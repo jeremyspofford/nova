@@ -42,6 +42,8 @@ function entry(m, now) {
     name: m.name, model: m.name, modified_at: m.modified_at ?? now, size, digest: m.digest ?? digestOf(m.name, size),
     details: { parent_model: '', format: 'gguf', family: m.family ?? 'stand-in', families: [m.family ?? 'stand-in'], parameter_size: m.parameter_size ?? '8B', quantization_level: m.quantization ?? 'Q4_K_M' },
     capabilities: m.capabilities ?? ['completion'],
+    // Ollama's cloud models are listed with where they really run.
+    ...(m.remote_host ? { remote_host: m.remote_host } : {}), ...(m.remote_model ? { remote_model: m.remote_model } : {}),
   };
 }
 

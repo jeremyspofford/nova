@@ -98,6 +98,7 @@ export class LocalModelProvider implements DecisionProvider {
         { kind: 'file', ref: 'decision inputs', sha256: createHash('sha256').update(JSON.stringify(checked)).digest('hex') },
       ],
     });
+    // The model's own `why` is never kept: System 1 doesn't write what the person reads (ADR-7).
     const named = `${r.model} on ${r.device === 'hub' ? 'the hub' : r.device}`;
     const got = checkAnswer(t, r.text ?? '');
     if (!got.ok) {
@@ -107,6 +108,6 @@ export class LocalModelProvider implements DecisionProvider {
     }
     const against = this.#guard?.(t, checked, got.answers) ?? null;
     if (against) return { template_id: t.template_id, version: t.version, answers: got.answers, confidence: 0, provider: this.id, escalate: true, why: `The local model (${named}) answered against your settings: ${against}` };
-    return { template_id: t.template_id, version: t.version, answers: got.answers, confidence: got.confidence, provider: this.id, escalate: false, why: got.why ? `${got.why} (${named})` : `Answered by ${named}.` };
+    return { template_id: t.template_id, version: t.version, answers: got.answers, confidence: got.confidence, provider: this.id, escalate: false, why: `Answered by ${named}.` };
   }
 }

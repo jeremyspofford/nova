@@ -149,8 +149,9 @@ async function complete(r: Resolved, body: Record<string, unknown>, req: { signa
 
 // A chat with a whole message list, for the model manager (models/index.ts): its cloud fallback and
 // a role served by an OpenAI-compatible runtime. `json` asks for a JSON object back.
-export async function chatMessages(c: Config, secret: (v: unknown) => string | null, messages: { role: string; content: string }[], req: { signal?: AbortSignal; onText?: (t: string) => void; json?: boolean } = {}): Promise<{ text: string; aborted: boolean; usage: Usage }> {
-  return complete(resolveCfg(c, secret), { messages, ...(req.json ? { response_format: { type: 'json_object' } } : {}) }, req);
+// `max_tokens` bounds the reply, so what a call can cost is known before it is made.
+export async function chatMessages(c: Config, secret: (v: unknown) => string | null, messages: { role: string; content: string }[], req: { signal?: AbortSignal; onText?: (t: string) => void; json?: boolean; max_tokens?: number } = {}): Promise<{ text: string; aborted: boolean; usage: Usage }> {
+  return complete(resolveCfg(c, secret), { messages, ...(req.json ? { response_format: { type: 'json_object' } } : {}), ...(req.max_tokens ? { max_tokens: req.max_tokens } : {}) }, req);
 }
 
 // Roles Nova's model manager serves (models/recommend.ts ROLES, the ones that chat). A provider

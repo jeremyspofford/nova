@@ -3,7 +3,7 @@
 // role; it doesn't list everything that would run. A role with no runtime here says so and stays
 // unassigned: transcription without a whisper runtime is off, not faked.
 import { gb, modelMemory, type Hardware } from './hardware.ts';
-import type { InstalledModel } from './ollama.ts';
+import { runsRemotely, type InstalledModel } from './ollama.ts';
 
 export const ROLES = ['triage-text', 'reasoner', 'embedder', 'transcriber'] as const;
 export type Role = (typeof ROLES)[number];
@@ -63,7 +63,7 @@ export const CATALOG: CatalogEntry[] = [
 const isEmbedder = (m: InstalledModel) => m.capabilities.includes('embedding') || (!m.capabilities.length && /embed|bge|minilm/i.test(m.name));
 const isText = (m: InstalledModel) => !isEmbedder(m) && (m.capabilities.includes('completion') || !m.capabilities.length);
 const isCoder = (m: InstalledModel) => /coder|code/i.test(m.name);
-const isCloud = (m: InstalledModel) => /[:-]cloud$/i.test(m.name);
+const isCloud = (m: InstalledModel) => runsRemotely(m.name, m);
 const fits = (size: number, h: Hardware | null) => !h || size * HEADROOM <= modelMemory(h).bytes;
 
 // What a device can hold, in words: the biggest model and roughly how many parameters.

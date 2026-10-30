@@ -15,6 +15,79 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M6b review fixes): the model manager's guards.**
+Branch `m6-fix/models`; tests in `tests/core/models-guards.test.ts` (the reviewer's probes, made
+real), each failing on the code before its fix.
+
+- **Trust is checked per call.** `placement()` returns a role only while its device is the hub or a
+  trusted computer; a revoked one (the devices `revoked`/`change` events) loses its roles and its
+  runtime address, reads `unassigned`, gets no call and no wake packet. Local-only work waits.
+- **Ollama cloud models never serve a role.** One rule (`OLLAMA_CLOUD` in `providers/types.ts`,
+  used by the registry and the manager), plus tags carrying `remote_host`/`remote_model`: refused
+  in assign and accept, re-checked in `#local`, never recommended, and System 1 stays on the rules.
+- **Model tasks always ask.** The worker's `minTier` is 2 whoever made the task; at run time the
+  brief's URL is ignored (Nova's own runtime for the device is asked), and the name, the
+  role-in-use guard and the disk budget (catalog size over the brief's) are checked again. Only
+  lists read from that runtime are recorded.
+- **System 1 is never quieter than the rules.** A model's drop/silent where the triage rule says
+  act/queue escalates (held for an OK); the reason kept is Nova's fixed words, never the model's
+  `why` (ADR-7).
+- **Budgets.** Each cloud call sends `max_tokens` (4096 unless the cloud model sets one) and
+  reserves its most possible cost in the same step as the check; overshoot is at most one call's
+  maximum. A stream that breaks after text arrived is charged its full reservation (what was used
+  isn't known). Tokens without a cost are priced from `models.prices` (`PUT /models/prices`) or,
+  with a budget set, said plainly and the cloud waits. The "can't tell what the cloud model costs"
+  refusal applies only to calls for the cloud model; a provider's budget wait (`via: 'provider'`)
+  is released by the budget alone.
+- **Fallback before output only.** Once text reached the person, `infer` ends with an honest error
+  instead of a second model's reply.
+- **Spoke addresses.** Before every call and wake the host must be in the computer's latest
+  heartbeat and private, LAN or mesh (a name must resolve only to such). Not "recent": a sleeping
+  computer sends none, and the latest is what it last said. Heartbeats keep only private IPv4
+  addresses and a one-label host name (`desk.local` reads as `desk`; dotted names are dropped).
+  Private here includes the example ranges (192.0.2/24, 198.51.100/24, 203.0.113/24), which are
+  never routed on the internet and are what tests use. Wake targets: private or broadcast IPv4.
+- **Minors.** Receipts for a computer name it (`ollama@<name>`; plain `ollama` stays the hub, so
+  existing receipts and gate tests read the same). Work waiting on a computer that didn't wake says
+  so and runs on its next heartbeat; Nova doesn't keep sending wake packets. Ollama 5xx or an error
+  line mid-reply (out of memory) is local capacity: the work waits. The role-set provider's words
+  name the cloud model when the privacy mode lets it answer.
+
+**2026-10-30 (M6c): the gate, a day in the life local-only.** Branch `m6c/gate`; the plan's §3.
+
+- **CI:** `tests/acceptance/m6-day.test.ts`, with the day itself in `m6-day-support.ts`. It runs
+  two real processes (a hub and a standby, M4's helpers; `setup()` now takes extra hub env), the
+  egress tripwire, a fixed hub-class hardware reading, and stand-ins for Ollama, Screenpipe and the
+  cloud model. The day runs on capture's test clock (`2030-01-15`) and covers:
+  - setup by conversation, local-only;
+  - roles accepted from installed models, with transcription unassigned;
+  - capture classified by signals: one event stays unclassified, and an incognito window is
+    never stored;
+  - triage by the local decision provider: a Noul proposal, plus heartbeat and event triggers
+    (Choice);
+  - chat and the M5 calc brief through the reasoner role;
+  - a captured fact promoted, then forgotten on both nodes (database, WAL, backups);
+  - a midday outage: the task waits, the person is told, the cloud is asked nothing, and the task
+    reruns;
+  - the evening retention sweep.
+
+  Every step is asserted. `NOVA_EVIDENCE=1` writes `docs/evidence/m6-day.md`.
+- **Real:** `m6-day-real.test.ts` (opt-in, `NOVA_REAL_OLLAMA=1`) runs the same day with the hardware
+  read for real and Nova's own recommendation: Qwen3:8b, deepseek-r1:32b and nomic-embed-text.
+  - Screenpipe is still the stand-in, and there is no standby.
+  - Ollama is reached through a loopback relay that passes only reading and inference. The outage
+    is that relay closing, a dead port; the evidence says so.
+  - What a model decides is recorded as it happened. Privacy is asserted as in CI.
+  - The committed `docs/evidence/m6-day.md` is a real run: 415 s, every step done, every receipt
+    local.
+- **Fixed on the way.** An event captured while the sorting model was down fell through to the
+  rules, which have no rule for `capture-promote`. It was counted as looked at and never proposed.
+  Now the pass stops when the provider that should answer (`proposer`, the local model once one is
+  assigned) didn't, and a later pass asks again.
+- **Seen in the real run, not fixed.** Qwen3:8b answers p = 0.9 to `capture-promote` for nearly
+  every event, so its proposals aren't selective yet. Proposals stay proposals: nothing becomes
+  memory until the person accepts.
+
 **2026-10-30 (M6b): local models — hardware, roles, downloads, one inference API, wake, fallback, budgets.**
 Branch `m6b/models`; the plan's §2. Code in `src/core/models/`, migration `0010_models.sql`
 (M6a took 0009). PWA: Settings › Models (`ui/js/models.js`, `ui/styles/models.css`).

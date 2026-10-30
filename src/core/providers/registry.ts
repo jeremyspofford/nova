@@ -21,7 +21,7 @@ import { CONFIRMATION_SYSTEM, Inbox, STATUSES, checkSignature, n8n, timeoutS as 
 import { openaiCompatible, roleOf } from './openai.ts';
 import { CONTRACT_SYSTEM, agentPrompt, contractPrompt, parseContract, summarize } from './prompt.ts';
 import { applyFiles, fileRefs, notCopied, outOfScope, treeHash, unifiedDiff, type Change, type Scope, type TaskSpace, type TestAsk } from './taskspace.ts';
-import { CLASSES, EGRESS, IMPLEMENTATIONS, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where } from './types.ts';
+import { CLASSES, EGRESS, IMPLEMENTATIONS, OLLAMA_CLOUD, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where } from './types.ts';
 import type { Db } from '../db.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
@@ -45,7 +45,6 @@ const COMPANY: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenA
 type Choice = (typeof CHOICES)[number];
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/;
-const OLLAMA_CLOUD = /[:-]cloud$/i;
 // Settings that decide what a provider runs or where its data goes.
 const WHERE_KEYS = ['command', 'base_url', 'webhook_url', 'callback_url'] as const;
 // Permission settings, strictest first.
@@ -107,6 +106,8 @@ export interface ModelsLink {
     purpose?: string; context_items?: { kind: 'memory' | 'file' | 'skill' | 'session' | 'standing'; ref: string; sha256: string }[]; max_cost_usd?: number; format?: 'json'; signal?: AbortSignal; onText?: (t: string) => void;
   }): Promise<{ text?: string; aborted?: boolean; notes: string[]; usage: Usage; model: string; provider: string }>;
   probe(role: 'reasoner' | 'triage-text'): Promise<string | null>;
+  // The cloud model the person set for local-preferred and cloud-allowed work, by name, if any.
+  cloudName?(): string | null;
 }
 
 export interface ProvidersOptions {
@@ -234,7 +235,14 @@ export class Providers extends EventEmitter {
     // A provider set to a role uses Nova's own local models (M6b): the model manager keeps it on
     // the person's devices, and its receipts say where each call went.
     if (x.manifest.adapter.implementation === 'openai-compatible' && roleOf(c)) {
-      return { coarse: 'local', receipt: 'local', words: `Runs on your own devices: the ${roleOf(c)} model Settings › Models assigns.` };
+      // The model manager keeps each call inside the task's privacy mode; outside local-only, the
+      // cloud model set there may answer, and the words say so.
+      const mode = this.#o.profile.privacyDefault();
+      const cloud = mode === 'local-only' ? null : this.#o.models?.cloudName?.() ?? null;
+      const words = !cloud ? `Runs on your own devices: the ${roleOf(c)} model Settings › Models assigns.`
+        : mode === 'local-preferred' ? `Runs on the ${roleOf(c)} model Settings › Models assigns, on your devices; when it can’t answer, ${cloud} may, off your devices. Each receipt says where.`
+        : `Uses ${cloud}, off your devices, when Nova chooses it (within your cloud budget), and otherwise the ${roleOf(c)} model on your devices. Each receipt says where.`;
+      return { coarse: 'local', receipt: 'local', words };
     }
     const url = impl.url?.(c);
     // Ollama serves its cloud models (names ending -cloud or :cloud) through the same local address,
@@ -626,7 +634,7 @@ export class Providers extends EventEmitter {
     // devices waits with the reason.
     const over = where.coarse === 'remote' ? this.#o.budget?.(brief) ?? null : null;
     if (over) {
-      try { this.#o.ledger.note(brief.task_id, 'waiting_on_model', { role: 'reasoner', kind: 'budget', reason: over }); } catch { /* the reason stands */ }
+      try { this.#o.ledger.note(brief.task_id, 'waiting_on_model', { role: 'reasoner', kind: 'budget', via: 'provider', reason: over }); } catch { /* the reason stands */ }
       return report('blocked', `Waiting on the cloud budget: ${over}`);
     }
     const role = roleOf(config);

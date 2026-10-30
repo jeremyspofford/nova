@@ -98,6 +98,10 @@ export const SECRET_REF = /^secret:\/\/([A-Z][A-Z0-9_]*)$/;
 export const secretName = (v: unknown): string | null => (typeof v === 'string' ? SECRET_REF.exec(v)?.[1] ?? null : null);
 
 export const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+// Ollama serves its cloud models (names ending -cloud or :cloud) through the same local address,
+// passing what it is given on to ollama.com: by where the data goes, that is the cloud. The
+// registry and the model manager both use this one rule.
+export const OLLAMA_CLOUD = /[:-]cloud$/i;
 export const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : d);
 
 // Every call a provider or connector makes refuses a redirect: "local" is decided by the address

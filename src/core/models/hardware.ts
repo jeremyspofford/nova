@@ -164,6 +164,23 @@ const text = (v: unknown, max = 120): string => (typeof v === 'string' ? v.repla
 const bytes = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v < 2 ** 53 ? Math.floor(v) : 0);
 const MAC = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+// One DNS label: a computer's own name, which a heartbeat may report (with or without .local).
+const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+// Whether an address stays among the person's own machines: loopback, the private LAN ranges,
+// link-local, the shared range mesh VPNs use (100.64.0.0/10), the IPv4 limited broadcast, and the
+// ranges reserved for examples (never routed on the internet; Nova's tests and docs use them).
+// Anything else could be a machine on the internet.
+export function privateAddress(a: string): boolean {
+  const h = a.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === '::1' || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h)) return true;
+  if (!IPV4.test(h)) return false;
+  const [a1, a2, a3] = h.split('.').map(Number) as [number, number, number, number];
+  if (h.split('.').some((x) => Number(x) > 255)) return false;
+  return a1 === 10 || a1 === 127 || (a1 === 172 && a2 >= 16 && a2 <= 31) || (a1 === 192 && a2 === 168) || (a1 === 169 && a2 === 254)
+    || (a1 === 100 && a2 >= 64 && a2 <= 127) || h === '255.255.255.255'
+    || (a1 === 192 && a2 === 0 && a3 === 2) || (a1 === 198 && a2 === 51 && a3 === 100) || (a1 === 203 && a2 === 0 && a3 === 113);
+}
 
 // A heartbeat's hardware, kept to what Nova uses and to sane sizes. Throws on what isn't hardware.
 export function checkHardware(v: unknown): Hardware {
@@ -177,18 +194,27 @@ export function checkHardware(v: unknown): Hardware {
   const network = Array.isArray(v.network) ? v.network.slice(0, 8).filter(isObj).flatMap((n) => {
     const mac = text(n.mac, 17).toLowerCase();
     const address = text(n.address, 15);
-    if (!MAC.test(mac) || !IPV4.test(address)) return [];
+    // Only an address on the person's own network is kept: Nova sends this computer prompts and
+    // wake packets at what it reports, and a public address would take them off the devices.
+    if (!MAC.test(mac) || !IPV4.test(address) || !privateAddress(address)) return [];
     const netmask = IPV4.test(text(n.netmask, 15)) ? text(n.netmask, 15) : '255.255.255.0';
     return [{ name: text(n.name, 32) || 'net', mac, address, netmask, broadcast: broadcastOf(address, netmask) }];
   }) : [];
   return {
-    at: text(v.at, 40) || new Date().toISOString(), platform: text(v.platform, 20) || 'unknown', arch: text(v.arch, 20) || 'unknown', hostname: text(v.hostname, 80),
+    at: text(v.at, 40) || new Date().toISOString(), platform: text(v.platform, 20) || 'unknown', arch: text(v.arch, 20) || 'unknown', hostname: hostLabel(v.hostname),
     cpu: { model: text(cpu.model) || 'unknown', threads: Math.min(4096, bytes(cpu.threads)) },
     ram_bytes: bytes(v.ram_bytes), ram_free_bytes: bytes(v.ram_free_bytes), gpus,
     disk: d ? { path: text(d.path, 200), total_bytes: bytes(d.total_bytes), free_bytes: bytes(d.free_bytes) } : null,
     network, whisper: text(v.whisper, 200) || null,
     sources: Array.isArray(v.sources) ? v.sources.slice(0, 8).map((s) => text(s, 30)).filter(Boolean) : [],
   };
+}
+
+// A reported host name, as one plain label ("desk", or "desk.local" read as "desk"); a dotted
+// name could be anyone's on the internet, so it is dropped.
+function hostLabel(v: unknown): string {
+  const h = text(v, 80).toLowerCase().replace(/\.local\.?$/, '');
+  return LABEL.test(h) ? h : '';
 }
 
 // ---- in words ------------------------------------------------------------------------------------

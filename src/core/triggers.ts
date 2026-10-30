@@ -351,9 +351,14 @@ export class Triggers extends EventEmitter {
       triage = { decision: r.answers.decision, reason: r.why, model: null };
     } else {
       const model = { provider: d.provider, template_id: d.template_id, version: d.version };
-      triage = d.escalate
+      // A model may be no quieter than the person's own rules: where they would act or hold it,
+      // a model's drop or silence escalates instead (a scheduled reminder is never lost to it).
+      const ruled = triageRule(inputs).answers.decision;
+      const quieter = (ruled === 'act' || ruled === 'queue') && (d.answers.decision === 'drop' || d.answers.decision === 'silent');
+      // What is kept is Nova's own words: a model never writes what the person reads (ADR-7).
+      triage = d.escalate || quieter
         ? { decision: 'queue', reason: UNSURE, model }
-        : { decision: d.answers.decision as TriageDecision, reason: d.why, model };
+        : { decision: d.answers.decision as TriageDecision, reason: d.provider === 'rules' ? d.why : `Decided “${String(d.answers.decision)}” by the ${d.provider} decision provider.`, model };
     }
 
     // 5. Act.

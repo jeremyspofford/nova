@@ -38,10 +38,10 @@ import { Browser, type BrowserOptions } from './browser/worker.ts';
 import type { Hub } from './browser/plan.ts';
 import { browserRoutes } from './browser/routes.ts';
 import { checkers as browserCheckers } from './browser/evidence.ts';
-import { Capture } from './capture/capture.ts';
+import { Capture, PROMOTE } from './capture/capture.ts';
 import { captureRoutes } from './capture/routes.ts';
 import { Models, type Hardware } from './models/index.ts';
-import { LocalModelProvider } from './models/decide.ts';
+import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { secretName } from './providers/types.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -203,7 +203,7 @@ export function createCore(o: CoreOptions) {
     db, log, home: o.home, workspace, extensions, ledger, verifier, receipts, profile, now,
     custom: o.agent, secret: providerSecret, meshHost: (h) => meshHosts().has(h),
     fire: (input) => triggers.fire(input),
-    models: { infer: (r) => models!.infer(r), probe: (role) => models!.probe(role) },
+    models: { infer: (r) => models!.infer(r), probe: (role) => models!.probe(role), cloudName: () => models?.cloud()?.name ?? null },
     budget: (brief) => models?.budgetBlock(brief.task_id, brief.constraints.max_cost_usd) ?? null,
   });
   // The device mesh: this node's keys, the registry, enrollment, and who may do what.
@@ -221,6 +221,7 @@ export function createCore(o: CoreOptions) {
     ...(o.models?.watchMs ? { watchMs: o.models.watchMs } : {}),
     ...(o.models?.wakePollMs ? { wakePollMs: o.models.wakePollMs } : {}),
     diskPath: o.home,
+    meshHost: (h) => meshHosts().has(h),
     secret: (v) => { const n = secretName(v); return n ? providerSecret(n) : null; },
     // The person is told the way proactive messages go: triaged, quiet hours kept.
     notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'models', name: 'Local models', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('models', 'Nova couldn’t tell you about waiting work.', { error: (e as Error).message })); },
@@ -265,6 +266,7 @@ export function createCore(o: CoreOptions) {
     privacy: () => profile.privacyDefault(),
     meshHosts: () => [...meshHosts()],
     fire: (topic, payload, key) => triggers.connectorEvent('capture', topic, payload, key),
+    proposer: () => (models!.decidesWithModel(rules.has(PROMOTE.template_id)) ? LOCAL_MODEL_PROVIDER : null),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     ...(o.capture?.fetch ? { fetch: o.capture.fetch } : {}),
   });
