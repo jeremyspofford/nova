@@ -53,6 +53,34 @@ test('a crash the supervisor handled closes once Nova is up, and Nova never rest
   }
 });
 
+// The supervisor's chaos test once found two "Nova stopped unexpectedly" problems open: the
+// server it had told of the first crash was killed after writing the problem and before writing
+// its playbook, so the next one of that kind couldn't find it. Here the kill lands exactly there.
+test('a server killed while it records a problem leaves no problem without its playbook: the next of its kind finds the one open', async () => {
+  const w = world('nova-killed-mid-problem-');
+  const core = join(import.meta.dirname, '..', '..', 'src', 'core', 'index.ts');
+  const tell = { source: 'supervisor', said: 'Nova stopped unexpectedly (it was stopped by SIGKILL) and the supervisor started it again.', playbook: 'server-crashed', repairs: [{ name: 'restart-server', ok: true, said: 'Started again after 0.3 s.' }] };
+  const script = `
+    const { createCore } = await import(${JSON.stringify(core)});
+    const c = createCore({ home: ${JSON.stringify(w.home)}, version: '0.1.0', trustedOrigin: () => true, vault: { mode: 'file', keychain: null } });
+    const run = c.db.run.bind(c.db);
+    c.db.run = (sql, ...a) => { if (sql.includes('INTO problem_playbook')) process.kill(process.pid, 'SIGKILL'); return run(sql, ...a); };
+    const t = ${JSON.stringify(tell)};
+    c.resilience.playbooks.open(t.source, t.said, t.playbook, { repairs: t.repairs });`;
+  const killed = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', HOME: w.dir, NOVA_VAULT_KEY: 'file' } });
+  assert.equal(killed.signal, 'SIGKILL', `the child died where the test kills it:\n${killed.stderr}`);
+
+  const c = open(w.home);
+  try {
+    const orphans = c.log.problems({ open: true }).filter((p) => !c.resilience.playbooks.view(p.id));
+    assert.deepEqual(orphans.map((p) => p.message), [], 'no open problem is missing its playbook');
+    c.resilience.playbooks.open(tell.source, tell.said, tell.playbook, { repairs: tell.repairs });
+    assert.equal(c.log.problems({ open: true }).filter((p) => p.source === 'supervisor').length, 1, 'one open problem of its kind');
+  } finally {
+    await c.close();
+  }
+});
+
 test('restarting Nova, choosing the backup folder and seeing the recovery key again are not any paired phone’s', async () => {
   const h = await hub();
   const w = world('nova-access-');

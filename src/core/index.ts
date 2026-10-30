@@ -944,6 +944,7 @@ export function createCore(o: CoreOptions) {
     heartbeat = null;
     changes.stop();
     models!.stop();
+    providers.stop();
     connectors.stop().catch(() => {});
     capture.stop().catch(() => {});
   }

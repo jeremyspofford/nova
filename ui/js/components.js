@@ -135,6 +135,8 @@ export function verifiedResultCard(t, { now = new Date() } = {}) {
 // The raw report is one tap further down.
 export function evidenceViewer(t) {
   const v = t.verification;
+  // The Relay run a coding task's work came from (its report's relay-run artifact), if any.
+  const relayRun = (t.report?.artifacts ?? []).find((a) => a?.kind === 'relay-run');
   const evidence = (e) => {
     if (!e) return 'Nothing was offered.';
     switch (e.kind) {
@@ -159,6 +161,7 @@ export function evidenceViewer(t) {
   <p class="sheet-line">${esc(t.brief?.goal ?? '')}</p>
   ${t.state === 'waiting' && t.reason ? `<p class="sheet-line task-reason">${esc(t.reason)}</p>` : ''}
   ${t.report?.summary ? `<p class="sheet-line">${esc(t.report.summary)}</p>` : ''}
+  ${relayRun ? `<p class="sheet-line is-faint">Done by Relay run ${esc(relayRun.ref)}${relayRun.branch ? `, branch ${esc(relayRun.branch)}` : ''}.</p>` : ''}
   ${v ? `<h3 class="sheet-heading">How Nova checked</h3><ul class="checks">${checks}</ul><p class="sheet-line is-faint">Checked ${esc(new Date(v.at).toLocaleString('en-US'))}.</p>` : `<p class="sheet-line">${t.state === 'done' ? 'Done.' : 'Not checked yet: Nova checks the evidence before it calls anything done.'}</p>`}
   <details class="raw"><summary>The ledger entry</summary><pre tabindex="0">${esc(JSON.stringify({ id: t.id, state: t.state, reason: t.reason, owner: t.owner, privacy_mode: t.privacy_mode, approval_tier: t.approval_tier, brief: t.brief, report: t.report, verification: t.verification }, null, 2))}</pre></details>
 </div>`;
