@@ -15,6 +15,46 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (Amendment 2026-10-30-C Part 1, UI fixes).** Branch `ui/amendment-c-part1`. Every
+item has tests that failed first (`tests/ui-fixes.test.js`, `tests/ui/ui-fixes.test.ts`); evidence
+in `docs/evidence/ui-fixes-gate.md`.
+- **Orb once per view:** no orb on messages, empty states, verified-result cards or proactive
+  banners. On a phone, the top bar's orb (Home: the hero); beside a rail, the rail's (Home's hero
+  hides on a tablet too, as it already did on a desktop).
+- **Timestamps, as written:** a group is one author, under five minutes apart. In a plain
+  back-and-forth the author changes every message, so each one starts a group and shows its time;
+  runs from one author (Nova's follow-ups and reports) show one. Exact time on hover, tap, long
+  press and keyboard focus. The amendment gives no number for a "gap"; **an hour** gets its own
+  divider. Work-trail steps say "took 2 s, finished 9:00 AM" from the log's own timestamps.
+- **Settings:** eight task categories, one level. Tablets get the phone's list-then-page layout;
+  the sidebar is for desktop widths, where a second pane fits beside the rail and right column.
+- **The contrast check and its fix:** the check is stricter than validation (it adds text/secondary
+  on raised surfaces and `border/strong` at 3:1) and only warns. The fix is a per-device nudge in the
+  core (`appearance.device_fixes`, applied when the CSS is generated): each failing colour moves
+  towards the package's own primary text in 5% steps, the smallest step that passes in every look
+  the package has; nothing else changes, other devices and designs are untouched, Undo removes it.
+  This fits the token model (one CSS generator, per-device scope already in the core) and never
+  invents a colour. **Both starters failed it:** field outlines were 2.79:1 (Orb Teal) and 1.72:1
+  (Companion Light). Their `border/strong` is fixed at source with that same nudge (v1.0.1), so all
+  six built-ins pass in every look (tested).
+- **The recommendation:** the starter that matches the device's light or dark (the person's choice,
+  else the system's) and passes the check, with that as its reason; otherwise the passing design with
+  the most room to spare. A light system gets Companion Light, a dark one Orb Teal.
+- **Deviations, said plainly:** light and dark is one setting for all devices in the core (there is
+  no per-device mode), so it always goes through Save. `scrollbar-gutter` is `stable both-edges`
+  (a form of stable that keeps the centred column centred). The rail and the right column are
+  separate panes, not nested in the view; they keep `overflow-y: auto` so a very short window never
+  clips them, and they don't scroll at the tested sizes.
+- **Caught on the way:** the existing offline test failed because the two new modules
+  (`settings-ia.js`, `contrast.js`) weren't in the service worker's shell, so the cached app
+  couldn't load. Shell v9; a unit test now checks every module `app.js` imports is in the shell.
+- **Existing tests changed:** `tests/ui/live-swap.test.ts` (it asserted the preview frame, which the
+  amendment removes; it now tries a design for all devices live and unsaved, applies for this
+  device, Undoes, Saves and undoes from the toast) and the appearance block of `scripts/shots.js`
+  (same reason: its frame check goes, and "#appearance focuses the current mode" goes because the
+  first control there is now the scope; `npm run shots` is not part of CI and was not re-run). No
+  other assertion was removed.
+
 **2026-10-30 (Amendment 2026-10-30-C, owner-approved).** `AMENDMENT-2026-10-30-C.md` and
 `UX-RESEARCH-2026-10-30.md` were added to the packet exactly as given (sha256 `e3b1862d…` and
 `dda206f4…`).
