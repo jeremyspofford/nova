@@ -392,6 +392,12 @@ test('local decision provider: typed answers from the sorting model, receipts na
     assert.equal(r.model, 'example-small:3b');
     assert.equal(r.egress, 'local');
     assert.ok(ollama.requests.some((q: { path: string; body: unknown }) => q.path === '/api/chat' && (q.body as { format?: unknown }).format), 'asked for the schema');
+    assert.ok(ollama.requests.every((q: { body: unknown }) => (q.body as { think?: unknown })?.think === undefined), 'a model that doesn’t think isn’t told not to');
+    // A thinking model asked for a schema has its reasoning turned off, so its answer is the JSON.
+    await core.models.assign('triage-text', { model: 'example-deep:32b' });
+    assert.equal((await core.decisions.decide('triage', inputs))!.provider, 'local-model');
+    assert.equal((ollama.requests.at(-1)!.body as { think?: boolean }).think, false);
+    await core.models.assign('triage-text', { model: 'example-small:3b' });
 
     // Noul, Choice and Score together.
     core.templates.builtIn({ template_id: 'example.check', version: 1, situation: 'Is this worth a look?', inputs: { subject: 'string' }, questions: [{ id: 'kind', type: 'choice', options: ['note', 'task', 'unknown'] }, { id: 'urgent', type: 'noul' }, { id: 'effort', type: 'score', min: 0, max: 10 }], escalation: { confidence_floor: 0.5 } });

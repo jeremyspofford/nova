@@ -447,12 +447,24 @@ export class Models extends EventEmitter {
         const e = await rt.embed(model, req.input!);
         return { embeddings: e.embeddings, served_by: 'local', device, model, provider: 'ollama', egress: 'local', receipt_id: receipt, usage: { model, ...(e.tokens_in ? { tokens_in: e.tokens_in } : {}) } };
       }
-      const out = await rt.chat({ model, messages: req.messages!, ...(req.format ? { format: req.format } : {}), ...(req.signal ? { signal: req.signal } : {}), ...(req.onText ? { onText: req.onText } : {}), keepAlive: '5m' });
+      const thinks = req.format ? await this.#thinks(device, url, model) : false;
+      const out = await rt.chat({ model, messages: req.messages!, ...(req.format ? { format: req.format } : {}), ...(thinks ? { think: false } : {}), ...(req.signal ? { signal: req.signal } : {}), ...(req.onText ? { onText: req.onText } : {}), keepAlive: '5m' });
       return { text: out.text, aborted: out.aborted, served_by: 'local', device, model, provider: 'ollama', egress: 'local', receipt_id: receipt, usage: { model, ...out.usage } };
     } catch (e) {
       if (e instanceof RuntimeDown) throw new LocalDown(e.message);
       throw e;
     }
+  }
+
+  // Whether a model reasons before it answers (Ollama's "thinking" capability), from what Nova last
+  // read of the runtime, or asked once.
+  #capabilities = new Map<string, string[]>();
+  async #thinks(device: string, url: string, model: string): Promise<boolean> {
+    const key = `${url}\0${model}`;
+    let caps = this.#capabilities.get(key) ?? this.#inventory.get(device)?.models.find((m) => m.name === model)?.capabilities;
+    if (!caps) caps = (await new Ollama(url).show(model).catch(() => null))?.capabilities ?? [];
+    this.#capabilities.set(key, caps);
+    return caps.includes('thinking');
   }
 
   #small(req: InferRequest): boolean {

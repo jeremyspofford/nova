@@ -123,8 +123,11 @@ export class Ollama {
   }
 
   // A streamed chat. `format` is a JSON schema the reply must follow (Ollama's structured output).
-  async chat(o: { model: string; messages: Message[]; format?: Record<string, unknown> | 'json'; signal?: AbortSignal; onText?: (t: string) => void; keepAlive?: string }): Promise<ChatOut> {
-    const body = { model: o.model, messages: o.messages, stream: true, ...(o.format ? { format: o.format, options: { temperature: 0 } } : {}), ...(o.keepAlive ? { keep_alive: o.keepAlive } : {}) };
+  // `think: false` turns a thinking model's reasoning off: with a schema to follow, a thinking model
+  // otherwise spends its answer reasoning and the reply can miss the schema. Sent only to a model
+  // that says it thinks (Ollama refuses the field elsewhere).
+  async chat(o: { model: string; messages: Message[]; format?: Record<string, unknown> | 'json'; think?: boolean; signal?: AbortSignal; onText?: (t: string) => void; keepAlive?: string }): Promise<ChatOut> {
+    const body = { model: o.model, messages: o.messages, stream: true, ...(o.format ? { format: o.format, options: { temperature: 0 } } : {}), ...(o.think !== undefined ? { think: o.think } : {}), ...(o.keepAlive ? { keep_alive: o.keepAlive } : {}) };
     let res: Response;
     try {
       res = await this.#fetch('/api/chat', { method: 'POST', body: JSON.stringify(body), timeoutMs: this.#timeoutMs, ...(o.signal ? { signal: o.signal } : {}) });
