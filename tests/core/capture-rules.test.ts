@@ -86,3 +86,59 @@ test('Screenpipe items read into raw events: OCR, audio, UI; unreadable ones ski
   assert.equal(normalize('ocr', { nope: 1 }), null);
   assert.equal(normalize('ocr', { type: 'OCR', content: { frame_id: 9, text: 'x', timestamp: '2026-11-02T09:00:00Z', private: true } })?.private, true);
 });
+
+// ---- review fixes (M6 capture review) --------------------------------------------------------------
+
+test('private windows in the major browsers’ languages, by title, address or a marker past where a title is cut', () => {
+  const titles = [
+    'Nouvel onglet — Navigation privée de Mozilla Firefox', // FR Firefox
+    'Neuer Tab — Mozilla Firefox (Privater Modus)', // DE Firefox
+    'Neuer Tab - Google Chrome (Inkognito)', // DE Chrome
+    'Nueva pestaña - Google Chrome (Incógnito)', // ES Chrome
+    'Nueva pestaña — Navegación privada de Mozilla Firefox', // ES Firefox
+    'Nuova scheda — Navigazione anonima di Mozilla Firefox', // IT Firefox
+    'Nova guia anônima - Google Chrome', // PT-BR Chrome
+    'Nova janela — Navegação privada do Mozilla Firefox', // PT Firefox
+    'Nieuw tabblad — Mozilla Firefox Privénavigatie', // NL Firefox
+    'Nieuw tabblad - Microsoft Edge InPrivate', // NL Edge
+    'Nouvel onglet - Brave (Fenêtre privée)', // FR Brave
+    'Start Page - Vivaldi (Private)', // Vivaldi
+    'Private Browsing', // Safari's own window
+  ];
+  for (const t of titles) assert.equal(isPrivate({}, { app: 'Browser', window_title: t, url: null }), true, t);
+  assert.equal(isPrivate({}, { app: 'Firefox', window_title: 'x', url: 'about:privatebrowsing' }), true, 'the address');
+  const long = `${'Long page title '.repeat(19)} — Mozilla Firefox Private Browsing`;
+  assert.ok(long.length > 300);
+  assert.equal(isPrivate({}, { app: 'Firefox', window_title: long, url: null }), true, 'past 300 characters');
+  for (const t of ['Privacy policy — Example', 'Private equity weekly - Reader', 'Navigation — Example']) {
+    assert.equal(isPrivate({}, { app: 'Browser', window_title: t, url: null }), false, t);
+  }
+});
+
+test('exclusions cover what the person meant: a site in a browser’s text, a fully qualified host, app editions, a stretch of time', async () => {
+  const { overlapsWindow } = await import('../../src/core/capture/rules.ts');
+  const rules = checkExclusions([{ kind: 'site', site: 'bank.example.' }, { kind: 'app', app: 'Signal' }, { kind: 'time', window: { start: '12:00', end: '13:00' } }]);
+  assert.deepEqual(rules[0], { kind: 'site', site: 'bank.example' }, 'a trailing dot is the same host');
+  const site = (o: Partial<Facts>) => excludedBy(f({ app: 'Browser', window_title: 'Account summary', ...o }), rules.slice(0, 1), 'UTC')?.kind ?? null;
+  assert.equal(site({ text: 'bank.example/accounts balance' }), 'site', 'the host in a browser’s screen text');
+  assert.equal(site({ app: 'Google Chrome', text: 'https://online.bank.example/login' }), 'site', 'a subdomain, in Chrome');
+  assert.equal(site({ text: 'notbank.example is another place' }), null, 'not part of a longer name');
+  assert.equal(site({ app: 'Editor', text: 'notes about bank.example' }), null, 'only a browser’s text');
+  assert.equal(site({ url: 'https://bank.example./acct' }), 'site', 'a fully qualified address');
+  assert.equal(site({ window_title: 'Statement — www.bank.example.' }), 'site');
+  const app = (name: string) => excludedBy(f({ app: name }), rules.slice(1, 2), 'UTC')?.kind ?? null;
+  for (const name of ['Signal', 'signal', 'Signal.exe', 'Signal.app', '  Signal   Beta ', 'Signal Beta']) assert.equal(app(name), 'app', name);
+  assert.equal(app('Signalling Tool'), null, 'a word prefix, not any prefix');
+  // A stretch that starts before a window and runs into it.
+  assert.equal(overlapsWindow('2026-11-02T11:50:00Z', '2026-11-02T12:05:00Z', { start: '12:00', end: '13:00' }, 'UTC'), true);
+  assert.equal(overlapsWindow('2026-11-02T11:00:00Z', '2026-11-02T11:59:00Z', { start: '12:00', end: '13:00' }, 'UTC'), false);
+  assert.equal(excludedBy(f({ kind: 'audio', app: null, at: '2026-11-02T11:50:00Z', ended_at: '2026-11-02T12:10:00Z' }), rules.slice(2), 'UTC')?.kind, 'time', 'audio, over its whole stretch');
+});
+
+test('an instant says its own time zone, or it isn’t one', async () => {
+  const { instant } = await import('../../src/core/capture/rules.ts');
+  assert.equal(instant('2026-10-29T10:00:00Z'), '2026-10-29T10:00:00.000Z');
+  assert.equal(instant('2026-10-29T12:00:00+02:00'), '2026-10-29T10:00:00.000Z');
+  assert.equal(instant('2026-10-29T10:00:00.123456Z'), '2026-10-29T10:00:00.123Z', 'Screenpipe’s microseconds');
+  for (const v of ['2026-10-29 10:00:00', '2026-10-29T10:00:00', 'Oct 29 2026 10:00', '2026-10-29', 1761732000000]) assert.equal(instant(v), null, String(v));
+});
