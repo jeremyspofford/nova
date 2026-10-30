@@ -15,7 +15,13 @@ import { call, enroll, hub } from '../core/mesh-support.ts';
 import { pair, proxy } from './mesh.ts';
 import { problemWith, repairs, sleep, until } from './support.ts';
 
-const caughtUp = (p: Awaited<ReturnType<typeof pair>>) => until(() => p.core.mesh.sync.cursor(), (c) => c >= p.h.core.mesh.sync.head(), 20_000, 'the standby to catch up');
+// Caught up on both sides: the standby has copied everything, and the hub has its acknowledgement.
+// The standby's cursor moves before its acknowledgement reaches the hub, so a test that cut the
+// link and moved the clock on as soon as the cursor matched could leave that acknowledgement in
+// flight, landing at the later time: the hub then saw a fresh acknowledgement, not a standby behind.
+const caughtUp = (p: Awaited<ReturnType<typeof pair>>) => until(
+  () => ({ cursor: p.core.mesh.sync.cursor(), ...p.h.core.mesh.role.lag() }),
+  (v) => v.cursor >= v.head && v.acked_seq >= v.head, 20_000, 'the standby to catch up, and the hub to have its acknowledgement');
 
 test('the standby partitioned from the hub: behind is a problem on both sides, and both close once it copies again', { timeout: 90_000 }, async () => {
   const p = await pair();
