@@ -47,6 +47,8 @@ import { Resilience } from './resilience/index.ts';
 import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
+import { Checkpoints, finishStaged, takeCheckpoint } from './resilience/checkpoints.ts';
+import { Restarter } from './resilience/restart.ts';
 import { Foundry } from './changes/foundry.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -104,6 +106,10 @@ export { restoreInto, backupFiles, sha256File } from './resilience/backup.ts';
 export { makeScratch, dropScratch } from './resilience/scratch.ts';
 export type { Manifest as BackupManifest } from './resilience/backup.ts';
 export { restoreBackup, loadMigrations } from './db.ts';
+// Checkpoints (M7 amendment §1): the supervisor takes one before a release switch on the stopped
+// home; the server applies a staged restore before anything opens the home.
+export { takeCheckpoint, listCheckpoints, finishStaged, stagedPending, KEEP_AUTO, RETENTION as CHECKPOINT_RETENTION } from './resilience/checkpoints.ts';
+export type { CheckpointView, CheckpointManifest } from './resilience/checkpoints.ts';
 
 export interface CoreOptions {
   home: string;
@@ -148,6 +154,8 @@ export interface CoreOptions {
   sandbox?: boolean;
   // The change pipeline (M7a), for tests: the monotonic clock its canary windows are measured on.
   changes?: { monotonic?: () => number };
+  // Checkpoints (M7 amendment), for tests: the free space where they go.
+  checkpoints?: { free?: (dir: string) => number | null };
   now?: () => Date;
 }
 
@@ -156,8 +164,15 @@ export type Core = ReturnType<typeof createCore>;
 export function createCore(o: CoreOptions) {
   const started = Date.now();
   const now = o.now ?? (() => new Date());
+  // A restore (or reset) staged before the last stop is applied first, before the database opens.
+  if (!o.sandbox) finishStaged(o.home);
   const db = new Db(join(o.home, 'nova.db'));
-  const migration = db.migrate({ backupDir: join(o.home, 'backups'), now });
+  // An automatic checkpoint before a database upgrade, beside the pre-upgrade copy: one that can't
+  // be taken stops the upgrade (and so the start), with the reason.
+  const migration = db.migrate({
+    backupDir: join(o.home, 'backups'), now,
+    ...(o.sandbox ? {} : { before: (from: number) => { takeCheckpoint({ home: o.home, db, kind: 'auto', reason: `Before upgrading the database from version ${from}`, version: o.version, now, ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}) }); } }),
+  });
   const log = new Log(db, join(o.home, 'logs', 'nova.log'), now);
   // Hub or standby, decided before anything writes: a standby copies the hub's sync log instead
   // of recording its own writes (mesh/promote.ts).
@@ -283,9 +298,22 @@ export function createCore(o: CoreOptions) {
     failoverAfterS: () => { const v = profile.get<number>('mesh', 'auto_failover_after_s'); return typeof v === 'number' && v > 0 ? v : null; },
   });
   const role = meshRole;
+  // Checkpoints (M7 amendment §1) and restarting in place, for a restore (and a factory reset).
+  const restarter = new Restarter({ supervisor: o.supervisor ?? null, log });
+  const checkpoints = new Checkpoints({
+    db, log, home: o.home, version: o.version, now, ledger, verifier, vault,
+    vaultAt: (home) => new Vault({ home, ...(o.vault ?? {}) }),
+    hubId: () => meshIdentity.id, role: () => role.role(), schema: () => loadMigrations().at(-1)?.version ?? 0, restarter,
+    ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}),
+  });
+  ledger.workers.set(checkpoints.worker.id, checkpoints.worker);
+  // Every forget reaches each checkpoint (and a restore that is staged).
+  backups.also((table, ids, words) => checkpoints.forget(table, ids, words));
   // The change pipeline and the foundry (M7a): changes to Nova go through gates, never live edits.
   const changes = new Changes({
     db, log, ledger, verifier, home: o.home, now, sandbox: o.sandbox === true, testClock: process.env.NOVA_TEST_CLOCK === '1',
+    // An automatic checkpoint before a change goes live: none, and it doesn't ship.
+    checkpoint: (reason) => { checkpoints.auto(reason); },
     routes: () => routes, health: () => health(), hubDevice: () => meshIdentity.id, privacy: () => profile.privacyDefault(),
     knownDevice: (id) => id === meshIdentity.id || devices.find(id)?.trust === 'trusted',
     // The canary's window on a clock that only moves forward. An injected clock (tests) is the
@@ -810,6 +838,8 @@ export function createCore(o: CoreOptions) {
     ...models.routes(),
     // ---- resilience (M7 plan §2–§3): backups, the drill, playbooks, the supervisor ----
     ...keep.routes((w) => { if (w.principal.kind !== 'console') throw new CoreError('forbidden', 'Releases are deployed and rolled back from the hub’s own screen only.'); }),
+    // ---- checkpoints (M7 amendment §1) ----
+    ...checkpoints.routes(),
     // ---- the change pipeline and the foundry (M7 plan §1) ----
     ...changes.routes(),
     {
@@ -899,7 +929,10 @@ export function createCore(o: CoreOptions) {
 
   return {
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
-    vault, connectors, capture, models, changes, foundry, resilience: keep,
+    vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter,
+    // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
+    // once its marker is staged.
+    restartInPlace: (why: string) => restarter.restartInPlace(why),
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
@@ -932,6 +965,10 @@ export function createCore(o: CoreOptions) {
       // keeps no clock of its own.
       if (!o.sandbox) keep.checkClock(true);
       browser.sweep();
+      // A restore finished at this start becomes a ledger task with its evidence.
+      if (role.role() === 'hub' && !o.sandbox) {
+        try { checkpoints.recordFinished(); } catch (e) { log.problem('resilience', 'Nova couldn’t record a finished restore in the ledger.', { detail: (e as Error)?.stack ?? String(e) }); }
+      }
       const recovered = role.role() === 'hub' ? startHub() : { requeued: [], reverified: [] };
       role.start();
       return recovered;

@@ -87,6 +87,7 @@ const SKIP_TOP: Record<string, string> = {
   kept: 'Nova’s own scratch',
   connectors: 'Era 2’s connection secrets (the vault holds them now)',
   'nova.pid': 'which process runs this home',
+  checkpoints: 'checkpoints stay on this machine and are restore points, not backups',
 };
 const SKIP_FILE: Record<string, string> = {
   'vault/key': 'the vault’s key never leaves this machine',

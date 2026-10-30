@@ -88,6 +88,9 @@ export interface ChangesOptions {
   testClock?: boolean;
   // The server a sandbox runs (tests may point elsewhere).
   server?: string;
+  // An automatic checkpoint of the whole home (M7 amendment §1), taken before a change is applied
+  // live; it throws when none can be taken, and the change then doesn't ship.
+  checkpoint?: (reason: string) => void;
 }
 
 export class Changes extends EventEmitter {

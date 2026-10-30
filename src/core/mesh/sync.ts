@@ -37,7 +37,8 @@ export interface VaultSync { sealedFile(): string | null; keyForStandby(): strin
 // carries it row by row), logs, backups, exports, extension leftovers, worker scratch, connector
 // secrets (Era 2's plaintext ones; the vault travels as its own entry, above), the mesh identity,
 // and git's history. Everything else in the home is journalled.
-export const NOT_JOURNALLED: ReadonlySet<string> = new Set(['.git', 'mesh', 'logs', 'backups', 'exports', 'kept', 'workers', 'connectors', 'vault']);
+// Checkpoints (M7 amendment) stay on their node too: they hold its keys.
+export const NOT_JOURNALLED: ReadonlySet<string> = new Set(['.git', 'mesh', 'logs', 'backups', 'exports', 'kept', 'workers', 'connectors', 'vault', 'checkpoints']);
 const DB_FILE = /^nova\.db/;
 const TMP = /\.nova-sync-\d+\.tmp$/;
 // A bigger file isn't carried; it is reported once instead.
