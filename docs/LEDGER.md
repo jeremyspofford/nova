@@ -15,6 +15,72 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M9, Feel & Polish: Amendment 2026-10-30-C Part 2).** Branch `m9/feel-polish`. Plan
+`docs/plans/M9.md`, evidence `docs/evidence/m9-gate.md`. Every gate item is a test that was seen
+failing first; the numbers are in the evidence.
+- **Measured, not asserted.** Each item has its own browser test (`tests/ui/m9-*.test.ts`):
+  - Web Vitals at p75 (12 fresh runs per view and width, PerformanceObserver);
+  - skeleton geometry;
+  - the progress bands;
+  - motion;
+  - contrast in every look and state;
+  - hit areas (elementFromPoint);
+  - the four foldable tests.
+- **What the tests found, and the fixes:**
+  - A 0.06 layout shift at every desktop start: the page painted in the phone layout first. The
+    shell now shows once its layout and first view are set.
+  - Closing a sheet was slow to paint (INP up to 240 ms) because of its whole-screen backdrop blur.
+    It is a plain veil now.
+  - From the plan's audit rather than a test: Home and Tasks drew "Nothing needs you" before their
+    data arrived, then redrew. They wait now.
+  - A streamed reply dropped its first piece: the server's "streaming" notice carries the text from
+    before that piece, and the page took it. The page keeps the words it has. `src/runner.js` was
+    not touched (the ingest builder's file); the server-side ordering is worth fixing there later.
+  - Typing in a Settings field didn't count as "touched", so late data took focus from it.
+  - The takeover sheet waited an extra 0.6 s before moving to the evidence: an artificial delay,
+    now removed.
+- **Progress rules in one place** (`ui/js/wait.js`): the 1 s and 10 s bands, real units, and an
+  estimate only from a measured basis (a download's rate, or this device's earlier waits of the same
+  kind). An agent's reply has no known total, so after 10 s it shows the steps done and the time so
+  far, not a percentage (DESIGN-SYSTEM §1.3: no percentage where the units aren't known).
+- **Skeletons are the view's own last layout on this device** (`ui/js/skeleton.js`, localStorage,
+  per view, layout and width). They can be exact because the same data draws the same blocks. With
+  no layout kept (a first visit) there is no skeleton, only the waiting line. A conversation's
+  blocks are kept by their distance from the end, because turns far above the screen are laid out
+  as estimates (content-visibility).
+- **Motion:**
+  - The two loops (orb breathing, the working pulse) show a state for as long as it lasts, so they
+    aren't held to 150–300 ms. They stop under reduced motion.
+  - Hover and selection colours now change instantly. The "found" mark is a static wash that goes
+    after 1.6 s.
+- **Contrast:**
+  - The core's check now sees a see-through surface over both ends of the page gradient. It also
+    checks hover rows, popovers and links on cards.
+  - Package values that moved: Orb Teal `status/error` and `text/secondary`; Aurora `text/secondary`
+    and `accent/primary` (from the core's own smallest-nudge fixer).
+  - Text never uses `text/faint`; that token is for graphics only.
+  - Status words are in primary text, and keep their colour in the icon, border and tint.
+- **Hit areas:**
+  - A `--hit` constant: 44 px, or 48 px on a coarse pointer. It is an accessibility constant like a
+    breakpoint, not a design token.
+  - Small-looking controls keep their look and get a square invisible `::before`.
+  - Exempt, and stated in the test:
+    - links inside running text (WCAG 2.5.8's inline exception);
+    - a message's time, which a finger reveals by pressing the whole message.
+- **Layout:**
+  - **The right column starts at 1024 px**, where it used to start at 1280. This supersedes
+    DESIGN-SYSTEM §5's "off by default on smaller widths" for desktop widths: the amendment wins
+    where they differ ("use the second pane").
+  - On a desktop, Settings' sidebar takes the column's room, as it already did on a tablet.
+  - The tablet's main column keeps at least 45ch.
+  - Prose is capped at 70ch.
+  - Type tokens are emitted in rem, so a person's text size applies. Packages keep px.
+- **A real hinge in CI:** Chromium's `Emulation.setDeviceMetricsOverride` with a `displayFeature`
+  gives real viewport segments and `env(viewport-segment-*)` values in the Docker browser.
+  - Layouts and overlays now size to the segments.
+  - `?posture=` still emulates only the arrangement.
+- **Starter packages:** both still have the same structure; only token values changed.
+
 **2026-10-30 (UI fixes, after review).** Same branch, after merging `main`. An independent review
 found these; each now has a test that was seen failing first (`tests/ui-review.test.js`,
 `tests/ui/ui-review.test.ts`).
