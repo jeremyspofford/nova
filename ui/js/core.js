@@ -21,18 +21,21 @@ export function deviceId() {
 export class Unreachable extends Error {}
 
 // Answers that the service worker served from its cache while Nova was out of reach carry
-// x-nova-offline; the page says so rather than presenting them as live.
-export const stale = { last: false };
+// x-nova-offline; the page says so rather than presenting them as live, and an answer from the
+// cache never counts as Nova being reachable.
+export const fromCache = (res) => res.headers.get('x-nova-offline') === '1';
 
-export async function api(method, path, body) {
+// The answer and whether it came from the offline cache, kept together so concurrent requests
+// can't mix up whose answer was stale.
+export async function request(method, path, body) {
   let res;
   try {
     res = await fetch(`${V1}${path}`, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
   } catch {
     throw new Unreachable('Nova’s server didn’t answer.');
   }
-  stale.last = res.headers.get('x-nova-offline') === '1';
-  if (res.status === 503 && stale.last) throw new Unreachable('Nova’s server didn’t answer.');
+  const stale = fromCache(res);
+  if (res.status === 503 && stale) throw new Unreachable('Nova’s server didn’t answer.');
   const json = res.headers.get('content-type')?.startsWith('application/json');
   const data = json ? await res.json().catch(() => null) : await res.text();
   if (!res.ok) {
@@ -41,8 +44,10 @@ export async function api(method, path, body) {
     e.status = res.status;
     throw e;
   }
-  return data;
+  return { data, stale };
 }
+
+export const api = (method, path, body) => request(method, path, body).then((r) => r.data);
 
 // The core's live updates: task, problem, setup, profile, extension, trigger, message,
 // design-system. One EventSource, many listeners.

@@ -1,7 +1,7 @@
 // The PWA's own surfaces, drawn from the core (/api/v1): Home, the right column, Tasks, Health,
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
-import { api, deviceId, stale } from './core.js';
+import { api, deviceId, request } from './core.js';
 import { ICONS, ago, approvalSheet, briefCard, card, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, memoryHighlightCard, orb, proactiveBanner, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
 import { greeting, isOpen, needsApproval, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
@@ -16,17 +16,19 @@ export const store = {
 
 const settle = (p, fallback) => p.catch(() => fallback);
 export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers']) {
+  // Each part comes back as [value, stale].
+  const get1 = (path) => request('GET', path).then((r) => [r.data, r.stale]);
   const get = {
-    tasks: () => api('GET', '/tasks?limit=100'),
-    problems: () => api('GET', '/problems'),
-    health: () => api('GET', '/health'),
-    profile: () => Promise.all([api('GET', '/profile'), api('GET', '/identity')]),
-    memory: () => api('GET', '/memory'),
-    rules: () => api('GET', '/triggers/rules'),
-    messages: () => api('GET', '/messages'),
-    workers: () => api('GET', '/workers'),
+    tasks: () => get1('/tasks?limit=100'),
+    problems: () => get1('/problems'),
+    health: () => get1('/health'),
+    profile: () => Promise.all([get1('/profile'), get1('/identity')]).then(([a, b]) => [[a[0], b[0]], a[1] || b[1]]),
+    memory: () => get1('/memory'),
+    rules: () => get1('/triggers/rules'),
+    messages: () => get1('/messages'),
+    workers: () => get1('/workers'),
   };
-  const results = await Promise.all(parts.map((p) => settle(get[p]().then((v) => [p, v, stale.last]), [p, undefined, false])));
+  const results = await Promise.all(parts.map((p) => settle(get[p]().then(([v, s]) => [p, v, s]), [p, undefined, false])));
   let any = false;
   let wasStale = false;
   for (const [p, v, s] of results) {
@@ -39,7 +41,8 @@ export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'm
   }
   if (any) store.loaded = true;
   store.stale = wasStale;
-  return any;
+  // Live means at least one answer came from the server itself, not the offline cache.
+  return { any, live: results.some(([, v, s]) => v !== undefined && !s) };
 }
 
 export const needsYou = () => store.tasks.filter(needsApproval).length + store.messages.filter((m) => m.hold === 'needs_ok').length;

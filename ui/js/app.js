@@ -7,7 +7,7 @@ import { applyEvent, emptySession } from './reduce.js';
 import { renderMarkdown } from './markdown.js';
 import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderPermissions, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
 import { apply as applyTheme } from './theme.js';
-import { on as onCore, stream as coreStream } from './core.js';
+import { fromCache, on as onCore, stream as coreStream } from './core.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
 import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
@@ -75,8 +75,9 @@ async function post(path, body = {}) {
 async function loadList() {
   try {
     const res = await fetch('/api/sessions');
+    if (!res.ok) throw new Error();
     state.list = await res.json();
-    setReachable(true);
+    setReachable(!fromCache(res));
   } catch { setReachable(false); }
   renderToc_();
 }
@@ -222,7 +223,7 @@ function setReachable(ok) {
   clearTimeout(healthTimer);
   if (!ok) {
     const check = () => fetch('/api/health').then((r) => {
-      if (!r.ok) throw new Error();
+      if (!r.ok || fromCache(r)) throw new Error();
       setReachable(true);
       loadList();
       refreshCore();
@@ -308,7 +309,8 @@ function renderCore({ enter: entering = false } = {}) {
 
 let refreshing = null;
 function refreshCore(parts) {
-  refreshing = core.load(parts).then((ok) => { if (ok) setReachable(true); renderCore(); renderVoice(); });
+  // The chrome too: the "saved earlier" banner depends on whether these answers were live.
+  refreshing = core.load(parts).then(({ any, live }) => { if (any) setReachable(live); renderChrome(); renderCore(); renderVoice(); });
   return refreshing;
 }
 
