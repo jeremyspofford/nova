@@ -52,11 +52,18 @@ test('the database fills up: the write is refused, nothing saved is lost, the pr
     assert.equal(kept.status, 201);
     const pages = core.db.get<{ page_count: number }>('PRAGMA page_count')!.page_count;
     core.db.raw.exec(`PRAGMA max_page_count = ${pages}`);
+    // Filled to the brim, not just past one page: smaller writes until they are refused too, then a
+    // few more refusals, each of which tries to save its problem. How full the last pages of each
+    // table happen to be (which depends on everything else in the database) then can't leave room
+    // for the problem.
     let refused: { status: number } | null = null;
-    for (let i = 0; i < 50 && !refused; i++) {
-      const r = await c.call('POST', '/memory', { kind: 'fact', content: `Filler ${i} `.repeat(400) });
-      if (r.status !== 201) refused = r;
+    for (const size of [400, 40, 4]) {
+      for (let i = 0; i < 200; i++) {
+        const r = await c.call('POST', '/memory', { kind: 'fact', content: `Filler ${size}.${i} `.repeat(size) });
+        if (r.status !== 201) { refused ??= r; break; }
+      }
     }
+    for (let i = 0; i < 10; i++) await c.call('POST', '/memory', { kind: 'fact', content: `Filler more ${i} `.repeat(40) });
     assert.ok(refused, 'a write was refused once the database was full');
     assert.equal(refused!.status, 500);
     // The problem couldn't go into the full database; it is shown anyway, with its playbook.
