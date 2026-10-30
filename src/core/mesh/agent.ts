@@ -97,11 +97,11 @@ export function agentTar(version: string): Buffer {
 // this node's identity key. The version carries the hash, so a device knows a change by it.
 export interface RuntimeBundle { manifest: RuntimeManifest; signature: string; signer: string; files: Record<string, string> }
 
-export function runtimeBundle(novaVersion: string, sign: (message: Uint8Array) => string, signer: string): RuntimeBundle {
+export function runtimeBundle(novaVersion: string, sign: (message: Uint8Array) => string, signer: string, signed: { epoch: number; issued_at: string }): RuntimeBundle {
   const raw: Record<string, Buffer> = {};
   for (const f of RUNTIME_FILES) raw[f] = readFileSync(join(DEVICE_DIR, f));
   const draft = runtimeManifest('', raw);
-  const manifest = { ...draft, version: `${novaVersion}+${draft.sha256.slice(0, 12)}` };
+  const manifest = { ...draft, version: `${novaVersion}+${draft.sha256.slice(0, 12)}`, epoch: signed.epoch, issued_at: signed.issued_at };
   return {
     manifest, signature: sign(runtimeManifestMessage(manifest)), signer,
     files: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, v.toString('base64')])),

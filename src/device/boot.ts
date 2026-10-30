@@ -27,7 +27,7 @@ import {
   revealMessage, runtimeManifest, sessionMessage, sha256Hex, signMessage, statusMessage, verifyRoster, x25519Statement,
   type DeviceKeys, type SignedRoster,
 } from '../core/mesh/wire.ts';
-import { acceptRoster, checkProof, rosterKeys, sameRoster, verifyBundle, type Bundle, type Proof } from './trust.ts';
+import { acceptRoster, checkProof, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof } from './trust.ts';
 import { Watchdog } from './watchdog.ts';
 import { Queue, QUEUE_KINDS, type QueueKind } from './queue.ts';
 import type { CallAnswer, FromRuntime, SessionMessage } from './runtime.ts';
@@ -90,7 +90,7 @@ export interface BootState {
   last_update?: { version: string; at: string; result: string } | null;
   refused_bundle?: { sha256: string; at: string } | null;
 }
-export interface Installed { version: string; manifest: { version: string; sha256: string; files: Record<string, string> }; installed_at: string; source: 'hub' | 'local' }
+export interface Installed { version: string; manifest: { version: string; sha256: string; files: Record<string, string>; epoch?: number; issued_at?: string }; installed_at: string; source: 'hub' | 'local' }
 
 // Written whole, then moved into place, so a crash never leaves half a file. Mode 0600 for
 // anything under boot/.
@@ -349,7 +349,7 @@ export function runtimeIntact(p: Paths): Installed | null {
 }
 
 // Replaces runtime/ with verified files: written to runtime.next/, then swapped in by rename.
-export function installRuntime(p: Paths, files: Record<string, Buffer>, version: string, source: Installed['source']): Installed {
+export function installRuntime(p: Paths, files: Record<string, Buffer>, version: string, source: Installed['source'], signed: { epoch?: number; issued_at?: string } = {}): Installed {
   const next = `${p.runtime}.next`;
   const prev = `${p.runtime}.prev`;
   rmSync(next, { recursive: true, force: true });
@@ -361,7 +361,7 @@ export function installRuntime(p: Paths, files: Record<string, Buffer>, version:
   if (existsSync(p.runtime)) renameSync(p.runtime, prev);
   renameSync(next, p.runtime);
   rmSync(prev, { recursive: true, force: true });
-  const inst: Installed = { version, manifest: { ...runtimeManifest(version, files) }, installed_at: new Date().toISOString(), source };
+  const inst: Installed = { version, manifest: { ...runtimeManifest(version, files), ...signed }, installed_at: new Date().toISOString(), source };
   writeJson(p.installed, inst);
   return inst;
 }
@@ -525,7 +525,12 @@ export class Boot {
     const b = r.body as Bundle;
     const installed = runtimeIntact(this.p);
     if (!o.force && installed && installed.source === 'hub' && installed.manifest.sha256 === b?.manifest?.sha256) return;
-    const v = verifyBundle(b, this.d.pinned);
+    const checked = verifyBundle(b, this.d.pinned);
+    // Never back to an older runtime than the hub's one installed, however validly signed: an old
+    // bundle served again could bring back a fixed bug.
+    const v: typeof checked = checked.ok && installed?.source === 'hub' && runtimeOrder(b.manifest, installed.manifest) < 0
+      ? { ok: false, reason: `It is older than the runtime installed (${installed.version}).` }
+      : checked;
     if (!v.ok) {
       const sha = String(b?.manifest?.sha256 ?? '');
       const again = this.state.refused_bundle?.sha256 === sha && Date.now() - Date.parse(this.state.refused_bundle.at) < 10 * 60_000;
@@ -536,7 +541,7 @@ export class Boot {
       await call(s.url, 'POST', '/api/v1/mesh/devices/me/report', { token: s.token, body: { problem: 'runtime_update_refused', detail: v.reason } }).catch(() => {});
       return;
     }
-    const inst = installRuntime(this.p, v.files, b.manifest.version, 'hub');
+    const inst = installRuntime(this.p, v.files, b.manifest.version, 'hub', { ...(Number.isInteger(b.manifest.epoch) ? { epoch: b.manifest.epoch } : {}), ...(typeof b.manifest.issued_at === 'string' ? { issued_at: b.manifest.issued_at } : {}) });
     this.#saveState({ refused_bundle: null, last_update: { version: inst.version, at: inst.installed_at, result: 'installed' } });
     this.say(`Installed runtime ${inst.version}, signed by the hub.`);
     this.#leaveSafeMode();

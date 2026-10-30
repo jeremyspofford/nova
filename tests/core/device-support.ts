@@ -30,10 +30,10 @@ export async function until<T>(read: () => T | Promise<T>, done: (v: T) => boole
 export interface Bundle { manifest: ReturnType<typeof runtimeManifest>; signature: string; signer: string; files: Record<string, string> }
 
 // A bundle of `files`, signed by `keys` (pinned or not: the test decides).
-export function bundle(files: Record<string, string>, keys: DeviceKeys, version?: string): Bundle {
+export function bundle(files: Record<string, string>, keys: DeviceKeys, version?: string, signed: { epoch?: number; issued_at?: string } = {}): Bundle {
   const raw = Object.fromEntries(Object.entries(files).map(([k, v]) => [k, Buffer.from(v)]));
   const draft = runtimeManifest('', raw);
-  const manifest = { ...draft, version: version ?? `test+${draft.sha256.slice(0, 12)}` };
+  const manifest = { ...draft, version: version ?? `test+${draft.sha256.slice(0, 12)}`, ...signed };
   return { manifest, signature: signMessage(keys.ed25519.privateKey, runtimeManifestMessage(manifest)), signer: keys.ed25519.publicKey, files: Object.fromEntries(Object.entries(files).map(([k, v]) => [k, Buffer.from(v).toString('base64')])) };
 }
 

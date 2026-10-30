@@ -332,7 +332,9 @@ export function helloProofMessage(challenge: string, claim: HelloClaim): Buffer 
 // that map, and a version. The hub signs `nova-runtime-v1.<canonical JSON of the manifest>`; the
 // boot agent checks the signature against its pinned keys and every file against its hash before
 // anything replaces the runtime it has.
-export interface RuntimeManifest { version: string; sha256: string; files: Record<string, string> }
+// `epoch` and `issued_at` (both signed with the rest) order bundles, so a device never goes back
+// to an older runtime, however validly signed: a higher epoch wins, then the later signing time.
+export interface RuntimeManifest { version: string; sha256: string; files: Record<string, string>; epoch?: number; issued_at?: string }
 export function runtimeManifestMessage(m: RuntimeManifest): Buffer {
   return Buffer.from(`nova-runtime-v1.${canonicalJson(m)}`, 'utf8');
 }

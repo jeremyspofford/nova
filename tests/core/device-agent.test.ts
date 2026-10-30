@@ -325,6 +325,34 @@ test('updates: a bundle signed by an unpinned key is refused and reported; a sig
   }
 });
 
+test('an older runtime, even one a pinned key signed, never replaces a newer one', async () => {
+  const m = await mesh();
+  try {
+    const newer = bundle({ ...goodFiles(), 'runtime.ts': `${goodFiles()['runtime.ts']}\n// newer\n` }, m.hub.keys, undefined, { epoch: 2, issued_at: '2026-10-30T10:00:00.000Z' });
+    m.hub.bundle = newer;
+    await m.boot.start({ signals: false });
+    assert.equal(runtimeIntact(m.dev.p)?.version, newer.manifest.version);
+    // A bundle the same key signed earlier, served again (a replay, or a node that fell behind).
+    const older = bundle(goodFiles(), m.hub.keys, undefined, { epoch: 2, issued_at: '2026-10-29T10:00:00.000Z' });
+    m.hub.bundle = older;
+    await m.boot.update({ force: true });
+    assert.equal(runtimeIntact(m.dev.p)?.version, newer.manifest.version, 'the newer runtime stays');
+    assert.ok(m.lines.some((l) => /Refused a runtime update from the hub: It is older than the runtime installed/.test(l)), m.lines.join('\n'));
+    assert.equal(m.hub.reports.at(-1)?.problem, 'runtime_update_refused');
+    // From a lower epoch (a hub that was replaced), however recently it was signed.
+    m.hub.bundle = bundle(goodFiles(), m.hub.keys, undefined, { epoch: 1, issued_at: '2026-10-31T10:00:00.000Z' });
+    await m.boot.update({ force: true });
+    assert.equal(runtimeIntact(m.dev.p)?.version, newer.manifest.version);
+    // A newer one is taken.
+    const newest = bundle(goodFiles(), m.hub.keys, undefined, { epoch: 3, issued_at: '2026-10-29T09:00:00.000Z' });
+    m.hub.bundle = newest;
+    await m.boot.update();
+    assert.equal(runtimeIntact(m.dev.p)?.version, newest.manifest.version);
+  } finally {
+    await m.stop();
+  }
+});
+
 test('three crashes in a minute: safe mode, said in the heartbeat; a new signed runtime brings it back', async () => {
   const m = await mesh();
   try {

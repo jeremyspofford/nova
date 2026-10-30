@@ -46,6 +46,13 @@ export function sameRoster(a: SignedRoster | null, b: SignedRoster): boolean {
   return canonicalJson(ra) === canonicalJson(rb);
 }
 
+// Which of two signed runtimes is newer: the higher epoch, then the later signing time. A manifest
+// without them (an older hub's, or this agent's own files) counts as oldest.
+export function runtimeOrder(a: Pick<RuntimeManifest, 'epoch' | 'issued_at'>, b: Pick<RuntimeManifest, 'epoch' | 'issued_at'>): number {
+  const t = (m: Pick<RuntimeManifest, 'issued_at'>) => (m.issued_at && !Number.isNaN(Date.parse(m.issued_at)) ? Date.parse(m.issued_at) : 0);
+  return (a.epoch ?? 0) - (b.epoch ?? 0) || t(a) - t(b);
+}
+
 export interface Bundle { manifest: RuntimeManifest; signature: string; signer: string; files: Record<string, string> }
 
 // The runtime's files, checked: names are plain file names, a pinned key signed the manifest, the

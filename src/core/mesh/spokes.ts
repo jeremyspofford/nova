@@ -239,7 +239,10 @@ export class Spokes extends EventEmitter {
   // The runtime agent, signed by this node. Built once per process: the files don't change under a
   // running hub, and a promoted standby signs its own.
   runtime(): RuntimeBundle {
-    this.#bundle ??= runtimeBundle(this.#version, (m) => this.#identity.sign(m), this.#identity.publicKey);
+    // Signed again when the epoch changes (this node became hub), so it orders after any bundle
+    // the hub before it signed.
+    const epoch = this.#devices.state().epoch;
+    if (this.#bundle?.manifest.epoch !== epoch) this.#bundle = runtimeBundle(this.#version, (m) => this.#identity.sign(m), this.#identity.publicKey, { epoch, issued_at: this.#now().toISOString() });
     return this.#bundle;
   }
 }

@@ -86,6 +86,13 @@ failed before the fix.
   items up to 768 kB a call, and an item that can never fit (queued by an
   older agent) is answered here as refused ("too big to send … never sent",
   marked `local`) so the rest flows.
+- **No runtime downgrades.** The runtime manifest now carries `epoch` and
+  `issued_at`, signed with the rest (a node signs its bundle again when its
+  epoch changes). The boot agent refuses a validly signed bundle that orders
+  before the hub-signed one installed (lower epoch, or same epoch and signed
+  earlier), and reports it like any refused update. A manifest without them
+  counts as oldest. A promoted standby's clock doesn't matter: its epoch is
+  higher.
 
 **2026-10-30 (M4 review): trust, pairing and access fixes.**
 
