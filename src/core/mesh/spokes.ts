@@ -78,7 +78,11 @@ export class Spokes extends EventEmitter {
 
   // A device agent says it is alive: last_seen now (not throttled, so Online is exact), its
   // capabilities, versions and whether it is in safe mode. Entering safe mode is a problem.
-  heartbeat(device: Device, body: Record<string, unknown>): { ok: true; epoch: number; runtime: { version: string }; restart_runtime?: true } {
+  // A factory reset of this hub (resilience/reset.ts): each computer hears it in its next
+  // heartbeat's reply, and `told` is called once it has.
+  resetNotice: { id: string; said: string; told: (device: Device) => void } | null = null;
+
+  heartbeat(device: Device, body: Record<string, unknown>): { ok: true; epoch: number; runtime: { version: string }; restart_runtime?: true; hub_reset?: { id: string; said: string } } {
     const at = this.#now().toISOString();
     const caps = body.capabilities;
     if (caps !== undefined && (!Array.isArray(caps) || caps.length > 32 || !caps.every((c) => typeof c === 'string' && /^[a-z][a-z0-9._-]{0,39}$/.test(c)))) {
@@ -103,7 +107,9 @@ export class Spokes extends EventEmitter {
     if (body.hardware !== undefined) this.emit('hardware', this.#devices.get(device.id), body.hardware);
     // A restart asked for by a repair playbook (M7b) goes out once, with this reply.
     const restart = safe && this.#restart.delete(device.id);
-    return { ok: true, epoch: this.#devices.state().epoch, runtime: { version: this.runtime().manifest.version }, ...(restart ? { restart_runtime: true } : {}) };
+    const reset = this.resetNotice;
+    if (reset) reset.told(device);
+    return { ok: true, epoch: this.#devices.state().epoch, runtime: { version: this.runtime().manifest.version }, ...(restart ? { restart_runtime: true } : {}), ...(reset ? { hub_reset: { id: reset.id, said: reset.said } } : {}) };
   }
 
   // Asks a computer's boot agent, at its next heartbeat in safe mode, to start its runtime again

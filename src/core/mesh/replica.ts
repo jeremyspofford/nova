@@ -129,7 +129,10 @@ export function ask(url: string, o: { method?: string; headers?: Record<string, 
 
 export const SYNC_AAD = (standbyId: string, after: number) => Buffer.from(`nova-sync-v1|${standbyId}|${after}`, 'utf8');
 
-export interface SyncPayload { v: 1; hub_id: string; standby_id: string; epoch: number; after: number; rows: LogRow[]; upto: number; more: boolean; head: number }
+// `reset`: the hub was factory reset (resilience/reset.ts). The standby wipes its copy, says so at
+// /mesh/reset/ack, and stops copying.
+export interface ResetNotice { id: string; said: string }
+export interface SyncPayload { v: 1; hub_id: string; standby_id: string; epoch: number; after: number; rows: LogRow[]; upto: number; more: boolean; head: number; reset?: ResetNotice }
 
 export interface ReplicaStatus {
   hub: { id: string; url: string; name: string | null };
@@ -165,6 +168,7 @@ export class Replica extends EventEmitter {
   #seenEpoch: (epoch: number) => void;
   #forgotten: (records: Record<string, unknown>[]) => void;
   #failoverAfterS: () => number | null;
+  #reset: ((notice: ResetNotice) => Promise<string>) | null;
   #waitS: number;
   #token: string | null = null;
   #lastTime = 0;
@@ -182,7 +186,7 @@ export class Replica extends EventEmitter {
   constructor(o: {
     sync: SyncLog; identity: MeshIdentity; log: Log; now: () => Date; role: () => RoleFile; hubName: () => string | null;
     epoch: () => number; seenEpoch: (epoch: number) => void; forgotten: (records: Record<string, unknown>[]) => void;
-    failoverAfterS: () => number | null; waitS?: number;
+    failoverAfterS: () => number | null; waitS?: number; reset?: (notice: ResetNotice) => Promise<string>;
   }) {
     super();
     this.#sync = o.sync;
@@ -195,6 +199,7 @@ export class Replica extends EventEmitter {
     this.#seenEpoch = o.seenEpoch;
     this.#forgotten = o.forgotten;
     this.#failoverAfterS = o.failoverAfterS;
+    this.#reset = o.reset ?? null;
     this.#waitS = o.waitS ?? 20;
   }
 
@@ -241,6 +246,13 @@ export class Replica extends EventEmitter {
     if (payload.hub_id !== role.hub.id || payload.standby_id !== role.device_id || payload.after !== after) throw new Refused('A sync answer was meant for a different hub or standby.');
     if (payload.epoch < this.#epoch()) throw new Refused(`The node at ${role.hub.url} is at epoch ${payload.epoch}, older than this standby knows (${this.#epoch()}). It isn’t the hub any more.`);
     this.#seenEpoch(payload.epoch);
+    // The hub was reset: nothing more is copied. The copy is wiped first, then the hub is told.
+    if (payload.reset && typeof payload.reset.id === 'string') {
+      this.#running = false;
+      const said = this.#reset ? await this.#reset(payload.reset) : 'This standby can’t wipe its copy by itself.';
+      await this.#call(`${role.hub.url}/api/v1/mesh/reset/ack`, { method: 'POST', body: { id: payload.reset.id, said } }).catch(() => {});
+      return false;
+    }
     const applied = this.#sync.apply(payload, this.#forgotten);
     this.#head = payload.head;
     this.#ok();
