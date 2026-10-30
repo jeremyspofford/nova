@@ -91,6 +91,49 @@ Branch `m6b/models`; the plan's §2. Code in `src/core/models/`, migration `0010
 - **Not done.** A whisper adapter; downloads through anything but Ollama; a spoke's models are
   read only while it is awake (last seen otherwise); fallback is per call, before output.
 
+**2026-10-30 (M6 review fixes): capture.** Branch `m6-fix/capture`. Tests:
+`tests/core/capture-review.test.ts` (the reviewer's probes as real tests), new cases in
+`tests/core/capture-rules.test.ts` and `tests/ui/m6a-capture.test.ts`; each failed on the code
+before its fix.
+
+- **Private windows (blocker).** `isPrivate` now reads what the source sent, before any clipping
+  (a browser puts its marker at the end of a long title, past the 300 characters kept), on both
+  ways in (Screenpipe and the device inbox), and checks the address too (`about:privatebrowsing`).
+  Markers cover Chrome/Edge/Brave/Opera/Vivaldi/Firefox/Safari wording in English, French,
+  German, Spanish, Italian, Portuguese and Dutch (plus a little Polish and Swedish), with accents
+  and case folded. It is best effort and says so: real Screenpipe sends no private flag, so the
+  posture copy and Settings › Capture say detection is by window title and recommend Screenpipe's
+  own ignored-windows setting. A page title that merely mentions "incognito" is dropped too; that
+  errs the right way.
+- **Backlogs and late items.** Screenpipe answers newest first, so the adapter now reads by
+  windows of time, oldest first: a window holding more than 1,000 items is narrowed, then read
+  whole, paged until a short page (not by the first total, since new items push older ones later).
+  The cursor is the end of the last window read whole (never past it); 60 requests per type per
+  pull, and the rest carries on next pull. Each pull asks again from `after − lookback` (5 minutes
+  by default, `PATCH /capture/sources/{id} {lookback_minutes}` 1–240, never before consent or
+  resume), and the cursor keeps the ids taken within the lookback, so a late, older item arrives
+  once. The old cursor shape (`ids`) is still read. Answers over 16 MB are refused.
+  Still missed: an item reported later than the lookback, and anything Screenpipe never kept.
+- **Exclusions.** A site matches a trailing-dot host, the window title as a host token (not part of
+  a longer name), and, for browser apps, the screen text. App names are folded (case, spaces,
+  `.exe`/`.app`) and a rule covers word-prefixed editions ("Signal" keeps out "Signal Beta", not
+  "Signalling Tool"); signals use the same folding without the prefix. A time window checks the
+  event's whole `[at, ended_at]` stretch. Settings says per kind what each keeps out, and that app
+  and site exclusions can't stop audio (time windows and spaces do).
+- **Who did it.** Promotions and accepted proposals are recorded as the caller, like consent and
+  forgetting: `device:<id>`, or `console` for the hub's own screen (was always `person`; consent's
+  `by` is now `console` there too). A promoted memory is still confirmed (the caller chose it).
+- **Smaller ones.** The indicator says "Capture state unknown" when the hub can't be reached (it
+  re-asks when the event stream drops or returns, and on `online`), never hiding while capture
+  might be on. A Screenpipe that isn't the hub's (`elsewhere`) makes the indicator say it needs
+  you. Paused copy says Screenpipe itself keeps recording. A revoked device's sources go off.
+  Accepting a suggestion opens the remember sheet and asks which space (the sheet never fills in
+  "personal" for an unclassified event; the API's own default is unchanged). A standby's pages
+  reload capture on sync (`capture.synced()` on `applied`). Triage that no provider could answer
+  (no rule, no provider) leaves the event waiting instead of marking it looked at, so it is
+  triaged once a provider exists. Device times without a zone are refused; a zoneless Screenpipe
+  time is read as UTC (Screenpipe keeps UTC).
+
 **2026-10-30 (M6a): capture — the Capture API, consent, storage, classification, promotion, Screenpipe.**
 Branch `m6a/capture`; the plan's §1. Code in `src/core/capture/`, migration `0009_capture.sql`
 (numbered 0009 alongside M6b's; the integrator renumbers).
