@@ -17,7 +17,6 @@ body {
     radial-gradient(80% 60% at 100% 100%, color-mix(in srgb, var(--accent-secondary) 10%, transparent), transparent 70%),
     linear-gradient(180deg, var(--bg-raised), var(--bg-base) 60%);
   background-color: var(--bg-base);
-  transition: background-color var(--motion-transition) var(--motion-ease), color var(--motion-transition) var(--motion-ease);
 }
 button, input, textarea, select { font: inherit; color: inherit; }
 /* A time or a date reads at least as well as secondary text (4.5:1 in every package), whatever

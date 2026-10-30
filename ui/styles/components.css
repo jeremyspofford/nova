@@ -77,7 +77,6 @@
   border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text-secondary);
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), color var(--motion-duration-fast) var(--motion-ease);
 }
 .icon-btn:hover { background: var(--surface-card-hover); color: var(--text-primary); }
 .icon-btn[aria-expanded="true"] { color: var(--accent-primary); }
@@ -112,7 +111,6 @@
   color: var(--text-secondary);
   font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body);
   text-decoration: none;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), color var(--motion-duration-fast) var(--motion-ease);
 }
 .nav-item:hover { color: var(--text-primary); background: var(--surface-card-hover); }
 .nav-item[aria-current="page"] { color: var(--accent-primary); background: var(--surface-card); }
@@ -251,7 +249,6 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
 .orb-core {
   background:
     radial-gradient(circle at 34% 28%, var(--orb-hi) 0%, var(--orb-c) 36%, color-mix(in srgb, var(--orb-c) 70%, var(--orb-g)) 78%, color-mix(in srgb, var(--orb-c) 60%, transparent) 100%);
-  transition: filter var(--motion-duration-slow) var(--motion-ease);
 }
 .orb-swirl {
   opacity: 0;
@@ -295,7 +292,6 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(var(--blur-glass));
   -webkit-backdrop-filter: blur(var(--blur-glass));
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), border-color var(--motion-duration-fast) var(--motion-ease);
 }
 .card-title {
   display: flex;
@@ -428,7 +424,7 @@ button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transp
   font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body);
   color: var(--text-primary);
   text-decoration: none;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), border-color var(--motion-duration-fast) var(--motion-ease), opacity var(--motion-duration-fast) var(--motion-ease);
+  transition: opacity var(--motion-duration-fast) var(--motion-ease);
 }
 .btn:hover { background: var(--surface-card-hover); }
 /* Primary: lit with the accent, the label in the primary text colour (checked for contrast
@@ -640,7 +636,6 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(var(--blur-glass));
   -webkit-backdrop-filter: blur(var(--blur-glass));
-  transition: border-color var(--motion-duration-fast) var(--motion-ease);
 }
 .composer:focus-within { border-color: var(--accent-primary); }
 .composer textarea {
@@ -667,7 +662,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--accent-primary) 24%, var(--bg-raised));
   color: var(--text-primary);
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), scale var(--motion-duration-fast) var(--motion-ease);
+  transition: scale var(--motion-duration-fast) var(--motion-ease);
 }
 .mic { border-color: var(--border-strong); background: transparent; color: var(--text-secondary); }
 .mic[aria-pressed="true"] { border-color: var(--accent-primary); color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
@@ -773,7 +768,6 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes rise { from { opacity: 0; translate: 0 var(--space-1); } }
 @keyframes breathe { from { opacity: 0.3; } to { opacity: 1; } }
-@keyframes found { from { background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent); } to { background-color: transparent; } }
 @keyframes stamp { from { opacity: 0; scale: 1.35; } 60% { opacity: 1; } }
 .view-enter { animation: rise var(--motion-transition) var(--motion-ease) both; }
 @media (prefers-reduced-motion: reduce) {

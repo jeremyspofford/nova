@@ -1,6 +1,6 @@
 {
   "id": "aurora",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "kind": "design-system",
   "name": "Aurora",
   "description": "Morning light through frosted glass.",
@@ -73,7 +73,7 @@
     "motion/pulse": "1600ms",
     "motion/transition": "240ms",
     "motion/duration-fast": "160ms",
-    "motion/duration-slow": "360ms",
+    "motion/duration-slow": "300ms",
     "motion/ease": "cubic-bezier(0.28, 0.11, 0.21, 1)",
     "layout/rail-width": "72px",
     "layout/content-max": "720px",

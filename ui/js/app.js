@@ -416,11 +416,14 @@ function renderAll({ enter = false } = {}) {
   } else scrollToEnd(true);
 }
 
-// Briefly mark what a link pointed at.
+// Briefly mark what a link pointed at: the mark stays for a moment, long enough to see where it
+// is, then goes (wait: expiry).
+const FOUND_MS = 1600;
+let found = null;
 function flash(node) {
-  node.classList.remove('is-found');
-  void node.offsetWidth;
+  if (found) { clearTimeout(found.timer); found.node.classList.remove('is-found'); }
   node.classList.add('is-found');
+  found = { node, timer: setTimeout(() => { node.classList.remove('is-found'); found = null; }, FOUND_MS) };
 }
 
 function renderThread() {

@@ -107,6 +107,20 @@ export const REDUCED_MOTION: Readonly<Record<string, string>> = Object.freeze({
 });
 export const REDUCED_MOTION_MAX_MS = 200;
 const LOOPS = ['motion/breathe', 'motion/pulse'];
+// Amendment 2026-10-30-C Part 2 (M9): a transition or a one-off animation takes 150–300 ms, and its
+// curve never overshoots (no bounce or elastic). The two loops (the orb breathing, a working pulse)
+// show a state for as long as it lasts, so they aren't held to the range; they stop under reduced
+// motion.
+export const MOTION_MIN_MS = 150;
+export const MOTION_MAX_MS = 300;
+export const TRANSITION_TOKENS: readonly string[] = Object.freeze(['motion/transition', 'motion/duration-fast', 'motion/duration-slow']);
+// A cubic-bezier whose y control points leave [0, 1] overshoots its end (or its start): a bounce.
+export function overshoots(easing: string): boolean {
+  const m = /^cubic-bezier\(([^)]*)\)$/.exec(easing.trim());
+  if (!m) return false;
+  const [, y1, , y2] = m[1]!.split(',').map((x) => Number(x.trim()));
+  return [y1!, y2!].some((y) => y < 0 || y > 1);
+}
 
 // ---- value syntax --------------------------------------------------------------------------
 
@@ -362,6 +376,18 @@ export function validatePackage(input: unknown): { ok: boolean; problems: string
     }
     const label = accentLabel(set);
     if (label && label.ratio < 4.5) out.push(`${lead}nothing reads on accent/primary: the best of ${ACCENT_LABELS.join(', ')} is ${label.ratio.toFixed(2)}:1; it needs 4.5:1 (labels on accent buttons).`);
+  }
+
+  // Motion: transitions in 150–300 ms, and no curve that bounces, in the default set and each mode.
+  for (const [mode, set] of [['', tokens], ...Object.entries(modes).map(([m, v]) => [m, v])] as [string, Record<string, unknown>][]) {
+    const lead = mode ? `In ${mode} mode, ` : '';
+    for (const name of TRANSITION_TOKENS) {
+      const v = set[name];
+      if (typeof v !== 'string' || !validValue('duration', v)) continue;
+      if (ms(v) < MOTION_MIN_MS || ms(v) > MOTION_MAX_MS) out.push(`${lead}${name} must be ${MOTION_MIN_MS}–${MOTION_MAX_MS}ms (calm, and never felt as a wait); got ${v}.`);
+    }
+    const ease = set['motion/ease'];
+    if (typeof ease === 'string' && validValue('easing', ease) && overshoots(ease)) out.push(`${lead}motion/ease overshoots (${ease}): no bounce or elastic motion; keep both y values between 0 and 1.`);
   }
 
   // Reduced motion: loops stop, transitions stay short.

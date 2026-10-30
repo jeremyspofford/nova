@@ -133,7 +133,6 @@
   background: none;
   font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body);
   color: var(--text-secondary);
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), color var(--motion-duration-fast) var(--motion-ease);
 }
 .act svg { width: 16px; height: 16px; }
 .act:hover { background: var(--surface-card-hover); color: var(--text-primary); }
@@ -178,7 +177,6 @@
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
   text-underline-offset: 3px;
-  transition: text-decoration-color var(--motion-duration-fast) var(--motion-ease);
 }
 .prose a:hover { text-decoration-color: var(--accent-primary); }
 .prose strong { font-weight: 600; }
@@ -232,8 +230,9 @@
 a.margin-link { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .margin-note.is-quiet { color: var(--text-faint); }
 
-/* A turn or memory a link pointed at: a wash that fades. */
-.is-found { animation: found calc(var(--motion-duration-slow) * 4) var(--motion-ease) both; border-radius: var(--radius-card); }
+/* A turn or memory a link pointed at: a quiet wash for a moment (app.js flash takes it off). Only
+   transform and opacity may animate (M9), so it comes and goes without motion. */
+.is-found { background-color: color-mix(in srgb, var(--accent-primary) 14%, transparent); border-radius: var(--radius-card); }
 
 /* ---- the front page: reports from scheduled work ---------------------------- */
 
@@ -275,7 +274,6 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   margin: 0 calc(-1 * var(--space-3));
   border-radius: var(--radius-card);
   outline-offset: -2px;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease);
 }
 .act-entry:hover, .act-entry:focus-within { background: var(--surface-card-hover); }
 .act-entry + .act-entry { margin-top: 1px; }
@@ -366,7 +364,6 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   height: 24px;
   border-radius: var(--radius-pill);
   background: var(--text-faint);
-  transition: background var(--motion-duration-fast) var(--motion-ease);
 }
 .switch-knob {
   position: absolute;
@@ -433,7 +430,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   margin: 0 calc(-1 * var(--space-3));
   border-radius: var(--radius-card);
   outline-offset: -2px;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), opacity var(--motion-transition) var(--motion-ease);
+  transition: opacity var(--motion-transition) var(--motion-ease);
 }
 .memory-item:hover, .memory-item:focus-within { background: var(--surface-card-hover); }
 .memory-item + .memory-item { margin-top: 1px; }
@@ -479,7 +476,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   margin: 0 calc(-1 * var(--space-3));
   border-radius: var(--radius-card);
   outline-offset: -2px;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), opacity var(--motion-transition) var(--motion-ease);
+  transition: opacity var(--motion-transition) var(--motion-ease);
 }
 .skill:hover, .skill:focus-within { background: var(--surface-card-hover); }
 .skill + .skill { margin-top: 1px; }
@@ -576,7 +573,6 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   padding: var(--space-4);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--radius-card);
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), border-color var(--motion-duration-fast) var(--motion-ease);
 }
 .dropzone.is-over { border-color: var(--accent-primary); background: var(--bg-raised); }
 .dropzone .skill-about { margin-top: 0; }
