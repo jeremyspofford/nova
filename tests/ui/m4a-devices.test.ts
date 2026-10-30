@@ -95,10 +95,10 @@ test('M4a: pair a phone by QR, approve it with matching digits, then revoke it',
       const r = indexedDB.open('nova-device');
       r.onsuccess = () => {
         const g = r.result.transaction('keys').objectStore('keys').get('self');
-        g.onsuccess = () => ok({ ed: g.result.ed.privateKey.extractable, x: g.result.x.privateKey.extractable, pub: g.result.ed.publicKey.extractable });
+        g.onsuccess = () => ok({ ed: g.result.ed.privateKey.extractable, x: 'x' in g.result, pub: g.result.ed.publicKey.extractable });
       };
     }));
-    assert.deepEqual(keys, { ed: false, x: false, pub: true }, 'the private keys can’t be read, not even by the page');
+    assert.deepEqual(keys, { ed: false, x: false, pub: true }, 'the private key can’t be read, not even by the page; no X25519 private key is kept');
     if (shots) await shoot(phone.page, join(shots, 'phone-digits.png'));
 
     // The hub's approval sheet opens by itself with the same digits; Confirm waits for the box.
