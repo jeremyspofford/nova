@@ -508,8 +508,13 @@ export class Models extends EventEmitter {
     }
     const local = failed.find((f) => f.where === 'local');
     const budget = failed.find((f) => f.budget);
+    // A role on a computer that didn't come up waits for that computer, and says so: Nova woke it
+    // once and won't keep sending wake packets; the work runs when it is heard from again.
+    const p = this.placement(req.role);
+    const spoke = p && p.device !== HUB ? this.#deviceName(p.device) : null;
+    const back = spoke ? `when ${spoke} is on again (Nova won’t keep waking it; turn it on, and the work runs once it checks in)` : 'when the model is back';
     const err = local
-      ? new ModelsWaiting('capacity', req.role, `Waiting on local capacity: ${local.why.replace(/\.$/, '')}.${mode === 'local-only' ? ' This is local-only, so it stays on your devices and runs when the model is back.' : budget ? ` ${budget.why}` : ''}`)
+      ? new ModelsWaiting('capacity', req.role, `Waiting on local capacity: ${local.why.replace(/\.$/, '')}.${mode === 'local-only' ? ` This is local-only, so it stays on your devices and runs ${back}.` : budget ? ` ${budget.why}` : ''}`)
       : new ModelsWaiting(budget ? 'budget' : 'capacity', req.role, budget ? `Waiting on the cloud budget: ${budget.why}` : `Waiting: ${failed.map((f) => f.why).join(' ')}`);
     if (req.task_id) this.#waiting(req.task_id, err);
     throw err;
@@ -549,7 +554,8 @@ export class Models extends EventEmitter {
     // the person's devices while the receipt said local.
     if (this.#remote(device, model)) throw new LocalDown(cloudWords(model).replace(/\.$/, ''));
     const rt = new Ollama(url);
-    const receipt = this.#receipt(req, mode, 'ollama', model, 'local');
+    // The receipt names the computer that answered; plain `ollama` is the hub's own runtime.
+    const receipt = this.#receipt(req, mode, device === HUB ? 'ollama' : `ollama@${slug(this.#deviceName(device))}`, model, 'local');
     try {
       if (req.role === 'embedder') {
         const e = await rt.embed(model, req.input!);
@@ -1262,6 +1268,7 @@ export class Models extends EventEmitter {
 
 export interface WakeResult { ok: boolean; waited_ms: number; limit_ms: number; words: string }
 
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+|-+$/g, '').slice(0, 48) || 'device';
 const cloudWords = (model: string) => `${model} runs in Ollama’s cloud, not on your devices, so it can’t serve a role: what it is given would leave them. Pick a model that runs locally.`;
 const secs = (ms: number) => `${Math.max(1, Math.round(ms / 1000))} s`;
 const usd = (n: number) => (n > 0 && n < 0.01 ? 'under $0.01' : `$${n.toFixed(2)}`);

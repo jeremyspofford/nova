@@ -203,7 +203,7 @@ export function createCore(o: CoreOptions) {
     db, log, home: o.home, workspace, extensions, ledger, verifier, receipts, profile, now,
     custom: o.agent, secret: providerSecret, meshHost: (h) => meshHosts().has(h),
     fire: (input) => triggers.fire(input),
-    models: { infer: (r) => models!.infer(r), probe: (role) => models!.probe(role) },
+    models: { infer: (r) => models!.infer(r), probe: (role) => models!.probe(role), cloudName: () => models?.cloud()?.name ?? null },
     budget: (brief) => models?.budgetBlock(brief.task_id, brief.constraints.max_cost_usd) ?? null,
   });
   // The device mesh: this node's keys, the registry, enrollment, and who may do what.

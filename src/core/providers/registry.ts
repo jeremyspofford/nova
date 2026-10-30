@@ -106,6 +106,8 @@ export interface ModelsLink {
     purpose?: string; context_items?: { kind: 'memory' | 'file' | 'skill' | 'session' | 'standing'; ref: string; sha256: string }[]; max_cost_usd?: number; format?: 'json'; signal?: AbortSignal; onText?: (t: string) => void;
   }): Promise<{ text?: string; aborted?: boolean; notes: string[]; usage: Usage; model: string; provider: string }>;
   probe(role: 'reasoner' | 'triage-text'): Promise<string | null>;
+  // The cloud model the person set for local-preferred and cloud-allowed work, by name, if any.
+  cloudName?(): string | null;
 }
 
 export interface ProvidersOptions {
@@ -233,7 +235,14 @@ export class Providers extends EventEmitter {
     // A provider set to a role uses Nova's own local models (M6b): the model manager keeps it on
     // the person's devices, and its receipts say where each call went.
     if (x.manifest.adapter.implementation === 'openai-compatible' && roleOf(c)) {
-      return { coarse: 'local', receipt: 'local', words: `Runs on your own devices: the ${roleOf(c)} model Settings › Models assigns.` };
+      // The model manager keeps each call inside the task's privacy mode; outside local-only, the
+      // cloud model set there may answer, and the words say so.
+      const mode = this.#o.profile.privacyDefault();
+      const cloud = mode === 'local-only' ? null : this.#o.models?.cloudName?.() ?? null;
+      const words = !cloud ? `Runs on your own devices: the ${roleOf(c)} model Settings › Models assigns.`
+        : mode === 'local-preferred' ? `Runs on the ${roleOf(c)} model Settings › Models assigns, on your devices; when it can’t answer, ${cloud} may, off your devices. Each receipt says where.`
+        : `Uses ${cloud}, off your devices, when Nova chooses it (within your cloud budget), and otherwise the ${roleOf(c)} model on your devices. Each receipt says where.`;
+      return { coarse: 'local', receipt: 'local', words };
     }
     const url = impl.url?.(c);
     // Ollama serves its cloud models (names ending -cloud or :cloud) through the same local address,

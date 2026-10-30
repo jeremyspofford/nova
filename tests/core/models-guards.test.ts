@@ -11,7 +11,9 @@ import { checkHardware } from '../../src/core/models/hardware.ts';
 import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
 import { startFakeWol } from '../../scripts/stand-ins/fake-wol.js';
 import { startFakeOpenAI } from '../../scripts/stand-ins/fake-openai.js';
+import { ModelsWaiting } from '../../src/core/models/index.ts';
 import { INSTALLED, hubHardware, modelsCore, say } from '../support/models.ts';
+import { FAKE_CLAUDE, calcTask, script, writeCalc } from '../support/providers.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until<T>(read: () => T | Promise<T>, done: (v: T) => boolean, ms = 10_000): Promise<T> {
@@ -270,5 +272,106 @@ test('a spoke whose heartbeat moved to another address gets nothing at the old o
     assert.deepEqual(c2.models.setWake({ target: '192.168.1.255:9' }), { target: '192.168.1.255:9' });
   } finally {
     await c2.close();
+  }
+});
+
+// ---- the review's minor findings -----------------------------------------------------------------
+
+test('budgets: a coding agent’s wait is the budget’s alone; the cloud model’s price isn’t its problem; tokens without a cost are priced or said', { timeout: 30_000 }, async () => {
+  const o = await startFakeOllama({ models: INSTALLED });
+  const cloud = await startFakeOpenAI({ model: 'cloud-model' });
+  const { core } = modelsCore(o.url, { privacy: 'cloud-allowed' });
+  try {
+    await core.models.accept();
+    writeCalc(core.workspace.root);
+    core.providers.configure('claude-code', { command: `node ${FAKE_CLAUDE} --script ${script('honest')}` });
+    core.providers.enable('claude-code', { approved: true });
+    // An unpriced cloud model with a budget: that stops the cloud model, not a coding agent.
+    core.models.setCloud({ name: 'Example cloud', base_url: cloud.url, model: 'cloud-model' }, true);
+    core.models.setBudget({ per_period_usd: 5, period: 'month' });
+    assert.equal(core.models.budgetBlock(null), null);
+    assert.match(String(core.models.budgetBlock(null, undefined, { cloud: true })), /can’t tell what Example cloud costs/);
+
+    // Over budget: the agent's task waits, and the local reasoner being up doesn't release it.
+    core.models.setBudget({ per_period_usd: 0, period: 'month' });
+    const task = core.ledger.create({ ...calcTask('claude-code'), origin: { kind: 'user' } } as never);
+    const waiting = await settled(core, task.id, (t) => t.state === 'waiting');
+    assert.match(String(waiting.reason), /Waiting on the cloud budget/);
+    const attempts = waiting.attempts;
+    assert.deepEqual(await core.models.check(), []);
+    await sleep(300);
+    assert.equal(core.ledger.get(task.id).attempts, attempts, 'not run again while the budget is still used');
+
+    // Usage that came back as tokens and no cost: with a budget, Nova says it can't count it, and
+    // counts it once it has a price.
+    core.models.setBudget({ per_period_usd: 1, period: 'month' });
+    core.db.run('INSERT INTO cloud_usage (at, task_id, session_id, provider, model, tokens_in, tokens_out, cost_usd, ref) VALUES (?, NULL, NULL, ?, ?, ?, ?, NULL, ?)', new Date().toISOString(), 'remote:example-agent', 'example-agent-model', 100_000, 50_000, 'test:unpriced');
+    assert.match(String(core.models.budgetBlock(null)), /can’t tell what example-agent-model cost/);
+    core.models.setPrices({ 'example-agent-model': { usd_per_mtok_in: 2, usd_per_mtok_out: 10 } });
+    assert.ok(Math.abs(core.models.spent() - 0.7) < 1e-9, String(core.models.spent()));
+    assert.equal(core.models.budgetBlock(null), null);
+  } finally {
+    await core.close();
+    await o.close();
+    await cloud.close();
+  }
+});
+
+test('a computer’s answers have receipts that name it; a role on a sleeping computer that won’t wake says it waits for that computer', { timeout: 30_000 }, async () => {
+  const hubOllama = await startFakeOllama({ models: INSTALLED });
+  const spoke = await startFakeOllama({ models: [INSTALLED[2]!] });
+  const wol = await startFakeWol({});
+  const { core } = modelsCore(hubOllama.url, { privacy: 'local-only' });
+  try {
+    const d = pairSpoke(core);
+    core.models.setWake({ target: wol.target, wait_s: 1 });
+    await core.models.assign('reasoner', { device: d.id, model: 'example-deep:32b', url: spoke.url });
+    const r = await core.models.infer({ role: 'reasoner', messages: say('hello') });
+    assert.equal(core.receipts.list().find((x) => x.id === r.receipt_id)!.provider, 'ollama@example-desktop');
+    spoke.setAsleep(true);
+    await assert.rejects(core.models.infer({ role: 'reasoner', messages: say('x'.repeat(3000)) }), /runs when Example desktop is on again/);
+    assert.equal(wol.packets.length, 1);
+  } finally {
+    await core.close();
+    await hubOllama.close();
+    await spoke.close();
+    await wol.close();
+  }
+});
+
+test('Ollama failing on its side (out of memory) makes local-only work wait on local capacity, not fail', async () => {
+  const srv = createServer(async (req, res) => {
+    for await (const _ of req) { /* drain */ }
+    const json = (status: number, o: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+    if (req.url === '/api/version') return json(200, { version: '0.0.1' });
+    if (req.url === '/api/tags') return json(200, { models: [{ name: 'example-mid:8b', size: 5e9, digest: 'a'.repeat(64), details: { parameter_size: '8B' }, capabilities: ['completion'] }] });
+    if (req.url === '/api/chat') return json(500, { error: 'model requires more system memory (12 GiB) than is available (4 GiB)' });
+    json(404, {});
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+  const { core } = modelsCore(`http://127.0.0.1:${(srv.address() as { port: number }).port}`, { privacy: 'local-only' });
+  try {
+    await core.models.assign('reasoner', { model: 'example-mid:8b' });
+    await assert.rejects(core.models.infer({ role: 'reasoner', messages: say('hi') }), (e: Error) => e instanceof ModelsWaiting && /Waiting on local capacity: .*more system memory/.test(e.message));
+  } finally {
+    await core.close();
+    srv.close();
+  }
+});
+
+test('a provider set to a role says honestly, per privacy mode, where its calls may go', async () => {
+  const o = await startFakeOllama({ models: INSTALLED });
+  const cloud = await startFakeOpenAI({ model: 'cloud-model' });
+  const { core } = modelsCore(o.url, { privacy: 'local-preferred' });
+  try {
+    core.providers.configure('openai-compatible', { role: 'reasoner' });
+    core.models.setCloud({ name: 'Example cloud', base_url: cloud.url, model: 'cloud-model' }, true);
+    assert.match(core.providers.view('openai-compatible').egress.words, /when it can’t answer, Example cloud may, off your devices/);
+    core.profile.set('privacy', 'default', 'local-only', 'settings');
+    assert.match(core.providers.view('openai-compatible').egress.words, /^Runs on your own devices/);
+  } finally {
+    await core.close();
+    await o.close();
+    await cloud.close();
   }
 });

@@ -145,8 +145,9 @@ export class Ollama {
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      // A model that isn't there is a capacity problem too: the role points at nothing.
-      if (res.status === 404) throw new RuntimeDown(errorText(res.status, text, this.host));
+      // A model that isn't there is a capacity problem too: the role points at nothing. So is the
+      // runtime failing on its side (5xx: out of memory, a runner that crashed): the work waits.
+      if (res.status === 404 || res.status >= 500) throw new RuntimeDown(errorText(res.status, text, this.host));
       throw new Error(errorText(res.status, text, this.host));
     }
     let text = '';
@@ -154,7 +155,8 @@ export class Ollama {
     let done = false;
     try {
       for await (const line of ndjson(res, o.signal)) {
-        if (typeof line.error === 'string') throw new Error(`Ollama at ${this.host}: ${line.error}`);
+        // An error mid-reply is the runtime's own trouble (memory, a crashed runner): capacity.
+        if (typeof line.error === 'string') throw new RuntimeDown(`Ollama at ${this.host}: ${line.error}`);
         const piece = line.message?.content;
         if (typeof piece === 'string' && piece) { text += piece; o.onText?.(piece); }
         if (line.done === true) {
@@ -175,7 +177,7 @@ export class Ollama {
   async embed(model: string, input: string | string[]): Promise<{ embeddings: number[][]; tokens_in?: number }> {
     const res = await this.#fetch('/api/embed', { method: 'POST', body: JSON.stringify({ model, input }), timeoutMs: 120_000 });
     const body = await res.text().catch(() => '');
-    if (res.status === 404) throw new RuntimeDown(errorText(res.status, body, this.host));
+    if (res.status === 404 || res.status >= 500) throw new RuntimeDown(errorText(res.status, body, this.host));
     if (!res.ok) throw new Error(errorText(res.status, body, this.host));
     const j = JSON.parse(body) as { embeddings?: number[][]; prompt_eval_count?: number };
     return { embeddings: Array.isArray(j.embeddings) ? j.embeddings : [], ...(typeof j.prompt_eval_count === 'number' ? { tokens_in: j.prompt_eval_count } : {}) };
