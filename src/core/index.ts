@@ -32,6 +32,9 @@ export type { Worker, Egress } from './workers.ts';
 export type { Checker } from './verify.ts';
 export type { Lane, LanedWorker, Task } from './ledger.ts';
 // The design-system schema and its checks, for the token lint and the package check (scripts/).
+// The mesh's wire format and the limiter, shared with the device agent (src/device) and sync.
+export * from './mesh/wire.ts';
+export { SlidingWindowLimiter } from './mesh/limiter.ts';
 export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
 
 export interface CoreOptions {
