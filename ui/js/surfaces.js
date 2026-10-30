@@ -160,6 +160,15 @@ export async function openTask(id) {
     openSheet(approvalSheet(t, { worker }), { label: 'Needs your OK' });
     return;
   }
+  // A provider has finished and Nova asks before running the test on what it wrote.
+  if (t.state === 'waiting') {
+    const run = await api('GET', `/providers/tasks/${encodeURIComponent(id)}/test-run`).catch(() => null);
+    if (run) {
+      const worker = store.workers.find((w) => w.id === t.owner) ?? null;
+      openSheet(approvalSheet(t, { worker, run }), { label: 'Needs your OK' });
+      return;
+    }
+  }
   // A browser task with its browser open: the live view, where the person can take over.
   if (t.owner === 'browser' && isOpen(t)) {
     const view = await api('GET', `/browser/tasks/${encodeURIComponent(id)}`).catch(() => null);
@@ -204,6 +213,7 @@ export async function approve(form) {
   if (form.dataset.allow) return confirmAllow(form);
   if (form.dataset.promote) return confirmPromote(form);
   if (form.dataset.provider) return confirmProvider(form);
+  if (form.dataset.testRun) return approveTestRun(form.dataset.testRun);
   const id = form.dataset.task;
   const tier = Number(form.dataset.tier);
   const confirm = form.querySelector('input[name="confirm"]');
@@ -212,6 +222,15 @@ export async function approve(form) {
     await api('POST', `/tasks/${encodeURIComponent(id)}/approve`, tier === 3 ? { confirm: true } : {});
     closeSheet();
     toast('Approved. Nova carries on.');
+    await load(['tasks']);
+  } catch (e) { toast(e.message); }
+}
+
+async function approveTestRun(id) {
+  try {
+    await api('POST', `/providers/tasks/${encodeURIComponent(id)}/test-run`, {});
+    closeSheet();
+    toast('Approved. Nova runs the test.');
     await load(['tasks']);
   } catch (e) { toast(e.message); }
 }

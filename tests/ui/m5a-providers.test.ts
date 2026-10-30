@@ -6,12 +6,14 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { stop, until } from '../acceptance/support.ts';
 import { ROOT, blank, browser, device, finishSetup, ready, shoot, shotsDir } from './support.ts';
-import { startFakeOpenAI } from '../../scripts/stand-ins/fake-openai.js';
+import { filesReply, startFakeOpenAI } from '../../scripts/stand-ins/fake-openai.js';
+import { FIXED_SUM, calcTask, writeCalc } from '../support/providers.ts';
 
 test('M5a: Settings › Providers recommends one chat model; set up, turned on with an OK, chosen, and chat goes through it', async (t) => {
   const b = await browser();
   if (typeof b === 'string') return t.skip(b);
-  const fake = await startFakeOpenAI({ model: 'example-chat', reply: () => 'Hello from the local model.' });
+  // A chat answers in words; a task (the JSON files contract) with the fix for calc/sum.mjs.
+  const fake = await startFakeOpenAI({ model: 'example-chat', reply: (req: { messages?: { content?: string }[] }) => (/Reply with one JSON object/.test(req.messages?.[0]?.content ?? '') ? filesReply([{ path: 'calc/sum.mjs', content: FIXED_SUM }], 'It adds now.') : 'Hello from the local model.') });
   const m = blank('nova-ui-providers-');
   // The model command counts as the cloud (agent_egress undeclared), and setup picks local-only.
   const nova = await m.start({ NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(ROOT, 'scripts/fake-agent.js')}` });
@@ -59,6 +61,27 @@ test('M5a: Settings › Providers recommends one chat model; set up, turned on w
     const { body } = await m.send('POST', '/api/sessions', { text: 'hello' });
     const s = await until<any>(() => m.get(`/api/sessions/${body.id}`), (x) => x.live === null && x.session.turns[0]?.state !== 'open', 400);
     assert.match(JSON.stringify(s.session.turns[0].items), /Hello from the local model\./);
+
+    // A task for it: once the model has written its fix, Nova asks before running the test on it,
+    // in the approval sheet, showing what changed and what running it means.
+    writeCalc(join(m.home, 'workspace'));
+    const made = await m.send('POST', '/api/v1/tasks', calcTask('openai-compatible', { privacy_mode: 'local-only' }));
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    await until<any>(() => m.get(`/api/v1/tasks/${made.body.id}`), (x) => x.state === 'waiting', 400);
+    await page.goto(`${m.base}/tasks`);
+    await ready(page);
+    await page.locator(`[data-action="open-task"][data-task="${made.body.id}"]`).first().click();
+    const ask = page.locator(`.approval-sheet[data-test-run="${made.body.id}"]`);
+    await ask.waitFor();
+    const words = (await ask.textContent()) ?? '';
+    assert.match(words, /This runs code the provider wrote, as you, with access to your files\./);
+    assert.match(words, /calc\/sum\.mjs/);
+    assert.match(words, /\+export const sum = \(a, b\) => a \+ b;/);
+    if (shots) await shoot(page, join(shots, 'm5a-test-run-approval.png'));
+    await ask.locator('[data-action="approve"]').click();
+    await page.locator('.toast', { hasText: 'Nova runs the test' }).waitFor();
+    const done = await until<any>(() => m.get(`/api/v1/tasks/${made.body.id}`), (x) => ['done', 'failed'].includes(x.state), 400);
+    assert.equal(done.state, 'done', done.reason);
     assert.deepEqual(errors, [], 'no errors in the page');
   } finally {
     await b.close();

@@ -331,10 +331,31 @@ const TIER_WORDS = {
 };
 const PRIVACY_WORDS = { 'local-only': 'Nothing leaves this machine.', 'local-preferred': 'Local first; cloud help only if needed, and recorded.', 'cloud-allowed': 'Nova may use cloud services for this.' };
 
-export function approvalSheet(t, { worker = null } = {}) {
+// `run`: Nova asking to run a brief's test on what a provider wrote (GET /providers/tasks/{id}/test-run).
+// The person sees each file it changed, a short preview of the change, and what running it means.
+function testRunSheet(t, run, where) {
+  const KIND = { added: 'added', modified: 'changed', deleted: 'deleted' };
+  const files = run.files.map((f) => `<li><p class="card-line"><strong>${esc(f.path)}</strong> · ${esc(KIND[f.kind] ?? f.kind)} · +${Number(f.added)} −${Number(f.removed)}</p>${f.preview ? `<pre tabindex="0">${esc(f.preview)}</pre>` : ''}</li>`).join('');
+  return `<form class="approval-sheet" data-tier="2" data-test-run="${esc(t.id)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
+  <p class="sheet-line">${esc(run.provider_name)} has finished. Before Nova checks its work, it needs to run <code>${esc(run.command)}</code>.</p>
+  <p class="sheet-line"><strong>${esc(run.words)}</strong></p>
+  ${run.files.length ? `<h3 class="sheet-heading">What it changed</h3><ul class="checks">${files}</ul>${run.more ? `<p class="sheet-line is-faint">And ${Number(run.more)} more.</p>` : ''}` : ''}
+  <dl class="facts"><dt>Who did it</dt><dd>${where}</dd><dt>Why it asks</dt><dd>${esc(TIER_WORDS[2])}</dd></dl>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve">Run the test</button>
+    <button type="button" class="btn" data-action="cancel-task" data-task="${esc(t.id)}">Cancel the task</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+export function approvalSheet(t, { worker = null, run = null } = {}) {
   const tier = Number(t.approval_tier) >= 3 ? 3 : 2;
   const EGRESS = { none: 'stays on this machine', local: 'stays on your devices', remote: 'reaches the internet' };
   const where = worker ? `${esc(worker.name ?? worker.id)}${EGRESS[worker.egress] ? ` · ${EGRESS[worker.egress]}` : ''}` : esc(t.owner);
+  if (run) return testRunSheet(t, run, where);
   return `<form class="approval-sheet" data-tier="${tier}" data-task="${esc(t.id)}" method="dialog">
   <p class="sheet-kicker">${status('needs-you')}</p>
   <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
