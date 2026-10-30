@@ -514,7 +514,13 @@ export function renderDevices() {
     : !m.listening
       ? 'Other devices can’t reach this Nova yet, so only this one is here. To pair a phone or a computer, start Nova with a mesh address (NOVA_MESH_URL); the README says how.'
       : `Phones, browsers and computers you’ve paired. Devices reach Nova at ${m.public_url}.`;
-  const add = m?.listening && approver && !copy ? `<div class="sheet-actions"><button type="button" class="btn${store.requests.length ? '' : ' primary'}" data-action="add-device">Add a device</button></div>` : '';
+  // A device that wasn't allowed to approve can't add one; it says where to instead of just
+  // leaving the button out.
+  const add = !m?.listening || copy
+    ? ''
+    : approver
+      ? `<div class="sheet-actions"><button type="button" class="btn${store.requests.length ? '' : ' primary'}" data-action="add-device">Add a device</button></div>`
+      : '<p class="memory-lede">This device can’t add devices. To pair another, use the hub’s own screen, or let this device approve from there.</p>';
   return `<section class="memory-section" id="devices" aria-labelledby="set-devices"><h2 class="memory-heading" id="set-devices">Devices</h2>
 <p class="memory-lede">${esc(lede)}</p>
 ${waiting ? `<ul class="settings-list">${waiting}</ul>` : ''}

@@ -133,6 +133,15 @@ test('M4a: pair a phone by QR, approve it with matching digits, then revoke it',
     for (let i = 0; i < 50 && !(await cachedApiPaths()).includes('/api/v1/tasks'); i++) await new Promise((r) => setTimeout(r, 100));
     assert.ok((await cachedApiPaths()).includes('/api/v1/tasks'), 'kept for offline use while paired');
 
+    // The phone wasn't allowed to approve, so it can't add devices; its Devices section says where
+    // to, rather than just leaving the button out.
+    await phone.page.goto(`${mesh}/settings#devices`);
+    await ready(phone.page);
+    const own = phone.page.locator('#devices');
+    await own.locator('.device-row[data-device]').first().waitFor();
+    assert.equal(await own.locator('[data-action="add-device"]').count(), 0);
+    assert.match((await own.textContent()) ?? '', /To pair another, use the hub’s own screen/);
+
     // The hub lists it; revoking is tier 3; the phone is sent back to /pair.
     await hub.page.goto(`${m.base}/settings#devices`);
     await ready(hub.page);
