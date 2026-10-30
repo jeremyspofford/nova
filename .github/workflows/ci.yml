@@ -42,12 +42,14 @@ jobs:
     # completed from the PWA alone. In CI it never skips: no browser is a failure.
     name: UI gate (Chromium)
     runs-on: ubuntu-latest
+    # The Playwright image for the pinned playwright-core (package.json): its Chromium and system
+    # libraries, the same image scripts/ui-test.sh uses locally. (Playwright 1.56 can't install
+    # its browser on the runner's own Ubuntu 26.04.)
+    container: mcr.microsoft.com/playwright:v1.56.1-noble
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
       - run: npm ci
-      # The browser build this playwright-core expects, with the system libraries it needs.
-      - run: node node_modules/playwright-core/cli.js install --with-deps chromium
       - run: npm run test:ui
         env:
           NOVA_UI_SHOTS: ${{ runner.temp }}/ui-shots
