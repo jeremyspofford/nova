@@ -103,14 +103,11 @@ export class MeshRole extends EventEmitter {
     return { role: s.role, epoch: s.epoch, standby: null, replica: { ...this.replica()!, sync: this.#replica?.status() ?? null } };
   }
 
-  // The standby's lag, measured from when it was approved at the earliest.
+  // The standby's lag, counted from when it was approved at the earliest.
   lag() {
     const s = this.#o.devices.state();
     const standby = s.standby_id ? this.#o.devices.find(s.standby_id) : null;
-    const lag = this.#o.sync.lag();
-    const since = standby?.approved_at ? Math.round((this.#o.now().getTime() - Date.parse(standby.approved_at)) / 1000) : lag.seconds;
-    const seconds = Math.min(lag.seconds, Math.max(0, since));
-    return { ...lag, seconds, behind: lag.rows > 0 && seconds > 60 };
+    return this.#o.sync.lag(standby?.approved_at ? Date.parse(standby.approved_at) : 0);
   }
 
   // ---- running ----------------------------------------------------------------------------------
@@ -127,7 +124,7 @@ export class MeshRole extends EventEmitter {
     this.#o.sync.startJournal();
     this.#fence ??= setInterval(() => { void this.fence().catch(() => {}); }, FENCE_EVERY_MS);
     this.#fence.unref();
-    this.#lag ??= setInterval(() => this.#watchLag(), LAG_EVERY_MS);
+    this.#lag ??= setInterval(() => this.checkLag(), LAG_EVERY_MS);
     this.#lag.unref();
   }
 
@@ -154,7 +151,9 @@ export class MeshRole extends EventEmitter {
     this.#replica.on('applied', (a) => this.emit('applied', a));
     this.#replica.on('failover', (f: { down_s: number; error: string }) => {
       this.#o.log.problem('mesh', `The hub was unreachable for ${f.down_s} s, so this standby is making itself the hub, as you set it to (mesh.auto_failover_after_s).`, { detail: f.error });
-      void this.promote({ confirm: true, by: 'nova', auto: true }).catch((e) => this.#o.log.problem('mesh', 'The standby couldn’t make itself the hub.', { detail: (e as Error)?.stack ?? String(e) }));
+      void this.promote({ confirm: true, by: 'nova', auto: true }).catch((e) => {
+        if (!this.#closed) this.#o.log.problem('mesh', 'The standby couldn’t make itself the hub.', { detail: (e as Error)?.stack ?? String(e) });
+      });
     });
     this.#replica.start();
   }
@@ -167,7 +166,8 @@ export class MeshRole extends EventEmitter {
 
   // ---- the hub: serving the standby ---------------------------------------------------------------
 
-  #watchLag(): void {
+  // A standby that falls behind is a problem on the hub, once until it catches up again.
+  checkLag(): void {
     try {
       if (this.role() !== 'hub' || !this.#o.devices.state().standby_id) return;
       const lag = this.lag();
@@ -175,7 +175,7 @@ export class MeshRole extends EventEmitter {
       if (lag.behind && !was) {
         this.#o.db.run('UPDATE sync_state SET behind_since = ? WHERE id = 1', this.#o.now().toISOString());
         const standby = this.#o.devices.find(this.#o.devices.state().standby_id!);
-        this.#o.log.problem('sync', `The standby${standby ? ` “${standby.name}”` : ''} has fallen behind: ${lag.rows} ${lag.rows === 1 ? 'change' : 'changes'} not copied yet, the oldest ${lag.seconds} s old. If the hub failed now, those would be missing.`);
+        this.#o.log.problem('sync', `The standby${standby ? ` “${standby.name}”` : ''} has fallen behind: ${lag.rows} ${lag.rows === 1 ? 'change' : 'changes'} not copied yet, and nothing acknowledged for ${lag.seconds} s. If the hub failed now, those would be missing.`);
       } else if (!lag.behind && was) this.#o.db.run('UPDATE sync_state SET behind_since = NULL WHERE id = 1');
     } catch { /* closing */ }
   }
@@ -296,7 +296,8 @@ export class MeshRole extends EventEmitter {
       this.emit('promoted', { epoch, roster, task: task.id, auto: !!o.auto });
       this.emit('change', this.status());
       // The record runs in its own lane, so recovered work doesn't hold it up; give it a moment.
-      for (let i = 0; i < 100 && !TERMINAL.includes(this.#o.ledger.get(task.id).state); i++) await new Promise((r) => setTimeout(r, 20));
+      for (let i = 0; i < 100 && !this.#closed && !TERMINAL.includes(this.#o.ledger.get(task.id).state); i++) await new Promise((r) => setTimeout(r, 20));
+      if (this.#closed) throw new CoreError('conflict', 'Nova is stopping.');
       return { epoch, roster, task: this.#o.ledger.get(task.id), recovered };
     })();
     this.#promoting = work;
@@ -352,7 +353,7 @@ export class MeshRole extends EventEmitter {
           if (who.principal.kind !== 'device' || who.principal.device.id !== s.standby_id) throw new CoreError('forbidden', 'Only the standby acknowledges the sync log.');
           if (s.role !== 'hub') throw new CoreError('conflict', this.replica()!.reason);
           this.#o.sync.ack(Number(body.seq));
-          this.#watchLag();
+          this.checkLag();
           return this.lag();
         },
       },

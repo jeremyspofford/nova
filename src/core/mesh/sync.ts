@@ -12,7 +12,7 @@ import { dirname, join, normalize, sep } from 'node:path';
 import { CoreError } from '../errors.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
-import { HybridClock, parseHlc } from './wire.ts';
+import { HybridClock } from './wire.ts';
 
 // Replicated tables and their keys, as in migration 0006. Everything else stays on its own node.
 export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
@@ -114,14 +114,16 @@ export class SyncLog {
     this.#db.run('UPDATE sync_state SET acked_seq = MAX(acked_seq, ?), acked_at = ? WHERE id = 1', Math.min(seq, this.head()), this.#now().toISOString());
   }
 
-  // How far the standby is behind: entries it hasn't acknowledged, and how old the oldest is.
-  lag(): Lag {
+  // How far the standby is behind: entries it hasn't acknowledged, and for how long it hasn't
+  // acknowledged anything while there was something to take (counted from `notBefore`, when it was
+  // approved, at the earliest). A standby that keeps acknowledging is catching up, not behind.
+  lag(notBefore = 0): Lag {
     const s = this.#db.get<{ acked_seq: number; acked_at: string | null }>('SELECT acked_seq, acked_at FROM sync_state WHERE id = 1')!;
     const head = this.head();
-    const pending = this.#db.get<{ n: number; hlc: string | null }>('SELECT COUNT(*) AS n, MIN(hlc) AS hlc FROM sync_log WHERE seq > ?', s.acked_seq)!;
-    const oldest = pending.hlc ? parseHlc(pending.hlc)?.pt ?? null : null;
-    const seconds = pending.n && oldest ? Math.max(0, Math.round((this.#now().getTime() - oldest) / 1000)) : 0;
-    return { head, acked_seq: s.acked_seq, acked_at: s.acked_at, rows: pending.n, seconds, behind: pending.n > 0 && seconds > BEHIND_AFTER_S };
+    const rows = this.#db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sync_log WHERE seq > ?', s.acked_seq)!.n;
+    const base = Math.max(s.acked_at ? Date.parse(s.acked_at) : 0, notBefore);
+    const seconds = rows ? Math.max(0, Math.round((this.#now().getTime() - base) / 1000)) : 0;
+    return { head, acked_seq: s.acked_seq, acked_at: s.acked_at, rows, seconds, behind: rows > 0 && seconds > BEHIND_AFTER_S };
   }
 
   // A new standby starts from nothing: what an earlier one acknowledged says nothing about it.
@@ -246,6 +248,16 @@ export class SyncLog {
       for (const v of [t, t.replace(/\s+/g, ' ')]) needles.add(JSON.stringify(v).slice(1, -1));
     }
     let removed = 0;
+    try {
+      this.#purge(needles, (n) => { removed += n; });
+    } finally {
+      // The replaced entries' old pages leave the write-ahead log now.
+      if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    }
+    return removed;
+  }
+
+  #purge(needles: Set<string>, count: (n: number) => void): void {
     for (const n of needles) {
       const hit = this.#db.all<{ seq: number; tbl: string; pk: string }>(
         `SELECT seq, tbl, pk FROM sync_log WHERE (tbl = 'memory' OR (tbl = ? AND (pk = 'MEMORY.md' OR pk LIKE 'memory/%'))) AND instr(row, ?) > 0`, FILE, n,
@@ -253,10 +265,9 @@ export class SyncLog {
       for (const h of hit) {
         this.#db.run('DELETE FROM sync_log WHERE seq = ?', h.seq);
         if (h.tbl === FILE) { this.#logged?.delete(h.pk); this.#seen.delete(h.pk); }
-        removed++;
+        count(1);
       }
     }
-    return removed;
   }
 
   // ---- the standby applies -----------------------------------------------------------------------
@@ -275,12 +286,16 @@ export class SyncLog {
     for (const r of rows) this.#check(r);
     const gone: Record<string, unknown>[] = [];
     let files = 0;
+    // Entries that may have carried a forgotten memory's words: once replaced, the old pages are
+    // folded out of the write-ahead log at once, not whenever SQLite would.
+    let scrub = false;
     // The hub's order already satisfies its own foreign keys; entries arrive newest-per-row, so a
     // child can come before the row it points at. Checks are off only while applying.
     this.#db.raw.exec('PRAGMA foreign_keys = OFF');
     try {
       this.#db.tx(() => {
         for (const r of rows) {
+          if (r.tbl === 'memory' || (r.tbl === FILE && (r.pk === 'MEMORY.md' || r.pk.startsWith('memory/')))) scrub = true;
           if (r.op === 'put') this.#put(r.tbl, JSON.parse(r.row!) as Record<string, unknown>);
           else if (r.op === 'delete') {
             if (r.tbl === 'memory') {
@@ -298,6 +313,7 @@ export class SyncLog {
     } finally {
       this.#db.raw.exec('PRAGMA foreign_keys = ON');
     }
+    if (scrub && this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     if (gone.length) forgotten(gone);
     return { applied: rows.length, files };
   }
