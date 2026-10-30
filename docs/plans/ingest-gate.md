@@ -205,3 +205,17 @@ Branch `ingest/gate`. The ledger entry of the same date has the decisions in ful
   - 14 of 15 benign items pass with a model. One known false positive is quarantined, not blocked: an article quoting an injection phrase.
   - The canary test passes in three variants and fails with the guard switched off.
   - The tripwire saw no egress.
+
+### After the adversarial review (2026-10-30)
+
+The decisions are in the ledger entry "fixes from the adversarial review of #229". In short:
+- **B1:** failed reads are screened and taint the run.
+- **B2:** standing-file paths are normalised before the guard compares them.
+- **B3:** in a tainted run, an address the model put together asks; following a link the run read is free.
+- **B4:** every skill file is screened before anything is written. The skill goes in through a staging folder, and its files are trusted only while unchanged.
+- **S1:** origins never go in tag attributes.
+- **S2:** device notes wait as candidates unless they pass.
+- **S3:** `exec` output is screened in every run, and taints when a check flags it or the model is unsure. This replaces the "only while tainted" reading above.
+- **S4:** the tokenizer is linear and capped.
+- **S5:** the screen template is tier 3, and its questions can't be dropped.
+- **Folding and more hiding rules** are added, and the browser worker fails closed.

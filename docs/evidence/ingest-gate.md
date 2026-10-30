@@ -2,15 +2,40 @@
 
 Plan: `docs/plans/ingest-gate.md`. Decisions: `docs/LEDGER.md`, 2026-10-30, "the ingest gate". All of this runs in CI, as part of `npm test`. No real model is needed: the Noul screen is exercised with the stand-in Ollama answering fixed probabilities.
 
-## Runs (2026-10-30)
+## Runs (2026-10-30, after the review fixes)
 
-- **`npm run check`** (lint:tokens, check:themes, typecheck, unit, acceptance and chaos): **860 tests, 852 pass, 0 fail, 8 skipped.** The 8 skipped are the opt-in real-model and real-service runs, as before.
-  - The first full run had one failure: the M7 amendment's restore-in-place test, which checks process identity after a restart. It passed twice on its own and in the second full run, so I treat it as load-sensitive. It is unrelated to this change.
-- **`tests/ingest/`: 61 tests, 61 pass.**
-- **`scripts/ui-test.sh`** (Chromium in the Playwright container): **32 tests, 31 pass, 1 fail.**
-  - The failure was M6a's capture indicator, which timed out waiting for the "server not answering" state. Run alone, it passed. That test and its code are untouched here.
-  - M5c now also checks that each browser page read carries its screen's verdict. It passes.
+- **`npm run check`** (lint:tokens, check:themes, typecheck, unit, acceptance and chaos): **879 tests, 871 pass, 0 fail, 8 skipped.** The 8 skipped are the opt-in real-model and real-service runs.
+- **`tests/ingest/`: 80 tests, 80 pass.**
+- **`scripts/ui-test.sh`** (Chromium in the Playwright container): **32 tests, 32 pass.**
+  - M5c also checks that each browser page read carries its screen's verdict.
   - Screenshots the run rewrote were restored, and stray ones deleted.
+- **Before the review** (first PR version): 860/852/0/8, 61 ingest tests, and the UI run at 31 of 32. That run's one failure was an M6a timing flake, which passed when rerun alone.
+
+## Review fixes (adversarial review of #229)
+
+Each finding became a test that failed first. Where the finding is in the agent loop, the test goes through the runner (`createNova` with a scripted attacker model), not just `core.ingest.screen`. After the fixes, the reviewer's own probes report the following.
+
+| Finding | Test | After |
+|---|---|---|
+| B1: a failed fetch, its reason phrase raw, no taint | `review.test.js` B1 (×2) | The error says only "HTTP 500" and is screened; the run is tainted; `exec` asks; memory waits as a candidate. |
+| B2: `./USER.md`, `workspace/../SOUL.md` | `review.test.js` B2 | Five spellings each ask; the files are unchanged; the card shows the new content. |
+| B3: chunked, short-base64, reversed and split-vault leaks | `review.test.js` B3 (×3) | All 8 constructed addresses ask, and the collector gets nothing. A page's link and a search result's link are followed without asking. A memory-carrying search asks. Drafts and commands still ask. |
+| B4: a NUL byte skips the skill screen; its files are trusted | `review.test.js` B4 (×3) | Blocked despite the NUL byte; a file beside SKILL.md is screened; an undecodable file is refused; nothing lands on disk. An image holds the skill, said on its card, and so does no model. A changed skill file is screened when read. |
+| S1: the origin breaks out of the header | `review.test.js` S1 | The origin is an escaped `From:` line in the body; only the real `</outside>` remains. |
+| S2: device notes went straight into MEMORY.md | `device.test.ts` | A note the checks block is refused; others wait as candidates unless they pass. |
+| S3: command output unscreened | `review.test.js` S3 | Screened in every run. Ordinary output keeps auto-run; an injection in it taints. |
+| S4: quadratic tokenizer | `review-core.test.ts` | Six adversarial 2 MB inputs each finish in under 2 s (about 1.1 s in total); past the cap, never a pass. |
+| S5: screen template changes at tier 1 | `review-core.test.ts` | Tier 3; dropping or changing a question is refused. |
+| Minor: homoglyphs, full-width, spacing, soft hyphen | `review-core.test.ts` | Instructions and tags are found; tags are escaped; Cyrillic text is unchanged. |
+| Minor: hiding by tiny or percentage font, hsl, named colours, clip, descendant selectors; svg and noscript text | `review-core.test.ts` | Each blocks when it hides instructions. |
+| Minor: text/plain with markup | `review.test.js` | Hidden instructions in it block. |
+| Minor: corpus through the runner | `review.test.js` | 10 items served and fetched through the runner match the core's verdicts, with origin `127.0.0.1`. |
+| Minor: browser fails closed | `review-core.test.ts` | A screen that throws leaves the read blocked. |
+| Minor: forget candidate names the memory | `review.test.js` | "Forget “…”". |
+
+**Still not caught:**
+- Hiding by an external stylesheet or by script. That text is treated as visible, but still checked for instructions.
+- Without a model, a paraphrased injection that no pattern matches. In a page it is held back, never passed. In command output it reaches the model as data but doesn't taint.
 
 ## The tests
 
