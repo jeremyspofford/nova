@@ -32,15 +32,16 @@ export async function kill(r: Running) {
 
 // A hub and a standby home, each with a mesh listener on its own loopback port. The standby enrolls
 // with `boot.ts join --kind standby --nova-home <dir> --address <its mesh URL>` (M4b), which writes
-// its identity and mesh/role.json.
-export async function setup(prefix: string, hubExtra: (home: string) => void = () => {}) {
+// its identity and mesh/role.json. `hubEnv` adds to the hub's environment only (the M6 gate's test
+// clock and stand-in model runtime).
+export async function setup(prefix: string, hubExtra: (home: string) => void = () => {}, hubEnv: Record<string, string> = {}) {
   const hub = blank(`${prefix}-hub-`);
   const standby = blank(`${prefix}-standby-`);
   const standbyMesh = `http://127.0.0.1:${await freePort()}`;
   const env = (url: string) => ({ ...agent, NOVA_MESH_URL: url, NOVA_MESH_TRANSPORT: 'network', NOVA_SYNC_WAIT_S: '5' });
   hubExtra(hub.home);
   // The hub picks its own mesh port and says which.
-  const hubProc = await hub.start(env('http://127.0.0.1:0'));
+  const hubProc = await hub.start({ ...env('http://127.0.0.1:0'), ...hubEnv });
   const hubMesh = hubProc.mesh!;
   assert.match(hubMesh, /^http:\/\/127\.0\.0\.1:[1-9]\d*$/, 'the hub says the port it chose');
 
