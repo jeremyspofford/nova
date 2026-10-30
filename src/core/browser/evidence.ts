@@ -9,7 +9,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import type { Brief, Evidence } from '../envelope.ts';
 import type { Checker } from '../verify.ts';
-import { allowed } from './plan.ts';
+import { allowed, hasEffects, type Step } from './plan.ts';
 
 export const SCREENSHOT = 'final.png';
 export const FINAL_READ = 'final-read.json';
@@ -94,10 +94,15 @@ export function checkers(home: string): { screenshot: Checker; url: Checker } {
 
   const url: Checker = (e: Evidence, brief: Brief) => {
     if (e.kind !== 'url') return { ok: false, why: 'Not a link.' };
-    const inputs = (brief.inputs ?? {}) as { allowed_hosts?: string[]; verify?: { expect?: string[] } };
+    const inputs = (brief.inputs ?? {}) as { allowed_hosts?: string[]; steps?: Step[]; verify?: { expect?: string[]; url?: string } };
     const expect = (inputs.verify?.expect ?? []).filter((x) => typeof x === 'string' && x.trim());
+    // A plan that may have sent something proves it only through a page it named itself, read by
+    // Nova afresh: the page it ended on, and that page's own DOM, are the page's to steer.
+    const acting = Array.isArray(inputs.steps) && hasEffects({ steps: inputs.steps });
     if (!expect.length) return { ok: false, why: 'The task didn’t say what the final page must show, so a link alone can’t prove it.' };
     if (!Array.isArray(inputs.allowed_hosts) || !allowed(e.url, inputs.allowed_hosts)) return { ok: false, why: `${e.url} is outside the hosts this task declared, so Nova won’t read it.` };
+    if (inputs.verify?.url && e.url !== inputs.verify.url) return { ok: false, why: `Nova checks the page the plan named, ${inputs.verify.url}; not ${e.url}.` };
+    if (acting && !inputs.verify?.url) return { ok: false, why: 'The plan sends something but names no page that shows it happened (inputs.verify.url), so Nova can’t check it.' };
     let record: FinalRead;
     try {
       record = JSON.parse(readFileSync(join(taskDir(home, brief.task_id), FINAL_READ), 'utf8')) as FinalRead;
@@ -108,10 +113,17 @@ export function checkers(home: string): { screenshot: Checker; url: Checker } {
     const reads = record.reads.filter((r) => r.url === e.url && !r.error);
     if (!reads.length) return { ok: false, why: `Nova couldn’t read ${e.url} itself: ${record.reads.map((r) => r.error).filter(Boolean).join(' ') || 'no answer'}.` };
     const missingIn = (r: Read) => expect.filter((x) => !squash(r.text).includes(squash(x)));
-    const best = reads.find((r) => !missingIn(r).length);
     const how = (r: Read) => (r.source === 'fetch' ? `fetched ${e.url} again itself${r.status ? ` (HTTP ${r.status})` : ''}` : `read the final page in its own browser, afresh`);
-    if (best) return { ok: true, why: `Nova ${how(best)}, and it shows ${quote(expect)}.` };
-    const r = reads[0]!;
+    // Nova's own fetch, when it got one, is the read that counts: the page can write its DOM, not
+    // what Nova fetches. The DOM stands alone only when there was no fetch to be had, and only for
+    // a plan that just looked.
+    const fetched = reads.find((r) => r.source === 'fetch');
+    if (!fetched && acting) {
+      const why = record.reads.filter((x) => x.source === 'fetch' && x.error).map((x) => x.error).join(' ') || 'it didn’t try';
+      return { ok: false, why: `Nova couldn’t fetch ${e.url} again itself, and a page that sent something can’t vouch for itself (${why}).` };
+    }
+    const r = fetched ?? reads[0]!;
+    if (!missingIn(r).length) return { ok: true, why: `Nova ${how(r)}, and it shows ${quote(expect)}.` };
     return { ok: false, why: `Nova ${how(r)}, and it doesn’t show ${quote(missingIn(r))}.` };
   };
 

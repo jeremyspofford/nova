@@ -12,7 +12,7 @@ import type { Ledger, LanedWorker, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
 import { findChromium, type Found } from './chromium.ts';
 import { FINAL_READ, SCREENSHOT, refOf, refetch, squash, taskDir, type FinalRead, type Read } from './evidence.ts';
-import { NO_HUB, allowed, describe, hasEffects, hostOf, marksCommit, planEgress, sends, validatePlan, type Hub, type Plan, type Step } from './plan.ts';
+import { NO_HUB, allowed, describe, hasEffects, hostOf, marksCommit, planEgress, sends, validateBrowserBrief, validatePlan, type Hub, type Plan, type Step } from './plan.ts';
 import { INPUT_KEYS, Session, type Holder, type Input, type SessionView } from './session.ts';
 
 export const BROWSER_WORKER = 'browser';
@@ -47,7 +47,7 @@ export class Browser extends EventEmitter {
       // A person may take a while over their step.
       timeoutMs: 60 * 60_000,
       lane: () => ({ key: 'browser', max: 2 }),
-      egressFor: (brief: Brief) => planEgress(validatePlan(brief.inputs, self.#hub())),
+      egressFor: (brief: Brief) => planEgress(validateBrowserBrief(brief, self.#hub())),
       // A plan that types, chooses, clicks or hands the page to the person may have sent something
       // by the time it fails, so the ledger never reruns it by itself (workers.ts, Effects).
       effects: (brief: Brief) => (hasEffects(validatePlan(brief.inputs, self.#hub())) ? 'external' : 'none'),

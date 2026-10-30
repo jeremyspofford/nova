@@ -210,6 +210,29 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
   return { allowed_hosts: (hosts as string[]).map(normalizeHost), steps: steps as Step[], ...(o.verify ? { verify: o.verify as Plan['verify'] } : {}) };
 }
 
+// Whether what the brief asks for can prove the plan done. A `url` requirement is proven by
+// what the page shows, so it needs `verify.expect`. A plan with outside effects must be proven by
+// Nova's own read of a page the plan names (`verify.url`): a screenshot can't show a form arrived,
+// and the page the plan ends on is the page's to choose.
+export function checkProof(plan: Plan, required: readonly { kind: string }[]): string[] {
+  const out: string[] = [];
+  const wantsUrl = required.some((r) => r?.kind === 'url');
+  if (wantsUrl && !plan.verify) out.push('A url requirement can’t be proven without inputs.verify.expect: the text the final page must show.');
+  if (hasEffects(plan)) {
+    if (!wantsUrl) out.push('This plan types, chooses, clicks or hands the page to you, so add {kind: "url"} to evidence_required: a screenshot alone can’t show it happened.');
+    if (!plan.verify?.url) out.push('inputs.verify.url must name the page that shows it happened (Nova fetches it again itself, inside the allowed hosts), with inputs.verify.expect saying what it must show.');
+  }
+  return out;
+}
+
+// The plan in a brief, checked, and whether the brief can prove it done; every problem is listed.
+export function validateBrowserBrief(brief: { inputs?: unknown; evidence_required?: readonly { kind: string }[] }, hub: Hub = NO_HUB): Plan {
+  const plan = validatePlan(brief.inputs, hub);
+  const problems = checkProof(plan, brief.evidence_required ?? []);
+  if (problems.length) throw new CoreError('validation', 'This browser plan can’t be proven done.', problems);
+  return plan;
+}
+
 // One step in plain words, for progress and the ledger.
 export function describe(s: Step): string {
   if (s.label) return s.label;
