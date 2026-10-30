@@ -160,8 +160,10 @@ export async function openTask(id) {
     openSheet(approvalSheet(t, { worker }), { label: 'Needs your OK' });
     return;
   }
-  // A provider has finished and Nova asks before running the test on what it wrote.
-  if (t.state === 'waiting') {
+  // A provider has finished and Nova asks before running the test on what it wrote. Only a task whose
+  // history says so is asked about it (other waiting tasks, a browser waiting for a person, have none).
+  const lastAsk = events.findLastIndex((e) => e.kind === 'test_run_asked');
+  if (t.state === 'waiting' && lastAsk >= 0 && !events.slice(lastAsk).some((e) => e.kind === 'test_run_approved')) {
     const run = await api('GET', `/providers/tasks/${encodeURIComponent(id)}/test-run`).catch(() => null);
     if (run) {
       const worker = store.workers.find((w) => w.id === t.owner) ?? null;
