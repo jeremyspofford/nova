@@ -15,7 +15,7 @@ import { Setup } from './setup.ts';
 import { Extensions } from './extensions.ts';
 import { Design, type Scope } from './design.ts';
 import { Decisions, RulesProvider, Templates } from './decide.ts';
-import { Triggers, type Policy, type RuleInput } from './triggers.ts';
+import { TRIAGE, Triggers, triageRule, type Policy, type RuleInput } from './triggers.ts';
 import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInput, type UserState } from './memory.ts';
 import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
@@ -223,7 +223,15 @@ export function createCore(o: CoreOptions) {
   ledger.workers.set(models.worker.id, models.worker);
   // System 1 on the local sorting model (ADR-7): asked first once one is assigned; the rules answer
   // when it isn't, or can't.
-  decisions.register(new LocalModelProvider({ infer: (r) => models!.infer(r), ready: () => models!.decisionsByModel() }), { first: true });
+  // The person's policy still binds it: what the triage rule decides from a hard setting (a category
+  // turned off, quiet hours for a message) a model's answer may not overturn; it escalates instead.
+  const triageGuard = (t: { template_id: string }, inputs: Record<string, unknown>, answers: Record<string, unknown>) => {
+    if (t.template_id !== TRIAGE.template_id) return null;
+    const hard = inputs.category_off === true || (inputs.quiet_hours === true && inputs.action === 'message');
+    const rule = triageRule(inputs as never).answers.decision;
+    return hard && answers.decision !== rule ? `your settings say “${rule}” here (${inputs.category_off ? 'this is turned off' : 'quiet hours'}).` : null;
+  };
+  decisions.register(new LocalModelProvider({ infer: (r) => models!.infer(r), ready: () => models!.decisionsByModel(), guard: triageGuard }), { first: true });
   const enroll = new Enrollment({ db, log, devices, identity: meshIdentity, now, publicUrl });
   const access = new Access({ devices, mesh: meshInfo });
   // Hub, standby and sync (M4 plan §3).

@@ -9,6 +9,7 @@ import type { Egress } from '../workers.ts';
 import type { InferRequest, InferResult } from './index.ts';
 
 export const PROVIDER_ID = 'local-model';
+export type Guard = (t: Template, inputs: Record<string, unknown>, answers: Record<string, Answer>) => string | null;
 
 // The JSON schema a template's answer must follow.
 export function answerSchema(t: Template): Record<string, unknown> {
@@ -66,10 +67,14 @@ export class LocalModelProvider implements DecisionProvider {
   readonly questionTypes = QUESTION_TYPES;
   #infer: (r: InferRequest) => Promise<InferResult>;
   #ready: () => boolean;
+  #guard: Guard | undefined;
 
-  constructor(o: { infer: (r: InferRequest) => Promise<InferResult>; ready: () => boolean }) {
+  // `guard`: the person's hard policy for a template (System 1.5), which a model's answer may not
+  // contradict; it returns why, and the decision escalates instead.
+  constructor(o: { infer: (r: InferRequest) => Promise<InferResult>; ready: () => boolean; guard?: Guard }) {
     this.#infer = o.infer;
     this.#ready = o.ready;
+    this.#guard = o.guard;
   }
 
   // Only once a sorting model is assigned (and the person hasn't kept decisions on the rules).
@@ -100,6 +105,8 @@ export class LocalModelProvider implements DecisionProvider {
       const answers = Object.fromEntries(t.questions.filter((q) => q.type === 'choice').map((q) => [q.id, UNKNOWN]));
       return { template_id: t.template_id, version: t.version, answers, confidence: 0, provider: this.id, escalate: true, why: `The local model (${named}) answered outside the template: ${got.problems.join('; ')}.` };
     }
+    const against = this.#guard?.(t, checked, got.answers) ?? null;
+    if (against) return { template_id: t.template_id, version: t.version, answers: got.answers, confidence: 0, provider: this.id, escalate: true, why: `The local model (${named}) answered against your settings: ${against}` };
     return { template_id: t.template_id, version: t.version, answers: got.answers, confidence: got.confidence, provider: this.id, escalate: false, why: got.why ? `${got.why} (${named})` : `Answered by ${named}.` };
   }
 }

@@ -594,7 +594,7 @@ export class Models extends EventEmitter {
     const measured = this.wakeLatency(device);
     // Honest about latency: wait as long as it took last time, with a margin; never measured,
     // wait the setting (two minutes by default) and say that is a guess.
-    const limit = measured !== null ? Math.round(measured * 1.5) + 5000 : (typeof w.wait_s === 'number' && w.wait_s > 0 ? w.wait_s : 120) * 1000;
+    const limit = measured !== null ? Math.round(measured * 1.5) + 2000 : (typeof w.wait_s === 'number' && w.wait_s > 0 ? w.wait_s : 120) * 1000;
     const sent = this.#now();
     const started = Date.now();
     try {
@@ -808,6 +808,7 @@ export class Models extends EventEmitter {
     const stop = new AbortController();
     let refused: string | null = null;
     let last = 0;
+    let lastStatus = '';
     try {
       await rt.pull(model, (p) => {
         dl.status = p.status;
@@ -817,12 +818,13 @@ export class Models extends EventEmitter {
           dl.completed = [...layers.values()].reduce((n, l) => n + l.completed, 0);
           // The disk budget, as soon as the sizes are known: the download stops, nothing is kept.
           if (budget !== null && used + dl.total > budget && !refused) {
-            refused = `Refused: ${model} is ${gb(dl.total)}, and with the ${gb(used)} your models already use that is past the disk budget of ${gb(budget)}. Nova stopped the download.`;
+            refused = `Refused: ${model} is at least ${gb(dl.total)}, and with the ${gb(used)} your models already use that is past the disk budget of ${gb(budget)}. Nova stopped the download.`;
             stop.abort();
           }
         }
+        // Each new step (a layer, verifying, success) is shown; within one, a few times a second.
         const now = Date.now();
-        if (now - last > 200 || p.status === 'success') { last = now; this.emit('progress', { ...dl }); }
+        if (now - last > 150 || p.status !== lastStatus) { last = now; lastStatus = p.status; this.emit('progress', { ...dl }); }
       }, AbortSignal.any([signal, stop.signal]));
     } catch (e) {
       this.#downloads.delete(brief.task_id);
@@ -929,6 +931,23 @@ export class Models extends EventEmitter {
 
   // ---- settings through the API ------------------------------------------------------------------
 
+  // Where wake packets go (host:port; the device's own broadcast address by default) and how long
+  // to wait for a computer never woken before.
+  setWake(v: unknown): { target?: string; wait_s?: number } {
+    if (!isObj(v)) throw new CoreError('validation', 'wake is {target?, wait_s?}.');
+    const out: { target?: string; wait_s?: number } = {};
+    if (v.target !== undefined && v.target !== null && v.target !== '') {
+      if (typeof v.target !== 'string' || !/^[a-z0-9.-]+(:\d{1,5})?$/i.test(v.target)) throw new CoreError('validation', 'target is where wake packets go, host:port (like 192.168.1.255:9).');
+      out.target = v.target;
+    }
+    if (v.wait_s !== undefined && v.wait_s !== null) {
+      if (typeof v.wait_s !== 'number' || v.wait_s < 1 || v.wait_s > 900) throw new CoreError('validation', 'wait_s is how long to wait for a computer never woken before, 1 to 900 seconds.');
+      out.wait_s = v.wait_s;
+    }
+    this.#set('wake', out);
+    return out;
+  }
+
   setDiskBudget(v: unknown): void {
     if (v !== null && !(typeof v === 'number' && v > 0 && v <= 100_000)) throw new CoreError('validation', 'gb is the most disk models may use, in GB, or null for no budget.');
     this.#set('disk_budget_gb', v);
@@ -987,6 +1006,7 @@ export class Models extends EventEmitter {
       { method: 'DELETE', path: '/models/roles/{role}', summary: 'Leave a role unassigned.', handle: async ({ params }) => { this.unassign(params.role); return view(); } },
       { method: 'POST', path: '/models/pull', status: 201, summary: 'Download a model (a tier-2 ledger task: it waits for your OK). Refused at once when the disk budget can’t take it. digest: the sha256 to expect, if known.', body: '{model, device?, digest?}', handle: ({ body }) => this.requestPull(body) },
       { method: 'POST', path: '/models/remove', status: 201, summary: 'Remove an installed model (a tier-2 ledger task). A model serving a role must be replaced first.', body: '{model, device?}', handle: ({ body }) => this.requestRemove(body) },
+      { method: 'PUT', path: '/models/wake', summary: 'Where Wake-on-LAN packets go (host:port; by default the computer’s own broadcast address) and how long to wait for a computer never woken before (wait_s, 120 by default). After the first wake Nova waits as long as it took, half again, plus 2 s.', body: '{target?, wait_s?}', handle: async ({ body }) => { this.setWake(body); return view(); } },
       { method: 'PUT', path: '/models/disk-budget', summary: 'The most disk models may use, in GB (null for none). Downloads past it are refused.', body: '{gb}', handle: async ({ body }) => { this.setDiskBudget(body.gb); return view(); } },
       { method: 'PUT', path: '/models/budget', summary: 'Cloud budgets: per task and per period (day, week or month), in US dollars. Over budget, work waits with the reason; local stays the default.', body: '{per_task_usd?, per_period_usd?, period}', handle: async ({ body }) => { this.setBudget(body); return view(); } },
       { method: 'PUT', path: '/models/cloud', summary: 'The cloud model local-preferred and cloud-allowed work may use when it must (an OpenAI-compatible address; its key in the vault). A new address needs {confirm: true}. {cloud: null} removes it.', body: '{cloud, confirm?}', handle: async ({ body }) => { this.setCloud(body.cloud, body.confirm === true); return view(); } },
