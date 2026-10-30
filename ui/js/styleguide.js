@@ -182,7 +182,7 @@ function render() {
       ${label('Toasts')}<div class="sg-frame sg-toasts"><div class="toast">Forgotten.<button type="button" class="toast-btn">Undo</button></div><div class="toast" data-tone="alert">The heartbeat couldn’t check the schedules.<button type="button" class="toast-btn">See Health</button></div></div>
       ${label('Banner')}<div class="banner">You’re offline. What you see was saved earlier; nothing new can arrive or be sent until you’re back.</div>
       ${label('Settings rows')}<ul class="settings-list">${settingsRow({ title: 'Your name', note: 'What Nova calls you.', control: '<input class="input" value="Sam" aria-label="Your name"><button type="button" class="btn small">Save</button>' })}${settingsRow({ title: 'Appearance id', note: 'It lets this browser keep its own appearance.' })}</ul>
-      ${label('Empty state')}${emptyState({ line: 'No tasks yet.', orbState: 'idle' })}
+      ${label('Empty state')}${emptyState({ line: 'No tasks yet.' })}
       ${label('Buttons')}<div class="sg-demo-row"><button class="btn primary">Approve</button><button class="btn">Not now</button><button class="btn quiet">Cancel</button><button class="btn small">Pause</button><button class="btn" disabled>Disabled</button><button class="send" aria-label="Send">${icons.send}</button><button class="send is-stop" aria-label="Stop">${icons.stop}</button></div>
     </div>`),
     section('Conversation', 'Nova speaks from beside its orb; your words sit in the accent.', `<div class="sg-demo">

@@ -16,6 +16,10 @@
 @media (min-width: 600px) { :root { --viewport: medium; } }
 @media (min-width: 1024px) { :root { --viewport: wide; } }
 @media (min-width: 1280px) { :root { --aside-room: yes; } }
+/* Settings: a sidebar beside the open category from the expanded width class (840px, UX-RESEARCH
+   §7), the grouped list below it (app.js reads --settings-layout). */
+:root { --settings-layout: list; }
+@media (min-width: 840px) { :root { --settings-layout: sidebar; } }
 @media (horizontal-viewport-segments: 2) { :root { --segments: horizontal; } }
 @media (vertical-viewport-segments: 2) { :root { --segments: vertical; } }
 
@@ -74,8 +78,10 @@ body[data-layout="desktop"][data-room="yes"] .aside-toggle { display: inline-gri
 
 /* ---- per-layout arrangement of the views -------------------------------------------------- */
 
-/* The orb is the hero of Home on a phone and a tablet; on a desktop it lives in the rail. */
-body[data-layout="desktop"] .home-hero .orb { display: none; }
+/* The orb appears once per view (DESIGN-SYSTEM §1). On a phone it is Home's hero, and the top
+   bar's small orb everywhere else; beside a rail (tablet, desktop) it is the rail's, so Home
+   shows no second one. */
+body:not([data-layout="phone"]) .home-hero .orb { display: none; }
 body[data-layout="desktop"] .home-hero { align-items: flex-start; text-align: left; padding-top: var(--space-6); }
 body[data-layout="phone"] .home-hero .orb { --orb-size: calc(var(--space-8) * 2.6); }
 
@@ -87,9 +93,9 @@ body[data-layout="tablet"] .home [data-asideable] { display: none; }
 body[data-layout="desktop"][data-aside="off"] .home-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* The phone's top bar carries a small orb, since there is no rail; Home has the big one, so a
-   phone shows no top bar there at all. In a conversation the orb is Nova's avatar everywhere. */
+   phone shows no top bar there at all. Never a second orb in a conversation. */
 .topbar-orb { display: none; }
-body[data-layout="phone"] .topbar-orb, body[data-view="chat"] .topbar-orb { display: inline-flex; }
+body[data-layout="phone"] .topbar-orb { display: inline-flex; }
 body[data-layout="phone"][data-view="home"]:not([data-capturing="on"]) .topbar { display: none; }
 /* While anything is capturing, its indicator is on every page: a phone's Home keeps a top bar for
    it, without the small orb (Home has the big one). */
@@ -98,7 +104,6 @@ body[data-layout="phone"][data-view="home"] .topbar-orb { display: none; }
 /* Activity and Settings rows narrow down on a phone. */
 body[data-layout="phone"] .act-entry { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
 body[data-layout="phone"] .switch-word { display: none; }
-body[data-layout="phone"] .ds-grid { grid-template-columns: minmax(0, 1fr); }
 
 /* Memory and skill notes sit in the margin when the centre column has room for one. */
 body[data-layout="desktop"][data-room="yes"][data-aside="off"] .thread .margins {
@@ -121,3 +126,10 @@ body[data-layout="phone"] .dock { padding-left: var(--space-4); padding-right: v
 body:not([data-layout="phone"]):not([data-view="chat"]) .topbar-title {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
+
+/* A tablet showing Settings as sidebar and detail gives it the context pane's room: the sidebar is
+   the second pane (list-detail). */
+body[data-layout="tablet"][data-view="settings"][data-settings-layout="sidebar"] .shell {
+  grid-template: "rail main" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr);
+}
+body[data-layout="tablet"][data-view="settings"][data-settings-layout="sidebar"] .aside { display: none; }

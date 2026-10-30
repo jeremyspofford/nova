@@ -2,11 +2,13 @@
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
-import { ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, orb, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
+import { ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
-import { MODES, current as appearance, previewCss, rollback, setMode, use } from './theme.js';
+import { MODES, current as appearance, endPreview, fixContrast, follow, preview, previewingNow, rollback, setMode, syncedId, undoFix, use } from './theme.js';
+import { recommend } from './contrast.js';
+import { contrastView, undoPlan } from './look.js';
 import { openTakeover } from './takeover.js';
 
 // What the core has told this page, kept fresh by the event stream.
@@ -149,7 +151,7 @@ export function renderTasks(el, now = new Date()) {
 </section>`).join('');
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Tasks</h2>
 <p class="view-lede">Everything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.</p></header>
-${groups || emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.', orbState: 'idle' })}`;
+${groups || emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.' })}`;
 }
 
 // One task in the sheet: the approval when it waits for one, else its evidence and history.
@@ -303,7 +305,7 @@ ${store.resolved.length ? `<details class="panel raw"><summary>Dealt with recent
 function playbookBlock(p) {
   const pb = store.resilience?.playbooks?.[p.id];
   if (!pb) return '';
-  const did = (pb.repairs ?? []).slice(-3).map((r) => `<li>${esc(r.said)} <span class="is-faint">${esc(ago(r.at))}</span></li>`).join('');
+  const did = (pb.repairs ?? []).slice(-3).map((r) => `<li>${esc(r.said)} <time class="playbook-when" datetime="${esc(r.at)}">${esc(ago(r.at))}</time></li>`).join('');
   return `<div class="playbook" data-playbook="${esc(pb.id)}">
   ${did ? `<p class="settings-note"><b>What Nova did</b></p><ul class="steps">${did}</ul>` : pb.automatic ? `<p class="settings-note">${esc(pb.automatic)}</p>` : ''}
   <p class="settings-note"><b>What you can do</b></p><ol class="steps">${pb.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
@@ -391,11 +393,14 @@ export function renderYou() {
   const field = (id, value, labelText) => `<label class="sr-only" for="${id}">${esc(labelText)}</label><input class="input" id="${id}" value="${esc(value ?? '')}" maxlength="40" autocomplete="off">`;
   return `<section class="memory-section" id="you" aria-labelledby="set-you"><h2 class="memory-heading" id="set-you">You and Nova</h2>
 <ul class="settings-list">
-${settingsRow({ title: 'Your name', note: 'What Nova calls you.', control: `${field('you-name', i.user_name, 'Your name')}<button type="button" class="btn small" data-action="save-profile" data-section="user" data-key="name" data-field="you-name">Save</button>` })}
-${settingsRow({ title: 'Nova’s name', note: 'Only the name changes; the charter stays.', control: `${field('nova-name', i.name, 'Nova’s name')}<button type="button" class="btn small" data-action="save-profile" data-section="identity" data-key="name" data-field="nova-name">Save</button>` })}
-${settingsRow({ title: 'Directness', note: 'Nova always says when it thinks something’s wrong; this is how.', control: `<label class="sr-only" for="directness">Directness</label><select class="input" id="directness" data-action="set-profile" data-section="tuning" data-key="directness">${DIRECTNESS.map(([v, l]) => `<option value="${v}"${i.directness === v ? ' selected' : ''}>${l}</option>`).join('')}</select>` })}
-</ul></section>
-<section class="memory-section" id="privacy" aria-labelledby="set-privacy"><h2 class="memory-heading" id="set-privacy">Privacy</h2>
+${settingsRow({ id: 'you-name-row', title: 'Your name', note: 'What Nova calls you.', control: `${field('you-name', i.user_name, 'Your name')}<button type="button" class="btn small" data-action="save-profile" data-section="user" data-key="name" data-field="you-name">Save</button>` })}
+${settingsRow({ id: 'nova-name-row', title: 'Nova’s name', note: 'Only the name changes; the charter stays.', control: `${field('nova-name', i.name, 'Nova’s name')}<button type="button" class="btn small" data-action="save-profile" data-section="identity" data-key="name" data-field="nova-name">Save</button>` })}
+${settingsRow({ id: 'directness-row', title: 'Directness', note: 'Nova always says when it thinks something’s wrong; this is how.', control: `<label class="sr-only" for="directness">Directness</label><select class="input" id="directness" data-action="set-profile" data-section="tuning" data-key="directness">${DIRECTNESS.map(([v, l]) => `<option value="${v}"${i.directness === v ? ' selected' : ''}>${l}</option>`).join('')}</select>` })}
+</ul></section>`;
+}
+
+export function renderPrivacy() {
+  return `<section class="memory-section" id="privacy" aria-labelledby="set-privacy"><h2 class="memory-heading" id="set-privacy">Privacy</h2>
 <p class="memory-lede">The default for every task. A task can be stricter, never looser.</p>
 <fieldset class="set-field"><legend class="sr-only">Privacy mode</legend><div class="choices">${PRIVACY.map(([v, l]) => `<label class="choice"><input type="radio" name="privacy" value="${v}"${privacy() === v ? ' checked' : ''}><span class="choice-name">${l}</span></label>`).join('')}</div></fieldset>
 <p class="settings-note">${esc(PRIVACY.find(([v]) => v === privacy())?.[2] ?? '')}</p></section>`;
@@ -409,70 +414,173 @@ export async function saveProfile(section, key, value) {
   } catch (e) { toast(e.message); }
 }
 
-let previewId = null;
-const SAMPLE = {
-  tasks: [
-    { id: 's1', title: 'Summarize the week’s notes', state: 'active', reason: null, approval_tier: 1, user_visibility: 'handling', created_at: new Date().toISOString() },
-    { id: 's2', title: 'Send the draft reply', state: 'waiting', approval_tier: 2, approved_at: null, user_visibility: 'attention', created_at: new Date().toISOString() },
-  ],
-  done: { id: 's3', title: 'Write a welcome note', state: 'done', report: { summary: 'The note is in your workspace.' }, verification: { ok: true, checks: [{ ok: true }] }, completed_at: new Date().toISOString() },
-};
+// ---- Settings › Appearance (Amendment 2026-10-30-C Part 1 §5) ---------------------------------
+// Picking a design applies it to the real page at once; there is no preview mock. For this device
+// it is saved at once, with Undo on show. For all devices it shows here first and is kept only on
+// Save. The scope in force is always on show, a live contrast check reads what the screen shows,
+// and Nova recommends one design.
 
-// A sample of the real components, drawn in a sandboxed frame with only the previewed design
-// system's CSS: nothing is applied until the person says so.
-function previewDoc(id, mode) {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<link rel="stylesheet" href="${previewCss(id, mode)}"><link rel="stylesheet" href="/styles/base.css"><link rel="stylesheet" href="/styles/components.css"><link rel="stylesheet" href="/styles/views.css">
-</head><body data-layout="phone" style="overflow:auto"><main class="view home">
-<header class="home-hero">${orb({ state: 'idle', size: 'hero', decorative: true })}<h2 class="greeting">Good morning</h2><p class="greeting-sub">Nothing needs you.</p></header>
-<div class="home-cards">${handlingCard({ tasks: SAMPLE.tasks })}${verifiedResultCard(SAMPLE.done)}
-<div class="card"><div class="chat-bubble from-person"><div class="bubble-body">What’s on today?</div></div><div class="chat-bubble from-nova">${orb({ size: 'avatar', decorative: true })}<div class="bubble-body">Two things, both small.</div></div>
-<div class="card-action"><span class="btn primary">Approve</span><span class="btn">Not now</span>${status('failed')}</div></div></div>
-</main></body></html>`;
+// `next`: where focus belongs after the last action, kept briefly so a redraw that arrives late
+// (the core's event) doesn't drop it on the page.
+const look = { scope: 'device', pending: null, undo: null, next: null, nextUntil: 0 };
+const prefers = () => (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+const designName = (a, id) => a.list.find((d) => d.id === id)?.name ?? id;
+
+// A design's thumbnail: a few of its own colours, in the look this device would show.
+function chips(d, want) {
+  const sw = (d.looks?.[want] ?? d.looks?.default)?.swatch;
+  if (!sw) return '<span class="ds-chips" aria-hidden="true"></span>';
+  const vars = [['bg', sw.bg], ['card', sw.raised], ['text', sw.text], ['accent', sw.accent], ['orb', sw.orb]].map(([k, v]) => `--chip-${k}: ${esc(v)}`).join('; ');
+  return `<span class="ds-chips" aria-hidden="true" style="${vars}"><span class="chip chip-bg"></span><span class="chip chip-card"></span><span class="chip chip-text"></span><span class="chip chip-accent"></span><span class="chip chip-orb"></span></span>`;
 }
 
-export function renderAppearance() {
+function designCard(d, a, { big = false, showing, want }) {
+  const tags = [d.id === a.user ? '<span class="pill">All devices</span>' : '', d.id === a.device ? '<span class="pill">This device</span>' : '', d.valid ? '' : '<span class="pill is-warn">Has problems</span>'].join('');
+  return `<button type="button" class="ds-card${big ? ' is-big' : ''}" data-action="pick-ds" data-ds="${esc(d.id)}" aria-pressed="${d.id === showing}"${d.valid ? '' : ' disabled'}>
+  ${chips(d, want)}<span class="ds-text"><span class="ds-name">${esc(d.name)}</span>${big && d.description ? `<span class="ds-note">${esc(d.description)}</span>` : ''}${tags ? `<span class="ds-tags">${tags}</span>` : ''}</span>
+</button>`;
+}
+
+// The live check on what this page shows now, from its own variables (look.js decides what it
+// says and offers).
+function contrastPanel(a) {
+  const css = getComputedStyle(document.documentElement);
+  const shown = a.list.find((d) => d.id === a.theme);
+  const v = contrastView({
+    checks: a.checks, get: (t) => css.getPropertyValue(`--${t.replace(/\//g, '-')}`).trim(),
+    fix: a.fix, fixable: shown?.fixable ?? [], unfixable: shown?.unfixable ?? [], pending: !!look.pending,
+  });
+  const ok = v.state === 'unknown' ? 'unknown' : v.state === 'ok' ? 'true' : 'false';
+  const items = v.failures.map((f) => `<li>${esc(f.what)}: ${f.ratio}:1; it needs ${f.min}:1.</li>`).join('');
+  const cant = v.cantFix.length ? `<p class="settings-note">${v.offerUndo ? 'The fix went as far as it can.' : 'Adjusting colours can’t fix this.'} Still hard to read: ${esc(v.cantFix.join('; ').toLowerCase())}. Another design will read better.</p>` : '';
+  const wait = v.state === 'fail' && look.pending ? '<p class="settings-note">Save or cancel first; then Nova can fix it on this device.</p>' : '';
+  const fix = v.offerFix ? '<div class="sheet-actions"><button type="button" class="btn primary small" data-action="fix-contrast">Fix it on this device</button></div><p class="settings-note">Nova moves just those colours until they pass, on this device only. You can undo it.</p>' : '';
+  const undo = v.offerUndo ? '<div class="sheet-actions"><button type="button" class="btn small" data-action="undo-fix">Undo the contrast fix</button></div>' : '';
+  const body = v.state === 'fail'
+    ? `<p class="contrast-title">${esc(v.line)}</p><ul class="contrast-list">${items}</ul>${fix}${cant}${wait}${undo}`
+    : `<p class="contrast-line">${esc(v.line)}</p>${undo}`;
+  return { ok, body };
+}
+
+// Appearance is drawn once as a frame, and its parts are filled in place, so the live regions
+// (the scope line, the bar with Undo or Save, the contrast check) stay the same elements and a
+// screen reader hears each change.
+const FRAME = `<section class="memory-section" id="appearance" aria-labelledby="set-look"><h2 class="memory-heading" id="set-look">Appearance</h2>
+<p class="ds-scope" id="appearance-scope" role="status"></p>
+<div data-sub="where"></div>
+<div class="ds-bar-slot" id="appearance-bar" role="status"></div>
+<div class="ds-picker" id="appearance-design"></div>
+<div class="contrast-check" id="contrast-check" role="status"></div>
+<div data-sub="mode"></div>
+<p class="perm-foot"><a class="set-link" href="/styleguide">Style reference</a></p></section>`;
+
+const setHtml = (node, html) => { if (node && node.innerHTML !== html) node.innerHTML = html; };
+
+export function drawAppearance(box) {
+  if (!box.querySelector('#appearance')) box.innerHTML = FRAME;
   const a = appearance();
   const usable = a.list.filter((d) => d.state !== 'disabled');
-  previewId ??= a.theme;
-  const name = (id) => a.list.find((d) => d.id === id)?.name ?? id;
-  const tags = (d) => [d.id === a.user ? '<span class="pill is-on">All devices</span>' : '', d.id === a.device ? '<span class="pill is-on">This device</span>' : '', d.valid ? '' : '<span class="pill is-warn">Has problems</span>'].join('');
-  const cards = usable.map((d) => `<li><button type="button" class="ds-card" data-action="preview-ds" data-ds="${esc(d.id)}" aria-pressed="${d.id === previewId}"${d.valid ? '' : ' disabled'}>
-  <span class="ds-name">${esc(d.name)}</span><span class="ds-note">${esc(d.description || '')}</span><span class="ds-tags">${tags(d)}</span>
-</button>${d.valid ? '' : `<p class="settings-note">${esc(d.problems.slice(0, 2).join(' '))}</p>`}</li>`).join('');
-  const shown = a.scope === 'device' ? `This device shows ${name(a.theme)}, its own choice.` : a.scope === 'user' ? `Every device shows ${name(a.theme)}.` : `Showing ${name(a.theme)}, the default.`;
-  return `<section class="memory-section" id="appearance" aria-labelledby="set-look"><h2 class="memory-heading" id="set-look">Appearance</h2>
-<p class="memory-lede">${esc(shown)} Preview a design system here; nothing changes until you apply it.</p>
-<ul class="ds-grid" aria-label="Design systems">${cards}</ul>
-<iframe class="preview-frame" id="ds-preview" title="Preview of ${esc(name(previewId))}" sandbox srcdoc="${esc(previewDoc(previewId, a.mode))}"></iframe>
-<div class="sheet-actions">
-  <button type="button" class="btn primary" data-action="apply-ds" data-scope="user" data-ds="${esc(previewId)}">Use ${esc(name(previewId))} on all devices</button>
-  <button type="button" class="btn" data-action="apply-ds" data-scope="device" data-ds="${esc(previewId)}">On this device only</button>
-</div>
-<div class="sheet-actions">
-  <button type="button" class="btn small quiet" data-action="rollback-ds" data-scope="user"${a.canRollback.user ? '' : ' disabled'}>Undo the last change for all devices</button>
-  <button type="button" class="btn small quiet" data-action="rollback-ds" data-scope="device"${a.canRollback.device ? '' : ' disabled'}>Undo the last change on this device</button>
-</div>
-<fieldset class="set-field"><legend class="set-legend">Light and dark</legend>
-<div class="choices">${MODES.map((m) => `<label class="choice"><input type="radio" name="mode" value="${m}"${m === a.mode ? ' checked' : ''}><span class="choice-name">${m[0].toUpperCase()}${m.slice(1)}</span></label>`).join('')}</div></fieldset>
-<p class="perm-foot"><a class="set-link" href="/styleguide">Style reference</a></p></section>`;
+  const showing = look.pending?.id ?? a.theme;
+  const mode = look.pending?.mode ?? a.mode;
+  const want = mode === 'light' || mode === 'dark' ? mode : prefers();
+  const rec = recommend(usable, { mode, prefers: prefers() });
+  const others = usable.filter((d) => d.id !== rec?.id);
+  setHtml(box.querySelector('#appearance-scope'), `Theme: <b>${esc(designName(a, a.theme))}</b> · ${a.scope === 'device' ? 'this device only' : 'synced'}`);
+  setHtml(box.querySelector('[data-sub="where"]'), `<fieldset class="set-field" id="appearance-where"><legend class="set-legend">Change it for</legend>
+<div class="choices"><label class="choice"><input type="radio" name="ds-scope" value="device"${look.scope === 'device' ? ' checked' : ''}><span class="choice-name">This device</span></label><label class="choice"><input type="radio" name="ds-scope" value="user"${look.scope === 'user' ? ' checked' : ''}><span class="choice-name">All my devices</span></label></div>
+<p class="settings-note">${look.scope === 'device' ? 'A design you pick shows here at once, and Undo puts the last one back.' : 'A design you pick shows here first; your other devices change when you save it.'}</p></fieldset>`);
+  const bar = box.querySelector('#appearance-bar');
+  const barHtml = look.pending
+    ? `<div class="ds-bar" id="appearance-pending"><p>${esc(designName(a, showing))}${look.pending.mode ? `, ${esc(look.pending.mode)}` : ''} is showing here only. Save to use it on all your devices.</p><span class="row-actions"><button type="button" class="btn primary small" data-action="save-ds">Save for all devices</button><button type="button" class="btn small" data-action="cancel-ds">Cancel</button></span></div>`
+    : look.undo && a.scope === 'device' && a.theme === look.undo
+      ? `<div class="ds-bar" id="appearance-undo"><p>${esc(designName(a, look.undo))} is on this device now.</p><button type="button" class="btn small" data-action="undo-ds">Undo</button></div>`
+      : '';
+  setHtml(bar, barHtml);
+  setHtml(box.querySelector('#appearance-design'), `${rec ? `<div class="ds-recommended"><p class="ds-kicker">Recommended</p>${designCard(rec, a, { big: true, showing, want })}<p class="ds-reason">${esc(rec.reason)}</p></div>` : ''}
+${others.length ? `<h3 class="conn-sub">Other designs</h3><ul class="ds-others" aria-label="Other designs">${others.map((d) => `<li>${designCard(d, a, { showing, want })}${d.valid ? '' : `<p class="settings-note">${esc(d.problems.slice(0, 2).join(' '))}</p>`}</li>`).join('')}</ul>` : ''}`);
+  const check = box.querySelector('#contrast-check');
+  const panel = contrastPanel(a);
+  if (check.dataset.ok !== panel.ok) check.dataset.ok = panel.ok;
+  setHtml(check, panel.body);
+  const focusLost = () => !document.activeElement || document.activeElement === document.body;
+  const lost = focusLost();
+  setHtml(box.querySelector('[data-sub="mode"]'), `<fieldset class="set-field" id="appearance-mode"><legend class="set-legend">Light and dark <span class="set-legend-note">· all devices</span></legend>
+<div class="choices">${MODES.map((m) => `<label class="choice"><input type="radio" name="mode" value="${m}"${m === mode ? ' checked' : ''}><span class="choice-name">${m[0].toUpperCase()}${m.slice(1)}</span></label>`).join('')}</div></fieldset>`);
+  if (look.next && Date.now() < look.nextUntil && (lost || focusLost())) box.querySelector(look.next)?.focus({ preventScroll: true });
 }
 
-export function previewDs(id) {
-  previewId = id;
+// Leaving Settings with a design only tried for all devices puts the saved one back.
+export function cancelPreview() {
+  if (!look.pending && !previewingNow()) return;
+  look.pending = null;
+  endPreview().catch(() => {});
 }
 
+// Undo after Save: exactly what that Save changed (look.js undoPlan), in the order that keeps
+// each step's own rollback meaningful.
+async function undoSave(plan, before) {
+  if (plan.device) await rollback('device');
+  if (plan.user) await rollback('user');
+  if (plan.mode) await setMode(plan.mode);
+  toast(`Back to ${before.label}.`);
+}
+
+const PRESSED = '.ds-card[aria-pressed="true"]';
+
+// Runs one action and returns where focus should go next (a selector), or null.
 export async function appearanceAction(action, el) {
+  const next = await act(action, el);
+  look.next = next;
+  look.nextUntil = next ? Date.now() + 2000 : 0;
+  return next;
+}
+
+async function act(action, el) {
+  const a = appearance();
   try {
-    if (action === 'apply-ds') {
-      await use(el.dataset.ds, el.dataset.scope);
-      // This device's own choice still wins here; say so rather than claim the screen changed.
-      const own = el.dataset.scope !== 'device' && appearance().scope === 'device';
-      toast(el.dataset.scope === 'device' ? 'Applied on this device.' : own ? 'Applied on every other device. This one keeps the design you chose for it.' : 'Applied on every device.');
+    if (action === 'scope') { look.scope = el.value === 'user' ? 'user' : 'device'; return null; }
+    if (action === 'pick-ds') {
+      const id = el.dataset.ds;
+      if (look.scope === 'device') {
+        look.pending = null;
+        look.undo = id;
+        await use(id, 'device').catch((e) => { look.undo = null; throw e; });
+      } else {
+        look.pending = { ...look.pending, id };
+        await preview(id, look.pending.mode ?? a.mode);
+      }
+      return `.ds-card[data-ds="${CSS.escape(id)}"]`;
     }
-    if (action === 'rollback-ds') { await rollback(el.dataset.scope); toast('Back to the one before.'); }
-    if (action === 'mode') await setMode(el.value);
+    if (action === 'mode') {
+      look.pending = { ...look.pending, mode: el.value };
+      await preview(look.pending.id ?? a.theme, el.value);
+      return null;
+    }
+    if (action === 'save-ds' && look.pending) {
+      const saved = look.pending;
+      const before = { mode: a.mode, synced: await syncedId(), device: a.device, label: designName(a, a.theme) };
+      const plan = undoPlan(before, saved);
+      look.pending = null;
+      look.undo = null;
+      if (saved.mode && saved.mode !== a.mode) await setMode(saved.mode);
+      if (saved.id) {
+        if (saved.id !== before.synced) await use(saved.id, 'user');
+        if (a.device) await follow();
+      }
+      await endPreview();
+      toast('Saved for all your devices.', plan ? { action: { label: 'Undo', run: () => undoSave(plan, before).catch((e) => toast(e.message)) } } : {});
+      return PRESSED;
+    }
+    if (action === 'cancel-ds') { look.pending = null; await endPreview(); return PRESSED; }
+    if (action === 'undo-ds') { look.undo = null; await rollback('device'); return PRESSED; }
+    if (action === 'fix-contrast') {
+      const out = await fixContrast();
+      toast(out.unfixable?.length ? 'Fixed what Nova could on this device.' : 'Fixed on this device.');
+      return '[data-action="undo-fix"]';
+    }
+    if (action === 'undo-fix') { await undoFix(); return '[data-action="fix-contrast"]'; }
   } catch (e) { toast(e.message); }
+  return null;
 }
 
 let installPrompt = null;
@@ -493,10 +601,10 @@ export function renderDevices() {
   // A standby shows the hub's registry as it copied it; devices are added and revoked on the hub.
   const copy = !!m?.replica;
   const installRow = standalone()
-    ? settingsRow({ title: 'Installed', note: 'Nova runs as an app on this device.' })
+    ? settingsRow({ id: 'install-row', title: 'Installed', note: 'Nova runs as an app on this device.' })
     : installPrompt
-      ? settingsRow({ title: 'Install Nova', note: 'Open Nova like an app, with its own window and icon.', control: '<button type="button" class="btn small" data-action="install">Install</button>' })
-      : settingsRow({ title: 'Install Nova', note: iosLimits() ? 'In Safari, tap Share, then Add to Home Screen.' : 'Your browser offers Install in its menu when it can.' });
+      ? settingsRow({ id: 'install-row', title: 'Install Nova', note: 'Open Nova like an app, with its own window and icon.', control: '<button type="button" class="btn small" data-action="install">Install</button>' })
+      : settingsRow({ id: 'install-row', title: 'Install Nova', note: iosLimits() ? 'In Safari, tap Share, then Add to Home Screen.' : 'Your browser offers Install in its menu when it can.' });
   const all = meshDevices();
   const trusted = all.filter((d) => d.trust !== 'revoked');
   const revoked = all.filter((d) => d.trust === 'revoked');

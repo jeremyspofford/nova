@@ -39,6 +39,8 @@ export const TOKEN_NAMES: readonly string[] = Object.freeze(entries.map(([n]) =>
 export const cssVar = (name: string) => `--${name.replace(/\//g, '-')}`;
 
 export const DEFAULT_DESIGN_SYSTEM = 'orb-teal';
+// DESIGN-SYSTEM §3: the two packages made for Nova, dark first.
+export const STARTERS: readonly string[] = Object.freeze(['orb-teal', 'companion-light']);
 export const BUILTIN_DIR = fileURLToPath(new URL('../../design-systems', import.meta.url));
 export const MODES = ['light', 'dark', 'auto'] as const;
 export type Mode = (typeof MODES)[number];
@@ -78,6 +80,26 @@ export const CONTRAST_PAIRS: readonly (readonly [string, string, number, string]
 ] as const);
 // A label on an accent button uses whichever of these reads best; one of them must reach 4.5:1.
 const ACCENT_LABELS = ['bg/base', 'text/primary', 'surface/card'];
+
+// The live check in Settings › Appearance (Amendment 2026-10-30-C Part 1 §5): stricter than
+// validation, which a package needs only to be applied. Body text (and timestamps, which use
+// text/secondary) at 4.5:1 on every surface it sits on; control outlines and focus markers at
+// 3:1 (WCAG 1.4.3, 1.4.11): every colour the UI draws as a control's outline is here, and a test
+// reads those from the CSS (tests/ui-review.test.js). It warns; it never blocks.
+export type CheckKind = 'text' | 'control';
+export const LIVE_CHECKS: readonly (readonly [string, string, number, CheckKind, string])[] = Object.freeze([
+  ['text/primary', 'bg/base', 4.5, 'text', 'Text on the background'],
+  ['text/primary', 'bg/raised', 4.5, 'text', 'Text on raised surfaces'],
+  ['text/primary', 'surface/card', 4.5, 'text', 'Text on cards'],
+  ['text/secondary', 'bg/base', 4.5, 'text', 'Secondary text and timestamps'],
+  ['text/secondary', 'bg/raised', 4.5, 'text', 'Secondary text on raised surfaces'],
+  ['text/secondary', 'surface/card', 4.5, 'text', 'Secondary text on cards'],
+  ['border/strong', 'bg/base', 3, 'control', 'Outlines of fields and buttons'],
+  ['border/strong', 'bg/raised', 3, 'control', 'Outlines of fields on raised surfaces'],
+  ['accent/primary', 'bg/base', 3, 'control', 'Focus rings and selected markers'],
+  ['status/attention', 'bg/base', 3, 'control', 'Outlines of things that need you'],
+  ['status/error', 'bg/base', 3, 'control', 'Outlines of buttons that erase'],
+] as const);
 
 // Under prefers-reduced-motion the core always emits these; a package may only shorten them.
 export const REDUCED_MOTION: Readonly<Record<string, string>> = Object.freeze({
@@ -198,6 +220,74 @@ function accentLabel(tokens: Record<string, unknown>): { token: string; ratio: n
     if (r !== null && (!best || r > best.ratio)) best = { token: t, ratio: r };
   }
   return best;
+}
+
+// ---- the live check and its one-tap fix -------------------------------------------------------------
+
+export interface CheckResult { fg: string; bg: string; min: number; kind: CheckKind; what: string; ratio: number; ok: boolean }
+
+// Every live check on one resolved token set. `margin` is the worst ratio over its minimum: under
+// 1 means something fails.
+export function liveCheck(tokens: Record<string, unknown>): { ok: boolean; margin: number; results: CheckResult[] } {
+  const results: CheckResult[] = [];
+  for (const [fg, bg, min, kind, what] of LIVE_CHECKS) {
+    const r = ratio(tokens, fg, bg);
+    if (r === null) continue;
+    results.push({ fg, bg, min, kind, what, ratio: Math.round(r * 100) / 100, ok: r >= min });
+  }
+  const margin = results.reduce((m, x) => Math.min(m, x.ratio / x.min), Infinity);
+  return { ok: results.every((x) => x.ok), margin: Number.isFinite(margin) ? Math.round(margin * 1000) / 1000 : 1, results };
+}
+
+// A package's token sets as a device can see them: its own values, and each mode's on top.
+export function looks(pkg: DesignPackage): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = { default: { ...pkg.tokens } };
+  for (const m of ['light', 'dark'] as const) if (pkg.modes?.[m] && Object.keys(pkg.modes[m]!).length) out[m] = { ...pkg.tokens, ...pkg.modes[m]! };
+  return out;
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const fmt = ([r, g, b, a]: Rgba) => (a >= 1 ? `#${[r, g, b].map((c) => Math.round(c).toString(16).padStart(2, '0')).join('')}` : `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${round2(a)})`);
+
+// A foreground moved part of the way (k, 0 to 1) towards a stronger colour: the package's own
+// primary text, or for primary text itself, black or white, whichever is further from the
+// background. Only the one token moves; nothing else in the package changes.
+function nudged(tokens: Record<string, string>, token: string, k: number): string {
+  const fg = parseColor(tokens[token])!;
+  const target: Rgba = token === 'text/primary'
+    ? (scheme(tokens) === 'dark' ? [255, 255, 255, 1] : [0, 0, 0, 1])
+    : parseColor(tokens['text/primary'])!;
+  const mix = [0, 1, 2, 3].map((i) => fg[i]! + (target[i]! - fg[i]!) * k) as Rgba;
+  return fmt(mix);
+}
+
+export const NUDGE_STEP = 0.05;
+
+// The smallest nudge, in steps of NUDGE_STEP, that makes every live check of each failing
+// foreground pass in every look the package has. Tokens that already pass are left alone; a
+// token that can't be fixed this way is left out, and reported.
+export function contrastNudge(pkg: DesignPackage): { nudge: Record<string, number>; unfixable: string[] } {
+  const sets = Object.values(looks(pkg));
+  const failing = [...new Set(sets.flatMap((t) => liveCheck(t).results.filter((r) => !r.ok).map((r) => r.fg)))];
+  const nudge: Record<string, number> = {};
+  const unfixable: string[] = [];
+  for (const token of failing) {
+    let found: number | null = null;
+    for (let step = 1; step * NUDGE_STEP <= 1 + 1e-9 && found === null; step++) {
+      const k = round2(step * NUDGE_STEP);
+      const passes = sets.every((t) => liveCheck({ ...t, [token]: nudged(t, token, k) }).results.every((r) => r.fg !== token || r.ok));
+      if (passes) found = k;
+    }
+    if (found === null) unfixable.push(token); else nudge[token] = found;
+  }
+  return { nudge, unfixable };
+}
+
+// Tokens with a device's nudge applied, computed on the set they belong to.
+export function applyNudge(tokens: Record<string, string>, nudge: Record<string, number> = {}): Record<string, string> {
+  const out = { ...tokens };
+  for (const [token, k] of Object.entries(nudge)) if (TOKENS[token]?.syntax === 'color' && token in tokens && k > 0 && k <= 1) out[token] = nudged(tokens, token, k);
+  return out;
 }
 
 // ---- package validation -------------------------------------------------------------------------
@@ -330,24 +420,30 @@ function block(selector: string, lines: string[], indent = '') {
 // Tokens (and modes) → CSS variables. `auto` follows the system's light/dark preference; `light`
 // and `dark` pick that mode's values. Reduced motion is always honoured. Only a valid package
 // becomes CSS, so no value can carry anything but what its token family allows.
-export function generateCss(input: unknown, o: { mode?: Mode } = {}): string {
+// `nudge` is a device's contrast fix (Design.fixContrast): each named colour moved towards a
+// stronger one, computed on each look's own values.
+export function generateCss(input: unknown, o: { mode?: Mode; nudge?: Record<string, number> } = {}): string {
   const v = validatePackage(input);
   const name = isObj(input) && typeof input.name === 'string' ? input.name : 'This design system';
   if (!v.ok) throw new CoreError('validation', `${name} isn’t valid, so Nova won’t turn it into CSS.`, v.problems);
   const pkg = input as unknown as DesignPackage;
   const mode = o.mode ?? 'auto';
-  const resolved = mode === 'auto' ? pkg.tokens : { ...pkg.tokens, ...(pkg.modes?.[mode] ?? {}) };
+  const nudge = o.nudge ?? {};
+  const fixed = Object.keys(nudge).length > 0;
+  const resolved = applyNudge(mode === 'auto' ? pkg.tokens : { ...pkg.tokens, ...(pkg.modes?.[mode] ?? {}) }, nudge);
   const vars = (t: Record<string, string>) => TOKEN_NAMES.filter((n) => n in t).map((n) => `${cssVar(n)}: ${t[n]};`);
   const safe = `${name} ${pkg.version} (${pkg.id})`.replace(/[^\w .,'’()-]/g, '');
 
   const root = [`color-scheme: ${scheme(resolved)};`, ...vars(resolved)];
-  const parts = [`/* ${safe}, mode ${mode}. Generated by Nova from the package’s tokens; don’t edit. */`, block(':root', root)];
+  const parts = [`/* ${safe}, mode ${mode}${fixed ? ', with this device’s contrast fix' : ''}. Generated by Nova from the package’s tokens; don’t edit. */`, block(':root', root)];
   if (mode === 'auto') {
     for (const m of ['light', 'dark'] as const) {
       const over = pkg.modes?.[m];
       if (!over || !Object.keys(over).length) continue;
       const t = { ...pkg.tokens, ...over };
-      parts.push(`@media (prefers-color-scheme: ${m}) {\n${block(':root', [`color-scheme: ${scheme(t)};`, ...vars(over)], '  ')}\n}`);
+      const fixedT = applyNudge(t, nudge);
+      const changed = { ...over, ...Object.fromEntries(Object.keys(nudge).filter((n) => n in fixedT).map((n) => [n, fixedT[n]!])) };
+      parts.push(`@media (prefers-color-scheme: ${m}) {\n${block(':root', [`color-scheme: ${scheme(t)};`, ...vars(changed)], '  ')}\n}`);
     }
   }
   const reduced = { ...REDUCED_MOTION, ...(pkg.reduced_motion ?? {}) };
@@ -365,8 +461,14 @@ export interface Appearance {
   device_overrides: Record<string, string>;
   // Per-device rollback: what the device showed before its last override (null: no override).
   device_previous: Record<string, string | null>;
+  // Per-device contrast fixes: for one design system, the colours nudged on that device only.
+  device_fixes: Record<string, DeviceFix>;
+  // Which paired device (registry id) each appearance id belongs to, so revoking the device
+  // forgets its appearance too. The hub's own screen has none.
+  device_owners: Record<string, string>;
 }
-export interface Active { id: string; name: string; scope: 'device' | 'user' | 'default'; mode: Mode; device_id?: string }
+export interface DeviceFix { design_system: string; nudge: Record<string, number> }
+export interface Active { id: string; name: string; scope: 'device' | 'user' | 'default'; mode: Mode; device_id?: string; fix?: Record<string, number> }
 
 const DEVICE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -429,6 +531,7 @@ export class Design extends EventEmitter {
       components: COMPONENTS,
       content_rules: CONTENT_RULES,
       contrast: CONTRAST_PAIRS.map(([fg, bg, min, what]) => ({ fg, bg, min, what })),
+      live_checks: LIVE_CHECKS.map(([fg, bg, min, kind, what]) => ({ fg, bg, min, kind, what })),
       reduced_motion: { always: REDUCED_MOTION, max_ms: REDUCED_MOTION_MAX_MS },
     };
   }
@@ -468,6 +571,8 @@ export class Design extends EventEmitter {
       mode: MODES.includes(a.mode as Mode) ? (a.mode as Mode) : 'auto',
       device_overrides: isObj(a.device_overrides) ? (a.device_overrides as Record<string, string>) : {},
       device_previous: isObj(a.device_previous) ? (a.device_previous as Record<string, string | null>) : {},
+      device_fixes: isObj(a.device_fixes) ? (a.device_fixes as Record<string, DeviceFix>) : {},
+      device_owners: isObj(a.device_owners) ? (a.device_owners as Record<string, string>) : {},
     };
   }
 
@@ -477,10 +582,15 @@ export class Design extends EventEmitter {
     const named = (id: string, scope: Active['scope'], extra: Partial<Active> = {}): Active => ({ id, name: this.#installed().find((x) => x.id === id)?.manifest.name ?? id, scope, mode: a.mode, ...extra });
     const device = deviceId && DEVICE.test(deviceId) ? deviceId : null;
     const override = device ? a.device_overrides[device] : undefined;
-    if (device && override && this.#usable(override)) return named(override, 'device', { device_id: device });
-    if (a.design_system && this.#usable(a.design_system)) return named(a.design_system, 'user');
+    // This device's contrast fix, while it shows the design system the fix was made for.
+    const fix = (id: string): Partial<Active> => {
+      const f = device ? a.device_fixes[device] : undefined;
+      return f && f.design_system === id && isObj(f.nudge) && Object.keys(f.nudge).length ? { fix: f.nudge } : {};
+    };
+    if (device && override && this.#usable(override)) return named(override, 'device', { device_id: device, ...fix(override) });
+    if (a.design_system && this.#usable(a.design_system)) return named(a.design_system, 'user', fix(a.design_system));
     const fallback = [DEFAULT_DESIGN_SYSTEM, ...this.#builtins.keys()].find((id) => this.#usable(id)) ?? DEFAULT_DESIGN_SYSTEM;
-    return named(fallback, 'default');
+    return named(fallback, 'default', fix(fallback));
   }
 
   state(deviceId?: string | null) {
@@ -489,7 +599,31 @@ export class Design extends EventEmitter {
 
   css(deviceId?: string | null): string {
     const a = this.active(deviceId);
-    return generateCss(this.#find(a.id).manifest, { mode: a.mode });
+    return generateCss(this.#find(a.id).manifest, { mode: a.mode, nudge: a.fix });
+  }
+
+  // The live check's one-tap fix, for one device: the failing colours of what it shows, nudged
+  // just far enough to pass (contrastNudge). Kept per device and per design system, so other
+  // devices and other designs are untouched; undoFix takes it away.
+  fixContrast(o: { device_id?: string | null }) {
+    const device = this.#scope({ scope: 'device', device_id: o.device_id });
+    const active = this.active(device);
+    const pkg = this.#find(active.id).manifest as DesignPackage;
+    const { nudge, unfixable } = contrastNudge(pkg);
+    if (!Object.keys(nudge).length) {
+      throw new CoreError('conflict', unfixable.length ? `Nova can’t make ${active.name} readable by adjusting its colours. Choose another design.` : `Nothing to fix: every text and control in ${active.name} already passes.`);
+    }
+    this.#set('device_fixes', { ...this.appearance().device_fixes, [device!]: { design_system: active.id, nudge } });
+    return { ...this.#changed('contrast-fix', active.id, device), fixed: Object.keys(nudge), unfixable };
+  }
+
+  undoFix(o: { device_id?: string | null }) {
+    const device = this.#scope({ scope: 'device', device_id: o.device_id })!;
+    const fixes = { ...this.appearance().device_fixes };
+    if (!(device in fixes)) throw new CoreError('conflict', 'There’s no contrast fix on this device.');
+    delete fixes[device];
+    this.#set('device_fixes', fixes);
+    return this.#changed('contrast-fix', this.active(device).id, device);
   }
 
   // For a sandboxed frame: any valid package, rendered without applying it.
@@ -512,6 +646,40 @@ export class Design extends EventEmitter {
       this.#set('design_system', id);
     }
     return this.#changed('apply', id, device);
+  }
+
+  // A device drops its own choice and shows the person's again. Rollback on that device brings
+  // its own choice back.
+  follow(o: { device_id?: string | null }) {
+    const device = this.#scope({ scope: 'device', device_id: o.device_id })!;
+    const a = this.appearance();
+    const own = a.device_overrides[device];
+    if (!own) return this.state(device);
+    const overrides = { ...a.device_overrides };
+    delete overrides[device];
+    this.#set('device_previous', { ...a.device_previous, [device]: own });
+    this.#set('device_overrides', overrides);
+    return this.#changed('apply', this.active(device).id, device);
+  }
+
+  // A paired device used this appearance id: remember whose it is.
+  own(appearanceId: string, registryId: string) {
+    if (!DEVICE.test(appearanceId) || typeof registryId !== 'string' || !registryId) return;
+    const owners = this.appearance().device_owners;
+    if (owners[appearanceId] !== registryId) this.#set('device_owners', { ...owners, [appearanceId]: registryId });
+  }
+
+  // A device was revoked: its own design, its rollback and its contrast fix go with it.
+  forgetDevice(registryId: string) {
+    const a = this.appearance();
+    const gone = Object.entries(a.device_owners).filter(([, r]) => r === registryId).map(([id]) => id);
+    if (!gone.length) return;
+    const drop = <T>(o: Record<string, T>) => Object.fromEntries(Object.entries(o).filter(([k]) => !gone.includes(k)));
+    this.#set('device_overrides', drop(a.device_overrides));
+    this.#set('device_previous', drop(a.device_previous));
+    this.#set('device_fixes', drop(a.device_fixes));
+    this.#set('device_owners', drop(a.device_owners));
+    for (const id of gone) this.#changed('removed', this.active(id).id, id);
   }
 
   // One step back. Rolling back twice goes forward again.
@@ -552,7 +720,7 @@ export class Design extends EventEmitter {
     return o.device_id;
   }
 
-  #changed(action: 'apply' | 'rollback' | 'mode' | 'removed' | 'turned-off' | 'turned-on', id: string, device: string | null) {
+  #changed(action: 'apply' | 'rollback' | 'mode' | 'removed' | 'turned-off' | 'turned-on' | 'contrast-fix', id: string, device: string | null) {
     const out = { action, id, scope: device ? 'device' : 'user', ...(device ? { device_id: device } : {}), mode: this.appearance().mode };
     this.emit('change', out);
     return this.state(device);
@@ -575,7 +743,14 @@ export class Design extends EventEmitter {
   #summary(x: Installed) {
     const v = validatePackage(x.manifest);
     const m = x.manifest as DesignPackage;
-    return { id: x.id, name: m.name, version: x.version, description: m.description ?? '', state: x.state, builtin: this.#builtins.has(x.id), valid: v.ok, problems: v.problems, extras: m.extras ?? [], preview: m.preview ?? [] };
+    // How each look reads (the live check) and a few colours for the picker's thumbnail.
+    const seen = v.ok ? Object.fromEntries(Object.entries(looks(m)).map(([k, t]) => {
+      const c = liveCheck(t);
+      return [k, { scheme: scheme(t), ok: c.ok, margin: c.margin, swatch: { bg: t['bg/base'], raised: t['bg/raised'], card: t['surface/card'], text: t['text/primary'], accent: t['accent/primary'], orb: t['orb/core'] } }];
+    })) : {};
+    // What the one-tap fix could do for it: the colours it would move, and those it can't fix.
+    const fix = v.ok ? contrastNudge(m) : { nudge: {}, unfixable: [] };
+    return { id: x.id, name: m.name, version: x.version, description: m.description ?? '', state: x.state, builtin: this.#builtins.has(x.id), starter: STARTERS.includes(x.id), valid: v.ok, problems: v.problems, extras: m.extras ?? [], preview: m.preview ?? [], looks: seen, fixable: Object.keys(fix.nudge), unfixable: fix.unfixable };
   }
 
   #usable(id: string): boolean {
@@ -604,6 +779,8 @@ export class Design extends EventEmitter {
     const previous = Object.fromEntries(Object.entries(a.device_previous).filter(([, v]) => v !== id));
     if (Object.keys(overrides).length !== Object.keys(a.device_overrides).length) { this.#set('device_overrides', overrides); touched = true; }
     if (Object.keys(previous).length !== Object.keys(a.device_previous).length) this.#set('device_previous', previous);
+    const fixes = Object.fromEntries(Object.entries(a.device_fixes).filter(([, f]) => f.design_system !== id));
+    if (Object.keys(fixes).length !== Object.keys(a.device_fixes).length) this.#set('device_fixes', fixes);
     // Also when it was only the fallback (a built-in turned off): what shows has changed.
     if (touched || before === id) this.#changed(action, this.active().id, null);
   }

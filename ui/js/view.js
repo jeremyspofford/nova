@@ -2,7 +2,7 @@
 // permissions): state in, HTML out. Used by the app and by the living style reference, so the
 // reference always shows the real components. The PWA's own components are in components.js.
 import { escapeHtml as esc, renderMarkdown } from './markdown.js';
-import { orb, status } from './components.js';
+import { status } from './components.js';
 import { activityStatus, toolTier } from './status.js';
 
 export const icons = {
@@ -46,6 +46,24 @@ export function shortDay(d, now = new Date()) {
 }
 
 export const clock = (d) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
+// A message's exact time, to the second: "Wednesday, October 28, 2026, 9:02:30 AM".
+export function exactTime(d) {
+  const p = parts(d);
+  return `${p.weekday}, ${p.month} ${p.day}, ${p.year}, ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
+}
+
+// Timestamps in a conversation (Amendment 2026-10-30-C Part 1 §3): a group is one author's
+// messages less than five minutes apart, and only its first message shows the time; every
+// message keeps its exact time, shown on hover, on a tap or long press, and on keyboard focus.
+// A new day gets a date divider, and a gap of an hour or more a divider with the time.
+export const GROUP_MS = 5 * 60_000;
+export const GAP_MS = 60 * 60_000;
+
+export function msgTime(iso, lead) {
+  const d = new Date(iso);
+  return `<time class="when${lead ? ' is-lead' : ''}" datetime="${esc(iso)}" tabindex="0"><span class="when-short" aria-hidden="true">${esc(clock(d))}</span><span class="when-exact">${esc(exactTime(d))}</span></time>`;
+}
 
 // ---- sidebar -------------------------------------------------------------
 
@@ -163,12 +181,12 @@ function approvalDetail(tool) {
   if (!p) return '';
   if (tool.name === 'gmail_draft') {
     return `<div class="approval-mail"><dl class="approval-fields"><dt>To</dt><dd>${esc(p.to)}</dd>${p.cc ? `<dt>Cc</dt><dd>${esc(p.cc)}</dd>` : ''}<dt>Subject</dt><dd>${esc(p.subject || '(no subject)')}</dd></dl>
-<div class="approval-letter" tabindex="0">${esc(p.body)}</div></div>`;
+<div class="approval-letter">${esc(p.body)}</div></div>`;
   }
   if (tool.name === 'schedule_set') {
     const to = p.deliver === 'main' ? 'The main conversation' : p.deliver === 'here' ? 'This conversation' : 'Another conversation';
-    return `<div class="approval-mail"><dl class="approval-fields"><dt>Name</dt><dd>${esc(p.name)}</dd><dt>When</dt><dd>${esc(p.when)}${p.once ? '' : `<span class="approval-next">Next: ${esc(p.next)}</span>`}</dd><dt>Reports</dt><dd>${to}</dd></dl>
-<div class="approval-letter" tabindex="0">${esc(p.prompt)}</div></div>`;
+    return `<div class="approval-mail"><dl class="approval-fields"><dt>Name</dt><dd>${esc(p.name)}</dd><dt>When</dt><dd>${esc(p.when)}${p.once ? '' : `<span class="approval-next">Next: <time>${esc(p.next)}</time></span>`}</dd><dt>Reports</dt><dd>${to}</dd></dl>
+<div class="approval-letter">${esc(p.prompt)}</div></div>`;
   }
   if (tool.name === 'gmail_organize') {
     return `<ul class="approval-list">${(p.messages ?? []).map((m) => `<li><span class="approval-subject">${esc(m.subject)}</span> <span class="approval-from">${esc(m.from)}</span></li>`).join('')}</ul>`;
@@ -208,7 +226,11 @@ function renderTool(tool, turnOpen) {
   const stamp = tool.approval
     ? `<span class="stamp${tool.approval.decision === 'deny' ? ' is-declined' : ''}">${stampWord(tool.approval)}</span>`
     : '';
-  const when = tool.approval?.ts ? `<span class="record-time">${esc(clock(new Date(tool.approval.ts)))}</span>` : '';
+  // A finished step says how long it took and when it finished (its start and end are in the log).
+  const ended = tool.result?.ts ?? null;
+  const when = ended && tool.ts
+    ? `<span class="record-time">took ${esc(took(tool.ts, ended))}, finished <time datetime="${esc(ended)}">${esc(clock(new Date(ended)))}</time></span>`
+    : tool.approval?.ts ? `<span class="record-time">${esc(clock(new Date(tool.approval.ts)))}</span>` : '';
   const label = state === 'skipped' ? `Never ran ${tool.name === 'exec' ? `<code>${esc(String(tool.args?.command ?? '').split('\n')[0])}</code>` : 'that step'}` : toolLabel(tool, state);
   const cls = `record is-${state}" data-tool="${esc(tool.id)}`;
   const output = tool.result?.output;
@@ -260,7 +282,11 @@ export function renderSkillNote(item, skills = null) {
     : `<p class="margin-note is-quiet">followed ${esc(item.name)}, since removed</p>`;
 }
 
-export function renderTurn(turn, { live = null, isLast = false, memory = new Map(), skills = null, readOnly = false } = {}) {
+// When Nova's side of a turn began: its first step or words. Nothing yet while it is thinking.
+export const novaStart = (turn) => turn.items.find((it) => (it.kind === 'text' || it.kind === 'tool') && it.ts)?.ts ?? null;
+
+// `times`: { person, nova }, each true when that message leads its group (msgTime).
+export function renderTurn(turn, { live = null, isLast = false, memory = new Map(), skills = null, readOnly = false, times = { person: true, nova: true } } = {}) {
   const open = turn.state === 'open';
   const running = open && !!live;
   let nova = '';
@@ -288,10 +314,13 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
   if (lastTextId && !running) actions.push(`<button type="button" class="act" data-action="copy" data-copy="${esc(lastTextId)}" aria-label="Copy reply">${icons.copy}<span>Copy</span></button>`);
   if (isLast && !running && !readOnly) actions.push(`<button type="button" class="act" data-action="regenerate" aria-label="Regenerate reply">${icons.again}<span>Regenerate</span></button>`);
 
+  // The person's turn is a tinted bubble; Nova's is the page itself, full width. No avatar, no
+  // orb: the orb is in the view once (DESIGN-SYSTEM §1).
+  const started = novaStart(turn);
   return `<section class="turn" id="t-${esc(turn.id)}" data-turn="${esc(turn.id)}">
-  ${turn.followup ? '' : `<div class="msg-user"><div class="bubble">${esc(turn.text)}</div>
+  ${turn.followup ? '' : `<div class="msg-user msg" data-author="person">${turn.ts ? msgTime(turn.ts, times.person) : ''}<div class="bubble">${esc(turn.text)}</div>
     <div class="actions"><button type="button" class="act" data-action="copy-user" data-turn="${esc(turn.id)}" aria-label="Copy message">${icons.copy}<span>Copy</span></button></div></div>`}
-  <div class="msg-nova"><span class="msg-avatar">${orb({ size: 'avatar', decorative: true })}</span>${nova}${actions.length ? `<div class="actions">${actions.join('')}</div>` : ''}</div>
+  <div class="msg-nova msg" data-author="nova">${started ? msgTime(started, times.nova) : ''}${nova}${actions.length ? `<div class="actions">${actions.join('')}</div>` : ''}</div>
 </section>`;
 }
 
@@ -327,17 +356,31 @@ export function renderWorkNote(session, parentTitle = '') {
   return `<p class="work-note">${text}</p>`;
 }
 
-// Each turn is keyed, with a dateline when a new day begins ("days are chapters").
+// Each turn is keyed, with a dateline when a new day begins ("days are chapters"), a divider
+// after a long gap, and its messages' times grouped (GROUP_MS).
 export function renderBlocks(session, live, now = new Date(), memory = new Map(), skills = null) {
   let day = null;
+  let prev = null; // the last message: { author, at }
   const last = session.turns.length - 1;
+  // True when this message starts a group, and remembers it as the last one.
+  const leads = (author, iso) => {
+    const at = Date.parse(iso);
+    const lead = !prev || prev.author !== author || at - prev.at >= GROUP_MS;
+    prev = { author, at };
+    return lead;
+  };
   return session.turns.map((t, i) => {
     const d = new Date(t.ts);
-    const line = dayKey(d) !== day ? `<h2 class="dateline">${esc(longDate(d, now))}</h2>` : '';
+    let line = '';
+    if (dayKey(d) !== day) { line = `<h2 class="dateline">${esc(longDate(d, now))}</h2>`; prev = null; }
+    else if (prev && Date.parse(t.ts) - prev.at >= GAP_MS) { line = `<p class="gap-divider"><time datetime="${esc(t.ts)}">${esc(clock(d))}</time></p>`; prev = null; }
     day = dayKey(d);
-    if (t.kind === 'handoff') return { key: t.id, html: line + renderHandoff(t) };
+    if (t.kind === 'handoff') { leads('nova', t.ts); return { key: t.id, html: line + renderHandoff(t) }; }
+    const times = { person: t.followup ? false : leads('person', t.ts), nova: false };
+    const started = novaStart(t);
+    if (started) times.nova = leads('nova', started);
     const isLive = live && live.turn === t.id && live.attempt === t.attempt ? live : null;
-    return { key: t.id, html: line + renderTurn(t, { live: isLive, isLast: i === last, memory, skills, readOnly: session.kind === 'helper' || session.kind === 'run' }) };
+    return { key: t.id, html: line + renderTurn(t, { live: isLive, isLast: i === last, memory, skills, readOnly: session.kind === 'helper' || session.kind === 'run', times }) };
   });
 }
 
@@ -717,7 +760,7 @@ function entryMeta(e) {
   if (e.kind === 'helper' && e.parent) bits.push(`asked in <a href="${where(e.parent)}">${esc(clip(e.parentTitle ?? '', 40))}</a>`);
   if (e.kind === 'schedule' && !e.missed) bits.push(e.manual ? 'run now, by you' : e.late ? 'ran late' : 'on schedule');
   if (e.missed) bits.push("Nova wasn't running then");
-  if (e.ended && e.state !== 'working' && e.state !== 'waiting') bits.push(took(e.started, e.ended));
+  if (e.ended && e.state !== 'working' && e.state !== 'waiting') bits.push(`took ${took(e.started, e.ended)}, finished <time datetime="${esc(e.ended)}">${esc(clock(new Date(e.ended)))}</time>`);
   if (e.report) bits.push(`<a href="${where(e.report.to)}#h-${esc(e.report.handoff)}">${e.state === 'done' ? 'Read the report' : 'See what it said'}</a>`);
   if (e.kind !== 'reply' && e.session && !e.missed && e.state !== 'queued') bits.push(`<a href="/c/${esc(e.session)}">Every step</a>`);
   return bits.join(' · ');
@@ -780,7 +823,7 @@ export function renderPermissions(list) {
   <div class="perm-text"><p class="perm-label" id="pl-${esc(p.id)}">${esc(p.label)}</p>${p.note ? `<p class="perm-note">${esc(p.note)}.</p>` : ''}</div>
   <button type="button" class="switch" role="switch" aria-checked="${p.yes}" aria-labelledby="pl-${esc(p.id)}" data-action="toggle-permission" data-id="${esc(p.id)}"><span class="switch-word">${p.yes ? 'Without asking' : 'Ask first'}</span><span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span></button>
 </li>`).join('');
-  return `<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
+  return `<section class="memory-section" id="perms" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
 <p class="memory-lede">Everything Nova can do that changes something outside the conversation asks you first. Turn a switch on and Nova does that without asking, in a conversation or while it works on its own; Activity shows each time.</p>
 ${list.length ? `<ul class="perm-list">${rows}</ul>` : '<p class="memory-none">Nothing Nova can do asks first right now.</p>'}
 <p class="perm-foot">When Nova gets a new tool, from an update, a plugin or a connector, anything it can change shows up here, set to Ask first. These switches are kept in permissions.md in your Nova folder.</p></section>`;
