@@ -13,7 +13,15 @@ export type ServerMode = 'starting' | 'running' | 'restarting' | 'safe_mode' | '
 export interface ProbeLine { at: string; ok: boolean; said: string }
 export interface Stage { stage: 'prepare' | 'tests' | 'sandbox' | 'smoke' | 'switch' | 'canary' | 'promote' | 'rollback'; ok: boolean; at: string; said: string }
 
-export interface ReleaseSlot { version: string; commit: string | null; created_at: string; status: 'ready' | 'live' | 'previous' | 'failed' | 'rolled_back' }
+// `migration`: the database upgrade this release made when it went live (from → to), the backup
+// taken before it, and where the person's data stood then, so going back knows what it may undo.
+export interface ReleaseSlot {
+  version: string;
+  commit: string | null;
+  created_at: string;
+  status: 'ready' | 'live' | 'previous' | 'failed' | 'rolled_back';
+  migration?: { from: number; to: number; backup: string | null; mark: { seq: number; problem: number } } | null;
+}
 
 export interface SupervisorState {
   v: 1;
