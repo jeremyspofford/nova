@@ -18,6 +18,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { CoreError } from '../errors.ts';
 import { check, hasProtocolTags, instructionSpans, protocolSpans, KIND_WORDS, PROTOCOL_NAMES, type Attachment, type Checked, type Flag, type Span } from './checks.ts';
+import { outbound, shingles, type OutboundResult } from './outbound.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Decisions, TemplateDef, Templates } from '../decide.ts';
@@ -138,8 +139,15 @@ export interface IngestOptions {
   read?: ((fenced: string, source: Source) => Promise<string | null>) | null;
   blocked?: (b: Blocked) => void;
   thresholds?: Thresholds;
+  // For the outbound guard: the vault's values, memory records, and the standing files' text.
+  secrets?: () => string[];
+  memory?: () => string[];
+  standing?: () => string[];
   now?: () => Date;
 }
+
+export interface Candidate { id: string; at: string; op: 'remember' | 'note' | 'forget'; kind: string | null; content: string | null; target: string | null; replaces: string | null; source: string | null; taint: Taint[] }
+export interface Hold { kind: string; ref: string; screen: string; reasons: string[]; at: string }
 
 export class Ingest {
   readonly thresholds: Thresholds;
@@ -203,7 +211,89 @@ export class Ingest {
     this.#o.db?.run('UPDATE ingest_screen SET task_id = ? WHERE id = ?', task, id);
   }
 
+  // ---- the outbound guard (plan §7) -------------------------------------------------------------
+
+  outbound(payload: { text: string }, o: { tainted: boolean }): OutboundResult {
+    const read = (f: (() => string[]) | undefined, what: string) => { try { return f?.() ?? []; } catch (e) { this.#o.log?.warn('ingest', `The outbound guard couldn’t read ${what}.`, { error: (e as Error).message }); return []; } };
+    return outbound(payload.text, {
+      tainted: o.tainted,
+      secrets: read(this.#o.secrets, 'the vault'),
+      mine: () => shingles([...read(this.#o.memory, 'memory'), ...read(this.#o.standing, 'the standing files')]),
+    });
+  }
+
+  // ---- holds: things from outside that wait for the person (plan §6) ----------------------------
+
+  hold(kind: string, ref: string, s: Pick<Screened, 'id' | 'flags'>): void {
+    const reasons = s.flags.filter((f) => f.level !== 'note').map((f) => KIND_WORDS[f.kind] ?? f.kind);
+    this.#db().run('INSERT OR REPLACE INTO ingest_hold (kind, ref, screen_id, reasons, at) VALUES (?, ?, ?, ?, ?)', kind, ref, s.id, JSON.stringify(reasons.length ? reasons : ['unsure: screened without a model']), this.#now().toISOString());
+  }
+
+  held(kind: string, ref: string): { screen: string; reasons: string[] } | null {
+    const r = this.#o.db?.get<{ screen_id: string; reasons: string }>('SELECT screen_id, reasons FROM ingest_hold WHERE kind = ? AND ref = ?', kind, ref);
+    return r ? { screen: r.screen_id, reasons: JSON.parse(r.reasons) as string[] } : null;
+  }
+
+  holds(kind: string): Hold[] {
+    return (this.#o.db?.all<{ kind: string; ref: string; screen_id: string; reasons: string; at: string }>('SELECT * FROM ingest_hold WHERE kind = ? ORDER BY at', kind) ?? [])
+      .map((r) => ({ kind: r.kind, ref: r.ref, screen: r.screen_id, reasons: JSON.parse(r.reasons) as string[], at: r.at }));
+  }
+
+  release(kind: string, ref: string): boolean {
+    const had = !!this.held(kind, ref);
+    this.#db().run('DELETE FROM ingest_hold WHERE kind = ? AND ref = ?', kind, ref);
+    return had;
+  }
+
+  // ---- memory candidates (plan §8) ----------------------------------------------------------------
+
+  candidate(c: { op: Candidate['op']; kind?: string; content?: string; target?: string; replaces?: string; source?: string; taint: Taint[] }): string {
+    const id = `mc-${randomUUID().slice(0, 12)}`;
+    this.#db().run(
+      'INSERT INTO memory_candidate (id, at, op, kind, content, target, replaces, source, taint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, this.#now().toISOString(), c.op, c.kind ?? null, c.content ?? null, c.target ?? null, c.replaces ?? null, c.source ?? null, JSON.stringify(c.taint),
+    );
+    return id;
+  }
+
+  candidates(): Candidate[] {
+    return (this.#o.db?.all<Record<string, string | null>>('SELECT * FROM memory_candidate ORDER BY at') ?? []).map(toCandidate);
+  }
+
+  // The person keeps it: it is handed back to be written, and is no longer a candidate.
+  takeCandidate(id: string): Candidate | null {
+    const row = this.#o.db?.get<Record<string, string | null>>('SELECT * FROM memory_candidate WHERE id = ?', id);
+    if (!row) return null;
+    this.#db().run('DELETE FROM memory_candidate WHERE id = ?', id);
+    return toCandidate(row);
+  }
+
+  dropCandidate(id: string): boolean {
+    const had = !!this.#o.db?.get('SELECT 1 FROM memory_candidate WHERE id = ?', id);
+    this.#db().run('DELETE FROM memory_candidate WHERE id = ?', id);
+    return had;
+  }
+
+  // ---- file provenance (plan §9) -----------------------------------------------------------------
+
+  markOwn(path: string, sha256: string): void {
+    this.#db().run('INSERT OR REPLACE INTO file_provenance (path, sha256, at) VALUES (?, ?, ?)', path, sha256, this.#now().toISOString());
+  }
+
+  clearOwn(path: string): void {
+    this.#o.db?.run('DELETE FROM file_provenance WHERE path = ?', path);
+  }
+
+  isOwn(path: string, sha256: string): boolean {
+    return this.#o.db?.get<{ sha256: string }>('SELECT sha256 FROM file_provenance WHERE path = ?', path)?.sha256 === sha256;
+  }
+
   // ---- internals --------------------------------------------------------------------------------
+
+  #db(): Db {
+    if (!this.#o.db) throw new Error('This screen keeps no records.');
+    return this.#o.db;
+  }
 
   #source(s: Source): Source {
     if (!s || !SOURCE_KINDS.includes(s.kind)) throw new CoreError('validation', `A screen needs a source kind: one of ${SOURCE_KINDS.join(', ')}.`);
@@ -271,6 +361,10 @@ export class Ingest {
     const clean = strip(said, [...instructionSpans(said), ...protocolSpans(said)]);
     return hasProtocolTags(clean) ? escapeProtocol(clean) : clean;
   }
+}
+
+function toCandidate(r: Record<string, string | null>): Candidate {
+  return { id: r.id!, at: r.at!, op: r.op as Candidate['op'], kind: r.kind ?? null, content: r.content ?? null, target: r.target ?? null, replaces: r.replaces ?? null, source: r.source ?? null, taint: JSON.parse(r.taint ?? '[]') as Taint[] };
 }
 
 // Why a block, in plain words: which checks and which questions.
