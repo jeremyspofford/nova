@@ -45,7 +45,50 @@ export function loadConfig(env = process.env, root = ROOT) {
     googleBase: env.NOVA_GOOGLE_BASE ?? '',
     imapUrl: env.NOVA_IMAP_URL ?? undefined,
     searchUrl: env.NOVA_SEARCH_URL ?? undefined,
+    // The mesh listener for paired devices (M4 plan §0), or null: then nothing beyond this machine
+    // can reach Nova's console, and devices can't pair.
+    mesh: meshConfig(env, file),
   };
+}
+
+// A setting Nova refuses to start with; the message says why, in plain words.
+export class ConfigError extends Error {}
+
+// NOVA_MESH_URL=https://host:port with NOVA_TLS_CERT and NOVA_TLS_KEY; or http://host:port only with
+// NOVA_MESH_TRANSPORT=proxy (a TLS proxy carries it) or network (an encrypted network, such as a
+// tailnet, does). Plain HTTP with no such statement is refused: anyone on the way could read and
+// change what devices say. NOVA_MESH_PUBLIC_URL is the address devices are told to use.
+export function meshConfig(env, file = {}) {
+  const raw = env.NOVA_MESH_URL ?? file.mesh_url;
+  if (!raw) return null;
+  let url;
+  try { url = new URL(raw); } catch { throw new ConfigError(`NOVA_MESH_URL isn't an address Nova can listen on: ${raw}`); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.port === '' || url.pathname !== '/') {
+    throw new ConfigError(`NOVA_MESH_URL must be http(s)://<address>:<port>, with nothing after the port: ${raw}`);
+  }
+  let transport = env.NOVA_MESH_TRANSPORT ?? file.mesh_transport;
+  let tls = null;
+  if (url.protocol === 'https:') {
+    if (transport && transport !== 'tls') throw new ConfigError('NOVA_MESH_TRANSPORT is only for an http:// mesh address; an https:// one carries its own TLS.');
+    const cert = env.NOVA_TLS_CERT ?? file.tls_cert;
+    const key = env.NOVA_TLS_KEY ?? file.tls_key;
+    if (!cert || !key) throw new ConfigError('An https:// mesh address needs NOVA_TLS_CERT and NOVA_TLS_KEY: the certificate and its private key, as PEM files.');
+    tls = { cert, key };
+    transport = 'tls';
+  } else if (!['proxy', 'network'].includes(transport)) {
+    throw new ConfigError(`Nova won't serve other devices over plain HTTP at ${raw}: anyone on the way could read and change what they send. Use an https:// address with NOVA_TLS_CERT and NOVA_TLS_KEY. If a TLS proxy or an encrypted network (such as a tailnet) already carries it, say so with NOVA_MESH_TRANSPORT=proxy or NOVA_MESH_TRANSPORT=network.`);
+  }
+  const bindHost = url.hostname.replace(/^\[|\]$/g, '');
+  const wildcard = ['0.0.0.0', '::'].includes(bindHost);
+  const pub = env.NOVA_MESH_PUBLIC_URL ?? file.mesh_public_url ?? (wildcard ? null : url.origin);
+  if (!pub) throw new ConfigError(`NOVA_MESH_URL listens on every address, so Nova can't tell devices which one to use. Set NOVA_MESH_PUBLIC_URL to the address they reach it at.`);
+  let publicUrl;
+  try { publicUrl = new URL(pub); } catch { throw new ConfigError(`NOVA_MESH_PUBLIC_URL isn't an address: ${pub}`); }
+  if (!['http:', 'https:'].includes(publicUrl.protocol)) throw new ConfigError(`NOVA_MESH_PUBLIC_URL must be an http(s) address: ${pub}`);
+  if (transport !== 'network' && publicUrl.protocol !== 'https:') {
+    throw new ConfigError(`Devices reach Nova over TLS here, so NOVA_MESH_PUBLIC_URL must be an https:// address, not ${pub}.`);
+  }
+  return { bindHost, port: Number(url.port), transport, tls, publicUrl: publicUrl.origin };
 }
 
 function egress(v) {

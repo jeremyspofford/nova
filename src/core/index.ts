@@ -20,7 +20,11 @@ import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { info, permits, stricter, type Egress } from './workers.ts';
-import { createApi, Raw, type Route } from './api.ts';
+import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
+import { loadIdentity } from './mesh/identity.ts';
+import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
+import { Enrollment } from './mesh/enroll.ts';
+import { Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 
 export { render as renderIdentity } from './identity.ts';
@@ -35,6 +39,14 @@ export type { Lane, LanedWorker, Task } from './ledger.ts';
 // The mesh's wire format and the limiter, shared with the device agent (src/device) and sync.
 export * from './mesh/wire.ts';
 export { SlidingWindowLimiter } from './mesh/limiter.ts';
+export { KINDS as DEVICE_KINDS, ROLE_OF, SESSION_TTL_MS } from './mesh/devices.ts';
+export { JOIN_REVEAL_TTL_MS, JOIN_APPROVE_TTL_MS } from './mesh/enroll.ts';
+export { PUBLIC_PATHS, SESSION_COOKIE, allows, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
+export type { Device, Kind as DeviceKind, Role as DeviceRole, MeshState } from './mesh/devices.ts';
+export type { JoinRequest, Pairing } from './mesh/enroll.ts';
+export type { Listener, MeshListenerInfo, Principal, Scope } from './mesh/access.ts';
+export type { MeshIdentity } from './mesh/identity.ts';
+export type { Who } from './api.ts';
 export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
 
 export interface CoreOptions {
@@ -50,6 +62,8 @@ export interface CoreOptions {
   confirmations?: Record<string, Checker>;
   // Where the built-in design systems live; defaults to design-systems/ in the repo.
   designSystems?: string;
+  // The mesh listener, when there is one: where devices reach Nova, and what carries it.
+  mesh?: MeshListenerInfo | null;
   now?: () => Date;
 }
 
@@ -83,6 +97,14 @@ export function createCore(o: CoreOptions) {
   const memory = new Memory({ db, home: o.home, now, afterForget: (ids) => backups.forget('memory', ids) });
   const receipts = new Receipts({ db, log, now });
   for (const p of design.ensureBuiltins()) log.problem('design', p);
+  // The device mesh: this node's keys, the registry, enrollment, and who may do what.
+  const meshInfo = o.mesh ?? null;
+  const publicUrl = () => meshInfo?.publicUrl ?? null;
+  const meshIdentity = loadIdentity(o.home, { now, warn: (m) => log.problem('mesh', m) });
+  const devices = new Devices({ db, log, identity: meshIdentity, now, publicUrl });
+  devices.ensureHub();
+  const enroll = new Enrollment({ db, log, devices, identity: meshIdentity, now, publicUrl });
+  const access = new Access({ devices, mesh: meshInfo });
 
   const bus = new EventEmitter();
   bus.setMaxListeners(100);
@@ -105,12 +127,31 @@ export function createCore(o: CoreOptions) {
   design.on('change', (c) => bus.emit('event', 'design-system', c));
   triggers.on('trigger', (t) => bus.emit('event', 'trigger', { trigger_id: t.trigger_id, rule_id: t.rule_id, class: t.class, decision: t.triage.decision, reason: t.triage.reason, ledger_task_id: t.ledger_task_id, message_id: t.message_id }));
   triggers.on('message', (m) => bus.emit('event', 'message', m));
+  devices.on('change', (c: { action: string; device: Device }) => bus.emit('event', 'device', { action: c.action, device: deviceView(c.device) }));
+  enroll.on('change', (r) => bus.emit('event', 'join_request', r));
   const stream = {
     on(listener: (event: string, data: unknown) => void) {
       const fn = (event: string, data: unknown) => listener(event, data);
       bus.on('event', fn);
       return () => bus.off('event', fn);
     },
+  };
+
+  // A device as the API shows it. Online: the hub always; others when heard from lately or holding
+  // a stream open. `this`: the device asking (the hub, for the console).
+  function deviceView(d: Device, p?: Principal) {
+    const { public_key: _pk, x25519_public_key: _xk, ...rest } = d;
+    const recent = d.last_seen ? now().getTime() - Date.parse(d.last_seen) < ONLINE_WINDOW_MS : false;
+    return {
+      ...rest,
+      online: d.trust === 'trusted' && (d.role === 'hub' || access.isLive(d.id) || recent),
+      this: p ? (p.kind === 'device' ? p.device.id === d.id : p.kind === 'console' && d.id === meshIdentity.id) : false,
+    };
+  }
+  const by = (w: Who) => (w.principal.kind === 'device' ? `device:${w.principal.device.id}` : w.principal.kind);
+  // Joining and sessions happen only over the mesh listener, the transport §0 accepts.
+  const meshOnly = (w: Who) => {
+    if (w.listener !== 'mesh') throw new CoreError('forbidden', meshInfo ? `Devices join and sign in at ${meshInfo.publicUrl}, not at this address.` : 'Other devices can’t reach this Nova: it has no mesh address.');
   };
 
   function health() {
@@ -132,8 +173,18 @@ export function createCore(o: CoreOptions) {
       problems: { ok: true, open: log.problems({ open: true }).length },
       memory: { ok: true, counts: memory.counts() },
       receipts: { ok: true, counts: receipts.counts() },
+      mesh: { ok: true, ...meshHealth() },
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
+  }
+
+  function meshHealth() {
+    const s = devices.state();
+    return {
+      role: s.role, epoch: s.epoch, listening: !!meshInfo, counts: devices.counts(),
+      // The standby's lag arrives with sync (M4c).
+      standby: s.standby_id ? { id: s.standby_id, lag: null } : null,
+    };
   }
 
   const header = (h: IncomingHttpHeaders, name: string) => { const v = h[name]; return Array.isArray(v) ? v[0] : v; };
@@ -276,6 +327,72 @@ export function createCore(o: CoreOptions) {
         ...(query.get('egress') ? { egress: query.get('egress') as 'local' | 'remote' } : {}),
       }),
     },
+    // ---- the device mesh (M4 plan §0–§1) ----
+    {
+      method: 'GET', path: '/mesh/hello', access: 'public', summary: 'The hub’s fingerprint, epoch, role and public keys. No person data; anyone may ask.',
+      handle: () => {
+        const s = devices.state();
+        const self = devices.get(meshIdentity.id);
+        return { name: self.name, id: meshIdentity.id, fingerprint: meshIdentity.fingerprint, epoch: s.epoch, role: s.role, public_key: meshIdentity.publicKey, x25519_public_key: meshIdentity.x25519PublicKey };
+      },
+    },
+    {
+      method: 'GET', path: '/mesh/status', access: 'mesh', summary: 'Whether other devices can reach this Nova, where, and who is asking.',
+      handle: ({ who }) => {
+        const p = who.principal;
+        return {
+          public_url: publicUrl(), transport: meshInfo?.transport ?? null, fingerprint: meshIdentity.fingerprint, ...meshHealth(),
+          you: p.kind === 'device' ? { console: false, device_id: p.device.id, kind: p.device.kind, can_approve: p.device.can_approve } : { console: true, device_id: meshIdentity.id, kind: 'computer', can_approve: true },
+        };
+      },
+    },
+    { method: 'GET', path: '/mesh/devices', summary: 'The device registry, the hub first. The device asking is marked `this`.', handle: ({ who }) => devices.list().map((d) => deviceView(d, who.principal)) },
+    {
+      method: 'PATCH', path: '/mesh/devices/{id}', summary: 'Rename a device, or let it approve new devices (tier 3: needs {confirm: true}, and only an approver may grant it).', body: '{name?, can_approve?, confirm?}',
+      handle: ({ params, body, who }) => {
+        if (body.can_approve !== undefined && allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', 'Only the hub’s own screen, or a device you’ve allowed to approve, can change who approves.');
+        if (body.name !== undefined) devices.rename(params.id!, body.name);
+        if (body.can_approve !== undefined) devices.setCanApprove(params.id!, body.can_approve, body.confirm === true);
+        return deviceView(devices.get(params.id!), who.principal);
+      },
+    },
+    {
+      method: 'POST', path: '/mesh/devices/{id}/revoke', summary: 'Revoke a device (tier 3: needs {confirm: true}). Its sessions end and its open streams close at once; its key can never sign in or enroll again.', body: '{confirm, reason?}',
+      handle: ({ params, body, who }) => deviceView(devices.revoke(params.id!, { confirm: body.confirm === true, reason: body.reason, by: by(who) }), who.principal),
+    },
+    { method: 'POST', path: '/mesh/pairings', status: 201, access: 'approver', summary: 'Make a pairing code: single use, five minutes. The reply has the QR address, the one-line command and the hub’s fingerprint.', handle: ({ who }) => enroll.createPairing(by(who)) },
+    { method: 'GET', path: '/mesh/requests', access: 'approver', summary: 'Devices waiting for your OK, each with the six digits it shows.', handle: () => enroll.requests() },
+    {
+      method: 'POST', path: '/mesh/requests/{id}/approve', access: 'approver', summary: 'Approve a device (tier 3: needs {confirm: true}) once its digits match. This creates its device record.', body: '{confirm}',
+      handle: ({ params, body, who }) => { const r = enroll.approve(params.id!, { confirm: body.confirm === true, by: by(who) }); return { request: r.request, device: deviceView(r.device, who.principal) }; },
+    },
+    { method: 'POST', path: '/mesh/requests/{id}/deny', access: 'approver', summary: 'Turn a device away.', handle: ({ params, who }) => enroll.deny(params.id!, by(who)) },
+    {
+      method: 'POST', path: '/mesh/join', status: 201, access: 'public', summary: 'A device asks to join with a code, its public keys, and a commitment to its nonce. A wrong or spent code is a 400 with no detail.',
+      body: '{code, public_key, x25519_public_key, x25519_sig, claims: {name, platform, kind, capabilities[], address?}, commitment}',
+      handle: ({ body, who }) => { meshOnly(who); enroll.limit('calls', who.address); return enroll.join(body, who.address); },
+    },
+    {
+      method: 'POST', path: '/mesh/join/{id}/reveal', access: 'public', summary: 'The device reveals its nonce, signed over nova-add-device-reveal-v1.<id>.<time>; the reply is the six digits.', body: '{device_nonce, time, signature}',
+      handle: ({ params, body, who }) => { meshOnly(who); enroll.limit('calls', who.address); return enroll.reveal(params.id!, body); },
+    },
+    {
+      method: 'GET', path: '/mesh/join/{id}', access: 'public', summary: 'The device polls its request: ?time=&signature= over nova-add-device-status-v1.<id>.<time>. Approved, it gets its device id and the signed roster.',
+      handle: ({ params, query, who }) => { meshOnly(who); enroll.limit('polls', who.address); return enroll.status(params.id!, { time: query.get('time'), signature: query.get('signature') }); },
+    },
+    {
+      method: 'POST', path: '/mesh/session', access: 'public', summary: 'A trusted device starts a 12-hour session, signed over nova-session-v1.<device_id>.<time>. {cookie: true} sets an HttpOnly cookie instead of returning a token.',
+      body: '{device_id, time, signature, cookie?}',
+      handle: ({ body, who }) => {
+        meshOnly(who);
+        enroll.limit('calls', who.address);
+        const s = devices.startSession(body);
+        const out = { device_id: s.device.id, kind: s.device.kind, expires_at: s.expires_at };
+        if (body.cookie !== true) return { ...out, token: s.token };
+        return new Reply(out, { 'set-cookie': sessionCookie(s.token, { secure: publicUrl()?.startsWith('https:') ?? false, maxAgeS: SESSION_TTL_MS / 1000 }) });
+      },
+    },
+    { method: 'GET', path: '/mesh/roster', access: 'mesh', summary: 'Who the hub and the standby are, signed by this node: devices pin both keys from it.', handle: () => devices.roster() },
   ];
 
   // Tests drive the heartbeat's clock through the API; this route doesn't exist otherwise.
@@ -293,11 +410,14 @@ export function createCore(o: CoreOptions) {
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let ticking: Promise<unknown> = Promise.resolve();
   const beat = () => {
+    try { enroll.sweep(); } catch (e) { log.problem('mesh', 'Nova couldn’t tidy up old requests to join.', { detail: (e as Error)?.stack ?? String(e) }); }
     ticking = triggers.tick().catch((e) => log.problem('triggers', 'The heartbeat couldn’t check the schedules.', { detail: (e as Error)?.stack ?? String(e) }));
   };
 
   const api = createApi({
     routes, stream, version: o.version, trustedOrigin: o.trustedOrigin,
+    // The approval prompt goes only where it can be answered.
+    visible: (event, p) => event !== 'join_request' || allows('approver', p) === 'ok',
     onError: (e) => log.problem('api', 'Something went wrong inside Nova while answering a request.', { detail: (e as Error)?.stack ?? String(e) }),
   });
 
@@ -307,7 +427,12 @@ export function createCore(o: CoreOptions) {
     openapi: api.doc,
     identity: () => identityOf(profile),
     persona: () => render(identityOf(profile)),
-    handle: (req: IncomingMessage, res: ServerResponse, url: URL) => api.handle(req, res, url),
+    mesh: { identity: meshIdentity, devices, enroll, access, info: meshInfo },
+    // Who is asking, for a request outside /api/v1, or null once a refusal was sent (mesh/access.ts).
+    gate: (req: IncomingMessage, res: ServerResponse, url: URL, listener: Listener) => access.gate(req, res, url, listener),
+    // The core's routes, for the principal the gate found.
+    handle: (req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal, listener: Listener) =>
+      api.handle(req, res, url, { principal, listener, address: access.address(req, listener) }),
     // Recovers the ledger, then starts the heartbeat: once now (to catch up), then every 30 s.
     start() {
       const recovered = ledger.recover();

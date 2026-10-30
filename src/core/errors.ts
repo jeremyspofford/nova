@@ -1,8 +1,8 @@
 // One error type for the core. The code decides the HTTP status; the message is written for a
 // person, because it may be shown as-is.
-export type ErrorCode = 'validation' | 'not_found' | 'conflict' | 'forbidden';
+export type ErrorCode = 'validation' | 'unauthorized' | 'not_found' | 'conflict' | 'forbidden' | 'too_many';
 
-const STATUS: Record<ErrorCode, number> = { validation: 400, forbidden: 403, not_found: 404, conflict: 409 };
+const STATUS: Record<ErrorCode, number> = { validation: 400, unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, too_many: 429 };
 
 export class CoreError extends Error {
   readonly code: ErrorCode;

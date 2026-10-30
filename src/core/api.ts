@@ -3,12 +3,16 @@
 // document, so the two cannot drift apart.
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import { CoreError } from './errors.ts';
+import { APPROVER_ONLY, REFUSAL, allows, type Listener, type Principal, type Scope } from './mesh/access.ts';
 
-export interface Ctx { params: Record<string, string>; query: URLSearchParams; body: Record<string, unknown>; headers: IncomingHttpHeaders }
+// Who is asking and how they got here (mesh/access.ts), for the scope check and for handlers that
+// need it (enrollment is only over the mesh listener; "this device" in the registry).
+export interface Who { principal: Principal; listener: Listener; address: string }
+export interface Ctx { params: Record<string, string>; query: URLSearchParams; body: Record<string, unknown>; headers: IncomingHttpHeaders; who: Who }
 export type Handler = (ctx: Ctx) => unknown;
 
 export interface Route {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   path: string;                  // OpenAPI style: /tasks/{id}
   summary: string;
   body?: string;                 // what the JSON body carries, for the document
@@ -16,6 +20,8 @@ export interface Route {
   // Set only on the webhook route: automations call it with their own token
   // (x-nova-hook-token), which the handler checks, instead of the X-Nova header.
   auth?: 'hook-token';
+  // Who may call it (mesh/access.ts). Everything a person uses is `person`, the default.
+  access?: Scope;
   handle: Handler;
 }
 
@@ -26,6 +32,16 @@ export class Raw {
   constructor(type: string, body: string) {
     this.type = type;
     this.body = body;
+  }
+}
+
+// A handler returns Reply to set headers (a session cookie) along with its JSON.
+export class Reply {
+  readonly body: unknown;
+  readonly headers: Record<string, string>;
+  constructor(body: unknown, headers: Record<string, string>) {
+    this.body = body;
+    this.headers = headers;
   }
 }
 
@@ -47,11 +63,12 @@ export function openapi(routes: Route[], version: string): Record<string, unknow
     (paths[`${PREFIX}${r.path}`] ??= {})[r.method.toLowerCase()] = {
       summary: r.summary,
       ...(params.length ? { parameters: params } : {}),
+      ...(r.access && r.access !== 'person' ? { 'x-nova-access': r.access } : {}),
       ...(r.body ? { requestBody: { required: true, description: r.body, content: { 'application/json': { schema: { type: 'object' } } } } } : {}),
       responses: { [String(r.status ?? 200)]: { description: 'OK' }, default: { description: 'An error: {error, details?}' } },
     };
   }
-  paths[`${PREFIX}/events`] = { get: { summary: 'Live updates as server-sent events: task, problem, setup, profile, extension, trigger, message, design-system.', responses: { 200: { description: 'text/event-stream' } } } };
+  paths[`${PREFIX}/events`] = { get: { summary: 'Live updates as server-sent events: task, problem, setup, profile, extension, trigger, message, design-system, device, join_request.', responses: { 200: { description: 'text/event-stream' } } } };
   return { openapi: '3.1.0', info: { title: 'Nova core API', version }, paths };
 }
 
@@ -72,7 +89,15 @@ const readBody = (req: IncomingMessage, limit = 1_000_000): Promise<Record<strin
   req.on('error', fail);
 });
 
-export function createApi(o: { routes: Route[]; stream: Stream; version: string; trustedOrigin: (host: string) => boolean; onError: (e: unknown) => void }) {
+// Before M4 every request was the console's; a caller that doesn't say otherwise still is. The core
+// itself (index.ts) always says.
+const CONSOLE: Who = { principal: { kind: 'console' }, listener: 'console', address: 'console' };
+
+export function createApi(o: {
+  routes: Route[]; stream: Stream; version: string; trustedOrigin: (host: string) => boolean; onError: (e: unknown) => void;
+  // Which events a principal may see on the stream (by default, all of them).
+  visible?: (event: string, p: Principal) => boolean;
+}) {
   for (const r of o.routes) {
     if (r.auth && (r.method !== HOOK_ROUTE.method || r.path !== HOOK_ROUTE.path)) throw new Error(`${r.method} ${r.path} can't skip the X-Nova guard; only ${HOOK_ROUTE.method} ${HOOK_ROUTE.path} may.`);
   }
@@ -85,12 +110,17 @@ export function createApi(o: { routes: Route[]; stream: Stream; version: string;
   };
 
   // Returns false when the path isn't the core's, so the caller can carry on routing.
-  async function handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
+  async function handle(req: IncomingMessage, res: ServerResponse, url: URL, who: Who = CONSOLE): Promise<boolean> {
     if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) return false;
     const path = url.pathname.slice(PREFIX.length) || '/';
     try {
       const matches = table.filter((r) => r.re.test(path));
       const route = matches.find((r) => r.method === req.method);
+      // Who may call it comes first: someone without a session learns nothing, not even whether a
+      // path exists.
+      const scope: Scope = route?.access ?? matches[0]?.access ?? 'person';
+      const verdict = allows(scope, who.principal);
+      if (verdict !== 'ok') throw new CoreError(verdict === 'unauthenticated' ? 'unauthorized' : 'forbidden', scope === 'approver' && verdict === 'forbidden' ? APPROVER_ONLY : REFUSAL[verdict]);
       // Same rule as the rest of the server: changes come only from Nova's own page. The webhook
       // route is the one exception; it checks its own token.
       if (req.method !== 'GET' && req.method !== 'HEAD' && route?.auth !== 'hook-token') {
@@ -102,7 +132,9 @@ export function createApi(o: { routes: Route[]; stream: Stream; version: string;
       if (path === '/events' && req.method === 'GET') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write(': nova core\n\n');
-        const off = o.stream.on((event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        const off = o.stream.on((event, data) => {
+          if (!o.visible || o.visible(event, who.principal)) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        });
         const beat = setInterval(() => res.write(': beat\n\n'), 20_000);
         req.on('close', () => { clearInterval(beat); off(); });
         return true;
@@ -112,8 +144,11 @@ export function createApi(o: { routes: Route[]; stream: Stream; version: string;
       const decode = (v: string) => { try { return decodeURIComponent(v); } catch { throw new CoreError('validation', 'The address has a malformed escape.'); } };
       const params = Object.fromEntries(Object.entries(route.re.exec(path)!.groups ?? {}).map(([k, v]) => [k, decode(v)]));
       const body = route.method === 'GET' || route.method === 'DELETE' ? {} : await readBody(req);
-      const out = await route.handle({ params, query: url.searchParams, body, headers: req.headers });
-      if (out instanceof Raw) {
+      const out = await route.handle({ params, query: url.searchParams, body, headers: req.headers, who });
+      if (out instanceof Reply) {
+        res.writeHead(route.status ?? 200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...out.headers });
+        res.end(JSON.stringify(out.body));
+      } else if (out instanceof Raw) {
         res.writeHead(route.status ?? 200, { 'content-type': out.type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
         res.end(out.body);
       } else send(res, route.status ?? 200, out);

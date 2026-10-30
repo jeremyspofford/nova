@@ -1,9 +1,12 @@
 // Nova's local web server: the UI, a small JSON API, and a server-sent event
-// stream per conversation. Binds to 127.0.0.1 by default.
+// stream per conversation. Binds to 127.0.0.1 by default. A second listener, the
+// mesh listener, serves paired devices when one is configured (src/core/mesh/access.ts
+// says who may do what on either).
 import { createServer } from 'node:http';
+import { createServer as createTlsServer } from 'node:https';
 import { createReadStream, existsSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
-import { loadConfig } from './config.js';
+import { ConfigError, loadConfig } from './config.js';
 import { ensureGit, seedHome } from './home.js';
 import { SessionStore, validId } from './sessions.js';
 import { Runner, BusyError } from './runner.js';
@@ -35,6 +38,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   const chatRun = new ChatRun({ program, egress: config.agentEgress, privacy: () => core.profile.privacyDefault() });
   const core = createCore({
     home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
+    mesh: config.mesh ? { publicUrl: config.mesh.publicUrl, transport: config.mesh.transport } : null,
     workers: [chatRun], confirmations: { [SYSTEM]: (e, brief) => chatRun.confirm(e, brief) },
   });
   if (!config.timezonePinned && core.identity().timezone) config.timezone = core.identity().timezone;
@@ -150,10 +154,12 @@ export function createNova(config = loadConfig(), deps = {}) {
 
   // Requests must come from Nova's own page. The Host check stops DNS
   // rebinding; the custom header makes cross-site POSTs impossible without a
-  // CORS preflight, which this server never grants.
+  // CORS preflight, which this server never grants. Devices address Nova by its
+  // mesh address.
+  const meshHosts = config.mesh ? [new URL(config.mesh.publicUrl).hostname.replace(/^\[|\]$/g, ''), config.mesh.bindHost] : [];
   const allowedHost = (host) => {
     const name = String(host ?? '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
-    return ['localhost', '127.0.0.1', '::1', config.host].includes(name);
+    return ['localhost', '127.0.0.1', '::1', config.host, ...meshHosts].includes(name);
   };
 
   // npm run dev: watch ui/ and tell open pages to refresh.
@@ -181,6 +187,7 @@ export function createNova(config = loadConfig(), deps = {}) {
 
   function serveStatic(req, res, path) {
     // The PWA's places (ui/js/nav.js); Era 2's paths keep working.
+    if (path === '/pair') return serveFile(res, join(ui, 'pair.html'));
     if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
@@ -401,18 +408,22 @@ export function createNova(config = loadConfig(), deps = {}) {
     return json(res, 404, { error: 'Not found' });
   }
 
-  const server = createServer(async (req, res) => {
+  // One handler for both listeners; the listener is part of who is asking.
+  const handler = (listener) => async (req, res) => {
     try {
       if (!allowedHost(req.headers.host)) { res.writeHead(421); return res.end('Misdirected request'); }
       const url = new URL(req.url, 'http://nova.local');
       const parts = url.pathname.split('/');
+      // The console, a paired device, or no one yet: a refusal is sent here and nothing below runs.
+      const principal = core.gate(req, res, url, listener);
+      if (!principal) return;
       if (config.dev && url.pathname === '/__dev/events') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
         res.write(': dev\n\n');
         devClients.add(res);
         return req.on('close', () => devClients.delete(res));
       }
-      if (await core.handle(req, res, url)) return;
+      if (await core.handle(req, res, url, principal, listener)) return;
       // The active design system as CSS variables (?device= for a device's own choice). Pages
       // fetch it again on the core's design-system event, so a change needs no reload.
       if (url.pathname === '/design-system.css' && req.method === 'GET') {
@@ -433,13 +444,25 @@ export function createNova(config = loadConfig(), deps = {}) {
       if (!res.headersSent) json(res, e.message === 'bad json' || e.message === 'too large' ? 400 : 500, { error: e.message });
       else res.end();
     }
-  });
+  };
+  const server = createServer(handler('console'));
+  const m = config.mesh;
+  const mesh = !m ? null : m.tls
+    ? createTlsServer({ cert: readFileSync(m.tls.cert), key: readFileSync(m.tls.key) }, handler('mesh'))
+    : createServer(handler('mesh'));
 
-  return { server, runner, store, scheduler, helpers, chatRun, config, seeded, started, core };
+  return { server, mesh, runner, store, scheduler, helpers, chatRun, config, seeded, started, core };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const nova = createNova();
+  let nova;
+  try {
+    nova = createNova();
+  } catch (e) {
+    if (!(e instanceof ConfigError)) throw e;
+    console.error(`Nova didn't start: ${e.message}`);
+    process.exit(1);
+  }
   const { config } = nova;
   ensureGit(config.home);
   nova.helpers.recover(); // helper logs from before the ledger; the rest is the ledger's recovery
@@ -454,10 +477,17 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(`Nova is ready at http://${config.host === '127.0.0.1' ? 'localhost' : config.host}:${nova.server.address().port}  (${ms} ms)`);
     console.log(`Home: ${config.home}`);
     if (!['127.0.0.1', 'localhost', '::1'].includes(config.host)) {
-      console.log('Warning: Nova is listening beyond this machine. Anyone who can reach it can talk to Nova and approve commands.');
+      console.log('Note: the console port is listening beyond this machine. Only requests from this machine get the console; anything else must pair first, and pairing needs a mesh address (NOVA_MESH_URL).');
     }
   });
-  const quit = async () => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); await nova.core.close(); process.exit(0); };
+  if (nova.mesh) {
+    const m = config.mesh;
+    nova.mesh.listen(m.port, m.bindHost, () => {
+      const how = { tls: 'over TLS', proxy: 'through a TLS proxy, as you said', network: 'over an encrypted network, as you said' }[m.transport];
+      console.log(`Devices pair and connect at ${m.publicUrl} (listening on ${m.bindHost}:${nova.mesh.address().port}, ${how}).`);
+    });
+  }
+  const quit = async () => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.close(); process.exit(0); };
   process.on('SIGINT', quit);
   process.on('SIGTERM', quit);
 }
