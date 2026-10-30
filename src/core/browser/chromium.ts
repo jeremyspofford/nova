@@ -3,7 +3,7 @@
 // plainly when there is none. Each task gets a fresh, throwaway profile, and the browser is
 // reached only over its debugging pipe.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { accessSync, constants, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { accessSync, constants, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
@@ -71,8 +71,54 @@ export interface LaunchOptions {
 
 export interface Launched { cdp: Cdp; proc: ChildProcess; profile: string; stderr: () => string; close: () => Promise<void> }
 
+// Each task's profile is a fresh folder in the temp folder, removed when its browser closes. One
+// left behind (Nova killed, the machine off) may hold the person's cookies from a takeover, so
+// Nova sweeps them at start. A profile names the process that made it (OWNER), and Chromium's own
+// lock names the one using it; one whose process is still alive is left alone.
+export const PROFILE_PREFIX = 'nova-browser-';
+const OWNER = '.nova-owner';
+// A profile that names no process (made before profiles named one) is left alone this long.
+const UNMARKED_STALE_MS = 2 * 60 * 60_000;
+
+const alive = (pid: number): boolean => {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+};
+
+export function sweepProfiles(dir: string = tmpdir(), o: { now?: number; isAlive?: (pid: number) => boolean } = {}): string[] {
+  const live = o.isAlive ?? alive;
+  const now = o.now ?? Date.now();
+  const removed: string[] = [];
+  let names: string[] = [];
+  try { names = readdirSync(dir).filter((n) => n.startsWith(PROFILE_PREFIX)); } catch { return removed; }
+  for (const n of names) {
+    const path = join(dir, n);
+    try {
+      const st = lstatSync(path);
+      // Only folders, and only this user's: never follow a link, never touch someone else's.
+      if (!st.isDirectory() || (process.getuid && st.uid !== process.getuid())) continue;
+      const owner = (() => { try { return Number(readFileSync(join(path, OWNER), 'utf8').trim()); } catch { return null; } })();
+      const locker = (() => { try { return Number(/-(\d+)$/.exec(readlinkSync(join(path, 'SingletonLock')))?.[1]); } catch { return null; } })();
+      if ((owner !== null && live(owner)) || (locker !== null && live(locker))) continue;
+      if (owner === null && locker === null && now - st.mtimeMs < UNMARKED_STALE_MS) continue;
+      rmSync(path, { recursive: true, force: true });
+      removed.push(path);
+    } catch { /* gone meanwhile, or not ours to remove */ }
+  }
+  return removed;
+}
+
+// Chromium looks up no name but the declared hosts' (and only those resolve): an undeclared name
+// can't even be asked of DNS, which would tell whoever answers it where the page wanted to go.
+// Ports and brackets don't belong in a rule; a wildcard stays one.
+export function resolverRules(hosts: readonly string[]): string {
+  const names = [...new Set(hosts.map((h) => h.trim().toLowerCase().replace(/:\d{1,5}$/, '').replace(/^\[|\]$/g, '')).filter(Boolean))];
+  return ['MAP * ~NOTFOUND', ...names.map((n) => `EXCLUDE ${n}`)].join(', ');
+}
+
 export async function launch(o: LaunchOptions): Promise<Launched> {
-  const profile = mkdtempSync(join(tmpdir(), 'nova-browser-'));
+  const profile = mkdtempSync(join(tmpdir(), PROFILE_PREFIX));
+  writeFileSync(join(profile, OWNER), String(process.pid));
   const width = o.width ?? 1280;
   const height = o.height ?? 800;
   const args = [
@@ -89,6 +135,7 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
     // one) goes to a proxy that refuses it, unless its host is one the task declared. WebRTC may
     // not go around the proxy.
     `--proxy-server=${o.refuser}`, `--proxy-bypass-list=${['<-loopback>', ...o.bypass].join(';')}`,
+    `--host-resolver-rules=${resolverRules(o.bypass)}`,
     '--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--webrtc-ip-handling-policy=disable_non_proxied_udp',
     ...(o.sandbox === false ? ['--no-sandbox'] : []),
     'about:blank',

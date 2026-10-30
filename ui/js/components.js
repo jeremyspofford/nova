@@ -157,6 +157,7 @@ export function evidenceViewer(t) {
   <p class="sheet-kicker">${status(statusOf(t))}</p>
   <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
   <p class="sheet-line">${esc(t.brief?.goal ?? '')}</p>
+  ${t.state === 'waiting' && t.reason ? `<p class="sheet-line task-reason">${esc(t.reason)}</p>` : ''}
   ${t.report?.summary ? `<p class="sheet-line">${esc(t.report.summary)}</p>` : ''}
   ${v ? `<h3 class="sheet-heading">How Nova checked</h3><ul class="checks">${checks}</ul><p class="sheet-line is-faint">Checked ${esc(new Date(v.at).toLocaleString('en-US'))}.</p>` : `<p class="sheet-line">${t.state === 'done' ? 'Done.' : 'Not checked yet: Nova checks the evidence before it calls anything done.'}</p>`}
   <details class="raw"><summary>The ledger entry</summary><pre tabindex="0">${esc(JSON.stringify({ id: t.id, state: t.state, reason: t.reason, owner: t.owner, privacy_mode: t.privacy_mode, approval_tier: t.approval_tier, brief: t.brief, report: t.report, verification: t.verification }, null, 2))}</pre></details>

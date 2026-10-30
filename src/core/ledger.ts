@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { CoreError } from './errors.ts';
 import { ENVELOPE_VERSION, validateBrief, validateReport, type Brief, type ContextRef, type EvidenceRequirement, type PrivacyMode, type Report, type Tier } from './envelope.ts';
-import { egressOf, permits, type Worker } from './workers.ts';
+import { effectsOf, egressOf, permits, type Worker } from './workers.ts';
 import type { Db } from './db.ts';
 import type { Log } from './log.ts';
 import type { Verification, Verifier } from './verify.ts';
@@ -19,7 +19,8 @@ const MOVES: Record<State, State[]> = {
   // waiting → active: a running worker that asked for the person carries on once they're done.
   waiting: ['queued', 'cancelled', 'failed', 'active'],
   active: ['verifying', 'waiting', 'failed', 'queued', 'cancelled'],
-  verifying: ['done', 'queued', 'failed'],
+  // verifying → waiting: evidence that didn't hold up for work that may already have happened.
+  verifying: ['done', 'queued', 'failed', 'waiting'],
   done: [],
   failed: [],
   cancelled: [],
@@ -227,9 +228,15 @@ export class Ledger extends EventEmitter {
     if (this.#running.has(id)) throw new CoreError('conflict', 'This task is still running: it is waiting for you to do a step. Open it to take over.');
     if (t.state !== 'waiting' || (t.approval_tier >= 2 && !t.approved_at)) throw new CoreError('conflict', "This task isn't waiting for a retry.");
     this.#db.run(`UPDATE task SET user_visibility = 'handling' WHERE id = ?`, id);
-    const next = this.#move(id, 'queued', reason, 'retried');
+    // Running work with outside effects again is a new decision: the OK given for the first run
+    // doesn't cover it, so a task that needs one asks again before it runs.
+    const w = this.workers.get(t.owner);
+    const reapprove = t.attempts > 0 && t.approval_tier >= 2 && !!w && effectsOf(w, t.brief) === 'external';
+    if (reapprove) this.#db.run('UPDATE task SET approved_at = NULL WHERE id = ?', id);
+    const next = this.#move(id, 'queued', reason, 'retried', reapprove ? { asks_again: true } : undefined);
+    const gated = reapprove ? this.#gate(next) : next;
     void this.pump();
-    return next;
+    return gated;
   }
 
   // A running worker needs the person for a step only they may do (a sign-in, a challenge): the
@@ -246,6 +253,15 @@ export class Ledger extends EventEmitter {
     if (!this.#running.has(id) || t.state !== 'waiting') return t;
     this.#db.run(`UPDATE task SET user_visibility = 'handling' WHERE id = ?`, id);
     return this.#move(id, 'active', why, 'person_done');
+  }
+
+  // A running worker is about to do the thing that has the task's outside effect (a step flagged
+  // `commits`). Written down first, so after a failure the ledger knows whether that point was
+  // ever passed in this attempt.
+  committing(id: string, what: string): void {
+    const t = this.get(id);
+    if (!this.#running.has(id)) throw new CoreError('conflict', 'Only a running task can pass its commit point.');
+    this.#event(id, 'commit_point', null, null, { what, attempt: t.attempts });
   }
 
   // Something a worker wants in the task's record that isn't a change of state (a takeover, a
@@ -269,6 +285,10 @@ export class Ledger extends EventEmitter {
     const requeued: string[] = [];
     const reverified: string[] = [];
     for (const t of this.list({ state: 'active', limit: 500 })) {
+      if (!this.#mayRerun(t)) {
+        this.#hold(t.id, 'Nova restarted while this was running', 'recovered');
+        continue;
+      }
       if (t.attempts >= this.#maxAttempts) {
         this.#fail(t.id, `Nova restarted while this was running, ${t.attempts} times. Not trying again.`, undefined, 'recovered');
         continue;
@@ -281,6 +301,10 @@ export class Ledger extends EventEmitter {
     for (const t of this.list({ state: 'waiting', limit: 500 })) {
       const last = this.#db.get<{ kind: string }>('SELECT kind FROM task_event WHERE task_id = ? AND to_state IS NOT NULL ORDER BY seq DESC LIMIT 1', t.id);
       if (last?.kind !== 'needs_person') continue;
+      if (!this.#mayRerun(t)) {
+        this.#hold(t.id, 'Nova restarted while this waited for you', 'recovered');
+        continue;
+      }
       if (t.attempts >= this.#maxAttempts) {
         this.#fail(t.id, `Nova restarted while this waited for you, ${t.attempts} times. Not trying again.`, undefined, 'recovered');
         continue;
@@ -291,6 +315,7 @@ export class Ledger extends EventEmitter {
     }
     for (const t of this.list({ state: 'verifying', limit: 500 })) {
       if (t.report) this.#verifyAndSettle(t.id, t.report);
+      else if (!this.#mayRerun(t)) this.#hold(t.id, 'Nova restarted before the report arrived', 'recovered');
       else this.#move(t.id, 'queued', 'Nova restarted before the report arrived. It will run again.', 'recovered');
       reverified.push(t.id);
     }
@@ -437,17 +462,52 @@ export class Ledger extends EventEmitter {
       return;
     }
     const why = v.checks.filter((c) => !c.ok).map((c) => c.why).join(' ');
-    this.#retryOrFail(id, `The evidence didn't hold up: ${why}`, undefined, 'verification_failed');
+    // What didn't match, kept with the event: for work that may already have happened, it is
+    // what the person checks before choosing to retry.
+    const discrepancy = v.checks.filter((c) => !c.ok).map((c) => ({ kind: c.requirement.kind, why: c.why }));
+    this.#retryOrFail(id, `The evidence didn't hold up: ${why}`, undefined, 'verification_failed', { discrepancy });
   }
 
-  #retryOrFail(id: string, why: string, detail?: string, kind = 'attempt_failed'): void {
+  #retryOrFail(id: string, why: string, detail?: string, kind = 'attempt_failed', extra?: Record<string, unknown>): void {
     const t = this.get(id);
+    if (!this.#mayRerun(t)) {
+      this.#hold(id, why, kind, { ...(detail ? { detail } : {}), ...extra });
+      return;
+    }
     if (t.attempts < this.#maxAttempts) {
       this.#log.warn('ledger', why, { task: id, attempt: t.attempts, detail });
       this.#requeue(t, `${why} Trying again (attempt ${t.attempts + 1} of ${this.#maxAttempts}).`, kind, { detail });
       return;
     }
     this.#fail(id, `${why} Gave up after ${t.attempts} attempts.`, detail, kind);
+  }
+
+  // Whether a task that stopped after it was dispatched may run again by itself. Work with outside
+  // effects may not: it may already have happened, and only the person can tell. The exception is
+  // a brief that marks where its effect happens (`commits`): if this attempt never got there,
+  // nothing has happened yet. That decision is written down either way.
+  #mayRerun(t: Task): boolean {
+    const w = this.workers.get(t.owner);
+    if (!w || effectsOf(w, t.brief) !== 'external') return true;
+    let marked = false;
+    try { marked = w.commits?.(t.brief) === true; } catch { /* it can't say: as if unmarked */ }
+    if (!marked) return false;
+    const since = this.#db.get<{ seq: number | null }>(`SELECT MAX(seq) AS seq FROM task_event WHERE task_id = ? AND kind = 'dispatched'`, t.id)?.seq ?? 0;
+    const passed = this.#db.get<{ detail: string | null }>(`SELECT detail FROM task_event WHERE task_id = ? AND kind = 'commit_point' AND seq > ? ORDER BY seq LIMIT 1`, t.id, since);
+    const what = passed ? parse<{ what?: string }>(passed.detail)?.what : null;
+    this.#event(t.id, 'rerun_decision', null, null, passed
+      ? { rerun: false, why: `It got as far as “${what ?? 'the step that sends it'}”, so it may already have happened.` }
+      : { rerun: true, why: 'It stopped before the step that has the outside effect, so nothing has happened yet; it may run again.' });
+    return !passed;
+  }
+
+  // Work that may already have happened waits for the person: Needs you, with what went wrong, and
+  // only their retry (or cancel) moves it on.
+  #hold(id: string, why: string, kind: string, detail?: Record<string, unknown>): void {
+    const reason = `May already have happened: ${why.trim().replace(/[.\s]+$/, '')}. Check, then retry or cancel.`;
+    this.#log.warn('ledger', reason, { task: id });
+    this.#db.run(`UPDATE task SET user_visibility = 'attention' WHERE id = ?`, id);
+    this.#move(id, 'waiting', reason, kind, { ...detail, held: true });
   }
 
   // Tier 3 is confirmed every time it runs (NOVA-SPEC §6), so a rerun asks again.

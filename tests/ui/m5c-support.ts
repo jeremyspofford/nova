@@ -35,7 +35,9 @@ export function formPlan(site: Site, o: PlanOptions = {}) {
       { do: 'click', selector: '#submit' },
       { do: 'read', selector: '#status', expect: 'Received' },
     ],
-    verify: { expect: [name, email, 'Received'] },
+    // A plan that sends something is proven by a page it names, fetched by Nova itself: the
+    // site's own list of what it received.
+    verify: { url: `${site.url}/records`, expect: [name, email] },
   };
 }
 
@@ -47,6 +49,16 @@ export function browserTask(plan: unknown, title = 'Sign up on the example site'
 }
 
 type M = ReturnType<typeof blank>;
+
+// Delegates a browser task and gives the OK a form plan asks for (tier 2), as the person would.
+export async function delegate(m: M, plan: unknown, title?: string) {
+  const r = await m.send('POST', '/api/v1/tasks', browserTask(plan, title));
+  if (r.status === 201 && r.body.state === 'waiting' && r.body.approval_tier >= 2 && !r.body.approved_at) {
+    const ok = await m.send('POST', `/api/v1/tasks/${r.body.id}/approve`, r.body.approval_tier === 3 ? { confirm: true } : {});
+    if (ok.status !== 200) throw new Error(`approve: ${JSON.stringify(ok.body)}`);
+  }
+  return r;
+}
 type Task = { id: string; state: string; reason: string | null; verification: { ok: boolean; checks: { ok: boolean; why: string; requirement: { kind: string } }[] } | null; report: any };
 
 export async function waitTask(m: M, id: string, done: (t: Task) => boolean, ms = 60_000): Promise<Task> {

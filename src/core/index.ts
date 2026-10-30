@@ -3,6 +3,7 @@
 // nothing outside src/core imports anything but this file.
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
+import { hostname, networkInterfaces } from 'node:os';
 import { CoreError } from './errors.ts';
 import { Db } from './db.ts';
 import { Log, addSecretValue } from './log.ts';
@@ -33,7 +34,8 @@ import { Vault, type KeyMode, type KeyStore } from './vault.ts';
 import { Connectors } from './connectors/index.ts';
 import { homeAssistant, type HomeAssistantOptions } from './connectors/home-assistant.ts';
 import { Providers } from './providers/registry.ts';
-import { Browser } from './browser/worker.ts';
+import { Browser, type BrowserOptions } from './browser/worker.ts';
+import type { Hub } from './browser/plan.ts';
 import { browserRoutes } from './browser/routes.ts';
 import { checkers as browserCheckers } from './browser/evidence.ts';
 import { createHash } from 'node:crypto';
@@ -57,7 +59,7 @@ export * from './mesh/wire.ts';
 export { SlidingWindowLimiter } from './mesh/limiter.ts';
 export { KINDS as DEVICE_KINDS, ROLE_OF, SESSION_TTL_MS } from './mesh/devices.ts';
 export { JOIN_REVEAL_TTL_MS, JOIN_APPROVE_TTL_MS, rateKey } from './mesh/enroll.ts';
-export { PUBLIC_PATHS, SESSION_COOKIE, allows, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
+export { BROWSER_TASK_HEADER, PUBLIC_PATHS, SESSION_COOKIE, allows, fromBrowserTask, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
 export { DEVICE_CONFIG_SECTIONS, INBOX_KINDS, MAX_BATCH as INBOX_MAX_BATCH } from './mesh/spokes.ts';
 export { RUNTIME_FILES, agentFiles, agentTar, joinScript, tar } from './mesh/agent.ts';
 export type { Device, Kind as DeviceKind, Role as DeviceRole, MeshState } from './mesh/devices.ts';
@@ -100,6 +102,10 @@ export interface CoreOptions {
   mesh?: MeshListenerInfo | null;
   // Where the vault's key lives (vault.ts): NOVA_VAULT_KEY by default; tests inject a keychain.
   vault?: { mode?: KeyMode; keychain?: ((account: string) => KeyStore | null) | null };
+  // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
+  hubPorts?: () => number[];
+  // How the browser worker starts a browser: Chromium, or a stand-in in tests.
+  browserLaunch?: BrowserOptions['launch'];
   // Home Assistant's reconnect pauses and timeouts (tests shorten them).
   homeAssistant?: HomeAssistantOptions;
   // The model command Era 2 chats with (agent_cmd, agent_egress): the custom-cli provider (M5a).
@@ -127,7 +133,17 @@ export function createCore(o: CoreOptions) {
   const verifier = new Verifier(workspace, now);
   for (const [system, check] of Object.entries(o.confirmations ?? {})) verifier.registerConfirmation(system, check);
   // Browser work with takeover (M5c): a worker of its own, and the checks for what it proves.
-  const browser = new Browser({ home: o.home, log, now });
+  // Its browser runs here, so it is told where Nova itself listens: this machine's addresses and
+  // names, at the console's and the mesh listener's ports (browser/plan.ts, `Hub`).
+  const hubAddress = (): Hub => ({
+    ports: o.hubPorts?.() ?? [],
+    hosts: [
+      hostname(),
+      ...(o.mesh?.publicUrl ? [(() => { try { return new URL(o.mesh!.publicUrl).hostname; } catch { return ''; } })()] : []),
+      ...Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((a) => a.address)),
+    ].filter(Boolean),
+  });
+  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}) });
   const browserChecks = browserCheckers(o.home);
   verifier.registerKind('screenshot', browserChecks.screenshot);
   verifier.registerKind('url', browserChecks.url);
@@ -267,6 +283,11 @@ export function createCore(o: CoreOptions) {
   role.on('change', (s) => bus.emit('event', 'mesh', s));
   role.on('applied', (a) => bus.emit('event', 'sync', a));
   browser.on('change', (v) => bus.emit('event', 'browser', v));
+  // A device that may no longer approve may no longer hold a browser either (browser/routes.ts).
+  devices.on('revoked', (d: Device) => browser.release(`device:${d.id}`, `ended by Nova: its device was removed`));
+  devices.on('change', (c: { action: string; device: Device }) => {
+    if (c.action === 'can_approve' && !c.device.can_approve) browser.release(`device:${c.device.id}`, 'ended by Nova: its device may no longer take over');
+  });
   const stream = {
     on(listener: (event: string, data: unknown) => void) {
       const fn = (event: string, data: unknown) => listener(event, data);
@@ -728,6 +749,7 @@ export function createCore(o: CoreOptions) {
     // A hub recovers the ledger, then starts the heartbeat: once now (to catch up), then every
     // 30 s. A standby starts copying the hub instead, and runs nothing else.
     start() {
+      browser.sweep();
       const recovered = role.role() === 'hub' ? startHub() : { requeued: [], reverified: [] };
       role.start();
       return recovered;

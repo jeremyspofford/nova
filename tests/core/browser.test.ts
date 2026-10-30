@@ -110,8 +110,9 @@ test('plan: declared hosts decide what a URL may reach: port, subdomains, scheme
 });
 
 test('plan: where a plan’s data goes, so local-only can refuse it', () => {
-  for (const h of ['127.0.0.1:4321', 'localhost', '10.0.0.8', '192.168.1.20:80', '172.20.0.2', '100.101.102.103', 'printer.local', '[::1]:80', 'nas.home.arpa']) assert.equal(hostEgress(h), 'local', h);
-  for (const h of ['example.test', '8.8.8.8', '172.32.0.1', 'intranet', 'example.com:443']) assert.equal(hostEgress(h), 'remote', h);
+  for (const h of ['127.0.0.1:4321', 'localhost', '10.0.0.8', '192.168.1.20:80', '172.20.0.2', '100.101.102.103', '[::1]:80']) assert.equal(hostEgress(h), 'local', h);
+  // A name proves nothing about where it leads, however local it sounds (M5 review).
+  for (const h of ['example.test', '8.8.8.8', '172.32.0.1', 'intranet', 'example.com:443', 'printer.local', 'nas.home.arpa']) assert.equal(hostEgress(h), 'remote', h);
   assert.equal(planEgress({ allowed_hosts: ['127.0.0.1:1'], steps: [] }), 'local');
   assert.equal(planEgress({ allowed_hosts: ['127.0.0.1:1', 'example.test'], steps: [] }), 'remote');
 });

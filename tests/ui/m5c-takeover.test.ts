@@ -15,7 +15,7 @@ import type { Browser, Page } from 'playwright-core';
 import { sleep, stop } from '../acceptance/support.ts';
 import { call, enroll } from '../core/mesh-support.ts';
 import { blank, browser, device, finishSetup, ready, shoot, shotsDir } from './support.ts';
-import { browserEnv, browserTask, events, formPlan, settled, startFormSite, waitTask, type Site } from './m5c-support.ts';
+import { browserEnv, delegate, events, formPlan, settled, startFormSite, waitTask, type Site } from './m5c-support.ts';
 
 const freePort = () => new Promise<number>((ok) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address() as { port: number }; s.close(() => ok(port)); }); });
 
@@ -67,7 +67,7 @@ test('M5c: the worker asks for a person; they take over in the PWA, do the step,
   const dir = shots();
   try {
     await finishSetup(m);
-    const r = await m.send('POST', '/api/v1/tasks', browserTask(formPlan(site, { person: true })));
+    const r = await delegate(m, formPlan(site, { person: true }));
     assert.equal(r.status, 201, JSON.stringify(r.body));
     const id = r.body.id as string;
     const asking = await waitTask(m, id, (x) => x.state === 'waiting' || settled(x));
@@ -182,7 +182,7 @@ test('M5c: a takeover in the middle of a step, on a phone: the worker waits, the
   try {
     await finishSetup(m);
     // The site takes 6 s to answer the first page, so the person can step in while it loads.
-    const r = await m.send('POST', '/api/v1/tasks', browserTask(formPlan(site, { person: false, delay: 6000 }), 'Sign up, slowly'));
+    const r = await delegate(m, formPlan(site, { person: false, delay: 6000 }), 'Sign up, slowly');
     assert.equal(r.status, 201, JSON.stringify(r.body));
     const id = r.body.id as string;
     for (let i = 0; i < 100; i++) {
