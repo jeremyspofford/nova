@@ -27,11 +27,14 @@ import { Enrollment } from './mesh/enroll.ts';
 import { Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
 import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
-import { Spokes } from './mesh/spokes.ts';
+import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
 import { agentTar, joinScript } from './mesh/agent.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
+
+// A setting's key as the inbox takes it in a config change (mesh/spokes.ts).
+const DEVICE_CONFIG_KEY = /^[a-z][a-z0-9_.-]{0,63}$/;
 
 export { render as renderIdentity } from './identity.ts';
 export { permits } from './workers.ts';
@@ -481,8 +484,13 @@ export function createCore(o: CoreOptions) {
     },
     { method: 'GET', path: '/mesh/inbox/refusals', summary: 'What devices sent that was refused or rejected, with the reasons, newest first. ?device= for one.', handle: ({ query }) => spokes.refusals(query.get('device') ?? undefined) },
     {
-      method: 'GET', path: '/mesh/config/{section}/{key}', access: 'device', summary: 'A setting a device agent may change, with its version, which a change must name as base_version.',
+      method: 'GET', path: '/mesh/config/{section}/{key}', access: 'device', summary: `A setting a device agent may change (${DEVICE_CONFIG_SECTIONS.join(', ')}), with its version, which a change must name as base_version.`,
       handle: ({ params }) => {
+        // What a computer may read is what it may change, and no more: the setup conversation,
+        // privacy and appearance stay with the person (the approval sheet promises so).
+        if (!(DEVICE_CONFIG_SECTIONS as readonly string[]).includes(params.section!) || !DEVICE_CONFIG_KEY.test(params.key!)) {
+          throw new CoreError('forbidden', `A device can read ${DEVICE_CONFIG_SECTIONS.join(', ')} settings only, by section and key.`);
+        }
         const r = configRow(params.section!, params.key!);
         return { section: params.section, key: params.key, value: r ? JSON.parse(r.value) : null, version: r ? configVersion(r) : null };
       },
