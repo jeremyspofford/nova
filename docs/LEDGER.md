@@ -15,6 +15,63 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (security: the ingest gate — Amendment C Part 3).** Branch `ingest/gate`, plan
+`docs/plans/ingest-gate.md`, evidence `docs/evidence/ingest-gate.md`.
+- **What it is:** `src/core/ingest/` (`checks.ts`, `screen.ts`, `outbound.ts`, `index.ts`),
+  migration 0013. Every read of outside content is screened before a model acts on it:
+  - the agent's `web_fetch`, `web_search`, `gmail_search`, `gmail_read`;
+  - `read_file` on anything that isn't the person's own;
+  - `exec` output while tainted;
+  - helpers' and scheduled runs' reports from tainted runs, and files passed to helpers;
+  - uploaded skills, captured text before the promote decision, device notes, and browser page
+    reads.
+- **The verdict rules:**
+  - The Noul screen is the built-in template `ingest-screen` (five questions). It goes through
+    `Decisions.decide` forced local-only, and only the `local-model` provider's answer counts.
+  - The highest probability decides: below 0.2 with no quarantining flag → pass (wrapped as data);
+    0.2–0.8, a quarantining flag, sampled long content, or no model → quarantine (instruction-like
+    spans and hidden text removed, listed by kind; with a model, a reader's facts-only extract);
+    0.8 or a blocking flag (hidden instructions, hidden protocol tags) → block (one line, a verified
+    ledger task owned by the internal `ingest` worker).
+  - The thresholds are constants in code (`DEFAULT_THRESHOLDS`), not a setting: lowering one is a
+    change to Nova, so tier 3 through its pipeline.
+- **Taint** is now the list of sources a conversation read (screen id, kind, origin, verdict, top
+  score), kept in the session log. It carries into handoffs and into helpers a tainted run starts.
+  - While tainted, `exec`, mail drafts and changes, schedules, writes to standing files, and any
+    tool that needs an OK always ask, naming the source. A yes in `permissions.md` still holds for
+    untainted runs.
+  - The old blanket `online` permission is gone. Fetching and searching go through the outbound
+    guard: secrets always, and in a tainted run memory/standing-file content (24 characters) and
+    encoded blobs.
+- **Memory guard:** `<remember>`, `<note>` and `<forget>` in a tainted run become candidates.
+  They wait in Memory › Waiting for your OK, out of every prompt.
+- **Where I read the plan, and why:**
+  - **Handoffs are screened only when the run that wrote them read outside content.** An untainted
+    helper's report is Nova's own work on the person's brief.
+  - **`exec` output is screened only while tainted, as the plan says.** The amendment lists "tool
+    output". I took the plan's reading: screening every command's output would taint every run
+    that runs one command, and end auto-run for multi-command work that the person allowed.
+    Owner's call. *Known limit:* an untainted command the person approved that fetches from the
+    network isn't screened.
+  - **`<forget>` in a tainted run "asks first" as a waiting candidate,** not a blocking card.
+  - **Device notes:** the plan says they "keep the person-accept step they already have". They
+    don't have one: they are recorded as unreviewed and go straight into MEMORY.md. I added Nova's
+    own checks before the write (a block refuses the note) but no new accept step. *Gap.*
+  - **Workspace provenance** is by content hash in `file_provenance`. Only what Nova wrote itself
+    in an untainted run is its own; anything else (commands, providers, downloads, edits) reads as
+    unknown and is screened.
+  - **Nova's own state tools** (and any tool not listed as reading from outside) are trusted:
+    never screened, never taint. That holds for the self-state tools in the parallel grounding PR.
+  - **The stand-in Ollama's default structured answer** for the screen's questions is now
+    "unlikely" (0.05). Near the top of the range had called every capture an attack. Tests that
+    need the screen to fire pass their own `reply`. No check or threshold changed.
+- **Not built:** a cloud screener (a screen a mode change can skip isn't a gate); opening
+  attachments (Nova doesn't); HTML for IMAP mail (the Gmail API path passes it when there is no
+  plain part); a model step that reads browser page reads (none exists; reads carry their verdict).
+- **Tests:** `tests/ingest/` (61): the deterministic checks, the screen, guards, core wiring, the
+  corpus (31 injection payloads, 15 benign items), the canary end to end, taint, the person's
+  side, device notes, and local-only egress under the tripwire.
+
 **2026-10-30 (Screenpipe source: edit in the console, API key).** Branch `capture/screenpipe-key`.
 These are two gaps the owner found live.
 - **The address and lookback can now be edited** in Settings › Capture › Address and API key. It

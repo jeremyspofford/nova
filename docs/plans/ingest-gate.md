@@ -170,3 +170,38 @@ Standing files and memory are the person's own and are not screened, but writes 
 - **Local-only:** the screen never calls a remote provider, checked by the egress tripwire.
 - **These run in CI like any other suite.** The Noul screen is exercised with a fake local model that returns fixed probabilities; the deterministic checks are tested directly.
 - **The fresh-user test still passes.**
+
+## As built (2026-10-30)
+
+Branch `ingest/gate`. The ledger entry of the same date has the decisions in full; the evidence is `docs/evidence/ingest-gate.md`.
+
+- **Where it lives:** `src/core/ingest/`:
+  - `checks.ts`: the deterministic checks (§3);
+  - `screen.ts`: `Ingest` with `screen`, `screenNow`, holds, memory candidates and file provenance (§1, §2, §4, §6, §8);
+  - `outbound.ts`: the outbound guard (§7);
+  - `index.ts`: the core wiring, with the verified ledger record of a block.
+  - Migration 0013 adds `ingest_screen`, `ingest_hold`, `memory_candidate` and `file_provenance`, none replicated.
+  - Exported through `src/core/index.ts`; the API is `GET /api/v1/ingest/screens[/{id}]` and `POST /api/v1/ingest/screen`.
+- **The agent loop** (`src/runner.js`) screens each outside read, logs the raw output for the person, and gives the model only the screened form (`context.js`).
+  - Taint is a list of sources in the session log, carried into handoffs and helpers.
+  - `GUARDED`, and any tool that needs an OK, always asks in a tainted run.
+  - The outbound guard checks URLs, searches, drafts and commands.
+  - Memory blocks in a tainted run become candidates.
+- **Elsewhere:**
+  - skills are screened at upload (server.js), and a held skill has "Turn it on";
+  - capture is screened before triage;
+  - browser page reads are screened as they are taken;
+  - device notes get Nova's own checks before the inbox writes.
+  - Health has "Outside content".
+- **Where this reads the plan** (each is in the ledger entry):
+  - handoffs are screened only from tainted runs;
+  - `exec` output only while tainted;
+  - `<forget>` waits as a candidate;
+  - device notes had no accept step to keep, and none was added;
+  - the old `online` permission is retired in favour of the outbound guard;
+  - any approval-needing tool is guarded in a tainted run, not only the listed ones.
+- **Gate results:**
+  - 31 of 31 injection payloads are caught with no model, and with a model that sees nothing wrong.
+  - 14 of 15 benign items pass with a model. One known false positive is quarantined, not blocked: an article quoting an injection phrase.
+  - The canary test passes in three variants and fails with the guard switched off.
+  - The tripwire saw no egress.
