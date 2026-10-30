@@ -291,7 +291,9 @@ test('M4 gate: phone by QR and computer by command; revoke one; kill the hub, pr
     // Local-only held: nothing tried to reach beyond this machine and its mesh.
     for (const node of [hub, standby]) assert.equal(readFileSync(node.egress, 'utf8'), '', `no egress from ${node.home}`);
     step('Local-only held: neither Nova process tried to connect anywhere outside this machine and its own mesh.');
-    if (shots) {
+    // The transcript is evidence for a release, written only when asked (NOVA_UI_EVIDENCE=1), so an
+    // ordinary local run doesn't rewrite a tracked file.
+    if (process.env.NOVA_UI_EVIDENCE === '1') {
       const evidence = join(ROOT, 'docs', 'evidence');
       mkdirSync(evidence, { recursive: true });
       writeFileSync(join(evidence, 'm4-gate.md'), `${log.join('\n')}\n\nScreenshots: docs/screenshots/m4/gate-*.png\n`);
