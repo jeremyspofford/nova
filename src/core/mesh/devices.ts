@@ -177,6 +177,27 @@ export class Devices extends EventEmitter {
     return device;
   }
 
+  // After this hub's keys were replaced (replaceIdentityKeys): its own record takes the new keys,
+  // and the epoch goes up so the roster it now signs supersedes any signed with the old key.
+  // Computers and the standby pinned the old key and would believe a roster signed with it, so
+  // they are revoked and must be added again. Phones and browsers keep their sessions: they never
+  // take a roster on trust after pairing.
+  rekeyHub(by: string): { epoch: number; revoked: Device[] } {
+    const id = this.identity.id;
+    const hub = this.get(id);
+    if (hub.role !== 'hub' || this.state().role !== 'hub') throw new CoreError('conflict', 'This node isn’t the hub, so its keys aren’t the ones devices trust. Enroll a standby again with a new home instead.');
+    const pinned = this.list().filter((d) => d.trust === 'trusted' && d.role !== 'hub' && (d.kind === 'computer' || d.kind === 'standby'));
+    const at = this.#now().toISOString();
+    this.#db.tx(() => {
+      this.#db.run('UPDATE device SET public_key = ?, x25519_public_key = ?, fingerprint = ? WHERE id = ?', this.identity.publicKey, this.identity.x25519PublicKey, this.identity.fingerprint, id);
+      this.#db.run('UPDATE mesh_state SET epoch = epoch + 1, updated_at = ? WHERE id = 1', at);
+    });
+    const revoked = pinned.map((d) => this.revoke(d.id, { confirm: true, reason: 'The hub’s keys were replaced. Add it again.', by }));
+    this.#log.info('mesh', 'The hub’s keys were replaced.', { epoch: this.state().epoch, revoked: revoked.length, by });
+    this.emit('change', { action: 'rekeyed', device: this.get(id) });
+    return { epoch: this.state().epoch, revoked };
+  }
+
   // Heard from now. Written at most every 30 s per device.
   touch(id: string): void {
     const now = this.#now().getTime();

@@ -465,7 +465,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
   const { config } = nova;
-  ensureGit(config.home);
+  // Said once per open problem, not once per start: it stays open until the keys are replaced.
+  ensureGit(config.home, {
+    problem: (m) => { if (!nova.core.log.problems({ open: true }).some((p) => p.message === m)) nova.core.log.problem('mesh', m); },
+  });
   // A hub first asks its roster peers whether one of them became hub while it was away (fencing).
   const { role } = nova.core.mesh;
   await role.fence();

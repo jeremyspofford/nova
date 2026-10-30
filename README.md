@@ -212,6 +212,25 @@ back, it sees that it was replaced and steps down rather than act as a second
 hub. Connector sign-ins (Gmail) stay on the machine where you made them;
 connect them again on the new hub.
 
+### If the hub's keys were exposed
+
+The hub's private keys live in `<home>/mesh/identity.json`, readable only by
+you, and never in the home's git history. A home made before that rule saved
+them in its history once, where anyone who can read the folder can read them;
+Nova then shows a problem saying so at every start. Replace them, with Nova
+stopped:
+
+```sh
+node scripts/rotate-hub-keys.js ~/Nova
+```
+
+The hub keeps its place and gets new keys, and the epoch goes up. Computers
+and the standby trusted the old keys, so they are revoked: the script lists
+them. Add each one again, a computer with a new device home
+(`NOVA_DEVICE_HOME`), a standby with a new blank home. Phones and browsers stay
+signed in. The old keys stay in the history but no longer open anything, and
+the problem goes away.
+
 ## Check it
 
 ```sh

@@ -21,7 +21,7 @@ import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { info, permits, stricter, type Egress } from './workers.ts';
 import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
-import { loadIdentity } from './mesh/identity.ts';
+import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
 import { Enrollment } from './mesh/enroll.ts';
 import { Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
@@ -30,6 +30,7 @@ import { MeshRole, nodeRole } from './mesh/promote.ts';
 import { Spokes } from './mesh/spokes.ts';
 import { agentTar, joinScript } from './mesh/agent.ts';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 
 export { render as renderIdentity } from './identity.ts';
@@ -582,4 +583,25 @@ export function createCore(o: CoreOptions) {
       db.close();
     },
   };
+}
+
+// Replaces the hub's keys after they were exposed (the README's “If the hub’s keys were exposed”):
+// new keys under the same id, a higher epoch, and the computers and standby that pinned the old key
+// revoked, to be added again. Run with Nova stopped (scripts/rotate-hub-keys.js).
+export async function rotateHubKeys(home: string, o: { now?: () => Date } = {}) {
+  // A mistyped home must not become a new, empty one.
+  if (!existsSync(join(home, 'mesh', 'identity.json'))) throw new CoreError('not_found', `${home} has no keys to replace (no mesh/identity.json). Is that Nova’s home?`);
+  const open =() => createCore({ home, version: 'rotate', trustedOrigin: () => false, ...(o.now ? { now: o.now } : {}) });
+  const probe = open();
+  const hub = probe.mesh.role.role() === 'hub';
+  await probe.close();
+  if (!hub) throw new CoreError('conflict', 'This node is a standby, not the hub. Enroll it again with a new home instead of replacing its keys.');
+  replaceIdentityKeys(home, o);
+  const core = open();
+  try {
+    const r = core.mesh.devices.rekeyHub('console');
+    return { epoch: r.epoch, fingerprint: core.mesh.identity.fingerprint, revoked: r.revoked.map((d) => ({ id: d.id, name: d.name, kind: d.kind })) };
+  } finally {
+    await core.close();
+  }
 }

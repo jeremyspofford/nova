@@ -15,6 +15,24 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M4 review): trust, pairing and access fixes.**
+
+- **The hub's private keys were committed to the home's git history.**
+  `src/home.js`'s `UNTRACKED` lacked `mesh/`, so the first `git add -A`
+  committed `mesh/identity.json` (both private keys) and `mesh/role.json` as
+  blobs anyone who can read the home can read. `mesh/` is untracked now, and
+  `ensureGit` stops tracking it on every start where it is still tracked. A
+  home whose history (any ref or the reflog) holds the *current* private key
+  gets a problem in plain words at every start until the keys are replaced.
+  **Rotation:** `node scripts/rotate-hub-keys.js <home>` with Nova stopped
+  (`rotateHubKeys` in the core): new keys under the same id, epoch + 1, and
+  every computer and the standby revoked, because they pinned the old key and
+  would follow a roster signed with it; phones and browsers keep their
+  sessions (they never take a roster on trust after pairing). The old blobs
+  stay in history, harmless once nothing trusts them; Nova doesn't rewrite the
+  person's history. The secret-scan test now also reads every git object.
+  Every M4 home made before this fix should be treated as exposed.
+
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and
 `0007_device_inbox.sql`.

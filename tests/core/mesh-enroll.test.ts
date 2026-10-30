@@ -1,13 +1,16 @@
 // Enrollment (M4 plan §1, CONTRACTS §5): the happy path end to end, and every refusal: wrong,
 // spent and expired codes, a bad signature, a commitment that doesn't match, a replayed reveal and
 // poll, a revoked key trying again, and the rate limits. Also: the hub's keys stay in their 0600
-// file and out of the database and the log, and so do codes and session tokens.
+// file and out of the database, the log and the home's git history, and so do codes and session
+// tokens.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateDeviceKeys, keyFingerprint, normalizePairingCode, verifyRoster } from '../../src/core/index.ts';
 import { Joiner, PUBLIC_URL, call, enroll, hub } from './mesh-support.ts';
+import { commitHome, ensureGit } from '../../src/home.js';
 
 test('the happy path: code, join, reveal, the same six digits on both screens, tier-3 approval, roster, session', async () => {
   const h = await hub();
@@ -259,7 +262,7 @@ test('a standby: one at a time, its address in the roster; computers and standby
   }
 });
 
-test('keys, codes and tokens stay out of the database and the log; the identity file is 0600', async () => {
+test('keys, codes and tokens stay out of the database, the log and git history; the identity file is 0600', async () => {
   const h = await hub();
   try {
     const p = await h.c('POST', '/mesh/pairings');
@@ -275,6 +278,13 @@ test('keys, codes and tokens stay out of the database and the log; the identity 
       const bytes = readFileSync(place).toString('latin1');
       for (const s of secrets) assert.equal(bytes.includes(s), false, `${s.slice(0, 6)}… found in ${place}`);
     }
+    // The home is a git repository (src/home.js), committed after every turn: every object in it,
+    // packed or loose, reachable or not.
+    assert.equal(await ensureGit(h.home), true);
+    await commitHome(h.home, 'Nova: turn');
+    const objects = execFileSync('git', ['-C', h.home, 'cat-file', '--batch-all-objects', '--batch'], { encoding: 'latin1', maxBuffer: 64 * 1024 * 1024 });
+    assert.ok(objects.length > 0);
+    for (const s of secrets) assert.equal(objects.includes(s), false, `${s.slice(0, 6)}… found in the home's git objects`);
     assert.equal(JSON.stringify(h.core.mesh.identity).includes(id.ed25519.private), false, 'serializing the identity shows public parts only');
   } finally {
     await h.stop();
