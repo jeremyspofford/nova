@@ -22,7 +22,8 @@ and its as-built note. Every behaviour has a test that failed first.
   seal key is `checkpoints/.seal`, not the vault, so a stopped home can be checkpointed. Nightly
   backups (`SKIP_TOP`) and the standby's journal (`NOT_JOURNALLED`) leave `checkpoints` out.
 - **Retention, as the UI states it.** The newest 10 automatic checkpoints, counted by sequence and
-  never by date. Named ones stay until the person deletes them (tier 2). A new checkpoint is
+  never by date. Named ones stay until the person deletes them (tier 3, the hub's screen, after
+  review: NOVA-SPEC puts deleting data at tier 3), at most 20 of them. A new checkpoint is
   complete before any prune. A disk too full refuses in plain words.
 - **Automatic.** At ship and before a canary that hasn't applied yet: none, and the change waits
   ("Not shipped: Nova couldn’t take a checkpoint first…"). Before a database upgrade: none, and no
@@ -58,6 +59,19 @@ and its as-built note. Every behaviour has a test that failed first.
   supervisor, the server's release hook closes the listeners and the core, then `process.execve`
   restarts the same program: same pid, same ports. The reset builder adds its marker to
   `stagedPending` and `finishStaged`.
+- **After review (same day).** Each fix has a test that failed on the code before it.
+  - What is kept from now is read at swap time from the outgoing database, so a revocation,
+    problem or backup made after staging survives.
+  - A restore whose restart can't happen is dropped at once and said; it never fires later.
+  - The marker lists every staged file by hash. An incomplete or changed staging is dropped
+    (anything moved put back) with a problem: Nova never runs a mix. Dropping renames the folder
+    away first.
+  - `core.stopWork` halts running tasks and ends every process Nova started (`children.ts`)
+    before an in-place restart and on a stop.
+  - Half-taken checkpoints are removed at start and before every forget.
+  - Deleting a checkpoint is tier 3, and at most 20 named ones are kept.
+  - A full disk while staging refuses in plain words; after a complete swap it is a problem, not
+    a failed start.
 - **Small changes elsewhere.**
   - `Db.migrate({before})`.
   - `ChangesOptions.checkpoint`. "Ship it" on an OK'd change that was held back retries its task.
