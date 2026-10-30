@@ -15,6 +15,82 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M7b): the supervisor, code releases, backups, the restore drill and the chaos pass.**
+Branch `m7b/resilience`; the plan's §2–§3. Code in `src/supervisor/` and `src/core/resilience/`,
+migration `0012_resilience.sql` (local tables: playbooks, backup runs, drills).
+
+- **The supervisor is its own process** (`node src/supervisor/main.ts run`), the server its child
+  over an IPC channel (no listening port: only the child can ask it anything). Crashes restart
+  after 1 s, doubling to 30 s; three within a minute is safe mode: the server is held, the reason
+  goes into the state file, the database (a problem with the `safe-mode` playbook, written
+  directly since no server runs) and a small page on Nova's own port (loopback, 503 for the API),
+  with `rollback` (to the last good release) and `recover` offered. Safe mode survives a restart of
+  the supervisor. Health is asked every 30 s; three unanswered in a row restart the server (3 s
+  grace, then SIGKILL). The command line reaches a running supervisor through a 0600 Unix socket in
+  its state folder. It refuses to start when a server already runs the home (`nova.pid`).
+- **Releases are git tags**, each in a slot `<dir>/releases/<tag>/` (a worktree of the tag's commit;
+  a slot that isn't exactly its tag any more is made again), `current` a symlink swapped by rename.
+  `base` is the checkout the supervisor runs from. Deploying is tier 3: the command line asks for
+  the tag to be typed (or `--confirm <tag>`); the API (`POST /api/v1/supervisor/deploy`) is the
+  console's only, with `confirm: true`. Stages: the release's tests (`npm test` by default, run in
+  the slot with a scratch HOME; a slot borrows the base's `node_modules` when the lockfiles match)
+  → a sandbox start on a copy of the home → smoke probes → switch → canary (2 min by default, never
+  under 2 s or two probes) → promote. A release from before M7b (no sandbox mode) is refused at
+  prepare. Health that already failed before the deploy (a backup drive unplugged) is no fault of
+  the release and doesn't fail its canary or smoke probes.
+- **The database across a release.** "Nothing was written since" is the sync log (migration 0006)
+  not moving past the mark taken when the new release first answered: every write to the person's
+  data adds an entry with a rising sequence. Set aside: problems (Nova's own diagnostics, carried
+  over into the restored database so none is lost) and the file journal (the files stay on disk and
+  the journal records them again). Deviation worth knowing: writes the new release made between its
+  migration and its first answer are Nova's own start-up, and are undone with the restore.
+- **Backups** go to a folder the person names, which Nova never creates (a drive not mounted must
+  not become a folder on the wrong disk) and which can't be inside the home. Retention keeps the
+  newest N by sequence number, never by date, and only after a new backup is complete. The
+  encrypted copy is one file per backup (a ustar archive, AES-256-GCM, header bound as AAD, written
+  in chunks, nothing unpacked until the tag checks); its key is `nova/backup-key` in the vault. The
+  vault's own file is in a backup, its key is not: a restored home can't open its vault, said
+  plainly (the drill sets that check aside). The home's git history isn't in a backup (it can hold
+  keys exposed before M4c untracked them). Forgetting: `Backups.also` carries every forget into
+  each nightly backup (the snapshot cleaned like M2's, text files rid of the lines with the words,
+  hashes rewritten) and each encrypted copy (decrypted, cleaned, encrypted again); one that can't be
+  cleaned is destroyed and reported.
+- **Schedules are visible rules**: setting a folder adds "Nightly backup" (03:30) and "Weekly
+  restore drill" (Sunday 04:00) heartbeat rules; both run as `resilience` ledger tasks whose
+  evidence Nova reads itself (the backup's database hash against its manifest; the drill's record).
+- **The sandbox is M7a's.** Its sandbox mode (`createCore({sandbox})`, `NOVA_SANDBOX=1`) and its
+  `inert()` (exported for this) are used by the drill (after the restored copy is checked) and by
+  the release sandbox (on `copyHome`, a snapshot plus the files a backup carries). The drill and the
+  supervisor start the process themselves (a release's code; a restored home), so M7a's `Sandbox`
+  class, which snapshots the live database in process, isn't used as is. server.js also skips
+  fencing, schedules and helpers in a sandbox; config.js gives a sandbox no mesh listener whatever
+  `nova.config.json` says.
+- **Playbooks** (`resilience/playbooks.ts`): problems opened in other modules' own words are
+  classified (a failed task by its worker, the model manager's fault, the standby behind, a device
+  in safe mode, a full disk), so no module had to change how it reports. Automatic repairs only
+  where nothing of the person's can change; at most three by Nova, a minute apart; the person can
+  run one any time. A failed task's problem stays open after its worker answers again: the task is
+  the person's to retry. Changes to M5/M6 behaviour, each found by the chaos pass: the model manager
+  opens its fault problem in local-only too (it only did when the cloud answered instead); a
+  secret that didn't reach the disk is no longer kept in memory; a problem the database can't take
+  (a full disk) is still emitted and listed, from memory, and the log never throws; the hub can ask
+  a device agent in safe mode, once, to restart its runtime (`restart_runtime` in the heartbeat
+  reply; the boot agent runs `recover`); a connection that keeps failing to reconnect is watched,
+  and its problem says when the name won't resolve.
+- **The clock**: the heartbeat compares wall time with the time that really passed; a start
+  compares now with the newest time written down. A jump opens `clock-jump`: schedules whose last
+  run is "in the future" are put back on time, device sign-ins dated in the future end, and capture
+  retention is held until the person marks it dealt with. Backup retention needs no hold (by
+  sequence).
+- **Chaos simulations, all safe**: a full disk is SQLite's own `max_page_count` (the same "database
+  or disk is full") and ENOSPC injected into Node's fs for one test folder (`syncBuiltinESMExports`);
+  DNS failing is an injected resolver (no real query); partitions and slow links are a loopback
+  proxy the test controls; crashes are SIGKILL/SIGSTOP to processes the test started.
+- **Gaps.** No OS service unit for the supervisor (run it as you'd run Nova). A device that is
+  simply off isn't a problem (devices sleep); its queue delivering exactly once on reconnect is
+  what is tested. The standby's own "unreachable for a minute" is wall time, so its test records
+  that problem rather than wait a minute. No remote backup target (the owner's choice later).
+
 **2026-10-30 (M7a): the governed change pipeline and the foundry.** Branch `m7a/changes`; the
 plan's §1. Code in `src/core/changes/`, migration `0011_changes.sql` (the integrator renumbers).
 
