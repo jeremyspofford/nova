@@ -15,6 +15,18 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (Screenpipe 0.4: accessibility text).** Branch `capture/screenpipe-accessibility`.
+With the API key saved, the owner's Screenpipe answered 400. Screenpipe 0.4 renamed the content type
+for accessibility text from `ui` to `accessibility`; its items still come back as type `"UI"`. The
+adapter asked for `ui`. I confirmed this against Screenpipe's current API documentation (the
+`/search` parameters list `ocr`, `audio`, `accessibility`, `input`, `all`).
+- Nova now asks by the new name. It falls back to `ui` only when a Screenpipe answers 400 to the new
+  one, and remembers which name each address took.
+- The stand-in Screenpipe can speak either version (`speaks('0.4' | 'old')`), and the test covers
+  both.
+- `input` (clicks, keys, clipboard) isn't taken in: capture never asked for it, and adding it would
+  be a new consent question, not a fix.
+
 **2026-10-30 (grounding: the chat agent knows what Nova is).** Branch `agent/self-grounding`
 (`agent/grounding` was already checked out in another worktree). Evidence:
 `docs/evidence/agent-grounding.md`.
