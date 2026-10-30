@@ -230,7 +230,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   function serveStatic(req, res, path) {
     // The PWA's places (ui/js/nav.js); Era 2's paths keep working.
     if (path === '/pair') return serveFile(res, join(ui, 'pair.html'));
-    if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
+    if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {

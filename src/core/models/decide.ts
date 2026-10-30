@@ -66,19 +66,19 @@ export class LocalModelProvider implements DecisionProvider {
   readonly egress: Egress = 'local';
   readonly questionTypes = QUESTION_TYPES;
   #infer: (r: InferRequest) => Promise<InferResult>;
-  #ready: () => boolean;
+  #ready: (t: Template) => boolean;
   #guard: Guard | undefined;
 
   // `guard`: the person's hard policy for a template (System 1.5), which a model's answer may not
   // contradict; it returns why, and the decision escalates instead.
-  constructor(o: { infer: (r: InferRequest) => Promise<InferResult>; ready: () => boolean; guard?: Guard }) {
+  constructor(o: { infer: (r: InferRequest) => Promise<InferResult>; ready: (t: Template) => boolean; guard?: Guard }) {
     this.#infer = o.infer;
     this.#ready = o.ready;
     this.#guard = o.guard;
   }
 
-  // Only once a sorting model is assigned (and the person hasn't kept decisions on the rules).
-  ready(): boolean { return this.#ready(); }
+  // Only once a sorting model is assigned; see Models.decidesWithModel for which templates.
+  ready(t: Template): boolean { return this.#ready(t); }
 
   async decide(t: Template, inputs: Record<string, unknown>): Promise<Decision> {
     const checked = checkInputs(t, inputs);

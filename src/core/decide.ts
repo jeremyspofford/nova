@@ -68,9 +68,9 @@ export interface DecisionProvider {
   // The question types this provider can answer; a template with any other type is not sent to it.
   questionTypes: readonly Question['type'][];
   decide(t: Template, inputs: Record<string, unknown>): Promise<Decision>;
-  // Whether it can answer at all right now (a model provider with no model assigned can't); not
+  // Whether it can answer this template now (a model provider with no model assigned can't); not
   // asked when false. Absent means always.
-  ready?(): boolean;
+  ready?(t: Template): boolean;
 }
 
 export const UNKNOWN = 'unknown';
@@ -503,7 +503,7 @@ export class Decisions {
     // A caller's mode can only tighten the live setting, never loosen it.
     const mode = opts.privacy_mode ? stricter(opts.privacy_mode, this.#privacy()) : this.#privacy();
     const able = (x: DecisionProvider) => t.questions.every((q) => x.questionTypes.includes(q.type));
-    for (const p of this.#providers.filter((x) => permits(mode, x.egress) && able(x) && (x.ready?.() ?? true))) {
+    for (const p of this.#providers.filter((x) => permits(mode, x.egress) && able(x) && (x.ready?.(t) ?? true))) {
       try {
         return settle(t, p.id, await p.decide(t, inputs));
       } catch (e) {

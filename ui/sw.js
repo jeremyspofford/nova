@@ -9,7 +9,7 @@ const SHELL = [
   '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css',
   '/js/app.js', '/js/core.js', '/js/shell.js', '/js/layout.js', '/js/nav.js', '/js/status.js', '/js/components.js',
   '/js/surfaces.js', '/js/setup.js', '/js/theme.js', '/js/view.js', '/js/markdown.js', '/js/reduce.js', '/js/qr.js', '/js/device-key.js', '/js/takeover.js',
-  '/js/connections.js', '/js/models.js',
+  '/js/connections.js', '/js/capture.js', '/js/models.js',
 ];
 // Memory and context receipts are never kept here: a forgotten memory must not survive in a
 // cache (owner's standing order 4), so these are network-only.
@@ -18,11 +18,13 @@ const SHELL = [
 // device or an answered request must never come back from a cache. Nor is a browser task's live
 // picture or its screenshot: what a page showed is the person's, and a frame from the past must
 // never pass for the present. Nor are connections and the vault: a disconnected service must not
-// look connected, and a home's state must be live. Nor are models (M6b): a download's progress
+// look connected, and a home's state must be live. Nor is capture: a forgotten event must not
+// survive in a cache either, and the indicator must say what is capturing now. Nor are models
+// (M6b): a download’s progress
 // and a role's health are live state.
-const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/models)(?:\/|$)/;
+const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/capture|v1\/models)(?:\/|$)/;
 // Pages the app answers with its shell.
-const PAGES = /^\/(?:|chat|new|tasks|memory|automations|skills|schedules|activity|health|settings|c\/[\w-]+)$/;
+const PAGES = /^\/(?:|chat|new|tasks|memory|automations|skills|schedules|activity|health|settings|capture|c\/[\w-]+)$/;
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -1,0 +1,88 @@
+// The person's capture rules alone (src/core/capture/rules.ts): private contexts, each exclusion
+// kind, weekly time windows in the person's time zone, and classification by their signals only,
+// with ambiguous activity left unclassified. Plus Screenpipe items read into raw events.
+// Neutral placeholders only.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { checkExclusions, checkSignals, checkSwitch, classify, excludedBy, inWindow, isPrivate, type Facts } from '../../src/core/capture/rules.ts';
+import { normalize } from '../../src/core/capture/screenpipe.ts';
+
+const f = (o: Partial<Facts> = {}): Facts => ({ kind: 'screen', at: '2026-11-02T10:30:00.000Z', device_id: 'dev-a', source_id: 'src-a', app: 'Editor', window_title: 'notes.txt', url: null, ...o });
+
+test('private and incognito contexts are recognised, by the source’s mark or the window’s title', () => {
+  assert.equal(isPrivate({}, f()), false);
+  assert.equal(isPrivate({ private: true }, f()), true);
+  assert.equal(isPrivate({ incognito: true }, f()), true);
+  for (const t of ['New Incognito Tab - Browser', 'InPrivate - Browser', 'Private Browsing — Browser', 'Example (Private)', 'A Private Window']) {
+    assert.equal(isPrivate({}, f({ window_title: t })), true, t);
+  }
+  assert.equal(isPrivate({}, f({ window_title: 'Privacy policy — Example' })), false, 'a page about privacy is not a private window');
+});
+
+test('time windows: weekdays, past midnight, in the person’s time zone', () => {
+  const lunch = { days: [1, 2, 3, 4, 5], start: '12:00', end: '13:00' };
+  assert.equal(inWindow('2026-11-02T12:30:00Z', lunch, 'UTC'), true, 'Monday 12:30');
+  assert.equal(inWindow('2026-11-02T13:00:00Z', lunch, 'UTC'), false, 'the end is not inside');
+  assert.equal(inWindow('2026-11-01T12:30:00Z', lunch, 'UTC'), false, 'Sunday');
+  // 12:30 in UTC is 07:30 in New York: outside; 17:30 UTC is 12:30 there: inside.
+  assert.equal(inWindow('2026-11-02T12:30:00Z', lunch, 'America/New_York'), false);
+  assert.equal(inWindow('2026-11-02T17:30:00Z', lunch, 'America/New_York'), true);
+  const night = { days: [5], start: '22:00', end: '06:00' };
+  assert.equal(inWindow('2026-11-06T23:00:00Z', night, 'UTC'), true, 'Friday 23:00');
+  assert.equal(inWindow('2026-11-07T05:00:00Z', night, 'UTC'), true, 'Saturday 05:00 belongs to Friday night');
+  assert.equal(inWindow('2026-11-08T05:00:00Z', night, 'UTC'), false, 'Sunday 05:00 does not');
+});
+
+test('each exclusion kind keeps an event out: app, site (address or title), space, time window; scoped to a source when it says', () => {
+  const rules = checkExclusions([
+    { kind: 'app', app: 'password keeper' },
+    { kind: 'site', site: 'https://www.bank.example/login' },
+    { kind: 'space', space: 'health' },
+    { kind: 'time', window: { start: '18:00', end: '19:00' } },
+    { kind: 'app', app: 'Chat', source: 'src-b' },
+  ]);
+  assert.deepEqual(rules[1], { kind: 'site', site: 'bank.example' }, 'a site is kept as its host');
+  assert.equal(excludedBy(f(), rules, 'UTC'), null);
+  assert.equal(excludedBy(f({ app: 'Password Keeper' }), rules, 'UTC')?.kind, 'app');
+  assert.equal(excludedBy(f({ url: 'https://accounts.bank.example/x' }), rules, 'UTC')?.kind, 'site');
+  assert.equal(excludedBy(f({ window_title: 'Statement — bank.example' }), rules, 'UTC')?.kind, 'site', 'a title naming the site');
+  assert.equal(excludedBy(f({ space: 'health' }), rules, 'UTC')?.kind, 'space');
+  assert.equal(excludedBy(f({ at: '2026-11-02T18:15:00Z' }), rules, 'UTC')?.kind, 'time');
+  assert.equal(excludedBy(f({ app: 'Chat' }), rules, 'UTC'), null, 'only for the source it names');
+  assert.equal(excludedBy(f({ app: 'Chat', source_id: 'src-b' }), rules, 'UTC')?.kind, 'app');
+  assert.throws(() => checkExclusions([{ kind: 'folder', path: '/x' }]), /kind is one of/);
+  assert.throws(() => checkExclusions([{ kind: 'time', window: { start: '9am', end: '10:00' } }]), /start and an end/);
+  assert.throws(() => checkExclusions([{ kind: 'site', site: 'not a site' }]), /names a site/);
+});
+
+test('classification: only the person’s signals; disagreement or none stays unclassified; the switch wins while on', () => {
+  const signals = checkSignals([
+    { kind: 'app', app: 'Editor', space: 'work' },
+    { kind: 'app', app: 'Game', space: 'personal' },
+    { kind: 'device', device: 'dev-b', space: 'personal' },
+    { kind: 'calendar', window: { days: [1, 2, 3, 4, 5], start: '09:00', end: '17:00' }, space: 'work' },
+  ]);
+  assert.deepEqual(classify(f(), signals, null, 'UTC'), { space: 'work', by: 'signal:app+calendar' }, 'two signals that agree');
+  assert.deepEqual(classify(f({ app: 'Notes', at: '2026-11-02T20:00:00Z' }), signals, null, 'UTC'), null, 'no signal: unclassified, never a guess');
+  assert.deepEqual(classify(f({ app: 'Game' }), signals, null, 'UTC'), null, 'a personal app in working hours: ambiguous, unclassified');
+  assert.deepEqual(classify(f({ app: 'Game', at: '2026-11-02T20:00:00Z' }), signals, null, 'UTC'), { space: 'personal', by: 'signal:app' });
+  assert.deepEqual(classify(f({ device_id: 'dev-b', app: null, at: '2026-11-01T10:00:00Z' }), signals, null, 'UTC'), { space: 'personal', by: 'signal:device' });
+  const sw = checkSwitch({ space: 'study', since: '2026-11-02T10:00:00Z', until: '2026-11-02T11:00:00Z' })!;
+  assert.deepEqual(classify(f({ app: 'Game' }), signals, sw, 'UTC'), { space: 'study', by: 'switch' }, 'the explicit switch wins');
+  assert.deepEqual(classify(f({ at: '2026-11-02T11:30:00Z' }), signals, sw, 'UTC'), { space: 'work', by: 'signal:app+calendar' }, 'and ends when it says');
+  assert.throws(() => checkSignals([{ kind: 'folder', path: '/home/x/work', space: 'work' }]), /Folder paths are never used/);
+  assert.throws(() => checkSignals([{ kind: 'app', app: 'Editor', space: 'Not A Space' }]), /space/);
+});
+
+test('Screenpipe items read into raw events: OCR, audio, UI; unreadable ones skipped', () => {
+  assert.deepEqual(normalize('ocr', { type: 'OCR', content: { frame_id: 7, text: 'Draft agenda', timestamp: '2026-11-02T09:00:00Z', app_name: 'Editor', window_name: 'agenda.md', browser_url: 'https://docs.example/a' } }), {
+    external_id: 'ocr:7', kind: 'screen', at: '2026-11-02T09:00:00.000Z', app: 'Editor', window_title: 'agenda.md', url: 'https://docs.example/a', text: 'Draft agenda',
+  });
+  assert.deepEqual(normalize('audio', { type: 'Audio', content: { chunk_id: 3, transcription: 'hello there', timestamp: '2026-11-02T09:01:00Z', device_name: 'Microphone' } }), {
+    external_id: 'audio:3', kind: 'audio', at: '2026-11-02T09:01:00.000Z', app: null, window_title: 'Microphone', url: null, text: 'hello there',
+  });
+  assert.equal(normalize('ui', { type: 'UI', content: { id: 5, text: 'x', timestamp: '2026-11-02T09:02:00Z', app_name: 'A', window_name: 'B' } })?.external_id, 'ui:5');
+  assert.equal(normalize('ocr', { type: 'OCR', content: { frame_id: 8, text: 'x', timestamp: 'yesterday' } }), null);
+  assert.equal(normalize('ocr', { nope: 1 }), null);
+  assert.equal(normalize('ocr', { type: 'OCR', content: { frame_id: 9, text: 'x', timestamp: '2026-11-02T09:00:00Z', private: true } })?.private, true);
+});

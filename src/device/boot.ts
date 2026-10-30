@@ -8,7 +8,7 @@
 //   node src/device/boot.ts run        keep the runtime running (what join.sh starts)
 //   node src/device/boot.ts status     what this device is, where its hub is, how it is (--json)
 //   node src/device/boot.ts recover    reinstall the runtime from the hub and leave safe mode
-//   node src/device/boot.ts queue <event|task_request|memory_note|config_change> '<json>' [--key <key>]
+//   node src/device/boot.ts queue <event|task_request|memory_note|config_change|capture_event> '<json>' [--key <key>]
 //
 // The device home is NOVA_DEVICE_HOME (default ~/.nova-device):
 //   boot/     keys.json (0600), device.json (the pinned roster), state.json, installed.json, ca.pem

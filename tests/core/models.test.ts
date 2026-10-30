@@ -504,3 +504,30 @@ test('a fresh core without any of this set up stays quiet: no model, rules decid
     await core.close();
   }
 });
+
+test('capture proposals (M6a) get a local-model answer under local-only, even with decisions kept on the rules, and the receipt names it', async () => {
+  const ollama = await startFakeOllama({ models: INSTALLED });
+  const { core } = modelsCore(ollama.url, { privacy: 'local-only' });
+  const inputs = { kind: 'screen', app: 'Editor', space: '', text: 'The recycling is collected on Thursdays.' };
+  try {
+    // Nothing assigned: the rules have no rule for it, so it escalates and nothing would be proposed.
+    const none = (await core.decisions.decide('capture-promote', inputs))!;
+    assert.equal(none.provider, 'rules');
+    assert.equal(none.escalate, true);
+
+    await core.models.assign('triage-text', { model: 'example-small:3b' });
+    // The person keeps decisions on the rules: triage stays with them, but a template they have no
+    // rule for still goes to the local model.
+    core.profile.set('models', 'decisions', 'rules', 'settings');
+    assert.equal((await core.decisions.decide('triage', { class: 'event', action: 'message', quiet_hours: false, category_off: false }))!.provider, 'rules');
+    const d = (await core.decisions.decide('capture-promote', inputs))!;
+    assert.equal(d.provider, 'local-model');
+    assert.equal(d.escalate, false);
+    assert.equal(d.answers.remember, 0.9);
+    const r = core.receipts.list().find((x) => x.purpose === 'decision: capture-promote@1')!;
+    assert.deepEqual([r.provider, r.model, r.egress, r.privacy_mode], ['ollama', 'example-small:3b', 'local', 'local-only']);
+  } finally {
+    await core.close();
+    await ollama.close();
+  }
+});

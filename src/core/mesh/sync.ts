@@ -21,6 +21,9 @@ export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
   trigger: ['trigger_id'], message: ['id'], extension: ['id'], device: ['id'], problem: ['id'], receipt: ['id'],
   // Migration 0007: a device's queued items, taken in exactly once, on whichever node is hub.
   device_inbox: ['device_id', 'key'],
+  // Migration 0009: capture (M6a). Sources carry consent and each adapter's cursor; events carry
+  // what was captured, and a delete of one is forgetting it (see `forgetting`).
+  capture_source: ['id'], capture_event: ['id'], capture_tombstone: ['source_id', 'key'], capture_promotion: ['id'], capture_proposal: ['id'],
 };
 export const FILE = 'file';
 // The vault (vault.ts) is one entry: its ciphertext in the log like a row. Its key is added only
@@ -75,6 +78,9 @@ export class SyncLog {
   #columns = new Map<string, Set<string>>();
   // Set by the core once the vault exists; without it, secrets simply don't replicate.
   vault: VaultSync | null = null;
+  // Tables other than memory whose deletes are forgetting (capture_event, M6a): on a standby, the
+  // deleted rows are handed here after the commit, so the rest of a forget (backups) happens here too.
+  forgetting = new Map<string, (rows: Record<string, unknown>[]) => void>();
 
   constructor(o: { db: Db; log: Log; home: string; node: string; now: () => Date }) {
     this.#db = o.db;
@@ -324,6 +330,7 @@ export class SyncLog {
     const rows = batch.rows;
     for (const r of rows) this.#check(r);
     const gone: Record<string, unknown>[] = [];
+    const others = new Map<string, Record<string, unknown>[]>();
     let files = 0;
     // Entries that may have carried a forgotten memory's words: once replaced, the old pages are
     // folded out of the write-ahead log at once, not whenever SQLite would.
@@ -334,7 +341,7 @@ export class SyncLog {
     try {
       this.#db.tx(() => {
         for (const r of rows) {
-          if (r.tbl === 'memory' || (r.tbl === FILE && (r.pk === 'MEMORY.md' || r.pk.startsWith('memory/')))) scrub = true;
+          if (r.tbl === 'memory' || this.forgetting.has(r.tbl) || (r.tbl === FILE && (r.pk === 'MEMORY.md' || r.pk.startsWith('memory/')))) scrub = true;
           let stored = r.row;
           if (r.tbl === VAULT) stored = this.#applyVault(r);
           else if (r.op === 'put') this.#put(r.tbl, JSON.parse(r.row!) as Record<string, unknown>);
@@ -342,6 +349,11 @@ export class SyncLog {
             if (r.tbl === 'memory') {
               const rec = this.#db.get<Record<string, unknown>>('SELECT * FROM memory WHERE id = ?', r.pk);
               if (rec) gone.push(rec);
+            } else if (this.forgetting.has(r.tbl)) {
+              const keys = REPLICATED[r.tbl]!;
+              const values = keys.length === 1 ? [r.pk] : (JSON.parse(r.pk) as (string | number)[]);
+              const rec = this.#db.get<Record<string, unknown>>(`SELECT * FROM "${r.tbl}" WHERE ${keys.map((k) => `"${k}" = ?`).join(' AND ')}`, ...values);
+              if (rec) others.set(r.tbl, [...(others.get(r.tbl) ?? []), rec]);
             }
             this.#delete(r.tbl, r.pk);
           } else if (r.op === 'file_put') { this.#writeFile(JSON.parse(r.row!) as FileRow); files++; }
@@ -356,6 +368,9 @@ export class SyncLog {
     }
     if (scrub && this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     if (gone.length) forgotten(gone);
+    for (const [tbl, recs] of others) {
+      try { this.forgetting.get(tbl)!(recs); } catch (e) { this.#log.problem('sync', `Nova couldn’t finish forgetting what the hub deleted from ${tbl} here.`, { detail: (e as Error)?.stack ?? String(e) }); }
+    }
     return { applied: rows.length, files };
   }
 

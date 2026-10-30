@@ -6,7 +6,7 @@ import { CoreError } from './errors.ts';
 import { PRIVACY_MODES, type PrivacyMode } from './envelope.ts';
 import type { Db } from './db.ts';
 
-export const SECTIONS = ['identity', 'user', 'tuning', 'privacy', 'policy', 'appearance', 'mesh', 'providers', 'models', 'setup'] as const;
+export const SECTIONS = ['identity', 'user', 'tuning', 'privacy', 'policy', 'appearance', 'mesh', 'providers', 'capture', 'models', 'setup'] as const;
 export type Section = (typeof SECTIONS)[number];
 export type Source = 'setup' | 'settings' | 'conversation' | 'import';
 

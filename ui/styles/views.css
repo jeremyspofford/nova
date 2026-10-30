@@ -712,3 +712,41 @@ kbd {
 .conn-form .field-row { margin-top: 0; }
 .conn-more { margin-top: var(--space-4); }
 .conn-hint { margin-top: var(--space-1); }
+
+/* ---- Capture (M6a): the indicator, Settings › Capture, the Capture view ----------------------- */
+
+.capture-ind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  padding: calc(var(--space-1) / 2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.capture-ind[hidden] { display: none; }
+.capture-ind:hover { background: var(--surface-card-hover); }
+.capture-ind:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.capture-dot { width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: var(--status-working); }
+.capture-ind.is-warn .capture-dot { background: var(--status-attention); }
+
+.capture-now { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+.capture-rules, .capture-posture, .capture-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+.capture-rules li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-1) 0; border-bottom: 1px solid var(--border-subtle); }
+.capture-posture li { display: grid; gap: var(--space-1); padding: var(--space-2) 0; }
+.capture-form .field-row { margin-top: var(--space-2); }
+.capture-switch { display: grid; gap: var(--space-1); margin-top: var(--space-4); }
+.capture-inline { width: auto; }
+.capture-check { display: flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.capture-card { gap: var(--space-3); }
+.capture-sort { display: grid; gap: var(--space-2); }
+.capture-item { display: grid; gap: var(--space-1); padding: var(--space-3) 0; border-top: 1px solid var(--border-subtle); }
+.capture-item:first-child { border-top: 0; }
+.capture-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.capture-text { overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
+.capture .sheet-actions { margin-top: 0; }

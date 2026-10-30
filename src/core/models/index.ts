@@ -184,6 +184,13 @@ export class Models extends EventEmitter {
     return this.#get<string>('decisions') !== 'rules' && !!this.placement('triage-text');
   }
 
+  // Whether the local model answers a template: once a sorting model is assigned, every template,
+  // or (decisions kept on the rules) only those the rules have no rule for, which they couldn't
+  // answer anyway (capture's proposals, for one).
+  decidesWithModel(hasRule: boolean): boolean {
+    return !!this.placement('triage-text') && (this.#get<string>('decisions') !== 'rules' || !hasRule);
+  }
+
   #privacy(): PrivacyMode { return this.#o.profile.privacyDefault(); }
 
   // ---- hardware and the device map -------------------------------------------------------------
