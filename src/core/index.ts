@@ -382,6 +382,7 @@ export function createCore(o: CoreOptions) {
     proposer: () => (models!.decidesWithModel(rules.has(PROMOTE.template_id)) ? LOCAL_MODEL_PROVIDER : null),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
+    secrets: vault,
     ...(o.capture?.fetch ? { fetch: o.capture.fetch } : {}),
   });
   // A forgotten memory takes the capture it was promoted from with it; on a standby, what the hub
