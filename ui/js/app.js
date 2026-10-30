@@ -21,6 +21,8 @@ import { bindCheckpoints, loadCheckpoints, renderCheckpoints } from './checkpoin
 import { bindReset, loadReset, renderReset } from './reset.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
+import { over, remember, waitingLine } from './wait.js';
+import { blocksOf, doneWaiting, keepShape, showWaiting } from './skeleton.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -236,8 +238,8 @@ function setReachable(ok) {
       loadList();
       refreshCore();
       if (state.id && (!stream || stream.readyState === EventSource.CLOSED)) open(state.id, { quiet: true });
-    }).catch(() => { healthTimer = setTimeout(check, 2000); });
-    healthTimer = setTimeout(check, 2000);
+    }).catch(() => { healthTimer = setTimeout(check, 2000); }); // wait: retry: is the server back?
+    healthTimer = setTimeout(check, 2000); // wait: retry: is the server back?
   }
 }
 
@@ -295,6 +297,13 @@ function showCore(view) {
   if (target) target.focus({ preventScroll: true });
 }
 
+// After a real render, once the view's entrance has settled: its layout, for the next skeleton.
+function rememberShape(view, node) {
+  doneWaiting(view);
+  const moving = node.getAnimations({ subtree: true }).filter((a) => a.effect?.getComputedTiming().iterations !== Infinity);
+  Promise.all(moving.map((a) => a.finished.catch(() => {}))).then(() => { if (state.view === (view === 'chat' ? 'chat' : view) && node.isConnected) keepShape(view, node, blocksOf(view, node)); });
+}
+
 function enter(node) {
   node.classList.remove('view-enter');
   void node.offsetWidth;
@@ -304,8 +313,10 @@ function enter(node) {
 // Draw whatever of the core's surfaces is on screen, keeping the reader's place and focus.
 function renderCore({ enter: entering = false } = {}) {
   const keep = (node, draw) => {
+    const waited = !!node.querySelector('[data-skeleton], .view-waiting');
     const focusKey = document.activeElement && node.contains(document.activeElement) ? (document.activeElement.dataset.task ?? document.activeElement.dataset.action ?? null) : null;
     draw(node);
+    if (core.store.loaded && !node.querySelector('[data-skeleton], .view-waiting') && (entering || waited)) rememberShape(state.view, node);
     if (focusKey) node.querySelector(`[data-task="${CSS.escape(focusKey)}"], [data-action="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
     if (entering) enter(node);
   };
@@ -343,7 +354,8 @@ function startNew() {
 function open(id, { quiet = false } = {}) {
   stream?.close();
   setView('chat');
-  if (!quiet || state.id !== id) Object.assign(state, { id, live: null, pending: state.pending?.sessionId === id ? state.pending : null, stick: true });
+  if (!quiet || state.id !== id) Object.assign(state, { id, live: null, pending: state.pending?.sessionId === id ? state.pending : null, stick: true, snapshot: false });
+  if (!state.snapshot && !state.pending) { rendered = new Map(); showWaiting('chat', el.thread, 'Loading the conversation', { end: true }); }
   restoreDraft();
   if (id === 'main') markMainSeen();
   const es = new EventSource(`/api/sessions/${id}/events`);
@@ -353,12 +365,21 @@ function open(id, { quiet = false } = {}) {
     const snap = JSON.parse(e.data);
     state.session = snap.session;
     state.live = snap.live;
+    state.snapshot = true;
     if (state.pending && state.session.turns.some((t) => !t.kind && t.text === state.pending.text && t.ts >= state.pending.since)) state.pending = null;
     renderAll({ enter: first && !quiet });
+    if (first && state.session.turns.length) rememberShape('chat', el.thread);
     first = false;
   });
   es.addEventListener('event', (e) => onEvent(JSON.parse(e.data)));
-  es.addEventListener('live', (e) => { state.live = JSON.parse(e.data); renderThread(); renderChrome(); showSignals(); });
+  es.addEventListener('live', (e) => {
+    // The server says "streaming" just after the first piece, with its text from before that piece:
+    // the words already here are real and stay (M9: a reply's first words were being dropped).
+    const next = JSON.parse(e.data);
+    if (next && state.live && next.turn === state.live.turn && next.attempt === state.live.attempt && (next.text ?? '').length < (state.live.text ?? '').length) next.text = state.live.text;
+    state.live = next;
+    renderThread(); renderChrome(); showSignals();
+  });
   es.addEventListener('delta', (e) => {
     const d = JSON.parse(e.data);
     if (!state.live || state.live.turn !== d.turn || state.live.attempt !== d.attempt) return;
@@ -369,13 +390,14 @@ function open(id, { quiet = false } = {}) {
   es.addEventListener('open', () => setReachable(true));
   es.addEventListener('error', () => {
     if (es.readyState === EventSource.CLOSED) { setReachable(false); return; }
-    setTimeout(() => { if (es === stream && es.readyState !== EventSource.OPEN) setReachable(false); }, 1500);
+    setTimeout(() => { if (es === stream && es.readyState !== EventSource.OPEN) setReachable(false); }, 1500); // wait: debounce: a stream that reconnects at once is not a drop
   });
 }
 
 function onEvent(ev) {
   applyEvent(state.session, ev);
-  if (ev.type === 'user') state.pending = null;
+  if (ev.type === 'user') { state.pending = null; over('send'); }
+  if (ev.type === 'done') { const t = state.session.turns.find((x) => x.id === ev.turn); if (t?.ts && ev.ts) remember('reply', Date.parse(ev.ts) - Date.parse(t.ts)); }
   if (ev.type === 'assistant' && state.live?.turn === ev.turn) state.live.text = '';
   if (ev.type === 'session' || ev.type === 'title') loadList();
   renderThread();
@@ -386,7 +408,7 @@ function onEvent(ev) {
 
 function viewSession() {
   if (!state.pending) return state.session;
-  const turn = { id: 'pending', text: state.pending.text, ts: state.pending.since, attempt: 0, items: [], state: 'open' };
+  const turn = { id: 'pending', text: state.pending.text, ts: state.pending.since, attempt: 0, items: [], state: 'open', sending: !state.pending.sent };
   return { ...state.session, turns: [...state.session.turns, turn] };
 }
 
@@ -423,10 +445,12 @@ let found = null;
 function flash(node) {
   if (found) { clearTimeout(found.timer); found.node.classList.remove('is-found'); }
   node.classList.add('is-found');
-  found = { node, timer: setTimeout(() => { node.classList.remove('is-found'); found = null; }, FOUND_MS) };
+  found = { node, timer: setTimeout(() => { node.classList.remove('is-found'); found = null; }, FOUND_MS) }; // wait: expiry: the mark
 }
 
 function renderThread() {
+  // A conversation whose snapshot isn't in yet is waiting (open): nothing of another one shows.
+  if (state.view === 'chat' && state.id && state.snapshot === false && !state.pending) return;
   const session = viewSession();
   const wasNear = nearBottom();
   if (!session.turns.length) {
@@ -629,7 +653,7 @@ function saveDraft() {
   clearTimeout(draftTimer);
   const key = draftKey();
   const value = el.input.value;
-  draftTimer = setTimeout(() => { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch {} }, 250);
+  draftTimer = setTimeout(() => { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch {} }, 250); // wait: debounce: saving the draft
 }
 
 function autosize() {
@@ -641,7 +665,7 @@ function say(notice, ms = 4000) {
   state.notice = notice;
   renderChrome();
   clearTimeout(say.t);
-  say.t = setTimeout(() => { state.notice = ''; renderChrome(); }, ms);
+  say.t = setTimeout(() => { state.notice = ''; renderChrome(); }, ms); // wait: expiry: the notice
 }
 
 async function send() {
@@ -660,11 +684,13 @@ async function send() {
     if (!sessionId) {
       const { id } = await post('/api/sessions', { text });
       state.pending.sessionId = id;
+      state.pending.sent = true;
       history.pushState(null, '', `/c/${id}`);
       open(id);
       loadList();
     } else {
       await post(`/api/sessions/${sessionId}/messages`, { text });
+      if (state.pending) { state.pending.sent = true; renderThread(); }
     }
   } catch (e) {
     state.pending = null;
@@ -704,7 +730,7 @@ el.thread.addEventListener('change', (e) => {
 });
 el.input.addEventListener('input', () => { autosize(); saveDraft(); renderChrome(); });
 el.input.addEventListener('focus', renderChrome);
-el.input.addEventListener('blur', () => setTimeout(renderChrome, 0));
+el.input.addEventListener('blur', () => setTimeout(renderChrome, 0)); // wait: after the event: focus has moved
 el.input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!running()) send(); }
 });
@@ -717,7 +743,7 @@ async function copy(text, button) {
   const before = label.textContent;
   button.classList.add('is-done');
   label.textContent = 'Copied';
-  setTimeout(() => { button.classList.remove('is-done'); label.textContent = before; }, 1600);
+  setTimeout(() => { button.classList.remove('is-done'); label.textContent = before; }, 1600); // wait: expiry: “Copied”
 }
 
 // Links to Nova's own places stay inside the app (the style reference and Google don't).
@@ -784,7 +810,7 @@ el.thread.addEventListener('pointerdown', (e) => {
   const msg = e.target.closest(SHOWS_TIME);
   pressed = false;
   pressAt = { x: e.clientX, y: e.clientY };
-  if (e.pointerType === 'touch' && msg && !operating(e, msg)) pressTimer = setTimeout(() => { pressed = true; showTime(msg, true); }, 450);
+  if (e.pointerType === 'touch' && msg && !operating(e, msg)) pressTimer = setTimeout(() => { pressed = true; showTime(msg, true); }, 450); // wait: long press
 });
 for (const ev of ['pointerup', 'pointercancel']) el.thread.addEventListener(ev, () => clearTimeout(pressTimer));
 el.thread.addEventListener('pointermove', (e) => {
@@ -820,12 +846,14 @@ function showMemory() {
 let memoryDeferred = false;
 function renderMemoryView({ enter = false } = {}) {
   if (el.memory.querySelector('.is-editing')) { memoryDeferred = true; return; }
+  const waited = !!el.memory.querySelector('[data-skeleton], .view-waiting');
   memoryDeferred = false;
   const focused = document.activeElement?.closest?.('.memory-item')?.dataset.id;
   const at = focused ? [...el.memory.querySelectorAll('.memory-item')].findIndex((x) => x.dataset.id === focused) : -1;
   if (state.memory) el.memory.innerHTML = renderMemory(state.memory);
   else if (state.memoryError) el.memory.innerHTML = `<div class="empty"><p class="empty-line">Memory couldn't be read.</p><p class="memory-lede">${state.memoryError}</p><button type="button" class="btn" data-action="retry-memory">Try again</button></div>`;
-  else el.memory.innerHTML = '';
+  else if (!el.memory.querySelector('[data-skeleton], .view-waiting')) showWaiting('memory', el.memory, 'Loading Memory');
+  if (state.memory && (enter || waited)) rememberShape('memory', el.memory);
   // An edit gives the memory a new id; focus stays where it was in the list.
   if (focused) (document.getElementById(`m-${focused}`) ?? el.memory.querySelectorAll('.memory-item')[at])?.focus({ preventScroll: true });
   if (enter) {
@@ -840,13 +868,14 @@ function autosizeField(field) {
   field.style.height = `${field.scrollHeight + field.offsetHeight - field.clientHeight}px`;
 }
 
-function editMemory(item) {
+// `draft`: words the person typed before, when a save failed and they edit again.
+function editMemory(item, draft = null) {
   if (item.classList.contains('is-editing')) return;
   const text = item.querySelector('.memory-text');
   const field = document.createElement('textarea');
   field.className = 'memory-edit';
   field.rows = 1;
-  field.value = text.textContent;
+  field.value = draft ?? text.textContent;
   field.setAttribute('aria-label', 'Edit this memory');
   item.classList.add('is-editing');
   text.hidden = true;
@@ -865,9 +894,17 @@ function editMemory(item) {
     item.classList.remove('is-editing');
     item.focus({ preventScroll: true });
     if (save && next && next !== before) {
+      // The honest split (DESIGN-SYSTEM §1.6): the new words at once; "Saving" if the server takes
+      // a second; "Saved" only when it has them. A failure puts back what is really saved, says
+      // why, and keeps what was typed one tap away.
       text.textContent = next;
+      text.insertAdjacentHTML('afterend', waitingLine('Saving', { key: 'memory-save' }));
+      const saving = text.nextElementSibling;
       try { await post(`/api/memory/${item.dataset.id}`, { text: next }); toast('Saved. Nova will use it from the next message.'); }
-      catch (e) { text.textContent = before; toast(e.message); }
+      catch (e) {
+        text.textContent = before;
+        notify(`${e.message} Your change wasn’t saved.`, { action: { label: 'Edit again', run: () => { const now = document.getElementById(item.id) ?? item; editMemory(now, next); } } });
+      } finally { saving?.remove(); over('memory-save'); }
     }
     if (memoryDeferred) renderMemoryView();
   };
@@ -1233,7 +1270,7 @@ function renderSchedulesView({ enter = false } = {}) {
   }
 }
 // "Next: tomorrow at 7:00 AM" stays true as the clock moves.
-setInterval(() => { if (state.view === 'automations' && !document.hidden) renderSchedulesView(); }, 60_000);
+setInterval(() => { if (state.view === 'automations' && !document.hidden) renderSchedulesView(); }, 60_000); // wait: clock: “Next: …” stays true
 
 const scheduleName = (id) => state.schedules?.set.find((s) => s.id === id)?.name ?? 'The schedule';
 
@@ -1361,7 +1398,7 @@ function renderActivityView({ enter = false } = {}) {
   }
 }
 // "Working for 2 min" and the days stay true as the clock moves.
-setInterval(() => { if (state.view === 'activity' && !document.hidden) renderActivityView(); }, 60_000);
+setInterval(() => { if (state.view === 'activity' && !document.hidden) renderActivityView(); }, 60_000); // wait: clock: “Working for …” stays true
 
 async function earlier(button) {
   button.disabled = true;
@@ -1747,7 +1784,7 @@ let pendingTimer = 0;
 function scheduleRefresh(parts) {
   for (const p of parts) pending.add(p);
   clearTimeout(pendingTimer);
-  pendingTimer = setTimeout(() => { const list = [...pending]; pending = new Set(); refreshCore(list); }, 120);
+  pendingTimer = setTimeout(() => { const list = [...pending]; pending = new Set(); refreshCore(list); }, 120); // wait: debounce: many events at once
 }
 onCore('task', () => scheduleRefresh(['tasks']));
 onCore('problem', (p) => {
@@ -1940,7 +1977,7 @@ function keepSession() {
     if (!(await renew())) location.assign('/pair');
   };
   check();
-  setInterval(check, 10 * 60_000);
+  setInterval(check, 10 * 60_000); // wait: clock: the session’s renewal
   document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
 }
 

@@ -6,6 +6,7 @@
 import { api, on } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { toast } from './shell.js';
+import { left, over, since, waitingLine } from './wait.js';
 
 let data = null;
 let failed = '';
@@ -17,6 +18,7 @@ export async function loadModels() {
   try {
     data = await api('GET', '/models');
     failed = '';
+    over('models');
   } catch (e) {
     failed = e.message || 'Nova’s server didn’t answer.';
   }
@@ -26,7 +28,11 @@ export async function loadModels() {
 const GB = 1024 ** 3;
 const size = (b) => (b >= 10 * GB ? `${Math.round(b / GB)} GB` : b >= GB ? `${(b / GB).toFixed(1).replace(/\.0$/, '')} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`);
 // While layers are still arriving, Ollama hasn't said the whole size yet: the total is a floor.
-const sofar = (p) => `${size(p.completed ?? 0)} of ${/^pulling/.test(p.status ?? '') ? 'at least ' : ''}${size(p.total ?? 0)}${p.status ? ` · ${p.status}` : ''}`;
+// Bytes so far, in real units; after 10 s, time left from the measured rate ("about 3 minutes left").
+const sofar = (p) => {
+  const est = p.task_id ? left(p.completed ?? 0, p.total ?? 0, Date.now() - since(`download-${p.task_id}`)) : '';
+  return `${size(p.completed ?? 0)} of ${/^pulling/.test(p.status ?? '') ? 'at least ' : ''}${size(p.total ?? 0)}${p.status ? ` · ${p.status}` : ''}${est ? ` · ${est}` : ''}`;
+};
 const STATE_WORDS = { ready: ['Ready', 'is-on'], down: ['Not answering', 'is-warn'], asleep: ['Asleep', ''], unassigned: ['Not set', ''], 'no-runtime': ['No runtime', ''] };
 
 function deviceCard(d) {
@@ -68,7 +74,7 @@ function downloadRow(t) {
   if (t.state === 'active' || t.state === 'queued' || t.state === 'verifying') {
     const total = live?.total ?? 0;
     const done = live?.completed ?? 0;
-    const bar = total ? `<progress class="model-progress" max="${total}" value="${done}" aria-label="${esc(t.title)}"></progress><p class="settings-note">${esc(sofar(live))}</p>` : `<p class="settings-note">${esc(live?.status || 'Starting…')}</p>`;
+    const bar = total ? `<progress class="model-progress" max="${total}" value="${done}" aria-label="${esc(t.title)}"></progress><p class="settings-note">${esc(sofar(live))}</p>` : (live?.status ? `<p class="settings-note">${esc(live.status)}</p>` : waitingLine('Starting the download', { key: `download-${t.id}` }));
     return `<li class="model-download" data-task="${esc(t.id)}"><p class="settings-label">${esc(t.title)}</p>${bar}</li>`;
   }
   const ok = t.state === 'done';
@@ -86,7 +92,7 @@ const num = (v) => (typeof v === 'number' ? String(v) : '');
 
 export function renderModels() {
   const head = '<section class="memory-section" id="models" aria-labelledby="set-models"><h2 class="memory-heading" id="set-models">Models</h2>';
-  if (!data) return `${head}<p class="memory-lede">${esc(failed || 'Loading…')}</p>${failed ? '<button type="button" class="btn set-retry" data-action="models-retry">Try again</button>' : ''}</section>`;
+  if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="models-retry">Try again</button>` : waitingLine('Loading models', { key: 'models' })}</section>`;
   const hub = data.devices[0];
   const lede = hub?.runtime?.ok
     ? 'Nova runs models on your own devices. Here is what each can do, and what Nova recommends for each job.'
@@ -137,10 +143,11 @@ export function bindModels(root, render) {
   let held = false;
   const typing = () => { const a = document.activeElement; return !!a?.closest?.('#models .model-form') && a.matches('input'); };
   rerender = () => { if (typing()) { held = true; return; } held = false; render(); };
-  root.addEventListener('focusout', () => { if (held) setTimeout(() => { if (held && !typing()) rerender(); }, 0); });
+  root.addEventListener('focusout', () => { if (held) setTimeout(() => { if (held && !typing()) rerender(); }, 0); }); // wait: after the event: focus has settled
   on('models', () => { if (document.getElementById('models')) loadModels(); });
   on('model_progress', (p) => {
     if (!p?.task_id) return;
+    since(`download-${p.task_id}`);
     progress.set(p.task_id, p);
     const row = document.querySelector(`.model-download[data-task="${CSS.escape(p.task_id)}"]`);
     const bar = row?.querySelector('progress');

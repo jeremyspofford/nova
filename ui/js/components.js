@@ -4,6 +4,7 @@
 import { escapeHtml as esc } from './markdown.js';
 import { ORB_WORDS, STATUS, isOpen, label, needsApproval, statusOf } from './status.js';
 import { qrSvg } from './qr.js';
+import { waitingLine } from './wait.js';
 
 // ---- icons: line drawings in currentColor -------------------------------------------------
 
@@ -309,7 +310,7 @@ export function addDeviceSheet(p, { now = new Date() } = {}) {
 export function healthCard({ health = null, problems = [], reachable = true } = {}) {
   let body;
   if (!reachable) body = '<p class="card-lead">Nova isn’t answering.</p><p class="card-line">This page reconnects when it’s back.</p>';
-  else if (!health) body = '<p class="card-lead">Checking…</p>';
+  else if (!health) body = waitingLine('Checking Nova’s health', { key: 'health' });
   else {
     const bad = Object.entries(health.checks ?? {}).filter(([, c]) => c && c.ok === false);
     const lead = problems.length ? `${problems.length} problem${problems.length === 1 ? '' : 's'} to look at` : bad.length ? 'Something isn’t right' : 'All systems normal';
@@ -424,7 +425,7 @@ export function takeoverPanel(t, v, opts = {}) {
   <p class="sheet-line takeover-line" role="status" aria-live="polite">${esc(st.line)}</p>
   <div class="takeover-screen" data-held="${st.mine}">
     <img class="takeover-frame" alt="The browser’s screen, live${host ? `, at ${esc(host)}` : ''}" tabindex="0" hidden>
-    <p class="takeover-wait">Waiting for the browser’s picture…</p>
+    ${waitingLine('Waiting for the browser’s picture', { key: 'takeover-picture' })}
   </div>
   <form class="takeover-type"${st.mine ? '' : ' hidden'}>
     <label class="takeover-type-label" for="takeover-text">Type into the page</label>

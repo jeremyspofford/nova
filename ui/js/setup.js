@@ -6,6 +6,7 @@ import { ICONS, chatBubble, evidenceViewer, lookingIntoItCard, verifiedResultCar
 import { liveOrb, openSheet, toast } from './shell.js';
 import { escapeHtml as esc } from './markdown.js';
 import { forgetHere } from './forget-here.js';
+import { waitingLine } from './wait.js';
 
 const el = document.getElementById('setup');
 let view = null;
@@ -49,7 +50,7 @@ function finish() {
 function result() {
   if (!view.done) return '';
   if (!view.first_task) return '';
-  if (!task) return '<p class="setup-sub">Checking the first task…</p>';
+  if (!task) return waitingLine('Checking the first task', { key: 'first-task' });
   if (task.state === 'done') return `<div class="setup-done"><p class="setup-sub">Your first task, checked by Nova:</p>${verifiedResultCard(task)}</div>`;
   if (task.state === 'failed' || task.state === 'cancelled') return `<div class="setup-done"><p class="setup-sub">The first task didn’t finish: ${esc(task.reason ?? 'no reason given')}. Setup is still done.</p></div>`;
   return `<div class="setup-done">${lookingIntoItCard(task)}</div>`;

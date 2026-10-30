@@ -52,7 +52,7 @@
 
 .msg-nova { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; width: 100%; }
 .msg-nova > .prose:not(.handoff-body) { max-width: 70ch; }
-.msg-nova > * { animation: fade-in var(--motion-duration-fast) var(--motion-ease) both; }
+.msg-nova > *:not(.waiting) { animation: fade-in var(--motion-duration-fast) var(--motion-ease) both; }
 
 /* A message's time. The first of a group shows it; the exact time, to the second, shows on
    hover, on a tap or long press (.show-time), and on keyboard focus. text/secondary passes

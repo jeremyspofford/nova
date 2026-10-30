@@ -808,7 +808,21 @@ summary { padding-block: max(0px, calc((var(--hit) - 1lh) / 2)); }
    Under 1 s there is no indicator: a waiting line takes its room at once (so nothing moves when it
    shows) and fades in only after --wait-quiet. After 10 s, wait.js adds real units and an estimate.
    The delay is when to speak, not motion, so reduced motion keeps it. */
-:root { --wait-quiet: 1000ms; }
-.waiting { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); opacity: 0; animation: appear var(--motion-duration-fast) var(--motion-ease) var(--wait-quiet) forwards; }
+:root { --wait-quiet: 1000ms; --wait-left: var(--wait-quiet); }
+.waiting { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); opacity: 0; animation: appear var(--motion-duration-fast) var(--motion-ease) var(--wait-left) forwards; }
 .waiting.is-late { opacity: 1; animation: none; }
 @keyframes appear { to { opacity: 1; } }
+/* A step that is really running shows its words at once; its spinner joins after 1 s. */
+.wait-dot { display: inline-flex; opacity: 0; animation: appear var(--motion-duration-fast) var(--motion-ease) var(--wait-left) forwards; }
+.is-late > .wait-dot { opacity: 1; animation: none; }
+/* A whole view waiting: its skeleton, the view's own last layout here, unseen for 1 s; the words only
+   after 10 s (skeleton.js). Still: no shimmer. */
+.skeleton { position: relative; opacity: 0; animation: appear var(--motion-duration-fast) var(--motion-ease) var(--wait-left) forwards; }
+.skeleton:has(.waiting.is-late) { opacity: 1; animation: none; }
+.skel-block { position: absolute; }
+.skel-block.is-card { border: 1px solid var(--border-subtle); background: var(--surface-card); }
+.skel-line { position: absolute; border-radius: var(--radius-pill); background: var(--border-subtle); }
+.skel-status { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: center; }
+.skeleton.is-end .skel-status { top: auto; bottom: 0; }
+.skel-status .waiting { visibility: hidden; padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); background: var(--bg-overlay); }
+.skel-status .waiting.is-long { visibility: visible; }

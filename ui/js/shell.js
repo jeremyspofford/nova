@@ -177,7 +177,7 @@ export function toast(text, { action = null, tone = 'info', ms = null } = {}) {
   void el.offsetWidth;
   el.classList.add('view-enter');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, ms ?? (action ? 8000 : tone === 'alert' ? 8000 : 3200));
+  toastTimer = setTimeout(hideToast, ms ?? (action ? 8000 : tone === 'alert' ? 8000 : 3200)); // wait: expiry: the toast
 }
 export function hideToast() {
   $('toast').hidden = true;

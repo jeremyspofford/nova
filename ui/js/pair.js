@@ -108,14 +108,14 @@ function wait(id) {
       const time = key.signedTime();
       const sig = await key.sign(id, `nova-add-device-status-v1.${requestId}.${time}`);
       const s = await api('GET', `/mesh/join/${encodeURIComponent(requestId)}?time=${time}&signature=${encodeURIComponent(sig)}`);
-      if (s.state === 'pending') { setTimeout(poll, 2000); return; }
+      if (s.state === 'pending') { setTimeout(poll, 2000); return; } // wait: poll: has the hub said yes?
       await key.update({ pending: null });
       if (s.state === 'approved') return await approved(s);
       if (s.state === 'denied') return stop('Not added', 'The hub turned this device away. Ask for a new code if that was a mistake.', { retry: true });
       return stop('Too late', 'Nobody approved this device in time. Ask your hub for a new code.', { retry: true });
     } catch (e) {
       // Offline for a moment: keep asking. Anything else is said, never waited out in silence.
-      if (e instanceof Offline) { setTimeout(poll, 2000); return; }
+      if (e instanceof Offline) { setTimeout(poll, 2000); return; } // wait: retry: the hub is out of reach
       await key.update({ pending: null }).catch(() => {});
       fail(e);
     }

@@ -80,7 +80,7 @@ function measures() {
     indicator(before: Record<string, string>[]) {
       const el = document.activeElement as HTMLElement;
       const cands = this.candidates(el);
-      const now = cands.map((c) => this.ring(c));
+      const now = cands.map((c: Element) => this.ring(c));
       for (let i = 0; i < cands.length; i++) {
         // A control drawn by something else (a radio inside its choice) shows focus there.
         if (opacity(cands[i]!) === 0 || cands[i]!.getBoundingClientRect().width < 4) continue;
@@ -109,7 +109,7 @@ function measures() {
       const cs = getComputedStyle(e);
       return { outline: cs.outlineStyle === 'none' || cs.outlineWidth === '0px' ? 'none' : cs.outlineColor, border: cs.borderTopStyle === 'none' ? 'none' : cs.borderTopColor, shadow: cs.boxShadow };
     },
-    before() { return this.candidates(document.activeElement as HTMLElement).map((c) => this.ring(c)); },
+    before() { return this.candidates(document.activeElement as HTMLElement).map((c: Element) => this.ring(c)); },
   };
 }
 
@@ -118,7 +118,7 @@ type Row = readonly [string, number, number];
 // One look of one design: the main views, each state.
 async function audit(page: Page, base: string, look: string) {
   const fails: string[] = [];
-  const states: Record<string, number> = { rest: 0, hover: 0, focus: 0, selected: 0, disabled: 0, error: 0, placeholder: 0, icon: 0 };
+  const states = { rest: 0, hover: 0, focus: 0, selected: 0, disabled: 0, error: 0, placeholder: 0, icon: 0 };
   const add = (state: string, rows: readonly Row[], where: string) => {
     for (const [what, r, min] of rows) if (r < min) fails.push(`${look} · ${where} · ${state}: ${what} ${r}:1 (needs ${min}:1)`);
   };

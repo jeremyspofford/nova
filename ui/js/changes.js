@@ -9,6 +9,7 @@ import { api, on } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { status } from './components.js';
 import { toast } from './shell.js';
+import { over, waitingLine } from './wait.js';
 
 let data = null;
 let failed = '';
@@ -20,6 +21,7 @@ export async function loadChanges() {
   try {
     data = await api('GET', '/changes');
     failed = '';
+    over('changes');
   } catch (e) {
     failed = e.message || 'Nova’s server didn’t answer.';
   }
@@ -91,7 +93,7 @@ function changeRow(c) {
 
 export function renderChanges() {
   const head = '<section class="memory-section" id="changes" aria-labelledby="set-changes"><h2 class="memory-heading" id="set-changes">Changes</h2>';
-  if (!data) return `${head}<p class="memory-lede">${esc(failed || 'Loading…')}</p>${failed ? '<button type="button" class="btn set-retry" data-action="changes-retry">Try again</button>' : ''}</section>`;
+  if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="changes-retry">Try again</button>` : waitingLine('Loading changes', { key: 'changes' })}</section>`;
   const waiting = data.changes.find((c) => c.id === data.standout);
   const rest = data.changes.filter((c) => c.id !== data.standout);
   return `${head}
