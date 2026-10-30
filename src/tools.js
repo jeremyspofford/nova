@@ -6,8 +6,8 @@
 // again with the result in the transcript.
 import { spawn } from 'node:child_process';
 import { trackChild } from './core/index.ts';
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, sep } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { inHome, inSecretDir } from './home.js';
 
 const MAX_READ = 200_000;
@@ -18,12 +18,42 @@ export const SEARCH_URL = 'https://html.duckduckgo.com/html/';
 
 // Secrets live in ~/vault/ and ~/mesh/ (Era 2 kept connection secrets in ~/connectors/). No tool
 // reads or writes them.
+//
+// Nova's own state is not the agent's to touch (a hole older than the M7 amendment, closed with
+// its review): write_file writes only inside workspace/ and to the standing files the agent is
+// meant to edit (WRITABLE); read_file never reads Nova's database, checkpoints (identity and vault
+// keys are in them), pre-upgrade backups, the home's git history, a factory reset's marker or the
+// home's sentinel (UNREADABLE). Paths are checked after links are followed, so a link in the
+// workspace can't carry a read or a write out to them.
+export const WRITABLE = ['AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md'];
+const UNREADABLE = new Set(['checkpoints', 'backups', '.git', 'factory-reset.json', '.nova-home']);
+const DB = /^nova\.db/;
+
+// The path as it really is: the deepest part that exists, with its links followed, then the rest.
+function real(abs) {
+  let at = abs;
+  const rest = [];
+  while (!existsSync(at)) {
+    const up = dirname(at);
+    if (up === at) break;
+    rest.unshift(basename(at));
+    at = up;
+  }
+  return join(realpathSync(at), ...rest);
+}
+
 function guard(home, path, verb) {
-  const abs = inHome(home, path);
-  const rel = relative(home, abs);
-  const dir = inSecretDir(rel.split(sep).join('/'));
+  const lexical = inHome(home, path);
+  const root = realpathSync(home);
+  const abs = real(lexical);
+  if (abs !== root && !abs.startsWith(root + sep)) throw new Error(`${path} leads outside Nova's home, so it can't be ${verb}`);
+  const rel = relative(root, abs);
+  const posix = rel.split(sep).join('/');
+  const dir = inSecretDir(posix);
   if (dir) throw new Error(`${dir === 'mesh' ? 'Device keys' : 'Connection secrets'} in ${dir}/ can't be ${verb}`);
-  return { abs, rel };
+  const top = posix.split('/')[0];
+  if (verb === 'read' && (UNREADABLE.has(top) || DB.test(top))) throw new Error(`${path} is Nova's own state (its database, checkpoints, backups or history), so it can't be read`);
+  return { abs, rel, top };
 }
 
 export const TOOLS = {
@@ -43,11 +73,12 @@ export const TOOLS = {
     doc: 'Create or replace a text file in your home: your workspace and the standing files. MEMORY.md and memory/ are kept with memory blocks instead (below).',
     needsApproval: false,
     async run({ path, content }, { home }) {
-      const { abs, rel } = guard(home, path, 'written');
+      const { abs, rel, top } = guard(home, path, 'written');
       if (rel === 'sessions' || rel.startsWith(`sessions${sep}`)) throw new Error('Session logs are an audit trail and cannot be edited');
       if (rel === 'MEMORY.md' || rel === 'memory' || rel.startsWith(`memory${sep}`)) throw new Error('Memory is kept with <remember> and <note> blocks, not write_file');
       if (rel === 'schedules' || rel.startsWith(`schedules${sep}`)) throw new Error('Schedules are set with schedule_set, which the person approves, not write_file');
       if (rel === 'permissions.md') throw new Error('Only the person changes what Nova may do on its own');
+      if (!WRITABLE.includes(rel) && !(top === 'workspace' && rel !== 'workspace')) throw new Error(`${path} can't be written: Nova writes only in workspace/ and its standing files (${WRITABLE.join(', ')}). The rest of its home is Nova's own state.`);
       if (typeof content !== 'string') throw new Error('content must be a string');
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, content);

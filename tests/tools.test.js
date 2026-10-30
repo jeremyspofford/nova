@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { ToolTagFilter, extractMemory, parseToolCall, TOOLS, htmlToText, toolProtocol, availableTools } from '../src/tools.js';
 import { seedHome } from '../src/home.js';
 
@@ -108,4 +108,50 @@ test('web_fetch fails when the page answers with an error, and reads it when it 
     await assert.rejects(TOOLS.web_fetch.run({ url: `${base}/busy` }, {}), /HTTP 429/);
     assert.match(await TOOLS.web_fetch.run({ url: `${base}/` }, {}), /^HTTP 200 OK[\s\S]*Three to compare/);
   } finally { server.close(); }
+});
+
+// A hole older than the M7 amendment, closed with it: the agent's write_file could write Nova's own
+// state (nova.db, the pre-upgrade copies a rollback restores from, .git/hooks, a factory reset's
+// marker). It writes only inside workspace/ and to the standing files it is meant to edit; read_file
+// never reads Nova's database, checkpoints, backups, history, the reset marker, the vault or keys.
+test('write_file writes only the workspace and the standing files; everything else of Nova’s is refused', async () => {
+  const h = home();
+  for (const path of ['workspace/notes/a.md', 'USER.md', 'SOUL.md', 'AGENTS.md', 'IDENTITY.md']) {
+    assert.match(await TOOLS.write_file.run({ path, content: 'ok' }, { home: h }), /Wrote 2 bytes/, path);
+  }
+  for (const path of [
+    'nova.db', 'nova.db-wal', 'nova.db-shm', 'backups/nova-2026-10-29.db', '.git/hooks/post-commit', '.git/config', '.gitignore',
+    'checkpoints/.seal', 'checkpoints/.restore/marker.json', 'checkpoints/000001-x/manifest.json', 'factory-reset.json', 'reset-report.json',
+    'changes/x.json', 'extensions/x/manifest.json', 'logs/nova.log', 'workers/x', 'kept/x', 'exports/x', 'nova.pid', 'skills/x/SKILL.md',
+    'notes-at-the-top.md', '.nova-home',
+  ]) {
+    await assert.rejects(TOOLS.write_file.run({ path, content: 'x' }, { home: h }), /can't be written/, path);
+  }
+  await assert.rejects(TOOLS.write_file.run({ path: '.git/hooks/post-commit', content: '#!/bin/sh\necho planted\n' }, { home: h }), /only in workspace\/ and its standing files/);
+  assert.ok(!existsSync(join(h, '.git', 'hooks', 'post-commit')));
+});
+
+test('read_file never reads Nova’s database, checkpoints, backups, history, the reset marker, the vault or keys', async () => {
+  const h = home();
+  for (const [f, text] of [['nova.db', 'db'], ['checkpoints/.seal', 'seal'], ['factory-reset.json', '{}'], ['memory/2026-10-30.md', '- a note']]) {
+    mkdirSync(dirname(join(h, f)), { recursive: true });
+    writeFileSync(join(h, f), text);
+  }
+  for (const path of ['nova.db', 'nova.db-wal', 'checkpoints/.seal', 'checkpoints/000001-x/files/mesh/identity.json', 'backups/x.db', '.git/config', 'factory-reset.json', 'vault/key', 'mesh/identity.json']) {
+    await assert.rejects(TOOLS.read_file.run({ path }, { home: h }), /can't be read/, path);
+  }
+  assert.equal(await TOOLS.read_file.run({ path: 'memory/2026-10-30.md' }, { home: h }), '- a note');
+  assert.match(await TOOLS.read_file.run({ path: 'USER.md' }, { home: h }), /\S/);
+});
+
+test('a link inside the workspace can’t carry a write or a read out to Nova’s own files', async () => {
+  const h = home();
+  writeFileSync(join(h, 'nova.db'), 'db');
+  symlinkSync(join(h, 'nova.db'), join(h, 'workspace', 'link'));
+  symlinkSync(h, join(h, 'workspace', 'up'));
+  await assert.rejects(TOOLS.write_file.run({ path: 'workspace/link', content: 'x' }, { home: h }), /can't be written/);
+  await assert.rejects(TOOLS.write_file.run({ path: 'workspace/up/factory-reset.json', content: 'x' }, { home: h }), /can't be written/);
+  await assert.rejects(TOOLS.read_file.run({ path: 'workspace/link' }, { home: h }), /can't be read/);
+  assert.equal(readFileSync(join(h, 'nova.db'), 'utf8'), 'db');
+  assert.ok(!existsSync(join(h, 'factory-reset.json')));
 });
