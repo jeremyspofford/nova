@@ -2,7 +2,8 @@
 // nothing is captured from this machine. It speaks the parts of Screenpipe's REST API that Nova's
 // adapter reads (src/core/capture/screenpipe.ts):
 //   GET /health   {status: "healthy", frame_status, audio_status, last_frame_timestamp, …}
-//   GET /search   ?content_type=ocr|audio|ui|all &start_time= &end_time= &app_name= &limit= &offset=
+//   GET /search   ?content_type=ocr|audio|accessibility|all &start_time= &end_time= &app_name= &limit= &offset=
+//                 (accessibility items come back as type "UI"; before 0.4 that content type was "ui")
 //                 → {data: [{type: "OCR"|"Audio"|"UI", content: {…}}], pagination: {limit, offset, total}},
 //                 newest first, as Screenpipe answers.
 // And, for driving it from another process (the gate), POST /__items {items: [...]} adds items
@@ -13,7 +14,9 @@
 // down() stops listening (connections are refused, as when Screenpipe isn't running); up() listens
 // again on the same port. requireKey(key) makes /search answer 403 without "Authorization: Bearer
 // <key>", as Screenpipe 0.4 does once its API key is on (null turns that off); `auths` holds each
-// request's Authorization header, or null. `node scripts/fake-screenpipe.js [--port N]` runs one and prints its address.
+// request's Authorization header, or null. speaks(v) picks which name the accessibility content type
+// goes by: '0.4' answers 400 to "ui" (as Screenpipe 0.4 does), 'old' answers 400 to "accessibility",
+// and 'any' (the default) takes either. `node scripts/fake-screenpipe.js [--port N]` runs one and prints its address.
 import { createServer } from 'node:http';
 
 export async function startFakeScreenpipe({ port = 0 } = {}) {
@@ -21,6 +24,7 @@ export async function startFakeScreenpipe({ port = 0 } = {}) {
   const requests = [];
   const auths = [];
   let key = null;
+  let speaks = 'any';
   let nextId = 1;
   const sockets = new Set();
 
@@ -54,7 +58,10 @@ export async function startFakeScreenpipe({ port = 0 } = {}) {
 
   function search(q) {
     const want = (q.get('content_type') ?? 'all').toLowerCase();
-    const types = want === 'all' ? ['ocr', 'audio', 'ui'] : want.split('+');
+    const named = want === 'all' ? ['ocr', 'audio', 'accessibility'] : want.split('+');
+    const refused = named.find((t) => !['ocr', 'audio', 'all', ...(speaks === '0.4' ? [] : ['ui']), ...(speaks === 'old' ? [] : ['accessibility'])].includes(t));
+    if (refused) return { status: 400, body: { error: `invalid content_type: ${refused}` } };
+    const types = named.map((t) => (t === 'accessibility' ? 'ui' : t));
     const start = q.get('start_time');
     const end = q.get('end_time');
     const app = q.get('app_name');
@@ -63,7 +70,7 @@ export async function startFakeScreenpipe({ port = 0 } = {}) {
     const hits = items
       .filter((i) => types.includes(i.type) && (!start || i.at >= new Date(start).toISOString()) && (!end || i.at <= new Date(end).toISOString()) && (!app || i.app === app))
       .sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id);
-    return { data: hits.slice(offset, offset + limit).map(toApi), pagination: { limit, offset, total: hits.length } };
+    return { status: 200, body: { data: hits.slice(offset, offset + limit).map(toApi), pagination: { limit, offset, total: hits.length } } };
   }
 
   const server = createServer((req, res) => {
@@ -77,7 +84,8 @@ export async function startFakeScreenpipe({ port = 0 } = {}) {
     }
     if (req.method === 'GET' && url.pathname === '/search') {
       if (key !== null && req.headers.authorization !== `Bearer ${key}`) return json(403, { error: 'forbidden' });
-      return json(200, search(url.searchParams));
+      const r = search(url.searchParams);
+      return json(r.status, r.body);
     }
     if (req.method === 'POST' && (url.pathname === '/__items' || url.pathname === '/__reset')) {
       let body = '';
@@ -103,6 +111,7 @@ export async function startFakeScreenpipe({ port = 0 } = {}) {
     requests,
     auths,
     requireKey: (k) => { key = k; },
+    speaks: (v) => { speaks = v; },
     add,
     clear: () => { items.length = 0; },
     down: () => (server.listening ? stopListening() : Promise.resolve()),
