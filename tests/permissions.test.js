@@ -10,7 +10,7 @@ const home = () => mkdtempSync(join(tmpdir(), 'nova-perm-'));
 
 test('every permission comes from a tool, and starts as ask', () => {
   const p = new Permissions(home(), () => TOOLS);
-  assert.deepEqual(p.list().map((x) => x.id), ['commands', 'online', 'gmail-drafts', 'gmail-tidy', 'schedules']);
+  assert.deepEqual(p.list().map((x) => x.id), ['commands', 'online', 'gmail-drafts', 'gmail-tidy', 'schedules', 'memory-import']);
   assert.ok(p.list().every((x) => x.yes === false));
   assert.equal(p.allows('commands'), false);
 });
