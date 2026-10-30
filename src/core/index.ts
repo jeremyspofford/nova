@@ -25,6 +25,9 @@ import { loadIdentity } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
 import { Enrollment } from './mesh/enroll.ts';
 import { Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
+import { Spokes } from './mesh/spokes.ts';
+import { agentTar, joinScript } from './mesh/agent.ts';
+import { createHash } from 'node:crypto';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 
 export { render as renderIdentity } from './identity.ts';
@@ -42,6 +45,8 @@ export { SlidingWindowLimiter } from './mesh/limiter.ts';
 export { KINDS as DEVICE_KINDS, ROLE_OF, SESSION_TTL_MS } from './mesh/devices.ts';
 export { JOIN_REVEAL_TTL_MS, JOIN_APPROVE_TTL_MS } from './mesh/enroll.ts';
 export { PUBLIC_PATHS, SESSION_COOKIE, allows, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
+export { DEVICE_CONFIG_SECTIONS, INBOX_KINDS, MAX_BATCH as INBOX_MAX_BATCH } from './mesh/spokes.ts';
+export { RUNTIME_FILES, agentFiles, agentTar, joinScript, tar } from './mesh/agent.ts';
 export type { Device, Kind as DeviceKind, Role as DeviceRole, MeshState } from './mesh/devices.ts';
 export type { JoinRequest, Pairing } from './mesh/enroll.ts';
 export type { Listener, MeshListenerInfo, Principal, Scope } from './mesh/access.ts';
@@ -105,6 +110,25 @@ export function createCore(o: CoreOptions) {
   devices.ensureHub();
   const enroll = new Enrollment({ db, log, devices, identity: meshIdentity, now, publicUrl });
   const access = new Access({ devices, mesh: meshInfo });
+  // Computers' device agents (M4b): heartbeats, the inbox their queues flush into, the runtime.
+  const configRow = (section: string, key: string) => db.get<{ value: string; updated_at: string }>('SELECT value, updated_at FROM profile WHERE section = ? AND key = ?', section, key);
+  // A setting's version: its time and value together, so two changes in one millisecond differ.
+  const configVersion = (r: { value: string; updated_at: string }) => createHash('sha256').update(`${r.updated_at}\0${r.value}`).digest('hex').slice(0, 16);
+  const spokes = new Spokes({
+    db, log, devices, identity: meshIdentity, now, version: o.version,
+    effects: {
+      task: (d, key, body) => {
+        const task = ledger.create({ ...(body as unknown as TaskInput), origin: { kind: 'device', ref: d.id }, idempotency_key: `device:${d.id}:${key}` });
+        triggers.reactive(task, `device:${d.id}`);
+        return task;
+      },
+      memory: (d, body) => memory.remember({ ...(body as unknown as MemoryInput), kind: (body.kind ?? 'fact') as MemoryKind, recorded_by: `device:${d.id}` }),
+      config: {
+        read: (section, key) => { const r = configRow(section, key); return r ? { value: JSON.parse(r.value), version: configVersion(r) } : null; },
+        write: (section, key, value) => { profile.set(section as Section, key, value, 'settings'); return configVersion(configRow(section, key)!); },
+      },
+    },
+  });
 
   const bus = new EventEmitter();
   bus.setMaxListeners(100);
@@ -128,6 +152,8 @@ export function createCore(o: CoreOptions) {
   triggers.on('trigger', (t) => bus.emit('event', 'trigger', { trigger_id: t.trigger_id, rule_id: t.rule_id, class: t.class, decision: t.triage.decision, reason: t.triage.reason, ledger_task_id: t.ledger_task_id, message_id: t.message_id }));
   triggers.on('message', (m) => bus.emit('event', 'message', m));
   devices.on('change', (c: { action: string; device: Device }) => bus.emit('event', 'device', { action: c.action, device: deviceView(c.device) }));
+  spokes.on('change', (d: Device) => bus.emit('event', 'device', { action: 'heartbeat', device: deviceView(d) }));
+  spokes.on('event', (e) => bus.emit('event', 'device_event', e));
   enroll.on('change', (r) => bus.emit('event', 'join_request', r));
   const stream = {
     on(listener: (event: string, data: unknown) => void) {
@@ -142,8 +168,10 @@ export function createCore(o: CoreOptions) {
   function deviceView(d: Device, p?: Principal) {
     const { public_key: _pk, x25519_public_key: _xk, ...rest } = d;
     const recent = d.last_seen ? now().getTime() - Date.parse(d.last_seen) < ONLINE_WINDOW_MS : false;
+    const agent = d.kind === 'computer' && d.role !== 'hub' ? spokes.agent(d.id) : null;
     return {
       ...rest,
+      ...(agent ? { agent } : {}),
       online: d.trust === 'trusted' && (d.role === 'hub' || access.isLive(d.id) || recent),
       this: p ? (p.kind === 'device' ? p.device.id === d.id : p.kind === 'console' && d.id === meshIdentity.id) : false,
     };
@@ -152,6 +180,11 @@ export function createCore(o: CoreOptions) {
   // Joining and sessions happen only over the mesh listener, the transport §0 accepts.
   const meshOnly = (w: Who) => {
     if (w.listener !== 'mesh') throw new CoreError('forbidden', meshInfo ? `Devices join and sign in at ${meshInfo.publicUrl}, not at this address.` : 'Other devices can’t reach this Nova: it has no mesh address.');
+  };
+  // The computer asking, for routes only a device agent calls.
+  const me = (w: Who): Device => {
+    if (w.principal.kind !== 'device') throw new CoreError('forbidden', 'Only a paired computer’s device agent sends this.');
+    return w.principal.device;
   };
 
   function health() {
@@ -393,6 +426,34 @@ export function createCore(o: CoreOptions) {
       },
     },
     { method: 'GET', path: '/mesh/roster', access: 'mesh', summary: 'Who the hub and the standby are, signed by this node: devices pin both keys from it.', handle: () => devices.roster() },
+    // ---- computers' device agents (M4 plan §2) ----
+    {
+      method: 'GET', path: '/mesh/hello/proof', access: 'public', summary: 'This node signs a device’s ?challenge= over nova-hello-v1.<challenge>.<{id, role, epoch, public_key}>, so a device agent knows it holds a pinned key before signing in.',
+      handle: ({ query, who }) => { enroll.limit('polls', who.address); return spokes.proof(query.get('challenge')); },
+    },
+    {
+      method: 'POST', path: '/mesh/devices/me/heartbeat', access: 'device', summary: 'A device agent is alive: last seen now, with its capabilities, versions and whether it is in safe mode. The reply names the runtime this node ships.',
+      body: '{capabilities?, version?, runtime_version?, safe_mode?}',
+      handle: ({ body, who }) => spokes.heartbeat(me(who), body),
+    },
+    {
+      method: 'POST', path: '/mesh/devices/me/report', access: 'device', summary: 'A device agent reports a problem the person should know about (a runtime update it refused).', body: '{problem: runtime_update_refused | runtime_install_failed, detail?}',
+      handle: ({ body, who }) => spokes.report(me(who), body),
+    },
+    {
+      method: 'POST', path: '/mesh/inbox', access: 'device', summary: 'A device agent’s queued items, in order, each taken in exactly once by its key: events, task requests (a task, or a refusal kept with its reason), memory notes (recorded_by device:<id>), config changes (server wins: a stale base_version is rejected).',
+      body: '{items: [{key, kind: event | task_request | memory_note | config_change, body, created_at?}]}',
+      handle: ({ body, who }) => spokes.inbox(me(who), body),
+    },
+    { method: 'GET', path: '/mesh/inbox/refusals', summary: 'What devices sent that was refused or rejected, with the reasons, newest first. ?device= for one.', handle: ({ query }) => spokes.refusals(query.get('device') ?? undefined) },
+    {
+      method: 'GET', path: '/mesh/config/{section}/{key}', access: 'device', summary: 'A setting a device agent may change, with its version, which a change must name as base_version.',
+      handle: ({ params }) => {
+        const r = configRow(params.section!, params.key!);
+        return { section: params.section, key: params.key, value: r ? JSON.parse(r.value) : null, version: r ? configVersion(r) : null };
+      },
+    },
+    { method: 'GET', path: '/mesh/runtime', access: 'device', summary: 'The runtime agent this node ships, {manifest: {version, sha256, files}, signature, signer, files}, signed over nova-runtime-v1.<manifest>.', handle: () => spokes.runtime() },
   ];
 
   // Tests drive the heartbeat's clock through the API; this route doesn't exist otherwise.
@@ -414,6 +475,20 @@ export function createCore(o: CoreOptions) {
     ticking = triggers.tick().catch((e) => log.problem('triggers', 'The heartbeat couldn’t check the schedules.', { detail: (e as Error)?.stack ?? String(e) }));
   };
 
+  // GET /join.sh and GET /device-agent.tar: the one-line command's script, and the agent it unpacks.
+  let tarCache: Buffer | null = null;
+  function agentDownload(req: IncomingMessage, res: ServerResponse, url: URL): boolean {
+    if ((url.pathname !== '/join.sh' && url.pathname !== '/device-agent.tar') || (req.method !== 'GET' && req.method !== 'HEAD')) return false;
+    const sh = url.pathname === '/join.sh';
+    const body = sh ? Buffer.from(joinScript(publicUrl())) : (tarCache ??= agentTar(o.version));
+    res.writeHead(200, {
+      'content-type': sh ? 'text/x-shellscript; charset=utf-8' : 'application/x-tar', 'content-length': body.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
+      ...(sh ? {} : { 'content-disposition': 'attachment; filename="device-agent.tar"' }),
+    });
+    res.end(req.method === 'HEAD' ? undefined : body);
+    return true;
+  }
+
   const api = createApi({
     routes, stream, version: o.version, trustedOrigin: o.trustedOrigin,
     // The approval prompt goes only where it can be answered.
@@ -427,12 +502,13 @@ export function createCore(o: CoreOptions) {
     openapi: api.doc,
     identity: () => identityOf(profile),
     persona: () => render(identityOf(profile)),
-    mesh: { identity: meshIdentity, devices, enroll, access, info: meshInfo },
+    mesh: { identity: meshIdentity, devices, enroll, access, spokes, info: meshInfo },
     // Who is asking, for a request outside /api/v1, or null once a refusal was sent (mesh/access.ts).
     gate: (req: IncomingMessage, res: ServerResponse, url: URL, listener: Listener) => access.gate(req, res, url, listener),
     // The core's routes, for the principal the gate found.
-    handle: (req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal, listener: Listener) =>
-      api.handle(req, res, url, { principal, listener, address: access.address(req, listener) }),
+    // Also the device agent's installer and archive (public; mesh/access.ts PUBLIC_PATHS).
+    handle: async (req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal, listener: Listener) =>
+      agentDownload(req, res, url) || api.handle(req, res, url, { principal, listener, address: access.address(req, listener) }),
     // Recovers the ledger, then starts the heartbeat: once now (to catch up), then every 30 s.
     start() {
       const recovered = ledger.recover();

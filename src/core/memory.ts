@@ -16,7 +16,9 @@ export type UserState = (typeof USER_STATES)[number];
 
 const HEADINGS: Record<Kind, string> = { timeline: 'Timeline', entity: 'People, places and things', fact: 'Facts', preference: 'Preferences', decision: 'Decisions', commitment: 'Commitments' };
 const SCOPE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-const RECORDER = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+// nova, person, import, a worker id, or device:<id> for a note a paired device sent (M4b).
+const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const RECORDER = /^(?:[a-z0-9][a-z0-9._-]{0,63}|device:[0-9a-f-]{36})$/;
 const LOW = 0.5;
 
 export interface MemoryInput {
@@ -98,7 +100,7 @@ export class Memory {
   // that is already here, or was forgotten, is skipped, so importing again adds nothing.
   importRecord(input: MemoryInput & { id: string }): { record: MemoryRecord | null; imported: boolean } {
     const id = input?.id;
-    if (typeof id !== 'string' || !RECORDER.test(id)) throw new CoreError('validation', 'id must be a short name in letters, digits, ., - or _.');
+    if (typeof id !== 'string' || !NAME.test(id)) throw new CoreError('validation', 'id must be a short name in letters, digits, ., - or _.');
     const row = this.#validate(input, id);
     return this.#db.tx(() => {
       if (this.#db.get('SELECT 1 FROM memory_event WHERE memory_id = ? AND kind = ?', id, 'forgotten')) return { record: null, imported: false };
@@ -292,7 +294,7 @@ export class Memory {
   }
 
   #by(v: unknown): string {
-    if (typeof v !== 'string' || !RECORDER.test(v)) throw new CoreError('validation', 'A memory must say who recorded it: nova, person, import, or a worker id.');
+    if (typeof v !== 'string' || !RECORDER.test(v)) throw new CoreError('validation', 'A memory must say who recorded it: nova, person, import, a worker id, or device:<id>.');
     return v;
   }
 

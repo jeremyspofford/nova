@@ -28,7 +28,8 @@ export const canMove = (from: State, to: State): boolean => MOVES[from].includes
 
 export const VISIBILITY = ['silent', 'handling', 'attention'] as const;
 export type Visibility = (typeof VISIBILITY)[number];
-export interface Origin { kind: 'user' | 'setup' | 'trigger'; ref?: string }
+// `device`: asked for by a paired computer's agent (ref: the device id), through its queue.
+export interface Origin { kind: 'user' | 'setup' | 'trigger' | 'device'; ref?: string }
 
 export interface TaskInput {
   title: string;
