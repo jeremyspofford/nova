@@ -15,6 +15,25 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (Screenpipe source: edit in the console, API key).** Branch `capture/screenpipe-key`.
+These are two gaps the owner found live.
+- **The address and lookback can now be edited** in Settings › Capture › Address and API key. It
+  uses the PATCH route, so the validation is the same. The panel opens by itself when the source
+  can't be reached or is refused.
+- **Screenpipe 0.4's API key:** an optional `api_key` on the source.
+  - It is entered as a password, never filled back in, and kept in the vault under
+    `capture/<source>`, never in the source's config.
+  - It is sent as `Authorization: Bearer` on every Screenpipe request, and sent on none when unset.
+  - `null` removes it.
+  - The view says only `has_api_key`.
+  - A 401 or 403 is a state of its own, `needs_key`, with the owner's wording, not "isn't
+    answering". With a wrong key saved, it says so.
+- **Found by the test, and fixed:** Settings' Capture section redraws when a source's status
+  changes, and that threw away what was being typed. The "don't redraw under typing" check covered
+  text fields only, and clicking Save moved focus away anyway. The Capture section now carries typed
+  fields and open details over a redraw, and resets a form once its change is saved. This is
+  limited to Capture, since other sections may rely on a redraw to clear their forms.
+
 **2026-10-30 (security: web_fetch could read Nova itself — Amendment C Part 3, first piece).**
 Branch `fix/web-fetch-ssrf`.
 - **The hole:** Nova's console answers any request from this machine as the person. The agent's
