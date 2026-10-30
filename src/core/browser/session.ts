@@ -8,7 +8,7 @@
 import { EventEmitter } from 'node:events';
 import { createServer, type Server, type Socket } from 'node:net';
 import { CoreError } from '../errors.ts';
-import { launch, type Launched } from './chromium.ts';
+import { launch, type LaunchOptions, type Launched } from './chromium.ts';
 import { lookup } from 'node:dns/promises';
 import { BROWSER_TASK_HEADER } from '../mesh/access.ts';
 import { HUB_REFUSAL, NO_HUB, allowed, hostOf, reachesHub, target, thisMachine, type Hub } from './plan.ts';
@@ -67,6 +67,8 @@ export interface SessionOptions {
   height?: number;
   // Where Nova itself listens (plan.ts): refused whatever the declared hosts say.
   hub?: () => Hub;
+  // How the browser is started: Chromium, or a stand-in in tests.
+  launch?: (o: LaunchOptions) => Promise<Launched>;
 }
 
 export class Session extends EventEmitter {
@@ -128,7 +130,7 @@ export class Session extends EventEmitter {
     const width = this.#o.width ?? 1280;
     const height = this.#o.height ?? 800;
     this.#meta = { width, height };
-    this.#browser = await launch({ path: this.#o.chromium, bypass: this.hosts, refuser: `http://127.0.0.1:${port}`, sandbox: this.#o.sandbox, width, height });
+    this.#browser = await (this.#o.launch ?? launch)({ path: this.#o.chromium, bypass: this.hosts, refuser: `http://127.0.0.1:${port}`, sandbox: this.#o.sandbox, width, height });
     const cdp = this.#browser.cdp;
     this.#cdp = cdp;
     cdp.on('close', (why: string) => { if (this.mode !== 'closed') this.#closeNow(`the browser stopped (${why})`); });
@@ -430,10 +432,32 @@ export class Session extends EventEmitter {
   // Runs in a world of Nova's own beside the page's: the page shares the DOM but can't replace
   // the functions Nova calls, so it can't mislead the worker about what is there.
   async evaluate<T>(expression: string): Promise<T> {
+    return this.#run<T>(await this.#world(), expression);
+  }
+
+  // What the worker does to the page (types, chooses, clicks), never while someone holds it. The
+  // hold is checked after the last wait and before the call that acts goes out, with nothing
+  // awaited in between: a takeover that starts after that starts after the action, never during
+  // it; one that started before it makes the worker wait, and look again.
+  async act<T>(expression: string): Promise<T> {
+    for (;;) {
+      await this.gate();
+      const world = await this.#world();
+      if (this.mode === 'taken_over' || this.mode === 'needs_person') continue;
+      if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
+      return this.#run<T>(world, expression);
+    }
+  }
+
+  async #world(): Promise<number> {
     const tree = await this.#send<{ frameTree: { frame: { id: string } } }>('Page.getFrameTree');
     const world = await this.#send<{ executionContextId: number }>('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'nova' });
+    return world.executionContextId;
+  }
+
+  async #run<T>(contextId: number, expression: string): Promise<T> {
     const r = await this.#send<{ result: { value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } }>('Runtime.evaluate', {
-      expression, contextId: world.executionContextId, returnByValue: true, awaitPromise: true,
+      expression, contextId, returnByValue: true, awaitPromise: true,
     });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] ?? r.exceptionDetails.text ?? 'The page threw an error.');
     return r.result.value as T;

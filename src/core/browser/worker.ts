@@ -13,13 +13,14 @@ import type { Log } from '../log.ts';
 import { findChromium, type Found } from './chromium.ts';
 import { FINAL_READ, SCREENSHOT, refOf, refetch, squash, taskDir, type FinalRead, type Read } from './evidence.ts';
 import { NO_HUB, allowed, describe, hasEffects, hostOf, marksCommit, planEgress, sends, validateBrowserBrief, validatePlan, type Hub, type Plan, type Step } from './plan.ts';
-import { INPUT_KEYS, Session, type Holder, type Input, type SessionView } from './session.ts';
+import { INPUT_KEYS, Session, type Holder, type Input, type SessionOptions, type SessionView } from './session.ts';
 
 export const BROWSER_WORKER = 'browser';
 const STEP_TIMEOUT_MS = 15_000;
 
 // `hub`: where Nova itself listens, which no browser task may reach (plan.ts).
-export interface BrowserOptions { home: string; log: Log; now?: () => Date; env?: NodeJS.ProcessEnv; hub?: () => Hub }
+// `launch`: how a browser is started; a stand-in in tests.
+export interface BrowserOptions { home: string; log: Log; now?: () => Date; env?: NodeJS.ProcessEnv; hub?: () => Hub; launch?: SessionOptions['launch'] }
 
 const clip = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const sel = (s: string) => JSON.stringify(s);
@@ -132,7 +133,7 @@ export class Browser extends EventEmitter {
     if (!found.path) return report('failed', found.detail);
 
     this.sessions.get(id)?.close('replaced');
-    const s = new Session({ taskId: id, chromium: found.path, hosts: plan.allowed_hosts, sandbox: this.#sandbox(), now: this.#now, hub: () => this.#hub() });
+    const s = new Session({ taskId: id, chromium: found.path, hosts: plan.allowed_hosts, sandbox: this.#sandbox(), now: this.#now, hub: () => this.#hub(), ...(this.#o.launch ? { launch: this.#o.launch } : {}) });
     s.commits = marksCommit(plan);
     this.sessions.set(id, s);
     this.#follow(s);
@@ -216,15 +217,13 @@ export class Browser extends EventEmitter {
       case 'fill':
       case 'select': {
         await this.#find(s, step.selector, step.timeout_ms);
-        await s.gate();
-        const r = await s.evaluate<string>(step.do === 'fill' ? fillJs(step.selector, step.value) : selectJs(step.selector, step.value));
+        const r = await s.act<string>(step.do === 'fill' ? fillJs(step.selector, step.value) : selectJs(step.selector, step.value));
         if (r !== 'ok') throw new Error(stepProblem(step, r));
         return;
       }
       case 'click': {
         await this.#find(s, step.selector, step.timeout_ms);
-        await s.gate();
-        const r = await s.evaluate<string>(`(() => { const el = document.querySelector(${sel(step.selector)}); if (!el) return 'missing'; if (el.disabled) return 'disabled'; el.scrollIntoView({ block: 'center' }); el.click(); return 'ok'; })()`);
+        const r = await s.act<string>(`(() => { const el = document.querySelector(${sel(step.selector)}); if (!el) return 'missing'; if (el.disabled) return 'disabled'; el.scrollIntoView({ block: 'center' }); el.click(); return 'ok'; })()`);
         if (r !== 'ok') throw new Error(stepProblem(step, r));
         await s.settle();
         return;
