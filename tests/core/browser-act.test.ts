@@ -16,6 +16,8 @@ import type { Launched } from '../../src/core/browser/chromium.ts';
 import { Db } from '../../src/core/db.ts';
 import { Log } from '../../src/core/log.ts';
 import { ENVELOPE_VERSION, type Brief } from '../../src/core/envelope.ts';
+import { createCore } from '../../src/core/index.ts';
+import { until } from './connector-support.ts';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex').toString('base64');
 
@@ -102,4 +104,39 @@ test('a takeover that starts while the worker gets ready to click: the click wai
   assert.equal(fake.sent.filter((x) => x.method === 'Runtime.evaluate' && String(x.params.expression).includes('el.click()')).length, 1, 'the click happened once, after the hand-back');
   assert.ok(s, 'the takeover happened mid-step');
   await browser.close();
+});
+
+// ---- a device that may no longer hold the browser (M5 review, minor 7) ---------------------------
+
+test('a device that is revoked, or may no longer approve, loses the browser at once; the step waits for someone else', async () => {
+  const saved = process.env.NOVA_CHROMIUM;
+  process.env.NOVA_CHROMIUM = process.execPath;
+  const fake = standIn(() => {});
+  const core = createCore({ home: mkdtempSync(join(tmpdir(), 'nova-release-')), version: '0.1.0', trustedOrigin: () => true, browserLaunch: fake.launch });
+  try {
+    const ended: { by: string; how: string }[] = [];
+    core.ledger.on('note', (n: { kind: string; detail: { by: string; how: string } }) => { if (n.kind === 'takeover_ended') ended.push(n.detail); });
+    const t = core.ledger.create({
+      title: 'Sign in on the example site', owner: 'browser', goal: 'Signed in.', origin: { kind: 'user' }, evidence_required: [{ kind: 'url' }],
+      inputs: { allowed_hosts: ['127.0.0.1:4321'], steps: [{ do: 'navigate', url: 'http://127.0.0.1:4321/' }, { do: 'person', why: 'Sign in.' }], verify: { url: 'http://127.0.0.1:4321/account', expect: ['Received'] } },
+    });
+    await until(() => core.browser.view(t.id), (v) => 'mode' in v && v.mode === 'needs_person');
+    const phone = { key: 'device:phone-1', label: 'Example phone' };
+    for (const [event, detail] of [['revoked', { id: 'phone-1' }], ['change', { action: 'can_approve', device: { id: 'phone-1', can_approve: false } }]] as const) {
+      core.browser.takeOver(t.id, phone);
+      assert.equal((core.browser.view(t.id) as { holder: { key: string } }).holder.key, 'device:phone-1');
+      core.mesh.devices.emit(event, detail);
+      const v = core.browser.view(t.id) as { mode: string; holder: unknown; asked: string };
+      assert.deepEqual([v.mode, v.holder, v.asked], ['needs_person', null, 'Sign in.'], event);
+      assert.match(ended.at(-1)!.how, event === 'revoked' ? /its device was removed/ : /its device may no longer take over/);
+    }
+    // Someone who still may can carry on.
+    core.browser.takeOver(t.id, { key: 'console', label: 'The hub’s own screen' });
+    core.browser.handBack(t.id, { key: 'console', label: 'The hub’s own screen' });
+    await until(() => core.browser.view(t.id).live, (live) => !live);
+    assert.ok(core.ledger.events(t.id).some((e) => e.kind === 'person_done'), 'the worker carried on past the step');
+  } finally {
+    if (saved === undefined) delete process.env.NOVA_CHROMIUM; else process.env.NOVA_CHROMIUM = saved;
+    await core.close();
+  }
 });

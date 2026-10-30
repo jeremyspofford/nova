@@ -34,7 +34,7 @@ import { Vault, type KeyMode, type KeyStore } from './vault.ts';
 import { Connectors } from './connectors/index.ts';
 import { homeAssistant, type HomeAssistantOptions } from './connectors/home-assistant.ts';
 import { Providers } from './providers/registry.ts';
-import { Browser } from './browser/worker.ts';
+import { Browser, type BrowserOptions } from './browser/worker.ts';
 import type { Hub } from './browser/plan.ts';
 import { browserRoutes } from './browser/routes.ts';
 import { checkers as browserCheckers } from './browser/evidence.ts';
@@ -104,6 +104,8 @@ export interface CoreOptions {
   vault?: { mode?: KeyMode; keychain?: ((account: string) => KeyStore | null) | null };
   // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
   hubPorts?: () => number[];
+  // How the browser worker starts a browser: Chromium, or a stand-in in tests.
+  browserLaunch?: BrowserOptions['launch'];
   // Home Assistant's reconnect pauses and timeouts (tests shorten them).
   homeAssistant?: HomeAssistantOptions;
   // The model command Era 2 chats with (agent_cmd, agent_egress): the custom-cli provider (M5a).
@@ -141,7 +143,7 @@ export function createCore(o: CoreOptions) {
       ...Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((a) => a.address)),
     ].filter(Boolean),
   });
-  const browser = new Browser({ home: o.home, log, now, hub: hubAddress });
+  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}) });
   const browserChecks = browserCheckers(o.home);
   verifier.registerKind('screenshot', browserChecks.screenshot);
   verifier.registerKind('url', browserChecks.url);
@@ -277,6 +279,11 @@ export function createCore(o: CoreOptions) {
   role.on('change', (s) => bus.emit('event', 'mesh', s));
   role.on('applied', (a) => bus.emit('event', 'sync', a));
   browser.on('change', (v) => bus.emit('event', 'browser', v));
+  // A device that may no longer approve may no longer hold a browser either (browser/routes.ts).
+  devices.on('revoked', (d: Device) => browser.release(`device:${d.id}`, `ended by Nova: its device was removed`));
+  devices.on('change', (c: { action: string; device: Device }) => {
+    if (c.action === 'can_approve' && !c.device.can_approve) browser.release(`device:${c.device.id}`, 'ended by Nova: its device may no longer take over');
+  });
   const stream = {
     on(listener: (event: string, data: unknown) => void) {
       const fn = (event: string, data: unknown) => listener(event, data);

@@ -350,6 +350,19 @@ export class Session extends EventEmitter {
     return { duration_ms };
   }
 
+  // Nova ends a takeover itself: the one holding the browser may no longer (their device was
+  // removed, or may no longer approve). A step that waits for a person waits for someone else;
+  // otherwise the worker carries on from the page as it was left.
+  release(how: string): void {
+    const held = this.holder;
+    if (!held || this.mode !== 'taken_over') return;
+    this.holder = null;
+    this.mode = this.asked ? 'needs_person' : 'working';
+    this.emit('takeover_ended', { holder: held, duration_ms: Date.now() - held.since, how });
+    this.emit('change');
+    for (const fn of this.#handedBack.splice(0)) fn();
+  }
+
   // The person's pointer and keys, only from whoever holds the browser.
   async input(h: Holder, e: Input): Promise<void> {
     if (!this.holder) throw new CoreError('conflict', 'Take over first: Nova is working in this browser.');

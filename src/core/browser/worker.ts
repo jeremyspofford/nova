@@ -97,6 +97,11 @@ export class Browser extends EventEmitter {
   takeOver(id: string, h: Holder): SessionView { return this.#session(id).takeOver(h); }
   handBack(id: string, h: Holder): SessionView { this.#session(id).handBack(h); return this.#session(id).view(); }
 
+  // Whoever is `key` may no longer hold a browser: every takeover of theirs ends now.
+  release(key: string, how: string): void {
+    for (const s of this.sessions.values()) if (s.live && s.holder?.key === key) s.release(how);
+  }
+
   async input(id: string, h: Holder, body: Record<string, unknown>): Promise<{ ok: true }> {
     await this.#session(id).input(h, parseInput(body));
     return { ok: true };
