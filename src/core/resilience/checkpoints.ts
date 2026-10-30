@@ -481,7 +481,7 @@ export function dropStaged(home: string): void {
 // only ever opens the home as it was or as restored, never a mix. Returns the restore's record
 // once it is applied (also kept as checkpoints/restores/<id>.json, the ledger task's evidence),
 // or null when nothing was staged.
-export function finishStaged(home: string, o: { interrupt?: (step: number) => void } = {}): RestoreMarker | null {
+export function finishStaged(home: string, o: { interrupt?: (step: number, what: 'aside' | 'in') => void } = {}): RestoreMarker | null {
   const m = readMarker(home);
   if (!m) {
     // A staging that never got its marker (stopped while copying) is dropped: nothing was promised.
@@ -494,24 +494,24 @@ export function finishStaged(home: string, o: { interrupt?: (step: number) => vo
   if (m.state === 'staged') {
     mkdirSync(old, { recursive: true, mode: 0o700 });
     let step = 0;
-    const tick = () => { step++; o.interrupt?.(step); };
+    const tick = (what: 'aside' | 'in') => { step++; o.interrupt?.(step, what); };
     const incoming = new Set(m.names);
     // What isn't in the restored home goes aside first (the database's WAL and SHM among them).
     for (const n of readdirSync(home).sort((a, b) => (/^nova\.db-/.test(b) ? 1 : 0) - (/^nova\.db-/.test(a) ? 1 : 0))) {
       if (STAYS.has(n) || incoming.has(n)) continue;
       if (existsSync(join(old, n))) rmSync(join(old, n), { recursive: true, force: true });
       renameSync(join(home, n), join(old, n));
-      tick();
+      tick('aside');
     }
     for (const n of m.names) {
       if (!existsSync(join(neu, n))) continue; // moved in already
       if (existsSync(join(home, n))) {
         rmSync(join(old, n), { recursive: true, force: true });
         renameSync(join(home, n), join(old, n));
-        tick();
+        tick('aside');
       }
       renameSync(join(neu, n), join(home, n));
-      tick();
+      tick('in');
     }
     m.state = 'swapped';
     writeMarker(home, m);
