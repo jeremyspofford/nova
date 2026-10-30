@@ -158,13 +158,25 @@ export class Connectors extends EventEmitter {
     this.#all.set(m.id, c);
     // A built-in connector is in the extension host once the person connects it (and leaves it
     // when they disconnect), so the host lists what they chose, not everything Nova could do.
-    const have = this.#o.extensions.list().find((x) => x.id === m.id);
-    if (have && have.version !== m.version) this.#o.extensions.update(m, { builtin: true });
-    if (!have && safeStatus(c).connected) this.#enabled(m.id, true);
+    // Records change on the hub only (start(), below): a standby's come from the hub.
     if (c.worker) this.#o.addWorker(c.worker);
     if (c.confirm) this.#o.addConfirmation(m.id, c.confirm);
-    if (this.#started && c.status().connected) this.#startOne(c);
+    if (this.#started) this.#ready(c);
     return c;
+  }
+
+  // On the hub: the extension record matches what is connected (an Era 2 Gmail connected before
+  // M5 gets its record here, and a newer built-in manifest replaces the old), then live work starts.
+  #ready(c: Connector): void {
+    const m = c.manifest;
+    try {
+      const have = this.#o.extensions.list().find((x) => x.id === m.id);
+      if (have && have.version !== m.version) this.#o.extensions.update(m, { builtin: true });
+      if (safeStatus(c).connected) this.#enabled(m.id, true);
+    } catch (e) {
+      this.#o.log.problem('connectors', `Nova couldn’t record ${m.name} in its extensions.`, { detail: (e as Error)?.stack ?? String(e) });
+    }
+    if (safeStatus(c).connected) this.#startOne(c);
   }
 
   has(id: string): boolean {
@@ -234,7 +246,7 @@ export class Connectors extends EventEmitter {
   // Hub only: live connections start when the node is hub, and stop when it steps down.
   start(): void {
     this.#started = true;
-    for (const c of this.#all.values()) if (c.status().connected) this.#startOne(c);
+    for (const c of this.#all.values()) this.#ready(c);
   }
 
   async stop(): Promise<void> {

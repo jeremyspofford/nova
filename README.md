@@ -127,6 +127,7 @@ Optional `nova.config.json` at the repo root (environment variables win):
 | `mesh_public_url` | `NOVA_MESH_PUBLIC_URL` | `NOVA_MESH_URL` (required when it listens on every address) |
 | `mesh_transport` | `NOVA_MESH_TRANSPORT` | none (`proxy` or `network`, for an `http://` mesh address) |
 | `tls_cert`, `tls_key` | `NOVA_TLS_CERT`, `NOVA_TLS_KEY` | none (PEM files, for an `https://` mesh address) |
+|  | `NOVA_VAULT_KEY` | `auto`: the vault's key in the system keychain if one answers, else `vault/key` in the home (`file` or `keychain` to insist) |
 
 `agent_cmd` is the one place a model is chosen. Nova writes the assembled
 system prompt to a file and substitutes its path for `{system_file}`, sends the

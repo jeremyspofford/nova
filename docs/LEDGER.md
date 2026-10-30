@@ -15,6 +15,64 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M5b): the vault, the connector kind, Home Assistant, Gmail as a connector.** Branch
+`m5b/connectors`; the plan's §2 has the "as built" note.
+
+- **One vault file, the key elsewhere.** `home/vault/secrets.json` (0600) is AES-256-GCM over the
+  whole name → value map, the vault id as associated data (a vault can't be passed off as another).
+  The key is in the OS keychain when one answers, else `home/vault/key` (0600) and the person is
+  told, in Settings › Connections and health, that the key sits next to the vault. A file key
+  moves into a keychain once one answers (written, read back, then deleted). Era 1 encrypted with
+  ChaCha20-Poly1305 and kept the secrets themselves in the keychain; the plan says AES-256-GCM and
+  "the key held by the keychain", so only the key goes there, which also makes the standby simple.
+  The Windows backend (Credential Locker through PowerShell) is written and its command shape
+  tested, but has not run on Windows. Tests never reach a real keychain: `auto` means `file`
+  under the test runner, test servers set `NOVA_VAULT_KEY=file`, and the real `secret-tool` is
+  tried only where it exists, with a throwaway account it removes.
+- **Redaction is by value**, not only by key name: every value the vault reads or writes (8
+  characters or more, and each field of a JSON value) is replaced in log lines, problems (stored
+  and replicated) and receipts.
+- **The standby gets the vault sealed.** `vault/` isn't journalled. The hub's sync log carries
+  one `vault` entry, the ciphertext, and adds the key only while serving a batch, inside the
+  batch already sealed to the standby's X25519 key; the standby stores the entry without it and
+  puts the key in its own key store. No sync log on either node holds the key (tested in-process
+  and with two real processes and a failover). This closes M4's note that connectors had to be
+  reconnected after a failover. Known gap: a database backup taken before a secret was revoked
+  still holds the old ciphertext, which the same key opens; the revoked token is revoked at the
+  service where the service allows it.
+- **A built-in connector is in the extension host only while it is connected.** The host lists
+  what the person chose (the fresh-user check that it starts empty still holds); connecting is the
+  OK on the permissions the Connections page shows; Disconnect removes the record and its data
+  folder. Disconnect is full revocation: sign out at the service where it can, then delete its
+  secrets, the rules listening to it and its settings. `DELETE /extensions/{id}` does the same
+  through a new kind hook, `revoke`, which runs before the data folder goes. Era 2's own Gmail
+  disconnect on the Skills page is unchanged (it keeps the OAuth client).
+- **Connector events fire only for what a rule listens to.** An event rule names
+  `{connector, topic}` (source `connector:<id>/<topic>`, no webhook token); a Home Assistant state
+  change or new Gmail becomes a trigger record only when a rule listens for that entity or for
+  `inbox`. A record per state change would flood the trigger table, which replicates. One rule
+  per entity (the existing unique source index for event rules).
+- **Home Assistant service calls are ledger tasks.** The tier comes from the domain (2, or 3 for
+  marked domains; locks and alarms marked to start, a recommendation the person can undo with a
+  confirmation), and the worker refuses a brief below it, so a task can't lower its own gate. The
+  evidence is a `confirmation` that Nova's own read-back of the entity backs (a sync checker, so
+  the worker takes the reading and the checker accepts only readings Nova took). Local-only never
+  contacts a Home Assistant at a remote address: reads are refused in plain words, live events
+  stay off, and the ledger refuses the task. Egress is decided from the address as written
+  (loopback, private ranges, `.local`/`.lan`/`.home.arpa`/`.internal`, single-label names and
+  mesh device hosts are local). Worker egress stays `local | remote`; M5a's `remote:<host>`
+  form can replace it at integration.
+- **Gmail's mail events are a poll** (every 5 minutes, only while a rule listens and the privacy
+  setting allows it); the first look only learns what is already there.
+- **Gmail tests.** Two assertions checked plaintext files in `connectors/gmail/` with mode 0600;
+  they now check the vault (0600, encrypted, no plaintext file). Behaviour is unchanged.
+- **Also:** the file tools refuse `vault/` as they refuse `connectors/`; approved `exec` runs as
+  the person and can still read `vault/key` where there is no keychain. The service worker never
+  caches `/api/v1/connectors` or `/api/v1/vault`; its cache name is now `nova-shell-v4`.
+- **For the owner to check by hand:** a real Home Assistant (connect, a light on and off, a
+  door sensor rule, Disconnect deleting the token there), and the vault's key in the keychain on a
+  desktop with one.
+
 **2026-10-30 (M4, re-check of the blocker fixes): three more ways out of the runtime's sandbox,
 closed; key replacement made safe.**
 
