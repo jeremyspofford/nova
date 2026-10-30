@@ -184,7 +184,7 @@ test('automatic failover, when turned on: the standby takes over by itself once 
   let hubProc: Running | null = s.hubProc;
   let standbyProc: Running | null = null;
   try {
-    assert.equal((await s.hub.send('PUT', '/api/v1/profile/mesh/auto_failover_after_s', { value: 2 })).status, 200);
+    assert.equal((await s.hub.send('PUT', '/api/v1/profile/mesh/auto_failover_after_s', { value: 2, confirm: true })).status, 200);
     standbyProc = await s.standby.start(s.env(s.standbyMesh));
     await until(() => s.standby.get('/api/v1/profile'), (p: any) => p.mesh?.auto_failover_after_s === 2, 400);
     assert.equal((await s.standby.get('/api/v1/mesh/status')).role, 'standby');

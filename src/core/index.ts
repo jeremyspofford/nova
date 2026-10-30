@@ -24,7 +24,7 @@ import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
 import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
 import { Enrollment } from './mesh/enroll.ts';
-import { Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
+import { APPROVER_ONLY, Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
 import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
 import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
@@ -244,12 +244,15 @@ export function createCore(o: CoreOptions) {
     return { role: s.role, epoch: s.epoch, listening: !!meshInfo, counts: devices.counts(), standby: s.standby, replica: s.replica };
   }
 
-  // The one mesh setting: automatic failover, off unless the person sets a number of seconds.
-  function meshSetting(key: string, value: unknown) {
+  // The one mesh setting: automatic failover, off unless the person sets a number of seconds. It
+  // decides which machine becomes the hub, so it is the approvers' (like promotion) and tier 3.
+  function meshSetting(key: string, value: unknown, confirm: boolean, who: Who) {
+    if (allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', APPROVER_ONLY);
     if (key !== 'auto_failover_after_s') throw new CoreError('validation', 'The mesh section has one setting: auto_failover_after_s.');
     if (value !== null && !(Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 86_400)) {
       throw new CoreError('validation', 'auto_failover_after_s is the number of seconds the hub must be unreachable before the standby takes over (1 to 86400), or null to leave it off.');
     }
+    if (!confirm) throw new CoreError('validation', 'Changing automatic failover needs an explicit confirmation: send confirm: true.');
   }
 
   const header = (h: IncomingHttpHeaders, name: string) => { const v = h[name]; return Array.isArray(v) ? v[0] : v; };
@@ -263,11 +266,11 @@ export function createCore(o: CoreOptions) {
     { method: 'GET', path: '/identity', summary: 'Who Nova is for this person: name, tuning, and the fixed charter.', handle: () => ({ identity: identityOf(profile), charter: CHARTER, rendered: render(identityOf(profile)) }) },
     { method: 'GET', path: '/profile', summary: 'The whole profile (no secrets; those are referenced by name only).', handle: () => profile.all() },
     {
-      method: 'PUT', path: '/profile/{section}/{key}', summary: 'Change one profile record, as a settings screen would.', body: '{value}',
-      handle: ({ params, body }) => {
+      method: 'PUT', path: '/profile/{section}/{key}', summary: 'Change one profile record, as a settings screen would. The mesh section is tier 3 ({confirm: true}) and only an approver may change it.', body: '{value, confirm?}',
+      handle: ({ params, body, who }) => {
         const section = params.section as Section;
         if (!SECTIONS.includes(section) || section === 'setup') throw new CoreError('validation', `There is no profile section called "${params.section}".`);
-        if (section === 'mesh') meshSetting(params.key!, body.value);
+        if (section === 'mesh') meshSetting(params.key!, body.value, body.confirm === true, who);
         if (section === 'appearance') {
           if (params.key !== 'mode') throw new CoreError('validation', 'Choose a design system with POST /api/v1/design-systems/{id}/apply, so it is checked and can be rolled back.');
           design.setMode(body.value);

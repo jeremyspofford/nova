@@ -32,6 +32,13 @@ built-ins only.
   stay in history, harmless once nothing trusts them; Nova doesn't rewrite the
   person's history. The secret-scan test now also reads every git object.
   Every M4 home made before this fix should be treated as exposed.
+- **What a computer may read** through `GET /mesh/config/{section}/{key}` is
+  what it may change: `DEVICE_CONFIG_SECTIONS` and the inbox's key pattern.
+  Setup (the transcript), privacy, appearance and mesh are a 403.
+- **`mesh.auto_failover_after_s` is the approvers' and tier 3.** It decides
+  which machine becomes hub, like promotion, so a phone without `can_approve`
+  gets a 403 and every change needs `confirm: true`. The PWA has no control
+  for it yet.
 
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and
