@@ -58,6 +58,21 @@ export function usually(durations) {
   return mid < 1000 ? 'under a second' : about(mid).replace(/^about /, 'about ');
 }
 
+// What a kind of wait usually takes, in general words, before this device has any history of its own
+// (a first visit): Nova's own reads are local and answer in well under a second; a reply, a step, a
+// scheduled run take what such work takes. The amendment asks for a general estimate after 10 s,
+// so there is always one; this device's own history replaces it as soon as there is some.
+const USUAL = [
+  [/^(view-|capture|changes|checkpoints|connections|health|models|reset|memory-save|send)/, 'under a second'],
+  [/^(restore-preview|takeover-picture|step-)/, 'a few seconds'],
+  [/^reply/, 'about half a minute'],
+  [/^(schedule|first-task)/, 'about a minute'],
+  [/^download-/, 'a few minutes'],
+];
+export function expected(kind, durations = []) {
+  return usually(durations) || USUAL.find(([re]) => re.test(kind))?.[1] || '';
+}
+
 // Time so far, plainly.
 export function sofar(elapsed) {
   const s = Math.floor(elapsed / 1000);
@@ -90,7 +105,7 @@ export function over(key) {
 // never hides or changes it.
 export function waitState(key, at, { done = null, total = null, noun = 'part' } = {}) {
   const elapsed = Date.now() - at;
-  const words = longWords({ elapsed, done, total, noun, usual: usually(history(key)) });
+  const words = longWords({ elapsed, done, total, noun, usual: expected(key, history(key)) });
   const cls = `${elapsed >= QUIET_MS ? ' is-late' : ''}${elapsed >= LONG_MS ? ' is-long' : ''}`;
   const u = done === null ? '' : ` data-done="${done}" data-total="${total ?? ''}" data-noun="${esc(noun)}"`;
   // A redraw keeps the fade-in on the wait's own clock, not the new element's.
@@ -145,7 +160,7 @@ function tick() {
       done: el.dataset.done === undefined ? null : Number(el.dataset.done),
       total: el.dataset.total ? Number(el.dataset.total) : null,
       noun: el.dataset.noun ?? 'part',
-      usual: usually(history(el.dataset.waiting)),
+      usual: expected(el.dataset.waiting, history(el.dataset.waiting)),
     });
     const text = words ? ` · ${words}` : '';
     if (more.textContent !== text) more.textContent = text;

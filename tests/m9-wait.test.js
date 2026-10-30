@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { QUIET_MS, LONG_MS, band, units, about, left, usually, sofar, longWords, waitingLine } from '../ui/js/wait.js';
+import { QUIET_MS, LONG_MS, band, units, about, left, usually, sofar, longWords, waitingLine, expected } from '../ui/js/wait.js';
 
 test('the bands: nothing under 1 s, an indicator to 10 s, then real progress', () => {
   assert.equal(QUIET_MS, 1000);
@@ -54,6 +54,20 @@ test('a long wait says what is done, an estimate where there is a basis, else th
   assert.equal(longWords({ elapsed: 12000, done: null }), '12 s so far');
   assert.equal(longWords({ elapsed: 12000, done: null, usual: 'under a second' }), '12 s so far · it usually takes under a second');
   assert.equal(longWords({ elapsed: 12000, done: 2, total: null, noun: 'step' }), '2 steps done · 12 s so far');
+});
+
+test('after 10 s there is always a general estimate: this device’s own history, else what is usual for the kind of wait', () => {
+  // No history on this device (a first visit): a built-in, general estimate for each kind of wait.
+  for (const [kind, words] of [['view-tasks', 'under a second'], ['view-chat', 'under a second'], ['models', 'under a second'], ['send', 'under a second'], ['reply', 'about half a minute'], ['step-web_search', 'a few seconds'], ['schedule', 'about a minute'], ['first-task', 'about a minute']]) {
+    assert.equal(expected(kind, []), words, kind);
+    assert.match(longWords({ elapsed: 12000, usual: expected(kind, []) }), new RegExp(`it usually takes ${words}$`), kind);
+  }
+  // This device's own history wins once there is some.
+  assert.equal(expected('reply', [4000, 5000, 6000]), 'a few seconds');
+  // Every wait the PWA names has an estimate.
+  const named = new Set();
+  for (const [, src] of sources) for (const m of src.matchAll(/(?:waitingLine\([^\n]*?key: |waitState\()['`]([\w-]+)/g)) named.add(m[1]);
+  for (const k of named) assert.ok(expected(k, []), `a built-in estimate for “${k}”`);
 });
 
 test('a waiting line carries when the wait began, so a redraw keeps its age; it is hidden for its first second', () => {

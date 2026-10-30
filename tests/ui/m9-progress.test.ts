@@ -51,7 +51,7 @@ test('M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real 
     assert.match(w[0]!.text, /^Loading Tasks…$/, 'it says what it waits for, and nothing more yet');
     await d.page.clock.runFor(10_000);
     w = await indicator(d.page, '#tasks-view [data-waiting]');
-    assert.match(w[0]!.text, /Loading Tasks… · \d+ of \d+ parts · /, `after 10 s: real units (${w[0]!.text})`);
+    assert.match(w[0]!.text, /^Loading Tasks… · \d+ of \d+ parts · 1\d s so far · it usually takes under a second$/, `after 10 s: real units and a general estimate, with no history on this device (${w[0]!.text})`);
     const shots = m9Shots();
     if (shots) await d.page.screenshot({ path: join(shots, 'waiting-tasks-after-10s.png') });
     assert.doesNotMatch(w[0]!.text, /%/, 'no percentage');
@@ -116,7 +116,7 @@ test('M9 gate, progress: chat names the real phase from 1 s, counts after 10 s, 
     if (shots) await d.page.screenshot({ path: join(shots, 'chat-thinking.png') });
     await sleep(9500);
     w = await indicator(d.page, '#thread [data-waiting="reply"]');
-    assert.match(w[0]!.text, /^Thinking… · (0 steps done · )?1\d s so far/, `after 10 s: the time so far (${w[0]!.text})`);
+    assert.match(w[0]!.text, /^Thinking… · (0 steps done · )?1\d s so far · it usually takes about half a minute$/, `after 10 s: the time so far and a general estimate (${w[0]!.text})`);
     if (shots) await d.page.screenshot({ path: join(shots, 'chat-thinking-after-10s.png') });
     await d.page.waitForFunction(() => /the peas go first/.test(document.getElementById('thread')?.textContent ?? ''), null, { timeout: 15000 });
     assert.equal(await d.page.locator('#thread [data-waiting="reply"]').count(), 0, 'Thinking goes when the words come');
