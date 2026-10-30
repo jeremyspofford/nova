@@ -35,7 +35,9 @@ test('a named checkpoint holds the whole home, identity and vault key included, 
     h.core.vault.put('provider/EXAMPLE_KEY', 'placeholder-value');
     mkdirSync(join(h.home, 'memory'), { recursive: true });
     writeFileSync(join(h.home, 'memory', '2026-10-29.md'), '- Bins go out on the first weekday.\n');
-    writeFileSync(join(h.home, 'notes.md'), 'A note of the person’s.\n');
+    mkdirSync(join(h.home, 'workspace'), { recursive: true });
+    writeFileSync(join(h.home, 'workspace', 'notes.md'), 'A note in Nova’s workspace.\n');
+    writeFileSync(join(h.home, 'proxy.js'), '// the person’s own, not Nova’s\n');
     for (const d of ['logs', 'kept', 'workers/changes', 'exports', 'backups', '.git']) mkdirSync(join(h.home, d), { recursive: true });
     for (const f of ['logs/extra.log', 'kept/x', 'workers/changes/x', 'exports/e.json', 'backups/nova-old.db', '.git/HEAD', 'nova.pid']) writeFileSync(join(h.home, f), 'x');
 
@@ -49,8 +51,8 @@ test('a named checkpoint holds the whole home, identity and vault key included, 
     for (const k of ['id', 'seq', 'name', 'kind', 'reason', 'at', 'nova_version', 'schema_version', 'files', 'total_bytes', 'seal']) assert.ok(k in manifest, `manifest has ${k}`);
     assert.match(manifest.seal, /^[0-9a-f]{64}$/);
     const paths = manifest.files.map((f: { path: string }) => f.path);
-    for (const p of ['vault/key', 'vault/secrets.json', 'mesh/identity.json', 'memory/2026-10-29.md', 'notes.md']) assert.ok(paths.includes(p), `${p} is in it: ${paths.join(', ')}`);
-    for (const p of paths) assert.ok(!/^(logs|kept|workers|exports|backups|checkpoints|\.git)\/|^nova\.pid$|^nova\.db/.test(p), `${p} is not`);
+    for (const p of ['vault/key', 'vault/secrets.json', 'mesh/identity.json', 'memory/2026-10-29.md', 'workspace/notes.md']) assert.ok(paths.includes(p), `${p} is in it: ${paths.join(', ')}`);
+    for (const p of paths) assert.ok(!/^(logs|kept|workers|exports|backups|checkpoints|\.git)\/|^nova\.pid$|^nova\.db|^proxy\.js$/.test(p), `${p} is not`);
     assert.ok(has(join(dir, 'nova.db'), 'Bins go out on the first weekday.'), 'the database snapshot');
     // The person's alone, whatever the umask.
     assert.equal(mode(join(h.home, 'checkpoints')), 0o700);

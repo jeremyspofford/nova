@@ -35,6 +35,7 @@ import { ENVELOPE_VERSION, type Brief, type Report } from '../envelope.ts';
 import { cleanBackup, sha256File, writeManifest, type ManifestFile } from './backup.ts';
 import { safeRel } from './archive.ts';
 import { carryOver, droppedDevices } from './restore.ts';
+import { isNovaEntry } from './entries.ts';
 import type { Restarter } from './restart.ts';
 
 export const CHECKPOINTS_DIR = 'checkpoints';
@@ -91,12 +92,13 @@ const SKIP_TOP: Record<string, string> = {
 const DB_FILE = /^nova\.db/;
 const TEMP = /\.(tmp|partial)$|\.nova-sync-\d+\.tmp$/;
 const DIR = /^(\d{6,})-[a-z0-9-]{1,48}$/;
-export const EXCLUDED = ['nova.db: copied as a consistent snapshot instead', ...Object.entries(SKIP_TOP).map(([p, why]) => `${p}: ${why}`)];
+export const EXCLUDED = ['nova.db: copied as a consistent snapshot instead', ...Object.entries(SKIP_TOP).map(([p, why]) => `${p}: ${why}`), 'anything that isn’t Nova’s own (entries.ts): left as it is'];
 
 const root = (home: string) => join(home, CHECKPOINTS_DIR);
 
-// The home's files a checkpoint carries: everything but the names above, the database (snapshot)
-// and temporary files. Links and sockets are not the person's content and are never followed.
+// The home's files a checkpoint carries: Nova's own entries (entries.ts) but the names above, the
+// database (snapshot) and temporary files. Files Nova didn't make are never in one. Links and
+// sockets are never followed.
 export function checkpointFiles(home: string): string[] {
   const out: string[] = [];
   const walk = (rel: string) => {
@@ -104,7 +106,7 @@ export function checkpointFiles(home: string): string[] {
     try { entries = readdirSync(join(home, rel), { withFileTypes: true }); } catch { return; }
     for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const r = rel ? `${rel}/${e.name}` : e.name;
-      if (!rel && (SKIP_TOP[e.name] || DB_FILE.test(e.name))) continue;
+      if (!rel && (!isNovaEntry(e.name) || SKIP_TOP[e.name] || DB_FILE.test(e.name))) continue;
       if (TEMP.test(e.name)) continue;
       if (e.isDirectory()) walk(r);
       else if (e.isFile()) out.push(r);
@@ -456,6 +458,8 @@ export function stageCopy(home: string, f: Found): string {
   mkdirSync(out, { recursive: true, mode: 0o700 });
   for (const file of f.manifest.files) {
     const rel = safeRel(file.path);
+    // A checkpoint from before entries.ts may hold files that aren't Nova's: those are never put back.
+    if (!isNovaEntry(rel.split('/')[0]!)) continue;
     mkdirDeep(out, rel);
     copyFileSync(join(f.path, 'files', rel), join(out, rel), constants.COPYFILE_FICLONE);
   }
@@ -466,7 +470,7 @@ export function stageCopy(home: string, f: Found): string {
 // Seals the staging: from here the restore happens at the next start, whatever stops in between.
 export function writeStaged(home: string, m: Omit<RestoreMarker, 'v' | 'state' | 'names'>): RestoreMarker {
   const out = join(root(home), RESTORE_DIR, 'new');
-  const marker: RestoreMarker = { v: 1, state: 'staged', names: readdirSync(out).sort(), ...m };
+  const marker: RestoreMarker = { v: 1, state: 'staged', names: readdirSync(out).filter(isNovaEntry).sort(), ...m };
   writeMarker(home, marker);
   return marker;
 }
@@ -496,9 +500,10 @@ export function finishStaged(home: string, o: { interrupt?: (step: number, what:
     let step = 0;
     const tick = (what: 'aside' | 'in') => { step++; o.interrupt?.(step, what); };
     const incoming = new Set(m.names);
-    // What isn't in the restored home goes aside first (the database's WAL and SHM among them).
+    // What of Nova's isn't in the restored home goes aside first (the database's WAL and SHM among
+    // them). What isn't Nova's is never moved.
     for (const n of readdirSync(home).sort((a, b) => (/^nova\.db-/.test(b) ? 1 : 0) - (/^nova\.db-/.test(a) ? 1 : 0))) {
-      if (STAYS.has(n) || incoming.has(n)) continue;
+      if (!isNovaEntry(n) || STAYS.has(n) || incoming.has(n)) continue;
       if (existsSync(join(old, n))) rmSync(join(old, n), { recursive: true, force: true });
       renameSync(join(home, n), join(old, n));
       tick('aside');
@@ -616,6 +621,7 @@ export class Checkpoints {
         'Everything since then is undone: tasks, memories, settings and changes.',
         'Nova takes a checkpoint of now first, so you can come back to this.',
         'Devices you removed stay removed, anything you asked Nova to forget stays forgotten, and open problems stay listed.',
+        'Files in this folder that aren’t Nova’s are left as they are.',
         ...(dropped.length ? [`${dropped.map((d) => `“${d.name}”`).join(', ')} ${dropped.length === 1 ? 'was' : 'were'} paired since then and will need pairing again.`] : []),
         'Nova restarts by itself; you don’t need to do anything.',
       ],

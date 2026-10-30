@@ -6,7 +6,7 @@
 // tests/supervisor (under the supervisor). Neutral placeholders; throwaway homes only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCore, finishStaged, stagedPending, type Core } from '../../src/core/index.ts';
 import { enroll, hub, PUBLIC_URL } from './mesh-support.ts';
@@ -35,7 +35,8 @@ test('a restore round trip: the data goes back; revocations, the epoch, problems
     const later = await enroll(h, { name: 'Phone revoked later' });
     h.core.memory.remember({ kind: 'fact', content: 'The plants get water on Sundays.', recorded_by: 'person' });
     const gone = h.core.memory.remember({ kind: 'fact', content: 'The spare key is under the blue flowerpot.', recorded_by: 'person' });
-    writeFileSync(join(h.home, 'notes.md'), 'As it was then.\n');
+    mkdirSync(join(h.home, 'workspace'), { recursive: true });
+    writeFileSync(join(h.home, 'workspace', 'notes.md'), 'As it was then.\n');
     const early = h.core.log.problem('test', 'A placeholder problem from before.');
     const identity = { id: h.core.mesh.identity.id, fingerprint: h.core.mesh.identity.fingerprint };
     const cp = (await h.c('POST', '/resilience/checkpoints', { name: 'Before the trip' })).body;
@@ -43,7 +44,7 @@ test('a restore round trip: the data goes back; revocations, the epoch, problems
     // Since then: more data, a device revoked, one paired, a problem opened and one resolved, a forget.
     h.tick(3_600_000);
     h.core.memory.remember({ kind: 'fact', content: 'Added after the checkpoint.', recorded_by: 'person' });
-    writeFileSync(join(h.home, 'notes.md'), 'Changed since.\n');
+    writeFileSync(join(h.home, 'workspace', 'notes.md'), 'Changed since.\n');
     assert.equal((await h.c('POST', `/mesh/devices/${later.dev.deviceId}/revoke`, { confirm: true })).status, 200);
     const since = await enroll(h, { name: 'Phone paired since' });
     h.core.log.problem('test', 'A placeholder problem opened since.');
@@ -80,7 +81,7 @@ test('a restore round trip: the data goes back; revocations, the epoch, problems
     assert.equal(stagedPending(h.home), false);
     assert.equal(existsSync(join(h.home, 'checkpoints', '.restore')), false, 'nothing staged is left behind');
     assert.deepEqual(memories(again), ['The plants get water on Sundays.'], 'the data as it was; the forgotten one stays forgotten');
-    assert.equal(readFileSync(join(h.home, 'notes.md'), 'utf8'), 'As it was then.\n');
+    assert.equal(readFileSync(join(h.home, 'workspace', 'notes.md'), 'utf8'), 'As it was then.\n');
     assert.equal(again.mesh.identity.id, identity.id, 'the same identity');
     assert.equal(again.mesh.identity.fingerprint, identity.fingerprint);
     const devices = again.mesh.devices;
@@ -146,11 +147,13 @@ test('a crash in the middle of a restore: the next start finishes it; Nova never
   let again: Core | null = null;
   try {
     h.core.memory.remember({ kind: 'fact', content: 'From before the checkpoint.', recorded_by: 'person' });
-    writeFileSync(join(h.home, 'notes.md'), 'then\n');
+    mkdirSync(join(h.home, 'workspace'), { recursive: true });
+    writeFileSync(join(h.home, 'workspace', 'notes.md'), 'then\n');
     const cp = (await h.c('POST', '/resilience/checkpoints', { name: 'Crash test' })).body;
     h.core.memory.remember({ kind: 'fact', content: 'From after it.', recorded_by: 'person' });
-    writeFileSync(join(h.home, 'notes.md'), 'now\n');
-    writeFileSync(join(h.home, 'only-now.md'), 'made since\n');
+    writeFileSync(join(h.home, 'workspace', 'notes.md'), 'now\n');
+    mkdirSync(join(h.home, 'skills'), { recursive: true });
+    writeFileSync(join(h.home, 'skills', 'only-now.md'), 'made since\n');
     assert.equal((await h.c('POST', `/resilience/checkpoints/${cp.id}/restore`, { confirm: true })).status, 202);
     await h.stop();
 
@@ -163,11 +166,51 @@ test('a crash in the middle of a restore: the next start finishes it; Nova never
     again = reopen(h.home, h.clock);
     assert.equal(stagedPending(h.home), false);
     assert.deepEqual(memories(again), ['From before the checkpoint.']);
-    assert.equal(readFileSync(join(h.home, 'notes.md'), 'utf8'), 'then\n');
-    assert.equal(existsSync(join(h.home, 'only-now.md')), false, 'what was made since is undone (and kept in the “before” checkpoint)');
+    assert.equal(readFileSync(join(h.home, 'workspace', 'notes.md'), 'utf8'), 'then\n');
+    assert.equal(existsSync(join(h.home, 'skills', 'only-now.md')), false, 'what Nova made since is undone (and kept in the “before” checkpoint)');
     const before = again.checkpoints.list().find((c) => /^Before restoring/.test(c.label))!;
-    assert.ok(readFileSync(join(h.home, 'checkpoints', before.id, 'files', 'only-now.md'), 'utf8').includes('made since'));
+    assert.ok(readFileSync(join(h.home, 'checkpoints', before.id, 'files', 'skills', 'only-now.md'), 'utf8').includes('made since'));
   } finally {
+    await again?.close();
+  }
+});
+
+test('files in the home that aren’t Nova’s are never in a checkpoint, and a restore leaves them exactly as they are, made before it or after', async () => {
+  const h = await hub();
+  let again: Core | null = null;
+  let stopped = false;
+  try {
+    h.core.memory.remember({ kind: 'fact', content: 'Nova’s, from before.', recorded_by: 'person' });
+    writeFileSync(join(h.home, 'proxy.js'), '// the person’s proxy, as it was\n');
+    mkdirSync(join(h.home, 'notes-of-mine'));
+    writeFileSync(join(h.home, 'notes-of-mine', 'a.txt'), 'mine, from before\n');
+    const cp = (await h.c('POST', '/resilience/checkpoints', { name: 'With foreign files around' })).body;
+    const manifest = JSON.parse(readFileSync(join(h.home, 'checkpoints', cp.id, 'manifest.json'), 'utf8'));
+    for (const f of manifest.files) assert.ok(!/^(proxy\.js|notes-of-mine)(\/|$)/.test(f.path), `${f.path} isn’t Nova’s, so it isn’t in the checkpoint`);
+
+    // Since: Nova's data changes, and so do the person's own files.
+    h.core.memory.remember({ kind: 'fact', content: 'Nova’s, from after.', recorded_by: 'person' });
+    writeFileSync(join(h.home, 'proxy.js'), '// the person’s proxy, edited since\n');
+    writeFileSync(join(h.home, 'notes-of-mine', 'b.txt'), 'mine, from after\n');
+    writeFileSync(join(h.home, 'later.txt'), 'mine, made after the checkpoint\n');
+    const preview = await h.c('GET', `/resilience/checkpoints/${cp.id}/restore`);
+    assert.ok(preview.body.said.includes('Files in this folder that aren’t Nova’s are left as they are.'), preview.body.said.join('\n'));
+    assert.equal((await h.c('POST', `/resilience/checkpoints/${cp.id}/restore`, { confirm: true })).status, 202);
+    stopped = true;
+    await h.stop();
+    again = reopen(h.home, h.clock);
+
+    assert.deepEqual(memories(again), ['Nova’s, from before.'], 'Nova’s own data went back');
+    assert.equal(readFileSync(join(h.home, 'proxy.js'), 'utf8'), '// the person’s proxy, edited since\n');
+    assert.equal(readFileSync(join(h.home, 'notes-of-mine', 'a.txt'), 'utf8'), 'mine, from before\n');
+    assert.equal(readFileSync(join(h.home, 'notes-of-mine', 'b.txt'), 'utf8'), 'mine, from after\n');
+    assert.equal(readFileSync(join(h.home, 'later.txt'), 'utf8'), 'mine, made after the checkpoint\n');
+    // Nor in the checkpoint of how things were just before.
+    const before = again.checkpoints.list().find((c) => /^Before restoring/.test(c.label))!;
+    const bm = JSON.parse(readFileSync(join(h.home, 'checkpoints', before.id, 'manifest.json'), 'utf8'));
+    assert.deepEqual(bm.files.filter((f: { path: string }) => /^(proxy\.js|later\.txt|notes-of-mine)/.test(f.path)), []);
+  } finally {
+    if (!stopped) await h.stop();
     await again?.close();
   }
 });
