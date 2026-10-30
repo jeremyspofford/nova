@@ -65,7 +65,7 @@ export function scripted(plan) {
   const calls = [];
   const agent = async ({ system, prompt, onText }) => {
     calls.push({ system, prompt });
-    const convo = prompt.slice(prompt.lastIndexOf('<conversation>'));
+    const convo = prompt.slice(prompt.lastIndexOf('<conversation>'), prompt.lastIndexOf('</conversation>'));
     const at = Math.max(convo.lastIndexOf('<user'), convo.lastIndexOf('<followup'));
     const turn = convo.slice(at);
     const step = (turn.match(/<tool_result /g) ?? []).length;
