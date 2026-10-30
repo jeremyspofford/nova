@@ -107,7 +107,9 @@ export class Session extends EventEmitter {
     return {
       task_id: this.taskId, live: this.live, mode: this.mode, url: this.url, step: this.step, asked: this.asked,
       holder: this.holder ? { key: this.holder.key, label: this.holder.label, since: new Date(this.holder.since).toISOString() } : null,
-      blocked: [...this.blocked.values()].map((b) => ({ host: b.host, count: b.count })),
+      // What the pages and the person were refused. Chromium's own calls home, refused at the
+      // proxy, are in the task's record but aren't news to the person watching.
+      blocked: [...this.blocked.values()].filter((b) => b.via !== 'proxy').map((b) => ({ host: b.host, count: b.count })),
     };
   }
 
