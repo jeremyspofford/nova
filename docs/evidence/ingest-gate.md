@@ -4,9 +4,9 @@ Plan: `docs/plans/ingest-gate.md`. Decisions: `docs/LEDGER.md`, 2026-10-30, "the
 
 ## Runs (2026-10-30, after the review fixes)
 
-- **`npm run check`** (lint:tokens, check:themes, typecheck, unit, acceptance and chaos), after merging main (the grounding PR and #232) and closing the `memory_import` gap: **897 tests, 888 pass, 0 fail, 9 skipped.** The skipped ones are the opt-in real-model and real-service runs.
-- **`tests/ingest/`: 85 tests, 85 pass** (`import.test.js` adds 5).
-- **`scripts/ui-test.sh`** (Chromium in the Playwright container): **32 tests, 32 pass.**
+- **`npm run check`** (lint:tokens, check:themes, typecheck, unit, acceptance and chaos), after the second review's fixes, with main merged in up to #228: **942 tests, 933 pass, 0 fail, 9 skipped.** The skipped ones are the opt-in real-model and real-service runs.
+- **`tests/ingest/`: 100 tests, 100 pass** (`import.test.js` adds 5, `round2.test.js` adds 14, `device.test.ts` adds 1).
+- **`scripts/ui-test.sh`** (Chromium in the Playwright container): **39 tests, 39 pass** (main's UI amendment added 7).
   - M5c also checks that each browser page read carries its screen's verdict.
   - Screenshots the run rewrote were restored, and stray ones deleted.
 - **Before the review** (first PR version): 860/852/0/8, 61 ingest tests, and the UI run at 31 of 32. That run's one failure was an M6a timing flake, which passed when rerun alone.
@@ -33,6 +33,20 @@ Each finding became a test that failed first. Where the finding is in the agent 
 | Minor: browser fails closed | `review-core.test.ts` | A screen that throws leaves the read blocked. |
 | Minor: forget candidate names the memory | `review.test.js` | "Forget “…”". |
 | `memory_import` (grounding PR) bypassed the memory guard | `import.test.js` (5) | The import file is screened, and a block refuses it with the reason. Its records wait as candidates ("imported from <file>"), never in MEMORY.md or the prompt, even with `memory-import: yes`. An injected record waits flagged. The tool doc and briefing say the memories wait for the person's OK. |
+
+## Second review (round 2)
+
+| Finding | Test (runner path) | After |
+|---|---|---|
+| N1: known addresses planted through echoes | `round2.test.js` (×6) | Each of these, followed by a fetch of the planted address, now asks: a failed `read_file`, a `write_file` then `read_file` round trip, `use_skill` with an unknown name, a `delegate` title, an empty search's echo, and a helper's report text. The collector gets nothing. A link the helper really read travels with its report and stays free. |
+| N1b: leaking data one link choice at a time | `round2.test.js` (×2) | The 9th follow to one host asks; past 20 follows in all, every fetch asks. |
+| N2: `use_skill` loads a held skill | `round2.test.js` | Refused: "held-one is held back: Nova couldn’t fully check it". |
+| N3: a SKILL.md changed after its check is still used | `round2.test.js` | It isn't listed or matched, and `use_skill` refuses it: "changed since Nova checked it". |
+| N4: import file names in every prompt | `round2.test.js` | The briefing gives only the count. `import_files` lists the names, screened, and listing them taints the run. |
+| N5: a device note that passes becomes memory | `device.test.ts` | It waits for the person even when the model passes it. |
+| N8: outside text in the briefing unescaped | `round2.test.js` | A device name and a problem carrying `<tool_call …>` and "ignore previous instructions" appear only as quoted, escaped data. |
+| N10: "Turn it on" trusts unchecked files | `round2.test.js` | Only checked text files are trusted. A `.png` that is really text is refused by `read_file`. |
+| N6 (accepted) | `round2.test.js` | A paraphrased injection in command output, with no model, reaches the model as held-back data. This is a known limit, in the ledger. |
 
 **Still not caught:**
 - Hiding by an external stylesheet or by script. That text is treated as visible, but still checked for instructions.

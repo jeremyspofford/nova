@@ -219,3 +219,15 @@ The decisions are in the ledger entry "fixes from the adversarial review of #229
 - **S4:** the tokenizer is linear and capped.
 - **S5:** the screen template is tier 3, and its questions can't be dropped.
 - **Folding and more hiding rules** are added, and the browser worker fails closed.
+
+### After the second adversarial review (2026-10-30)
+
+The decisions are in the ledger entry "fixes from the second adversarial review". In short:
+- **N1:** known addresses come only from links really read from outside, plus the person's own messages.
+- **N1b:** free link-follows in a tainted run are capped at 8 per host and 20 in all.
+- **N2, N3:** held skills, and skills changed since they were checked, are off everywhere.
+- **N4:** import file names reach the agent only through `import_files`, screened.
+- **N5:** every device note waits for the person.
+- **N8:** outside-derived text in the briefing is quoted and escaped.
+- **N10:** "Turn it on" trusts only a skill's checked text files.
+- **N6:** paraphrase in command output with no model is a known limit.
