@@ -15,6 +15,39 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M5 review fixes): browser work, and work with outside effects.** Branch
+`m5-fix/browser-effects`.
+
+- **A browser task never reaches Nova itself.** Its browser runs on the hub, so loopback from it
+  was the console. Two walls, each enough alone: the plan can't name Nova's listeners (console and
+  mesh ports, on a loopback name or one of this machine's addresses, or a name resolving here),
+  and the session's interception refuses them whatever the declared hosts say; and every request
+  the browser lets through carries `x-nova-browser-task`, set at the CDP layer, which makes it
+  public to the access policy (not a device either). This machine without a port can't be
+  declared at all: Chromium sends a declared host's WebSockets straight there, past interception,
+  and a WebSocket handshake is never the console. Nova's ports reach the core as `hubPorts`.
+- **Workers say what a brief may change outside (`effects`: none, idempotent, external).** For
+  external work, a failure after dispatch (evidence that didn't hold up, a throw, an unreadable
+  report, a time-out, a restart) leaves the task waiting, Needs you: "May already have happened:
+  <why>. Check, then retry or cancel." Only `retry()` runs it again, and it clears the approval of
+  a tier-2 or tier-3 task first. Browser: external with fill/select/click/person steps; Home
+  Assistant service calls: external; n8n: idempotent only with its "Safe to send twice" setting
+  (`idempotent: true`); the providers that work in the task's folder: none. A plan may flag the
+  step that commits its effect (`commits: true`): `commit_point` is written before it runs (and
+  when someone takes over), and a failure before that point may still rerun by itself; each such
+  decision is a `rerun_decision` event.
+- **Browser plans:** fill/select/click asks first (tier 2). A `url` requirement needs
+  `verify.expect`; a plan with outside effects needs `url` evidence on a page it names
+  (`verify.url`), and the checker judges by Nova's own re-fetch whenever there is one. Only
+  addresses count as local (not `.local` or `.home.arpa` names). The worker re-checks a takeover
+  right before each acting CDP call; a revoked device, or one that may no longer approve, loses
+  the browser at once; left-behind profiles are removed at start (each names its process); and
+  Chromium resolves only the declared names (`--host-resolver-rules`).
+- **Not done, and why.** A name that resolves to a private address at check time doesn't count as
+  local (no lookup at delegation; it would need pinning in Chromium to mean anything). Pages may
+  still open WebSockets to a declared host:port directly (the proxy bypass), as before; only
+  Nova's own ports are now out of reach that way.
+
 **2026-10-30 (M5b): the vault, the connector kind, Home Assistant, Gmail as a connector.** Branch
 `m5b/connectors`; the plan's §2 has the "as built" note.
 
