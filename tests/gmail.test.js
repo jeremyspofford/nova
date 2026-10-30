@@ -2,7 +2,7 @@
 // way it can go wrong.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Gmail, GmailError, bodyText, googleEndpoints } from '../src/connectors/gmail.js';
@@ -51,6 +51,17 @@ test('connecting: PKCE, the modify scope (never send or delete), token kept priv
   assert.deepEqual(g.vault.list(), ['connector/gmail/GOOGLE_OAUTH_CLIENT', 'connector/gmail/GOOGLE_REFRESH_TOKEN']);
   assert.doesNotMatch(readFileSync(g.vault.file, 'utf8'), /rt-|shh/);
   assert.doesNotMatch(g.vault.get('connector/gmail/GOOGLE_REFRESH_TOKEN'), /at-\d/); // access tokens stay in memory
+});
+
+test('an Era 2 secret file that isn’t JSON still moves into the vault, as its text, and its file goes', () => {
+  const g = fresh();
+  mkdirSync(g.dir, { recursive: true });
+  writeFileSync(join(g.dir, 'password.json'), 'abcd efgh ijkl mnop\n');
+  writeFileSync(join(g.dir, 'token.json'), '');
+  assert.deepEqual(g.migratePlaintext().sort(), ['password.json', 'token.json']);
+  assert.equal(g.vault.get('connector/gmail/GMAIL_APP_PASSWORD'), 'abcd efgh ijkl mnop\n');
+  assert.equal(existsSync(join(g.dir, 'password.json')), false, 'never left behind');
+  assert.equal(existsSync(join(g.dir, 'token.json')), false, 'an empty file holds nothing to keep');
 });
 
 test('a sign-in with a stolen or stale state is refused', async () => {

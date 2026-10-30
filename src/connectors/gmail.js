@@ -76,17 +76,24 @@ export class GmailOAuth {
   }
 
   // Era 2 kept these as plaintext files in connectors/gmail/ (0600). Each moves into the vault, is
-  // read back, and only then is its file deleted.
+  // read back, and only then is its file deleted. A file that isn't JSON (edited by hand, cut
+  // short) still holds a secret: it goes in as its text, never left behind in plaintext. An empty
+  // file holds nothing and just goes.
   migratePlaintext() {
     const moved = [];
     for (const name of Object.keys(VAULT_NAMES)) {
       const path = join(this.dir, name);
       if (!existsSync(path)) continue;
-      let data;
-      try { data = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
+      const text = readFileSync(path, 'utf8');
+      const key = vaultName(name);
       // The vault's copy wins if there already is one (the file is then a leftover).
-      if (!this.read(name)) this.writeSecret(name, data);
-      if (this.read(name)) { rmSync(path, { force: true }); moved.push(name); }
+      if (text.trim() && this.vault.get(key) === null) {
+        let data;
+        try { data = JSON.parse(text); } catch { data = undefined; }
+        if (data === undefined) this.vault.put(key, text);
+        else this.writeSecret(name, data);
+      }
+      if (!text.trim() || this.vault.get(key) !== null) { rmSync(path, { force: true }); moved.push(name); }
     }
     try { rmdirSync(this.dir); rmdirSync(join(this.home, 'connectors')); } catch { /* not empty, or not there */ }
     return moved;
