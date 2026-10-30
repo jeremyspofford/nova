@@ -413,20 +413,26 @@ export class Capture extends EventEmitter {
         this.on('event', f);
         return () => { this.off('event', f); };
       },
-      async *[Symbol.asyncIterator](): AsyncGenerator<CaptureEvent> {
+      // Listening starts when the iterator is made, not at its first next(), so nothing that
+      // arrives in between is missed. return() (a for-await loop's break) stops it.
+      [Symbol.asyncIterator](): AsyncIterator<CaptureEvent> {
         const queue: CaptureEvent[] = [];
-        let wake: (() => void) | null = null;
-        const f = (e: CaptureEvent) => { if (match(e)) { queue.push(e); wake?.(); } };
+        let wake: ((r: IteratorResult<CaptureEvent>) => void) | null = null;
+        let done = false;
+        const f = (e: CaptureEvent) => {
+          if (!match(e)) return;
+          if (wake) { const w = wake; wake = null; w({ value: e, done: false }); } else queue.push(e);
+        };
         self.on('event', f);
-        try {
-          for (;;) {
-            while (queue.length) yield queue.shift()!;
-            await new Promise<void>((r) => { wake = r; });
-            wake = null;
-          }
-        } finally {
-          self.off('event', f);
-        }
+        const end = (): IteratorResult<CaptureEvent> => { done = true; self.off('event', f); wake?.({ value: undefined, done: true }); wake = null; return { value: undefined, done: true }; };
+        return {
+          next: () => {
+            if (queue.length) return Promise.resolve({ value: queue.shift()!, done: false });
+            if (done) return Promise.resolve({ value: undefined, done: true });
+            return new Promise((r) => { wake = r; });
+          },
+          return: () => Promise.resolve(end()),
+        };
       },
     };
   }
