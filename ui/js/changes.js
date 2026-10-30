@@ -32,12 +32,14 @@ const STATE_WORDS = { passed: 'passed', failed: 'failed', running: 'running', pe
 const KIND_WORDS = { extension: 'Extension', 'design-system': 'Design system', config: 'Setting', template: 'Decision template', 'trigger-rules': 'Rule pack' };
 const BY_WORDS = (c) => (c.proposed_by === 'foundry' ? `Written by Nova’s foundry${c.author ? ` (${c.author})` : ''}` : c.proposed_by.startsWith('provider:') ? `Proposed by ${c.proposed_by.slice(9)}` : 'Proposed by you');
 const time = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+// The pipeline's words carry exact times; a person reads them as a date and a time.
+const plain = (text) => String(text ?? '').replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z/g, (iso) => time(iso));
 
 function stageList(c, { upto = null } = {}) {
   const rows = c.stages_in_order.filter((s, i) => upto === null || i < upto);
   return `<ol class="change-stages">${rows.map((s) => `<li class="change-stage" data-stage="${esc(s.stage)}" data-state="${esc(s.status)}">
   <span class="change-stage-name">${esc(STAGE_WORDS[s.stage] ?? s.stage)}</span> <span class="change-stage-state">${esc(STATE_WORDS[s.status] ?? s.status)}</span>
-  ${s.summary ? `<p class="settings-note">${esc(s.summary)}</p>` : ''}
+  ${s.summary ? `<p class="settings-note">${esc(plain(s.summary))}</p>` : ''}
 </li>`).join('')}</ol>`;
 }
 
@@ -49,7 +51,7 @@ function canaryPanel(c) {
   const probes = last ? last.results : k.probes.map((name) => ({ name, ok: null, why: 'Not run yet.' }));
   return `<div class="change-canary" aria-label="Canary in progress">
   <p class="settings-note">Live on ${esc(k.scope)} until ${esc(time(k.ends_at))}. ${k.runs.length ? `Probes ran ${k.runs.length} time${k.runs.length === 1 ? '' : 's'}${last ? `, last at ${esc(time(last.at))}` : ''}.` : 'Probes run through the window.'}</p>
-  <ul class="change-probes">${probes.map((p) => `<li class="change-probe" data-ok="${p.ok === null ? 'pending' : p.ok}">${esc(p.why)}</li>`).join('')}</ul>
+  <ul class="change-probes">${probes.map((p) => `<li class="change-probe" data-ok="${p.ok === null ? 'pending' : p.ok}">${esc(plain(p.why))}</li>`).join('')}</ul>
 </div>`;
 }
 
@@ -79,9 +81,9 @@ function changeRow(c) {
       : `<div class="sheet-actions"><button type="button" class="btn small quiet" data-action="changes-rollback" data-change="${esc(c.id)}">Roll back</button></div>`
     : '';
   return `<li class="change-row" data-change="${esc(c.id)}" data-state="${esc(c.state)}">
-  <div class="conn-head"><p class="settings-label">${esc(c.title)} <span class="change-version">v${esc(c.version)}</span></p>${status(KEY[c.status] ?? 'quiet')}</div>
+  <div class="conn-head"><p class="settings-label">${esc(c.title)} <span class="change-version">v${esc(c.version)}</span></p>${status(KEY[c.status] ?? 'quiet', c.status === 'Verified' && c.ship_task_id ? { task: c.ship_task_id } : {})}</div>
   <p class="settings-note">${esc(KIND_WORDS[c.kind] ?? c.kind)} · ${esc(BY_WORDS(c))} · ${esc(time(c.updated_at))}</p>
-  ${canaryPanel(c) || `<p class="settings-note change-words">${esc(c.words)}</p>`}
+  ${canaryPanel(c) || `<p class="settings-note change-words">${esc(plain(c.words))}</p>`}
   ${c.state === 'refused' ? '' : `<details class="raw change-evidence"><summary>Evidence for every stage</summary>${stageList(c)}${c.release ? `<p class="settings-note change-release">Released as ${esc(c.release.dir)}${c.release.commit ? ` · commit ${esc(c.release.commit.slice(0, 10))}` : ''}. ${esc(c.release.history)}</p>` : ''}</details>`}
   ${back}
 </li>`;

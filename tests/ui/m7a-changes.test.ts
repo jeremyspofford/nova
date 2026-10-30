@@ -70,6 +70,8 @@ test('M7a: Settings › Changes — the tier-3 Ship it with its sandbox evidence
     await m.send('POST', api('/changes/tick'), { now: '2030-01-15T09:00:00.000Z' });
     await page.waitForFunction((cid) => document.querySelector(`#changes .change-row[data-change="${cid}"]`)?.getAttribute('data-state') === 'live', id);
     assert.match((await row.textContent()) ?? '', /Verified/);
+    // Verified carries its evidence: the Ship task, verified by Nova.
+    assert.equal(await row.locator('button.status[data-status="verified"]').getAttribute('data-task'), (await m.get(api(`/changes/${id}`))).ship_task_id);
     // Evidence for every stage, one layer down.
     assert.equal(await row.locator('details.change-evidence').getAttribute('open'), null);
     await row.locator('details.change-evidence summary').click();
