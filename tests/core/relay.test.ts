@@ -312,3 +312,39 @@ test('a busy Relay: the task waits with the reason, then runs by itself once Rel
     await core.close();
   }
 });
+
+test('busy answers aren’t attempts: four of them, a run that fails verification, then an honest run: done', { timeout: 60_000 }, async () => {
+  const core = boot();
+  const relay = await startFakeRelay({ busy: 4, mode: 'lying' });
+  try {
+    await relayOn(core, relay.url);
+    const t = core.ledger.create({ ...calcTask('relay'), origin: { kind: 'user' } } as never);
+    let end = core.ledger.get(t.id);
+    for (let i = 0; i < 2000; i++) {
+      // The first run Relay really starts lies; every one after it is honest.
+      if (relay.runs.size >= 1) relay.set({ mode: 'honest' });
+      await core.ledger.idle();
+      end = core.ledger.get(t.id);
+      if (['done', 'failed', 'cancelled'].includes(end.state)) break;
+      if (end.state === 'waiting' && core.providers.testAsk(t.id)) core.providers.approveTest(t.id);
+      await sleep(10);
+    }
+    assert.equal(end.state, 'done', String(end.reason));
+    assert.equal(sum(core), FIXED_SUM);
+    // Two real runs in Relay. Each was followed by the dispatch that ran the test once you OK'd it,
+    // so four attempts in all, as with no busy answers: the busy ones were given back.
+    assert.equal(relay.runs.size, 2);
+    assert.equal(end.attempts, 4);
+    const returned = core.ledger.events(t.id).filter((e) => e.kind === 'attempt_returned');
+    assert.equal(returned.length, 4);
+    assert.equal((returned[0]!.detail as { reason: string }).reason, 'Relay was busy; this didn’t count as an attempt.');
+    // The busy asks reused the first attempt's requestId; Relay started no run for them, so the
+    // first real start under that id was a fresh run.
+    const ids = posts(relay, '/api/workers').map((r) => (r.body as { requestId: string }).requestId);
+    assert.deepEqual(ids.slice(0, 5), Array(5).fill(requestId(t.brief.idempotency_key, 1)));
+    assert.equal(ids.length, 6);
+  } finally {
+    await relay.close();
+    await core.close();
+  }
+});

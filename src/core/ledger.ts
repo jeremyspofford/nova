@@ -267,6 +267,32 @@ export class Ledger extends EventEmitter {
     return this.#move(id, 'active', why, 'person_done');
   }
 
+  // A running worker says its work never started this time: the service it hands work to turned it
+  // away before anything existed (Relay's runtime_busy). Written down now; if the worker's report is
+  // `blocked`, the ledger gives the dispatch back, so it isn't counted as an attempt. A done or
+  // failed report is counted whatever was said here.
+  notStarted(id: string, why: string): void {
+    const t = this.get(id);
+    if (!this.#running.has(id)) throw new CoreError('conflict', 'Only a running task can say its work never started.');
+    this.#event(id, 'not_started', null, null, { why: String(why).slice(0, 300), attempt: t.attempts });
+  }
+
+  // What the worker said about this dispatch never starting (a not_started event since the last
+  // dispatch), or null.
+  #claimedNotStarted(id: string): string | null {
+    const since = this.#db.get<{ seq: number | null }>(`SELECT MAX(seq) AS seq FROM task_event WHERE task_id = ? AND kind = 'dispatched'`, id)?.seq ?? 0;
+    const row = this.#db.get<{ detail: string | null }>(`SELECT detail FROM task_event WHERE task_id = ? AND kind = 'not_started' AND seq > ? ORDER BY seq DESC LIMIT 1`, id, since);
+    return row ? parse<{ why?: string }>(row.detail)?.why ?? 'The work never started' : null;
+  }
+
+  // The dispatch didn't count: its attempt is given back, and the record says so in plain words.
+  #giveBack(id: string, why: string): void {
+    this.#db.tx(() => {
+      this.#db.run('UPDATE task SET attempts = MAX(attempts - 1, 0) WHERE id = ?', id);
+      this.#event(id, 'attempt_returned', null, null, { reason: `${why.trim().replace(/[.;\s]+$/, '')}; this didn’t count as an attempt.`, attempts: this.get(id).attempts });
+    });
+  }
+
   // A running worker is about to do the thing that has the task's outside effect (a step flagged
   // `commits`). Written down first, so after a failure the ledger knows whether that point was
   // ever passed in this attempt.
@@ -296,7 +322,11 @@ export class Ledger extends EventEmitter {
   recover(): { requeued: string[]; reverified: string[] } {
     const requeued: string[] = [];
     const reverified: string[] = [];
-    for (const t of this.list({ state: 'active', limit: 500 })) {
+    for (const found of this.list({ state: 'active', limit: 500 })) {
+      // A worker that said its work never started, and then Nova stopped: that dispatch isn't counted.
+      const unstarted = this.#claimedNotStarted(found.id);
+      if (unstarted) this.#giveBack(found.id, unstarted);
+      const t = unstarted ? this.get(found.id) : found;
       if (!this.#mayRerun(t)) {
         this.#hold(t.id, 'Nova restarted while this was running', 'recovered');
         continue;
@@ -456,6 +486,9 @@ export class Ledger extends EventEmitter {
 
     if (report.status === 'failed') return this.#fail(t.id, `${worker.name} couldn't do it: ${report.summary}`);
     if (report.status === 'blocked' || report.status === 'partial') {
+      // Only a blocked report can say the work never started; then the dispatch is given back.
+      const unstarted = report.status === 'blocked' ? this.#claimedNotStarted(t.id) : null;
+      if (unstarted) this.#giveBack(t.id, unstarted);
       this.#db.run(`UPDATE task SET user_visibility = 'attention' WHERE id = ?`, t.id);
       const why = report.status === 'blocked' ? `Blocked: ${report.blockers.join('; ') || report.summary}` : `Partly done: ${report.summary}`;
       this.#move(t.id, 'waiting', why, report.status);

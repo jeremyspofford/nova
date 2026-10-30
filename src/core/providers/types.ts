@@ -69,6 +69,10 @@ export interface WorkOutcome {
   artifacts?: ({ kind: string; ref: string } & Record<string, unknown>)[];
   // Blocked only for now (the service is busy): Nova asks again by itself after this many seconds.
   retry_after_s?: number;
+  // Blocked before anything was started (Relay answered runtime_busy before a run existed), in
+  // plain words: the ledger gives the dispatch back, so it isn't counted as an attempt. Taken only
+  // with status blocked.
+  not_started?: string;
 }
 
 // `receipt` and `privacy` come from a caller whose handle records its own receipts (ownReceipt): the

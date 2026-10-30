@@ -230,7 +230,9 @@ export const relay: Impl = {
       if (started.status === 409 && started.body?.code === 'runtime_busy') {
         i.log('Relay is busy with another run; trying again later');
         const words = `${BUSY}. Nova asks it again by itself.`;
-        return { status: 'blocked', summary: words, blockers: [words], usage, retry_after_s: num(i.config.busy_retry_s, 30) };
+        // Relay turned it away before any run existed (it records a run only after this check), so
+        // this isn't an attempt, and asking again later with the same requestId starts a fresh run.
+        return { status: 'blocked', summary: words, blockers: [words], usage, retry_after_s: num(i.config.busy_retry_s, 30), not_started: 'Relay was busy' };
       }
       if (started.status !== 202 || typeof started.body?.id !== 'string') return failed(`Relay didn’t start a worker: ${relayError(started)}`);
       runId = started.body.id;

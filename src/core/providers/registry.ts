@@ -712,6 +712,9 @@ export class Providers extends EventEmitter {
     if (out.status !== 'done') {
       // Busy for now: Nova asks again by itself (safe: the provider works on a copy).
       if (out.status === 'blocked' && out.retry_after_s) this.#retryLater(brief.task_id, out.retry_after_s, out.summary);
+      // Nothing was started, so this dispatch isn't an attempt (the ledger takes it only with a
+      // blocked report).
+      if (out.status === 'blocked' && out.not_started) { try { this.#o.ledger.notStarted(brief.task_id, out.not_started); } catch { /* counted, then */ } }
       return report(out.status, out.summary, out.blockers ? { blockers: out.blockers } : {}, out.usage);
     }
     const reported: Report['artifacts'] = out.artifacts ?? [];
