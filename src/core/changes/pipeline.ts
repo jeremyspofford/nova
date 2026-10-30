@@ -266,6 +266,12 @@ export class Changes extends EventEmitter {
     const c = this.get(id);
     if (!c.ship_task_id) throw new CoreError('conflict', `“${c.title}” hasn’t passed ${this.#nextGate(c)} yet. A change can’t skip a stage.`);
     if (c.state !== 'waiting') throw new CoreError('conflict', `“${c.title}” isn’t waiting for an OK (${STATUS[c.state]}).`);
+    // Already OK'd, and held back since (no checkpoint could be taken): another go.
+    const t = this.#o.ledger.get(c.ship_task_id);
+    if (t.state === 'waiting' && (t.approved_at || t.approval_tier < 2)) {
+      this.#o.ledger.retry(t.id, 'Trying again to ship it, as you asked.');
+      return this.get(id);
+    }
     this.#o.ledger.approve(c.ship_task_id, { confirm: o.confirm === true });
     return this.get(id);
   }
@@ -616,6 +622,19 @@ export class Changes extends EventEmitter {
       });
     }
     let cur = this.get(c.id);
+    // A checkpoint of the whole home before anything goes live (M7 amendment §1), at ship and again
+    // before a canary that hasn't applied yet applies. None, and it doesn't ship: the change waits,
+    // saying why, and the person retries once there is room.
+    if (this.#o.checkpoint && (!cur.canary?.started_at || cur.canary.applied === false)) {
+      try {
+        this.#o.checkpoint(`Before shipping “${c.title}” v${c.version}`);
+      } catch (e) {
+        const why = `Not shipped: Nova couldn’t take a checkpoint first. ${(e as Error).message}`;
+        this.#update(c.id, { state: 'waiting', reason: why });
+        this.emit('change', { id: c.id, state: 'waiting' });
+        return report('blocked', why);
+      }
+    }
     if (!cur.canary?.started_at) {
       // What is live now is kept before anything changes: a rollback puts exactly this back.
       const device = cur.kind === 'design-system' ? cur.canary?.device ?? this.#o.hubDevice() : null;
