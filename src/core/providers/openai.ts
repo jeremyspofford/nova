@@ -4,7 +4,7 @@
 // /v1, llama.cpp, LM Studio and hosted compatible APIs. Era 1's tools, images and model catalogue
 // aren't needed here and stayed behind.
 import { CoreError } from '../errors.ts';
-import { num, secretName, str, type ChatRequest, type Config, type Impl, type Usage, type WorkInput, type WorkOutcome } from './types.ts';
+import { NO_REDIRECT, num, reachProblem, secretName, str, type ChatRequest, type Config, type Impl, type Usage, type WorkInput, type WorkOutcome } from './types.ts';
 
 // The Ollama profile: what a fresh Nova points at.
 export const OLLAMA_BASE = 'http://127.0.0.1:11434/v1';
@@ -103,14 +103,14 @@ async function complete(r: Resolved, body: Record<string, unknown>, req: { signa
   let res: Response;
   try {
     res = await fetch(`${r.base}/chat/completions`, {
-      method: 'POST', signal,
+      method: 'POST', signal, ...NO_REDIRECT,
       headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...(r.key ? { authorization: `Bearer ${r.key}` } : {}) },
       body: JSON.stringify({ model: r.model, stream: true, stream_options: { include_usage: true }, ...body }),
     });
   } catch (e) {
     if (req.signal?.aborted) return { text, aborted: true, usage };
     if (timeout.aborted) throw new CoreError('conflict', `${r.host} didn’t answer within ${Math.round(r.timeoutMs / 1000)} s.`);
-    throw new CoreError('conflict', `Nova couldn’t reach ${r.host}: ${scrub(((e as Error).cause as Error)?.message ?? (e as Error).message, r.key)}.`);
+    throw new CoreError('conflict', `Nova couldn’t reach ${r.host}: ${scrub(reachProblem(e), r.key)}.`);
   }
   if (!res.ok) throw new CoreError('conflict', scrub(httpProblem(res.status, (await res.text().catch(() => '')).slice(0, 2000), r.host, !!r.key), r.key));
   const parser = new SseParser();
@@ -173,14 +173,14 @@ export const openaiCompatible: Impl = {
     let r: Resolved;
     try { r = resolveCfg(c, secret); } catch (e) { return (e as Error).message; }
     try {
-      const res = await fetch(`${r.base}/models`, { signal: AbortSignal.any([signal, AbortSignal.timeout(4000)]), headers: r.key ? { authorization: `Bearer ${r.key}` } : {} });
+      const res = await fetch(`${r.base}/models`, { ...NO_REDIRECT, signal: AbortSignal.any([signal, AbortSignal.timeout(4000)]), headers: r.key ? { authorization: `Bearer ${r.key}` } : {} });
       if (!res.ok) return scrub(httpProblem(res.status, await res.text().catch(() => ''), r.host, !!r.key), r.key);
       const body = (await res.json().catch(() => null)) as { data?: { id?: string }[] } | null;
       const ids = Array.isArray(body?.data) ? body!.data.map((m) => m?.id).filter(Boolean) : [];
       if (ids.length && r.model && !ids.includes(r.model)) return `${r.host} answers, but has no model called ${r.model} (it has ${ids.slice(0, 5).join(', ')}${ids.length > 5 ? ', …' : ''}).`;
       return null;
     } catch (e) {
-      return `Nova couldn’t reach ${r.host}: ${((e as Error).cause as Error)?.message ?? (e as Error).message}.`;
+      return `Nova couldn’t reach ${r.host}: ${scrub(reachProblem(e), r.key)}.`;
     }
   },
   async chat(c, secret, req: ChatRequest) {

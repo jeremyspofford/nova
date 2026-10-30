@@ -88,3 +88,13 @@ export const secretName = (v: unknown): string | null => (typeof v === 'string' 
 
 export const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 export const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : d);
+
+// Every call a provider or connector makes refuses a redirect: "local" is decided by the address
+// Nova checked, and following a redirect would carry the brief, a key or a token somewhere else.
+export const NO_REDIRECT = { redirect: 'error' } as const;
+
+// Why a call didn't get through, in words; a refused redirect is said as one.
+export function reachProblem(e: unknown): string {
+  const m = ((e as Error)?.cause as Error)?.message ?? (e as Error)?.message ?? String(e);
+  return /redirect/i.test(m) ? 'it answered with a redirect, which Nova doesn’t follow: what Nova sends goes only to the address it checked' : m;
+}

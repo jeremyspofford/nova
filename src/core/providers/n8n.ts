@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { canonicalJson } from '../mesh/wire.ts';
 import { summarize } from './prompt.ts';
-import { num, secretName, str, type Config, type Impl, type WorkInput, type WorkOutcome } from './types.ts';
+import { NO_REDIRECT, num, reachProblem, secretName, str, type Config, type Impl, type WorkInput, type WorkOutcome } from './types.ts';
 
 export const SIGNATURE_HEADER = 'x-nova-signature';
 export const FRESH_S = 300;
@@ -102,10 +102,10 @@ export const n8n = (inbox: Inbox): Impl => ({
   async probe(c, _secret, signal) {
     // A webhook only answers a real call; reaching the host is what can be checked without one.
     try {
-      await fetch(new URL(str(c.webhook_url)).origin, { method: 'HEAD', signal: AbortSignal.any([signal, AbortSignal.timeout(4000)]) });
+      await fetch(new URL(str(c.webhook_url)).origin, { method: 'HEAD', ...NO_REDIRECT, signal: AbortSignal.any([signal, AbortSignal.timeout(4000)]) });
       return null;
     } catch (e) {
-      return `Nova couldn’t reach ${new URL(str(c.webhook_url)).host}: ${((e as Error).cause as Error)?.message ?? (e as Error).message}.`;
+      return `Nova couldn’t reach ${new URL(str(c.webhook_url)).host}: ${reachProblem(e)}.`;
     }
   },
   async work(i: WorkInput): Promise<WorkOutcome> {
@@ -130,13 +130,13 @@ export const n8n = (inbox: Inbox): Impl => ({
     let res: Response;
     try {
       res = await fetch(str(i.config.webhook_url), {
-        method: 'POST', signal: AbortSignal.any([i.signal, AbortSignal.timeout(30_000)]),
+        method: 'POST', ...NO_REDIRECT, signal: AbortSignal.any([i.signal, AbortSignal.timeout(30_000)]),
         headers: { 'content-type': 'application/json', [SIGNATURE_HEADER]: signatureHeader(secret, body), 'x-nova-task': i.brief.task_id, 'idempotency-key': i.brief.idempotency_key },
         body,
       });
     } catch (e) {
       if (i.signal.aborted) throw i.signal.reason;
-      return { status: 'failed', summary: `Nova couldn’t reach the workflow at ${host}: ${((e as Error).cause as Error)?.message ?? (e as Error).message}.`, usage };
+      return { status: 'failed', summary: `Nova couldn’t reach the workflow at ${host}: ${reachProblem(e)}.`, usage };
     }
     if (!res.ok) return { status: 'failed', summary: `The workflow at ${host} turned the brief down (${res.status}).`, usage };
     i.log(`sent to ${host}; waiting for its callback`);

@@ -16,6 +16,7 @@ import type { Egress } from '../workers.ts';
 import type { Route } from '../api.ts';
 import type { Connector, ConnectorContext, ConnectorStatus } from './index.ts';
 import { addressEgress } from './index.ts';
+import { NO_REDIRECT, reachProblem } from '../providers/types.ts';
 
 export const HA_ID = 'home-assistant';
 const TOKEN = 'HA_TOKEN';
@@ -178,8 +179,11 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
           headers: { authorization: `Bearer ${t}`, ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}) },
           ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
           signal: AbortSignal.timeout(timeoutMs),
+          ...NO_REDIRECT,
         });
-      } catch {
+      } catch (e) {
+        const why = reachProblem(e);
+        if (/redirect/.test(why)) throw new CoreError('conflict', `Home Assistant at ${new URL(base).host} ${why.replace(/^it /, '')}. Use the address it redirects to, if that is where it is.`);
         throw new CoreError('conflict', `Couldn’t reach Home Assistant at ${new URL(base).host}. Check that it is running and the address is right.`);
       }
       if (res.status === 401 || res.status === 403) {

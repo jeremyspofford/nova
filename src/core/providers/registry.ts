@@ -45,6 +45,7 @@ const COMPANY: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenA
 type Choice = (typeof CHOICES)[number];
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/;
+const OLLAMA_CLOUD = /[:-]cloud$/i;
 // What one task may bring back from a coding agent, at most.
 const MAX_CHANGES = 200;
 const MAX_CHANGE_BYTES = 50 * 1024 * 1024;
@@ -197,6 +198,11 @@ export class Providers extends EventEmitter {
         : e === 'local' ? { coarse: 'local', receipt: 'local', words: 'Stays on your devices.' } : { coarse: 'none', receipt: 'local', words: 'Stays on this computer.' };
     }
     const url = impl.url?.(c);
+    // Ollama serves its cloud models (names ending -cloud or :cloud) through the same local address,
+    // passing the brief on to ollama.com: by where the data goes, that is the cloud.
+    if (x.manifest.adapter.implementation === 'openai-compatible' && OLLAMA_CLOUD.test(str(c.model))) {
+      return { coarse: 'remote', receipt: 'remote:ollama.com', words: `Sends the brief to Ollama’s cloud: ${str(c.model)} runs there, not on this computer.` };
+    }
     if (impl.url) {
       if (!url) return { coarse: 'local', receipt: 'local', words: 'No address set yet.' };
       let host: string;
