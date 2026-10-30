@@ -141,7 +141,7 @@ How the restore runs:
   `memory.md` (the memory export, written there) and a README. `vault/` and `mesh/` are left out
   whole, and the manifest says so. It opens with `openEncrypted` and the recovery key alone.
 - **Staging:** `factory-reset.json` in the home names exactly what goes: Nova's own entries (by name,
-  `OWN_ENTRIES`), the vault ids whose keychain item goes, each of Nova's sealed backups and encrypted
+  `NOVA_ENTRIES` in `entries.ts`, shared with checkpoints), the vault ids whose keychain item goes, each of Nova's sealed backups and encrypted
   copies with its seal or header nonce, the strays, and the folders that aren't there. It stays out of
   backups, sandboxes and sync, and acts only on the home it names.
 - **Telling devices:** the hub's stream sends `reset` (phones and browsers with one open); a
@@ -150,13 +150,14 @@ How the restore runs:
   the vault and its key and the copied files, stages its own marker for the rest, then acks. The hub
   waits up to 45 s for those it can reach, then ends every session. Who was and wasn't told goes into
   the marker, then the report.
-- **Finishing:** `finishReset` runs at the top of `createCore` and of `createNova` (before the home is
-  seeded): the vault's key (`Vault.forgetKeys`), the backups (each checked again; one that changed is
+- **Finishing:** `finishReset` runs from `finishStaged` (checkpoints.ts), at the top of `createCore`
+  and of `createNova` (before the home is seeded), and goes before a staged restore: the vault's key (`Vault.forgetKeys`), the backups (each checked again; one that changed is
   left and said), the home's own entries, Nova's leftover scratch, then `reset-report.json`, then the
   marker. A step that throws stops the start: a half-reset Nova never runs.
-- **Restart:** not wired here. The reset stages and tells, then calls `restart` if it has one;
-  `src/core/index.ts` passes `restart: null` (marked `WIRE:`) until the checkpoints work's restart in
-  place exists. Until then Nova refuses every change while staged, and finishes at its next start.
+- **Restart:** once devices are told, `restartInPlace` (restart.ts): the supervisor's staged restart
+  (`stagedPending` includes the reset's marker), or the server re-executing itself. The page then
+  opens first-run setup by itself. Until Nova is down it refuses every change. A core with nothing
+  that can restart it (a test) finishes at its next start.
 
 ## 3. Tests (the definition of done)
 

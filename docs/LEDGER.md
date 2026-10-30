@@ -15,15 +15,10 @@ built-ins only.
 
 ## Decisions
 
-<<<<<<< HEAD
 **2026-10-30 (M7 amendment §2): factory reset, as built.** Branch `m7-amend/reset`; plan
 `docs/plans/M7-amendment.md` §2 has the as-built note.
-- **Nova's own entries, by name.** `OWN_ENTRIES` (`resilience/reset.ts`): the database and its
-  WAL/SHM, `vault`, `mesh`, `checkpoints`, `backups`, `.git`, `.gitignore`, `logs`, `workers`,
-  `kept`, `captures`, `connectors`, `nova.pid`, and Era 2's: `MEMORY.md`, `memory`, the standing
-  files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`), `permissions.md`, `sessions`, `skills`,
-  `schedules`, `workspace`, `extensions`, `exports`. Anything else in the home is the person's: left
-  and listed. A reset report from an earlier reset is overwritten.
+- **Nova's own entries, by name:** `NOVA_ENTRIES` in `resilience/entries.ts` (below). Anything else
+  in the home is the person's: left and listed. A report from an earlier reset is overwritten.
 - **Backups:** Nova's own sealed backups and recorded encrypted copies in every folder from
   `backup_run` (and the ones set now). Each is recorded with its seal (or its header's nonce) when the
   reset is staged and checked again before it is deleted. A folder that isn't there (the rule
@@ -39,15 +34,19 @@ built-ins only.
   own marker for the rest (identity, role file), which finishes at its next start.
 - **While staged** the core refuses every change (409), except what telling devices needs (sessions,
   heartbeats, sync acks, the reset ack).
-- **Open: the restart in place** belongs to the checkpoints work; `restart: null` in
-  `src/core/index.ts` (marked `WIRE:`) is the one place to wire it. Until then the reset finishes at
-  the next start, and the page opens first-run setup once the server answers with the report.
+- **Restart in place, wired** (after merging `m7-amend/checkpoints`): once devices are told, the
+  reset calls `restartInPlace` (`resilience/restart.ts`); the standby does too, once it has
+  reported back. `stagedPending` and `finishStaged` (`checkpoints.ts`) include the reset's marker,
+  so the supervisor honours the restart, and a staged reset goes first and wins over a staged
+  restore (a restore can't be staged while a reset is, and the other way round).
+- **One list of Nova's entries:** `entries.ts` (`NOVA_ENTRIES`), shared with checkpoints. Added
+  there by the reset: `factory-reset.json` and `reset-report.json` (both also in checkpoints'
+  `SKIP_TOP`, so a restore leaves them as they are). Not added: `captures`, which the plan names
+  but no code writes (capture lives in the database); a folder of the person's by that name stays.
 - **Browser test** is `tests/ui/m7-reset.test.ts` (the plan names one shared file,
-  `m7-checkpoints-reset.test.ts`; the integrator may fold them together). Its server is restarted by
-  the test, which stays valid once the restart in place is wired.
+  `m7-checkpoints-reset.test.ts`; the integrator may fold them together). Nobody restarts the
+  server in it: the page opens first-run setup by itself once Nova is back.
 
-||||||| 78fc2394
-=======
 **2026-10-30 (M7 amendment): checkpoints and restore.** Branch `m7-amend/checkpoints`; the plan's §1
 and its as-built note. Every behaviour has a test that failed first.
 - **What a checkpoint is.** The whole home, the identity and vault key file included, in
@@ -98,7 +97,6 @@ and its as-built note. Every behaviour has a test that failed first.
   - `SyncLog.fresh()`.
   - The service worker never caches `/api/v1/resilience` (shell v8).
 
->>>>>>> origin/m7-amend/checkpoints
 **2026-10-30 (packet amendment, owner): checkpoints and factory reset, folded into M7.** Added to
 ROADMAP-AND-GATES under M7, binding, and not a new milestone. M7 was already merged (#219), so it
 ships as its own PR; the plan is `docs/plans/M7-amendment.md`.
