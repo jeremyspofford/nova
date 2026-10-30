@@ -3,6 +3,7 @@
 // plainly when there is none. Each task gets a fresh, throwaway profile, and the browser is
 // reached only over its debugging pipe.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { trackChild } from '../children.ts';
 import { accessSync, constants, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -140,7 +141,7 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
     ...(o.sandbox === false ? ['--no-sandbox'] : []),
     'about:blank',
   ];
-  const proc = spawn(o.path, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+  const proc = trackChild(spawn(o.path, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] }));
   let err = '';
   (proc.stderr as Readable).on('data', (d: Buffer) => { err = (err + String(d)).slice(-4000); });
   const failed = new Promise<never>((_, fail) => {

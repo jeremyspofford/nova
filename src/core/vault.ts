@@ -325,6 +325,41 @@ export class Vault extends EventEmitter {
     }
   }
 
+  // ---- a factory reset (resilience/reset.ts) ---------------------------------------------------
+
+  // The vault ids whose key may be in a keychain: the file's, and the one in use.
+  keyIds(): string[] {
+    const ids = new Set<string>();
+    if (this.#id) ids.add(this.#id);
+    try { ids.add(parseFile(readFileSync(this.file, 'utf8')).id); } catch { /* no file, or one Nova can't read */ }
+    return [...ids];
+  }
+
+  // Removes this vault's key wherever it is: the keychain item of each id (this vault's, and any
+  // given) and the key file. The vault holds nothing after this. Returns where it was removed from,
+  // in plain words; a keychain that isn't answering is said, not guessed at.
+  forgetKeys(ids: string[] = []): { keychain: string | null; file: boolean; problem: string | null } {
+    let keychain: string | null = null;
+    let problem: string | null = null;
+    if (this.#mode !== 'file') {
+      for (const id of new Set([...this.keyIds(), ...ids].filter((i) => UUID.test(i)))) {
+        const kc = this.#keychainFor(`vault-${id}`);
+        if (!kc) continue;
+        const up = kc.available();
+        if (!up.ok) { problem = `The vault’s key may still be in ${kc.name}, which isn’t answering (${up.detail}). It opens nothing now; remove the item “${SERVICE} / vault-${id}” there yourself.`; continue; }
+        kc.remove();
+        keychain = kc.name;
+      }
+    }
+    const disk = fileKeyStore(this.#home);
+    const file = existsSync(join(this.dir, KEY_FILE));
+    disk.remove();
+    this.#key = null;
+    this.#store = null;
+    this.#map = null;
+    return { keychain, file, problem };
+  }
+
   // ---- the standby's copy (mesh/sync.ts) ------------------------------------------------------
 
   // The encrypted file as it is on disk, for the sync log. Never the key.

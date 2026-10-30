@@ -145,6 +145,35 @@ function headerOf(fd: number): { header: ArchiveHeader; head: Buffer; start: num
   return { header, head, start: 12 + n };
 }
 
+// Whether `file` is one of Nova's encrypted copies that opens under `key`: the whole ciphertext is
+// read and its tag checked, nothing written.
+export function verifyFile(file: string, key: Buffer): boolean {
+  const fd = openSync(file, 'r');
+  try {
+    const h = headerOf(fd);
+    if (h.header.key_fp !== keyFingerprint(key)) return false;
+    const size = fstatSync(fd).size;
+    if (size < h.start + 16) return false;
+    const tag = Buffer.alloc(16);
+    readSync(fd, tag, 0, 16, size - 16);
+    const d = createDecipheriv('aes-256-gcm', key, Buffer.from(h.header.nonce, 'base64'));
+    d.setAAD(h.head);
+    d.setAuthTag(tag);
+    const buf = Buffer.alloc(CHUNK);
+    for (let at = h.start; at < size - 16;) {
+      const n = readSync(fd, buf, 0, Math.min(CHUNK, size - 16 - at), at);
+      if (n <= 0) return false;
+      d.update(buf.subarray(0, n));
+      at += n;
+    }
+    try { d.final(); return true; } catch { return false; }
+  } catch {
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 // Decrypts `file` into `outDir` (which must not exist yet). The whole file is checked before
 // anything is unpacked: the plaintext goes to a scratch archive first, and only after the tag
 // matched is it unpacked.

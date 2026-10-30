@@ -31,3 +31,6 @@
 .change-confirm { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
 .change-row .sheet-actions, .change-confirm .sheet-actions { margin-top: 0; }
 @media (prefers-reduced-motion: reduce) { .change-row, .change-ship { transition: none; } }
+/* Settings › Backups › Checkpoints (M7 amendment): the name and its button on one line. */
+.cp-take { align-items: end; }
+.cp-take .sheet-actions { margin-top: 0; }

@@ -44,9 +44,14 @@ import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { secretName } from './providers/types.ts';
 import { Resilience } from './resilience/index.ts';
+import { FactoryReset } from './resilience/reset.ts';
+import { ensureMark } from './resilience/home-mark.ts';
 import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
+import { Checkpoints, dropPartials, finishStaged, stagedPending, takeCheckpoint } from './resilience/checkpoints.ts';
+import { Restarter } from './resilience/restart.ts';
+import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -100,10 +105,22 @@ export type { SupervisorLink, SupervisorState, SupervisorProblem, ReleaseSlot, S
 export { PLAYBOOKS } from './resilience/playbooks.ts';
 export { CODE_ROOT, copyHome, smoke, startSandbox, sandboxEnv } from './resilience/sandbox.ts';
 export type { Sandbox, ProbeResult } from './resilience/sandbox.ts';
-export { restoreInto, backupFiles, sha256File } from './resilience/backup.ts';
+export { restoreInto, backupFiles, sha256File, openEncrypted } from './resilience/backup.ts';
+// Factory reset (M7 amendment §2): finished at start, before the database opens (server.js too).
+export { RESET_MARKER, RESET_REPORT, finishReset, homeEntries } from './resilience/reset.ts';
+export { HOME_MARK, ensureMark } from './resilience/home-mark.ts';
+export type { ResetReport } from './resilience/reset.ts';
 export { makeScratch, dropScratch } from './resilience/scratch.ts';
 export type { Manifest as BackupManifest } from './resilience/backup.ts';
 export { restoreBackup, loadMigrations } from './db.ts';
+// Checkpoints (M7 amendment §1): the supervisor takes one before a release switch on the stopped
+// home; the server applies a staged restore before anything opens the home.
+export { takeCheckpoint, listCheckpoints, finishStaged, stagedPending, KEEP_AUTO, RETENTION as CHECKPOINT_RETENTION } from './resilience/checkpoints.ts';
+export type { CheckpointView, CheckpointManifest } from './resilience/checkpoints.ts';
+// Nova's own entries in a home, by name: what checkpoints, restore and factory reset may touch.
+export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.ts';
+// Every process Nova starts, so none outlives an in-place restart (Era 2's commands register too).
+export { trackChild } from './children.ts';
 
 export interface CoreOptions {
   home: string;
@@ -148,6 +165,11 @@ export interface CoreOptions {
   sandbox?: boolean;
   // The change pipeline (M7a), for tests: the monotonic clock its canary windows are measured on.
   changes?: { monotonic?: () => number };
+  // Checkpoints (M7 amendment), for tests: the free space where they go.
+  checkpoints?: { free?: (dir: string) => number | null };
+  // Factory reset (M7 amendment §2), for tests: how long the hub waits for devices to hear it, and
+  // a hook before each step of finishing one (to stop it part way, as a power cut would).
+  reset?: { tellMs?: number; step?: (what: string) => void };
   now?: () => Date;
 }
 
@@ -156,9 +178,23 @@ export type Core = ReturnType<typeof createCore>;
 export function createCore(o: CoreOptions) {
   const started = Date.now();
   const now = o.now ?? (() => new Date());
+  // A restore or a factory reset staged before the last stop is applied first, before the database
+  // opens; a checkpoint stopped part-way is dropped. A reset that can't finish throws: a half-reset
+  // Nova never runs.
+  // Nova's mark on its home (home-mark.ts): written when the folder is clearly Nova's.
+  if (!o.sandbox) ensureMark(o.home, { now });
+  const staged = o.sandbox ? null : finishStaged(o.home, { vaultAt: (home) => new Vault({ home, ...(o.vault ?? {}) }), now, reset: { ...(o.vault ? { vault: o.vault } : {}), ...(o.reset?.step ? { step: o.reset.step } : {}), now } });
+  if (!o.sandbox) dropPartials(o.home);
   const db = new Db(join(o.home, 'nova.db'));
-  const migration = db.migrate({ backupDir: join(o.home, 'backups'), now });
+  // An automatic checkpoint before a database upgrade, beside the pre-upgrade copy: one that can't
+  // be taken stops the upgrade (and so the start), with the reason.
+  const migration = db.migrate({
+    backupDir: join(o.home, 'backups'), now,
+    ...(o.sandbox ? {} : { before: (from: number) => { takeCheckpoint({ home: o.home, db, kind: 'auto', reason: `Before upgrading the database from version ${from}`, version: o.version, now, ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}) }); } }),
+  });
   const log = new Log(db, join(o.home, 'logs', 'nova.log'), now);
+  // What a staged restore couldn't do (or did, with a full disk) is the person's to know.
+  for (const p of staged?.problems ?? []) log.problem('resilience', p);
   // Hub or standby, decided before anything writes: a standby copies the hub's sync log instead
   // of recording its own writes (mesh/promote.ts).
   const place = nodeRole(db, o.home);
@@ -281,11 +317,26 @@ export function createCore(o: CoreOptions) {
     forgotten: (rows) => memory.forgottenElsewhere(rows),
     forget: (id, by) => { try { memory.forget(id, by); return true; } catch (e) { if (e instanceof CoreError && e.code === 'not_found') return false; throw e; } },
     failoverAfterS: () => { const v = profile.get<number>('mesh', 'auto_failover_after_s'); return typeof v === 'number' && v > 0 ? v : null; },
+    // The hub was factory reset: this standby wipes its copy (resilience/reset.ts).
+    hubReset: (notice) => reset.standbyWipe(notice),
   });
   const role = meshRole;
+  // Checkpoints (M7 amendment §1) and restarting in place, for a restore (and a factory reset).
+  const restarter = new Restarter({ supervisor: o.supervisor ?? null, log });
+  const checkpoints = new Checkpoints({
+    db, log, home: o.home, version: o.version, now, ledger, verifier, vault,
+    vaultAt: (home) => new Vault({ home, ...(o.vault ?? {}) }),
+    hubId: () => meshIdentity.id, role: () => role.role(), schema: () => loadMigrations().at(-1)?.version ?? 0, restarter,
+    ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}),
+  });
+  ledger.workers.set(checkpoints.worker.id, checkpoints.worker);
+  // Every forget reaches each checkpoint (and a restore that is staged).
+  backups.also((table, ids, words) => checkpoints.forget(table, ids, words));
   // The change pipeline and the foundry (M7a): changes to Nova go through gates, never live edits.
   const changes = new Changes({
     db, log, ledger, verifier, home: o.home, now, sandbox: o.sandbox === true, testClock: process.env.NOVA_TEST_CLOCK === '1',
+    // An automatic checkpoint before a change goes live: none, and it doesn't ship.
+    checkpoint: (reason) => { checkpoints.auto(reason); },
     routes: () => routes, health: () => health(), hubDevice: () => meshIdentity.id, privacy: () => profile.privacyDefault(),
     knownDevice: (id) => id === meshIdentity.id || devices.find(id)?.trust === 'trusted',
     // The canary's window on a clock that only moves forward. An injected clock (tests) is the
@@ -366,6 +417,24 @@ export function createCore(o: CoreOptions) {
   });
   const keep = resilience;
   ledger.workers.set(keep.worker.id, keep.worker);
+  // Stops the work: the ledger takes nothing new, every child process stops, running work gets up to
+  // `boundMs` to finish (before an in-place restart, a quit, or a factory reset's wipe).
+  async function stopWork(boundMs = 5000) {
+    ledger.halt('Nova is restarting.');
+    await stopChildren(Math.min(3000, boundMs));
+    await Promise.race([ledger.idle(), new Promise((r) => setTimeout(r, boundMs).unref())]);
+  }
+  // Factory reset (M7 amendment §2): the export, the confirmation's list, telling devices, staging.
+  const reset = new FactoryReset({
+    home: o.home, db, log, version: o.version, now, vault, nightly: keep.nightly, memory, devices, access, spokes, role,
+    emit: (event, data) => bus.emit('event', event, data),
+    // Restart in place (resilience/restart.ts): the next start finishes the wipe.
+    restarter, restorePending: () => stagedPending(o.home), setupDone: () => setup.view().done,
+    relayUsed: () => { try { return providers.view('relay').enabled || !!db.get("SELECT 1 FROM task WHERE owner = 'relay' LIMIT 1"); } catch { return false; } },
+    // The hub's own work stops too (the heartbeat, so no nightly backup starts), then the queue.
+    stopWork: async (ms) => { stopHub(); await stopWork(ms); },
+    ...(o.reset?.tellMs ? { tellMs: o.reset.tellMs } : {}),
+  });
   wireRepairs(keep.playbooks, { ledger, providers, models, connectors, role, spokes, devices });
   keep.watch(connectorWatch(keep.playbooks, connectors, o.resilience?.lookup));
 
@@ -544,7 +613,12 @@ export function createCore(o: CoreOptions) {
         return profile.section(section);
       },
     },
-    { method: 'GET', path: '/setup', summary: 'The setup conversation so far, and the question Nova is asking.', handle: () => setup.view() },
+    {
+      // After a factory reset, until setup is done, the browser forgets what it kept of the Nova that
+      // was erased (M7 amendment §2).
+      method: 'GET', path: '/setup', summary: 'The setup conversation so far, and the question Nova is asking.',
+      handle: ({ who, headers }) => { const v = setup.view(); const h = reset.clearHeaders(who.principal, header(headers, 'cookie')); return Object.keys(h).length ? new Reply(v, h) : v; },
+    },
     { method: 'POST', path: '/setup/messages', summary: 'Answer Nova in the setup conversation.', body: '{text}', handle: ({ body }) => setup.answer(str(body.text, 'text')) },
     {
       method: 'GET', path: '/tasks', summary: 'Work Ledger tasks, newest first. Filter with ?state=.',
@@ -810,6 +884,10 @@ export function createCore(o: CoreOptions) {
     ...models.routes(),
     // ---- resilience (M7 plan §2–§3): backups, the drill, playbooks, the supervisor ----
     ...keep.routes((w) => { if (w.principal.kind !== 'console') throw new CoreError('forbidden', 'Releases are deployed and rolled back from the hub’s own screen only.'); }),
+    // ---- checkpoints (M7 amendment §1) ----
+    ...checkpoints.routes(),
+    // ---- factory reset (M7 amendment §2) ----
+    ...reset.routes(),
     // ---- the change pipeline and the foundry (M7 plan §1) ----
     ...changes.routes(),
     {
@@ -900,7 +978,13 @@ export function createCore(o: CoreOptions) {
 
   return {
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
-    vault, connectors, capture, models, changes, foundry, resilience: keep,
+    vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
+    // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
+    // once its marker is staged.
+    restartInPlace: (why: string) => restarter.restartInPlace(why),
+    // Before a restart in place (and a stop): running tasks stop and are left for the next start,
+    // and every process Nova started is ended, within `boundMs`.
+    stopWork,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
@@ -909,6 +993,13 @@ export function createCore(o: CoreOptions) {
     // Who is asking, for a request outside /api/v1, or null once a refusal was sent (mesh/access.ts).
     gate: (req: IncomingMessage, res: ServerResponse, url: URL, listener: Listener) => {
       const p = access.gate(req, res, url, listener);
+      // While a factory reset is staged, nothing new is taken.
+      const resetting = p ? reset.blocks(req.method, url.pathname) : null;
+      if (resetting) {
+        res.writeHead(409, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ error: resetting, resetting: true }));
+        return null;
+      }
       const replica = p && req.method !== 'GET' && req.method !== 'HEAD' && !REPLICA_WRITES.has(url.pathname) ? role.replica() : null;
       if (!replica) return p;
       res.writeHead(409, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -933,6 +1024,10 @@ export function createCore(o: CoreOptions) {
       // keeps no clock of its own.
       if (!o.sandbox) keep.checkClock(true);
       browser.sweep();
+      // A restore finished at this start becomes a ledger task with its evidence.
+      if (role.role() === 'hub' && !o.sandbox) {
+        try { checkpoints.recordFinished(); } catch (e) { log.problem('resilience', 'Nova couldn’t record a finished restore in the ledger.', { detail: (e as Error)?.stack ?? String(e) }); }
+      }
       const recovered = role.role() === 'hub' ? startHub() : { requeued: [], reverified: [] };
       role.start();
       return recovered;

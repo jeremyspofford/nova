@@ -24,7 +24,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import tls from 'node:tls';
 import {
   exportDeviceKeys, generateDeviceKeys, importDeviceKeys, keyFingerprint, newPairingNonce, pairingCommitment, pairingConfirmationV2,
-  revealMessage, runtimeManifest, sessionMessage, sha256Hex, signMessage, statusMessage, verifyRoster, x25519Statement,
+  hubResetMessage, revealMessage, runtimeManifest, sessionMessage, sha256Hex, signMessage, statusMessage, verifyDeviceSignature, verifyRoster, x25519Statement,
   type DeviceKeys, type SignedRoster,
 } from '../core/mesh/wire.ts';
 import { acceptRoster, checkProof, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof } from './trust.ts';
@@ -50,6 +50,8 @@ const RUNTIME_FILES = ['runtime.ts', 'queue.ts'];
 const CAPABILITIES = ['heartbeat', 'queue'];
 // The process exits with this when the hub revoked the device, so a supervisor can tell.
 export const EXIT_REVOKED = 3;
+// Why it stopped, when the hub it paired with was factory reset.
+const HUB_RESET = 'The hub was reset.';
 
 // ---- the device home -----------------------------------------------------------------------------
 
@@ -612,6 +614,8 @@ export class Boot {
     try {
       const r = await call(s.url, m.method, m.path, { token: s.token, body: m.body });
       answer({ status: r.status, body: r.body });
+      // A heartbeat answer this agent got itself, over its own session: the hub may say it was reset.
+      if (m.path === '/api/v1/mesh/devices/me/heartbeat' && r.status === 200) this.#heardReset(r.body);
     } catch (e) {
       answer({ error: (e as Error).message });
     }
@@ -629,6 +633,7 @@ export class Boot {
       case 'unreachable': this.#session = null; return this.#lookForHub();
       case 'unauthorized': return this.#unauthorized();
       case 'update': return this.update();
+      // The runtime is untrusted: it can't say the hub was reset (see #heardReset).
       case 'heartbeat': return;
       case 'call': return this.#callForRuntime(m);
     }
@@ -682,6 +687,7 @@ export class Boot {
     try {
       const r = await call(s.url, 'POST', '/api/v1/mesh/devices/me/heartbeat', { token: s.token, body: { capabilities: CAPABILITIES, version: AGENT_VERSION, runtime_version: inst?.version ?? null, safe_mode: true } });
       if (r.status === 401) return this.#unauthorized();
+      if (r.status === 200 && this.#heardReset(r.body)) return;
       // The hub's repair playbook asks once for a fresh start (M7b): reinstall and leave safe mode;
       // the watchdog's limit still holds, so three more crashes bring it back here.
       if (r.status === 200 && r.body?.restart_runtime === true) {
@@ -707,11 +713,44 @@ export class Boot {
     this.watchdog.reset();
   }
 
-  async #revoked(reason: string, now: boolean): Promise<void> {
+  // The hub this computer paired with was factory reset (M7 amendment §2): it said so in a
+  // heartbeat, over this computer's own session. Its identity is gone, so there is nothing to go
+  // back to: the session ends and the agent stops for good, as when revoked. The words are this
+  // agent's own, never the hub's text.
+  // Only the hub this computer pinned can say it was reset: its answer carries a signature over
+  // nova-hub-reset-v1.<this device>.<reset id> by a pinned key. Anything else is ignored.
+  #heardReset(body: unknown): boolean {
+    const h = (body as { hub_reset?: { id?: unknown; signature?: unknown; signer?: unknown } } | null)?.hub_reset;
+    if (!h) return false;
+    const ok = typeof h.id === 'string' && typeof h.signature === 'string' && typeof h.signer === 'string'
+      && this.d.pinned.includes(h.signer) && verifyDeviceSignature(h.signer, hubResetMessage(this.d.device_id, h.id), h.signature);
+    if (!ok) {
+      if (!this.#saidUnsigned) this.say('An answer said the hub was reset, but not with a key this computer pinned, so the agent ignored it.');
+      this.#saidUnsigned = true;
+      return false;
+    }
+    void this.#hubReset();
+    return true;
+  }
+  #saidUnsigned = false;
+
+  async #hubReset(): Promise<void> {
+    if (this.#closed) return;
+    this.#session = null;
+    return this.#revoked(HUB_RESET, true, [
+      'The hub was reset: Nova there was erased and starts over. This computer is no longer paired with it, so the agent has stopped and won’t start again.',
+      'To use this computer with the new Nova, add it there with a new code.',
+    ]);
+  }
+
+  async #revoked(reason: string, now: boolean, words?: string[]): Promise<void> {
     this.#closed = true;
     if (now) this.#saveState({ revoked: true, revoked_at: new Date().toISOString(), revoked_reason: reason });
-    this.say('This computer was removed from Nova: the hub revoked it. The agent has stopped and won’t start again.');
-    this.say('To use this computer with Nova again, add it again with a new code (its old key can never be used again).');
+    const said = words ?? (reason === HUB_RESET ? ['The hub this computer paired with was reset, so the agent has stopped and won’t start again. Add it to the new Nova with a new code.'] : [
+      'This computer was removed from Nova: the hub revoked it. The agent has stopped and won’t start again.',
+      'To use this computer with Nova again, add it again with a new code (its old key can never be used again).',
+    ]);
+    for (const l of said) this.say(l);
     for (const t of this.#timers) clearInterval(t);
     this.#timers = [];
     await this.watchdog.stop();

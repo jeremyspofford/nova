@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { request } from 'node:http';
 import { createNova } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
+import { ensureMark } from '../src/core/index.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 let nova;
@@ -197,6 +198,7 @@ test('memory: one store; MEMORY.md is its view, and hand edits are taken in on t
 
 test('memory: at start, an Era 2 MEMORY.md is imported into the core once', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-s-import-'));
+  ensureMark(home);
   writeFileSync(join(home, 'MEMORY.md'), '# MEMORY.md\n\n## Preferences\n\n- Likes sample tea. <!-- id=m00aa11bb from=s1/t1 at=2026-09-01T10:00:00.000Z -->\n- Written by hand.\n');
   const config = loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: `node ${join(root, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none' });
   const first = createNova(config);

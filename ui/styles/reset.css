@@ -1,0 +1,34 @@
+/* Settings › Danger zone and the factory reset's sheet (M7 amendment §2), and its result on the
+   first-run screen. Set apart: more space above, an alert-coloured edge. Its one standout, the
+   erase button, is in the alert colour. Tokens only. */
+.settings-part:has(> .danger-zone) { margin-top: var(--space-8); }
+.settings-part > .memory-section.danger-zone { border-color: var(--status-error); border-left-width: var(--space-1); }
+.danger-zone .memory-heading { color: var(--status-error); }
+.danger-zone .sheet-actions { margin-top: var(--space-4); }
+.btn.primary.danger { border-color: var(--status-error); background: color-mix(in srgb, var(--status-error) 24%, var(--bg-raised)); }
+.btn.primary.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--status-error) 34%, var(--bg-raised)); }
+.btn.primary.danger:disabled { opacity: 0.5; cursor: not-allowed; }
+.reset-sheet { display: flex; flex-direction: column; gap: var(--space-3); }
+.reset-sheet .field-label .field { margin-top: var(--space-1); }
+.reset-sub { margin: var(--space-2) 0 0; font: var(--type-weight-strong) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-primary); }
+.reset-list { margin: 0; padding-left: var(--space-5); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.reset-list li { overflow-wrap: anywhere; }
+.reset-list li + li { margin-top: var(--space-1); }
+.reset-left-out { color: var(--text-primary); }
+.reset-error { margin: 0; color: var(--status-error); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.reset-path { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.reset-key {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--status-attention);
+  border-radius: var(--radius-input);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: var(--type-weight-strong) var(--type-body)/var(--type-line-body) var(--font-mono);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+/* The result, on the first-run screen. */
+.reset-result { display: grid; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.reset-result-title { margin: 0; font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-display); color: var(--text-primary); }
+.reset-result .setup-sub { margin: 0; }

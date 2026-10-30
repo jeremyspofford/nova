@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createCore, type Core } from '../../src/core/index.ts';
+import { createCore, type Core, ensureMark } from '../../src/core/index.ts';
 import { GATES, MIN_CANARY_S, weakens } from '../../src/core/changes/gates.ts';
 import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
 import { filesReply } from '../../scripts/stand-ins/fake-openai.js';
@@ -28,6 +28,7 @@ async function until<T>(read: () => T | Promise<T>, done: (v: T) => boolean, ms 
 
 function open(o: { git?: boolean; ollama?: string } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'nova-changes-'));
+  ensureMark(home);
   if (o.git) execFileSync('git', ['-C', home, 'init', '-q']);
   const clock = { now: new Date('2030-01-15T08:00:00.000Z') };
   const core = createCore({

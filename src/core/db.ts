@@ -95,7 +95,9 @@ export class Db {
     return this.get<{ v: number | null }>('SELECT MAX(version) AS v FROM schema_migrations')?.v ?? 0;
   }
 
-  migrate(opts: { migrations?: Migration[]; backupDir?: string; now?: () => Date } = {}): MigrateResult {
+  // `before(from, to)`: called once an upgrade is certain and before anything changes (the core takes
+  // an automatic checkpoint there); if it throws, nothing is upgraded.
+  migrate(opts: { migrations?: Migration[]; backupDir?: string; now?: () => Date; before?: (from: number, to: number) => void } = {}): MigrateResult {
     const migrations = opts.migrations ?? loadMigrations();
     const now = opts.now ?? (() => new Date());
     this.#ensureLedger();
@@ -110,6 +112,7 @@ export class Db {
     const pending = migrations.filter((m) => m.version > from);
     if (!pending.length) return { from, to: from, applied: [], backup: null };
 
+    if (this.path !== ':memory:' && from > 0) opts.before?.(from, pending.at(-1)!.version);
     let backup: string | null = null;
     if (this.path !== ':memory:' && from > 0) {
       if (!opts.backupDir) throw new CoreError('validation', 'A backup folder is required to upgrade a database file.');

@@ -19,7 +19,7 @@ import type { Brief } from '../envelope.ts';
 import type { Access } from './access.ts';
 import type { Device, Devices } from './devices.ts';
 import type { MeshIdentity } from './identity.ts';
-import { ask, readRole, Replica, SYNC_AAD, writeRole, type RoleFile, type SyncPayload } from './replica.ts';
+import { ask, readRole, Replica, SYNC_AAD, writeRole, type ResetNotice, type RoleFile, type SyncPayload } from './replica.ts';
 import type { SyncLog } from './sync.ts';
 import { sessionMessage, verifyRoster, type SignedRoster } from './wire.ts';
 
@@ -54,9 +54,14 @@ export interface MeshRoleOptions {
   // Forgets a memory here as the person would (standing order 4); false when there is none.
   forget: (id: string, by: string) => boolean;
   failoverAfterS: () => number | null;
+  // On a standby: the hub was factory reset, so this node wipes its copy (resilience/reset.ts) and
+  // returns what it did, in plain words, for the hub's result.
+  hubReset?: (notice: ResetNotice) => Promise<string>;
 }
 
 export class MeshRole extends EventEmitter {
+  // On the hub: a factory reset is under way. The standby hears it in its next sync answer.
+  resetNotice: ResetNotice | null = null;
   #o: MeshRoleOptions;
   #file: RoleFile | null;
   #replica: Replica | null = null;
@@ -164,6 +169,7 @@ export class MeshRole extends EventEmitter {
       epoch: () => this.#o.devices.state().epoch,
       seenEpoch: (epoch) => this.#o.db.run('UPDATE mesh_state SET epoch = ?, updated_at = ? WHERE id = 1 AND epoch < ?', epoch, this.#o.now().toISOString(), epoch),
       forgotten: this.#o.forgotten, failoverAfterS: this.#o.failoverAfterS,
+      ...(this.#o.hubReset ? { reset: this.#o.hubReset } : {}),
       ...(process.env.NOVA_SYNC_WAIT_S ? { waitS: Number(process.env.NOVA_SYNC_WAIT_S) } : {}),
     });
     this.#replica.on('applied', (a) => this.emit('applied', a));
@@ -220,9 +226,10 @@ export class MeshRole extends EventEmitter {
     if (!Number.isInteger(after) || after < 0 || !Number.isFinite(wait)) throw new CoreError('validation', 'after must be a whole number of 0 or more; wait, seconds up to 25.');
     // A long poll: answer as soon as there is something new, or after `wait` seconds with nothing.
     const until = Date.now() + wait * 1000;
-    while (!this.#closed && Date.now() < until && this.#o.sync.head() <= after) await new Promise((r) => setTimeout(r, 150));
+    while (!this.#closed && !this.resetNotice && Date.now() < until && this.#o.sync.head() <= after) await new Promise((r) => setTimeout(r, 150));
     if (this.#closed) throw new CoreError('conflict', 'Nova is stopping.');
-    const payload: SyncPayload = { v: 1, hub_id: this.#o.identity.id, standby_id: device.id, epoch: this.#o.devices.state().epoch, after, ...this.#o.sync.batch(after) };
+    const reset = this.resetNotice;
+    const payload: SyncPayload = { v: 1, hub_id: this.#o.identity.id, standby_id: device.id, epoch: this.#o.devices.state().epoch, after, ...(reset ? { rows: [], upto: after, more: false, head: this.#o.sync.head(), reset } : this.#o.sync.batch(after)) };
     const sealed = this.#o.identity.seal(device.x25519_public_key, Buffer.from(JSON.stringify(payload), 'utf8'), SYNC_AAD(device.id, after));
     return { hub_id: payload.hub_id, epoch: payload.epoch, sealed: sealed.toString('base64url') };
   }

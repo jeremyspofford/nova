@@ -15,6 +15,7 @@ import { daySentence } from '../ui/js/view.js';
 import { createNova } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { startFakeGoogle } from '../scripts/fake-google.js';
+import { ensureMark } from '../src/core/index.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 const LA = 'America/Los_Angeles';
@@ -26,6 +27,7 @@ const calls = []; // every model call: { system, prompt }
 before(async () => {
   google = await startFakeGoogle();
   const home = mkdtempSync(join(tmpdir(), 'nova-he-'));
+  ensureMark(home);
   mkdirSync(join(home, 'workspace'), { recursive: true });
   writeFileSync(join(home, 'workspace', 'bikes.md'), 'Commute: 9 miles, one long hill. Budget $2,000.\n');
   nova = createNova(loadConfig({

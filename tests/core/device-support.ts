@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import {
-  exportDeviceKeys, generateDeviceKeys, helloProofMessage, runtimeManifest, runtimeManifestMessage, sessionMessage, signMessage, signRoster,
+  exportDeviceKeys, generateDeviceKeys, helloProofMessage, hubResetMessage, runtimeManifest, runtimeManifestMessage, sessionMessage, signMessage, signRoster,
   verifyDeviceSignature, type DeviceKeys, type Roster, type SignedRoster,
 } from '../../src/core/index.ts';
 import { rosterKeys } from '../../src/device/trust.ts';
@@ -52,6 +52,10 @@ export class FakeNode {
   inbox = new Map<string, { key: string; kind: string; status: string; ref: string }>();
   received: Received[] = [];
   heartbeats: Array<Record<string, unknown>> = [];
+  // A factory reset of this node: said in every heartbeat reply once set, signed by this node's key
+  // (or by `hubResetKey`, to stand in for a key the device didn't pin).
+  hubReset: { id: string; said: string } | null = null;
+  hubResetKey: DeviceKeys | null = null;
   reports: Array<Record<string, unknown>> = [];
   sessionsStarted = 0;
   url = '';
@@ -120,7 +124,7 @@ export class FakeNode {
     if (path === '/mesh/runtime') return this.bundle ? send(200, this.bundle) : send(404, { error: 'none' });
     if (path === '/mesh/devices/me/heartbeat') {
       this.heartbeats.push(body);
-      return send(200, { ok: true, epoch: this.epoch, runtime: { version: this.bundle?.manifest.version ?? 'none' } });
+      return send(200, { ok: true, epoch: this.epoch, runtime: { version: this.bundle?.manifest.version ?? 'none' }, ...(this.hubReset ? { hub_reset: { ...this.hubReset, signature: signMessage((this.hubResetKey ?? this.keys).ed25519.privateKey, hubResetMessage(device, this.hubReset.id)), signer: (this.hubResetKey ?? this.keys).ed25519.publicKey } } : {}) });
     }
     if (path === '/mesh/devices/me/report') { this.reports.push(body); return send(200, { ok: true }); }
     if (path === '/mesh/inbox') {

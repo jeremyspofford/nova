@@ -8,7 +8,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import {
   createCore, generateDeviceKeys, newPairingNonce, pairingCommitment, pairingConfirmationV2, revealMessage, sessionMessage, signMessage,
-  statusMessage, x25519Statement, type Core, type DeviceKeys, type Listener,
+  statusMessage, x25519Statement, type Core, type CoreOptions, type DeviceKeys, type Listener,
 } from '../../src/core/index.ts';
 
 export const PUBLIC_URL = 'http://hub.example:4320';
@@ -29,12 +29,13 @@ export async function call(base: string, method: string, path: string, body?: un
 
 // The core with both listeners, like src/server.js but without Era 2: anything the core doesn't
 // answer is "static".
-export async function hub(o: { mesh?: boolean } = {}) {
+export async function hub(o: { mesh?: boolean; core?: Partial<CoreOptions> } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'nova-mesh-'));
   const clock = { t: Date.parse('2026-10-29T10:00:00.000Z') };
   const core: Core = createCore({
     home, version: '0.1.0', trustedOrigin: (h) => /^(127\.0\.0\.1|localhost|hub\.example)(:\d+)?$/.test(h), now: () => new Date(clock.t),
     mesh: o.mesh === false ? null : { publicUrl: PUBLIC_URL, transport: 'network' },
+    ...o.core,
   });
   const handler = (listener: Listener) => async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url!, 'http://nova.local');

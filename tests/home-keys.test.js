@@ -4,19 +4,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as home$ from '../src/home.js';
 
 const { commitHome, ensureGit } = home$;
 const keysInHistory = (h) => home$.keysInHistory(h);
-import { loadIdentity } from '../src/core/index.ts';
+import { loadIdentity, ensureMark } from '../src/core/index.ts';
 
 const git = (h, ...args) => execFileSync('git', ['-C', h, ...args], { encoding: 'utf8' });
 
 function home() {
   const h = mkdtempSync(join(tmpdir(), 'nova-home-keys-'));
+  ensureMark(h);
   writeFileSync(join(h, 'USER.md'), '# USER.md\n');
   loadIdentity(h);
   writeFileSync(join(h, 'mesh', 'role.json'), '{"version":1,"role":"standby"}\n', { mode: 0o600 });
@@ -96,4 +97,22 @@ test('replacing the keys refuses while Nova runs this home, and the warning clos
   assert.deepEqual(problems, [], 'the history holds only keys that no longer open anything');
   assert.equal(resolved.length, 1, 'so the open warning is closed');
   assert.match(resolved[0], /keys/);
+});
+
+// Nova's mark on its home holds the key that seals a factory reset; checkpoints hold the identity and
+// the vault key. None of them, nor a reset's marker or report, ever reaches the home's history.
+test('the home’s mark, a reset’s marker and report, and checkpoints never reach the home’s history', async () => {
+  const h = home();
+  mkdirSync(join(h, 'checkpoints', '000001-here', 'files', 'mesh'), { recursive: true });
+  writeFileSync(join(h, 'checkpoints', '000001-here', 'files', 'mesh', 'identity.json'), '{}');
+  writeFileSync(join(h, 'checkpoints', '.seal'), 'seal');
+  writeFileSync(join(h, 'factory-reset.json'), '{}');
+  writeFileSync(join(h, 'factory-reset.json.set-aside-2026-10-30T00-00-00-000Z'), '{}');
+  writeFileSync(join(h, 'reset-report.json'), '{}');
+  assert.equal(await ensureGit(h, { problem: () => {} }), true);
+  await commitHome(h, 'Nova: turn');
+  const tracked = git(h, 'ls-files').split('\n');
+  for (const name of ['.nova-home', 'checkpoints/', 'factory-reset.json', 'reset-report.json']) {
+    assert.ok(!tracked.some((f) => f.startsWith(name)), `${name} isn’t tracked: ${tracked.join(' ')}`);
+  }
 });

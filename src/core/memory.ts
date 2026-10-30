@@ -235,9 +235,10 @@ export class Memory {
   }
 
   // Plain files the person owns: every field as JSON, and a readable page grouped by kind.
-  export(): { dir: string; json: string; markdown: string; count: number } {
+  // `o.dir`: a folder to write them into instead (a factory reset's export, resilience/reset.ts).
+  export(o: { dir?: string } = {}): { dir: string; json: string; markdown: string; count: number } {
     const at = this.#now().toISOString();
-    const dir = join(this.exportsDir, `memory-${at.replace(/[:.]/g, '-')}`);
+    const dir = o.dir ?? join(this.exportsDir, `memory-${at.replace(/[:.]/g, '-')}`);
     const records = this.active().map(({ active: _a, low_confidence: _l, ...r }) => r);
     mkdirSync(dir, { recursive: true });
     const json = join(dir, 'memory.json');

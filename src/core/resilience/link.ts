@@ -47,7 +47,7 @@ export interface SupervisorProblem { source: string; said: string; playbook: str
 
 export interface SupervisorLink {
   state(): SupervisorState | null;
-  request(type: 'deploy' | 'rollback' | 'restart', o?: { version?: string }): Promise<{ ok: boolean; said: string }>;
+  request(type: 'deploy' | 'rollback' | 'restart', o?: { version?: string; staged?: boolean }): Promise<{ ok: boolean; said: string }>;
   onProblem(fn: (p: SupervisorProblem) => void): void;
   // Where the database stands before any work runs (see `mark` above).
   mark?(m: { seq: number; problem: number }): void;

@@ -5,6 +5,7 @@
 // person's own rules are paused, providers and connectors are off, and no device addresses are
 // kept, so a sandbox never reaches anyone. It keeps no secrets: the vault isn't copied.
 import { spawn, type ChildProcess } from 'node:child_process';
+import { trackChild } from '../children.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { cpSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -66,7 +67,7 @@ export class Sandbox {
       if (a === '--import' || a === '--require') { const v = process.execArgv[i + 1]; if (v) preload.push(a, v); }
       else if (a.startsWith('--import=') || a.startsWith('--require=')) preload.push(a);
     });
-    const proc = spawn(process.execPath, [...preload, o.server ?? SERVER], { cwd: join(SERVER, '..', '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = trackChild(spawn(process.execPath, [...preload, o.server ?? SERVER], { cwd: join(SERVER, '..', '..'), env, stdio: ['ignore', 'pipe', 'pipe'] }));
     this.#proc = proc;
     proc.stdout!.on('data', (d) => this.#out.push(String(d)));
     proc.stderr!.on('data', (d) => this.#out.push(String(d)));

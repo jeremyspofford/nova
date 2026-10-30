@@ -15,6 +15,210 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M7 amendment §2, final review).** Branch `m7-amend/final` (from
+`m7-amend/checkpoints-reset`); each with a test that failed first.
+- **Nova doesn't adopt a folder that clashes with its own entries.** At start, a folder that
+  already holds something named like one of `NOVA_ENTRIES` is refused, naming them ("This folder
+  already has .git/ and workspace/ that aren't Nova's. Choose an empty folder for Nova's home, or
+  move them."): Nova's data would otherwise end up inside the person's folders, out of a reset's
+  reach. Nova's own: a new or empty folder, one whose `nova.db` has Nova's schema, and (added here)
+  an Era 2 home that holds all four standing files Era 2 seeded (`AGENTS.md`, `SOUL.md`,
+  `IDENTITY.md`, `USER.md`), which has no `nova.db` yet. Other things already there are recorded and
+  left alone. Tests that pre-fill a fresh home now let Nova mark it first (`ensureMark`), as Nova
+  does before seeding.
+- **`write_file` allows a path only as spelled exactly and after folding**; refusals stay folded.
+- **Relay:** when it is on or was ever handed work, the confirmation and the result say its work
+  stays in Relay's own storage and a reset of Nova doesn't erase it.
+- **The home's git history** never takes `.nova-home` (the seal key), a reset's marker or report, or
+  `checkpoints/` (which holds the identity and the vault key); `src/home.js` `UNTRACKED`. A home
+  that already committed any of them before isn't rewritten: not changed here.
+
+**2026-10-30 (M7 amendment §2, re-review fixes).** Branch `m7-amend/reset`; each with a test that
+failed on `dcbc98df` first.
+- **The mark means "this folder is Nova's".** `.nova-home` records `before`: the top-level names a
+  folder already held when Nova was first pointed at it. A new or empty folder, or one whose
+  `nova.db` has Nova's schema (existing homes, the preview's), holds nothing of the person's. A
+  standby's `mesh/` with only its identity and role file counts as Nova's (its enrollment wrote
+  them). A reset never erases `before` entries, and the confirmation and the result list them
+  ("already here before Nova; left alone"). `server.js` marks the home before seeding it.
+- **`write_file` never goes through a link**, dangling ones included: every part is `lstat`ed, and
+  the file is opened `O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW` (not `O_EXCL`: replacing a file is
+  the tool's job).
+- **Names are folded** (NFC, lower case) for the read blocks, the secret folders and the write
+  allow-list, as a case-insensitive disk would see them.
+- **`Clear-Site-Data` only on the hub's own screen, once per reset**, until setup is done: the
+  cookie `nova-reset-cleared=<reset id>` (HttpOnly, SameSite=Strict) marks it done. Never a
+  paired device, whose new key it would take.
+- **A finished reset whose marker was left behind** (stopped after the report and the new key) is
+  recognised by its report's id and cleared quietly.
+
+**2026-10-30 (M7 amendment §2, review fixes): factory reset hardened.** Branch `m7-amend/reset`;
+each fix has a test that failed on `55fddabd` first.
+- **A hole older than the amendment (fixed here):** the agent's `write_file` could write
+  `nova.db`, `backups/*.db` (what a rollback restores), `.git/hooks/*` (the change pipeline commits
+  in the home, so a hook would run with no approval) and a reset's marker. `src/tools.js` is now
+  an allow-list: `write_file` writes only inside `workspace/` and to `AGENTS.md`, `SOUL.md`,
+  `IDENTITY.md`, `USER.md` (the standing files the prompt names; `MEMORY.md`, `memory/`,
+  `sessions/`, `schedules/`, `permissions.md` keep their own refusals). `read_file` refuses
+  `nova.db*`, `checkpoints/`, `backups/`, `.git/`, `factory-reset.json`, `.nova-home`, and as
+  before `vault/`, `mesh/`, `connectors/`; it still reads the standing files, `memory/`,
+  `workspace/`, `sessions/`, `skills/` and the rest of the person's content. Links are followed
+  before the check. The other tools write nothing in the home (`exec` runs in `workspace/` with
+  approval; `schedule_set` is approved).
+- **The marker is sealed:** an HMAC under a key in `.nova-home` (`resilience/home-mark.ts`). Chosen
+  over a per-boot secret because a reset must still finish after a crash or a reboot, and over the
+  vault because the vault's key is the first thing the wipe removes. A key in the home is enough
+  once the agent can't write there: what else can write the home is the person's own programs,
+  which can delete it anyway. A marker that doesn't verify (forged, changed, junk, or for another
+  folder) is never acted on: it is renamed `factory-reset.json.set-aside-<time>`, Nova starts as
+  it was, and a problem says so. The mark gets a new key after each reset.
+- **Checkpoints, by the same reasoning:** the restore marker and `checkpoints/.seal` are in the home
+  too; the agent can no longer read or write either, and the restore marker is checked against the
+  staged files' hashes. A same-user program could forge them, as it could delete the home. Not
+  changed here.
+- **Only Nova's own home:** a reset is refused, staging and finishing, for `/`, the person's home
+  folder or any folder containing it, and for a folder without `.nova-home` (holding the home's id
+  and the seal key, 0600, never in a backup, checkpoint, export or the standby's copy). Nova writes
+  it when it sets up a home: a new folder, or one whose `nova.db` has Nova's `schema_migrations`.
+  So the preview home gets it at its next start; a folder holding some other `nova.db` never does.
+- **The export** is checked by its real path (links followed); one gone by the end is said to be
+  gone, never "untouched".
+- **Late backups:** staging stops the heartbeat and the work queue (`core.stopWork`) before telling
+  devices, then lists the backups again into the marker. Half-written ones (`.nova-backup-N.partial`,
+  the database in the clear; `nova-backup-N.nbk.partial`) in Nova's recorded folders go too.
+- **Encrypted copies** are erased only if they open under the backup key (the tag checks, nothing
+  unpacked; `archive.ts` `verifyFile`), and are then known by their whole file's sha256.
+- **Computers:** `hub_reset` is signed by the hub's identity key over
+  `nova-hub-reset-v1.<device>.<reset id>`; the boot agent acts only on one in a heartbeat answer it
+  got itself, from a pinned key. The runtime can't say it.
+- **Browsers:** on the `reset` event and on the first-run screen after a reset, the page forgets its
+  device key, `nova.*` storage (drafts) and the service worker's caches (`ui/js/forget-here.js`).
+  Until setup is done after a reset, the first-run page and `GET /setup` send
+  `Clear-Site-Data: "cache", "storage"`. The result says a phone was told and asked to forget; it
+  doesn't claim it did.
+- **Open:** keychain items of vault ids Nova no longer knows can't be removed: the `KeyStore`
+  abstraction can't list items. Only the ids recorded at staging are removed.
+
+**2026-10-30 (M7 amendment §2): factory reset, as built.** Branch `m7-amend/reset`; plan
+`docs/plans/M7-amendment.md` §2 has the as-built note.
+- **Nova's own entries, by name:** `NOVA_ENTRIES` in `resilience/entries.ts` (below). Anything else
+  in the home is the person's: left and listed. A report from an earlier reset is overwritten.
+- **Backups:** Nova's own sealed backups and recorded encrypted copies in every folder from
+  `backup_run` (and the ones set now). Each is recorded with its seal (or its header's nonce) when the
+  reset is staged and checked again before it is deleted. A folder that isn't there (the rule
+  forgetting uses) is named before and after; strays are left.
+- **The export holds no `vault/` at all**, not just no key: the plan's "no saved secrets". Nor
+  `mesh/`. The recovery key is returned once and stored nowhere, not even in the vault.
+- **The keychain key** goes through `Vault.forgetKeys` (the vault's own KeyStore, for each vault id
+  recorded at staging); a keychain that isn't answering is said in the report, not guessed at.
+- **Telling devices.** Phones and browsers can be told only while their stream is open; a computer
+  heard from in the last 2 minutes is waited for (its next heartbeat); the standby while it copies.
+  Waiting is capped at 45 s, then every session ends. A computer's agent stops for good on
+  `hub_reset` (exit code 3, as when revoked). The standby wipes its replica in place and stages its
+  own marker for the rest (identity, role file), which finishes at its next start.
+- **While staged** the core refuses every change (409), except what telling devices needs (sessions,
+  heartbeats, sync acks, the reset ack).
+- **Restart in place, wired** (after merging `m7-amend/checkpoints`): once devices are told, the
+  reset calls `restartInPlace` (`resilience/restart.ts`); the standby does too, once it has
+  reported back. `stagedPending` and `finishStaged` (`checkpoints.ts`) include the reset's marker,
+  so the supervisor honours the restart, and a staged reset goes first and wins over a staged
+  restore (a restore can't be staged while a reset is, and the other way round).
+- **The same staging rules as a restore** (after the checkpoints review fixes, `b78ecc6f`): the
+  marker carries the sha256 of itself and is never acted on once changed (Nova doesn't start, and
+  nothing more is erased); `core.stopWork` runs before the restart and before a standby wipes its
+  copy. **A restart that fails** leaves the reset staged to finish when Nova starts next (the person
+  confirmed an erase), said on the Danger zone and the sheet and as a problem, with every change
+  refused (409) until then. A restore that fails is dropped instead: there the person keeps now.
+- **Acceptance:** `tests/acceptance/m7-checkpoints-reset.test.ts`, one real server process, both
+  restarts in place, the egress tripwire empty. The two browser tests stay separate files.
+- **One list of Nova's entries:** `entries.ts` (`NOVA_ENTRIES`), shared with checkpoints. Added
+  there by the reset: `factory-reset.json` and `reset-report.json` (both also in checkpoints'
+  `SKIP_TOP`, so a restore leaves them as they are). Not added: `captures`, which the plan names
+  but no code writes (capture lives in the database); a folder of the person's by that name stays.
+- **Browser test** is `tests/ui/m7-reset.test.ts` (the plan names one shared file,
+  `m7-checkpoints-reset.test.ts`; the integrator may fold them together). Nobody restarts the
+  server in it: the page opens first-run setup by itself once Nova is back.
+
+**2026-10-30 (M7 amendment): checkpoints and restore.** Branch `m7-amend/checkpoints`; the plan's §1
+and its as-built note. Every behaviour has a test that failed first.
+- **What a checkpoint is.** The whole home, the identity and vault key file included, in
+  `<home>/checkpoints/<seq>-<slug>/` (0700/0600), with a sealed manifest in the nightly format. Its
+  seal key is `checkpoints/.seal`, not the vault, so a stopped home can be checkpointed. Nightly
+  backups (`SKIP_TOP`) and the standby's journal (`NOT_JOURNALLED`) leave `checkpoints` out.
+- **Retention, as the UI states it.** The newest 10 automatic checkpoints, counted by sequence and
+  never by date. Named ones stay until the person deletes them (tier 3, the hub's screen, after
+  review: NOVA-SPEC puts deleting data at tier 3), at most 20 of them. A new checkpoint is
+  complete before any prune. A disk too full refuses in plain words.
+- **Automatic.** At ship and before a canary that hasn't applied yet: none, and the change waits
+  ("Not shipped: Nova couldn’t take a checkpoint first…"). Before a database upgrade: none, and no
+  upgrade, so no start. Before a release switch: the supervisor, on the stopped home; none, and no
+  switch. A home with no database yet is skipped. Before a restore.
+- **Forgets.** `Backups.also` cleans every checkpoint and a staged restore. One that can't be
+  cleaned is destroyed and reported. Unsealed folders named like checkpoints are cleaned too,
+  because they sit in Nova's own folder.
+- **Restore.** Tier 3, the console only, `{confirm: true}` every time. A damaged checkpoint, or
+  one from a newer schema, is refused. It is staged, then applied before the database opens by
+  renaming top-level entries; each step can be repeated. The record becomes a ledger task once.
+- **Interpretations.**
+  - "Identity" means this node's `mesh/` folder as it is now. A key replaced since is never put
+    back, and the identity is the same in the ordinary case.
+  - "Trust decisions" means the stricter of then and now for approving. Sign-ins that ended stay
+    ended. Unused pairing codes from then are spent.
+  - Forgets: the "forgotten" notes and capture tombstones come along, so nothing forgotten is
+    taken in again.
+  - Problems are matched by time, source and message, not by id, so they survive restores that
+    happen one after another.
+  - Nova's own records of what is outside the home come along: backup runs and drills, the
+    recovery key it showed, and its `nova/*` vault keys. Without them, backups made since would
+    become strays, out of reach of forgets. The person's saved secrets go back with the
+    checkpoint.
+  - Only Nova's own top-level entries (`src/core/resilience/entries.ts`, derived from every place
+    the code writes under the home) are checkpointed and restored. Files in the home that aren't
+    Nova's are never copied, moved or undone, and the confirmation says so.
+- **The standby copies afresh.** It treats its own hub at a higher epoch as a restarted log: it
+  drops what it copied and reads the log from 0. Promotion names another hub, and replacing the
+  hub's keys revokes the standby, so neither triggers this.
+- **Restart in place.** `core.restartInPlace(why)`. Under the supervisor, a `restart` request
+  with `staged: true` is honoured only with a marker on disk, and is no crash. Without the
+  supervisor, the server's release hook closes the listeners and the core, then `process.execve`
+  restarts the same program: same pid, same ports. The reset builder adds its marker to
+  `stagedPending` and `finishStaged`.
+- **After review (same day).** Each fix has a test that failed on the code before it.
+  - What is kept from now is read at swap time from the outgoing database, so a revocation,
+    problem or backup made after staging survives.
+  - A restore whose restart can't happen is dropped at once and said; it never fires later.
+  - The marker lists every staged file by hash. An incomplete or changed staging is dropped
+    (anything moved put back) with a problem: Nova never runs a mix. Dropping renames the folder
+    away first.
+  - `core.stopWork` halts running tasks and ends every process Nova started (`children.ts`)
+    before an in-place restart and on a stop.
+  - Half-taken checkpoints are removed at start and before every forget.
+  - Deleting a checkpoint is tier 3, and at most 20 named ones are kept.
+  - A full disk while staging refuses in plain words; after a complete swap it is a problem, not
+    a failed start.
+- **Small changes elsewhere.**
+  - `Db.migrate({before})`.
+  - `ChangesOptions.checkpoint`. "Ship it" on an OK'd change that was held back retries its task.
+  - `SupervisorLink.request(…, {staged})`.
+  - `SyncLog.fresh()`.
+  - The service worker never caches `/api/v1/resilience` (shell v8).
+
+**2026-10-30 (packet amendment, owner): checkpoints and factory reset, folded into M7.** Added to
+ROADMAP-AND-GATES under M7, binding, and not a new milestone. M7 was already merged (#219), so it
+ships as its own PR; the plan is `docs/plans/M7-amendment.md`.
+- **Checkpoints:** restore points of the whole data home. Nova takes one automatically before
+  self-changes, upgrades, releases and restores, and the person can take named ones. Each is
+  listed with date and size. Retention keeps the newest 10 automatic ones, by sequence, and named
+  ones until deleted.
+- **Restore:** tier 3, from the hub's screen only. It never brings back a revoked device or a
+  forgotten memory, and it raises the mesh epoch.
+- **Factory reset:** in Settings, under a Danger zone section. Nova offers an export first, and
+  wipes only what it made, by name.
+- **Backups on reset:** wiped as the owner expected, in every folder Nova ever backed up to,
+  after the export offer. A folder that can't be reached (an unplugged drive) can't be wiped;
+  that is said beforehand and afterwards.
+- **What the export leaves out:** saved secrets, the vault key and identity. The screen says so.
+
 **2026-10-30 (M8b): Relay is a provider like the others, and Nova's checks still decide.** This
 work is on branch `m8b/relay-adapter`. It was built against Relay v0.9.0's own `contract/v1.json`
 (commit `4add265`); `tests/support/relay-contract-v1.json` is a byte-for-byte copy of that file.

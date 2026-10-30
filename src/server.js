@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
+import { createCore, ensureMark, finishReset, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -43,6 +43,13 @@ function modelOptions(env) {
 
 export function createNova(config = loadConfig(), deps = {}) {
   const started = performance.now();
+  // A factory reset staged before the last stop (M7 amendment §2) finishes before anything touches
+  // the home, seeding included, so a reset home is seeded fresh. (A staged restore is applied by the
+  // core, with its options.) It throws when it can't finish: a half-reset Nova never runs.
+  if (process.env.NOVA_SANDBOX !== '1') finishReset(config.home, { leaveUnverified: true });
+  // Nova's mark on its home, before seeding: what is in the folder now, before Nova adds anything,
+  // is what a reset must never erase (core resilience/home-mark.ts).
+  if (process.env.NOVA_SANDBOX !== '1') ensureMark(config.home);
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
   // The core (src/core): database, Work Ledger, profile, identity, setup, extensions, /api/v1.
   const { version } = JSON.parse(readFileSync(join(config.root, 'package.json'), 'utf8'));
@@ -221,20 +228,22 @@ export function createNova(config = loadConfig(), deps = {}) {
     });
   }
 
-  function serveFile(res, file) {
+  // `clear`: after a factory reset, the hub's own screen is told once to forget what its browser
+  // kept of the Nova that was erased (core resilience/reset.ts, clearHeaders).
+  function serveFile(res, file, clear = {}) {
     const type = TYPES[extname(file)] ?? 'application/octet-stream';
     if (config.dev && file.endsWith('.html')) {
-      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
+      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', ...clear });
       return res.end(readFileSync(file, 'utf8').replace('</body>', '<script type="module" src="/js/dev-reload.js"></script></body>'));
     }
-    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...clear });
     createReadStream(file).pipe(res);
   }
 
-  function serveStatic(req, res, path) {
+  function serveStatic(req, res, path, principal) {
     // The PWA's places (ui/js/nav.js); Era 2's paths keep working.
     if (path === '/pair') return serveFile(res, join(ui, 'pair.html'));
-    if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
+    if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'), core.reset.clearHeaders(principal, req.headers.cookie));
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
@@ -489,7 +498,7 @@ export function createNova(config = loadConfig(), deps = {}) {
         return res.end();
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
-      serveStatic(req, res, url.pathname);
+      serveStatic(req, res, url.pathname, principal);
     } catch (e) {
       if (!res.headersSent) json(res, e.message === 'bad json' || e.message === 'too large' ? 400 : 500, { error: e.message });
       else res.end();
@@ -577,7 +586,31 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(`Devices pair and connect at ${nova.meshInfo.publicUrl} (listening on ${m.bindHost}:${port}, ${how}).`);
     });
   }
-  const quit = async () => { rmSync(join(config.home, 'nova.pid'), { force: true }); nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.close(); process.exit(0); };
+  // On a stop, nothing Nova started lives on after it (a command in a process group of its own).
+  const quit = async () => { rmSync(join(config.home, 'nova.pid'), { force: true }); nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.stopWork(2000); await nova.core.close(); process.exit(0); };
   process.on('SIGINT', quit);
   process.on('SIGTERM', quit);
+  // Restarting in place (core resilience/restart.ts), for a restore: stop listening, close the core,
+  // and tell the fresh start which ports to take again (the ones it has now, even if it was given 0).
+  nova.core.restarter.attach(async () => {
+    nova.scheduler.stop();
+    for (const id of nova.runner.active.keys()) nova.runner.stop(id);
+    // Nothing Nova started may write into the restored home: running tasks stop, and every process
+    // it started (in its own process group or not) is ended, within a bound.
+    await nova.core.stopWork(5000);
+    const closed = (s) => new Promise((r) => { if (!s?.listening) return r(); s.close(() => r()); s.closeAllConnections(); });
+    const port = nova.server.address()?.port;
+    const meshPort = nova.mesh?.address()?.port;
+    await Promise.all([closed(nova.server), closed(nova.mesh)]);
+    await nova.core.close();
+    const env = {};
+    if (port) env.NOVA_PORT = String(port);
+    for (const name of ['NOVA_MESH_URL', 'NOVA_MESH_PUBLIC_URL']) {
+      if (!meshPort || !process.env[name]) continue;
+      const u = new URL(process.env[name]);
+      if (u.port === '0') { u.port = String(meshPort); env[name] = u.origin; }
+    }
+    console.log('Nova is restarting to finish what was staged (a restore or a factory reset).');
+    return env;
+  });
 }

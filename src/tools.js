@@ -5,8 +5,9 @@
 // Nova runs the tool (asking the user first where required) and calls the model
 // again with the result in the transcript.
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, sep } from 'node:path';
+import { trackChild } from './core/index.ts';
+import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { inHome, inSecretDir } from './home.js';
 
 const MAX_READ = 200_000;
@@ -17,12 +18,61 @@ export const SEARCH_URL = 'https://html.duckduckgo.com/html/';
 
 // Secrets live in ~/vault/ and ~/mesh/ (Era 2 kept connection secrets in ~/connectors/). No tool
 // reads or writes them.
+//
+// Nova's own state is not the agent's to touch (a hole older than the M7 amendment, closed with
+// its review): write_file writes only inside workspace/ and to the standing files the agent is
+// meant to edit (WRITABLE); read_file never reads Nova's database, checkpoints (identity and vault
+// keys are in them), pre-upgrade backups, the home's git history, a factory reset's marker or the
+// home's sentinel (UNREADABLE).
+//  - Names are compared as a case-insensitive disk (macOS, Windows) sees them: NFC, lower case.
+//  - A read follows links, and is checked where it really lands.
+//  - A write never goes through a link at all, not even one that leads nowhere yet: every part of
+//    the path is looked at (lstat), and the file is opened with O_NOFOLLOW.
+export const WRITABLE = ['AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md'];
+const fold = (name) => String(name).normalize('NFC').toLowerCase();
+const WRITABLE_FOLDED = new Set(WRITABLE.map(fold));
+const UNREADABLE = new Set(['checkpoints', 'backups', '.git', 'factory-reset.json', '.nova-home']);
+const DB = /^nova\.db/;
+
+// The path as it really is: the deepest part that exists, with its links followed, then the rest.
+function real(abs) {
+  let at = abs;
+  const rest = [];
+  while (!existsSync(at)) {
+    const up = dirname(at);
+    if (up === at) break;
+    rest.unshift(basename(at));
+    at = up;
+  }
+  return join(realpathSync(at), ...rest);
+}
+
+// Whether any part of `rel` under `root` is a link (a dangling one included).
+function throughLink(root, rel) {
+  let at = root;
+  for (const part of rel.split(sep).filter(Boolean)) {
+    at = join(at, part);
+    let st;
+    try { st = lstatSync(at); } catch { return false; } // not there yet: nothing below it is either
+    if (st.isSymbolicLink()) return true;
+  }
+  return false;
+}
+
 function guard(home, path, verb) {
-  const abs = inHome(home, path);
-  const rel = relative(home, abs);
-  const dir = inSecretDir(rel.split(sep).join('/'));
+  const lexical = inHome(home, path);
+  const root = realpathSync(home);
+  const writing = verb !== 'read';
+  if (writing && throughLink(root, relative(resolve(home), lexical))) throw new Error(`${path} goes through a link, so it can't be ${verb}`);
+  const abs = writing ? join(root, relative(resolve(home), lexical)) : real(lexical);
+  if (abs !== root && !abs.startsWith(root + sep)) throw new Error(`${path} leads outside Nova's home, so it can't be ${verb}`);
+  const rel = relative(root, abs);
+  const posix = fold(rel.split(sep).join('/'));
+  const dir = inSecretDir(posix);
   if (dir) throw new Error(`${dir === 'mesh' ? 'Device keys' : 'Connection secrets'} in ${dir}/ can't be ${verb}`);
-  return { abs, rel };
+  const top = posix.split('/')[0];
+  if (verb === 'read' && (UNREADABLE.has(top) || DB.test(top))) throw new Error(`${path} is Nova's own state (its database, checkpoints, backups or history), so it can't be read`);
+  return { abs, rel, posix, top };
 }
 
 export const TOOLS = {
@@ -42,14 +92,20 @@ export const TOOLS = {
     doc: 'Create or replace a text file in your home: your workspace and the standing files. MEMORY.md and memory/ are kept with memory blocks instead (below).',
     needsApproval: false,
     async run({ path, content }, { home }) {
-      const { abs, rel } = guard(home, path, 'written');
-      if (rel === 'sessions' || rel.startsWith(`sessions${sep}`)) throw new Error('Session logs are an audit trail and cannot be edited');
-      if (rel === 'MEMORY.md' || rel === 'memory' || rel.startsWith(`memory${sep}`)) throw new Error('Memory is kept with <remember> and <note> blocks, not write_file');
-      if (rel === 'schedules' || rel.startsWith(`schedules${sep}`)) throw new Error('Schedules are set with schedule_set, which the person approves, not write_file');
-      if (rel === 'permissions.md') throw new Error('Only the person changes what Nova may do on its own');
+      const { abs, rel, posix, top } = guard(home, path, 'written');
+      if (top === 'sessions') throw new Error('Session logs are an audit trail and cannot be edited');
+      if (posix === 'memory.md' || top === 'memory') throw new Error('Memory is kept with <remember> and <note> blocks, not write_file');
+      if (top === 'schedules') throw new Error('Schedules are set with schedule_set, which the person approves, not write_file');
+      if (posix === 'permissions.md') throw new Error('Only the person changes what Nova may do on its own');
+      // Allowed only as spelled exactly and after folding: folding makes refusals stricter, never wider.
+      const exact = rel.split(sep).join('/');
+      const allowed = (name, first) => WRITABLE_FOLDED.has(name) || (first === 'workspace' && name !== 'workspace');
+      if (!allowed(posix, top) || !(WRITABLE.includes(exact) || (exact.split('/')[0] === 'workspace' && exact !== 'workspace'))) throw new Error(`${path} can't be written: Nova writes only in workspace/ and its standing files (${WRITABLE.join(', ')}). The rest of its home is Nova's own state.`);
       if (typeof content !== 'string') throw new Error('content must be a string');
       mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, content);
+      // Never through a link, even if one appeared since the check.
+      const fd = openSync(abs, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o644);
+      try { writeSync(fd, content); } finally { closeSync(fd); }
       return `Wrote ${Buffer.byteLength(content)} bytes to ${rel}`;
     },
   },
@@ -348,7 +404,7 @@ export function runCommand(command, { cwd, signal, timeoutMs = 120_000 }) {
   return new Promise((resolvePromise) => {
     mkdirSync(cwd, { recursive: true });
     const shell = process.env.SHELL || '/bin/sh';
-    const child = spawn(shell, ['-lc', command], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = trackChild(spawn(shell, ['-lc', command], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { group: true });
     let out = '';
     const take = (d) => { out += d; if (out.length > MAX_OUTPUT * 4) out = out.slice(-MAX_OUTPUT * 2); };
     child.stdout.on('data', take);
