@@ -255,7 +255,9 @@ test('the test clock route exists only when NOVA_TEST_CLOCK=1', async () => {
   }
 });
 
-test('module boundary: outside src/core, only src/core/index.ts is imported', () => {
+// The one exception: the device agent (src/device) ships to other machines on its own, so it
+// imports the wire format (src/core/mesh/wire.ts, node:crypto only) instead of the whole core.
+test('module boundary: outside src/core, only src/core/index.ts is imported (src/device: only mesh/wire.ts)', () => {
   const root = join(import.meta.dirname, '..', '..');
   const offenders: string[] = [];
   const walk = (dir: string) => {
@@ -264,7 +266,8 @@ test('module boundary: outside src/core, only src/core/index.ts is imported', ()
       if (e.isDirectory()) { if (!['core', 'node_modules'].includes(e.name)) walk(p); continue; }
       if (!/\.(js|ts)$/.test(e.name)) continue;
       for (const m of readFileSync(p, 'utf8').matchAll(/from '([^']*core\/[^']+)'/g)) {
-        if (!m[1]!.endsWith('core/index.ts')) offenders.push(`${relative(root, p)} → ${m[1]}`);
+        const device = relative(root, p).startsWith(join('src', 'device'));
+        if (!m[1]!.endsWith(device ? 'core/mesh/wire.ts' : 'core/index.ts')) offenders.push(`${relative(root, p)} → ${m[1]}`);
       }
     }
   };

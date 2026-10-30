@@ -318,6 +318,36 @@ export function verifyRoster(signed: SignedRoster, pinned: string[]): boolean {
   return pinned.some((k) => verifyDeviceSignature(k, message, signed.signature));
 }
 
+// ---- what a node proves to a device agent (M4b) ---------------------------------------------------
+
+// A node answering a device's challenge: `nova-hello-v1.<challenge>.<canonical JSON of what it
+// claims>`. A device signs a session request only for a node that proved it holds a pinned key, so
+// a stranger at the hub's address never gets a usable signature.
+export interface HelloClaim { id: string; role: string; epoch: number; public_key: string }
+export function helloProofMessage(challenge: string, claim: HelloClaim): Buffer {
+  return Buffer.from(`nova-hello-v1.${challenge}.${canonicalJson(claim)}`, 'utf8');
+}
+
+// The runtime agent a hub ships: each file's SHA-256 (hex), the SHA-256 of the canonical JSON of
+// that map, and a version. The hub signs `nova-runtime-v1.<canonical JSON of the manifest>`; the
+// boot agent checks the signature against its pinned keys and every file against its hash before
+// anything replaces the runtime it has.
+export interface RuntimeManifest { version: string; sha256: string; files: Record<string, string> }
+export function runtimeManifestMessage(m: RuntimeManifest): Buffer {
+  return Buffer.from(`nova-runtime-v1.${canonicalJson(m)}`, 'utf8');
+}
+
+export function sha256Hex(bytes: Uint8Array | string): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+// The manifest for a set of files (name → contents).
+export function runtimeManifest(version: string, files: Record<string, Uint8Array>): RuntimeManifest {
+  const hashes: Record<string, string> = {};
+  for (const name of Object.keys(files).sort()) hashes[name] = sha256Hex(files[name]!);
+  return { version, sha256: sha256Hex(canonicalJson(hashes)), files: hashes };
+}
+
 // ---- hybrid logical clocks --------------------------------------------------------------------
 
 // A value is physical milliseconds, a logical counter and the node that issued it, written with
