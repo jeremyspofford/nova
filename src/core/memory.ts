@@ -76,11 +76,12 @@ export class Memory {
   readonly exportsDir: string;
   #db: Db;
   #now: () => Date;
-  #afterForget: (ids: string[]) => void;
+  #afterForget: (ids: string[], records: MemoryRecord[]) => void;
   #forgetListeners: ((records: MemoryRecord[]) => void)[] = [];
+  #doneListeners: ((records: MemoryRecord[]) => void)[] = [];
 
   // afterForget: where else the forgotten records must go (the backups).
-  constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[]) => void }) {
+  constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[], records: MemoryRecord[]) => void }) {
     this.#db = o.db;
     this.#now = o.now ?? (() => new Date());
     this.#afterForget = o.afterForget ?? (() => {});
@@ -144,6 +145,12 @@ export class Memory {
     this.#forgetListeners.push(fn);
   }
 
+  // Called last, once every onForget listener has rewritten what it keeps: the sync log then
+  // replaces or drops whatever still carries the words.
+  onForgetDone(fn: (records: MemoryRecord[]) => void): void {
+    this.#doneListeners.push(fn);
+  }
+
   forget(id: string, by = 'person'): { forgotten: string[] } {
     const who = this.#by(by);
     const records = this.history(id);
@@ -155,9 +162,21 @@ export class Memory {
     });
     // Old pages in the write-ahead log could still hold the content; fold them in now.
     if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    this.#afterForget(ids);
+    this.#afterForget(ids, records);
     for (const fn of this.#forgetListeners) fn(records);
+    for (const fn of this.#doneListeners) fn(records);
     return { forgotten: ids };
+  }
+
+  // On a standby: the hub forgot these, and sync has already deleted the rows here (the hub's own
+  // history of it arrives by sync too). The rest of a forget happens here as on the hub: the
+  // write-ahead log, the backups, the rendered files, the sync log.
+  forgottenElsewhere(rows: Record<string, unknown>[]): void {
+    const records = rows.map((r) => this.#shape(r as unknown as Row));
+    if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    this.#afterForget(records.map((r) => r.id), records);
+    for (const fn of this.#forgetListeners) fn(records);
+    for (const fn of this.#doneListeners) fn(records);
   }
 
   get(id: string): MemoryRecord {
