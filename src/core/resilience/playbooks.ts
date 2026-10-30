@@ -203,7 +203,10 @@ export class Playbooks extends EventEmitter {
     const tag = (p: Problem) => { if (!this.#row(p.id)) this.attach(p.id, pending.playbook, pending.subject, o.repairs); };
     this.#log.prependOnceListener('problem', tag);
     try {
-      return this.#log.problem(source, said, { ...(o.detail ? { detail: o.detail } : {}), ...(o.taskId ? { taskId: o.taskId } : {}) });
+      // The problem and its playbook are one write. A server killed between the two (the
+      // supervisor's chaos pass did it) left a problem with no playbook: the next one of its kind
+      // couldn't find it and opened a second, and nothing would ever close the first.
+      return this.#db.tx(() => this.#log.problem(source, said, { ...(o.detail ? { detail: o.detail } : {}), ...(o.taskId ? { taskId: o.taskId } : {}) }));
     } finally {
       this.#log.off('problem', tag);
     }
