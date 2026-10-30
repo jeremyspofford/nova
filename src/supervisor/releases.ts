@@ -204,19 +204,33 @@ export function recordProblem(home: string, p: { source: string; said: string; p
   try {
     if (!tableExists(db, 'problem')) return null;
     const pb = tableExists(db, 'problem_playbook');
-    if (pb) {
-      const open = db.prepare(`SELECT pp.problem_id AS id FROM problem_playbook pp JOIN problem p ON p.id = pp.problem_id WHERE pp.playbook = ? AND pp.subject IS ? AND p.resolved_at IS NULL`).get(p.playbook, p.subject ?? null) as { id: number } | undefined;
-      if (open) return open.id;
+    // The problem and its playbook are one write: killed between the two, the supervisor would
+    // leave a problem no playbook knows, and the next of its kind would open a second.
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const id = record(db, pb, p, now);
+      db.exec('COMMIT');
+      return id;
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
     }
-    const at = now.toISOString();
-    db.prepare('INSERT INTO problem (at, source, message, detail) VALUES (?, ?, ?, ?)').run(at, p.source, p.said, p.detail ?? null);
-    const id = (db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id;
-    if (pb) {
-      const repairs = (p.repairs ?? []).map((r) => ({ at, name: r.name, by: 'nova', ok: r.ok, said: r.said }));
-      db.prepare('INSERT OR REPLACE INTO problem_playbook (problem_id, playbook, subject, repairs, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, p.playbook, p.subject ?? null, JSON.stringify(repairs), at);
-    }
-    return id;
   } finally {
     db.close();
   }
+}
+
+function record(db: DatabaseSync, pb: boolean, p: Parameters<typeof recordProblem>[1], now: Date): number {
+  if (pb) {
+    const open = db.prepare(`SELECT pp.problem_id AS id FROM problem_playbook pp JOIN problem p ON p.id = pp.problem_id WHERE pp.playbook = ? AND pp.subject IS ? AND p.resolved_at IS NULL`).get(p.playbook, p.subject ?? null) as { id: number } | undefined;
+    if (open) return open.id;
+  }
+  const at = now.toISOString();
+  db.prepare('INSERT INTO problem (at, source, message, detail) VALUES (?, ?, ?, ?)').run(at, p.source, p.said, p.detail ?? null);
+  const id = (db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id;
+  if (pb) {
+    const repairs = (p.repairs ?? []).map((r) => ({ at, name: r.name, by: 'nova', ok: r.ok, said: r.said }));
+    db.prepare('INSERT OR REPLACE INTO problem_playbook (problem_id, playbook, subject, repairs, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, p.playbook, p.subject ?? null, JSON.stringify(repairs), at);
+  }
+  return id;
 }
