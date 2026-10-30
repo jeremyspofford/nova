@@ -25,7 +25,10 @@ test('M7a: Settings › Changes — the tier-3 Ship it with its sandbox evidence
     // A stopped one (its own test is wrong) and one a provider proposed: tier 3.
     const broken = await m.send('POST', api('/changes'), { kind: 'trigger-rules', artifact: windDown('0.9.0', { tests: [{ name: 'fires at eight', at: '20:00', expect: { rule: 'Wind down', fires: true } }] }) });
     await until<any>(() => m.get(api(`/changes/${broken.body.id}`)), (c) => c.state === 'stopped', 1600);
-    const proposed = await m.send('POST', api('/changes'), { kind: 'trigger-rules', artifact: windDown('1.0.0'), proposed_by: 'provider:example-agent' });
+    // Its second rule starts a task: the OK is given on what that task would run.
+    const pack = windDown('1.0.0');
+    const note = { name: 'Morning note', class: 'heartbeat', cron: '0 6 * * 1', action: { kind: 'task', task: { title: 'Write the morning note', owner: 'workspace', goal: 'A note exists.', evidence_required: [{ kind: 'read_back', target: 'workspace:notes/morning.md' }], approval_tier: 0, inputs: { action: 'write', path: 'notes/morning.md', content: 'Good morning.' } } } };
+    const proposed = await m.send('POST', api('/changes'), { kind: 'trigger-rules', artifact: { ...pack, rules: [...pack.rules, note] }, proposed_by: 'provider:example-agent' });
     assert.equal(proposed.status, 201, JSON.stringify(proposed.body));
     const id = proposed.body.id as string;
     await until<any>(() => m.get(api(`/changes/${id}`)), (c) => c.state === 'waiting', 1600);
@@ -45,6 +48,7 @@ test('M7a: Settings › Changes — the tier-3 Ship it with its sandbox evidence
     assert.equal(await go.isDisabled(), true, 'tier 3: confirmed first');
     assert.match((await ship.textContent()) ?? '', /Proposed by example-agent · tier 3/);
     assert.match((await ship.textContent()) ?? '', /sends you “Time to wind down for the evening\.”/);
+    assert.match((await ship.textContent()) ?? '', /starts “Write the morning note”, run by workspace, at tier 0 \(acts without asking\), privacy as your setting says, with inputs \{"action":"write","path":"notes\/morning\.md","content":"Good morning\."\}/);
     assert.deepEqual(await ship.locator('.change-stage').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-stage')}:${e.getAttribute('data-state')}`)), ['sandbox:passed', 'tests:passed', 'health:passed', 'release:passed']);
     assert.match((await ship.locator('.change-stage[data-stage="health"]').textContent()) ?? '', /Health and 6 smoke probes passed on the sandbox/);
     // The stopped one says where it stopped, and why; it was never offered.
