@@ -13,6 +13,10 @@
 // that (the lookback), so an item Screenpipe reports late with an older time still arrives, and the
 // ids keep anything from arriving twice. A backlog bigger than one pull carries on at the next.
 //
+// Screenpipe 0.4 can require an API key (its Settings > Privacy): with one set, every request carries
+// it as "Authorization: Bearer <key>"; without, none does. A 401 or 403 is Screenpipe refusing Nova,
+// a state of its own (KeyRefused), never "isn't answering". The key is never put in a message.
+//
 // A Screenpipe that is down is a status and a problem, never a crash: the cursor stays where it
 // was, so what Screenpipe kept meanwhile arrives once it answers. What Screenpipe itself never kept
 // (it wasn't running) can't arrive, and an item reported later than the lookback is missed.
@@ -53,6 +57,16 @@ export interface RawEvent {
 }
 
 export class Unreachable extends Error {}
+// Screenpipe answered but refused Nova: it wants an API key, or not the one Nova sent.
+export class KeyRefused extends Error {
+  readonly hadKey: boolean;
+  constructor(hadKey: boolean) {
+    super(hadKey
+      ? 'Screenpipe answered but refused the API key Nova has; check it against the one in Screenpipe’s Settings > Privacy.'
+      : 'Screenpipe answered but refused Nova; it needs the API key from Screenpipe’s Settings > Privacy.');
+    this.hadKey = hadKey;
+  }
+}
 
 type Fetch = typeof fetch;
 
@@ -93,23 +107,27 @@ export class Screenpipe {
   #timeoutMs: number;
   #lookbackMs: number;
   #maxBytes: number;
+  #apiKey: string | null;
 
-  constructor(o: { url: string; fetch?: Fetch; timeoutMs?: number; lookbackMs?: number; maxBytes?: number }) {
+  constructor(o: { url: string; apiKey?: string | null; fetch?: Fetch; timeoutMs?: number; lookbackMs?: number; maxBytes?: number }) {
     this.url = o.url.replace(/\/+$/, '');
     this.#fetch = o.fetch ?? fetch;
     this.#timeoutMs = o.timeoutMs ?? 5000;
     this.#lookbackMs = o.lookbackMs ?? DEFAULT_LOOKBACK_MS;
     this.#maxBytes = o.maxBytes ?? MAX_BYTES;
+    this.#apiKey = o.apiKey || null;
   }
 
   async #get(path: string): Promise<unknown> {
     let res: Response;
     try {
       // A redirect could take the pull somewhere the address didn't say: refused.
-      res = await this.#fetch(`${this.url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(this.#timeoutMs), headers: { accept: 'application/json' } });
+      const headers: Record<string, string> = { accept: 'application/json', ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}) };
+      res = await this.#fetch(`${this.url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(this.#timeoutMs), headers });
     } catch (e) {
       throw new Unreachable(`Screenpipe at ${this.url} isn’t answering (${(e as Error)?.cause instanceof Error ? ((e as Error).cause as Error).message : (e as Error).message}).`);
     }
+    if (res.status === 401 || res.status === 403) { await res.body?.cancel().catch(() => {}); throw new KeyRefused(this.#apiKey !== null); }
     if (!res.ok) throw new Unreachable(`Screenpipe at ${this.url} answered ${res.status}.`);
     const tooMuch = () => new Unreachable(`Screenpipe at ${this.url} answered with too much at once (over ${Math.round(this.#maxBytes / 1024 / 1024)} MB), so Nova didn’t read it.`);
     if (Number(res.headers.get('content-length')) > this.#maxBytes) { await res.body?.cancel().catch(() => {}); throw tooMuch(); }

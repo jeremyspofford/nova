@@ -58,10 +58,10 @@ export function captureRoutes(capture: Capture): Route[] {
     },
     { method: 'POST', path: '/capture/proposals/{id}/dismiss', summary: 'Dismiss a proposal. The event stays as evidence.', handle: ({ params }) => capture.dismiss(params.id!) },
     {
-      method: 'POST', path: '/capture/sources/screenpipe', status: 201, summary: 'Add a Screenpipe on this machine (or another of your devices) to take capture from. It stays off until you turn it on.', body: '{url?, name?}',
+      method: 'POST', path: '/capture/sources/screenpipe', status: 201, summary: 'Add a Screenpipe on this machine (or another of your devices) to take capture from. It stays off until you turn it on. api_key, if Screenpipe asks for one, is kept in the vault.', body: '{url?, name?, api_key?}',
       handle: ({ body }) => capture.addScreenpipe(body),
     },
-    { method: 'PATCH', path: '/capture/sources/{id}', summary: 'Change a Screenpipe source’s address, or how far back each pull asks again for items it reports late (lookback_minutes, 1 to 240; 5 by default).', body: '{url?, lookback_minutes?}', handle: ({ params, body }) => capture.configure(params.id!, body) },
+    { method: 'PATCH', path: '/capture/sources/{id}', summary: 'Change a Screenpipe source’s address, how far back each pull asks again for items it reports late (lookback_minutes, 1 to 240; 5 by default), or its API key (api_key, from Screenpipe’s Settings > Privacy: kept in the vault and never shown back; null removes it).', body: '{url?, lookback_minutes?, api_key?}', handle: ({ params, body }) => capture.configure(params.id!, body) },
     {
       method: 'POST', path: '/capture/sources/{id}/enable', summary: 'Consent: turn a source on. It captures from now; since asks for what it kept from an earlier time too. Refused under local-only for an address outside your devices.', body: '{since?}',
       handle: ({ params, body, who }) => capture.enable(params.id!, { by: by(who), since: body.since }),

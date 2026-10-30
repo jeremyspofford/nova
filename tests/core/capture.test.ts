@@ -391,6 +391,61 @@ test('a device agent’s capture events through the inbox: offered by its heartb
   }
 });
 
+test('a Screenpipe API key: sent as Bearer when set, never otherwise; kept in the vault, never shown back or stored plainly', async () => {
+  await withScreenpipe(async (h, sp, id) => {
+    const src = `/capture/sources/${encodeURIComponent(id)}`;
+    sp.add({ at: min(h, -1), app: 'Editor', window: 'notes.txt', text: 'Example line one' });
+    await h.c('POST', `${src}/enable`, { since: min(h, -10) });
+    await pull(h, id);
+    assert.ok(sp.auths.length > 0 && sp.auths.every((a) => a === null), 'no key: no Authorization header at all');
+
+    // Screenpipe 0.4 with its API key on refuses /search: a state of its own, not "unreachable".
+    sp.requireKey('example-screenpipe-key-1');
+    sp.add({ at: min(h, 0), app: 'Editor', window: 'notes.txt', text: 'Example line two' });
+    await pull(h, id);
+    let view = (await h.c('GET', '/capture')).body.sources[0];
+    assert.equal(view.status, 'needs_key');
+    assert.equal(view.detail, 'Screenpipe answered but refused Nova; it needs the API key from Screenpipe’s Settings > Privacy.');
+    assert.equal(view.has_api_key, false);
+
+    // The key: saved through PATCH, sent on every request, never echoed.
+    const set = await h.c('PATCH', src, { api_key: 'example-screenpipe-key-1' });
+    assert.equal(set.status, 200, JSON.stringify(set.body));
+    assert.equal(set.body.has_api_key, true);
+    assert.doesNotMatch(JSON.stringify(set.body), /example-screenpipe-key-1/);
+    sp.auths.length = 0;
+    await pull(h, id);
+    view = (await h.c('GET', '/capture')).body.sources[0];
+    assert.equal(view.status, 'on', view.detail);
+    assert.ok(sp.auths.length > 0 && sp.auths.every((a) => a === 'Bearer example-screenpipe-key-1'), 'the key goes on every Screenpipe request');
+    assert.ok((await events(h)).some((e) => e.text === 'Example line two'));
+    assert.doesNotMatch(JSON.stringify((await h.c('GET', '/capture')).body), /example-screenpipe-key-1/, 'never shown back');
+    assert.deepEqual(holding(h.home, 'example-screenpipe-key-1'), [], 'never stored in plain text: not in config, logs or the database');
+
+    // A wrong key is refused the same way, and says so.
+    await h.c('PATCH', src, { api_key: 'example-wrong-key' });
+    await pull(h, id);
+    view = (await h.c('GET', '/capture')).body.sources[0];
+    assert.equal(view.status, 'needs_key');
+    assert.match(view.detail, /refused the API key Nova has/);
+
+    // Bad keys are refused; an empty one or null removes it.
+    for (const bad of [42, 'has a space', 'x'.repeat(2000)]) assert.equal((await h.c('PATCH', src, { api_key: bad })).status, 400, String(bad));
+    const removed = await h.c('PATCH', src, { api_key: null });
+    assert.equal(removed.body.has_api_key, false);
+    sp.requireKey(null);
+    sp.auths.length = 0;
+    await pull(h, id);
+    assert.ok(sp.auths.every((a) => a === null), 'removed: no header again');
+
+    // The address and lookback, changed together or alone, with the same checks as before.
+    const moved = await h.c('PATCH', src, { url: `${sp.base}/`, lookback_minutes: 15 });
+    assert.deepEqual([moved.status, moved.body.url, moved.body.lookback_minutes], [200, sp.base, 15]);
+    assert.equal((await h.c('PATCH', src, { url: 'not an address' })).status, 400);
+    assert.equal((await h.c('PATCH', src, { lookback_minutes: 0 })).status, 400);
+  });
+});
+
 test('local-only refuses a Screenpipe outside the person’s devices, and stops pulling one when privacy tightens', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-capture-remote-'));
   const asked: string[] = [];

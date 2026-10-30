@@ -55,6 +55,45 @@ in `docs/evidence/ui-fixes-gate.md`.
   first control there is now the scope; `npm run shots` is not part of CI and was not re-run). No
   other assertion was removed.
 
+**2026-10-30 (Screenpipe source: edit in the console, API key).** Branch `capture/screenpipe-key`.
+These are two gaps the owner found live.
+- **The address and lookback can now be edited** in Settings › Capture › Address and API key. It
+  uses the PATCH route, so the validation is the same. The panel opens by itself when the source
+  can't be reached or is refused.
+- **Screenpipe 0.4's API key:** an optional `api_key` on the source.
+  - It is entered as a password, never filled back in, and kept in the vault under
+    `capture/<source>`, never in the source's config.
+  - It is sent as `Authorization: Bearer` on every Screenpipe request, and sent on none when unset.
+  - `null` removes it.
+  - The view says only `has_api_key`.
+  - A 401 or 403 is a state of its own, `needs_key`, with the owner's wording, not "isn't
+    answering". With a wrong key saved, it says so.
+- **Found by the test, and fixed:** Settings' Capture section redraws when a source's status
+  changes, and that threw away what was being typed. The "don't redraw under typing" check covered
+  text fields only, and clicking Save moved focus away anyway. The Capture section now carries typed
+  fields and open details over a redraw, and resets a form once its change is saved. This is
+  limited to Capture, since other sections may rely on a redraw to clear their forms.
+
+**2026-10-30 (security: web_fetch could read Nova itself — Amendment C Part 3, first piece).**
+Branch `fix/web-fetch-ssrf`.
+- **The hole:** Nova's console answers any request from this machine as the person. The agent's
+  `web_fetch` had no address guard, needed no approval, and followed redirects. So a page could
+  talk the agent into fetching `http://localhost:<port>/api/v1/memory` (or `/capture/events`,
+  `/tasks`), and then into sending what it read out in another URL. Neither step asks the person
+  (web pages never set the mail "taint"). I confirmed it on the preview: a plain local GET, made the
+  way `web_fetch` makes it, returned memory.
+- **Found by:** the Part 3 inventory, ahead of the gate's design.
+- **Fix:** `src/safe-fetch.js`. Only public unicast addresses can be reached. A name is resolved,
+  every address it resolves to must be public, and the socket connects to the very address that was
+  checked, so DNS rebinding can't slip through. Every redirect is re-checked. Names that only exist
+  on a private network (`.local`, `.ts.net`, …) are refused. IPv4 inside IPv6 is judged as IPv4.
+- **Tests:** they failed first on the old tool. A test may widen the rule; the runner can't, because
+  the model controls only a tool's arguments.
+- **Still open, and the ingest gate's job:**
+  - outbound checks on what a URL carries;
+  - taint for web content;
+  - the screen itself.
+
 **2026-10-30 (Amendment 2026-10-30-C, owner-approved).** `AMENDMENT-2026-10-30-C.md` and
 `UX-RESEARCH-2026-10-30.md` were added to the packet exactly as given (sha256 `e3b1862d…` and
 `dda206f4…`).
