@@ -9,10 +9,122 @@ built-ins only.
 
 | Dependency | Kind | Why |
 | --- | --- | --- |
+| `jsqr` 1.4.0 | dev | Test-only: decodes the QR codes Nova draws (`tests/qr.test.js`, the M4 UI tests), so the encoder is checked by an independent decoder. Never loaded by Nova itself. |
 | `playwright-core` 1.56.1 | dev | Drives Chromium for `npm run shots` (golden screens, keyboard path, budgets); no bundled browser download. |
 | `claude` CLI | external | The default `agent_cmd`. Swappable by config; nothing in Nova depends on it. |
 
 ## Decisions
+
+**2026-10-29 (M4a): device enrollment, the registry, sessions, and who may do
+what.** Plan §0–§1. `src/core/mesh/`, migration `0005_mesh.sql`, Settings ›
+Devices, `/pair`.
+
+- **Who is asking** (`mesh/access.ts`), on every request, both listeners:
+  - console: the console listener, a loopback peer, a loopback `Host`, and no
+    `forwarded`, `x-forwarded-*`, `tailscale-*` or `x-real-ip` header;
+  - device: a session of a trusted device (cookie `nova_session` or
+    `Authorization: Bearer`), scoped by kind. Routes carry `access`:
+    `public`, `person` (default: console, browser, phone), `approver`
+    (console, or a browser/phone with `can_approve`), `device` (computer),
+    `sync` (standby), `mesh` (any trusted device). Outside `/api/v1`
+    everything is `person` except a short public list (`PUBLIC_PATHS`: the
+    pairing page and what it loads, `/design-system.css`, the icons, and the
+    reserved `/join.sh` and `/device-agent.tar`);
+  - public: everything else. API: 401 (before route matching, so nothing is
+    learnt about what exists). A page navigation: 303 to `/pair`. Another
+    device's kind outside its scope: 403.
+  - The `Host` check (421) and the X-Nova + Origin guard run as before, on
+    both listeners; the mesh's public host is a trusted origin.
+- **Tightening, said plainly:** with `NOVA_HOST` set beyond loopback, other
+  machines used to get everything; now they get 401 until paired, and pairing
+  needs a mesh address. Webhooks (`POST /hooks/{name}`) are `public`: they
+  authenticate with their own token, as before. No existing test changed.
+- **Transport** (`src/config.js` `meshConfig`): `NOVA_MESH_URL=https://…` needs
+  `NOVA_TLS_CERT`/`NOVA_TLS_KEY`; `http://…` needs
+  `NOVA_MESH_TRANSPORT=proxy|network`; otherwise Nova refuses to start and says
+  why. A wildcard bind needs `NOVA_MESH_PUBLIC_URL`; `proxy` and TLS need an
+  https public URL. Behind a stated proxy the rate limiter keys on the last
+  `x-forwarded-for` entry, and only then. Joining and sessions are served only
+  on the mesh listener.
+- **Keys and formats** (`mesh/wire.ts`, node:crypto only so the device agent
+  can carry it):
+  - Era 1's code primitives and the HLC ported nearly verbatim; Era 1's fixed
+    vectors still pass.
+  - Fingerprint: the first 20 bytes of SHA-256 of the raw Ed25519 key, in
+    Crockford base32 (the code alphabet), eight groups of four. A vector is
+    checked against Python.
+  - Every signed string has its own label: `nova-add-device-reveal-v1.<id>.<t>`,
+    `nova-add-device-status-v1.<id>.<t>`, `nova-session-v1.<device>.<t>`,
+    `nova-x25519-v1.<x25519 key>` (the join's `x25519_sig`: "over the X25519
+    key", with a label), `nova-roster-v1.<canonical JSON>`. Times are Unix
+    seconds within ±60 s.
+  - `seal`/`open`: static-static X25519, HKDF-SHA256 with a fresh 16-byte salt
+    per box and info `nova-seal-v1|<from>|<to>`, AES-256-GCM, optional AAD.
+    Layout: version 1, salt, iv, ciphertext, tag.
+- **Identity:** `home/mesh/identity.json` (0600, directory 0700, written
+  atomically) holds this node's id and both key pairs. A looser file is
+  tightened at start and recorded as a problem. The private halves never leave
+  the module; serializing the identity shows public parts only. A test scans
+  the database, its WAL and the log for the private keys, the code and the
+  session token.
+- **The hub is in its own registry** (role `hub`, kind `computer`), so the
+  roster, `mesh_state.hub_id` and promotion (M4c) have a record to point at;
+  for the console, "this device" is the hub. It can't be revoked.
+- **Enrollment** (`mesh/enroll.ts`):
+  - Codes: 20 an hour; single use; wrong, spent and expired codes all answer
+    400 "That code didn't work."
+  - The code is needed again for the digits, so between join and reveal the
+    hub holds it in memory only (Era 1's approach); a restart forgets it and
+    the request expires. **Deviation:** the join answer also carries
+    `pairing_id`, which the digits are computed over.
+  - Reveal within 2 minutes of the join, then approval within 10 minutes. A
+    request that expired after showing its digits is a problem; one that never
+    got that far is just tidied away.
+  - A commitment that doesn't match denies the request and records a problem.
+    A replayed reveal is 409; polls must be signed with a time newer than the
+    last accepted one.
+  - A revoked key is refused (403) without spending the code; a key already
+    paired or already asking is 409. One standby at a time.
+  - Rate limits per client address: 30 public calls a minute, 90 polls a
+    minute, 10 wrong codes in 5 minutes. A refusal is one problem per address
+    per 10 minutes.
+- **Sessions:** `nvs_` tokens, 12 hours, stored as a labelled SHA-256. A signed
+  session request starts one session only. `{cookie: true}` sets an HttpOnly,
+  SameSite=Strict cookie (Secure when the public URL is https) and never puts
+  the token in the body. `last_seen` is written at most every 30 s.
+- **Revocation:** sets `trust='revoked'`, deletes sessions, emits `device`,
+  and on the next turn destroys every response the device has open (core
+  stream, Era 2 streams, anything in flight). A test shows streams close in
+  well under a second, and fails without the closing.
+- **Additions to the plan's route list:** `GET /mesh/status` (whether devices
+  can reach Nova, where, and who is asking; the PWA needs it). `PATCH` joins
+  the route methods. `join_request` events go only to approvers.
+- **PWA:**
+  - Settings › Devices lists the registry. Add a device is the standout,
+    unless a device is waiting, when Review is. Revoke and "let it approve"
+    are tier-3 sheets in the approval-sheet pattern. The join prompt opens by
+    itself on the hub's screen and on approver devices, with the digits first.
+  - The "Device id" row (the appearance id in localStorage) is now
+    "Appearance id", since "device" means the registry now.
+  - `ui/js/qr.js`: byte mode, level M, versions 1–10, the lowest-penalty mask,
+    one `currentColor` path with a quiet zone. `.qr` uses `light-dark()` on
+    `text/primary` and `bg/base`, so it is dark on light in every scheme with
+    their 4.5:1 contrast. jsqr decodes every version and every mask, and, in
+    Chromium, the pixels the page drew in light and dark mode without
+    inversion.
+  - `/pair` makes a fresh non-extractable Ed25519 + X25519 pair per pairing
+    (IndexedDB); drops the fragment from the address bar; refuses a hub whose
+    fingerprint isn't the QR's; shows the digits it computed itself and stops
+    if the hub's differ; pins the hub's key and checks the roster's signature;
+    signs in with the cookie. No secure context or no Ed25519: it says so and
+    offers no way on.
+  - A paired browser renews its session with its key two hours before it ends,
+    and after a 401 (API or stream); if the hub refuses, it goes to `/pair`,
+    which forgets the revoked key.
+  - The service worker never caches `/api/v1/mesh/*`; shell cache v3.
+- **Left for later:** `/join.sh` and `/device-agent.tar` are reserved public
+  paths with no handler yet (M4b), so the command door answers 404 until then.
+  The standby's lag in Health is `null` until sync (M4c).
 
 **2026-10-29 (packet amendment): perception principles added to DESIGN-SYSTEM §1
 as binding.** Owner's amendment; not a milestone, and M3/M4 scope is unchanged.

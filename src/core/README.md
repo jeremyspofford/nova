@@ -22,9 +22,17 @@ The modular-monolith core (ADR-1), in TypeScript that Node runs directly. The de
 | `triggers.ts` | The trigger engine: the rule registry, one record per firing, triage, dedup, cooldowns, batching, quiet hours, the heartbeat, webhooks, and proactive messages that always trace to a trigger. | CONTRACTS §6, NOVA-SPEC §4 |
 | `memory.ts` | Long-term memory with provenance: remember, correct (supersedes, keeps history), confirm, forget (real deletion of the chain, backups included), search, plain-file export, `importRecord` (keeps an existing id; used to bring in MEMORY.md). `src/memory.js` renders MEMORY.md from it. | CONTRACTS §7 |
 | `backups.ts` | Pre-upgrade backups; a forget is carried into every one of them, and a backup that can't be cleaned is destroyed and reported. | Owner's standing order 4 |
+| `mesh/wire.ts` | What the hub and devices say and how they prove it: pairing codes and the commit-then-reveal six digits (ported from Era 1), Ed25519 keys and signatures, the key fingerprint, canonical JSON, sealed boxes (X25519 → HKDF-SHA256 → AES-256-GCM), the signed roster, hybrid logical clocks. Imports only `node:crypto`, so the device agent can carry it alone. | CONTRACTS §5 |
+| `mesh/identity.ts` | This node's own Ed25519 and X25519 keys, in `home/mesh/identity.json` (0600), never in the database or logs; callers get sign, seal and open. | M4 plan §1 |
+| `mesh/devices.ts` | The device registry (the hub included), trust and revocation, device sessions (12 h, stored hashed), `mesh_state`, the signed roster. | CONTRACTS §5 |
+| `mesh/enroll.ts` | Enrollment: single-use five-minute codes (hashed), join, reveal, the six digits, tier-3 approval, signed status polls, rate limits, expiry. | CONTRACTS §5 |
+| `mesh/access.ts` | Who is asking, on every request: the console (loopback, addressed to loopback, no proxy, console listener), a paired device by session (cookie or bearer) with its kind's scope, or public. Cuts a revoked device's open streams. | M4 plan §0 |
+| `mesh/limiter.ts` | A sliding-window rate limiter per client address (ported from Era 1). | — |
 | `receipts.ts` | Context receipts: what each model call was told and where it went; the egress log; local-only violations refused as problems. | CONTRACTS §2 |
 
 Outside `/api/v1`, the server answers `GET /design-system.css?device=` with the applied design system as CSS variables; pages fetch it again when the `design-system` event arrives, so a change needs no reload or restart. The generated CSS carries the schema tokens and nothing else; Era 2's temporary aliases are gone (`docs/LEDGER.md`, M3b).
+
+Every request goes through `mesh/access.ts` first (`core.gate` outside `/api/v1`; each route's `access` scope inside it: `public`, `person` (the default), `approver`, `device`, `sync`, `mesh`). With no mesh listener configured, the console is exactly what it was before M4.
 
 Every change through the API needs the `X-Nova` header, except `POST /api/v1/hooks/{name}`: webhooks are called by automations and authenticate with their own `x-nova-hook-token` instead. That is the only exemption, and `api.ts` refuses any other route that claims it.
 

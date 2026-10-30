@@ -123,11 +123,47 @@ Optional `nova.config.json` at the repo root (environment variables win):
 | `agent_cmd` | `NOVA_AGENT_CMD` | `claude -p …` (see `src/config.js`) |
 | `timezone` | `NOVA_TZ` | the system timezone |
 |  | `NOVA_IMAP_URL` | `imaps://imap.gmail.com:993` (tests point it at a stand-in) |
+| `mesh_url` | `NOVA_MESH_URL` | none: no other device can reach Nova |
+| `mesh_public_url` | `NOVA_MESH_PUBLIC_URL` | `NOVA_MESH_URL` (required when it listens on every address) |
+| `mesh_transport` | `NOVA_MESH_TRANSPORT` | none (`proxy` or `network`, for an `http://` mesh address) |
+| `tls_cert`, `tls_key` | `NOVA_TLS_CERT`, `NOVA_TLS_KEY` | none (PEM files, for an `https://` mesh address) |
 
 `agent_cmd` is the one place a model is chosen. Nova writes the assembled
 system prompt to a file and substitutes its path for `{system_file}`, sends the
 conversation on stdin, and reads the reply from stdout, as plain text or as
 Claude Code's stream-json. Any command that does that works.
+
+## Your other devices
+
+Nova's console, at `NOVA_HOST:NOVA_PORT`, answers only this computer: a
+request counts as the console only if it comes from this machine, is addressed
+to it, and passed through no proxy. Anything else, including a reverse proxy
+pointed at the console port, gets nothing until it is paired.
+
+To pair a phone, a browser or a computer, give Nova a second address, the
+mesh address, that your devices can reach:
+
+```sh
+# Nova serves TLS itself, with a certificate your devices trust:
+NOVA_MESH_URL=https://0.0.0.0:4320 NOVA_MESH_PUBLIC_URL=https://hub.example:4320 \
+NOVA_TLS_CERT=cert.pem NOVA_TLS_KEY=key.pem npm start
+
+# Or a TLS proxy in front of a local port:
+NOVA_MESH_URL=http://127.0.0.1:4320 NOVA_MESH_TRANSPORT=proxy \
+NOVA_MESH_PUBLIC_URL=https://hub.example npm start
+```
+
+`NOVA_MESH_TRANSPORT=network` says an encrypted network (a tailnet) carries
+plain HTTP; browsers then can't pair (they need HTTPS for the keys), but
+computers can. Plain HTTP with neither statement is refused at startup.
+
+Then open Settings › Devices and choose **Add a device**. A phone scans the
+QR code; any browser opens the address and types the code; a computer runs the
+one-line command. Each device makes its own key, and shows six digits that
+your hub shows too: approve it on the hub only if they match. Codes work once,
+for five minutes. Only enter a code at your hub's own address, on a device you
+already trust. Revoke a device in the same place; it is signed out at once and
+its key never works again.
 
 ## Check it
 
