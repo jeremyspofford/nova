@@ -250,7 +250,7 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
 }
 .orb-core {
   background:
-    radial-gradient(circle at 34% 28%, color-mix(in srgb, var(--orb-hi) 90%, var(--text-primary)) 0%, var(--orb-c) 34%, color-mix(in srgb, var(--orb-c) 55%, var(--bg-base)) 78%, color-mix(in srgb, var(--orb-c) 35%, var(--bg-base)) 100%);
+    radial-gradient(circle at 34% 28%, var(--orb-hi) 0%, var(--orb-c) 36%, color-mix(in srgb, var(--orb-c) 70%, var(--orb-g)) 78%, color-mix(in srgb, var(--orb-c) 60%, transparent) 100%);
   transition: filter var(--motion-duration-slow) var(--motion-ease);
 }
 .orb-swirl {
@@ -260,16 +260,18 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   transition: opacity var(--motion-duration-slow) var(--motion-ease);
 }
 .orb-sheen {
-  background: radial-gradient(circle at 30% 24%, color-mix(in srgb, var(--text-primary) 55%, transparent) 0%, transparent 22%);
-  opacity: 0.6;
+  /* A highlight: the orb's own light, brighter. Never a feature. */
+  background: radial-gradient(circle at 32% 26%, var(--orb-hi) 0%, transparent 30%);
+  filter: brightness(1.6) saturate(0.7);
+  opacity: 0.55;
 }
 .orb[data-state="working"] .orb-glow { animation: orb-pulse var(--motion-pulse) var(--motion-ease) infinite; }
 .orb[data-state="listening"] { --orb-c: var(--orb-listening); }
 .orb[data-state="listening"] .orb-swirl { opacity: 1; animation: orb-swirl var(--motion-breathe) linear infinite; }
 .orb[data-state="speaking"] .orb-glow { animation: none; opacity: 1; scale: 1.08; }
 .orb[data-state="speaking"] .orb-core { filter: brightness(1.15); }
-.orb[data-state="attention"] { --orb-c: var(--orb-attention); --orb-g: color-mix(in srgb, var(--orb-attention) 50%, transparent); --orb-hi: color-mix(in srgb, var(--orb-attention) 60%, var(--text-primary)); }
-.orb[data-state="alert"] { --orb-c: var(--status-error); --orb-g: color-mix(in srgb, var(--status-error) 45%, transparent); --orb-hi: color-mix(in srgb, var(--status-error) 60%, var(--text-primary)); }
+.orb[data-state="attention"] { --orb-c: var(--orb-attention); --orb-g: color-mix(in srgb, var(--orb-attention) 50%, transparent); --orb-hi: var(--orb-attention); }
+.orb[data-state="alert"] { --orb-c: var(--status-error); --orb-g: color-mix(in srgb, var(--status-error) 45%, transparent); --orb-hi: var(--status-error); }
 .orb[data-state="alert"] .orb-glow { animation: orb-pulse var(--motion-pulse) var(--motion-ease) infinite; }
 .orb[data-state="offline"] { filter: grayscale(1); opacity: 0.45; }
 .orb[data-state="offline"] .orb-glow { animation: none; opacity: 0.3; }

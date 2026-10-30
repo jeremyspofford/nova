@@ -212,7 +212,8 @@ const PRIVACY_WORDS = { 'local-only': 'Nothing leaves this machine.', 'local-pre
 
 export function approvalSheet(t, { worker = null } = {}) {
   const tier = Number(t.approval_tier) >= 3 ? 3 : 2;
-  const where = worker ? `${esc(worker.name ?? worker.id)}${worker.egress ? ` · ${worker.egress === 'local' ? 'runs on this machine' : 'reaches the internet'}` : ''}` : esc(t.owner);
+  const EGRESS = { none: 'stays on this machine', local: 'stays on your devices', remote: 'reaches the internet' };
+  const where = worker ? `${esc(worker.name ?? worker.id)}${EGRESS[worker.egress] ? ` · ${EGRESS[worker.egress]}` : ''}` : esc(t.owner);
   return `<form class="approval-sheet" data-tier="${tier}" data-task="${esc(t.id)}" method="dialog">
   <p class="sheet-kicker">${status('needs-you')}</p>
   <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
