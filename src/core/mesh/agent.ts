@@ -195,7 +195,7 @@ if [ -n "\${NOVA_JOIN_NO_RUN:-}" ]; then
   echo "To start the agent: NOVA_DEVICE_HOME='$DEVICE_HOME' node '$BOOT' run"
   exit 0
 fi
-NOVA_DEVICE_HOME="$DEVICE_HOME" nohup node "$BOOT" run >>"$DEVICE_HOME/agent.log" 2>&1 </dev/null &
+NOVA_DEVICE_HOME="$DEVICE_HOME" nohup node --disable-sigusr1 "$BOOT" run >>"$DEVICE_HOME/agent.log" 2>&1 </dev/null &
 echo "The agent is running in the background (its log: $DEVICE_HOME/agent.log)."
 echo "Check on it: NOVA_DEVICE_HOME='$DEVICE_HOME' node '$BOOT' status"
 `;

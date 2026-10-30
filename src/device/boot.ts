@@ -378,12 +378,20 @@ export function installLocalRuntime(p: Paths): Installed {
 // guard. process.report writes a diagnostic report to any folder it is told (checking only the
 // working folder), v8.setFlagsFromString can switch on V8 tracers that write files anywhere
 // (--trace-turbo-path, --redirect-code-traces-to), and process.kill reaches every process of the
-// person's. None of them can be had back: they are replaced, not hidden, and can't be redefined.
+// person's — as do the raw bindings under it (process._kill) and process._debugProcess, which
+// sends any process the signal that opens its inspector. process.chdir and abort are taken too:
+// the runtime starts in state/ and has no reason to leave, and a core dump lands where it stands.
+// None of them can be had back: they are replaced, not hidden, and can't be redefined.
 export const RUNTIME_SANDBOX = `
 const lock = (o, k, v) => Object.defineProperty(o, k, { value: v, writable: false, configurable: false, enumerable: true });
 const no = (what) => function () { throw Object.assign(new Error(what + ' isn’t available to the runtime agent.'), { code: 'ERR_ACCESS_DENIED' }); };
 lock(process, 'report', undefined);
 lock(process, 'kill', no('process.kill'));
+lock(process, '_kill', no('process._kill'));
+lock(process, '_debugProcess', no('process._debugProcess'));
+lock(process, '_debugEnd', no('process._debugEnd'));
+lock(process, 'chdir', no('process.chdir'));
+lock(process, 'abort', no('process.abort'));
 lock(process.getBuiltinModule('node:v8'), 'setFlagsFromString', no('v8.setFlagsFromString'));
 process.getBuiltinModule('node:module').syncBuiltinESMExports();
 `;
@@ -550,7 +558,12 @@ export class Boot {
 
   #startRuntime(): ChildProcess {
     const c = spawnRuntime(this.p);
-    c.on('message', (m: FromRuntime) => void this.#fromRuntime(m));
+    // Whatever the runtime sends is untrusted: anything that isn't a message we know is dropped, and
+    // a failure handling one is said, never left to crash the boot agent.
+    c.on('message', (m: unknown) => {
+      if (!m || typeof m !== 'object' || typeof (m as { type?: unknown }).type !== 'string') return;
+      this.#fromRuntime(m as FromRuntime).catch((e: Error) => this.say(`A message from the runtime failed: ${e.message}`));
+    });
     c.on('error', (e) => this.say(`The runtime couldn’t start: ${e.message}`));
     return c;
   }

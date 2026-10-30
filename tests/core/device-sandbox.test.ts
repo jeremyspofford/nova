@@ -38,7 +38,7 @@ await t('copy_in', () => fs.cpSync(boot + '/keys.json', home + '/state/copy'));
 await t('chdir_boot', () => process.chdir(boot));
 await t('load_env_file', () => process.loadEnvFile(boot + '/keys.json'));
 // Node checks a signal report against the working folder but writes it to report.directory.
-process.chdir(home + '/state');
+try { process.chdir(home + '/state'); } catch { /* chdir is locked now; the runtime starts in state/ anyway */ }
 await t('report_write', () => process.report.writeReport(boot + '/report.json'));
 await t('report_signal', async () => { process.report.directory = boot; process.report.reportOnSignal = true; process.kill(process.pid, 'SIGUSR2'); await new Promise((r) => setTimeout(r, 200)); });
 await t('heap_snapshot', async () => (await import('node:v8')).writeHeapSnapshot(boot + '/heap.heapsnapshot'));
@@ -58,6 +58,13 @@ await t('execve', () => process.execve('/bin/sh', ['sh', '-c', 'echo x > ' + boo
 await t('worker', async () => { const { Worker } = await import('node:worker_threads'); new Worker('1', { eval: true }); });
 await t('addon', () => process.dlopen({ exports: {} }, boot + '/addon.node'));
 await t('kill', () => process.kill(process.ppid, 0));
+// The raw bindings under process.kill and the inspector signal reach other processes too (re-check
+// finding): another process of the person's, here a harmless sleep.
+await t('raw_kill', () => process._kill(Number(process.argv[5]), 0));
+await t('debug_process', () => process._debugProcess(Number(process.argv[5])));
+await t('debug_end', () => process._debugEnd());
+await t('chdir_runtime', () => process.chdir(home + '/runtime'));
+try { process.chdir(home + '/state'); } catch { /* chdir is locked now; the runtime starts in state/ anyway */ }
 await t('local_storage', () => { if (globalThis.localStorage === undefined) throw Object.assign(new Error('absent'), { code: 'ABSENT' }); globalThis.localStorage.setItem('k', 'v'); });
 await t('write_state', () => fs.writeFileSync(home + '/state/fine.txt', 'ok'));
 console.log(JSON.stringify(out));
@@ -82,9 +89,11 @@ test('the runtime’s sandbox: no node:sqlite, and no way out of state/ by links
   await new Promise<void>((r) => tcp.listen(0, '127.0.0.1', r));
   const port = (tcp.address() as { port: number }).port;
   const bootBefore = readdirSync(p.boot).sort();
+  // Another process of the person's; SIGUSR1 (what _debugProcess sends) would end it.
+  const bystander = spawn('sleep', ['60'], { stdio: 'ignore' });
   try {
     // Started from the device home (not state/), so a file written "here" would land outside state/.
-    const child = spawn(process.execPath, [...runtimeCommand(p, join(p.runtime, 'probe.mjs')).slice(0, -1), home, unixPath, String(port)], { cwd: home, env: {}, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [...runtimeCommand(p, join(p.runtime, 'probe.mjs')).slice(0, -1), home, unixPath, String(port), String(bystander.pid)], { cwd: home, env: {}, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (c) => { stdout += c; });
@@ -102,7 +111,9 @@ test('the runtime’s sandbox: no node:sqlite, and no way out of state/ by links
       'read_keys', 'write_boot', 'dotdot', 'symlink', 'symlink_relative', 'hardlink', 'rename_out', 'copy_in', 'chdir_boot', 'load_env_file',
       'report_write', 'report_signal', 'heap_snapshot', 'v8_flags', 'compile_cache', 'unix_connect', 'unix_listen', 'tcp_connect', 'fetch', 'dns',
       'wasi', 'inspector', 'inspector_session', 'process_binding', 'child_process', 'execve', 'worker', 'addon', 'kill', 'local_storage',
+      'raw_kill', 'debug_process', 'debug_end', 'chdir_runtime',
     ]) refused(k);
+    assert.equal(bystander.exitCode ?? bystander.signalCode, null, 'the other process was not signalled');
     assert.equal(out.write_state, 'ok', 'state/ stays writable');
     // Nothing appeared outside state/: not in boot/, not where it was started, and no service heard it.
     assert.deepEqual(readdirSync(p.boot).sort(), bootBefore, 'boot/ is unchanged');
@@ -111,6 +122,7 @@ test('the runtime’s sandbox: no node:sqlite, and no way out of state/ by links
     assert.deepEqual(touched, [], 'no local service was reached');
     assert.equal(JSON.parse(readFileSync(p.keys, 'utf8')).secret, 'test-private-key');
   } finally {
+    bystander.kill('SIGKILL');
     unix.close();
     tcp.close();
   }
