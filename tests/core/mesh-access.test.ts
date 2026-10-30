@@ -157,6 +157,21 @@ test('a malformed or "null" Origin is a 403, never a 500 or a problem, even on t
   }
 });
 
+test('a webhook answers over the mesh listener without a session: its own token is its key', async () => {
+  const b = await boot();
+  try {
+    const created = await b.c('POST', '/api/v1/triggers/rules', { name: 'Example events', class: 'event', hook: 'example', action: { kind: 'message', text: 'An example event arrived.' } });
+    assert.equal(created.status, 201);
+    const fired = await call(b.mesh, 'POST', '/api/v1/hooks/example', { n: 1 }, { 'x-nova': '', 'x-nova-hook-token': created.body.token });
+    assert.equal(fired.status, 202, JSON.stringify(fired.body));
+    assert.equal((await call(b.mesh, 'POST', '/api/v1/hooks/example', { n: 2 }, { 'x-nova': '', 'x-nova-hook-token': 'wrong' })).status, 403, 'a wrong token is still refused');
+    assert.equal((await call(b.mesh, 'POST', '/api/v1/hooks/example', { n: 3 }, { 'x-nova': '' })).status, 403, 'and no token');
+    assert.equal((await call(b.mesh, 'GET', '/api/v1/triggers/rules')).status, 401, 'the rest of automations stays the person’s');
+  } finally {
+    await b.stop();
+  }
+});
+
 test('a computer gets only the device routes, a standby only sync; neither gets the person’s things', async () => {
   const b = await boot();
   try {

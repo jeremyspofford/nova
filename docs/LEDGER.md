@@ -52,6 +52,9 @@ built-ins only.
   `X-Forwarded-For` entry: **the proxy must append to that header or replace
   it** (README); one that passes the client's header through lets a client
   choose its own limit. Nova can't tell which kind it is behind.
+- **Webhooks are public, as this ledger already said.** `POST /hooks/{name}`
+  now carries `access: 'public'`; it was `person` by default, so an
+  automation calling the mesh address got a 401. Its token is still checked.
 
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and

@@ -355,7 +355,8 @@ export function createCore(o: CoreOptions) {
     },
     { method: 'GET', path: '/triggers/{id}', summary: 'One trigger record.', handle: ({ params }) => triggers.get(params.id!) },
     {
-      method: 'POST', path: '/hooks/{name}', status: 202, auth: 'hook-token',
+      // Public: an automation has no device session; the hook token is its key, checked below.
+      method: 'POST', path: '/hooks/{name}', status: 202, auth: 'hook-token', access: 'public',
       summary: 'Call an event rule’s webhook. Authenticated by the x-nova-hook-token header instead of X-Nova, so automations can call it. The body is kept only as a hash; x-nova-dedup-key is optional.',
       body: 'any JSON object',
       handle: async ({ params, body, headers }) => {
