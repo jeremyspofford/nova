@@ -14,5 +14,6 @@ exec docker run --rm --init --ipc=host \
   -v "$ROOT:/work" -w /work \
   -v "$NODE_DIR:/opt/node:ro" \
   -e NOVA_UI_SHOTS="${NOVA_UI_SHOTS:-docs/screenshots/m3}" \
+  ${NOVA_VITALS_RUNS:+-e NOVA_VITALS_RUNS="$NOVA_VITALS_RUNS"} \
   --user "$(id -u):$(id -g)" -e HOME=/tmp \
   "$IMAGE" bash -c 'export PATH=/opt/node/bin:$PATH CHROMIUM=$(ls -d /ms-playwright/chromium-*/chrome-linux/chrome | head -1); node --test --test-concurrency=1 '"${FILES[*]}"

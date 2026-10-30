@@ -2013,7 +2013,10 @@ function boot() {
   refreshCore();
   loadCapture();
   route();
+  // The page shows once its layout and first view are set: nothing moves into place (M9, CLS).
+  document.body.dataset.shown = '';
 }
 // A blank profile opens the setup conversation, full screen, before anything else.
 if (!(await startSetup({ done: () => { boot(); navigate('/'); } }))) boot();
+document.body.dataset.shown = '';
 document.documentElement.dataset.ready = 'true';
