@@ -4,12 +4,13 @@
 // stream; the thread is rebuilt from state, patching only what changed so nothing that is
 // already on screen animates twice.
 import { applyEvent, emptySession } from './reduce.js';
-import { renderMarkdown } from './markdown.js';
+import { escapeHtml, renderMarkdown } from './markdown.js';
 import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderPermissions, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
 import { apply as applyTheme } from './theme.js';
 import { fromCache, on as onCore, stream as coreStream } from './core.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
+import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js';
 import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
 import { bindConnections, loadConnections, renderConnections } from './connections.js';
@@ -274,6 +275,7 @@ function setView(view) {
   el.dock.hidden = view !== 'chat';
   el.menu.hidden = view !== 'chat';
   if (view !== 'chat') el.jump.hidden = true;
+  if (was === 'settings' && view !== 'settings') core.cancelPreview();
   // The Capture view belongs to Settings in the navigation.
   markCurrent(view === 'capture' ? 'settings' : view);
   if (was !== view) showSignals();
@@ -752,6 +754,32 @@ el.thread.addEventListener('click', (e) => {
       }
     }
   }
+});
+
+// A message's exact time on a touch screen, where there is no hover: a tap on the message shows
+// it (another tap, or a tap elsewhere, hides it), and so does a long press.
+let pointer = 'mouse';
+let pressTimer = 0;
+let pressed = false; // a long press showed it: the click that follows doesn't hide it again
+const SHOWS_TIME = '.msg';
+const INTERACTIVE = 'a, button, summary, input, textarea, select, label, [tabindex]:not(time)';
+function showTime(msg, on) {
+  for (const x of el.thread.querySelectorAll('.msg.show-time')) if (x !== msg) x.classList.remove('show-time');
+  msg?.classList.toggle('show-time', on);
+}
+el.thread.addEventListener('pointerdown', (e) => {
+  pointer = e.pointerType;
+  clearTimeout(pressTimer);
+  const msg = e.target.closest(SHOWS_TIME);
+  pressed = false;
+  if (e.pointerType === 'touch' && msg && !e.target.closest(INTERACTIVE)) pressTimer = setTimeout(() => { pressed = true; showTime(msg, true); }, 450);
+});
+for (const ev of ['pointerup', 'pointercancel', 'pointermove']) el.thread.addEventListener(ev, (e) => { if (ev !== 'pointermove' || e.pointerType === 'touch') clearTimeout(pressTimer); });
+el.thread.addEventListener('click', (e) => {
+  if (pointer !== 'touch' || e.target.closest(INTERACTIVE)) return;
+  if (pressed) { pressed = false; return; }
+  const msg = e.target.closest(SHOWS_TIME);
+  showTime(msg, msg ? !msg.classList.contains('show-time') : false);
 });
 
 // ---- memory ------------------------------------------------------------------
@@ -1386,6 +1414,67 @@ function loadPermissions() {
     });
 }
 
+// Settings is one structure (settings-ia.js) in two layouts: on a desktop, a sidebar of categories
+// beside the open one; on a phone or tablet, the grouped list, and a category's page in its place
+// with a way back. The hash says what is open: a category (#appearance) or any setting in one
+// (#devices, #appearance-mode), which opens its category and is brought into view.
+const settingsUi = { cat: null };
+const settingsList = () => layout.layout !== 'desktop';
+
+function settingsTarget(hash) {
+  const id = decodeURIComponent(hash.replace(/^#/, ''));
+  if (!id) return { cat: null, target: null };
+  const target = el.settings.querySelector(`#${CSS.escape(id)}`);
+  const pane = target?.closest('.settings-pane');
+  if (pane) return { cat: pane.dataset.cat, target: pane === target ? null : target };
+  return { cat: categoryOf(id) ? id : null, target: null };
+}
+
+function selectSettings(cat) {
+  settingsUi.cat = cat && categoryOf(cat) ? cat : null;
+  const list = settingsList();
+  const open = settingsUi.cat ?? (list ? null : CATEGORIES[0].id);
+  for (const p of el.settings.querySelectorAll('.settings-pane')) p.hidden = p.dataset.cat !== open;
+  el.settings.dataset.show = open ? 'detail' : 'list';
+  el.settings.dataset.layout = list ? 'list' : 'sidebar';
+  for (const a of el.settings.querySelectorAll('.settings-cat')) {
+    if (a.dataset.cat === open && !list) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
+  const back = $('settings-back');
+  if (back) back.hidden = !(list && open);
+  const title = $('settings-title');
+  if (title) title.textContent = list && open ? categoryOf(open).label : 'Settings';
+}
+
+// From the list or the sidebar to a category, as its own step in the history.
+function openSettingsCat(cat) {
+  history.pushState(null, '', `/settings#${cat}`);
+  selectSettings(cat);
+  el.scroller.scrollTop = 0;
+  el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(cat)}"] h2`)?.setAttribute('tabindex', '-1');
+  el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(cat)}"] h2`)?.focus({ preventScroll: true });
+}
+
+// Bring one setting into view, mark it, and put focus on its control.
+function goToSetting(target) {
+  selectSettings(target.closest('.settings-pane')?.dataset.cat ?? settingsUi.cat);
+  target.scrollIntoView({ block: 'center' });
+  (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input, select, a') ?? target).focus({ preventScroll: true });
+  flash(target);
+}
+
+function renderSettingsResults(query) {
+  const box = $('settings-results');
+  if (!box) return;
+  const q = query.trim();
+  box.hidden = !q;
+  if (!q) { box.innerHTML = ''; return; }
+  const found = searchSettings(q);
+  box.innerHTML = found.length
+    ? found.slice(0, 8).map((r) => `<li><button type="button" class="settings-result" data-target="${escapeHtml(r.target)}" data-cat="${escapeHtml(r.cat)}"><span class="result-label">${escapeHtml(r.label)}</span><span class="result-path">${escapeHtml(r.path)}</span></button></li>`).join('')
+    : `<li class="settings-noresult">Nothing matches “${escapeHtml(q)}”. Try another word, like “theme”, “phone” or “backup”.</li>`;
+}
+
 function showSettings() {
   stream?.close();
   stream = null;
@@ -1395,18 +1484,21 @@ function showSettings() {
   renderChrome();
   renderToc_();
   renderSettingsView({ enter: true });
+  selectSettings(settingsTarget(location.hash).cat);
   Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadReset()]).then(() => {
     renderSettingsView({ only: 'you' });
-    const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
-    if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input'))?.focus({ preventScroll: true }); flash(target); }
-    else el.settings.focus({ preventScroll: true });
+    renderSettingsView({ only: 'privacy' });
+    const { cat, target } = settingsTarget(location.hash);
+    if (target) goToSetting(target);
+    else { selectSettings(cat); el.settings.focus({ preventScroll: true }); }
   });
 }
 
 const PARTS = {
   you: () => core.renderYou(),
+  privacy: () => core.renderPrivacy(),
   providers: () => core.renderProviders(),
-  perms: () => (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
+  perms: () => (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" id="perms" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
 <p class="memory-lede">${permissionsError}</p><button type="button" class="btn set-retry" data-action="retry-settings">Try again</button></section>` : ''),
   connections: () => renderConnections(),
   capture: () => renderCaptureSettings(),
@@ -1419,11 +1511,25 @@ const PARTS = {
   danger: () => renderReset(),
 };
 
+function settingsShell() {
+  const groups = GROUPS.map((g) => `<section class="settings-group"><h3 class="settings-group-title">${escapeHtml(g.title)}</h3><ul class="settings-cats">${g.cats.map((id) => {
+    const c = categoryOf(id);
+    return `<li><a class="settings-cat" href="/settings#${id}" data-cat="${id}"><span class="cat-label">${escapeHtml(c.label)}</span><span class="cat-summary">${escapeHtml(c.summary)}</span></a></li>`;
+  }).join('')}</ul></section>`).join('');
+  return `<header class="view-head settings-head">
+  <button type="button" class="btn small quiet settings-back" id="settings-back" hidden>${ICONS.back}<span>Settings</span></button>
+  <h2 class="view-title" id="settings-title">Settings</h2>
+  <div class="settings-search"><label class="sr-only" for="settings-search">Search settings</label><input type="search" class="input settings-search-input" id="settings-search" placeholder="Search settings" autocomplete="off" spellcheck="false" aria-controls="settings-results"></div>
+  <ul class="settings-results" id="settings-results" aria-label="Settings found" aria-live="polite" hidden></ul>
+</header>
+<div class="settings-layout">
+  <nav class="settings-nav" id="settings-nav" aria-label="Settings">${groups}</nav>
+  <div class="settings-detail">${CATEGORIES.map((c) => `<section class="settings-pane" data-cat="${c.id}" aria-label="${escapeHtml(c.label)}" hidden>${c.parts.map((k) => `<div class="settings-part" id="settings-${k}"></div>`).join('')}</section>`).join('')}</div>
+</div>`;
+}
+
 function renderSettingsView({ enter: entering = false, only = null } = {}) {
-  if (!$('settings-you')) {
-    el.settings.innerHTML = `<header class="view-head"><h2 class="view-title">Settings</h2></header>
-${Object.keys(PARTS).map((k) => `<div class="settings-part" id="settings-${k}"></div>`).join('')}`;
-  }
+  if (!$('settings-you')) el.settings.innerHTML = settingsShell();
   for (const k of only ? [only] : Object.keys(PARTS)) {
     const box = $(`settings-${k}`);
     const active = document.activeElement;
@@ -1449,14 +1555,25 @@ async function togglePermission(button) {
 }
 
 el.settings.addEventListener('click', (e) => {
+  const cat = e.target.closest('a.settings-cat');
+  if (cat && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); openSettingsCat(cat.dataset.cat); return; }
+  if (e.target.closest('#settings-back')) { history.pushState(null, '', '/settings'); selectSettings(null); el.scroller.scrollTop = 0; el.settings.querySelector('.settings-cat')?.focus({ preventScroll: true }); return; }
+  const found = e.target.closest('.settings-result');
+  if (found) {
+    const target = $(found.dataset.target) ?? el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(found.dataset.cat)}"]`);
+    $('settings-search').value = '';
+    renderSettingsResults('');
+    history.pushState(null, '', `/settings#${found.dataset.target}`);
+    if (target) goToSetting(target);
+    return;
+  }
   if (followLink(e)) return;
   const b = e.target.closest('[data-action]');
   const action = b?.dataset.action;
   if (action === 'toggle-permission') togglePermission(b);
   else if (action === 'retry-settings') loadPermissions();
   else if (action === 'save-profile') core.saveProfile(b.dataset.section, b.dataset.key, $(b.dataset.field).value.trim());
-  else if (action === 'preview-ds') { core.previewDs(b.dataset.ds); renderSettingsView({ only: 'look' }); }
-  else if (action === 'apply-ds' || action === 'rollback-ds') core.appearanceAction(action, b);
+  else if (['pick-ds', 'save-ds', 'cancel-ds', 'undo-ds', 'fix-contrast', 'undo-fix'].includes(action)) core.appearanceAction(action, b).then(() => renderSettingsView({ only: 'look' }));
   else if (action === 'install') core.install().then(() => renderSettingsView({ only: 'devices' }));
   else if (action === 'provider-choose') core.chooseProvider(b.dataset.for, b.dataset.provider);
   else if (action === 'provider-on') core.providerOn(b.dataset.provider);
@@ -1466,10 +1583,14 @@ el.settings.addEventListener('click', (e) => {
 el.settings.addEventListener('change', (e) => {
   const t = e.target;
   if (t.name === 'privacy') core.saveProfile('privacy', 'default', t.value);
-  else if (t.name === 'mode') core.appearanceAction('mode', t);
+  else if (t.name === 'mode') core.appearanceAction('mode', t).then(() => renderSettingsView({ only: 'look' }));
+  else if (t.name === 'ds-scope') core.appearanceAction('scope', t).then(() => renderSettingsView({ only: 'look' }));
   else if (t.dataset.action === 'set-profile') core.saveProfile(t.dataset.section, t.dataset.key, t.value);
 });
+el.settings.addEventListener('input', (e) => { if (e.target.id === 'settings-search') renderSettingsResults(e.target.value); });
 el.settings.addEventListener('keydown', (e) => {
+  if (e.target.id === 'settings-search' && e.key === 'Enter') { e.preventDefault(); el.settings.querySelector('.settings-result')?.click(); return; }
+  if (e.target.id === 'settings-search' && e.key === 'Escape' && e.target.value) { e.preventDefault(); e.target.value = ''; renderSettingsResults(''); return; }
   if (e.key === 'Enter' && e.target.matches('#you-name, #nova-name')) { e.preventDefault(); e.target.nextElementSibling?.click(); }
 });
 window.addEventListener('nova:appearance', () => { if (state.view === 'settings') renderSettingsView({ only: 'look' }); });
@@ -1679,7 +1800,7 @@ el.menu.addEventListener('click', () => (el.app.classList.contains('drawer-open'
 el.drawerClose.addEventListener('click', () => { closeDrawer(); el.menu.focus(); });
 el.scrim.addEventListener('click', closeDrawer);
 el.asideToggle.addEventListener('click', () => { toggleAside(); renderCore(); });
-window.addEventListener('nova:layout', () => renderCore());
+window.addEventListener('nova:layout', () => { renderCore(); if (state.view === 'settings') selectSettings(settingsUi.cat); });
 
 function step(dir) {
   const i = state.list.findIndex((s) => s.id === state.id);
