@@ -98,7 +98,7 @@ export function waitState(key, at, { done = null, total = null, noun = 'part' } 
 // it really began. `done`/`total`/`noun`: real units, where they are known.
 export function waitingLine(text, { key = '', since: at = key ? since(key) : Date.now(), done = null, total = null, noun = 'part', tag = 'p' } = {}) {
   const w = waitState(key, at, { done, total, noun });
-  return `<${tag} class="waiting${w.cls}"${w.attrs} role="status"><span class="pulse" aria-hidden="true"></span><span class="waiting-text">${esc(text)}…</span>${w.more}</${tag}>`;
+  return `<${tag} class="waiting${w.cls}"${w.attrs} role="status"><span class="pulse" aria-hidden="true"></span><span class="waiting-text">${esc(text)}…${w.more}</span></${tag}>`;
 }
 
 // What a long wait adds: real units, an estimate where there is a basis, or the time so far.

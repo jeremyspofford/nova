@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { CDPSession, Page } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { browser, device, shoot, still } from './support.ts';
 import { CHAT, CONTROLS, VIEWS, m9Shots, seeded, settled } from './m9-support.ts';
@@ -184,17 +185,22 @@ test('M9 gate, foldable 3: nothing under the hinge, in the book and laptop postu
         const under = await underHinge(d.page, rect);
         assert.deepEqual(under, [], `${what}, ${state}: nothing under the hinge`);
         const shots = m9Shots();
-        if (shots && ['home', 'chat', 'a task open', 'conversations open'].includes(state)) await d.page.screenshot({ path: join(shots, `hinge-${what.split(' ')[0]}-${state.replace(/ /g, '-')}.png`) });
+        if (shots && ['home', 'chat', 'a task open', 'conversations open'].includes(state)) { const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' }); writeFileSync(join(shots, `hinge-${what.split(' ')[0]}-${state.replace(/ /g, '-')}.png`), Buffer.from(data, 'base64')); } // page.screenshot would drop the hinge emulation
         rows.push(`${what}, ${state}: clear`);
       };
       for (const [view, path] of Object.entries(VIEWS)) {
         await d.page.goto(`${m.base}${path}`);
+        // The hinge again with the page loaded: the first navigation can bring the context's own
+        // viewport back over the override (seen once in a full run).
+        await screen(d.page, cdp, w, h, hinge);
         await settled(d.page, view);
+        await d.page.waitForFunction((p) => document.body.dataset.posture === p, posture, { timeout: 5000 }).catch(() => {});
         assert.equal(await d.page.evaluate(() => document.body.dataset.posture), posture, `${what}: the browser reports the posture`);
         await check(view);
       }
       // Open things: the conversations drawer, More, a task's sheet, a toast.
       await d.page.goto(`${m.base}/c/${CHAT}`);
+      await screen(d.page, cdp, w, h, hinge);
       await settled(d.page, 'chat');
       await d.page.click('#menu');
       await d.page.waitForSelector('.app.drawer-open');
@@ -205,6 +211,7 @@ test('M9 gate, foldable 3: nothing under the hinge, in the book and laptop postu
       await check('More open');
       await d.page.keyboard.press('Escape');
       await d.page.goto(`${m.base}/tasks`);
+      await screen(d.page, cdp, w, h, hinge);
       await settled(d.page, 'tasks');
       await d.page.locator('#tasks-view [data-action="open-task"]').first().click();
       await d.page.waitForSelector('#sheet[open]');

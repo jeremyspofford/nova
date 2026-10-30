@@ -42,7 +42,7 @@ body[data-layout="phone"] .tabs { display: flex; }
 /* The main column keeps a readable measure (M9: at least 45ch, at the expanded width of 840 px
    too, with room for a scrollbar) and the context pane takes what is left, up to its own width. */
 body[data-layout="tablet"] .shell {
-  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(min(calc(50ch + 2 * var(--space-5)), calc(100% - var(--layout-rail-width))), 1fr) minmax(0, calc(var(--space-8) * 5.5));
+  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(min(calc(50ch + 2 * var(--space-5)), calc(100% - var(--layout-rail-width) - var(--space-8) * 3)), 1fr) minmax(0, calc(var(--space-8) * 5.5));
 }
 body[data-layout="tablet"] .rail,
 body[data-layout="tablet"] .aside { display: flex; }
