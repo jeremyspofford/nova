@@ -46,7 +46,7 @@ test('grounding with a real local model: the four questions, transcripts kept', 
     const checks: Record<keyof typeof QUESTIONS, (reply: string, tools: string[]) => { right: string[]; wrong: string[] }> = {
       provider: (r, t) => verdict([
         [t.some((n) => n.startsWith('nova_')), 'checked Nova’s registry with a status tool'],
-        [/not (in|part of) (my|your|the) (current )?setup|not (set up|configured|connected)|isn’t (set up|configured|connected)|isn't (set up|configured|connected)|no openrouter/i.test(r), 'said OpenRouter isn’t in the current setup'],
+        [/not (in|part of) (my|your|the) (current )?setup|not (set up|configured|connected)|isn’t (set up|configured|connected)|isn't (set up|configured|connected)|no openrouter|don['’]t have openrouter|openrouter is not (currently )?(active|configured|set up)/i.test(r), 'said OpenRouter isn’t in the current setup'],
         [/Settings › Providers|Settings > Providers|Providers/i.test(r), 'named the way to add it (Settings › Providers)'],
         [!/I run on|I can['’]t (connect|use|do)|as an AI/i.test(r), 'did not answer “I can’t, I run on X”'],
       ]),

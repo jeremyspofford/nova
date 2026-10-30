@@ -53,6 +53,8 @@ test('the briefing states the registry as it is: instance, person, models, captu
       assert.match(b, /Appearance: Obsidian, mode auto; installed: Aurora, Companion Light, Nova, Obsidian, Orb Teal, Paper/);
       assert.match(b, /Open problems: 1; latest: capture: “Screenpipe answered but refused Nova/);
       assert.match(b, /OpenRouter included/, 'the way to add a provider is named');
+      assert.match(b, /OpenRouter included\) goes in Settings › Providers as the "Local model \(Ollama or compatible\)" provider/);
+      assert.match(b, /Never ask for a key, token or password in chat or in a file/);
     }, { instance: 'development', models: { ollamaUrl: ollama.url } });
   } finally {
     await sp.close();

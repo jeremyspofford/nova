@@ -129,8 +129,18 @@ Read from Nova's own registry at the start of this turn. This is the truth about
 
 ${lines.join('\n')}
 ${fresh.length ? `\n${fresh.join('\n')}\n` : ''}
-Not listed means not in this setup yet. Ways to add: a model provider in Settings › Providers (any OpenAI-compatible service, OpenRouter included, with its address, model and key), or a cloud model in Settings › Models; a connection in Settings › Connections; a capture source in Settings › Capture; a device in Settings › Devices; a skill in the Skills view; new extensions and design systems through Nova's change pipeline (Settings › Changes); the look in Settings › Appearance; what Nova may do without asking in Settings › Without asking.`;
+Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a connection in Settings › Connections; a capture source in Settings › Capture; a device in Settings › Devices; a skill in the Skills view; new extensions and design systems through Nova's change pipeline (Settings › Changes); the look in Settings › Appearance; what Nova may do without asking in Settings › Without asking. These are the person's to change: from chat you change only what your tools do (schedules, memory, files in your workspace). Never ask for a key, token or password in chat or in a file; the person enters it in that Settings section, which keeps it in the vault.`;
     return redactText(text);
+  }
+
+  // Where an OpenAI-compatible service (OpenRouter, say) goes, as this instance has it: the one
+  // "Local model (Ollama or compatible)" provider, which repointing would take from what it serves
+  // now, or the cloud model in Settings › Models.
+  #openAiWay(): string {
+    const p = this.#providerViews().find((x) => x.id === 'openai-compatible');
+    const used = p && (p.enabled || this.#chatId() === p.id);
+    const now = p && typeof p.config.base_url === 'string' && p.config.base_url ? hostOf(p.config.base_url) : null;
+    return `an OpenAI-compatible service (OpenRouter included) goes in Settings › Providers as the "${p?.name ?? 'Local model (Ollama or compatible)'}" provider, with its address, model and key${used && now ? ` (there is one such provider, and it points at ${now} now, so repointing it replaces that)` : ''}, then chosen as the chat model; or as the cloud model in Settings › Models, which local-preferred work falls back to`;
   }
 
   #instanceLine(): string {
