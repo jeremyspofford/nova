@@ -9,11 +9,12 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { blank, start, stop, until, sleep, type Running } from './support.ts';
+// This test restarts the hub on the same mesh port, so it picks one first: below the ephemeral
+// range, where no server on port 0 in a parallel test can take it meanwhile.
+import { freePort } from './m4c-support.ts';
 
-const freePort = () => new Promise<number>((ok) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address() as { port: number }; s.close(() => ok(port)); }); });
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 test('M4b: join by the one-line command, Online, offline queue across a hub outage (exactly once), revocation', { timeout: 120_000 }, async () => {
