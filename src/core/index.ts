@@ -405,13 +405,11 @@ export function createCore(o: CoreOptions) {
         triggers.reactive(task, `device:${d.id}`);
         return task;
       },
-      // A device's note is screened by Nova's own checks before it is kept (it can't wait for a
-      // model here): one that tries to give instructions is refused.
-      memory: (d, body) => {
-        const s = ingest.screenNow({ text: String((body as { content?: unknown }).content ?? ''), source: { kind: 'connector', origin: `device:${d.id}` } });
-        if (s.verdict === 'block') throw new CoreError('validation', 'Nova didn’t keep this note: it looked like it was trying to give instructions.');
-        return memory.remember({ ...(body as unknown as MemoryInput), kind: (body.kind ?? 'fact') as MemoryKind, recorded_by: `device:${d.id}` });
-      },
+      memory: (d, body) => memory.remember({ ...(body as unknown as MemoryInput), kind: (body.kind ?? 'fact') as MemoryKind, recorded_by: `device:${d.id}` }),
+      // A device's note is screened by Nova's own checks before it is kept (the inbox can't wait for
+      // a model): one that tries to give instructions is refused.
+      screenNote: (d, body) => (ingest.screenNow({ text: String((body as { content?: unknown }).content ?? ''), source: { kind: 'connector', origin: `device:${d.id}` } }).verdict === 'block'
+        ? 'Nova didn’t keep this note: it looked like it was trying to give instructions.' : null),
       capture: (d, key, body) => capture.fromDevice(d, key, body),
       config: {
         read: (section, key) => { const r = configRow(section, key); return r ? { value: JSON.parse(r.value), version: configVersion(r) } : null; },

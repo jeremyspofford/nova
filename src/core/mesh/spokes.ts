@@ -40,6 +40,9 @@ export interface AgentState { version: string | null; runtime_version: string | 
 export interface InboxEffects {
   task(device: Device, key: string, body: Record<string, unknown>): { id: string };
   memory(device: Device, body: Record<string, unknown>): { id: string };
+  // Why a note must not be kept (the ingest gate), or null; asked before anything is written, so
+  // the screen's own record stays when the note is refused.
+  screenNote?(device: Device, body: Record<string, unknown>): string | null;
   config: {
     read(section: string, key: string): { value: unknown; version: string } | null;
     write(section: string, key: string, value: unknown): string;
@@ -206,6 +209,8 @@ export class Spokes extends EventEmitter {
         case 'memory_note': {
           // Only the new memory's id is kept here, never its words, so forgetting it is complete.
           try {
+            const why = this.#effects.screenNote?.(device, body) ?? null;
+            if (why) return keep('refused', { reason: why });
             return keep('accepted', { ref: this.#db.tx(() => this.#effects.memory(device, body)).id });
           } catch (e) {
             return keep('refused', { reason: refusal(e) });
