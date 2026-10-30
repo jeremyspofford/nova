@@ -15,8 +15,7 @@ import { createServer as createNet, type Server as NetServer, type Socket } from
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { copyHome, restoreBackup, smoke, startSandbox, type DeployStage, type ProbeLine, type ReleaseSlot, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
-import { dropScratch, makeScratch } from '../core/resilience/scratch.ts';
+import { copyHome, dropScratch, makeScratch, restoreBackup, smoke, startSandbox, type DeployStage, type ProbeLine, type ReleaseSlot, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
 import { runningPid } from '../home.js';
 import { ServerProcess } from './server.ts';
 import { Slots, carryProblems, isRelease, mark, preMigrationBackup, problemsSince, recordProblem, sandboxable, schemaVersion, writesSince, type Mark } from './releases.ts';

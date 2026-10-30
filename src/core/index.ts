@@ -101,6 +101,7 @@ export { PLAYBOOKS } from './resilience/playbooks.ts';
 export { CODE_ROOT, copyHome, smoke, startSandbox, sandboxEnv } from './resilience/sandbox.ts';
 export type { Sandbox, ProbeResult } from './resilience/sandbox.ts';
 export { restoreInto, backupFiles, sha256File } from './resilience/backup.ts';
+export { makeScratch, dropScratch } from './resilience/scratch.ts';
 export type { Manifest as BackupManifest } from './resilience/backup.ts';
 export { restoreBackup, loadMigrations } from './db.ts';
 
