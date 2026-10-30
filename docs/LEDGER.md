@@ -15,6 +15,25 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M7 amendment §2, re-review fixes).** Branch `m7-amend/reset`; each with a test that
+failed on `dcbc98df` first.
+- **The mark means "this folder is Nova's".** `.nova-home` records `before`: the top-level names a
+  folder already held when Nova was first pointed at it. A new or empty folder, or one whose
+  `nova.db` has Nova's schema (existing homes, the preview's), holds nothing of the person's. A
+  standby's `mesh/` with only its identity and role file counts as Nova's (its enrollment wrote
+  them). A reset never erases `before` entries, and the confirmation and the result list them
+  ("already here before Nova; left alone"). `server.js` marks the home before seeding it.
+- **`write_file` never goes through a link**, dangling ones included: every part is `lstat`ed, and
+  the file is opened `O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW` (not `O_EXCL`: replacing a file is
+  the tool's job).
+- **Names are folded** (NFC, lower case) for the read blocks, the secret folders and the write
+  allow-list, as a case-insensitive disk would see them.
+- **`Clear-Site-Data` only on the hub's own screen, once per reset**, until setup is done: the
+  cookie `nova-reset-cleared=<reset id>` (HttpOnly, SameSite=Strict) marks it done. Never a
+  paired device, whose new key it would take.
+- **A finished reset whose marker was left behind** (stopped after the report and the new key) is
+  recognised by its report's id and cleared quietly.
+
 **2026-10-30 (M7 amendment §2, review fixes): factory reset hardened.** Branch `m7-amend/reset`;
 each fix has a test that failed on `55fddabd` first.
 - **A hole older than the amendment (fixed here):** the agent's `write_file` could write

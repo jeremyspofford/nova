@@ -162,11 +162,14 @@ How the restore runs:
   is sealed with an HMAC under the key in the home's mark (`.nova-home`); one that doesn't verify is
   kept aside, never acted on, and said as a problem.
 - **After review:** only a folder carrying Nova's mark, and never `/`, the person's home folder or
-  one containing it, is erased; the agent's file tools write only `workspace/` and the standing
+  one containing it, is erased, and never what the folder held before Nova first ran there (the
+  mark's `before`, listed in the confirmation and the result); the file tools never write through a
+  link and compare names case-insensitively; the agent's file tools write only `workspace/` and the standing
   files; the export is checked by its real path; work stops and backups are listed again before
   devices are told; half-written backups go; an encrypted copy goes only if it opens under the
   backup key; a computer acts only on a reset signed by its pinned hub; browsers forget their key,
-  drafts and caches (and get `Clear-Site-Data` until setup is done). The ledger has the details.
+  drafts and caches (the hub's own screen also gets `Clear-Site-Data`, once per reset, until setup is
+  done). The ledger has the details.
 
 ## 3. Tests (the definition of done)
 
