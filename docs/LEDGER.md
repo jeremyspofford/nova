@@ -15,6 +15,72 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (security: the ingest gate — fixes from the adversarial review of #229).** Same branch.
+Each finding became a test that failed first, through the runner (createNova and a scripted
+attacker) where it applies: `tests/ingest/review.test.js`, `review-core.test.ts`, `device.test.ts`.
+This entry supersedes the one below where they differ.
+- **Blockers fixed:**
+  - **B1, a failed read:** it is outside content too. A failed fetch, search or mail read is
+    screened and taints the run. `web_fetch` errors now carry only the status number, not the
+    server's reason phrase.
+  - **B2, standing files under another spelling:** the guard compares the normalised target, folded
+    the way `write_file` folds. `./USER.md`, `workspace/../SOUL.md`, `~/` and case all ask.
+  - **B3, the outbound guard:** in a tainted run, matching can't win against chunking, short
+    encodings or reversal, so the policy changed:
+    - Following a link is free. That means an address that appears verbatim (normalised) in what
+      the run read: a page's `href`s, search results, mail, reports, or the person's own messages.
+    - Any other address the model put together asks, showing the address.
+    - Matching stays as a second line.
+    - Search queries keep the secret and memory matching only. The search engine isn't a place the
+      attacker can read, and a query that carries a vault or memory match still asks.
+  - **B4, uploaded skills:** every file is screened before anything is written.
+    - NULs no longer skip the screen.
+    - A text file that isn't UTF-8 is refused.
+    - A file Nova can't read as text (an image) can't be checked, so the skill is held. So is one
+      checked without a model, said plainly on its card.
+    - The skill goes in through a staging folder, already held if it is to be held.
+    - Its files are trusted only while their hashes match the check. A changed file is screened
+      when read, and a changed SKILL.md takes the skill out of use until the person turns it on.
+    - Nova's own catalog skills are trusted by being identical to the catalog.
+- **Should-fixes:**
+  - **S1:** attacker-chosen strings never go in a tag attribute. The origin is an escaped `From:`
+    line in the body, attributes are fully escaped, and origins are cleaned before they reach ledger
+    titles or approval cards.
+  - **S2:** a device note waits as a memory candidate unless it passes the screen. With a sorting
+    model, one that passes is kept as before. A note Nova's own checks block is refused before
+    anything is written.
+    - *Limit:* waiting candidates are not replicated. They stay on the node that took them, so a
+      failover before the person decides loses them; the device's own queue has already settled.
+  - **S3:** `exec` output is screened in every run (the amendment binds: tool output). It taints
+    when a check flags something or the model isn't sure. Without a model, ordinary output passes on
+    as held-back data without tainting, so auto-run keeps working.
+    - *Residual gap:* without a model, a paraphrased injection in command output that no check
+      matches is not caught. It reaches the model as data, but doesn't taint.
+  - **S4:**
+    - The tokenizer is linear: no token can scan past the next `<`.
+    - Style blocks are found with `indexOf`, sentence widening is bounded, and nesting past 256 is
+      flagged.
+    - HTML past 1 MB and text past 2 MB is cut, flagged, and never passes.
+    - Screening yields once to the event loop first.
+    - 2 MB of adversarial markup takes about 1.1 s in the test.
+  - **S5:** any change to `ingest-screen` is tier 3, and `weakens()` refuses one that drops or
+    changes any of its five Noul questions.
+- **Minor fixes:**
+  - **Folding before the checks:** NFKC, Latin lookalikes in mixed-script words, soft hyphens, and
+    letters spelled out one by one. A fully folded copy is checked for detection.
+  - **More hiding:** font size under 2px or 10%, `hsl`/`hsla` and more named colours, any `clip` or
+    `clip-path`, and descendant selectors read by their last part. Text in `svg`, `noscript` and
+    `math` is screened.
+  - **Markup outside HTML:** non-HTML content that carries markup gets the HTML checks.
+  - **The browser worker fails closed.**
+  - **Approval cards:** the standing-file card shows the content, and a waiting forget names its
+    memory.
+  - **Case:** standing files are matched by exact name on a case-sensitive disk.
+- **Still not caught (stated plainly):**
+  - hiding by an external stylesheet or by script;
+  - a paraphrased injection in visible text when there is no model. It is still never passed, but
+    it isn't stripped.
+
 **2026-10-30 (security: the ingest gate — Amendment C Part 3).** Branch `ingest/gate`, plan
 `docs/plans/ingest-gate.md`, evidence `docs/evidence/ingest-gate.md`.
 - **What it is:** `src/core/ingest/` (`checks.ts`, `screen.ts`, `outbound.ts`, `index.ts`),

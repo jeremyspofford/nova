@@ -367,7 +367,9 @@ function hidingRules(html: string): { classes: Set<string>; ids: Set<string> } {
   for (const block of blocks) {
     for (const rule of block.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
       if (!hiddenBy(rule[2]!)) continue;
-      for (const sel of rule[1]!.split(',').map((x) => x.trim())) {
+      // A descendant or child selector ("body .x", "main > #y") is read by its last part: an
+      // element it names may be hidden, which is enough for the checks.
+      for (const sel of rule[1]!.split(',').map((x) => x.trim().split(/[\s>+~]+/).at(-1) ?? '')) {
         const m = /^[a-z0-9]*((?:[.#][\w-]+)+)$/i.exec(sel);
         if (!m) continue;
         for (const p of m[1]!.matchAll(/([.#])([\w-]+)/g)) (p[1] === '.' ? classes : ids).add(p[2]!);
