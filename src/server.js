@@ -577,7 +577,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(`Devices pair and connect at ${nova.meshInfo.publicUrl} (listening on ${m.bindHost}:${port}, ${how}).`);
     });
   }
-  const quit = async () => { rmSync(join(config.home, 'nova.pid'), { force: true }); nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.close(); process.exit(0); };
+  // On a stop, nothing Nova started lives on after it (a command in a process group of its own).
+  const quit = async () => { rmSync(join(config.home, 'nova.pid'), { force: true }); nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.stopWork(2000); await nova.core.close(); process.exit(0); };
   process.on('SIGINT', quit);
   process.on('SIGTERM', quit);
   // Restarting in place (core resilience/restart.ts), for a restore: stop listening, close the core,
@@ -585,6 +586,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   nova.core.restarter.attach(async () => {
     nova.scheduler.stop();
     for (const id of nova.runner.active.keys()) nova.runner.stop(id);
+    // Nothing Nova started may write into the restored home: running tasks stop, and every process
+    // it started (in its own process group or not) is ended, within a bound.
+    await nova.core.stopWork(5000);
     const closed = (s) => new Promise((r) => { if (!s?.listening) return r(); s.close(() => r()); s.closeAllConnections(); });
     const port = nova.server.address()?.port;
     const meshPort = nova.mesh?.address()?.port;

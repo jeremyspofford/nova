@@ -49,6 +49,7 @@ import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
 import { Checkpoints, dropPartials, finishStaged, takeCheckpoint } from './resilience/checkpoints.ts';
 import { Restarter } from './resilience/restart.ts';
+import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -112,6 +113,8 @@ export { takeCheckpoint, listCheckpoints, finishStaged, stagedPending, KEEP_AUTO
 export type { CheckpointView, CheckpointManifest } from './resilience/checkpoints.ts';
 // Nova's own entries in a home, by name: what checkpoints, restore and factory reset may touch.
 export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.ts';
+// Every process Nova starts, so none outlives an in-place restart (Era 2's commands register too).
+export { trackChild } from './children.ts';
 
 export interface CoreOptions {
   home: string;
@@ -939,6 +942,13 @@ export function createCore(o: CoreOptions) {
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
     restartInPlace: (why: string) => restarter.restartInPlace(why),
+    // Before a restart in place (and a stop): running tasks stop and are left for the next start,
+    // and every process Nova started is ended, within `boundMs`.
+    async stopWork(boundMs = 5000) {
+      ledger.halt('Nova is restarting.');
+      await stopChildren(Math.min(3000, boundMs));
+      await Promise.race([ledger.idle(), new Promise((r) => setTimeout(r, boundMs).unref())]);
+    },
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),

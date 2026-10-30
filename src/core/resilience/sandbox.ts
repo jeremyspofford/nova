@@ -8,6 +8,7 @@
 // code from another process (the supervisor) and a restored backup (the drill), so they start the
 // process here and share the rest.
 import { spawn, type ChildProcess } from 'node:child_process';
+import { trackChild } from '../children.ts';
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,7 +49,7 @@ export function sandboxEnv(home: string, extra: Record<string, string> = {}): Re
 export async function startSandbox(o: { root?: string; home: string; env?: Record<string, string>; timeoutMs?: number; execArgv?: string[] }): Promise<Sandbox> {
   const root = o.root ?? CODE_ROOT;
   const out: string[] = [];
-  const proc = spawn(process.execPath, [...(o.execArgv ?? []), join(root, 'src', 'server.js')], { cwd: root, env: sandboxEnv(o.home, o.env), stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = trackChild(spawn(process.execPath, [...(o.execArgv ?? []), join(root, 'src', 'server.js')], { cwd: root, env: sandboxEnv(o.home, o.env), stdio: ['ignore', 'pipe', 'pipe'] }));
   proc.stdout!.on('data', (d) => out.push(String(d)));
   proc.stderr!.on('data', (d) => out.push(String(d)));
   const said = () => out.join('');
