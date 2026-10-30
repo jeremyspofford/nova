@@ -48,6 +48,13 @@ failed before the fix.
   adds; an answer the runtime records and a power cut loses is sent again, and
   the hub answers it as a duplicate (exactly once still holds). The newest
   1,000 answers are kept. No migration from `queue.db`: M4 hasn't shipped.
+- **Who can make a hub step down.** Only its current standby (`standby_id`)
+  or, for a node that was itself a standby, the hub its role file names, and
+  only with a roster signed by that device's registered key at a higher
+  epoch. Any other trusted device making that claim is a problem ("isn't
+  this hub's standby … revoke it"), once per claim. Approving a new standby
+  turns any earlier one still in the registry into a `spoke` with no
+  address, so devices don't look for the hub there and fencing doesn't ask it.
 
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and

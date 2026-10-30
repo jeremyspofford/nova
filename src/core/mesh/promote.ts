@@ -68,9 +68,16 @@ export class MeshRole extends EventEmitter {
     }
     o.ledger.workers.set(this.worker.id, this.worker);
     o.verifier.registerConfirmation(CONFIRMATION_SYSTEM, (e, brief) => this.#confirm(e, brief));
-    // A newly approved standby starts from nothing, whatever an earlier one acknowledged.
+    // A newly approved standby starts from nothing, whatever an earlier one acknowledged. Any earlier
+    // standby still in the registry (trusted, say after a promotion elsewhere) stops being one: not
+    // standby, and no address, so nothing looks for the hub there and fencing doesn't ask it.
     o.devices.on('change', (c: { action: string; device: Device }) => {
-      if (c.action === 'approved' && c.device.kind === 'standby') o.sync.resetAck();
+      if (c.action !== 'approved' || c.device.kind !== 'standby') return;
+      o.sync.resetAck();
+      const me = o.identity.id;
+      const before = o.devices.list().filter((d) => d.id !== c.device.id && d.id !== me && (d.role === 'standby' || (d.kind === 'standby' && d.address)));
+      for (const d of before) o.db.run(`UPDATE device SET role = CASE WHEN role = 'standby' THEN 'spoke' ELSE role END, address = NULL WHERE id = ?`, d.id);
+      if (before.length) o.log.info('mesh', 'An earlier standby is no longer the standby.', { devices: before.map((d) => d.id), now: c.device.id });
     });
   }
 
@@ -212,6 +219,12 @@ export class MeshRole extends EventEmitter {
       checked.push(url);
       try { return { url, res: await ask(`${url}/api/v1/mesh/hello`, { timeoutMs: 3000, caFile: this.#file?.ca_file ?? null }) }; } catch { return null; }
     }));
+    // Who may have taken over: the standby this hub has now, the only node it ever handed the role
+    // to; and, for a node that was itself a standby, the hub its role file names. Any other
+    // trusted device (an old standby that was replaced, say) proving its key at a higher epoch is
+    // a machine that shouldn't be claiming the role, not a reason to step down.
+    const state = this.#o.devices.state();
+    const successors = new Set([state.standby_id, this.#file && this.#file.hub.id !== me ? this.#file.hub.id : null].filter((x): x is string => !!x));
     for (const a of answers) {
       if (!a || a.res.status !== 200 || this.role() !== 'hub') continue;
       const h = a.res.body as { id?: string; role?: string; epoch?: number; name?: string; roster?: SignedRoster };
@@ -221,13 +234,25 @@ export class MeshRole extends EventEmitter {
       const r = h.roster?.roster;
       // Only a node this hub already trusted, proving it with its own key, can take the role.
       if (!peer || peer.trust !== 'trusted' || !r || r.epoch !== h.epoch || r.hub.id !== peer.id || r.hub.public_key !== peer.public_key || !verifyRoster(h.roster!, [peer.public_key])) {
-        this.#o.log.problem('mesh', `${a.url} says it is the hub at epoch ${h.epoch}, but couldn’t prove it with a key this hub trusts, so this hub carries on.`);
+        this.#warn(`${a.url}|${h.epoch}|unproven`, `${a.url} says it is the hub at epoch ${h.epoch}, but couldn’t prove it with a key this hub trusts, so this hub carries on.`);
+        continue;
+      }
+      if (!successors.has(peer.id)) {
+        this.#warn(`${a.url}|${h.epoch}|${peer.id}`, `“${peer.name}” at ${a.url} says it is the hub at epoch ${h.epoch}, signed with its own key, but it isn’t this hub’s standby, so this hub carries on. If that machine is no longer yours, revoke it.`);
         continue;
       }
       this.demote(peer, h.epoch!, a.url);
       return { demoted: true, checked };
     }
     return { demoted: false, checked };
+  }
+
+  // Fencing runs every 30 s; the same claim is a problem once.
+  #warned = new Set<string>();
+  #warn(key: string, message: string): void {
+    if (this.#warned.has(key)) return;
+    this.#warned.add(key);
+    this.#o.log.problem('mesh', message);
   }
 
   // Steps down: stops recording and running, refuses changes, ends every device session.

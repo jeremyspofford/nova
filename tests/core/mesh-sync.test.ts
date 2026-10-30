@@ -14,7 +14,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  createCore, loadIdentity, readRole, REPLICATED, verifyRoster, writeRole, type Core, type DeviceKeys, type Listener, type RoleFile,
+  createCore, loadIdentity, readRole, REPLICATED, signRoster, verifyRoster, writeRole, type Core, type DeviceKeys, type Listener, type RoleFile,
 } from '../../src/core/index.ts';
 import { journalPath } from '../../src/core/mesh/sync.ts';
 import { Joiner, call, hub } from './mesh-support.ts';
@@ -443,6 +443,58 @@ test('a forged higher epoch doesn’t make a hub step down', async () => {
     assert.equal(h.core.mesh.role.role(), 'hub');
   } finally {
     liar.close();
+    await h.stop();
+  }
+});
+
+// A node at `address` that says it is hub at `epoch`, with a roster genuinely signed by `dev`'s key.
+async function claimsHub(dev: Joiner, epoch: number) {
+  const s = createServer((req, res) => {
+    const roster = signRoster({ epoch, hub: { id: dev.deviceId, url: url(), public_key: dev.keys.ed25519.publicKey, x25519_public_key: dev.keys.x25519.publicKey }, issued_at: new Date().toISOString() }, dev.keys.ed25519.privateKey);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: dev.deviceId, role: 'hub', epoch, name: 'Claimant', roster }));
+  });
+  await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
+  const url = () => `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+  return { url: url(), close: () => { s.closeAllConnections(); s.close(); } };
+}
+
+test('only the current standby can make a hub step down; a replaced standby loses its standby role and address', async () => {
+  const h = await hub();
+  const { enroll } = await import('./mesh-support.ts');
+  const old = await enroll(h, { kind: 'standby', name: 'Old standby', address: 'http://127.0.0.1:1' });
+  const oldPeer = await claimsHub(old.dev, 99);
+  try {
+    h.core.db.run('UPDATE device SET address = ? WHERE id = ?', oldPeer.url, old.dev.deviceId);
+    // It stops being the standby without being revoked: here as after a promotion elsewhere, which
+    // leaves mesh_state with no standby while the registry still has the old one, trusted.
+    h.core.db.run('UPDATE mesh_state SET standby_id = NULL');
+    // Its key (from a machine nobody uses now, say) signs a roster naming itself hub at epoch 99.
+    const f = await h.core.mesh.role.fence();
+    assert.equal(f.demoted, false, 'a trusted device that isn’t the standby can’t take the role');
+    assert.equal(h.core.mesh.role.role(), 'hub');
+    assert.ok(h.core.log.problems().some((x) => /isn’t this hub’s standby/.test(x.message)), 'the person is told');
+
+    // A new standby is approved: the old one is no longer standby, and isn't asked about it.
+    const fresh = await enroll(h, { kind: 'standby', name: 'New standby', address: 'http://127.0.0.1:1' });
+    const was = h.core.mesh.devices.get(old.dev.deviceId);
+    assert.equal(was.role, 'spoke', 'the replaced standby is no longer standby');
+    assert.equal(was.address, null, 'nor where devices look for one');
+    assert.equal(was.trust, 'trusted', 'still the person’s machine');
+    assert.equal(h.core.mesh.devices.state().standby_id, fresh.dev.deviceId);
+    assert.ok(!(await h.core.mesh.role.fence()).checked.includes(oldPeer.url));
+
+    // The current standby, proving its key at a higher epoch, is the one that can.
+    const freshPeer = await claimsHub(fresh.dev, 2);
+    try {
+      h.core.db.run('UPDATE device SET address = ? WHERE id = ?', freshPeer.url, fresh.dev.deviceId);
+      assert.equal((await h.core.mesh.role.fence()).demoted, true);
+      assert.equal(h.core.mesh.role.role(), 'standby');
+    } finally {
+      freshPeer.close();
+    }
+  } finally {
+    oldPeer.close();
     await h.stop();
   }
 });
