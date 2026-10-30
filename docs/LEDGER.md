@@ -15,6 +15,85 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M4b): the computer device agent, the one-line command, the
+offline queue.** Plan §2. `src/device/`, `src/core/mesh/{spokes,agent}.ts`.
+
+- **TypeScript on Node, not a port of Era 1's `novad`.** Evidence: no Rust
+  toolchain here (`cargo`, `rustc` not found); Node 26's permission model
+  enforces ADR-3's rule that the runtime can't touch the boot agent, and a test
+  proves it (writing `boot/`, replacing or reading `boot/keys.json`, writing
+  `runtime/`, spawning a process and starting a worker all fail with
+  `ERR_ACCESS_DENIED`, using the exact flags the boot agent starts the runtime
+  with); `novad`'s supervisor (`6e2cf142` `services/novad/src/supervisor.rs`:
+  backoff, disable after repeated crashes) and signed updates (`update.rs`:
+  verify, stage, swap) are the reference.
+- **Two agents.** `boot.ts` holds `boot/keys.json` (0600, folder 0700), joins,
+  pins the roster, signs sessions, runs the runtime under a watchdog and
+  installs runtime updates. `runtime.ts` (with `queue.ts`) heartbeats and
+  flushes the queue; it is started as
+  `node --permission --allow-fs-read=runtime/ --allow-fs-read=state/
+  --allow-fs-write=state/ --allow-net`, with an empty environment, and gets
+  its session token (and the hub's CA, when there is one) over IPC.
+  `--allow-net` is needed because Node 26's permission model also gates the
+  network.
+- **The agent ships alone.** `src/device` imports only `src/core/mesh/wire.ts`
+  from the core (a narrow, tested exception to "only `index.ts`"), so
+  `/device-agent.tar` is `src/device/**`, `wire.ts` and a package.json. The tar
+  is a hand-written ustar (no dependency), checked with the system `tar`.
+- **Who a device trusts.** Additions to `wire.ts`: `helloProofMessage` and the
+  runtime manifest. A node answers `GET /mesh/hello/proof?challenge=` with its
+  key; the agent signs a session request only for a node whose key it pinned,
+  that says it is hub, at an epoch ≥ the one it knows (so a stranger at the
+  hub's address never gets a usable signature), then takes its roster only if
+  a pinned key signed it, its epoch is ≥ known and it names that node as hub.
+  Lower epochs are never accepted. Tested with stand-in nodes and rosters the
+  test signs (promotion itself is M4c).
+- **Runtime updates.** `GET /mesh/runtime` is `{manifest: {version, sha256,
+  files}, signature, signer, files}`, signed over `nova-runtime-v1.<manifest>`
+  by the node's identity key; version is `<nova version>+<12 hex of sha256>`.
+  The boot agent checks the signer is pinned, the signature, every file's hash
+  and that the files are exactly the manifest's, then swaps `runtime/` by
+  rename. A refusal is printed, kept in `boot/state.json`, and reported
+  (`POST /mesh/devices/me/report` → a problem, once per ten minutes). The
+  installed runtime is re-hashed before every start. With no hub reachable on
+  first run, it installs the runtime from its own folder (`local+…`) and swaps
+  in the hub's signed one when it can.
+- **Watchdog.** Restarts after 1 s, 2 s, 4 s… (cap 30 s); three crashes within
+  60 s is safe mode: the runtime stays down, kept across restarts of the boot
+  agent; the boot agent heartbeats `safe_mode: true` (a problem on the hub, and
+  the registry row says so); a new signed runtime or `recover` ends it.
+- **Inbox** (`POST /mesh/inbox`, up to 100 items, in order). Each item is taken
+  in with its (device, key) row in the same transaction, so a key is answered
+  once and a repeat gets the same answer marked `duplicate`. `task_request` →
+  a ledger task (origin `{kind: 'device'}`, idempotency key
+  `device:<id>:<key>`) or a refusal kept with its reason and the request, plus
+  a problem. `memory_note` → memory with `recorded_by: device:<id>`
+  (`memory.ts` accepts that form now), unreviewed; the inbox keeps only the
+  memory's id, never its words, so forgetting stays complete. `config_change`
+  → identity, user, tuning and policy only (privacy, appearance and setup stay
+  with the person's own screens); its `base_version` must equal the setting's
+  current version (`GET /mesh/config/{section}/{key}`), else it is rejected,
+  reported to the device and recorded as a problem: the hub's value stands.
+  `event` → kept and sent on the stream as `device_event`. The device drops an
+  item's body once the hub has answered it.
+- **Additions to the plan's routes:** `GET /mesh/hello/proof`,
+  `POST /mesh/devices/me/report`, `GET /mesh/config/{section}/{key}`,
+  `GET /mesh/inbox/refusals` (person). Device views carry `agent: {version,
+  runtime_version, safe_mode, at}` for computers.
+- **Deviation: no numbered migration.** `device_inbox` and `device_heartbeat`
+  are created by `mesh/spokes.ts` with `CREATE TABLE IF NOT EXISTS`.
+  Migrations must be numbered without gaps, and 0006 belongs to M4c's sync,
+  written in parallel; numbering this 0007 would fail to load until 0006
+  exists. Both tables are new, so there is nothing to back up or convert. Once
+  M4b and M4c are both merged, this can become migration 0007 if wanted.
+- **TLS:** the system's trust, or `NOVA_CA_FILE` (copied into `boot/ca.pem` at
+  join; curl in `join.sh` uses `--cacert`). The one-line command's first curl
+  needs the CA too, through curl's own `CURL_CA_BUNDLE`. Tested over HTTPS with
+  a certificate made by `openssl`.
+- **Revocation:** the hub's refusal to start a session (after the node proved
+  a pinned key) stops the agent, records it in `boot/state.json`, and `run`
+  exits with status 3 from then on, saying why.
+
 **2026-10-29 (M4a): device enrollment, the registry, sessions, and who may do
 what.** Plan §0–§1. `src/core/mesh/`, migration `0005_mesh.sql`, Settings ›
 Devices, `/pair`.

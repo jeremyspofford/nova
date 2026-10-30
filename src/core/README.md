@@ -27,6 +27,8 @@ The modular-monolith core (ADR-1), in TypeScript that Node runs directly. The de
 | `mesh/devices.ts` | The device registry (the hub included), trust and revocation, device sessions (12 h, stored hashed), `mesh_state`, the signed roster. | CONTRACTS §5 |
 | `mesh/enroll.ts` | Enrollment: single-use five-minute codes (hashed), join, reveal, the six digits, tier-3 approval, signed status polls, rate limits, expiry. | CONTRACTS §5 |
 | `mesh/access.ts` | Who is asking, on every request: the console (loopback, addressed to loopback, no proxy, console listener), a paired device by session (cookie or bearer) with its kind's scope, or public. Cuts a revoked device's open streams. | M4 plan §0 |
+| `mesh/spokes.ts` | Computers' device agents, hub side (M4b): heartbeats (Online by recency, versions, safe mode as a problem), the inbox (each idempotency key taken in once, in order: tasks or refusals kept with the request, memory as `device:<id>`, server-wins config), reports, the challenge a node signs (`/mesh/hello/proof`), the signed runtime bundle. Its two tables are created here, not by a numbered migration (`docs/LEDGER.md`, M4b). | M4 plan §2 |
+| `mesh/agent.ts` | What the hub ships to a computer: `join.sh`, `device-agent.tar` (a hand-written ustar of `src/device/**`, `mesh/wire.ts` and a package.json) and the runtime bundle's files. | M4 plan §2 |
 | `mesh/limiter.ts` | A sliding-window rate limiter per client address (ported from Era 1). | — |
 | `receipts.ts` | Context receipts: what each model call was told and where it went; the egress log; local-only violations refused as problems. | CONTRACTS §2 |
 
@@ -36,6 +38,6 @@ Every request goes through `mesh/access.ts` first (`core.gate` outside `/api/v1`
 
 Every change through the API needs the `X-Nova` header, except `POST /api/v1/hooks/{name}`: webhooks are called by automations and authenticate with their own `x-nova-hook-token` instead. That is the only exemption, and `api.ts` refuses any other route that claims it.
 
-Rules: modules get what they need passed in; nothing outside `src/core` imports anything but `index.ts` (tested); source stays erasable TypeScript (no enums, namespaces or parameter properties) so Node can run it without a build.
+Rules: modules get what they need passed in; nothing outside `src/core` imports anything but `index.ts` (tested), except the device agent in `src/device`, which ships alone and imports only `mesh/wire.ts`; source stays erasable TypeScript (no enums, namespaces or parameter properties) so Node can run it without a build.
 
 The fresh-user acceptance test (`tests/acceptance/fresh-user.test.ts`) runs the real server with a blank home and an egress tripwire; `NOVA_EVIDENCE=<file> npm test` keeps its transcript.
