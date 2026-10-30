@@ -50,7 +50,8 @@ export function blank(prefix: string) {
   const egress = join(dir, 'egress.log');
   writeFileSync(egress, '');
   const home = join(dir, 'nova-home');
-  const env = { HOME: join(dir, 'user'), NOVA_HOME: home, NOVA_PORT: '0', NOVA_EGRESS_LOG: egress, TZ: 'UTC' };
+  // The vault's key in a file: a test server never reaches a real keychain (src/core/vault.ts).
+  const env = { HOME: join(dir, 'user'), NOVA_HOME: home, NOVA_PORT: '0', NOVA_EGRESS_LOG: egress, TZ: 'UTC', NOVA_VAULT_KEY: 'file' };
   const m = {
     dir, home, egress, env, base: '',
     async start(extra: Record<string, string> = {}) {
