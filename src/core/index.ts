@@ -44,6 +44,7 @@ import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { secretName } from './providers/types.ts';
 import { Resilience } from './resilience/index.ts';
+import { FactoryReset, finishReset } from './resilience/reset.ts';
 import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
@@ -100,7 +101,10 @@ export type { SupervisorLink, SupervisorState, SupervisorProblem, ReleaseSlot, S
 export { PLAYBOOKS } from './resilience/playbooks.ts';
 export { CODE_ROOT, copyHome, smoke, startSandbox, sandboxEnv } from './resilience/sandbox.ts';
 export type { Sandbox, ProbeResult } from './resilience/sandbox.ts';
-export { restoreInto, backupFiles, sha256File } from './resilience/backup.ts';
+export { restoreInto, backupFiles, sha256File, openEncrypted } from './resilience/backup.ts';
+// Factory reset (M7 amendment §2): finished at start, before the database opens (server.js too).
+export { RESET_MARKER, RESET_REPORT, OWN_ENTRIES, finishReset, homeEntries } from './resilience/reset.ts';
+export type { ResetReport } from './resilience/reset.ts';
 export { makeScratch, dropScratch } from './resilience/scratch.ts';
 export type { Manifest as BackupManifest } from './resilience/backup.ts';
 export { restoreBackup, loadMigrations } from './db.ts';
@@ -148,6 +152,9 @@ export interface CoreOptions {
   sandbox?: boolean;
   // The change pipeline (M7a), for tests: the monotonic clock its canary windows are measured on.
   changes?: { monotonic?: () => number };
+  // Factory reset (M7 amendment §2), for tests: how long the hub waits for devices to hear it, and
+  // a hook before each step of finishing one (to stop it part way, as a power cut would).
+  reset?: { tellMs?: number; step?: (what: string) => void };
   now?: () => Date;
 }
 
@@ -156,6 +163,9 @@ export type Core = ReturnType<typeof createCore>;
 export function createCore(o: CoreOptions) {
   const started = Date.now();
   const now = o.now ?? (() => new Date());
+  // A factory reset that was staged (or stopped part way) finishes before anything opens: a
+  // half-reset Nova never runs. It throws when it can't finish.
+  finishReset(o.home, { ...(o.vault ? { vault: o.vault } : {}), ...(o.reset?.step ? { step: o.reset.step } : {}), now });
   const db = new Db(join(o.home, 'nova.db'));
   const migration = db.migrate({ backupDir: join(o.home, 'backups'), now });
   const log = new Log(db, join(o.home, 'logs', 'nova.log'), now);
@@ -281,6 +291,8 @@ export function createCore(o: CoreOptions) {
     forgotten: (rows) => memory.forgottenElsewhere(rows),
     forget: (id, by) => { try { memory.forget(id, by); return true; } catch (e) { if (e instanceof CoreError && e.code === 'not_found') return false; throw e; } },
     failoverAfterS: () => { const v = profile.get<number>('mesh', 'auto_failover_after_s'); return typeof v === 'number' && v > 0 ? v : null; },
+    // The hub was factory reset: this standby wipes its copy (resilience/reset.ts).
+    hubReset: (notice) => reset.standbyWipe(notice),
   });
   const role = meshRole;
   // The change pipeline and the foundry (M7a): changes to Nova go through gates, never live edits.
@@ -366,6 +378,15 @@ export function createCore(o: CoreOptions) {
   });
   const keep = resilience;
   ledger.workers.set(keep.worker.id, keep.worker);
+  // Factory reset (M7 amendment §2): the export, the confirmation's list, telling devices, staging.
+  const reset = new FactoryReset({
+    home: o.home, db, log, version: o.version, now, vault, nightly: keep.nightly, memory, devices, access, spokes, role,
+    emit: (event, data) => bus.emit('event', event, data),
+    // WIRE: the restart in place (the checkpoints work) replaces this null; until then the marker
+    // waits for the next start.
+    restart: null,
+    ...(o.reset?.tellMs ? { tellMs: o.reset.tellMs } : {}),
+  });
   wireRepairs(keep.playbooks, { ledger, providers, models, connectors, role, spokes, devices });
   keep.watch(connectorWatch(keep.playbooks, connectors, o.resilience?.lookup));
 
@@ -810,6 +831,8 @@ export function createCore(o: CoreOptions) {
     ...models.routes(),
     // ---- resilience (M7 plan §2–§3): backups, the drill, playbooks, the supervisor ----
     ...keep.routes((w) => { if (w.principal.kind !== 'console') throw new CoreError('forbidden', 'Releases are deployed and rolled back from the hub’s own screen only.'); }),
+    // ---- factory reset (M7 amendment §2) ----
+    ...reset.routes(),
     // ---- the change pipeline and the foundry (M7 plan §1) ----
     ...changes.routes(),
     {
@@ -899,7 +922,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
-    vault, connectors, capture, models, changes, foundry, resilience: keep,
+    vault, connectors, capture, models, changes, foundry, resilience: keep, reset,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
@@ -908,6 +931,13 @@ export function createCore(o: CoreOptions) {
     // Who is asking, for a request outside /api/v1, or null once a refusal was sent (mesh/access.ts).
     gate: (req: IncomingMessage, res: ServerResponse, url: URL, listener: Listener) => {
       const p = access.gate(req, res, url, listener);
+      // While a factory reset is staged, nothing new is taken.
+      const resetting = p ? reset.blocks(req.method, url.pathname) : null;
+      if (resetting) {
+        res.writeHead(409, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify({ error: resetting, resetting: true }));
+        return null;
+      }
       const replica = p && req.method !== 'GET' && req.method !== 'HEAD' && !REPLICA_WRITES.has(url.pathname) ? role.replica() : null;
       if (!replica) return p;
       res.writeHead(409, { 'content-type': 'application/json', 'cache-control': 'no-store' });
