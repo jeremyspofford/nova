@@ -7,7 +7,7 @@ Worktree paths are in the test run’s own temporary folder, removed when the ru
 <!-- fake -->
 ## Relay’s fake worker (no model)
 
-Run 2026-10-30T14:02:41.683Z, 1 s from brief to verified. Nova commit `e917f08b`; Relay 0.9.0 at `4add265` (/home/jeremy/workspace/nova-build/.claude/relay-build), on an ephemeral port with a fresh data folder. `RELAY_CLAUDE_BIN` is Relay’s `test/fixtures/fake-claude-worker.mjs` (its honest default: it fixes calc/sum.mjs); `ANTHROPIC_BASE_URL=http://127.0.0.1:9`, so Relay reports local.
+Run 2026-10-30T14:09:23.294Z, 1 s from brief to verified. Nova commit `4f21ddb4`; Relay 0.9.0 at `4add265` (/home/jeremy/workspace/nova-build/.claude/relay-build), on an ephemeral port with a fresh data folder. `RELAY_CLAUDE_BIN` is Relay’s `test/fixtures/fake-claude-worker.mjs` (its honest default: it fixes calc/sum.mjs); `ANTHROPIC_BASE_URL=http://127.0.0.1:9`, so Relay reports local.
 
 - **Relay status:** api 1, workerEgress `local`, engines: claude (workers, 0.0.0 (Relay fake worker fixture)), codex (no workers).
 - **Brief:** Make the failing test in calc/ pass, privacy local-only (`node --test calc/sum.test.mjs`, evidence: test_result + file_diff).
@@ -15,7 +15,7 @@ Run 2026-10-30T14:02:41.683Z, 1 s from brief to verified. Nova commit `e917f08b`
 - **Outcome:** done — You OK’d running `node --test calc/sum.test.mjs` on what Relay wrote. Nova ran `node --test calc/sum.test.mjs` itself: it passed.
 - **test_result:** passed — Nova ran `node --test calc/sum.test.mjs` itself in the task’s folder: it passed (exit 0, 0.1 s).
 - **file_diff:** passed — Nova compared calc/sum.mjs in the task’s folder with the copy it started from: 1 line added, 1 removed, as reported.
-- **Relay run:** `526c0594-ed78-4d5b-928c-899356a8fc40`, status completed, branch `relay/526c0594-ed78-4d5b-928c-899356a8fc40` (the worktree's HEAD: `relay/526c0594-ed78-4d5b-928c-899356a8fc40`), worktree `/tmp/nova-test-82AMON/nova-m8-relay-q1cpHu/data/worktrees/526c0594-ed78-4d5b-928c-899356a8fc40`, base `6bfecac3ea73`, files ["calc/sum.mjs"], usage {"inputTokens":352,"outputTokens":20}, costUsd 0. Relay's summary: “Fixed calc/sum.mjs: it subtracted instead of adding.”.
+- **Relay run:** `61700bc8-eabe-4b4d-95cc-6400ec8382bd`, status completed, branch `relay/61700bc8-eabe-4b4d-95cc-6400ec8382bd` (the worktree's HEAD: `relay/61700bc8-eabe-4b4d-95cc-6400ec8382bd`), worktree `/tmp/nova-test-fd2G2f/nova-m8-relay-7KOm6J/data/worktrees/61700bc8-eabe-4b4d-95cc-6400ec8382bd`, base `fa1cbc1c6b17`, files ["calc/sum.mjs"], usage {"inputTokens":352,"outputTokens":20}, costUsd 0. Relay's summary: “Fixed calc/sum.mjs: it subtracted instead of adding.”.
 - **Workspace after:** calc/sum.mjs is the fix.
 - **Receipts:** relay / Relay worker (egress local).
 - **Events:** created → dispatched → test_run_asked → reported → partial → test_run_approved → retried → dispatched → reported → verifying → verified → copied_back.
