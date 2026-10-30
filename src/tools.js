@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
-import { inHome } from './home.js';
+import { inHome, inSecretDir } from './home.js';
 
 const MAX_READ = 200_000;
 const MAX_OUTPUT = 16_000;
@@ -15,13 +15,13 @@ const MAX_FETCH = 20_000;
 const UA = 'Nova/0.1 (personal agent)';
 export const SEARCH_URL = 'https://html.duckduckgo.com/html/';
 
-// Connection secrets live in ~/vault/ (Era 2 kept them in ~/connectors/). No tool reads or writes them.
+// Secrets live in ~/vault/ and ~/mesh/ (Era 2 kept connection secrets in ~/connectors/). No tool
+// reads or writes them.
 function guard(home, path, verb) {
   const abs = inHome(home, path);
   const rel = relative(home, abs);
-  for (const dir of ['connectors', 'vault']) {
-    if (rel === dir || rel.startsWith(`${dir}${sep}`)) throw new Error(`Connection secrets in ${dir}/ can't be ${verb}`);
-  }
+  const dir = inSecretDir(rel.split(sep).join('/'));
+  if (dir) throw new Error(`${dir === 'mesh' ? 'Device keys' : 'Connection secrets'} in ${dir}/ can't be ${verb}`);
   return { abs, rel };
 }
 

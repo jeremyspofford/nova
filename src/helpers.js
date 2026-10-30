@@ -15,14 +15,15 @@ import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { inHome } from './home.js';
+import { inHome, inSecretDir } from './home.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 import { WORKER, begun, openTasks } from './chat-run.js';
 
 const MAX_TASK = 8000;
 const MAX_FILES = 5;
 const MAX_FILE = 20_000;
-const PRIVATE = ['connectors', 'sessions'];
+// Secrets, and the conversations (a helper gets the brief, not the person's other talks).
+const PRIVATE = (rel) => inSecretDir(rel) ?? (rel === 'sessions' || rel.startsWith('sessions/') ? 'sessions' : null);
 
 export class HelperError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -71,7 +72,7 @@ export class Helpers extends EventEmitter {
   readFile(path) {
     const abs = inHome(this.runner.config.home, path);
     const rel = relative(this.runner.config.home, abs);
-    if (PRIVATE.some((d) => rel === d || rel.startsWith(`${d}${sep}`))) throw new HelperError(`${path} can't be passed to a helper.`);
+    if (PRIVATE(rel.split(sep).join('/'))) throw new HelperError(`${path} can't be passed to a helper.`);
     if (!existsSync(abs) || statSync(abs).isDirectory()) throw new HelperError(`There's no file at ${path} to pass along.`);
     const text = readFileSync(abs, 'utf8');
     return { path: rel.split(sep).join('/'), text: text.length > MAX_FILE ? `${text.slice(0, MAX_FILE)}\n[truncated: the file is ${text.length} characters]` : text };
