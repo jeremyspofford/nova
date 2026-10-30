@@ -71,6 +71,8 @@ export function createNova(config = loadConfig(), deps = {}) {
     agent: { command: config.agentCmd, egress: config.agentEgress },
     secrets: deps.secrets ?? ((name) => process.env[`NOVA_SECRET_${name}`] ?? null),
     models: modelOptions(process.env),
+    // A sandbox copy started by the change pipeline (M7a): no outside work, no changes taken.
+    sandbox: process.env.NOVA_SANDBOX === '1',
   });
   // Chat goes through the registry: the provider the profile names for chat, or agent_cmd (the
   // default), which the runner runs exactly as before. Scheduled runs and helpers follow it.

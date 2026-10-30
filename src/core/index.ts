@@ -43,6 +43,8 @@ import { captureRoutes } from './capture/routes.ts';
 import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { secretName } from './providers/types.ts';
+import { Changes } from './changes/pipeline.ts';
+import { Foundry } from './changes/foundry.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
@@ -123,6 +125,10 @@ export interface CoreOptions {
   // The local model manager (M6b): where the hub's Ollama answers by default, and (tests) a fixed
   // hardware reading and quicker watch and wake polls.
   models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number };
+  // This process is a sandbox copy started by the change pipeline (M7a, NOVA_SANDBOX=1): it runs
+  // none of the hub's outside work (connectors, capture, models, the heartbeat), takes no changes,
+  // and answers the sandbox routes.
+  sandbox?: boolean;
   now?: () => Date;
 }
 
@@ -256,6 +262,22 @@ export function createCore(o: CoreOptions) {
     failoverAfterS: () => { const v = profile.get<number>('mesh', 'auto_failover_after_s'); return typeof v === 'number' && v > 0 ? v : null; },
   });
   const role = meshRole;
+  // The change pipeline and the foundry (M7a): changes to Nova go through gates, never live edits.
+  const changes = new Changes({
+    db, log, ledger, verifier, home: o.home, now, sandbox: o.sandbox === true, testClock: process.env.NOVA_TEST_CLOCK === '1',
+    routes: () => routes, health: () => health(), hubDevice: () => meshIdentity.id, privacy: () => profile.privacyDefault(),
+    live: {
+      db, extensions, design, profile, triggers, templates, ledger, now, novaVersion: o.version,
+      timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
+      workerEgress: (owner) => { const w = ledger.workers.get(owner); return w ? w.egress : null; },
+    },
+  });
+  ledger.workers.set(changes.worker.id, changes.worker);
+  const foundry = new Foundry({
+    home: o.home, ledger, changes, receipts, privacy: () => profile.privacyDefault(),
+    infer: (r) => models!.infer(r) as never, chat: () => providers.chat(),
+  });
+  ledger.workers.set(foundry.worker.id, foundry.worker);
   // Capture (M6a): consent, storage on the hub, classification, promotion; Screenpipe pulled, and
   // device agents' capture events through the inbox below.
   const capture = new Capture({
@@ -337,6 +359,7 @@ export function createCore(o: CoreOptions) {
     }
   });
   extensions.on('change', (c) => bus.emit('event', 'extension', c));
+  changes.on('change', (c) => bus.emit('event', 'change', c));
   providers.on('change', (c) => bus.emit('event', 'provider', c));
   // The UI swaps its design-system stylesheet when this arrives: no reload, no restart.
   design.on('change', (c) => bus.emit('event', 'design-system', c));
@@ -418,6 +441,7 @@ export function createCore(o: CoreOptions) {
       connectors: connectors.health(),
       browser: browserHealth(),
       capture: capture.health(),
+      changes: changes.health(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
   }
@@ -736,6 +760,13 @@ export function createCore(o: CoreOptions) {
     // ---- capture (M6 plan §1) ----
     ...captureRoutes(capture),
     ...models.routes(),
+    // ---- the change pipeline and the foundry (M7 plan §1) ----
+    ...changes.routes(),
+    {
+      method: 'POST', path: '/foundry', status: 201, summary: 'Ask the foundry for an extension: it writes it with its tests and probe (the local model by default) and proposes it as a change, tier 3.',
+      body: '{need, kind: trigger-rules | template | skill-pack | design-system, via?: local-model | chat}',
+      handle: ({ body }) => foundry.request(body),
+    },
     // ---- browser work with takeover (M5 plan §3) ----
     ...browserRoutes(browser, {
       home: o.home,
@@ -765,6 +796,9 @@ export function createCore(o: CoreOptions) {
   function startHub() {
     const recovered = ledger.recover();
     providers.recover();
+    // A sandbox copy reaches nothing outside itself and keeps no clock of its own: the pipeline
+    // drives it.
+    if (o.sandbox) return recovered;
     models!.start();
     if (!heartbeat) {
       heartbeat = setInterval(beat, 30_000);
@@ -773,11 +807,13 @@ export function createCore(o: CoreOptions) {
     }
     connectors.start();
     capture.start();
+    changes.start();
     return recovered;
   }
   function stopHub() {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
+    changes.stop();
     models!.stop();
     connectors.stop().catch(() => {});
     capture.stop().catch(() => {});
@@ -811,7 +847,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
-    vault, connectors, capture, models,
+    vault, connectors, capture, models, changes, foundry,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
