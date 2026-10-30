@@ -372,14 +372,9 @@ function open(id, { quiet = false } = {}) {
     first = false;
   });
   es.addEventListener('event', (e) => onEvent(JSON.parse(e.data)));
-  es.addEventListener('live', (e) => {
-    // The server says "streaming" just after the first piece, with its text from before that piece:
-    // the words already here are real and stay (M9: a reply's first words were being dropped).
-    const next = JSON.parse(e.data);
-    if (next && state.live && next.turn === state.live.turn && next.attempt === state.live.attempt && (next.text ?? '').length < (state.live.text ?? '').length) next.text = state.live.text;
-    state.live = next;
-    renderThread(); renderChrome(); showSignals();
-  });
+  // The server sends a phase (with the text so far) before the pieces that follow it, so the page
+  // just takes it (src/runner.js; tests/m9-stream-order.test.js).
+  es.addEventListener('live', (e) => { state.live = JSON.parse(e.data); renderThread(); renderChrome(); showSignals(); });
   es.addEventListener('delta', (e) => {
     const d = JSON.parse(e.data);
     if (!state.live || state.live.turn !== d.turn || state.live.attempt !== d.attempt) return;
