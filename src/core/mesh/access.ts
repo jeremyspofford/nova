@@ -93,7 +93,8 @@ export class Access {
   constructor(o: { devices: Devices; mesh: MeshListenerInfo | null }) {
     this.#devices = o.devices;
     this.#mesh = o.mesh;
-    o.devices.on('revoked', (d: Device) => this.close(d.id));
+    // On the next turn: when a device revokes itself, the answer to that request is sent first.
+    o.devices.on('revoked', (d: Device) => setImmediate(() => this.close(d.id)));
   }
 
   identify(req: IncomingMessage, listener: Listener): Principal {
