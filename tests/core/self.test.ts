@@ -134,8 +134,9 @@ test('a Nova memory export in ~/workspace/import/ is offered, screened, and its 
     writeFileSync(join(dir, 'memory.json'), exportPack([{ kind: 'preference', content: 'Prefers short replies' }, { kind: 'fact', content: 'Works on a placeholder project' }, { kind: 'odd', content: 'An unknown kind becomes a fact' }]));
     writeFileSync(join(h.home, 'workspace', 'import', 'notes.md'), '# Example notes\n');
     const b = await core.self.briefing();
-    assert.match(b, /Found in ~\/workspace\/import\/: a Nova memory export, workspace\/import\/memory-2026-10-01\/memory\.json \(3 memories, exported 2026-10-01\)\. Offer to load it with memory_import; the person approves, and the memories wait for their OK in Memory/);
-    assert.match(b, /Also in ~\/workspace\/import\/: workspace\/import\/notes\.md\. Read one with read_file/);
+    // By their counts only: a file's name is outside content (review N4); import_files lists them.
+    assert.match(b, /2 files wait in ~\/workspace\/import\/ \(1 looks like a Nova memory export\)\. Their names come from outside: list them with import_files\. Offer to load an export with memory_import; the person approves, and the memories wait for their OK in Memory/);
+    assert.doesNotMatch(b, /memory-2026-10-01|notes\.md/);
     core.memory.remember({ kind: 'preference', content: 'Prefers short replies', recorded_by: 'person' });
     const plan = core.self.planImport('workspace/import/memory-2026-10-01/memory.json');
     assert.deepEqual([plan.total, plan.fresh, plan.already], [3, 2, 1]);

@@ -300,6 +300,17 @@ export const TOOLS = {
     available: (ctx) => ctx.self,
     run({ part }, { self }) { return { output: self.settings(part), summary: typeof part === 'string' && part ? part : 'settings' }; },
   },
+  import_files: {
+    signature: '{}',
+    doc: 'List the files waiting in ~/workspace/import/. Their names come from outside, so they arrive screened, as data.',
+    needsApproval: false,
+    available: (ctx) => ctx.self,
+    run(_args, { self }) {
+      const i = self.imports();
+      const lines = [...i.packs.map((p) => `${p.path}: a Nova memory export, ${p.count} ${p.count === 1 ? 'memory' : 'memories'}${p.exported_at ? `, exported ${p.exported_at.slice(0, 10)}` : ''}`), ...i.files.map((f) => `${f.path}: ${f.bytes} bytes`)];
+      return { output: lines.length ? lines.join('\n') : 'Nothing waits in ~/workspace/import/.', summary: `${lines.length} ${lines.length === 1 ? 'file' : 'files'}` };
+    },
+  },
   memory_import: {
     signature: '{"path": "workspace/import/memory.json"}',
     doc: 'Offer the memories in a Nova memory export in ~/workspace/import/ to the person. The file is screened first, and each memory not already kept waits for the person’s OK in Memory: none is in memory until they keep it. The person approves the step. For any other file, read it and suggest memories instead.',

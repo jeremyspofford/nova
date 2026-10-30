@@ -98,7 +98,7 @@ test('the briefing and the tool doc say imported memories wait for the person’
   try {
     await h.run('Hi.');
     const system = m.calls.at(-1).system;
-    assert.match(system, /Offer to load it with memory_import; the person approves, and the memories wait for their OK in Memory/);
+    assert.match(system, /Offer to load an export with memory_import; the person approves, and the memories wait for their OK in Memory/);
     assert.match(system, /- memory_import .*\n  .*waits for the person’s OK in Memory/);
     assert.doesNotMatch(system, /arrive in Memory for their review|into Memory\. Each memory not already kept arrives unreviewed/);
   } finally { await h.close(); }

@@ -15,6 +15,39 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (security: the ingest gate — fixes from the second adversarial review of #229).**
+Each finding is a test through the runner that failed first: `tests/ingest/round2.test.js` (14) and
+`device.test.ts`. The N5 test with a model was written with the fix, against the code that had kept
+a passing note.
+- **N1, a "known" address planted by an echo:** fixed.
+  - A known address now comes only from what was really read from outside: the links parsed from
+    fetched pages, search result addresses and mail, recorded with the screened read.
+  - A helper's read links travel with its report as data.
+  - The person's own messages count; a helper's brief doesn't.
+  - Tool errors and echoes, files the run wrote, the model's own arguments and a report's text
+    never count. Read-file errors, write-then-read round trips, unknown skill names, delegate
+    titles, empty search echoes and helper report text each ask now.
+- **N1b, data leaking through link choices:** in a tainted run, a link the run read is followed on
+  its own at most 8 times per host and 20 times in all; after that each follow asks.
+  - The caps are `DEFAULT_LINK_CAPS` in code, so raising one is tier 3, as with the thresholds.
+  - *Residual risk:* each free follow still says something by which link it picks. Within the caps
+    that is a few bits per follow, to a host the content itself named.
+- **N2 and N3, skills:** a skill that is held back, or whose SKILL.md changed since Nova checked it,
+  is kept off the matching and listing, and `use_skill` refuses it with the plain reason.
+  `use_skill` stays offered while any skill is installed, so the model hears that reason.
+- **N4, import file names:** the briefing gives only how many files wait in `workspace/import/`.
+  Their names arrive through `import_files`, a new tool whose result is screened as outside content
+  (kind `file`), and which taints the run.
+- **N5, device notes:** every one now waits for the person, even one a model passes.
+- **N8, outside text in the briefing:** device names, capture and provider status words, problems,
+  error text and triage reasons are quoted data: folded, protocol tags escaped, at most 200
+  characters, in quotes. The whole briefing is also protocol-escaped.
+- **N10, "Turn it on":** it trusts only a skill's text files. Images, fonts and archives were never
+  checked, so they stay outside content. `read_file` refuses a skill file whose first bytes aren't
+  what its name says.
+- **N6, accepted for now (a known limit):** without a model, a paraphrased injection in command
+  output that no check matches reaches the model as held-back data and doesn't taint the run.
+
 **2026-10-30 (security: the ingest gate — fixes from the adversarial review of #229).** Same branch.
 Each finding became a test that failed first, through the runner (createNova and a scripted
 attacker) where it applies: `tests/ingest/review.test.js`, `review-core.test.ts`, `device.test.ts`.

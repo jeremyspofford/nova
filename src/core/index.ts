@@ -126,7 +126,7 @@ export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.
 export { trackChild } from './children.ts';
 // The ingest gate (Amendment 2026-10-30-C Part 3): what Era 2's agent loop screens with, escapes
 // with, and says when something is blocked.
-export { Ingest, BLOCK_LINE, PROTOCOL_NAMES, KIND_WORDS, cleanOrigin, escapeProtocol, wrapData } from './ingest/index.ts';
+export { Ingest, BLOCK_LINE, DEFAULT_LINK_CAPS, PROTOCOL_NAMES, KIND_WORDS, cleanOrigin, escapeProtocol, fold, wrapData } from './ingest/index.ts';
 export type { Screened, Source as IngestSource, SourceKind, Taint, Verdict, Candidate as MemoryCandidate, Hold } from './ingest/index.ts';
 // Grounding: what this Nova is, from its own registries, for the chat agent's briefing and tools.
 export { IMPORT_DIR } from './self.ts';
@@ -415,22 +415,14 @@ export function createCore(o: CoreOptions) {
         triggers.reactive(task, `device:${d.id}`);
         return task;
       },
-      // A device's note is outside content until it passes the screen: it waits as a memory
-      // candidate for the person's OK (as memory from a tainted conversation does), out of every
-      // prompt. With a sorting model, a note that passes its full screen is then kept as before.
+      // A device's note is outside content: it never becomes memory without the person's OK
+      // (Amendment 2026-10-30-C Part 3.6). Every one waits as a memory candidate, out of every
+      // prompt, the same queue as memory from a conversation that read outside content.
       memory: (d, body) => {
         const content = String((body as { content?: unknown }).content ?? '');
         const kind = (body.kind ?? 'fact') as MemoryKind;
         const first = noteScreens.get(body) ?? ingest.screenNow({ text: content, source: { kind: 'connector', origin: `device:${d.id}` } });
-        const id = ingest.candidate({ op: 'remember', kind, content, source: `device:${d.id}`, taint: [first.taint] });
-        setImmediate(() => {
-          if (!ingest.hasModel()) return;
-          void ingest.screen({ text: content, source: { kind: 'connector', origin: `device:${d.id}` } }).then((s) => {
-            if (s.verdict !== 'pass' || !ingest.takeCandidate(id)) return;
-            memory.remember({ ...(body as unknown as MemoryInput), kind, recorded_by: `device:${d.id}` });
-          }).catch((e) => log.warn('ingest', 'A device note couldn’t be screened; it waits for you.', { error: (e as Error).message }));
-        });
-        return { id };
+        return { id: ingest.candidate({ op: 'remember', kind, content, source: `device:${d.id}`, taint: [first.taint] }) };
       },
       // A device's note is screened by Nova's own checks before it is kept (the inbox can't wait for
       // a model): one that tries to give instructions is refused.

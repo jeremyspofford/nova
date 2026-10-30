@@ -46,6 +46,9 @@ export interface Screened {
 // setting anyone can change at run time: a change is a change to Nova, through its pipeline.
 export interface Thresholds { pass_below: number; block_at: number }
 export const DEFAULT_THRESHOLDS: Thresholds = Object.freeze({ pass_below: 0.2, block_at: 0.8 });
+// How many links a tainted run may follow on its own before each further one asks: each link
+// chosen is a little information (plan §7, review N1b). Raising one is tier 3, like the thresholds.
+export const DEFAULT_LINK_CAPS: Readonly<{ per_host: number; total: number }> = Object.freeze({ per_host: 8, total: 20 });
 export const CHUNK = 3000;
 export const MAX_CHUNKS = 16;
 const MAX_EXTRACT = 20_000;

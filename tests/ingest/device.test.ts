@@ -1,11 +1,13 @@
 // Device inbox notes (plan §9, review S2): a note from a paired computer is outside content until
 // it passes the screen. Nova's own checks run before the inbox writes anything: one that tries to
-// give instructions is refused, with the reason. Anything else that hasn't passed waits as a memory
-// candidate for the person's OK, never straight into MEMORY.md; with a sorting model, a note that
-// passes its full screen is kept as before.
+// give instructions is refused, with the reason. Every other note waits as a memory candidate for
+// the person's OK, never straight into MEMORY.md, even one a sorting model passes (review N5:
+// Part 3.6, "candidates quarantine until corroborated/confirmed").
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { call, enroll, hub } from '../core/mesh-support.ts';
+import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
+import { INSTALLED, hubHardware } from '../support/models.ts';
 
 test('a device’s note that tries to give instructions is refused; any other waits for the person until it passes', async () => {
   const h = await hub();
@@ -33,5 +35,22 @@ test('a device’s note that tries to give instructions is refused; any other wa
     assert.equal(screens.length, 3, 'one screen per note');
   } finally {
     await h.stop();
+  }
+});
+
+test('even a note a sorting model passes waits for the person: a device note never becomes memory on its own', async () => {
+  const o = await startFakeOllama({ models: INSTALLED });
+  const h = await hub({ core: { models: { ollamaUrl: o.url, hardware: async () => hubHardware() as never } } });
+  try {
+    await h.core.models.assign('triage-text', { model: 'example-small:3b' });
+    const { token } = await enroll(h, { kind: 'computer', name: 'Test computer' });
+    const r = await call(h.mesh, 'POST', '/api/v1/mesh/inbox', { items: [{ key: 'mem-00000009', kind: 'memory_note', body: { content: 'The spare bulbs are in the hall cupboard.' } }] }, { authorization: `Bearer ${token}` });
+    assert.equal(r.body.results[0].status, 'accepted');
+    await new Promise((res) => setTimeout(res, 300));
+    assert.ok(!(h.core.memory.active() as { content: string }[]).some((x) => /spare bulbs/.test(x.content)));
+    assert.deepEqual(h.core.ingest.candidates().map((c) => c.content), ['The spare bulbs are in the hall cupboard.']);
+  } finally {
+    await h.stop();
+    await o.close();
   }
 });

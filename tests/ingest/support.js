@@ -93,7 +93,7 @@ export const call = (name, args) => `<tool_call name="${name}">${JSON.stringify(
 
 // A Nova with the scripted model. `yes`: permissions set to yes in permissions.md. `model`: a
 // stand-in Ollama `reply` for a local sorting model (none when absent).
-export async function startNova({ agent, yes = [], model = null, gmail = false } = {}) {
+export async function startNova({ agent, yes = [], model = null, gmail = false, linkCaps = null } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'nova-gate-'));
   ensureMark(home);
   const web = await startWeb();
@@ -103,12 +103,13 @@ export async function startNova({ agent, yes = [], model = null, gmail = false }
     NOVA_HOME: home, NOVA_AGENT_CMD: 'scripted-model', NOVA_AGENT_EGRESS: 'none', NOVA_TZ: 'UTC',
     NOVA_SEARCH_URL: `${web.base}/search`, ...(google ? { NOVA_GOOGLE_BASE: google.base } : {}),
   });
-  config.maxSteps = 20;
+  config.maxSteps = 30;
   config.commit = false;
   const nova = createNova(config, {
     agent,
     // The stand-in web is on this machine; a test may let the agent reach it, the model never can.
     fetchAllow: (address) => address === '127.0.0.1',
+    ...(linkCaps ? { linkCaps } : {}),
     ...(ollama ? { models: { ollamaUrl: ollama.url, hardware: async () => hubHardware(), watchMs: 100 } } : {}),
   });
   // The web and Gmail tools are offered only when the privacy setting allows the network.

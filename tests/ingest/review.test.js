@@ -233,7 +233,8 @@ test('a subset of the corpus through the runner: served pages and mail, verdicts
   const pick = [...inj.filter((x) => ['css-1', 'meta-1', 'zw-1', 'tool-1', 'exfil-2', 'link-2', 'enc-1'].includes(x.id)), ...ben.filter((x) => ['page-recipe', 'docs-api', 'page-wiki'].includes(x.id))];
   let base = '';
   const m = scripted((step) => (pick[step] ? call('web_fetch', { url: `${base}/corpus/${pick[step].id}` }) : 'Done.'));
-  const h = await startNova({ agent: m.agent, model: sorting(() => ({})) });
+  // Ten pages on one site: more than the free link-follows a tainted run gets by default (N1b).
+  const h = await startNova({ agent: m.agent, model: sorting(() => ({})), linkCaps: { per_host: 50, total: 50 } });
   base = h.web.base;
   for (const it of pick) h.web.corpus.set(it.id, it);
   try {

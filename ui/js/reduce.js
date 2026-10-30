@@ -36,7 +36,7 @@ export function applyEvent(s, ev) {
         id: ev.id, kind: 'handoff', name: ev.name, schedule: ev.schedule, helper: ev.helper, stopped: !!ev.stopped, run: ev.run, text: ev.text, ok: ev.ok !== false,
         late: !!ev.late, manual: !!ev.manual, due: ev.due, ts: ev.ts, attempt: 0, items: [], state: 'done', endedAt: ev.ts,
         // The ingest gate: a report from a run that read outside content, and its screened form.
-        ...(ev.taint ? { taint: ev.taint } : {}), ...(ev.screened ? { screened: ev.screened } : {}),
+        ...(ev.taint ? { taint: ev.taint } : {}), ...(ev.screened ? { screened: ev.screened } : {}), ...(ev.links ? { links: ev.links } : {}),
       });
       break;
     case 'attempt': {
