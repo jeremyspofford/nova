@@ -51,7 +51,7 @@ if ss -ltn 2>/dev/null | grep -qE "[:.]$PORT\b"; then
 fi
 mkdir -p "$DATA"
 tmux new-session -d -s "$SESSION" -c "$DIR" \
-  "env NOVA_HOME='$DATA' NOVA_PORT='$PORT' $MESH_ENV '$NODE' src/server.js 2>&1 | tee -a '$DATA/preview.log'"
+  "env NOVA_HOME='$DATA' NOVA_PORT='$PORT' NOVA_INSTANCE=preview $MESH_ENV '$NODE' src/server.js 2>&1 | tee -a '$DATA/preview.log'"
 
 for _ in $(seq 1 60); do
   if health="$(curl -sf "http://localhost:$PORT/api/v1/health")"; then
