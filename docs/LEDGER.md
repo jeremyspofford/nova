@@ -15,6 +15,24 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M7 amendment §2, final review).** Branch `m7-amend/final` (from
+`m7-amend/checkpoints-reset`); each with a test that failed first.
+- **Nova doesn't adopt a folder that clashes with its own entries.** At start, a folder that
+  already holds something named like one of `NOVA_ENTRIES` is refused, naming them ("This folder
+  already has .git/ and workspace/ that aren't Nova's. Choose an empty folder for Nova's home, or
+  move them."): Nova's data would otherwise end up inside the person's folders, out of a reset's
+  reach. Nova's own: a new or empty folder, one whose `nova.db` has Nova's schema, and (added here)
+  an Era 2 home that holds all four standing files Era 2 seeded (`AGENTS.md`, `SOUL.md`,
+  `IDENTITY.md`, `USER.md`), which has no `nova.db` yet. Other things already there are recorded and
+  left alone. Tests that pre-fill a fresh home now let Nova mark it first (`ensureMark`), as Nova
+  does before seeding.
+- **`write_file` allows a path only as spelled exactly and after folding**; refusals stay folded.
+- **Relay:** when it is on or was ever handed work, the confirmation and the result say its work
+  stays in Relay's own storage and a reset of Nova doesn't erase it.
+- **The home's git history** never takes `.nova-home` (the seal key), a reset's marker or report, or
+  `checkpoints/` (which holds the identity and the vault key); `src/home.js` `UNTRACKED`. A home
+  that already committed any of them before isn't rewritten: not changed here.
+
 **2026-10-30 (M7 amendment §2, re-review fixes).** Branch `m7-amend/reset`; each with a test that
 failed on `dcbc98df` first.
 - **The mark means "this folder is Nova's".** `.nova-home` records `before`: the top-level names a
