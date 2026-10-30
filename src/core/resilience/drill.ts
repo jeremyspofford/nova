@@ -4,13 +4,13 @@
 // drill, and a failed drill is a problem with its playbook. The live home is only read (for what
 // was forgotten), never written.
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Db, Migration } from '../db.ts';
 import { restoreInto, sha256File, type Manifest } from './backup.ts';
 import { inert, smoke, startSandbox } from './sandbox.ts';
+import { dropScratch, makeScratch } from './scratch.ts';
 
 export interface DrillCheck { name: string; ok: boolean; said: string }
 export interface DrillResult { ok: boolean; backup: string | null; source: 'folder' | 'encrypted' | null; checks: DrillCheck[] }
@@ -38,7 +38,7 @@ export async function drill(o: DrillInput): Promise<DrillResult> {
     check('backup', false, 'There is no finished backup to restore.');
     return { ok: false, backup: null, source: null, checks };
   }
-  const scratch = mkdtempSync(join(tmpdir(), 'nova-drill-'));
+  const scratch = makeScratch('drill');
   const home = join(scratch, 'home');
   try {
     let m: Manifest;
@@ -81,23 +81,10 @@ export async function drill(o: DrillInput): Promise<DrillResult> {
           : !vsManifest ? 'The database’s migration record doesn’t match the manifest.' : `All ${rows.length} migration checksums match.`);
 
         // Forgotten things stay forgotten: nothing the live Nova forgot is in the backup.
-        const forgotten = o.live.all<{ memory_id: string }>(`SELECT DISTINCT memory_id FROM memory_event WHERE kind = 'forgotten'`).map((r) => r.memory_id);
-        const has = (table: string) => !!restored!.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
-        let back = 0;
-        if (has('memory')) {
-          const q = restored.prepare('SELECT 1 FROM memory WHERE id = ?');
-          for (const id of forgotten) if (q.get(id)) back++;
-        }
-        // Capture forgotten with a tombstone (the source's key, hashed) must not be in it either.
-        let backCapture = 0;
-        if (has('capture_event')) {
-          const tombs = new Set(o.live.all<{ source_id: string; key: string }>('SELECT source_id, key FROM capture_tombstone').map((t) => `${t.source_id}\0${t.key}`));
-          if (tombs.size) {
-            for (const r of restored.prepare('SELECT source_id, external_id FROM capture_event WHERE external_id IS NOT NULL').all() as { source_id: string; external_id: string }[]) {
-              if (tombs.has(`${r.source_id}\0${sha(`${r.source_id}\0${r.external_id}`)}`)) backCapture++;
-            }
-          }
-        }
+        const f = forgottenIn(restored, o.live);
+        const back = f.memories;
+        const backCapture = f.capture;
+        const forgotten = { length: f.forgotten };
         check('forgotten', back + backCapture === 0, back + backCapture
           ? `${back + backCapture} forgotten ${back + backCapture === 1 ? 'item is' : 'items are'} back in the backup.`
           : `None of the ${forgotten.length} forgotten ${forgotten.length === 1 ? 'memory is' : 'memories are'} in it.`);
@@ -126,8 +113,30 @@ export async function drill(o: DrillInput): Promise<DrillResult> {
     }
     return { ok: checks.every((c) => c.ok), backup: o.backupDir, source: o.source, checks };
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    dropScratch(scratch);
   }
+}
+
+// How many things the live Nova forgot are in a restored database: memories by id, and capture
+// whose source key has a tombstone.
+export function forgottenIn(restored: DatabaseSync, live: Db): { memories: number; capture: number; forgotten: number } {
+  const forgotten = live.all<{ memory_id: string }>(`SELECT DISTINCT memory_id FROM memory_event WHERE kind = 'forgotten'`).map((r) => r.memory_id);
+  const has = (table: string) => !!restored.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
+  let memories = 0;
+  if (has('memory')) {
+    const q = restored.prepare('SELECT 1 FROM memory WHERE id = ?');
+    for (const id of forgotten) if (q.get(id)) memories++;
+  }
+  let capture = 0;
+  if (has('capture_event')) {
+    const tombs = new Set(live.all<{ source_id: string; key: string }>('SELECT source_id, key FROM capture_tombstone').map((t) => `${t.source_id}\0${t.key}`));
+    if (tombs.size) {
+      for (const r of restored.prepare('SELECT source_id, external_id FROM capture_event WHERE external_id IS NOT NULL').all() as { source_id: string; external_id: string }[]) {
+        if (tombs.has(`${r.source_id}\0${sha(`${r.source_id}\0${r.external_id}`)}`)) capture++;
+      }
+    }
+  }
+  return { memories, capture, forgotten: forgotten.length };
 }
 
 function safeCount(db: DatabaseSync): number | null {

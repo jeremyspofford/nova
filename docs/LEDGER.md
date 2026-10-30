@@ -85,6 +85,57 @@ before its fix (checked against `fdd33ea2`).
   standby: rolling back an extension change on a standby promoted mid-canary can't put files back
   and ends `broken`, saying so.
 
+**2026-10-30 (M7 review fixes): resilience — supervisor, releases, backups, drill, playbooks.**
+Branch `m7-fix/resilience` from `m7/self-modification`. Every fix has a test that failed first.
+
+- **Forgets owed to a missing folder.** A forget reaches every folder Nova ever backed up to
+  (from `backup_run`), not only the one set now. A folder that isn't there owes it: the forget
+  is written to `kept/.nova/forgets-owed.json` (in the home's `kept`, so never in a backup, a
+  sandbox copy or the standby; its words sealed with AES-GCM under a key derived from the seal
+  key) and carried in before any backup run, prune or drill, and on every heartbeat. A problem
+  (`forget-owed`, one per folder) says so until then. A folder counts as back when it exists and
+  holds Nova's backups (or never had any): an empty mount point doesn't silently drop a forget.
+  Residual: if the person deletes every backup in that folder themselves, the problem stays open
+  until they mark it dealt with. The drill checks every kept backup (or encrypted copy) for
+  forgotten things (`forgotten-everywhere`), not only the one restored.
+- **Only Nova's backups count.** A backup is a folder recorded in `backup_run` (id and seq) whose
+  manifest carries Nova's HMAC seal (key `nova/backup-seal` in the vault). Anything else named
+  like one is a stray: never restored, never latest, never pruned, shown in GET /backups and on
+  Health. No migration was needed. Backups made before this fix carry no seal and are strays
+  (M7 is unreleased; nothing is deleted). Manifest paths go through the same check as untar
+  (`safeRel`) in `restoreInto` and `cleanBackup`.
+- **Backups are the person's alone.** 0700 folders, 0600 files whatever the umask; a folder
+  owned by someone else, or writable by group or others, is refused when chosen and at backup
+  time. `PUT /backups/settings` is approver-only (tier 2).
+- **The recovery key.** The encrypted copy's key is shown once as a recovery key (64 hex digits,
+  eight groups) when the copy is set up; again only at tier 3 (`POST /backups/recovery-key
+  {confirm: true}`, the hub's own screen). `openEncrypted(file, key, out)` opens a copy with no
+  home and no vault. The drill opens copies with the recovery key the person was shown (checked
+  by fingerprint), or one given to it, never whatever the vault holds now. The key is in no
+  backup in readable form; the vault's file in a backup carries it encrypted under the vault key,
+  which never leaves the machine.
+- **Supervisor problems close; restarts don't run away.** A crash or hang the supervisor dealt
+  with closes at the next sweep of the server it started. `restart-server` is never run by Nova
+  itself, and a person's restart repair is the console's or an approver's. The supervisor takes
+  at most one asked-for restart per window (a minute), and each counts toward safe mode.
+- **free-scratch** deletes only this process's leftover scratch and that of stopped processes
+  (scratch names carry the pid: `nova-<kind>-p<pid>-…`), never a running process's folder.
+- **Rollback restores.** The release reports its mark (sync log seq, newest problem) over IPC as
+  `core.start()` begins, before recovery, ticks or dispatch. The slot records `mark.by`
+  (`release`, or `supervisor` for a release too old to say, read after its start). A restore says
+  in the history and on its problem what it restored.
+- **Minor.** Tags `current` and `base` are never releases. Any failure after the running release
+  stops puts it back. Rollback from safe mode with nowhere to go keeps safe mode. A refused
+  rollback whose release won't start again goes to safe mode, with the refusal in the database.
+  `base` runs a slot pinned to the repository's HEAD at supervisor start
+  (`releases/.base-<commit>`), never the checkout on disk. The supervisor's folder must be the
+  person's and 0700. The control socket wants the typed confirmation (the version, or
+  `rollback`); `rollback --confirm` is now `--confirm rollback`. **Residual:** any program running
+  as the person can connect to the 0600 socket and send the same bytes as the CLI. Node has no
+  peer-credential check, and a same-user process could drive the CLI anyway. The confirmation
+  guards against slips, not against code already running as the person. Sandboxes always get
+  `NOVA_HOST=127.0.0.1`.
+
 **2026-10-30 (M7b): the supervisor, code releases, backups, the restore drill and the chaos pass.**
 Branch `m7b/resilience`; the plan's §2–§3. Code in `src/supervisor/` and `src/core/resilience/`,
 migration `0012_resilience.sql` (local tables: playbooks, backup runs, drills).

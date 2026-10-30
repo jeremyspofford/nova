@@ -129,7 +129,7 @@ test('going back across a database upgrade: refused with the reason when somethi
     // Something written since the upgrade: going back would lose it, so it is refused.
     const m = await api(s.base(), 'POST', '/api/v1/memory', { kind: 'fact', content: 'Written after the upgrade.' });
     assert.equal(m.status, 201);
-    const back = await cli(s.dir, 'rollback', '--confirm');
+    const back = await cli(s.dir, 'rollback', '--confirm', 'rollback');
     assert.equal(back.code, 1, back.out);
     assert.match(back.out, /would lose \d+ changes? written since v1\.3\.0 upgraded the database/);
     assert.match(back.out, /Nova kept v1\.3\.0 running/);
@@ -149,7 +149,7 @@ test('going back across a database upgrade: refused with the reason when somethi
     const before = (await api(s2.base(), 'GET', '/api/v1/health')).body.checks.database.detail;
     const d = await cli(s2.dir, 'deploy', 'v1.3.0', '--confirm', 'v1.3.0');
     assert.equal(d.code, 0, d.out);
-    const back = await cli(s2.dir, 'rollback', '--confirm');
+    const back = await cli(s2.dir, 'rollback', '--confirm', 'rollback');
     assert.equal(back.code, 0, back.out);
     assert.match(back.out, /Restored the database from before v1\.3\.0 upgraded it/);
     await until(() => s2.state()?.mode === 'running' && !!s2.port(), 'Nova running again');

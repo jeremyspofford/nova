@@ -13,21 +13,35 @@
 //
 // Forgetting holds here too (owner's standing order 4): every forget is carried into each backup
 // and each encrypted copy, which is decrypted, cleaned and encrypted again; a copy that can't be
-// cleaned is destroyed and that is reported.
-import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, relative, resolve, sep } from 'node:path';
+// cleaned is destroyed and that is reported. That covers every folder Nova ever backed up to, not
+// only the one set now; a folder that isn't there when the forget happens (a drive unplugged) is
+// owed it: the forget is written down (out of every backup, its words sealed) and carried in as
+// soon as the folder is back, before any backup, prune or drill touches it.
+//
+// What counts as a backup: only a folder Nova recorded making (backup_run, by id and sequence)
+// whose manifest still carries Nova's seal (an HMAC under a key in the vault, never in a backup).
+// Anything else named like one is a stray: never restored, never "latest", never pruned, and
+// reported. Backups are the person's alone (folders 0700, files 0600), in a folder only they can
+// write.
+//
+// The encrypted copy's key is the person's recovery key: shown once when the copy is set up (and
+// again only at tier 3), it opens the copy on any machine, without this one's vault.
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import { cleanDbFile } from '../backups.ts';
 import { CoreError } from '../errors.ts';
-import { decryptTo, encryptDir, readHeader } from './archive.ts';
+import { decryptTo, encryptDir, keyFingerprint, readHeader, safeRel } from './archive.ts';
+import { dropScratch, makeScratch } from './scratch.ts';
 
 export interface BackupSettings { target: string | null; keep: number; encrypted_target: string | null }
 export const DEFAULT_KEEP = 7;
 export const KEY_NAME = 'nova/backup-key';
+// Seals manifests and the list of owed forgets: only Nova, holding it, can make a backup count.
+export const SEAL_NAME = 'nova/backup-seal';
 
 export interface ManifestFile { path: string; sha256: string; bytes: number }
 export interface Manifest {
@@ -42,6 +56,9 @@ export interface Manifest {
   files: ManifestFile[];
   excluded: string[];
   cleaned: { at: string; table: string; rows: number }[];
+  // Nova's seal over everything above (HMAC-SHA256): a manifest without it, or changed since, is
+  // not one of Nova's backups.
+  seal?: string;
 }
 
 export interface BackupRun { id: string; seq: number; at: string; target: string; path: string | null; ok: boolean; bytes: number; files: number; encrypted_path: string | null; error: string | null; task_id: string | null }
@@ -129,10 +146,20 @@ export interface NightlyOptions {
   log: Log;
   version: string;
   settings: () => BackupSettings;
-  // The encryption key, from the vault: made once, on first use.
+  // The encryption key (the person's recovery key), from the vault: made once, on first use.
   key: () => Buffer;
+  // The seal's key, from the vault: made once, on first use. Null when the vault can't give it.
+  seal: () => Buffer | null;
+  // A folder now owes forgets (it isn't there), or owes none any more (they were carried in).
+  owed?: (folder: string, kind: FolderKind, owes: boolean) => void;
   now?: () => Date;
 }
+
+export type FolderKind = 'folder' | 'encrypted';
+interface Found { path: string; seq: number; manifest: Manifest }
+interface FoundCopy { path: string; seq: number; at: string | null }
+// A forget a folder still owes: which rows, and the words (sealed: they are what was forgotten).
+interface Owed { folder: string; kind: FolderKind; table: string; ids: string[]; words: string; at: string }
 
 export class NightlyBackups {
   #o: NightlyOptions;
@@ -146,6 +173,8 @@ export class NightlyBackups {
   // Makes one backup now. Throws a BackupError (with its kind) when it can't; the old backups are
   // untouched then. Returns the run, with the encrypted copy's path or why there isn't one.
   run(o: { taskId?: string } = {}): BackupRun & { manifest: Manifest; encrypted_error: string | null } {
+    // Forgets owed to a folder that is back go in before anything else is done there.
+    this.applyOwed();
     const s = this.#o.settings();
     if (!s.target) throw new BackupError('target-missing', 'No backup folder is set yet. Choose one with PUT /api/v1/backups/settings.');
     const target = resolve(s.target);
@@ -160,22 +189,31 @@ export class NightlyBackups {
     try { st = statSync(target); } catch { /* not there */ }
     if (!st?.isDirectory()) return fail('target-missing', `The backup folder ${target} isn’t there. Nova won’t create it, in case it’s a drive that isn’t plugged in.`);
     if (inside(target, this.#o.home)) return fail('failed', 'The backup folder is inside Nova’s home, so a backup would contain itself. Choose a folder outside it.');
+    const unsafe = folderProblem(target);
+    if (unsafe) return fail('failed', unsafe);
+    const sealKey = this.#o.seal();
+    if (!sealKey) return fail('failed', 'Nova couldn’t get the key it seals backups with from the vault, so it made no backup.');
 
     const final = join(target, id);
     const partial = join(target, `.${id}.partial`);
     let manifest: Manifest;
     try {
       rmSync(partial, { recursive: true, force: true });
-      mkdirSync(join(partial, 'files'), { recursive: true });
+      // The person's alone, whatever the umask: folders 0700, files 0600.
+      mkdirSync(join(partial, 'files'), { recursive: true, mode: 0o700 });
+      chmodSync(partial, 0o700);
+      chmodSync(join(partial, 'files'), 0o700);
       const snap = join(partial, 'nova.db');
       this.#o.db.raw.exec(`VACUUM INTO '${snap.replaceAll("'", "''")}'`);
+      chmodSync(snap, 0o600);
       const files: ManifestFile[] = [];
       for (const rel of backupFiles(this.#o.home)) {
         const src = join(this.#o.home, rel);
         const dst = join(partial, 'files', rel);
-        mkdirSync(join(dst, '..'), { recursive: true });
+        mkdirSync(join(dst, '..'), { recursive: true, mode: 0o700 });
         try {
           copyFileSync(src, dst);
+          chmodSync(dst, 0o600);
         } catch (e) {
           // A file that went away while copying (a journal rotated, a scratch file removed) is
           // simply not in this backup; anything else stops it.
@@ -197,7 +235,7 @@ export class NightlyBackups {
         db: { path: 'nova.db', sha256: sha256File(snap), bytes: statSync(snap).size },
         files, excluded: EXCLUDED, cleaned: [],
       };
-      writeFileSync(join(partial, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+      writeManifest(partial, manifest, sealKey);
       renameSync(partial, final);
     } catch (e) {
       rmSync(partial, { recursive: true, force: true });
@@ -220,9 +258,10 @@ export class NightlyBackups {
     return { ...run, manifest, encrypted_error: encryptedError };
   }
 
-  // Keeps the newest `keep` complete backups (and encrypted copies), by sequence number; removes
-  // the rest, and anything left half-written by a backup that was stopped.
+  // Keeps the newest `keep` backups (and encrypted copies) Nova made, by sequence number; removes
+  // the rest, and anything left half-written by a backup that was stopped. Strays are left alone.
   prune(): { removed: string[] } {
+    this.applyOwed();
     const s = this.#o.settings();
     const removed: string[] = [];
     const keep = Math.max(1, s.keep || DEFAULT_KEEP);
@@ -236,32 +275,64 @@ export class NightlyBackups {
     return { removed };
   }
 
-  // Complete backups in the folder, newest first (a manifest means it finished).
-  complete(): { path: string; seq: number; manifest: Manifest }[] {
+  // Nova's own complete backups in the folder, newest first.
+  complete(): Found[] {
     const target = this.#o.settings().target;
-    if (!target || !existsSync(target)) return [];
-    const out: { path: string; seq: number; manifest: Manifest }[] = [];
-    for (const e of readdirSync(target)) {
-      const m = DIR.exec(e);
-      if (!m) continue;
-      try {
-        const manifest = JSON.parse(readFileSync(join(target, e, 'manifest.json'), 'utf8')) as Manifest;
-        out.push({ path: join(target, e), seq: Number(m[1]), manifest });
-      } catch { /* not finished, or not Nova's */ }
-    }
-    return out.sort((a, b) => b.seq - a.seq);
+    return target ? this.#scan(target).found : [];
   }
 
-  encrypted(): { path: string; seq: number; at: string | null }[] {
+  encrypted(): FoundCopy[] {
     const t = this.#o.settings().encrypted_target;
-    if (!t || !existsSync(t)) return [];
-    return readdirSync(t).flatMap((e) => {
+    return t ? this.#scanCopies(t).found : [];
+  }
+
+  // Things in the backup folders named like Nova's backups that Nova didn't make (or that were
+  // changed since): never used, never pruned, shown so the person can look.
+  strays(): string[] {
+    const s = this.#o.settings();
+    return [...(s.target ? this.#scan(s.target).strays : []), ...(s.encrypted_target ? this.#scanCopies(s.encrypted_target).strays : [])];
+  }
+
+  #scan(folder: string): { found: Found[]; strays: string[] } {
+    const found: Found[] = [];
+    const strays: string[] = [];
+    let names: string[] = [];
+    try { names = readdirSync(folder); } catch { return { found, strays }; }
+    const key = this.#o.seal();
+    for (const e of names) {
+      const m = DIR.exec(e);
+      if (!m) continue;
+      const path = join(folder, e);
+      let manifest: Manifest | null = null;
+      try { manifest = JSON.parse(readFileSync(join(path, 'manifest.json'), 'utf8')) as Manifest; } catch { /* below */ }
+      const seq = Number(m[1]);
+      const ours = !!manifest && !!key && manifest.id === e && manifest.seq === seq && sealed(manifest, key)
+        && !!this.#o.db.get('SELECT 1 FROM backup_run WHERE id = ? AND seq = ? AND ok = 1', manifest.id, seq);
+      if (ours) found.push({ path, seq, manifest: manifest! });
+      else strays.push(path);
+    }
+    return { found: found.sort((a, b) => b.seq - a.seq), strays };
+  }
+
+  #scanCopies(folder: string): { found: FoundCopy[]; strays: string[] } {
+    const found: FoundCopy[] = [];
+    const strays: string[] = [];
+    let names: string[] = [];
+    try { names = readdirSync(folder); } catch { return { found, strays }; }
+    for (const e of names) {
       const m = ENC.exec(e);
-      if (!m) return [];
+      if (!m) continue;
+      const path = join(folder, e);
+      const seq = Number(m[1]);
+      const recorded = this.#o.db.all<{ encrypted_path: string }>('SELECT encrypted_path FROM backup_run WHERE seq = ? AND ok = 1 AND encrypted_path IS NOT NULL', seq).some((r) => basename(r.encrypted_path) === e);
       let at: string | null = null;
-      try { at = readHeader(join(t, e)).at; } catch { /* damaged: the drill says so */ }
-      return [{ path: join(t, e), seq: Number(m[1]), at }];
-    }).sort((a, b) => b.seq - a.seq);
+      // A copy whose header can't be read is still Nova's when recorded: the drill says it's damaged.
+      let named = true;
+      try { const h = readHeader(path); at = h.at; named = h.id === dirName(seq) && h.seq === seq; } catch { /* damaged */ }
+      if (recorded && named) found.push({ path, seq, at });
+      else strays.push(path);
+    }
+    return { found: found.sort((a, b) => b.seq - a.seq), strays };
   }
 
   runs(limit = 20): BackupRun[] {
@@ -269,32 +340,118 @@ export class NightlyBackups {
   }
 
   // Unpacks an encrypted copy into `outDir` (which must not exist yet), checked whole first.
-  decrypt(file: string, outDir: string): Manifest {
-    decryptTo(file, this.#o.key(), outDir);
+  decrypt(file: string, outDir: string, key: Buffer = this.#o.key()): Manifest {
+    decryptTo(file, key, outDir);
     return JSON.parse(readFileSync(join(outDir, 'manifest.json'), 'utf8')) as Manifest;
   }
 
-  // A forget, carried into every backup and every encrypted copy (backups.ts calls this).
+  // ---- forgetting -------------------------------------------------------------------------------
+
+  // A forget, carried into every backup and every encrypted copy, in every folder Nova ever backed
+  // up to (backups.ts calls this). A folder that isn't there owes it.
   forget(table: string, ids: string[], words: string[]): { cleaned: string[]; destroyed: string[] } {
     const cleaned: string[] = [];
     const destroyed: string[] = [];
     if (!ids.length) return { cleaned, destroyed };
-    for (const b of this.complete()) {
+    // What was owed before goes first, so forgets reach each folder in the order they were made.
+    this.applyOwed();
+    for (const f of this.folders()) {
+      if (this.#reachable(f.folder, f.kind)) {
+        const r = this.#clean(f.folder, f.kind, table, ids, words);
+        cleaned.push(...r.cleaned);
+        destroyed.push(...r.destroyed);
+      } else this.#owe(f.folder, f.kind, table, ids, words);
+    }
+    return { cleaned, destroyed };
+  }
+
+  // Every folder Nova backed up to, and the ones set now: forgetting reaches them all.
+  folders(): { folder: string; kind: FolderKind }[] {
+    const s = this.#o.settings();
+    const out = new Map<string, { folder: string; kind: FolderKind }>();
+    const add = (folder: string | null, kind: FolderKind) => { if (folder) out.set(`${kind}\0${resolve(folder)}`, { folder: resolve(folder), kind }); };
+    for (const r of this.#o.db.all<{ target: string }>('SELECT DISTINCT target FROM backup_run WHERE ok = 1')) add(r.target, 'folder');
+    for (const r of this.#o.db.all<{ p: string }>('SELECT DISTINCT encrypted_path AS p FROM backup_run WHERE encrypted_path IS NOT NULL')) add(dirname(r.p), 'encrypted');
+    add(s.target, 'folder');
+    add(s.encrypted_target, 'encrypted');
+    return [...out.values()];
+  }
+
+  // Forgets owed to folders that aren't there, by folder: shown in Health.
+  owedView(): { folder: string; kind: FolderKind; forgets: number; since: string }[] {
+    const by = new Map<string, { folder: string; kind: FolderKind; forgets: number; since: string }>();
+    for (const o of this.#loadOwed()) {
+      const k = `${o.kind}\0${o.folder}`;
+      const v = by.get(k) ?? { folder: o.folder, kind: o.kind, forgets: 0, since: o.at };
+      v.forgets++;
+      by.set(k, v);
+    }
+    return [...by.values()];
+  }
+
+  // Carries owed forgets into each folder that is back. Called before a backup, a prune and a
+  // drill, and by the heartbeat; a folder still away keeps what it owes.
+  applyOwed(): { applied: { folder: string; kind: FolderKind }[] } {
+    const owed = this.#loadOwed();
+    const applied: { folder: string; kind: FolderKind }[] = [];
+    if (!owed.length) return { applied };
+    const left: Owed[] = [];
+    const key = this.#owedKey();
+    const groups = new Map<string, Owed[]>();
+    for (const o of owed) groups.set(`${o.kind}\0${o.folder}`, [...(groups.get(`${o.kind}\0${o.folder}`) ?? []), o]);
+    for (const list of groups.values()) {
+      const { folder, kind } = list[0]!;
+      if (!key || !this.#reachable(folder, kind)) { left.push(...list); continue; }
       try {
-        cleanBackup(b.path, table, ids, words, this.#now());
-        cleaned.push(b.path);
+        for (const o of list) this.#clean(folder, kind, o.table, o.ids, unsealWords(o.words, key));
+        applied.push({ folder, kind });
       } catch (e) {
-        rmSync(b.path, { recursive: true, force: true });
-        destroyed.push(b.path);
-        this.#o.log.problem('backups', 'A nightly backup couldn’t be cleaned of something you asked Nova to forget, so Nova deleted that backup rather than keep it.', { detail: `${b.path}: ${(e as Error).message}` });
+        left.push(...list);
+        this.#o.log.warn('backups', 'Nova couldn’t carry an owed forget into a backup folder yet.', { folder, error: (e as Error).message });
       }
     }
-    for (const e of this.encrypted()) {
-      const scratch = mkdtempSync(join(tmpdir(), 'nova-forget-'));
+    this.#saveOwed(left);
+    for (const a of applied) this.#o.owed?.(a.folder, a.kind, false);
+    return { applied };
+  }
+
+  // A folder is there for forgetting when it exists and either holds Nova's backups or never had
+  // any. An empty folder where backups were (a drive's mount point with the drive unplugged) is
+  // not: cleaning it would clean nothing and let the forget be dropped.
+  #reachable(folder: string, kind: FolderKind): boolean {
+    try { if (!statSync(folder).isDirectory()) return false; } catch { return false; }
+    const found = kind === 'folder' ? this.#scan(folder).found.length : this.#scanCopies(folder).found.length;
+    if (found) return true;
+    const had = kind === 'folder'
+      ? !!this.#o.db.get('SELECT 1 FROM backup_run WHERE ok = 1 AND target = ?', folder)
+      : this.#o.db.all<{ p: string }>('SELECT encrypted_path AS p FROM backup_run WHERE encrypted_path IS NOT NULL').some((r) => dirname(r.p) === folder);
+    return !had;
+  }
+
+  #clean(folder: string, kind: FolderKind, table: string, ids: string[], words: string[]): { cleaned: string[]; destroyed: string[] } {
+    const cleaned: string[] = [];
+    const destroyed: string[] = [];
+    const sealKey = this.#o.seal();
+    if (!sealKey) throw new Error('the key that seals backups isn’t available');
+    if (kind === 'folder') {
+      for (const b of this.#scan(folder).found) {
+        try {
+          cleanBackup(b.path, table, ids, words, this.#now(), sealKey);
+          cleaned.push(b.path);
+        } catch (e) {
+          rmSync(b.path, { recursive: true, force: true });
+          destroyed.push(b.path);
+          this.#o.log.problem('backups', 'A nightly backup couldn’t be cleaned of something you asked Nova to forget, so Nova deleted that backup rather than keep it.', { detail: `${b.path}: ${(e as Error).message}` });
+        }
+      }
+      return { cleaned, destroyed };
+    }
+    for (const e of this.#scanCopies(folder).found) {
+      const scratch = makeScratch('forget');
       try {
         const out = join(scratch, 'backup');
         const h = decryptTo(e.path, this.#o.key(), out);
-        cleanBackup(out, table, ids, words, this.#now());
+        cleanBackup(out, table, ids, words, this.#now(), sealKey);
         encryptDir(out, e.path, this.#o.key(), { id: h.id, seq: h.seq, at: h.at });
         cleaned.push(e.path);
       } catch (err) {
@@ -302,16 +459,51 @@ export class NightlyBackups {
         destroyed.push(e.path);
         this.#o.log.problem('backups', 'An encrypted backup copy couldn’t be cleaned of something you asked Nova to forget, so Nova deleted that copy rather than keep it.', { detail: `${e.path}: ${(err as Error).message}` });
       } finally {
-        rmSync(scratch, { recursive: true, force: true });
+        dropScratch(scratch);
       }
     }
     return { cleaned, destroyed };
+  }
+
+  #owe(folder: string, kind: FolderKind, table: string, ids: string[], words: string[]): void {
+    const key = this.#owedKey();
+    if (!key) {
+      this.#o.log.problem('backups', `Nova couldn’t write down a forget owed to ${folder}: the vault can’t give it the key it seals them with. Delete the backups there yourself.`);
+      return;
+    }
+    this.#saveOwed([...this.#loadOwed(), { folder, kind, table, ids, words: sealWords(words, key), at: this.#now().toISOString() }]);
+    this.#o.owed?.(folder, kind, true);
+  }
+
+  // The owed list lives in the home's `kept` folder: never in a backup, never copied to a sandbox
+  // or the standby, and emptied once every folder has what it owed.
+  #owedFile(): string {
+    return join(this.#o.home, 'kept', '.nova', 'forgets-owed.json');
+  }
+
+  #loadOwed(): Owed[] {
+    try { return (JSON.parse(readFileSync(this.#owedFile(), 'utf8')) as { owed: Owed[] }).owed ?? []; } catch { return []; }
+  }
+
+  #saveOwed(list: Owed[]): void {
+    const file = this.#owedFile();
+    if (!list.length && !existsSync(file)) return;
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(`${file}.tmp`, `${JSON.stringify({ v: 1, owed: list }, null, 2)}\n`, { mode: 0o600 });
+    renameSync(`${file}.tmp`, file);
+  }
+
+  #owedKey(): Buffer | null {
+    const k = this.#o.seal();
+    return k ? createHash('sha256').update('nova-owed-forgets\0').update(k).digest() : null;
   }
 
   #encrypt(dir: string, m: Manifest, to: string): string {
     let st: ReturnType<typeof statSync> | null = null;
     try { st = statSync(to); } catch { /* not there */ }
     if (!st?.isDirectory()) throw new Error(`the folder ${to} isn’t there, and Nova won’t create it`);
+    const unsafe = folderProblem(to);
+    if (unsafe) throw new Error(unsafe);
     const file = join(to, `${m.id}.nbk`);
     encryptDir(dir, file, this.#o.key(), { id: m.id, seq: m.seq, at: m.at });
     return file;
@@ -334,21 +526,65 @@ const inside = (path: string, root: string) => {
   return r === '' || (!r.startsWith('..') && !r.startsWith(sep) && !r.includes(`..${sep}`));
 };
 
+// Why a folder can't hold backups, or null: it must be the person's own, and no one else may
+// write it (they could change or plant backups there).
+export function folderProblem(path: string): string | null {
+  let st: ReturnType<typeof statSync>;
+  try { st = statSync(path); } catch { return null; }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (uid !== null && st.uid !== uid) return `${path} belongs to another user, so they could change or plant backups there. Choose a folder of your own.`;
+  if (Number(st.mode) & 0o022) return `${path} is a folder other users can write to, so they could change or plant backups there. Choose a folder only you can write (chmod go-w).`;
+  return null;
+}
+
+const sealOf = (m: Manifest, key: Buffer) => {
+  const { seal: _seal, ...rest } = m;
+  return createHmac('sha256', key).update(JSON.stringify(rest)).digest('hex');
+};
+
+const sealed = (m: Manifest, key: Buffer) => {
+  if (typeof m.seal !== 'string' || !/^[0-9a-f]{64}$/.test(m.seal)) return false;
+  return timingSafeEqual(Buffer.from(m.seal, 'hex'), Buffer.from(sealOf(m, key), 'hex'));
+};
+
+// Writes a backup's manifest with Nova's seal, all at once, readable by the person only.
+export function writeManifest(dir: string, m: Manifest, key: Buffer): void {
+  const path = join(dir, 'manifest.json');
+  m.seal = sealOf(m, key);
+  writeFileSync(`${path}.tmp`, `${JSON.stringify(m, null, 2)}\n`, { mode: 0o600 });
+  renameSync(`${path}.tmp`, path);
+}
+
+const sealWords = (words: string[], key: Buffer): string => {
+  const nonce = randomBytes(12);
+  const c = createCipheriv('aes-256-gcm', key, nonce);
+  const body = Buffer.concat([c.update(JSON.stringify(words)), c.final()]);
+  return Buffer.concat([nonce, body, c.getAuthTag()]).toString('base64');
+};
+
+const unsealWords = (text: string, key: Buffer): string[] => {
+  const b = Buffer.from(text, 'base64');
+  const d = createDecipheriv('aes-256-gcm', key, b.subarray(0, 12));
+  d.setAuthTag(b.subarray(b.length - 16));
+  return JSON.parse(Buffer.concat([d.update(b.subarray(12, b.length - 16)), d.final()]).toString('utf8')) as string[];
+};
+
 // Cleans one backup folder of rows (and of the words, in its files), then writes its manifest's
-// hashes again so the drill can still check it. Throws when it can't, so the caller destroys it.
-export function cleanBackup(dir: string, table: string, ids: string[], words: string[], at: Date): void {
-  const mpath = join(dir, 'manifest.json');
-  const m = JSON.parse(readFileSync(mpath, 'utf8')) as Manifest;
+// hashes again, sealed, so the drill can still check it. Throws when it can't, so the caller
+// destroys it. Every path the manifest names is checked first: none may reach outside the backup.
+export function cleanBackup(dir: string, table: string, ids: string[], words: string[], at: Date, sealKey: Buffer): void {
+  const m = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as Manifest;
+  const rels = m.files.map((f) => safeRel(f.path));
   const db = join(dir, 'nova.db');
   cleanDbFile(db, table, ids, words);
   m.db = { path: 'nova.db', sha256: sha256File(db), bytes: statSync(db).size };
   const ws = words.map((w) => w.trim()).filter((w) => w.length >= 3);
   if (ws.length) {
-    for (const f of m.files) {
-      const p = join(dir, 'files', f.path);
-      if (!existsSync(p) || lstatSync(p).isSymbolicLink()) continue;
+    m.files.forEach((f, i) => {
+      const p = join(dir, 'files', rels[i]!);
+      if (!existsSync(p) || lstatSync(p).isSymbolicLink()) return;
       const raw = readFileSync(p);
-      if (!ws.some((w) => raw.includes(Buffer.from(w)))) continue;
+      if (!ws.some((w) => raw.includes(Buffer.from(w)))) return;
       if (raw.includes(0)) throw new Error(`${f.path} holds forgotten words and isn’t text, so it can’t be cleaned.`);
       // Lines that carry the words go; what's left of a record spread over lines goes too.
       let text = raw.toString('utf8').split('\n').filter((line) => !ws.some((w) => line.includes(w))).join('\n');
@@ -356,23 +592,26 @@ export function cleanBackup(dir: string, table: string, ids: string[], words: st
       writeFileSync(p, text);
       f.sha256 = sha256File(p);
       f.bytes = statSync(p).size;
-    }
+    });
   }
   m.cleaned = [...(m.cleaned ?? []), { at: at.toISOString(), table, rows: ids.length }];
-  writeFileSync(`${mpath}.tmp`, `${JSON.stringify(m, null, 2)}\n`);
-  renameSync(`${mpath}.tmp`, mpath);
+  writeManifest(dir, m, sealKey);
 }
 
 // Copies a backup folder into a new home: the database and the files, nothing else. `into` must be
-// empty or not exist yet: restoring never writes over a home.
+// empty or not exist yet: restoring never writes over a home. A path that would reach outside the
+// backup, or anything that isn't a plain file, stops it before anything is written.
 export function restoreInto(backupDir: string, into: string): Manifest {
   const m = JSON.parse(readFileSync(join(backupDir, 'manifest.json'), 'utf8')) as Manifest;
+  const rels = m.files.map((f) => safeRel(f.path));
+  for (const rel of rels) if (!lstatSync(join(backupDir, 'files', rel)).isFile()) throw new Error(`${rel} in the backup isn’t a plain file.`);
+  if (!lstatSync(join(backupDir, 'nova.db')).isFile()) throw new Error('The backup’s database isn’t a plain file.');
   if (existsSync(into) && readdirSync(into).length) throw new CoreError('conflict', `${into} isn’t empty. Restore into a new folder; Nova never restores over a home.`);
-  mkdirSync(into, { recursive: true });
-  for (const f of m.files) {
-    const dst = join(into, f.path);
-    mkdirSync(join(dst, '..'), { recursive: true });
-    copyFileSync(join(backupDir, 'files', f.path), dst);
+  mkdirSync(into, { recursive: true, mode: 0o700 });
+  for (const rel of rels) {
+    const dst = join(into, rel);
+    mkdirSync(join(dst, '..'), { recursive: true, mode: 0o700 });
+    copyFileSync(join(backupDir, 'files', rel), dst);
   }
   copyFileSync(join(backupDir, 'nova.db'), join(into, 'nova.db'));
   return m;
@@ -380,4 +619,27 @@ export function restoreInto(backupDir: string, into: string): Manifest {
 
 export function newKey(): Buffer {
   return randomBytes(32);
+}
+
+// ---- the recovery key ---------------------------------------------------------------------------
+
+// The encrypted copy's key as the person keeps it: 64 hex digits in eight groups.
+export function formatRecoveryKey(key: Buffer): string {
+  return (key.toString('hex').match(/.{8}/g) ?? []).join('-');
+}
+
+export function parseRecoveryKey(text: string): Buffer {
+  const hex = String(text ?? '').toLowerCase().replace(/[\s-]/g, '');
+  if (!/^[0-9a-f]{64}$/.test(hex)) throw new CoreError('validation', 'A recovery key is 64 digits and letters a–f, in eight groups.');
+  return Buffer.from(hex, 'hex');
+}
+
+export { keyFingerprint };
+
+// Opens an encrypted copy with the person's recovery key alone: no home, no vault, any machine.
+export function openEncrypted(file: string, recoveryKey: string, outDir: string): Manifest {
+  const key = parseRecoveryKey(recoveryKey);
+  if (readHeader(file).key_fp !== keyFingerprint(key)) throw new Error('That recovery key doesn’t open this encrypted backup: it was made with a different key.');
+  decryptTo(file, key, outDir);
+  return JSON.parse(readFileSync(join(outDir, 'manifest.json'), 'utf8')) as Manifest;
 }

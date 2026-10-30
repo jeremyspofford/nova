@@ -166,21 +166,30 @@ node src/supervisor/main.ts recover           # leave safe mode once the cause i
 (every time), then runs the release's tests, starts it on a sandbox copy of
 your home, probes it, switches, and watches health for a canary window (two
 minutes by default, `--canary-s`); if health fails there it goes back to the
-previous release by itself. `rollback` goes back by hand. Going back across a
-database upgrade restores the backup taken before it only if nothing was
-written since; otherwise Nova refuses, says why, and keeps the newer release.
-Releases live in `~/.nova-supervisor/releases/<tag>/` (`--dir`), each a git
-worktree of its tag.
+previous release by itself. `rollback` goes back by hand (type `rollback`, or
+pass `--confirm rollback`). Going back across a database upgrade restores the
+backup taken before it only if nothing was written since the newer release
+started, its own start-up work included; otherwise Nova refuses, says why, and
+keeps the newer release. Releases live in `~/.nova-supervisor/releases/<tag>/`
+(`--dir`, a folder only you can open), each a git worktree of its tag. The
+code you started the supervisor from runs as it was committed then, so editing
+the checkout never changes what runs.
 
 **Backups.** `PUT /api/v1/backups/settings {"target": "/path/to/folder"}`
-(a folder that already exists, outside Nova's home) starts a nightly backup and
-a weekly restore drill, both in Automations. Each backup is a consistent copy
-of the database and your home's files, with a manifest of hashes; the vault's
-key and this computer's private keys are never in it. Add `"encrypted_target"`
-for an AES-256-GCM copy in a second folder (its key is in the vault), and
-`"keep"` for how many to keep (7). Forgetting something removes it from every
-backup too. Health shows the last backup and the last drill; a failed drill is
-a problem with steps.
+(a folder of yours that already exists, outside Nova's home, that no one else
+can write; from this screen or a device that may approve) starts a nightly
+backup and a weekly restore drill, both in Automations. Each backup is a
+consistent copy of the database and your home's files, with a manifest of
+hashes, readable by you only; the vault's key and this computer's private keys
+are never in it. Add `"encrypted_target"` for an AES-256-GCM copy in a second
+folder: the reply shows its **recovery key once**. Keep it somewhere other
+than this computer: with it the copy opens anywhere; without it the copy can't
+be opened if this computer is lost. `POST /api/v1/backups/recovery-key
+{"confirm": true}` shows it again, from this screen only. `"keep"` is how many
+to keep (7). Forgetting something removes it from every backup too; a backup
+drive that is unplugged at the time gets the forget as soon as it is back.
+Health shows the last backup and the last drill; a failed drill is a problem
+with steps.
 
 ## Your other devices
 

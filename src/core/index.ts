@@ -101,6 +101,7 @@ export { PLAYBOOKS } from './resilience/playbooks.ts';
 export { CODE_ROOT, copyHome, smoke, startSandbox, sandboxEnv } from './resilience/sandbox.ts';
 export type { Sandbox, ProbeResult } from './resilience/sandbox.ts';
 export { restoreInto, backupFiles, sha256File } from './resilience/backup.ts';
+export { makeScratch, dropScratch } from './resilience/scratch.ts';
 export type { Manifest as BackupManifest } from './resilience/backup.ts';
 export { restoreBackup, loadMigrations } from './db.ts';
 
@@ -920,6 +921,12 @@ export function createCore(o: CoreOptions) {
     // A hub recovers the ledger, then starts the heartbeat: once now (to catch up), then every
     // 30 s. A standby starts copying the hub instead, and runs nothing else.
     start() {
+      // Under the supervisor: where the data stands before any work runs (recovery, the
+      // heartbeat), so going back to an older release can tell whether it would undo any of it.
+      o.supervisor?.mark?.({
+        seq: db.get<{ s: number }>('SELECT IFNULL(MAX(seq), 0) AS s FROM sync_log')?.s ?? 0,
+        problem: db.get<{ p: number }>('SELECT IFNULL(MAX(id), 0) AS p FROM problem')?.p ?? 0,
+      });
       // A clock that went back while Nova was off shows as records written "in the future". A
       // sandbox copy (M7a's sandbox mode, also used by the restore drill and release deploys)
       // keeps no clock of its own.
