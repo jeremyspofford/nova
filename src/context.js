@@ -6,7 +6,7 @@ import { readStanding } from './home.js';
 import { Memory } from './memory.js';
 import { formatWhen } from './schedules.js';
 import { availableTools, memoryProtocol, toolProtocol } from './tools.js';
-import { renderIdentity } from './core/index.ts';
+import { escapeProtocol, renderIdentity } from './core/index.ts';
 
 const MAX_TRANSCRIPT = 120_000; // characters; older turns drop off first
 
@@ -26,7 +26,7 @@ export function skillsSection(installed = [], active = [], connectorDoc = () => 
   const loaded = active.map((s) => {
     const docs = s.needs.map((c) => connectorDoc(c)).filter(Boolean).map((d, i) => `<connector name="${s.needs[i]}">\n${d}\n</connector>`);
     const files = s.files?.length ? `\n\nThis skill's folder is ~/skills/${s.id}/. It also has: ${s.files.join(', ')}. Read them with read_file when the playbook points to them.` : '';
-    return `<skill name="${s.id}">\n${s.body}${files}\n</skill>${docs.length ? `\n${docs.join('\n')}` : ''}`;
+    return `<skill name="${s.id}">\n${fenceIn(s.body, ['skill', 'connector'])}${files}\n</skill>${docs.length ? `\n${docs.join('\n')}` : ''}`;
   });
   return `# Skills
 
@@ -58,6 +58,7 @@ ${allowed}${late ? `\n\nThis run was due at ${formatWhen(due, timezone)}, and is
 // For a helper: its scoped context. It knows who the person is, and gets the
 // files Nova passed along; the conversation and memory stay behind.
 export function helperSection({ title, files = [] }, allowed = '') {
+  // The runner has escaped or screened each file's text (runner.screenFiles).
   const passed = files.map((f) => `<file path="~/${f.path}">\n${f.text || '(empty)'}\n</file>`).join('\n\n');
   return `# You are a helper
 
@@ -98,21 +99,27 @@ export function buildSystem({ root, home, timezone }, now = new Date(), { tools 
   ].filter(Boolean).join('\n\n');
 }
 
-const esc = (s) => String(s).replace(/<\/(tool_result|user|nova|note|remember|forget|skill|connector|handoff)>/g, '<\\/$1>');
+// Text inside the transcript: every one of Nova's protocol tags escaped, opening and closing, so
+// nothing written there can open or close a block (the ingest gate, plan §4).
+const esc = (s) => escapeProtocol(String(s));
+// A playbook keeps its own markup; only the tags that would close its block are escaped.
+const fenceIn = (s, tags) => String(s).replace(new RegExp(`<(\\s*\\/\\s*(?:${tags.join('|')})\\b)`, 'gi'), '&lt;$1');
 
 function renderTurn(t, timezone) {
   const when = t.ts ? ` time="${formatNow(new Date(t.ts), timezone)}"` : '';
-  if (t.kind === 'handoff') return `<handoff from="${esc(t.name).replace(/"/g, "'")}" ${t.helper ? `helper="${t.helper}"` : `schedule="${t.schedule}"`}${when}>\n${esc(t.text)}\n</handoff>`;
+  // A report from a run that read outside content arrives screened.
+  if (t.kind === 'handoff') return `<handoff from="${esc(t.name).replace(/"/g, "'")}" ${t.helper ? `helper="${t.helper}"` : `schedule="${t.schedule}"`}${when}>\n${t.screened ?? esc(t.text)}\n</handoff>`;
   const parts = [t.followup
     ? `<followup${when}>The helper's report above just arrived. Say what it means for the person, briefly: your take, and what you'd do next or what they need to decide. Don't repeat the report.</followup>`
     : `<user${when}>\n${esc(t.text)}\n</user>`];
   for (const it of t.items) {
     if (it.kind === 'text') parts.push(`<nova>\n${esc(it.text)}\n</nova>`);
     if (it.kind === 'tool') {
-      parts.push(`<tool_call name="${it.name}">${JSON.stringify(it.args)}</tool_call>`);
+      parts.push(`<tool_call name="${it.name}">${esc(JSON.stringify(it.args))}</tool_call>`);
       if (it.approval?.auto && it.approval.decision === 'deny') parts.push(`<tool_result name="${it.name}" ok="false">Not done: this runs on its own, and no one was there to approve it. Suggest it in your report instead.</tool_result>`);
       else if (it.approval?.decision === 'deny') parts.push(`<tool_result name="${it.name}" ok="false">The user declined this.</tool_result>`);
-      else if (it.result) parts.push(`<tool_result name="${it.name}" ok="${it.result.ok}">\n${esc(it.result.output)}\n</tool_result>`);
+      // Outside content only ever in its screened form (data, an extract, or the block line).
+      else if (it.result) parts.push(`<tool_result name="${it.name}" ok="${it.result.ok}">\n${it.result.screened ?? esc(it.result.output)}\n</tool_result>`);
     }
   }
   if (t.state === 'stopped') parts.push('<note>The user stopped this reply here.</note>');

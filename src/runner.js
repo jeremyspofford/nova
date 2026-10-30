@@ -8,8 +8,9 @@
 // process dies mid-turn, the log still shows exactly how far it got.
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { runAgent, AgentError } from './agent.js';
-import { permits } from './core/index.ts';
+import { Ingest, escapeProtocol, permits } from './core/index.ts';
 import { buildPrompt, buildSystem, helperSection, runSection, schedulesSection, skillsSection } from './context.js';
 import { Memory } from './memory.js';
 import { Skills } from './skills.js';
@@ -17,20 +18,41 @@ import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
 import { Permissions, permissionFor, permissionsSection } from './permissions.js';
 import { commitHome, readStanding } from './home.js';
-import { TOOLS, ToolTagFilter, availableTools, extractMemory, parseToolCall, withinPrivacy } from './tools.js';
+import { TOOLS, ToolTagFilter, WRITABLE, availableTools, extractMemory, homeTarget, parseToolCall, withinPrivacy } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 import { stricter } from './chat-run.js';
 
 const shortId = () => randomUUID().slice(0, 8);
+const sha256 = (s) => createHash('sha256').update(s).digest('hex');
+const hostOf = (u) => { try { return new URL(String(u)).hostname; } catch { return String(u ?? '').slice(0, 100); } };
+
+// The ingest gate (Amendment 2026-10-30-C Part 3). While a run has read outside content (its
+// taint), these steps never run on their own, whatever permissions.md says: each asks the person,
+// and the request names the outside source that led to it.
+export const GUARDED = {
+  exec: 'run a command',
+  gmail_draft: 'write an email',
+  gmail_organize: 'change your mail',
+  schedule_set: 'change a schedule',
+  schedule_remove: 'change a schedule',
+};
+// The person's own files: never screened when read (their writes are guarded instead).
+const STANDING = new Set([...WRITABLE, 'MEMORY.md'].map((n) => n.toLowerCase()));
+const OWN_TOP = new Set(['memory', 'schedules', 'permissions.md']);
 
 export class Runner extends EventEmitter {
   // records: the core's memory, where MEMORY.md's entries live (passed in by the server). vault: the
   // core's, where connection secrets live.
-  constructor(config, store, { agent = runAgent, records = null, vault = null } = {}) {
+  // ingest: the core's screen (core.ingest); without a core, Nova's own checks alone, which never
+  // pass anything as plain data. fetchAllow: for tests alone (a stand-in page on this machine);
+  // nothing the model says can set it.
+  constructor(config, store, { agent = runAgent, records = null, vault = null, ingest = null, fetchAllow = null } = {}) {
     super();
     this.config = config;
     this.store = store;
     this.agent = agent;
+    this.ingest = ingest ?? new Ingest({ db: null });
+    this.fetchAllow = fetchAllow;
     this.active = new Map(); // sessionId → live run
     this.memory = new Memory(config.home, config.timezone, { records });
     this.skills = new Skills(config.root, config.home);
@@ -78,10 +100,12 @@ export class Runner extends EventEmitter {
   // { title, files } for a helper's work. Either way no one is there to
   // approve anything. privacy: the Work Ledger task's mode, for work the
   // chat-run worker does; the run keeps to the stricter of it and the setting.
-  send(sessionId, text, { unattended = null, helper = null, followup = null, privacy = null } = {}) {
+  // taint: the outside content this run starts from (a helper handed work by a run that had read
+  // some), kept with its first message.
+  send(sessionId, text, { unattended = null, helper = null, followup = null, privacy = null, taint = null } = {}) {
     if (this.active.has(sessionId)) throw new BusyError();
     const turn = shortId();
-    this.record(sessionId, { type: 'user', turn, text, ...(unattended ? { schedule: unattended.id } : {}), ...(followup ? { followup } : {}) });
+    this.record(sessionId, { type: 'user', turn, text, ...(unattended ? { schedule: unattended.id } : {}), ...(followup ? { followup } : {}), ...(taint?.length ? { taint } : {}) });
     this.start(sessionId, turn, 0, { unattended, helper, privacy });
     return turn;
   }
@@ -149,10 +173,9 @@ export class Runner extends EventEmitter {
 
   start(sessionId, turn, attempt, { unattended = null, helper = null, privacy = null } = {}) {
     const controller = new AbortController();
-    // skills: the playbooks this reply follows. tainted: mail has been read in
-    // this conversation, so going online asks first. alone: no one is there
-    // to approve anything.
-    const run = { controller, pending: null, skills: new Map(), tainted: false, unattended, helper, privacy, alone: !!(unattended || helper), live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
+    // skills: the playbooks this reply follows. taint: the outside content this conversation has
+    // read (the ingest gate). alone: no one is there to approve anything.
+    const run = { controller, pending: null, skills: new Map(), taint: [], unattended, helper, privacy, alone: !!(unattended || helper), live: { turn, attempt, phase: 'thinking', text: '', approval: null } };
     this.active.set(sessionId, run);
     this.emit('live', sessionId, { ...run.live });
     run.done = this.loop(sessionId, run)
@@ -225,22 +248,25 @@ export class Runner extends EventEmitter {
     const before = reduce(this.store.read(sessionId));
     const question = before.turns.find((t) => t.id === turn).text;
     let mode = this.privacyFor(run);
-    // Once Nova has read mail in a conversation, the mail is in its context,
-    // so going online asks first for the rest of that conversation.
-    run.tainted = before.turns.some((t) => t.items.some((i) => i.kind === 'tool' && TOOLS[i.name]?.mail && i.result?.ok));
+    // Outside content read anywhere in this conversation is still in its context, so the run
+    // starts with that taint (and a helper's report brings its run's).
+    run.taint = this.taintOf(before);
+    // A helper's files: the person's own as they are; any other workspace file is screened.
+    if (run.helper?.files?.length) await this.screenFiles(sessionId, tag, run);
 
     // The log keeps where each note came from, not its words: what is
     // forgotten later stays gone from the conversation view too. A helper's
     // context is scoped to its brief, so it recalls nothing.
     const recall = run.helper ? [] : this.memory.search(question);
     if (recall.length) this.record(sessionId, { type: 'recall', ...tag, notes: recall.map(({ id, source }) => ({ id, source })) });
-    for (const s of this.skills.match(question)) this.follow(sessionId, tag, run, s, 'matched');
+    for (const s of this.skills.match(question).filter((x) => !this.ingest.held('skill', x.id))) this.follow(sessionId, tag, run, s, 'matched');
 
     for (let step = 0; step <= this.config.maxSteps; step++) {
       // Again before every model call: the setting can tighten while a run waits for an OK.
       mode = this.privacyFor(run);
       const session = reduce(this.store.read(sessionId));
-      const installed = this.skills.installed();
+      // A skill from outside that the screen held back isn't offered until the person turns it on.
+      const installed = this.skills.installed().filter((x) => !this.ingest.held('skill', x.id));
       // Helpers and scheduled runs can't hand work to helpers of their own,
       // and a helper doesn't touch schedules.
       const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: installed.length, delegate: !run.alone && !!this.helpers }), mode)
@@ -290,7 +316,7 @@ export class Runner extends EventEmitter {
       const { visible, call, error } = parseToolCall(said, tools);
       if (visible) this.record(sessionId, { type: 'assistant', ...tag, id: shortId(), text: visible });
       run.live.text = '';
-      if (ops.length && !run.helper) this.keep(sessionId, tag, ops); // memory is kept in the conversation that asked
+      if (ops.length && !run.helper) this.keep(sessionId, tag, ops, run); // memory is kept in the conversation that asked
       if (!call && !error) { this.record(sessionId, { type: 'done', ...tag }); return; }
 
       if (step === this.config.maxSteps) {
@@ -300,11 +326,15 @@ export class Runner extends EventEmitter {
 
       const id = shortId();
       const tool = TOOLS[call?.name];
+      let page = null;
       const ctx = {
         home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
         gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
         schedules: this.schedules, sessionId,
-        delegate: (args) => this.helpers.spawn({ ...args, parent: sessionId, turn }),
+        // A helper started from a run that read outside content starts with that taint.
+        delegate: (args) => this.helpers.spawn({ ...args, parent: sessionId, turn, taint: run.taint }),
+        seen: (p) => { page = p; },
+        ...(this.fetchAllow ? { fetchAllow: this.fetchAllow } : {}),
       };
       // A tool that changes something outside Nova shows exactly what will
       // change before the person decides; if that can't be worked out, it fails here.
@@ -314,8 +344,11 @@ export class Runner extends EventEmitter {
         this.setLive(sessionId, { phase: 'tool' });
         try { preview = await tool.preview(call.args, ctx); } catch (e) { failed = e.message; }
       }
-      const needsApproval = !failed && (!!tool?.needsApproval || (!!tool?.online && run.tainted));
-      this.record(sessionId, { type: 'tool_call', ...tag, id, name: call?.name ?? 'unknown', args: call?.args ?? {}, needs_approval: needsApproval, ...(preview ? { preview } : {}) });
+      // The ingest gate: a guarded step in a tainted run, or anything that would carry something
+      // of the person's out, asks, and never goes on its own.
+      const guard = failed ? null : this.guardFor(call, tool, run, preview);
+      const needsApproval = !failed && (!!tool?.needsApproval || !!guard);
+      this.record(sessionId, { type: 'tool_call', ...tag, id, name: call?.name ?? 'unknown', args: call?.args ?? {}, needs_approval: needsApproval, ...(preview ? { preview } : {}), ...(guard ? { guard } : {}) });
       if (failed) {
         this.record(sessionId, { type: 'tool_result', ...tag, id, ok: false, output: failed });
         continue;
@@ -324,7 +357,7 @@ export class Runner extends EventEmitter {
       // A step the person lets Nova take without asking (Settings) goes ahead.
       // Otherwise Nova asks and waits, even with no one watching: a scheduled
       // run or a helper waits for the answer, and Activity shows it waiting.
-      if (needsApproval && this.permissions.allows(permissionFor(call.name, tool, { tainted: run.tainted }))) {
+      if (needsApproval && !guard && this.permissions.allows(permissionFor(call.name, tool))) {
         this.record(sessionId, { type: 'approval', ...tag, id, decision: 'allow', auto: true });
       } else if (needsApproval) {
         this.setLive(sessionId, { phase: 'approval', approval: id });
@@ -343,10 +376,12 @@ export class Runner extends EventEmitter {
       let output;
       let summary;
       let link;
+      let hints = null;
       let ok = true;
+      const taintedBefore = run.taint.length > 0;
       try {
         output = await tool.run(call.args, ctx);
-        if (output && typeof output === 'object') ({ output, summary, link } = output);
+        if (output && typeof output === 'object') ({ output, summary, link, ingest: hints = null } = output);
       } catch (e) {
         ok = false;
         output = e.code === 'ENOENT' ? `No such file: ${call.args.path ?? ''}` : e.message;
@@ -356,9 +391,19 @@ export class Runner extends EventEmitter {
         this.record(sessionId, { type: 'stopped', ...tag });
         return;
       }
-      if (tool.mail && ok) run.tainted = true;
+      // Outside content is screened before the model sees it; the log keeps what the tool returned
+      // (for the person), and the model is given only the screened form.
+      let screen = null;
+      if (ok) {
+        const read = this.outsideRead(call, String(output), { page, hints, tainted: taintedBefore });
+        if (read) {
+          screen = await this.ingest.screen(read);
+          run.taint.push(screen.taint);
+        }
+        if (call.name === 'write_file') this.provenance(call.args, taintedBefore);
+      }
       if (call.name.startsWith('schedule_') && ok) this.emit('schedules');
-      this.record(sessionId, { type: 'tool_result', ...tag, id, ok, output: String(output), ...(summary ? { summary } : {}), ...(link ? { link } : {}) });
+      this.record(sessionId, { type: 'tool_result', ...tag, id, ok, output: String(output), ...(summary ? { summary } : {}), ...(link ? { link } : {}), ...(screen ? { screen: screen.taint, screened: screen.extract } : {}) });
     }
   }
 
@@ -383,10 +428,17 @@ export class Runner extends EventEmitter {
 
   // Memory is written before the reply is marked done. The log records what
   // changed by id only; the words live in the core's memory and the day notes.
-  keep(sessionId, tag, ops) {
+  // In a run that read outside content, memory isn't written: each block becomes a candidate,
+  // held with where it came from, out of every prompt until the person keeps it (a forget too).
+  keep(sessionId, tag, ops, run = { taint: [] }) {
     const from = `${sessionId}/${tag.turn}`;
+    const held = run.taint.length > 0;
     const results = ops.map((o) => {
       try {
+        if (held) {
+          const id = this.ingest.candidate({ op: o.op, ...(o.kind ? { kind: o.kind } : {}), ...(o.text ? { content: o.text } : {}), ...(o.op === 'forget' ? { target: o.id } : {}), ...(o.replaces ? { replaces: o.replaces } : {}), source: from, taint: run.taint });
+          return { op: o.op, ok: true, held: true, id };
+        }
         if (o.op === 'remember') return this.memory.remember({ ...o, from });
         if (o.op === 'note') return this.memory.note({ ...o, from });
         const removed = this.memory.forget(o.id, { by: 'nova' });
@@ -395,9 +447,133 @@ export class Runner extends EventEmitter {
       } catch (e) {
         return { op: o.op, ok: false, error: e.message };
       }
-    }).map(({ op, ok, id, kind, replaced, existing, day, also }) => ({ op, ok, id, kind, replaced, existing, day, also }));
+    }).map(({ op, ok, id, kind, replaced, existing, day, also, held: h }) => ({ op, ok, id, kind, replaced, existing, day, also, ...(h ? { held: true } : {}) }));
     this.record(sessionId, { type: 'memory', ...tag, ops: results });
     this.emit('memory');
+  }
+
+  // ---- the ingest gate ------------------------------------------------------------------------
+
+  // The outside content a conversation has read: each screened read, each handoff from a run that
+  // read some, and what a run started with. Reads from before the gate count too.
+  taintOf(session) {
+    const out = [];
+    for (const t of session.turns) {
+      out.push(...(t.taint ?? []));
+      for (const i of t.items) {
+        if (i.kind !== 'tool' || !i.result?.ok) continue;
+        const legacy = TOOLS[i.name]?.mail || TOOLS[i.name]?.online;
+        if (i.result.screen) out.push(i.result.screen);
+        else if (legacy) out.push({ screen: null, kind: TOOLS[i.name]?.mail ? 'email' : 'web', origin: TOOLS[i.name]?.mail ? 'your mail' : hostOf(i.args?.url ?? 'the web'), verdict: 'quarantine', max: null });
+      }
+    }
+    const seen = new Set();
+    return out.filter((x) => { const k = x.screen ?? `${x.kind}:${x.origin}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+
+  // Why a step must ask because of the gate, or null.
+  guardFor(call, tool, run, preview) {
+    if (!call || !tool) return null;
+    const tainted = run.taint.length > 0;
+    const standing = call.name === 'write_file' && STANDING.has(String(call.args?.path ?? '').replace(/^~\//, '').toLowerCase());
+    const what = GUARDED[call.name] ?? (standing ? 'change your standing files' : null);
+    const payload = this.outboundPayload(call, preview);
+    const out = payload === null ? null : this.ingest.outbound({ text: payload }, { tainted });
+    const matched = out && !out.ok ? out.matched : null;
+    if (!(tainted && what) && !matched) return null;
+    const sources = [...new Set(run.taint.map((x) => x.origin))].slice(0, 5);
+    return { ...(tainted && what ? { what } : {}), ...(matched ? { matched } : {}), sources };
+  }
+
+  // What a step would send to a destination outside content could have chosen.
+  outboundPayload(call, preview) {
+    const a = call.args ?? {};
+    if (call.name === 'web_fetch') return String(a.url ?? '');
+    if (call.name === 'web_search') return String(a.query ?? '');
+    if (call.name === 'gmail_draft') return [preview?.to ?? a.to, preview?.cc ?? a.cc, preview?.subject ?? a.subject, preview?.body ?? a.body].filter(Boolean).join('\n');
+    if (call.name === 'exec') return String(a.command ?? '');
+    return null;
+  }
+
+  // The screen's input for a read of outside content, or null when what was read is the person's own.
+  outsideRead(call, output, { page, hints, tainted }) {
+    const a = call.args ?? {};
+    if (call.name === 'web_fetch') return { ...(page?.html ? { html: page.html } : { text: page?.text ?? output }), source: { kind: 'web', origin: page?.origin || hostOf(a.url), ref: page?.ref ?? String(a.url ?? '') } };
+    if (call.name === 'web_search') return { text: output, source: { kind: 'search', origin: hostOf(this.config.searchUrl ?? 'web search'), ref: String(a.query ?? '').slice(0, 200) } };
+    if (call.name === 'gmail_search') return { text: output, source: { kind: 'email', origin: 'Gmail search', ref: String(a.query ?? '').slice(0, 200) } };
+    if (call.name === 'gmail_read') {
+      const from = /<([^>]+@[^>]+)>/.exec(hints?.headers?.from ?? '')?.[1] ?? hints?.headers?.from ?? 'Gmail';
+      return { text: output, ...(hints?.html ? { html: hints.html } : {}), headers: hints?.headers ?? {}, attachments: hints?.attachments ?? [], source: { kind: 'email', origin: from, ref: String(a.id ?? '') } };
+    }
+    if (call.name === 'read_file') {
+      if (this.ownFile(String(a.path ?? ''))) return null;
+      return { text: output, source: { kind: 'file', origin: this.relPath(String(a.path ?? '')) ?? String(a.path ?? '') } };
+    }
+    if (call.name === 'exec' && tainted) return { text: output, source: { kind: 'tool', origin: 'a command', ref: String(a.command ?? '').slice(0, 200) } };
+    return null;
+  }
+
+  relPath(path) {
+    try { return homeTarget(this.config.home, path).rel; } catch { return null; }
+  }
+
+  // Whether a file in the home is the person's own: the standing files, memory, schedules and
+  // permissions, an installed skill that isn't held, or a workspace file Nova wrote itself in a
+  // run that read nothing from outside (by content hash). Everything else is outside or unknown.
+  ownFile(path, text = null) {
+    let t;
+    try { t = homeTarget(this.config.home, path); } catch { return false; }
+    const rel = t.rel;
+    const top = rel.split('/')[0].toLowerCase();
+    if (!rel.includes('/') && STANDING.has(rel.toLowerCase())) return true;
+    if (OWN_TOP.has(top)) return true;
+    if (top === 'skills') { const id = rel.split('/')[1]; return !!id && !this.ingest.held('skill', id); }
+    if (top !== 'workspace') return false;
+    let body = text;
+    if (body === null) {
+      try {
+        if (!existsSync(t.abs) || statSync(t.abs).isDirectory()) return false;
+        body = readFileSync(t.abs, 'utf8');
+      } catch { return false; }
+    }
+    return this.ingest.isOwn(rel, sha256(body));
+  }
+
+  // A workspace file Nova writes is its own only when the run had read nothing from outside.
+  provenance(args, tainted) {
+    const rel = this.relPath(String(args?.path ?? ''));
+    if (!rel || !rel.startsWith('workspace/')) return;
+    try {
+      if (tainted || typeof args.content !== 'string') this.ingest.clearOwn(rel);
+      else this.ingest.markOwn(rel, sha256(args.content));
+    } catch { /* no record kept: the file reads as unknown, and is screened */ }
+  }
+
+  // A helper's files: its own pass as they are (escaped); the rest are screened, and the run is
+  // tainted by them.
+  async screenFiles(sessionId, tag, run) {
+    const taint = [];
+    run.helper.files = await Promise.all(run.helper.files.map(async (f) => {
+      const whole = !/\n\[truncated: the file is \d+ characters\]$/.test(f.text ?? '');
+      if (whole && this.ownFile(f.path, f.text ?? '')) return { ...f, text: escapeProtocol(f.text ?? '') };
+      const s = await this.ingest.screen({ text: f.text ?? '', source: { kind: 'file', origin: f.path } });
+      taint.push(s.taint);
+      return { ...f, text: s.extract };
+    }));
+    if (taint.length) {
+      run.taint.push(...taint);
+      this.record(sessionId, { type: 'taint', ...tag, taint });
+    }
+  }
+
+  // A report from a run that read outside content carries its taint, and the conversation it goes
+  // to is given only its screened form.
+  async screenReport(run, handoff) {
+    if (!this.store.exists(run)) return {};
+    const taint = this.taintOf(reduce(this.store.read(run)));
+    if (!taint.length || !handoff.text) return {};
+    const s = await this.ingest.screen({ text: handoff.text, source: { kind: 'handoff', origin: handoff.name ?? 'a report', ref: run } });
+    return { taint: [...taint, s.taint], screened: s.extract };
   }
 }
 

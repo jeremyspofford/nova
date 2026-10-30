@@ -28,13 +28,15 @@ export function applyEvent(s, ev) {
       s.title = ev.title;
       break;
     case 'user':
-      s.turns.push({ id: ev.turn, text: ev.text, ts: ev.ts, attempt: 0, items: [], state: 'open', endedAt: null, ...(ev.followup ? { followup: ev.followup } : {}) });
+      s.turns.push({ id: ev.turn, text: ev.text, ts: ev.ts, attempt: 0, items: [], state: 'open', endedAt: null, ...(ev.followup ? { followup: ev.followup } : {}), ...(ev.taint ? { taint: ev.taint } : {}) });
       break;
     case 'handoff':
       // A report from scheduled work: an entry of its own, between replies.
       s.turns.push({
         id: ev.id, kind: 'handoff', name: ev.name, schedule: ev.schedule, helper: ev.helper, stopped: !!ev.stopped, run: ev.run, text: ev.text, ok: ev.ok !== false,
         late: !!ev.late, manual: !!ev.manual, due: ev.due, ts: ev.ts, attempt: 0, items: [], state: 'done', endedAt: ev.ts,
+        // The ingest gate: a report from a run that read outside content, and its screened form.
+        ...(ev.taint ? { taint: ev.taint } : {}), ...(ev.screened ? { screened: ev.screened } : {}),
       });
       break;
     case 'attempt': {
@@ -59,6 +61,9 @@ function applyTurnEvent(t, ev) {
     case 'memory':
       t.items.push({ kind: 'memory', ops: ev.ops ?? [] });
       break;
+    case 'taint':
+      t.taint = [...(t.taint ?? []), ...(ev.taint ?? [])];
+      break;
     case 'skill':
       t.items.push({ kind: 'skill', id: ev.skill, name: ev.name, how: ev.how });
       break;
@@ -66,7 +71,7 @@ function applyTurnEvent(t, ev) {
       t.items.push({ kind: 'text', id: ev.id, text: ev.text, ts: ev.ts });
       break;
     case 'tool_call':
-      t.items.push({ kind: 'tool', id: ev.id, name: ev.name, args: ev.args, needsApproval: !!ev.needs_approval, preview: ev.preview ?? null, approval: null, result: null, ts: ev.ts });
+      t.items.push({ kind: 'tool', id: ev.id, name: ev.name, args: ev.args, needsApproval: !!ev.needs_approval, preview: ev.preview ?? null, approval: null, result: null, ts: ev.ts, ...(ev.guard ? { guard: ev.guard } : {}) });
       break;
     case 'approval': {
       const tool = t.items.find((i) => i.kind === 'tool' && i.id === ev.id);
@@ -75,7 +80,7 @@ function applyTurnEvent(t, ev) {
     }
     case 'tool_result': {
       const tool = t.items.find((i) => i.kind === 'tool' && i.id === ev.id);
-      if (tool) tool.result = { ok: ev.ok, output: ev.output, summary: ev.summary, link: ev.link };
+      if (tool) tool.result = { ok: ev.ok, output: ev.output, summary: ev.summary, link: ev.link, ...(ev.screen ? { screen: ev.screen, screened: ev.screened } : {}) };
       break;
     }
     case 'error':

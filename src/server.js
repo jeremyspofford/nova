@@ -94,7 +94,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   const store = new SessionStore(config.home, config.timezone);
   // Curated memory lives in the core; MEMORY.md is rendered from it. The first start imports
   // an existing MEMORY.md once, and every start takes in hand edits made while Nova was off.
-  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault });
+  // The ingest gate (Amendment 2026-10-30-C Part 3) screens what the agent reads from outside.
+  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault, ingest: core.ingest });
   // Era 2's Gmail as a connector: its secrets in the vault, Settings › Connections, mail events.
   core.connectors.register(gmailConnector(runner.gmail));
   // Forgetting through the core's API reaches MEMORY.md and the day notes as well.
@@ -182,8 +183,22 @@ export function createNova(config = loadConfig(), deps = {}) {
       timezone: config.timezone,
     };
   };
+  // A skill from outside that the screen held back says why, until the person turns it on.
+  // A skill from outside (uploaded, not one Nova ships) is screened as it comes in: a block refuses
+  // it, and an unsure one is installed but held back, with the reasons, until the person turns it on.
+  async function screenSkill(skill) {
+    const dir = join(skills.dir, skill.id);
+    const text = ['SKILL.md', ...(skill.files ?? [])].map((f) => {
+      try { const b = readFileSync(join(dir, f)); return b.includes(0) ? '' : `${f}:\n${b.toString('utf8')}`; } catch { return ''; }
+    }).filter(Boolean).join('\n\n');
+    const s = await core.ingest.screen({ text, source: { kind: 'skill', origin: skill.id } });
+    if (s.verdict === 'block') { skills.remove(skill.id); core.ingest.release('skill', skill.id); }
+    else if (s.verdict === 'quarantine') core.ingest.hold('skill', skill.id, s);
+    else core.ingest.release('skill', skill.id);
+    return s;
+  }
   const skillsView = () => ({
-    installed: skills.installed(),
+    installed: skills.installed().map((x) => ({ ...x, held: core.ingest.held('skill', x.id)?.reasons ?? null })),
     available: skills.available(),
     connectors: { gmail: gmail.status() },
   });
@@ -276,8 +291,23 @@ export function createNova(config = loadConfig(), deps = {}) {
     }
 
     if (resource === 'memory') {
-      if (req.method === 'GET' && !id) return json(res, 200, { ...memory.read(), titles: titles() });
+      // candidates: what a conversation that read outside content wanted kept, waiting for the person.
+      if (req.method === 'GET' && !id) return json(res, 200, { ...memory.read(), titles: titles(), candidates: core.ingest.candidates() });
       if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
+      if (id === 'candidates' && action && (sub === 'keep' || sub === 'drop')) {
+        if (sub === 'drop') return core.ingest.dropCandidate(action) ? (saved(), json(res, 200, { ok: true })) : json(res, 404, { error: 'That’s already been dealt with.' });
+        const c = core.ingest.takeCandidate(action);
+        if (!c) return json(res, 404, { error: 'That’s already been dealt with.' });
+        let done;
+        if (c.op === 'remember') {
+          done = memory.remember({ kind: c.kind ?? 'fact', text: c.content ?? '', ...(c.replaces ? { replaces: c.replaces } : {}), ...(c.source ? { from: c.source } : {}) });
+          // The person kept it, so it is theirs: confirmed, not "not yet reviewed".
+          if (done.ok && done.id && !done.existing) try { core.memory.confirm(done.id, 'person'); } catch { /* corrected since */ }
+        } else if (c.op === 'note') done = memory.note({ text: c.content ?? '', ...(c.source ? { from: c.source } : {}) });
+        else done = { op: 'forget', removed: memory.forget(c.target ?? '', { by: 'person' }) };
+        saved();
+        return json(res, 200, { kept: done });
+      }
       if (id === 'restore') {
         const { items } = await readBody(req);
         if (!Array.isArray(items)) return json(res, 400, { error: 'items must be a list' });
@@ -312,9 +342,11 @@ export function createNova(config = loadConfig(), deps = {}) {
         let body;
         try { body = await readBody(req, 8_000_000); } catch { return json(res, 413, { error: 'That skill is too big to add. Skills can be up to 5 MB.' }); }
         try {
-          const skill = skills.add(body.zip ? unzip(Buffer.from(String(body.zip), 'base64')) : body.files);
+          const added = skills.add(body.zip ? unzip(Buffer.from(String(body.zip), 'base64')) : body.files);
+          const screened = await screenSkill(added);
           announce('skills');
-          return json(res, 200, { skill });
+          if (screened.verdict === 'block') return json(res, 400, { error: 'Nova didn’t add this skill: it looked like it was trying to give Nova instructions it shouldn’t follow. Tasks has the details.' });
+          return json(res, 200, { skill: { ...added, held: core.ingest.held('skill', added.id)?.reasons ?? null } });
         } catch (e) {
           if (e instanceof SkillError) return json(res, e.status, { error: e.message });
           if (e instanceof ZipError) return json(res, 400, { error: e.message });
@@ -325,8 +357,17 @@ export function createNova(config = loadConfig(), deps = {}) {
         let skill = null;
         let files;
         if (action === 'install') skill = skills.install(id);
-        else if (action === 'remove') files = skills.remove(id);
-        else if (action === 'restore') skill = skills.restore(id, (await readBody(req)).files);
+        else if (action === 'remove') { files = skills.remove(id); core.ingest.release('skill', id); }
+        else if (action === 'restore') {
+          skill = skills.restore(id, (await readBody(req)).files);
+          // Put back from Undo: a skill of the person's own is screened again, as when it came in.
+          if (skill && !skills.catalog().some((c) => c.id === skill.id) && (await screenSkill(skill)).verdict === 'block') {
+            announce('skills');
+            return json(res, 400, { error: 'Nova didn’t put this skill back: it looked like it was trying to give Nova instructions it shouldn’t follow.' });
+          }
+        }
+        // Turning on a skill the screen held back is the person's call.
+        else if (action === 'allow') { if (!core.ingest.release('skill', id)) return json(res, 404, { error: 'That skill isn’t held back.' }); }
         else return json(res, 404, { error: 'Not found' });
         announce('skills');
         return json(res, 200, files ? { files } : { skill });

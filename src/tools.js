@@ -76,6 +76,12 @@ function guard(home, path, verb) {
   return { abs, rel, posix, top };
 }
 
+// Where a path in the home really is, as read_file would read it: { abs, rel } (rel with /).
+export function homeTarget(home, path) {
+  const { abs, rel } = guard(home, path, 'read');
+  return { abs, rel: rel.split(sep).join('/') };
+}
+
 export const TOOLS = {
   read_file: {
     signature: '{"path": "USER.md"}',
@@ -126,14 +132,18 @@ export const TOOLS = {
     needsApproval: false,
     online: true,
     // Only the public web: never Nova itself or the person's own network (safe-fetch.js).
-    // `fetchAllow` is for tests alone; the runner never passes it.
-    async run({ url }, { signal, fetchAllow }) {
+    // `fetchAllow` is for tests alone; the runner passes it only when a test built it with one.
+    // `seen` hands the raw page to the ingest screen, which reads what the page hides.
+    async run({ url }, { signal, fetchAllow, seen }) {
       if (!/^https?:\/\//i.test(String(url))) throw new Error('Only http and https URLs can be fetched');
       const res = await safeFetch(String(url), { signal, headers: { 'user-agent': UA }, ...(fetchAllow ? { allow: fetchAllow } : {}) });
       // A page that didn't come back is a failed step, not a page to read.
       if (res.status < 200 || res.status > 299) throw new Error(`The page answered HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`);
       const { type } = res;
       let { text } = res;
+      let origin = '';
+      try { origin = new URL(res.url).hostname; } catch { /* the URL it asked for */ }
+      seen?.({ ...(/html/i.test(type) ? { html: text.slice(0, 2_000_000) } : { text: text.slice(0, 2_000_000) }), origin, ref: res.url });
       if (/html/i.test(type)) text = htmlToText(text);
       const head = `HTTP ${res.status} ${res.statusText} · ${type || 'unknown type'}\n\n`;
       return head + (text.length > MAX_FETCH ? `${text.slice(0, MAX_FETCH)}\n[truncated]` : text);

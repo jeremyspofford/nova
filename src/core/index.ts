@@ -122,6 +122,10 @@ export type { CheckpointView, CheckpointManifest } from './resilience/checkpoint
 export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.ts';
 // Every process Nova starts, so none outlives an in-place restart (Era 2's commands register too).
 export { trackChild } from './children.ts';
+// The ingest gate (Amendment 2026-10-30-C Part 3): what Era 2's agent loop screens with, escapes
+// with, and says when something is blocked.
+export { Ingest, BLOCK_LINE, PROTOCOL_NAMES, KIND_WORDS, escapeProtocol, wrapData } from './ingest/index.ts';
+export type { Screened, Source as IngestSource, SourceKind, Taint, Verdict, Candidate as MemoryCandidate, Hold } from './ingest/index.ts';
 
 export interface CoreOptions {
   home: string;
@@ -396,7 +400,13 @@ export function createCore(o: CoreOptions) {
         triggers.reactive(task, `device:${d.id}`);
         return task;
       },
-      memory: (d, body) => memory.remember({ ...(body as unknown as MemoryInput), kind: (body.kind ?? 'fact') as MemoryKind, recorded_by: `device:${d.id}` }),
+      // A device's note is screened by Nova's own checks before it is kept (it can't wait for a
+      // model here): one that tries to give instructions is refused.
+      memory: (d, body) => {
+        const s = ingest.screenNow({ text: String((body as { content?: unknown }).content ?? ''), source: { kind: 'connector', origin: `device:${d.id}` } });
+        if (s.verdict === 'block') throw new CoreError('validation', 'Nova didn’t keep this note: it looked like it was trying to give instructions.');
+        return memory.remember({ ...(body as unknown as MemoryInput), kind: (body.kind ?? 'fact') as MemoryKind, recorded_by: `device:${d.id}` });
+      },
       capture: (d, key, body) => capture.fromDevice(d, key, body),
       config: {
         read: (section, key) => { const r = configRow(section, key); return r ? { value: JSON.parse(r.value), version: configVersion(r) } : null; },
