@@ -411,9 +411,9 @@ export class Supervisor {
       const t0 = Date.now();
       await this.#stopServer();
       // A checkpoint of the stopped home first (M7 amendment §1). None, and there is no switch: the
-      // running release starts again as it was.
+      // running release starts again as it was. A home with no database yet has nothing to keep.
       try {
-        takeCheckpoint({ home: this.o.home, kind: 'auto', reason: `Before switching to release ${version}`, version: packageVersion(this.codeRoot(from)) ?? from });
+        if (existsSync(join(this.o.home, 'nova.db'))) takeCheckpoint({ home: this.o.home, kind: 'auto', reason: `Before switching to release ${version}`, version: packageVersion(this.codeRoot(from)) ?? from });
       } catch (e) {
         this.#start();
         await this.server?.ready(this.t.readyMs);
