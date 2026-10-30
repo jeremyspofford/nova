@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { egressOf, tokenIssuer } from '../../src/core/index.ts';
+import { addressEgress, tokenIssuer } from '../../src/core/index.ts';
 import { startFakeHomeAssistant } from '../../scripts/fake-home-assistant.js';
 import { bootCore, sleep, until } from './connector-support.ts';
 
@@ -185,9 +185,9 @@ test('a token Home Assistant stops accepting: says so plainly and stops retrying
 });
 
 test('egress: local for this network or the mesh, remote otherwise; local-only never contacts a remote one', async () => {
-  for (const u of ['http://127.0.0.1:8123', 'http://192.168.1.20:8123', 'http://10.0.0.2', 'http://172.20.1.1', 'http://homeassistant.local:8123', 'http://homeassistant:8123', 'http://[fd00::1]:8123', 'http://[::1]:8123']) assert.equal(egressOf(u), 'local', u);
-  for (const u of ['https://home.example.com', 'http://8.8.8.8', 'http://172.40.1.1', 'not a url']) assert.equal(egressOf(u), 'remote', u);
-  assert.equal(egressOf('https://hub.example.net:4318', ['hub.example.net']), 'local', 'a device in the mesh');
+  for (const u of ['http://127.0.0.1:8123', 'http://192.168.1.20:8123', 'http://10.0.0.2', 'http://172.20.1.1', 'http://homeassistant.local:8123', 'http://homeassistant:8123', 'http://[fd00::1]:8123', 'http://[::1]:8123']) assert.equal(addressEgress(u), 'local', u);
+  for (const u of ['https://home.example.com', 'http://8.8.8.8', 'http://172.40.1.1', 'not a url']) assert.equal(addressEgress(u), 'remote', u);
+  assert.equal(addressEgress('https://hub.example.net:4318', ['hub.example.net']), 'local', 'a device in the mesh');
 
   // A Home Assistant reached at a public name: Nova's fetch is pointed at the stand-in.
   const ha = await startFakeHomeAssistant();

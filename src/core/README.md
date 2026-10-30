@@ -36,6 +36,12 @@ The modular-monolith core (ADR-1), in TypeScript that Node runs directly. The de
 | `vault.ts` | Secrets by name (`secret://connector/<id>/<NAME>`), AES-256-GCM at rest in `home/vault/`; the key in the OS keychain or a 0600 file (said plainly); values redacted by value (log.ts); replicated to a standby sealed in the sync batch, never the key in a sync log. | M5 plan §2 |
 | `connectors/index.ts` | The connector kind: manifest in the extension host while connected, secrets in the vault, events as event trigger records for what a rule listens to, Disconnect and removal revoke at the service and delete secrets, rules and settings. Hub only. | EXTENSION-MODEL, M5 plan §2 |
 | `connectors/home-assistant.ts` | Home Assistant: states (tier 0), service calls as ledger tasks at tier 2 or 3 verified by Nova's read-back, state changes over the WebSocket API, egress local or remote by address. | NOVA-SPEC §6, M5 plan §2 |
+| `browser/cdp.ts` | A small Chrome DevTools Protocol client over Chromium's debugging pipe (no port, no Playwright). | M5 plan §3 |
+| `browser/chromium.ts` | Finding Chromium (`NOVA_CHROMIUM`, `CHROMIUM`, known paths; plainly when none) and starting it with a fresh profile per task. | M5 plan §3 |
+| `browser/plan.ts` | A browser task's plan: steps, declared hosts (`allowed`), where its data goes (`planEgress`). | M5 plan §3 |
+| `browser/session.ts` | One task's browser: every request held to the declared hosts (CDP Fetch, a refusing proxy behind it), the live screencast, takeover and the person's input. The worker waits at `gate()` while someone holds it. | M5 plan §3 |
+| `browser/worker.ts` | The `browser` ledger worker: runs a plan, asks for a person at a `person` step (Needs you), records takeovers and refusals, takes its evidence. | M5 plan §3, WORK-LEDGER |
+| `browser/evidence.ts`, `browser/routes.ts` | The `screenshot` and `url` checkers (Nova's own reads, in `workers/browser/<task>/`); `/api/v1/browser/*` (takeover, input and hand-back for approvers only). | M5 plan §3 |
 | `receipts.ts` | Context receipts: what each model call was told and where it went; the egress log; local-only violations refused as problems. | CONTRACTS §2 |
 
 Outside `/api/v1`, the server answers `GET /design-system.css?device=` with the applied design system as CSS variables; pages fetch it again when the `design-system` event arrives, so a change needs no reload or restart. The generated CSS carries the schema tokens and nothing else; Era 2's temporary aliases are gone (`docs/LEDGER.md`, M3b).

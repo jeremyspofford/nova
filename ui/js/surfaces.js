@@ -7,6 +7,7 @@ import { greeting, isOpen, needsApproval, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
 import { MODES, current as appearance, previewCss, rollback, setMode, use } from './theme.js';
+import { openTakeover } from './takeover.js';
 
 // What the core has told this page, kept fresh by the event stream.
 export const store = {
@@ -53,7 +54,10 @@ export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'm
   return { any, live: results.some(([, v, s]) => v !== undefined && !s) };
 }
 
-export const needsYou = () => store.tasks.filter(needsApproval).length + store.messages.filter((m) => m.hold === 'needs_ok').length + store.requests.length;
+// Everything in the one vocabulary's Needs you: an OK to give, a step only the person can do
+// (a browser task waiting for a takeover), a task that is stuck without them.
+const asksYou = (t) => statusOf(t) === 'needs-you';
+export const needsYou = () => store.tasks.filter(asksYou).length + store.messages.filter((m) => m.hold === 'needs_ok').length + store.requests.length;
 export const working = () => store.tasks.filter((t) => t.state === 'active' || t.state === 'verifying').length;
 export const privacy = () => store.profile?.privacy?.default ?? 'local-only';
 
@@ -91,7 +95,7 @@ const today = (now = new Date()) => now.toLocaleDateString('en-US', { weekday: '
 export function renderHome(el, now = new Date()) {
   const name = store.identity?.address_as ?? store.identity?.user_name ?? '';
   const unread = store.messages.filter((m) => (m.hold === 'needs_ok' || (m.delivered_at && !m.read_at)));
-  const asking = store.tasks.filter(needsApproval);
+  const asking = store.tasks.filter(asksYou);
   const verified = store.tasks.find((t) => t.state === 'done' && t.verification?.ok);
   const needsCard = asking.length
     ? card({ kind: 'needs-you-card', title: 'Needs you', icon: 'handling', body: `<ul class="task-list">${asking.slice(0, 3).map((t) => taskRow(t, { now })).join('')}</ul>` })
@@ -154,11 +158,42 @@ export async function openTask(id) {
     openSheet(approvalSheet(t, { worker }), { label: 'Needs your OK' });
     return;
   }
+  // A browser task with its browser open: the live view, where the person can take over.
+  if (t.owner === 'browser' && isOpen(t)) {
+    const view = await api('GET', `/browser/tasks/${encodeURIComponent(id)}`).catch(() => null);
+    if (view?.live) {
+      const you = store.mesh?.you;
+      openTakeover(t, view, { me: you && !you.console ? `device:${you.device_id}` : 'console', canTake: you?.can_approve !== false, onEnd: () => afterBrowser(id) });
+      return;
+    }
+  }
   const actions = [];
   if (t.state === 'waiting') actions.push(`<button type="button" class="btn primary" data-action="retry-task" data-task="${esc(t.id)}">Try again</button>`);
   if (isOpen(t)) actions.push(`<button type="button" class="btn" data-action="cancel-task" data-task="${esc(t.id)}">Cancel the task</button>`);
-  const timeline = events.length ? `<details class="raw"><summary>What happened</summary><ul class="timeline">${events.map((e) => `<li>${esc(new Date(e.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))} · ${esc(e.kind.replace(/_/g, ' '))}${e.to_state ? ` → ${esc(e.to_state)}` : ''}</li>`).join('')}</ul></details>` : '';
+  const timeline = events.length ? `<details class="raw"><summary>What happened</summary><ul class="timeline">${events.map((e) => `<li data-kind="${esc(e.kind)}">${esc(new Date(e.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))} · ${esc(e.kind.replace(/_/g, ' '))}${e.to_state ? ` → ${esc(e.to_state)}` : ''}${esc(eventDetail(e))}</li>`).join('')}</ul></details>` : '';
   openSheet(`${evidenceViewer(t)}${timeline}${actions.length ? `<div class="sheet-actions">${actions.join('')}</div>` : ''}`, { label: t.title });
+}
+
+// The few events whose detail the person needs in the timeline: who took over and for how long,
+// what was refused, which step.
+function eventDetail(e) {
+  const d = e.detail ?? {};
+  if (e.kind === 'takeover_started') return ` · ${d.who ?? d.by}${d.requested ? ', as Nova asked' : ''}`;
+  if (e.kind === 'takeover_ended') return ` · ${d.who ?? d.by}, after ${Math.max(1, Math.round((d.duration_ms ?? 0) / 1000))} s`;
+  if (e.kind === 'blocked_request') return ` · ${d.host}`;
+  if (e.kind === 'step') return ` · ${d.n} of ${d.of}: ${d.what}`;
+  return '';
+}
+
+// Once a browser task's browser closes, Nova checks the evidence; the sheet moves on to the
+// result when that is in (a few seconds at most), or to whatever the task shows by then.
+async function afterBrowser(id) {
+  for (let i = 0; i < 20; i++) {
+    const t = await api('GET', `/tasks/${encodeURIComponent(id)}`).catch(() => null);
+    if (!t || !['active', 'verifying'].includes(t.state)) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (sheetOpen()) openTask(id);
 }
 
 export async function approve(form) {
@@ -190,7 +225,7 @@ export async function taskAction(action, id) {
 
 // ---- Health -------------------------------------------------------------------------------
 
-const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices' };
+const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices', browser: 'Browser work' };
 function checkLine(key, c) {
   if (key === 'workers') return c.ok ? `${c.workers?.length ?? 0} ready.` : c.detail;
   if (key === 'ledger') return Object.entries(c.counts ?? {}).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ') || 'No tasks yet.';

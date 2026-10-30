@@ -128,6 +128,8 @@ Optional `nova.config.json` at the repo root (environment variables win):
 | `mesh_transport` | `NOVA_MESH_TRANSPORT` | none (`proxy` or `network`, for an `http://` mesh address) |
 | `tls_cert`, `tls_key` | `NOVA_TLS_CERT`, `NOVA_TLS_KEY` | none (PEM files, for an `https://` mesh address) |
 |  | `NOVA_VAULT_KEY` | `auto`: the vault's key in the system keychain if one answers, else `vault/key` in the home (`file` or `keychain` to insist) |
+|  | `NOVA_CHROMIUM` | `CHROMIUM`, then known install paths: the Chromium that browser tasks use (none: browser work is unavailable, and Health says so) |
+|  | `NOVA_CHROMIUM_SANDBOX` | on (`0` turns Chromium's own sandbox off, for a container without user namespaces) |
 
 `agent_cmd` is the one place a model is chosen. Nova writes the assembled
 system prompt to a file and substitutes its path for `{system_file}`, sends the

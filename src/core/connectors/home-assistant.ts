@@ -15,7 +15,7 @@ import type { Brief, Evidence } from '../envelope.ts';
 import type { Egress } from '../workers.ts';
 import type { Route } from '../api.ts';
 import type { Connector, ConnectorContext, ConnectorStatus } from './index.ts';
-import { egressOf } from './index.ts';
+import { addressEgress } from './index.ts';
 
 export const HA_ID = 'home-assistant';
 const TOKEN = 'HA_TOKEN';
@@ -89,7 +89,7 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
     const backoff = o.reconnectMs ?? { first: 1000, max: 60_000 };
     const cfg = () => ctx.config.get() as Config;
     const token = () => ctx.secrets.get(TOKEN);
-    const egress = (): Egress => (cfg().url ? egressOf(cfg().url!, ctx.meshHosts()) : 'local');
+    const egress = (): Egress => (cfg().url ? addressEgress(cfg().url!, ctx.meshHosts()) : 'local');
     const host = () => { try { return new URL(cfg().url!).host; } catch { return 'your Home Assistant'; } };
     // Readings Nova took itself after a service call, by confirmation id, for the verifier.
     const observed = new Map<string, State>();
@@ -169,7 +169,7 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
       const t = init.token ?? token();
       if (!base || !t) throw new CoreError('conflict', 'Home Assistant isn’t connected. Connect it in Settings, under Connections.');
       if (!init.base && cfg().broken) throw new CoreError('conflict', 'Home Assistant needs reconnecting: it no longer accepts Nova’s token.');
-      const e = init.base ? egressOf(base, ctx.meshHosts()) : egress();
+      const e = init.base ? addressEgress(base, ctx.meshHosts()) : egress();
       if (!ctx.permits(e)) throw new CoreError('forbidden', `Your Home Assistant is outside your network (${new URL(base).host}), and Nova is set to local-only, so Nova doesn’t contact it.`);
       let res: Response;
       try {
@@ -349,7 +349,7 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
         if (t && base) {
           const iss = tokenIssuer(t);
           if (!iss) note = 'Home Assistant’s token isn’t one Nova can revoke itself; delete it in your Home Assistant profile, under Long-lived access tokens.';
-          else if (!ctx.permits(egressOf(base, ctx.meshHosts()))) note = 'Nova is local-only and your Home Assistant is outside your network, so Nova didn’t contact it: delete the token in your Home Assistant profile.';
+          else if (!ctx.permits(addressEgress(base, ctx.meshHosts()))) note = 'Nova is local-only and your Home Assistant is outside your network, so Nova didn’t contact it: delete the token in your Home Assistant profile.';
           else {
             try {
               const r = await wsCommand(base, t, { type: 'auth/delete_refresh_token', refresh_token_id: iss }, timeoutMs);

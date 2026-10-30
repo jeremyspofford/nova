@@ -19,7 +19,7 @@ import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInpu
 import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
-import { info, permits, stricter, type Egress } from './workers.ts';
+import { egressOf, info, permits, stricter, type Egress } from './workers.ts';
 import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
 import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
@@ -32,6 +32,9 @@ import { agentTar, joinScript } from './mesh/agent.ts';
 import { Vault, type KeyMode, type KeyStore } from './vault.ts';
 import { Connectors } from './connectors/index.ts';
 import { homeAssistant, type HomeAssistantOptions } from './connectors/home-assistant.ts';
+import { Browser } from './browser/worker.ts';
+import { browserRoutes } from './browser/routes.ts';
+import { checkers as browserCheckers } from './browser/evidence.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
@@ -71,7 +74,7 @@ export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BU
 // The vault and connectors (M5b): Era 2's Gmail keeps its secrets in the vault and registers as a connector.
 export { Vault, FILE_KEY_NOTICE, SECRET_SCHEME, secretRef, keyMode, fileKeyStore, secretToolKeyStore, macKeyStore, windowsKeyStore, platformKeyStore } from './vault.ts';
 export type { KeyMode, KeyStore, Run as KeyCommandRunner, VaultStatus } from './vault.ts';
-export { egressOf, secretPrefix } from './connectors/index.ts';
+export { addressEgress, secretPrefix } from './connectors/index.ts';
 export type { Connector, ConnectorContext, ConnectorFactory, ConnectorStatus, ConnectorView } from './connectors/index.ts';
 export { HA_ID, HA_MANIFEST, DEFAULT_TIER3, tokenIssuer } from './connectors/home-assistant.ts';
 export { redactText } from './log.ts';
@@ -115,10 +118,16 @@ export function createCore(o: CoreOptions) {
   const workspace = new Workspace(join(o.home, 'workspace'));
   const verifier = new Verifier(workspace, now);
   for (const [system, check] of Object.entries(o.confirmations ?? {})) verifier.registerConfirmation(system, check);
+  // Browser work with takeover (M5c): a worker of its own, and the checks for what it proves.
+  const browser = new Browser({ home: o.home, log, now });
+  const browserChecks = browserCheckers(o.home);
+  verifier.registerKind('screenshot', browserChecks.screenshot);
+  verifier.registerKind('url', browserChecks.url);
   const rules = new RulesProvider();
   const templates = new Templates({ db, verifier, rules, now });
-  const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace')), templates.worker, ...(o.workers ?? [])], defaultPrivacy: () => profile.privacyDefault(), now });
+  const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace')), templates.worker, browser.worker, ...(o.workers ?? [])], defaultPrivacy: () => profile.privacyDefault(), now });
   templates.bind(ledger);
+  browser.bind(ledger);
   // Remote decision providers (JevProvider) are registered only once configured; local-only skips them anyway.
   const decisions = new Decisions({ templates, providers: [rules], privacy: () => profile.privacyDefault(), log });
   const triggers = new Triggers({
@@ -207,7 +216,7 @@ export function createCore(o: CoreOptions) {
     for (const t of ledger.list({ state: 'waiting', limit: 500 })) {
       const w = ledger.workers.get(t.owner);
       if (!w || !t.reason?.includes('local capacity')) continue;
-      if (permits(stricter(t.privacy_mode, profile.privacyDefault()), w.egress)) ledger.retry(t.id, 'Your privacy setting changed, so this can run now.');
+      if (permits(stricter(t.privacy_mode, profile.privacyDefault()), (() => { try { return egressOf(w, t.brief); } catch { return w.egress; } })())) ledger.retry(t.id, 'Your privacy setting changed, so this can run now.');
     }
   });
   extensions.on('change', (c) => bus.emit('event', 'extension', c));
@@ -221,6 +230,7 @@ export function createCore(o: CoreOptions) {
   enroll.on('change', (r) => bus.emit('event', 'join_request', r));
   role.on('change', (s) => bus.emit('event', 'mesh', s));
   role.on('applied', (a) => bus.emit('event', 'sync', a));
+  browser.on('change', (v) => bus.emit('event', 'browser', v));
   const stream = {
     on(listener: (event: string, data: unknown) => void) {
       const fn = (event: string, data: unknown) => listener(event, data);
@@ -275,6 +285,7 @@ export function createCore(o: CoreOptions) {
       mesh: { ok: true, ...meshHealth() },
       vault: vaultHealth(),
       connectors: connectors.health(),
+      browser: browserHealth(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
   }
@@ -283,6 +294,13 @@ export function createCore(o: CoreOptions) {
   function vaultHealth() {
     const s = vault.status();
     return { ok: s.ok, detail: s.problem ?? (s.secrets ? `${s.secrets} secret${s.secrets === 1 ? '' : 's'}, key in ${s.where}.` : 'Empty.'), secrets: s.secrets, key: s.key, notice: s.notice };
+  }
+
+  // No Chromium is said plainly, but isn't a fault: browser work is simply unavailable. A browser
+  // named in NOVA_CHROMIUM that isn't there is.
+  function browserHealth() {
+    const f = browser.chromium();
+    return { ok: f.path !== null || f.from === 'none', available: f.path !== null, detail: f.detail, running: browser.list().length };
   }
 
   function meshHealth() {
@@ -554,6 +572,11 @@ export function createCore(o: CoreOptions) {
     { method: 'POST', path: '/connectors/{id}/connect', summary: 'Connect a service with what its setup asks for (an address, a token). Secrets go into the vault.', body: '{…setup fields}', handle: ({ params, body }) => connectors.connect(params.id!, body) },
     { method: 'POST', path: '/connectors/{id}/disconnect', summary: 'Disconnect: sign Nova out at the service where it can, then delete its secrets, the rules listening to it and its settings.', handle: ({ params }) => connectors.disconnect(params.id!) },
     ...connectors.routes(),
+    // ---- browser work with takeover (M5 plan §3) ----
+    ...browserRoutes(browser, {
+      home: o.home,
+      holder: (w) => (w.principal.kind === 'device' ? { key: `device:${w.principal.device.id}`, label: w.principal.device.name } : { key: 'console', label: 'The hub’s own screen' }),
+    }),
   ];
 
   // Tests drive the heartbeat's clock through the API; this route doesn't exist otherwise.
@@ -618,7 +641,7 @@ export function createCore(o: CoreOptions) {
   });
 
   return {
-    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, browser,
     vault, connectors,
     health,
     openapi: api.doc,
@@ -649,6 +672,8 @@ export function createCore(o: CoreOptions) {
     async close() {
       stopHub();
       await role.close();
+      // Browsers close first and their tasks stay as they are: the next start runs them again.
+      await browser.close();
       await Promise.race([ticking.then(() => ledger.idle()), new Promise((r) => setTimeout(r, 2000).unref())]);
       db.close();
     },

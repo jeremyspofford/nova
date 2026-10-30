@@ -361,7 +361,7 @@ function safeStatus(c: Connector): ConnectorStatus {
 
 // local: this computer, the home network, or a device in the mesh; remote: anywhere else. Decided
 // from the address as written (a name that resolves somewhere public still counts by its name).
-export function egressOf(url: string, meshHosts: string[] = []): Egress {
+export function addressEgress(url: string, meshHosts: string[] = []): Egress {
   let host: string;
   try { host = new URL(url).hostname.replace(/^\[|\]$/g, '').toLowerCase(); } catch { return 'remote'; }
   if (meshHosts.map((h) => h.toLowerCase()).includes(host)) return 'local';

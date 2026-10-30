@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { CoreError } from './errors.ts';
 import { ENVELOPE_VERSION, validateBrief, validateReport, type Brief, type ContextRef, type EvidenceRequirement, type PrivacyMode, type Report, type Tier } from './envelope.ts';
-import { permits, type Worker } from './workers.ts';
+import { egressOf, permits, type Worker } from './workers.ts';
 import type { Db } from './db.ts';
 import type { Log } from './log.ts';
 import type { Verification, Verifier } from './verify.ts';
@@ -16,7 +16,8 @@ export const TERMINAL: readonly State[] = ['done', 'failed', 'cancelled'];
 
 const MOVES: Record<State, State[]> = {
   queued: ['active', 'waiting', 'cancelled'],
-  waiting: ['queued', 'cancelled', 'failed'],
+  // waiting → active: a running worker that asked for the person carries on once they're done.
+  waiting: ['queued', 'cancelled', 'failed', 'active'],
   active: ['verifying', 'waiting', 'failed', 'queued', 'cancelled'],
   verifying: ['done', 'queued', 'failed'],
   done: [],
@@ -146,9 +147,6 @@ export class Ledger extends EventEmitter {
       throw new CoreError('validation', 'A read-back requirement must name the file to read back.');
     }
     const mode = input.privacy_mode ?? this.#defaultPrivacy();
-    if (!permits(mode, worker.egress)) {
-      throw new CoreError('validation', `${worker.name} sends data off your devices, and this task is ${mode}. Pick a worker that keeps it local.`);
-    }
     if (input.parent_id !== undefined && !this.#db.get('SELECT 1 FROM task WHERE id = ?', input.parent_id)) throw new CoreError('validation', `No parent task ${input.parent_id}.`);
     if (input.user_visibility !== undefined && !VISIBILITY.includes(input.user_visibility)) throw new CoreError('validation', `user_visibility must be one of ${VISIBILITY.join(', ')}.`);
     const id = randomUUID();
@@ -164,6 +162,11 @@ export class Ledger extends EventEmitter {
       idempotency_key: key,
       ...(input.inputs ? { inputs: input.inputs } : {}),
     });
+    // Where this brief's data would go; a worker whose reach depends on the brief says so, and
+    // refuses a brief it could never run.
+    if (!permits(mode, egressOf(worker, brief))) {
+      throw new CoreError('validation', `${worker.name} sends data off your devices, and this task is ${mode}. Pick a worker that keeps it local.`);
+    }
     const at = this.#now().toISOString();
     this.#db.tx(() => {
       this.#db.run(
@@ -217,11 +220,38 @@ export class Ledger extends EventEmitter {
   // A worker that stepped aside (a blocked report) and is ready again uses it too, with its reason.
   retry(id: string, reason = 'Trying again, as you asked.'): Task {
     const t = this.get(id);
+    // Its worker is still running and waiting for the person (needsPerson): running it a second
+    // time would race the first.
+    if (this.#running.has(id)) throw new CoreError('conflict', 'This task is still running: it is waiting for you to do a step. Open it to take over.');
     if (t.state !== 'waiting' || (t.approval_tier >= 2 && !t.approved_at)) throw new CoreError('conflict', "This task isn't waiting for a retry.");
     this.#db.run(`UPDATE task SET user_visibility = 'handling' WHERE id = ?`, id);
     const next = this.#move(id, 'queued', reason, 'retried');
     void this.pump();
     return next;
+  }
+
+  // A running worker needs the person for a step only they may do (a sign-in, a challenge): the
+  // task waits, flagged for them, while the worker keeps running. `personDone` takes it back.
+  needsPerson(id: string, why: string): Task {
+    const t = this.get(id);
+    if (!this.#running.has(id) || (t.state !== 'active' && t.state !== 'waiting')) throw new CoreError('conflict', 'Only a running task can ask for you.');
+    this.#db.run(`UPDATE task SET user_visibility = 'attention' WHERE id = ?`, id);
+    return this.#move(id, 'waiting', why, 'needs_person');
+  }
+
+  personDone(id: string, why: string): Task {
+    const t = this.get(id);
+    if (!this.#running.has(id) || t.state !== 'waiting') return t;
+    this.#db.run(`UPDATE task SET user_visibility = 'handling' WHERE id = ?`, id);
+    return this.#move(id, 'active', why, 'person_done');
+  }
+
+  // Something a worker wants in the task's record that isn't a change of state (a takeover, a
+  // request it refused). It is appended like every other event.
+  note(id: string, kind: string, detail?: unknown): void {
+    const t = this.get(id);
+    this.#event(id, kind, null, null, detail);
+    this.emit('note', { task: t, kind, detail });
   }
 
   cancel(id: string, reason = 'Cancelled.'): Task {
@@ -242,6 +272,19 @@ export class Ledger extends EventEmitter {
         continue;
       }
       this.#requeue(t, 'Nova restarted while this was running. It will run again.', 'recovered');
+      requeued.push(t.id);
+    }
+    // A worker that was waiting for the person (needsPerson) was running too; what it had open is
+    // gone, so it starts again from the beginning.
+    for (const t of this.list({ state: 'waiting', limit: 500 })) {
+      const last = this.#db.get<{ kind: string }>('SELECT kind FROM task_event WHERE task_id = ? AND to_state IS NOT NULL ORDER BY seq DESC LIMIT 1', t.id);
+      if (last?.kind !== 'needs_person') continue;
+      if (t.attempts >= this.#maxAttempts) {
+        this.#fail(t.id, `Nova restarted while this waited for you, ${t.attempts} times. Not trying again.`, undefined, 'recovered');
+        continue;
+      }
+      this.#db.run(`UPDATE task SET user_visibility = 'handling' WHERE id = ?`, t.id);
+      this.#requeue(t, 'Nova restarted while this waited for you. It starts again from the beginning.', 'recovered');
       requeued.push(t.id);
     }
     for (const t of this.list({ state: 'verifying', limit: 500 })) {
@@ -319,7 +362,7 @@ export class Ledger extends EventEmitter {
     const worker = this.workers.get(t.owner);
     let wait: string | null = null;
     if (!worker) wait = `The worker "${t.owner}" isn't available.`;
-    else if (!permits(t.privacy_mode, worker.egress)) wait = `Waiting on local capacity: ${worker.name} would send this off your devices, and this task is local-only.`;
+    else if (!permits(t.privacy_mode, (() => { try { return egressOf(worker, t.brief); } catch { return 'remote'; } })())) wait = `Waiting on local capacity: ${worker.name} would send this off your devices, and this task is local-only.`;
     else if (t.approval_tier >= 2 && !t.approved_at) wait = 'Needs your OK before it runs.';
     if (wait && (t.state !== 'waiting' || t.reason !== wait)) {
       this.#db.run(`UPDATE task SET user_visibility = 'attention' WHERE id = ?`, t.id);
@@ -358,6 +401,8 @@ export class Ledger extends EventEmitter {
     stopped.catch(() => {});
     this.#running.delete(t.id);
     if (this.get(t.id).state === 'cancelled') return;
+    // A worker that asked for the person and then finished without saying they were done.
+    if (this.get(t.id).state === 'waiting') this.#move(t.id, 'active', `${worker.name} is on it.`, 'person_done');
 
     let report: Report;
     try {
