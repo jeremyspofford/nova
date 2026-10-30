@@ -147,7 +147,7 @@ export class NightlyBackups {
   // untouched then. Returns the run, with the encrypted copy's path or why there isn't one.
   run(o: { taskId?: string } = {}): BackupRun & { manifest: Manifest; encrypted_error: string | null } {
     const s = this.#o.settings();
-    if (!s.target) throw new BackupError('target-missing', 'No backup folder is set yet. Choose one in Settings › Backups.');
+    if (!s.target) throw new BackupError('target-missing', 'No backup folder is set yet. Choose one with PUT /api/v1/backups/settings.');
     const target = resolve(s.target);
     const at = this.#now().toISOString();
     const seq = this.#nextSeq(target);

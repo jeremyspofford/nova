@@ -18,16 +18,19 @@ export const store = {
   devices: [], mesh: null, requests: [],
   // Settings › Providers: GET /providers, loaded when Settings opens (M5a).
   providers: null,
+  // Keeping Nova running (M7b): the supervisor, releases, backups, the last drill, playbooks.
+  resilience: null,
 };
 
 const settle = (p, fallback) => p.catch(() => fallback);
-export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers', 'devices', 'mesh', 'requests']) {
+export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers', 'devices', 'mesh', 'requests', 'resilience']) {
   // Each part comes back as [value, stale].
   const get1 = (path) => request('GET', path).then((r) => [r.data, r.stale]);
   const get = {
     tasks: () => get1('/tasks?limit=100'),
     problems: () => get1('/problems'),
     health: () => get1('/health'),
+    resilience: () => get1('/resilience'),
     profile: () => Promise.all([get1('/profile'), get1('/identity')]).then(([a, b]) => [[a[0], b[0]], a[1] || b[1]]),
     memory: () => get1('/memory'),
     rules: () => get1('/triggers/rules'),
@@ -252,7 +255,7 @@ export async function taskAction(action, id) {
 
 // ---- Health -------------------------------------------------------------------------------
 
-const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices', browser: 'Browser work' };
+const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices', browser: 'Browser work', backups: 'Backups', changes: 'Changes', capture: 'Capture', vault: 'Vault', connectors: 'Connections' };
 function checkLine(key, c) {
   if (key === 'workers') return c.ok ? `${c.workers?.length ?? 0} ready.` : c.detail;
   if (key === 'ledger') return Object.entries(c.counts ?? {}).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ') || 'No tasks yet.';
@@ -280,6 +283,7 @@ export function renderHealth(el) {
   const h = store.health;
   const problem = (p, open) => `<li class="settings-row" id="pr-${esc(String(p.id))}">
   <div class="settings-text"><p class="settings-label">${esc(p.message)}</p><p class="settings-note">${esc(p.source)} · ${esc(ago(p.at))}${p.task_id ? ` · <a class="link" href="/tasks" data-action="open-task" data-task="${esc(p.task_id)}">the task</a>` : ''}</p>
+  ${open ? playbookBlock(p) : ''}
   ${p.detail ? `<details class="raw"><summary>Technical detail</summary><pre tabindex="0">${esc(p.detail)}</pre></details>` : ''}</div>
   ${open ? `<div class="settings-control"><button type="button" class="btn small" data-action="resolve-problem" data-problem="${esc(String(p.id))}">Mark as dealt with</button></div>` : ''}
 </li>`;
@@ -289,10 +293,67 @@ export function renderHealth(el) {
 <p class="view-lede">${!store.reachable ? 'Nova isn’t answering. This page reconnects when it’s back.' : store.problems.length ? 'Something went wrong. Each problem says what happened; the detail is one tap away.' : 'Everything Nova runs on, and anything that went wrong.'}</p></header>
 <section class="panel" aria-labelledby="h-problems"><h3 class="section-title" id="h-problems">Problems</h3>
 ${store.problems.length ? `<ul class="settings-list">${store.problems.map((p) => problem(p, true)).join('')}</ul>` : emptyState({ title: 'Nothing needs you', line: 'No problems are open.' })}</section>
+${keepingRunning()}
 <section class="panel" aria-labelledby="h-checks"><h3 class="section-title" id="h-checks">Checks</h3>
 ${h ? `<ul class="settings-list">${checks}</ul><p class="settings-note">Version ${esc(h.version)} · running for ${esc(uptime(h.uptime_s))}.</p>` : '<p class="settings-note">Checking…</p>'}</section>
 ${store.resolved.length ? `<details class="panel raw"><summary>Dealt with recently</summary><ul class="settings-list">${store.resolved.map((p) => problem(p, false)).join('')}</ul></details>` : ''}`;
 }
+
+// A problem's playbook (M7b): what Nova already did about it, and the steps that are the person's.
+function playbookBlock(p) {
+  const pb = store.resilience?.playbooks?.[p.id];
+  if (!pb) return '';
+  const did = (pb.repairs ?? []).slice(-3).map((r) => `<li>${esc(r.said)} <span class="is-faint">${esc(ago(r.at))}</span></li>`).join('');
+  return `<div class="playbook" data-playbook="${esc(pb.id)}">
+  ${did ? `<p class="settings-note"><b>What Nova did</b></p><ul class="steps">${did}</ul>` : pb.automatic ? `<p class="settings-note">${esc(pb.automatic)}</p>` : ''}
+  <p class="settings-note"><b>What you can do</b></p><ol class="steps">${pb.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+  ${pb.repair ? `<p><button type="button" class="btn small" data-action="repair-problem" data-problem="${esc(String(p.id))}">Try the repair now</button></p>` : ''}
+</div>`;
+}
+
+const MODE_WORDS = { starting: 'Starting', running: 'Running', restarting: 'Restarting after a crash', safe_mode: 'Held in safe mode', deploying: 'Deploying a release', stopped: 'Stopped' };
+const releaseName = (v) => (!v ? 'none' : v === 'base' ? 'as installed' : v);
+
+// The supervisor, releases (and a canary in progress), backups and the last restore drill: one
+// calm list of facts; the one thing that may need the person (a failed drill, a missing backup
+// folder) is a problem above, not a second alarm here.
+function keepingRunning() {
+  const r = store.resilience;
+  if (!r) return '';
+  const sup = r.supervisor;
+  const rel = r.releases;
+  const b = r.backups;
+  const d = r.drill;
+  const dep = rel?.deploy;
+  const canary = dep && dep.outcome === 'running' && dep.canary ? `<p class="settings-note" data-canary>Canary for ${esc(dep.version)}: ${dep.canary.probes.length} probe${dep.canary.probes.length === 1 ? '' : 's'} so far${dep.canary.probes.length ? `, the last: ${esc(dep.canary.probes.at(-1).said)}` : ''}. It rolls back by itself if health fails before ${esc(new Date(dep.canary.until).toLocaleTimeString())}.</p>` : '';
+  const lastDeploy = dep && dep.outcome !== 'running' ? `${esc(dep.version)}: ${esc({ promoted: 'live', rolled_back: 'rolled back by itself', stopped: 'stopped before the switch', refused: 'going back was refused' }[dep.outcome] ?? dep.outcome)}, ${esc(ago(dep.started_at))}` : '';
+  const backupLine = !b.settings.target ? 'No backup folder yet. Choose one with PUT /api/v1/backups/settings; Nova then backs up nightly and drills weekly.'
+    : b.target_present === false ? `The backup folder ${b.settings.target} isn’t there (a drive not plugged in?).${b.last_ok ? ` Last backup ${ago(b.last_ok.at)}.` : ''}`
+    : b.last_ok ? `Last backup ${ago(b.last_ok.at)}, to ${b.settings.target}. ${b.count} kept (up to ${b.settings.keep}).${b.encrypted !== null ? ` ${b.encrypted} encrypted cop${b.encrypted === 1 ? 'y' : 'ies'} in ${b.settings.encrypted_target}.` : ''}`
+    : `Nothing backed up yet to ${b.settings.target}.`;
+  const drillLine = !d ? 'No restore drill yet.' : `${d.ok ? 'Passed' : 'Failed'} ${ago(d.at)}: ${d.checks.filter((c) => c.ok).length} of ${d.checks.length} checks.`;
+  return `<section class="panel" aria-labelledby="h-keep"><h3 class="section-title" id="h-keep">Keeping Nova running</h3>
+<dl class="facts" data-resilience>
+  <dt>Supervisor</dt><dd>${sup ? `${esc(MODE_WORDS[sup.mode] ?? sup.mode)}${sup.server?.restarts ? `; restarted ${sup.server.restarts} time${sup.server.restarts === 1 ? '' : 's'}` : ''}.${sup.safe_mode ? ` ${esc(sup.safe_mode.reason)}` : ''}` : 'Not running under the supervisor. node src/supervisor/main.ts run keeps Nova running and takes releases.'}</dd>
+  ${rel ? `<dt>Release</dt><dd>${esc(releaseName(rel.current))}${rel.previous ? `; ${esc(releaseName(rel.previous))} is kept to go back to` : ''}.${lastDeploy ? ` Last deploy: ${lastDeploy}.` : ''}</dd>` : ''}
+  <dt>Backups</dt><dd>${esc(backupLine)}</dd>
+  <dt>Restore drill</dt><dd>${esc(drillLine)}${d?.task_id ? ` <a class="link" href="/tasks" data-action="open-task" data-task="${esc(d.task_id)}">Its evidence</a>` : ''}</dd>
+  ${r.clock?.held ? `<dt>Clock</dt><dd>${esc(r.clock.held)}</dd>` : ''}
+</dl>
+${canary}
+${b.settings.target ? `<p class="row-actions"><button type="button" class="btn small" data-action="backup-now">Back up now</button> <button type="button" class="btn small" data-action="drill-now">Run the restore drill</button></p>` : ''}
+</section>`;
+}
+
+// Back up now, run the drill, or a problem's repair: each a ledger task or a recorded attempt.
+export async function resilienceAction(action, id) {
+  try {
+    if (action === 'backup-now') { await api('POST', '/backups'); toast('Backing up now. It shows in Tasks.'); }
+    if (action === 'drill-now') { await api('POST', '/backups/drill'); toast('Running the restore drill. It shows in Tasks.'); }
+    if (action === 'repair-problem') { const r = await api('POST', `/problems/${encodeURIComponent(id)}/repair`); toast(r.said); }
+  } catch (e) { toast(e.message); }
+}
+
 const uptime = (s) => (s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`);
 
 // ---- automation rules (above Era 2's schedules) -------------------------------------------

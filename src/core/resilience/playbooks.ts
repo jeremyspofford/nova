@@ -66,7 +66,7 @@ export const PLAYBOOKS: Readonly<Record<string, PlaybookDef>> = {
   'backup-target-missing': {
     id: 'backup-target-missing', title: 'The backup folder isn’t there',
     repair: 'retry-backup', automatic: 'Nova tries again once the folder is back. It never creates the folder itself, in case a drive isn’t plugged in.',
-    steps: ['Plug in or mount the drive the backup folder is on, or choose another folder in Settings › Backups.', 'Nova never makes the folder itself: writing where a drive should be would fill the wrong disk.'],
+    steps: ['Plug in or mount the drive the backup folder is on, or choose another backup folder (PUT /api/v1/backups/settings).', 'Nova never makes the folder itself: writing where a drive should be would fill the wrong disk.'],
   },
   'disk-full': {
     id: 'disk-full', title: 'A disk is full',

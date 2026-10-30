@@ -377,6 +377,8 @@ export class Resilience {
       },
       drill: drills[0] ?? null,
       clock: { held: this.retentionHeld() },
+      // Each open problem's playbook, by problem id: its steps, and what Nova already did.
+      playbooks: Object.fromEntries(this.playbooks.list().filter((p) => p.playbook).map((p) => [p.id, p.playbook])),
     };
   }
 
