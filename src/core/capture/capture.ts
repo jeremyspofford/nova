@@ -132,6 +132,10 @@ export interface CaptureOptions {
   meshHosts: () => string[];
   // An event trigger for a topic, only when a rule listens (triggers.connectorEvent).
   fire: (topic: string, payload: Record<string, unknown>, dedupKey: string) => Promise<unknown>;
+  // The decision provider that should answer capture's proposals now (the local sorting model, once
+  // one is assigned), or null. When it should but another answered (it was down), the event isn't
+  // counted as looked at, so a later pass asks again once it is back.
+  proposer?: () => string | null;
   fetch?: typeof fetch;
   pollMs?: number;
 }
@@ -588,6 +592,10 @@ export class Capture extends EventEmitter {
         this.#o.log.warn('capture', 'A captured event couldn’t be triaged.', { error: (e as Error).message });
       }
       if (!this.#db.get('SELECT 1 FROM capture_event WHERE id = ?', r.id)) continue;
+      // The provider that should answer didn't (its model is down): stop here and ask again on a
+      // later pass, rather than count this and the rest as looked at.
+      const expected = this.#o.proposer?.() ?? null;
+      if (expected && d?.provider !== expected) break;
       this.#db.tx(() => {
         this.#db.run('UPDATE capture_event SET triaged = 1 WHERE id = ?', r.id);
         const p = d?.answers.remember;

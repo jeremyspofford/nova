@@ -53,6 +53,41 @@ real), each failing on the code before its fix.
   line mid-reply (out of memory) is local capacity: the work waits. The role-set provider's words
   name the cloud model when the privacy mode lets it answer.
 
+**2026-10-30 (M6c): the gate, a day in the life local-only.** Branch `m6c/gate`; the plan's §3.
+
+- **CI:** `tests/acceptance/m6-day.test.ts`, with the day itself in `m6-day-support.ts`. It runs
+  two real processes (a hub and a standby, M4's helpers; `setup()` now takes extra hub env), the
+  egress tripwire, a fixed hub-class hardware reading, and stand-ins for Ollama, Screenpipe and the
+  cloud model. The day runs on capture's test clock (`2030-01-15`) and covers:
+  - setup by conversation, local-only;
+  - roles accepted from installed models, with transcription unassigned;
+  - capture classified by signals: one event stays unclassified, and an incognito window is
+    never stored;
+  - triage by the local decision provider: a Noul proposal, plus heartbeat and event triggers
+    (Choice);
+  - chat and the M5 calc brief through the reasoner role;
+  - a captured fact promoted, then forgotten on both nodes (database, WAL, backups);
+  - a midday outage: the task waits, the person is told, the cloud is asked nothing, and the task
+    reruns;
+  - the evening retention sweep.
+
+  Every step is asserted. `NOVA_EVIDENCE=1` writes `docs/evidence/m6-day.md`.
+- **Real:** `m6-day-real.test.ts` (opt-in, `NOVA_REAL_OLLAMA=1`) runs the same day with the hardware
+  read for real and Nova's own recommendation: Qwen3:8b, deepseek-r1:32b and nomic-embed-text.
+  - Screenpipe is still the stand-in, and there is no standby.
+  - Ollama is reached through a loopback relay that passes only reading and inference. The outage
+    is that relay closing, a dead port; the evidence says so.
+  - What a model decides is recorded as it happened. Privacy is asserted as in CI.
+  - The committed `docs/evidence/m6-day.md` is a real run: 415 s, every step done, every receipt
+    local.
+- **Fixed on the way.** An event captured while the sorting model was down fell through to the
+  rules, which have no rule for `capture-promote`. It was counted as looked at and never proposed.
+  Now the pass stops when the provider that should answer (`proposer`, the local model once one is
+  assigned) didn't, and a later pass asks again.
+- **Seen in the real run, not fixed.** Qwen3:8b answers p = 0.9 to `capture-promote` for nearly
+  every event, so its proposals aren't selective yet. Proposals stay proposals: nothing becomes
+  memory until the person accepts.
+
 **2026-10-30 (M6b): local models — hardware, roles, downloads, one inference API, wake, fallback, budgets.**
 Branch `m6b/models`; the plan's §2. Code in `src/core/models/`, migration `0010_models.sql`
 (M6a took 0009). PWA: Settings › Models (`ui/js/models.js`, `ui/styles/models.css`).

@@ -13,6 +13,7 @@ import { answerSchema, checkAnswer } from '../../src/core/models/decide.ts';
 import { toInstalled } from '../../src/core/models/ollama.ts';
 import { ModelsWaiting } from '../../src/core/models/index.ts';
 import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
+import { startFakeScreenpipe } from '../../scripts/fake-screenpipe.js';
 import { magicMac, startFakeWol } from '../../scripts/stand-ins/fake-wol.js';
 import { filesReply, startFakeOpenAI } from '../../scripts/stand-ins/fake-openai.js';
 import { INSTALLED, LIBRARY, hubHardware, modelsCore, say } from '../support/models.ts';
@@ -529,5 +530,32 @@ test('capture proposals (M6a) get a local-model answer under local-only, even wi
   } finally {
     await core.close();
     await ollama.close();
+  }
+});
+
+// Found by the M6 gate: an event captured while the local sorting model was down fell through to
+// the rules (which have no rule for it), was counted as looked at, and was never proposed.
+test('capture proposals: an event captured while the local sorting model is down is asked again once it is back', async () => {
+  let ollama = await startFakeOllama({ models: INSTALLED });
+  const port = ollama.port;
+  const sp = await startFakeScreenpipe();
+  const { core } = modelsCore(ollama.url, { privacy: 'local-only' });
+  try {
+    await core.models.assign('triage-text', { model: 'example-small:3b' });
+    const src = core.capture.addScreenpipe({ url: sp.base });
+    core.capture.enable(src.id, { by: 'person' });
+    await ollama.close();
+    sp.add({ at: new Date(Date.now() + 60_000).toISOString(), app: 'Editor', text: 'The recycling moved to Wednesdays.' });
+    assert.equal(((await core.capture.pull(src.id)) as { kept: number }).kept, 1);
+    let r = await core.capture.propose();
+    assert.deepEqual(r.proposed, [], 'nothing is proposed while the model is down');
+    ollama = await startFakeOllama({ models: INSTALLED, port });
+    r = await core.capture.propose();
+    assert.equal(r.proposed.length, 1, 'the event is looked at once the model is back');
+    assert.equal(core.capture.proposals()[0]!.provider, 'local-model');
+  } finally {
+    await core.close();
+    await ollama.close();
+    await sp.close();
   }
 });
