@@ -114,10 +114,20 @@ export function toolState(tool, turnOpen) {
   return 'running';
 }
 
-// Why Nova is asking, in one sentence. Web tools ask only after mail has
-// been read in the conversation.
-const ONLINE = 'It has read your email in this conversation, so it checks with you before anything goes online.';
+// Why the ingest gate made a step ask: what it would carry out, and the outside source it follows.
+function guardLine(g) {
+  if (!g) return '';
+  const from = g.sources?.length ? ` It comes after reading ${g.sources.slice(0, 3).map((s) => `<code>${esc(s)}</code>`).join(', ')}.` : '';
+  const carries = g.matched?.length ? ` What it would send ${esc(g.matched[0].words)}.` : '';
+  const always = g.what ? ' After reading something from outside, Nova always asks first.' : '';
+  return `${carries}${from}${always}`;
+}
+
 function approvalBody(tool) {
+  return approvalWhat(tool) + guardLine(tool.guard);
+}
+
+function approvalWhat(tool) {
   const a = tool.args ?? {};
   const p = tool.preview ?? {};
   if (tool.name === 'gmail_draft') return `Nova wants to save this ${p.reply ? 'reply' : 'email'} as a draft in your Gmail. It won't be sent; you send it from Gmail when you're happy with it.`;
@@ -131,8 +141,9 @@ function approvalBody(tool) {
       : `Nova wants to set up ${p.once ? 'a reminder' : 'a schedule'}. It runs on its own and sends you ${p.once ? 'one report, then removes itself' : 'a report each time'}.`;
   }
   if (tool.name === 'schedule_remove') return `Nova wants to remove the schedule ${esc(p.name ?? tool.args?.id ?? '')}${p.when ? ` (${esc(p.when.replace(/^\w/, (c) => c.toLowerCase()))})` : ''}. It won't run again.`;
-  if (tool.name === 'web_fetch') return `Nova wants to open <code>${esc(host(a.url))}</code>. ${ONLINE}`;
-  if (tool.name === 'web_search') return `Nova wants to search the web for “${esc(a.query)}”. ${ONLINE}`;
+  if (tool.name === 'web_fetch') return `Nova wants to open <code>${esc(host(a.url))}</code>.`;
+  if (tool.name === 'web_search') return `Nova wants to search the web for “${esc(a.query)}”.`;
+  if (tool.name === 'write_file') return `Nova wants to change <code>${esc(a.path)}</code>, one of your standing files.`;
   const cmd = String(a.command ?? '');
   return `Nova wants to run ${cmd.includes('\n') || cmd.length > 72 ? 'this command' : `<code>${esc(cmd)}</code>`} in your workspace.`;
 }
@@ -219,6 +230,8 @@ export function renderNotes(notes, memory = new Map()) {
 // What Nova kept from this exchange, in the margin, linked to the Memory view.
 export function renderKept(ops, memory = new Map(), when = null) {
   return ops.filter((o) => o.ok && !o.existing).map((o) => {
+    // The ingest gate: memory from a conversation that read outside content waits for the person.
+    if (o.held) return `<p class="margin-note"><a class="margin-link" href="/memory#waiting">waiting for your OK</a>: this came after reading something from outside</p>`;
     if (o.op === 'forget') return '<p class="margin-note is-quiet">forgot something, as you asked</p>';
     const entry = memory.get(o.id);
     if (!entry) return '<p class="margin-note is-quiet">kept in memory, since forgotten</p>';
@@ -370,17 +383,32 @@ function memoryItem(e, titles, now) {
 </li>`;
 }
 
+// What a conversation that read outside content wanted kept: it waits here, out of every prompt,
+// until the person keeps or drops it (the ingest gate's memory guard).
+function waitingItem(c) {
+  const from = [...new Set((c.taint ?? []).map((x) => x.origin))].slice(0, 3).join(', ');
+  const what = c.op === 'forget' ? 'Forget one of your memories' : c.content;
+  return `<li class="memory-item" data-candidate="${esc(c.id)}"><p class="memory-text">${esc(what)}</p>
+<p class="memory-source">${c.op === 'note' ? 'A day note' : c.op === 'forget' ? 'A request' : 'A memory'} from a conversation that read ${esc(from || 'something from outside')}.</p>
+<div class="memory-actions"><button type="button" class="act" data-action="keep-candidate">${c.op === 'forget' ? 'Forget it' : 'Keep'}</button><button type="button" class="act" data-action="drop-candidate">${c.op === 'forget' ? 'Keep my memory' : 'Drop'}</button></div></li>`;
+}
+
 export function renderMemory(data, now = new Date()) {
   const sections = data?.sections ?? [];
   const days = data?.days ?? [];
+  const waiting = data?.candidates ?? [];
+  const held = waiting.length ? `<section class="memory-section" id="waiting" aria-labelledby="ms-waiting"><h2 class="memory-heading" id="ms-waiting">Waiting for your OK</h2>
+<p class="memory-kind">Nova read something from outside before it wanted to keep these, so they wait for you. Nova doesn't see them until you keep them.</p>
+<ul class="memory-list">${waiting.map(waitingItem).join('')}</ul></section>` : '';
   const count = sections.reduce((n, s) => n + s.entries.length, 0) + days.reduce((n, d) => n + d.entries.length, 0);
   if (!count) {
     return `<div class="empty memory-empty"><p class="empty-date">What Nova knows</p><p class="empty-line">Nothing kept yet.</p>
-<p class="memory-lede">As you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.</p></div>`;
+<p class="memory-lede">As you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.</p></div>${held}`;
   }
   const titles = data.titles ?? {};
   const out = [`<header class="memory-intro"><p class="empty-date">What Nova knows</p>
 <p class="memory-lede">Nova reads this before every reply. Change anything, or forget it.</p></header>`];
+  if (held) out.push(held);
   for (const s of sections) {
     const hid = `ms-${s.title.toLowerCase().replace(/\W+/g, '-')}`;
     out.push(`<section class="memory-section" aria-labelledby="${hid}"><h2 class="memory-heading" id="${hid}">${esc(s.title)}</h2>
@@ -417,6 +445,7 @@ function skillItem(s, gmail, installed) {
   return `<li class="skill${installed ? '' : ' is-available'}" id="s-${esc(s.id)}" data-id="${esc(s.id)}" tabindex="0">
   <div class="skill-head"><h3 class="skill-name">${esc(s.name)}</h3>${action}</div>
   <p class="skill-about">${esc(s.about || s.when)}</p>
+  ${installed && s.held ? `<p class="skill-needs is-warn">Held back: ${esc(s.held.join(', '))}. Nova won't use it until you turn it on.</p><div class="connection-actions"><button type="button" class="btn small" data-action="allow-skill">Turn it on</button></div>` : ''}
   ${installed ? skillNeeds(s, gmail) : ''}${installed && s.own ? `<p class="skill-needs">Added by you${s.files?.length ? `, with ${s.files.length} more file${s.files.length === 1 ? '' : 's'} in its folder` : ''}.</p>` : ''}
   <details class="skill-playbook"><summary>How Nova does it</summary><div class="prose">${renderMarkdown(s.body.replace(/^# .*\n+/, ''))}</div></details>
   ${tryIt}
