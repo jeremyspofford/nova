@@ -93,3 +93,13 @@ export function greeting(date = new Date(), name = '') {
   const part = h < 5 ? 'Good evening' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
   return name ? `${part}, ${name}` : part;
 }
+
+// The approval tier of an Era 2 tool step (NOVA-SPEC §6). Every one of these already asks first
+// (tier 2). Deleting something, or a command that looks irreversible, is tier 3: an explicit
+// confirm every time. The command check only ever adds friction; a command it misses still asks.
+const IRREVERSIBLE = /(^|[\s;&|(])(rm|rmdir|shred|unlink|dd|mkfs(\.\w+)?|truncate|wipefs)\s|\bgit\s+(push\b[^\n]*(--force|-f\b|--delete|\s:)|reset\s+--hard|clean\s+-\w*f|branch\s+-D|checkout\s+--\s|restore\b)|\bfind\b[^\n]*\s-delete\b|>\s*\/dev\/sd|\bdrop\s+(table|database)\b|\bchmod\s+-R\b|\bchown\s+-R\b/i;
+export function toolTier(name, args = {}) {
+  if (name === 'schedule_remove') return 3;
+  if (name === 'exec' && IRREVERSIBLE.test(` ${String(args?.command ?? '')}`)) return 3;
+  return 2;
+}

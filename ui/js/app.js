@@ -519,7 +519,8 @@ function afterRender() {
   if (card && !approvalsShown.has(card.dataset.tool)) {
     approvalsShown.add(card.dataset.tool);
     const typing = document.activeElement === el.input && el.input.value.trim();
-    if (!typing) card.querySelector('[data-action="allow"]').focus({ preventScroll: true });
+    // Tier 3 starts on the confirm box: Enter must never be enough on its own.
+    if (!typing) card.querySelector('[data-confirm], [data-action="allow"]').focus({ preventScroll: true });
   }
   for (const rec of el.thread.querySelectorAll('.record[data-tool]')) {
     if (approvalsShown.has(rec.dataset.tool) && rec.querySelector('.stamp')) {
@@ -658,12 +659,21 @@ async function regenerate() {
 
 async function decide(tool, decision, button) {
   const card = button?.closest('.approval');
+  // Tier 3: allowed only with the confirm box ticked, this time.
+  if (decision === 'allow' && card?.dataset.tier === '3' && !card.querySelector('[data-confirm]')?.checked) return;
   card?.querySelectorAll('button').forEach((b) => { b.disabled = true; });
   try { await post(`/api/sessions/${state.id}/approvals/${tool}`, { decision }); }
   catch (e) { card?.querySelectorAll('button').forEach((b) => { b.disabled = false; }); say(e.message); }
 }
 
 el.composer.addEventListener('submit', (e) => { e.preventDefault(); running() ? stop() : send(); });
+// A tier-3 step's confirm box unlocks its Allow button.
+el.thread.addEventListener('change', (e) => {
+  const box = e.target.closest?.('[data-confirm]');
+  if (!box) return;
+  const allow = box.closest('.approval')?.querySelector('[data-action="allow"]');
+  if (allow) allow.disabled = !box.checked;
+});
 el.input.addEventListener('input', () => { autosize(); saveDraft(); renderChrome(); });
 el.input.addEventListener('focus', renderChrome);
 el.input.addEventListener('blur', () => setTimeout(renderChrome, 0));

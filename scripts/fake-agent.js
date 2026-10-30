@@ -176,6 +176,11 @@ Prices are as the pages showed them today and can change. I haven't bought anyth
   const fact = sentence(third(original.replace(/^remember( that)?\s*/i, '')));
   const kind = /^(i prefer|i take|i like)/.test(msg) ? 'preference' : 'fact';
   await stream(`Got it. I'll remember that.\n\n<remember kind="${kind}">${fact}</remember>\n<note>Mentioned: ${fact}</note>`);
+} else if (msg.startsWith('clear out')) {
+  // An irreversible command: the approval asks for an explicit confirm (tier 3).
+  if (!result) await stream("I'll clear out the scratch folder.\n\n<tool_call name=\"exec\">{\"command\": \"rm -rf scratch\"}</tool_call>");
+  else if (result.includes('ok="false"')) await stream("Left it alone. Nothing was deleted.");
+  else await stream('The scratch folder is gone.');
 } else if (msg.startsWith('run') || msg.includes('git status')) {
   if (!result) {
     await stream("I'll check the working tree before standup.\n\n<tool_call name=\"exec\">{\"command\": \"git status --short --branch\"}</tool_call>");

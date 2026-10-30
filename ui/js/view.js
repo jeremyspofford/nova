@@ -3,7 +3,7 @@
 // reference always shows the real components. The PWA's own components are in components.js.
 import { escapeHtml as esc, renderMarkdown } from './markdown.js';
 import { orb, status } from './components.js';
-import { activityStatus } from './status.js';
+import { activityStatus, toolTier } from './status.js';
 
 export const icons = {
   send: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.5V4.5M5 9.5l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -163,13 +163,15 @@ function renderApproval(tool) {
   const change = tool.name.startsWith('gmail_') || tool.name.startsWith('schedule_');
   const yes = { gmail_draft: 'Save draft', schedule_set: tool.preview?.replaces ? 'Change it' : 'Set it up', schedule_remove: 'Remove it' }[tool.name] ?? (change ? 'Make the change' : 'Allow once');
   const verb = { gmail_draft: 'save', schedule_set: 'set it up', schedule_remove: 'remove it' }[tool.name] ?? (change ? 'make it' : 'allow');
-  return `<div class="approval approval-sheet" data-tier="2" role="group" aria-labelledby="ap-${esc(tool.id)}" data-tool="${esc(tool.id)}">
+  const tier = toolTier(tool.name, tool.args);
+  return `<div class="approval approval-sheet" data-tier="${tier}" role="group" aria-labelledby="ap-${esc(tool.id)}" data-tool="${esc(tool.id)}">
   <p class="sheet-kicker">${status('needs-you')}</p>
   <p class="approval-title" id="ap-${esc(tool.id)}">A small decision, when you're ready</p>
   <p class="approval-body">${approvalBody(tool)}</p>
   ${multi ? `<pre class="approval-cmd">${esc(cmd)}</pre>` : ''}${url ? `<pre class="approval-cmd">${esc(url)}</pre>` : ''}${approvalDetail(tool)}
+  ${tier === 3 ? `<p class="approval-body">${tool.name === 'exec' ? 'This command looks like it can’t be undone.' : 'This deletes something; it can’t be undone from here.'}</p><label class="confirm"><input type="checkbox" data-confirm="${esc(tool.id)}"> I understand, and I want Nova to do this.</label>` : ''}
   <div class="approval-actions">
-    <button type="button" class="btn primary" data-action="allow" data-tool="${esc(tool.id)}">${yes}</button>
+    <button type="button" class="btn primary" data-action="allow" data-tool="${esc(tool.id)}"${tier === 3 ? ' disabled' : ''}>${yes}</button>
     <button type="button" class="btn" data-action="deny" data-tool="${esc(tool.id)}">${change ? 'Not now' : 'Deny'}</button>
     <span class="keys" aria-hidden="true"><kbd>Enter</kbd> ${verb} · <kbd>Esc</kbd> ${change ? 'not now' : 'deny'}</span>
   </div>

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { LAYOUTS, POSTURES, asideOf, layoutOf, postureOf, resolve } from '../ui/js/layout.js';
 import { DESTINATIONS, placement, reachable, routeOf } from '../ui/js/nav.js';
-import { STATUS, activityStatus, greeting, label, needsApproval, orbState, statusOf } from '../ui/js/status.js';
+import { STATUS, activityStatus, greeting, label, needsApproval, orbState, statusOf, toolTier } from '../ui/js/status.js';
 
 // ---- layout ----------------------------------------------------------------------------
 
@@ -133,4 +133,16 @@ test('the greeting follows the hour', () => {
   assert.equal(greeting(new Date(2026, 9, 29, 8), 'Sam'), 'Good morning, Sam');
   assert.equal(greeting(new Date(2026, 9, 29, 14)), 'Good afternoon');
   assert.equal(greeting(new Date(2026, 9, 29, 21)), 'Good evening');
+});
+
+// Review finding: every Era 2 tool step was drawn as tier 2, so a deletion took one Enter.
+test('Era 2 tool steps: deletions and irreversible-looking commands are tier 3', () => {
+  assert.equal(toolTier('schedule_remove', { id: 'morning' }), 3);
+  for (const command of ['rm -rf build', 'cd x && rm notes.md', 'git push --force origin main', 'git push origin :old', 'git reset --hard HEAD~3', 'git clean -fdx', 'git branch -D topic', 'find . -name "*.tmp" -delete', 'dd if=/dev/zero of=/dev/sda', 'sqlite3 db "DROP TABLE notes"', 'chmod -R 777 .']) {
+    assert.equal(toolTier('exec', { command }), 3, command);
+  }
+  for (const command of ['git status', 'ls -la', 'npm test', 'git push origin main', 'grep -r "rm " src', 'cat format.md', 'echo firmware']) {
+    assert.equal(toolTier('exec', { command }), 2, command);
+  }
+  for (const name of ['schedule_set', 'gmail_draft', 'gmail_organize', 'web_fetch', 'write_file']) assert.equal(toolTier(name, {}), 2, name);
 });
