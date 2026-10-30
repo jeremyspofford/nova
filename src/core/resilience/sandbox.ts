@@ -39,6 +39,8 @@ export function sandboxEnv(home: string, extra: Record<string, string> = {}): Re
     // A closed port: a sandbox never reaches the person's model runtime.
     NOVA_OLLAMA_URL: 'http://127.0.0.1:9',
     ...extra,
+    // Loopback only, whatever else is passed: a sandbox is never reachable from another machine.
+    NOVA_HOST: '127.0.0.1',
   };
 }
 

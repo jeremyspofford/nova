@@ -9,6 +9,7 @@ import type { Db } from '../db.ts';
 import { UNSAVED_FROM, type Log, type Problem } from '../log.ts';
 import type { Route } from '../api.ts';
 import { CoreError } from '../errors.ts';
+import { allows } from '../mesh/access.ts';
 
 export interface PlaybookDef {
   id: string;
@@ -25,7 +26,7 @@ export const PLAYBOOKS: Readonly<Record<string, PlaybookDef>> = {
   // ---- the hub's own process (the supervisor, src/supervisor) ----
   'server-crashed': {
     id: 'server-crashed', title: 'Nova stopped unexpectedly',
-    repair: 'restart-server', automatic: 'The supervisor starts Nova again, waiting a little longer after each crash.',
+    repair: 'restart-server', automatic: 'The supervisor starts Nova again, waiting a little longer after each crash. This closes by itself once Nova is running again.',
     steps: ['Nothing to do if Nova stays up: work that was running is picked up again.', 'If it happens again, open the technical detail: it has the last lines Nova wrote before it stopped.'],
   },
   'safe-mode': {
@@ -38,7 +39,7 @@ export const PLAYBOOKS: Readonly<Record<string, PlaybookDef>> = {
   },
   'server-unresponsive': {
     id: 'server-unresponsive', title: 'Nova stopped answering',
-    repair: 'restart-server', automatic: 'The supervisor stops the process that no longer answers and starts Nova again.',
+    repair: 'restart-server', automatic: 'The supervisor stops the process that no longer answers and starts Nova again. This closes by itself once Nova is running again.',
     steps: ['Nothing to do if Nova answers again after the restart.', 'If it keeps happening, the technical detail says what the health check saw.'],
   },
   // ---- code releases ----
@@ -79,6 +80,15 @@ export const PLAYBOOKS: Readonly<Record<string, PlaybookDef>> = {
       'The latest backup couldn’t be restored as it should. Your live data is not affected.',
       'Run a new backup now from Health, then run the drill again.',
       'If the drill fails on a new backup too, the technical detail names the check that failed; keep your older backups until it passes.',
+    ],
+  },
+  'forget-owed': {
+    id: 'forget-owed', title: 'A forget is waiting for a backup folder',
+    automatic: 'Nova carries the forget into the backups there as soon as the folder is back, before it backs up, prunes or drills there, and closes this.',
+    steps: [
+      'You asked Nova to forget something while this backup folder wasn’t there, so the backups in it still hold it.',
+      'Plug in or mount the drive it is on: Nova cleans the backups there within a minute.',
+      'If you no longer use that folder or drive, delete the backups in it yourself (the folders named nova-backup-…).',
     ],
   },
   'backup-cleaning': {
@@ -141,6 +151,11 @@ export type Classifier = (p: Problem) => { playbook: string; subject: string | n
 
 const AUTO_TRIES = 3;
 const AUTO_SPACING_MS = 60_000;
+
+// Repairs Nova never makes by itself. Restarting the hub is the supervisor's to do when Nova
+// stops; a running Nova that restarts itself to "repair" a problem the supervisor already dealt
+// with only stops healthy work. The person may still ask (from the hub's screen or an approver).
+export const RESTARTS: ReadonlySet<string> = new Set(['restart-server']);
 
 export class Playbooks extends EventEmitter {
   #db: Db;
@@ -214,7 +229,8 @@ export class Playbooks extends EventEmitter {
     this.#put(problemId, { playbook, subject, repairs: JSON.stringify(repairs) });
     this.emit('change', { problem_id: problemId, playbook });
     // A safe repair starts at once (after the current step, so the problem is fully recorded).
-    if (PLAYBOOKS[playbook]?.repair && !done?.length) setImmediate(() => { void this.attempt(problemId, 'nova').catch(() => {}); });
+    const repair = PLAYBOOKS[playbook]?.repair;
+    if (repair && !RESTARTS.has(repair) && !done?.length) setImmediate(() => { void this.attempt(problemId, 'nova').catch(() => {}); });
   }
 
   view(problemId: number): PlaybookView | null {
@@ -241,6 +257,7 @@ export class Playbooks extends EventEmitter {
     if (!p || p.resolved_at) return { ok: true, said: 'Already dealt with.', repairs: JSON.parse(r.repairs) };
     const past = JSON.parse(r.repairs) as Repair[];
     if (by === 'nova') {
+      if (RESTARTS.has(def.repair)) return { ok: false, said: 'Nova never restarts itself as a repair: the supervisor does that when Nova stops.', repairs: past };
       const mine = past.filter((x) => x.by === 'nova');
       if (mine.length >= AUTO_TRIES) return { ok: false, said: 'Nova has tried this three times; it’s over to you.', repairs: past };
       const last = mine.at(-1);
@@ -279,7 +296,8 @@ export class Playbooks extends EventEmitter {
     const rows = this.#db.all<{ problem_id: number; playbook: string }>(
       `SELECT pp.problem_id, pp.playbook FROM problem_playbook pp JOIN problem p ON p.id = pp.problem_id WHERE p.resolved_at IS NULL`);
     for (const r of rows) {
-      if (!PLAYBOOKS[r.playbook]?.repair) continue;
+      const repair = PLAYBOOKS[r.playbook]?.repair;
+      if (!repair || RESTARTS.has(repair)) continue;
       await this.attempt(r.problem_id, 'nova').catch(() => {});
     }
   }
@@ -289,8 +307,13 @@ export class Playbooks extends EventEmitter {
       { method: 'GET', path: '/playbooks', summary: 'Every repair playbook: what each kind of problem is, the steps for you, and the repair Nova makes by itself where one is safe.', handle: () => Object.values(PLAYBOOKS) },
       { method: 'GET', path: '/problems/{id}/playbook', summary: 'A problem’s playbook: its steps, and every repair Nova tried, with how it went.', handle: ({ params }) => this.view(Number(params.id)) ?? (() => { throw new CoreError('not_found', 'That problem has no playbook.'); })() },
       {
-        method: 'POST', path: '/problems/{id}/repair', summary: 'Run a problem’s safe repair now. Only repairs that can’t change your data exist.',
-        handle: ({ params }) => this.attempt(Number(params.id), 'person'),
+        method: 'POST', path: '/problems/{id}/repair', summary: 'Run a problem’s safe repair now. Only repairs that can’t change your data exist. Restarting Nova is for the hub’s own screen or a device that may approve.',
+        handle: ({ params, who }) => {
+          const r = this.#row(Number(params.id));
+          const repair = r ? PLAYBOOKS[r.playbook]?.repair : undefined;
+          if (repair && RESTARTS.has(repair) && allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', 'Restarting Nova is for the hub’s own screen or a device that may approve.');
+          return this.attempt(Number(params.id), 'person');
+        },
       },
     ];
   }

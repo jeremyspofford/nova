@@ -88,9 +88,11 @@ test('a backup whose database passes its hash but fails SQLite’s own check is 
     writeFileSync(db, bytes);
     const m = JSON.parse(readFileSync(join(r.path!, 'manifest.json'), 'utf8'));
     const { sha256File } = await import('../../src/core/index.ts');
+    const { writeManifest, SEAL_NAME } = await import('../../src/core/resilience/backup.ts');
     m.db.sha256 = sha256File(db);
     m.db.bytes = bytes.length;
-    writeFileSync(join(r.path!, 'manifest.json'), JSON.stringify(m));
+    // Sealed again as Nova would, so the backup still counts as Nova's: only SQLite can tell.
+    writeManifest(r.path!, m, Buffer.from(c.vault.get(SEAL_NAME)!, 'base64'));
     const d = await c.resilience.drill();
     assert.equal(d.ok, false);
     const bad = d.checks.filter((x) => !x.ok).map((x) => x.name);

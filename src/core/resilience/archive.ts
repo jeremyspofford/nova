@@ -7,7 +7,7 @@
 //   "NOVABK1\n" · u32 header length · header JSON · ciphertext · 16-byte tag
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { closeSync, fstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, rmSync, statSync, writeSync } from 'node:fs';
-import { dirname, join, normalize, sep } from 'node:path';
+import { dirname, isAbsolute, join, normalize, sep } from 'node:path';
 
 const MAGIC = Buffer.from('NOVABK1\n');
 const CHUNK = 1 << 20;
@@ -15,6 +15,15 @@ const CHUNK = 1 << 20;
 export interface ArchiveHeader { v: 1; id: string; seq: number; at: string; alg: 'aes-256-gcm'; nonce: string; key_fp: string }
 
 export const keyFingerprint = (key: Buffer) => createHash('sha256').update(key).digest('hex').slice(0, 16);
+
+// A path read from a backup (an archive entry, a manifest's file list), as a path inside it. One
+// that would reach outside (“..”, absolute) is refused: whoever can write the backup folder must not
+// be able to make a restore or a clean write anywhere else.
+export function safeRel(path: string, what = 'The backup’s manifest'): string {
+  const rel = normalize(path);
+  if (!path || !rel || rel === '.' || isAbsolute(path) || rel.startsWith(sep) || rel.split(sep).includes('..') || path.includes('\0')) throw new Error(`${what} names a path outside the backup: ${path}`);
+  return rel;
+}
 
 // ---- ustar ------------------------------------------------------------------------------------
 
@@ -146,7 +155,7 @@ export function decryptTo(file: string, key: Buffer, outDir: string): ArchiveHea
   try {
     const h = headerOf(fd);
     header = h.header;
-    if (header.key_fp !== keyFingerprint(key)) throw new Error('This encrypted backup was made with a different key than the one in the vault.');
+    if (header.key_fp !== keyFingerprint(key)) throw new Error('This encrypted backup was made with a different key than this one.');
     const size = fstatSync(fd).size;
     if (size < h.start + 16) throw new Error('This encrypted backup is cut short.');
     const tag = Buffer.alloc(16);
@@ -201,8 +210,7 @@ function untar(tarFile: string, outDir: string): void {
       const path = prefix ? `${prefix}/${name}` : name;
       const size = parseInt(str(124, 12).trim() || '0', 8);
       const type = String.fromCharCode(block[156] ?? 48);
-      const rel = normalize(path.replace(/\/$/, ''));
-      if (!rel || rel.startsWith('..') || rel.startsWith(sep) || rel.split(sep).includes('..')) throw new Error(`The archive names a path outside the backup: ${path}`);
+      const rel = safeRel(path.replace(/\/$/, ''), 'The archive');
       const dest = join(root, rel);
       if (type === '5') mkdirSync(dest, { recursive: true });
       else if (type === '0' || type === '\0') {

@@ -2,9 +2,9 @@
 // problems Nova knows how to deal with, the clock watch, and what the supervisor says. The pieces:
 // backup.ts (and archive.ts for the encrypted copy), drill.ts, sandbox.ts, playbooks.ts, clock.ts,
 // link.ts (the supervisor's side is src/supervisor).
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { Db, Migration } from '../db.ts';
 import type { Log, Problem } from '../log.ts';
@@ -18,8 +18,9 @@ import type { Brief, Report } from '../envelope.ts';
 import type { Route, Who } from '../api.ts';
 import { ENVELOPE_VERSION } from '../envelope.ts';
 import { CoreError } from '../errors.ts';
-import { BackupError, DEFAULT_KEEP, KEY_NAME, NightlyBackups, newKey, sha256File, type BackupSettings, type FailureKind } from './backup.ts';
-import { drill, type DrillResult } from './drill.ts';
+import { BackupError, DEFAULT_KEEP, KEY_NAME, NightlyBackups, SEAL_NAME, folderProblem, formatRecoveryKey, keyFingerprint, newKey, parseRecoveryKey, sha256File, type BackupSettings, type FailureKind, type FolderKind } from './backup.ts';
+import { drill, forgottenIn, type DrillCheck, type DrillResult } from './drill.ts';
+import { dropScratch, freeScratch, makeScratch } from './scratch.ts';
 import { ClockWatch, duration, type Jump } from './clock.ts';
 import { Playbooks } from './playbooks.ts';
 import type { SupervisorLink } from './link.ts';
@@ -54,6 +55,9 @@ const inside = (path: string, root: string) => {
   return r === '' || (!r.startsWith(`..${sep}`) && r !== '..' && !isAbsolute(r));
 };
 
+// Problems the supervisor tells a server it started again: a running server closes them.
+const UP_AGAIN: ReadonlySet<string> = new Set(['server-crashed', 'server-unresponsive']);
+
 export class Resilience {
   readonly playbooks: Playbooks;
   readonly nightly: NightlyBackups;
@@ -67,7 +71,11 @@ export class Resilience {
     this.#o = o;
     this.playbooks = new Playbooks({ db: o.db, log: o.log, now: o.now });
     this.clock = new ClockWatch({ now: o.now, ...(o.monotonic ? { monotonic: o.monotonic } : {}) });
-    this.nightly = new NightlyBackups({ db: o.db, home: o.home, log: o.log, version: o.version, now: o.now, settings: () => this.settings(), key: () => this.#key() });
+    this.nightly = new NightlyBackups({
+      db: o.db, home: o.home, log: o.log, version: o.version, now: o.now, settings: () => this.settings(), key: () => this.#key(),
+      seal: () => { try { return this.#seal(); } catch { return null; } },
+      owed: (folder, kind, owes) => this.#owed(folder, kind, owes),
+    });
     // Every forget reaches the nightly backups and their encrypted copies too.
     o.backups.also((table, ids, words) => this.nightly.forget(table, ids, words));
     this.worker = this.#makeWorker();
@@ -92,6 +100,8 @@ export class Resilience {
       return null;
     });
     o.supervisor?.onProblem((sp) => {
+      // A crash or a hang the supervisor dealt with is told to the server it started again; that
+      // server closes it at its next sweep (it is running), and never restarts itself for it.
       try { this.playbooks.open(sp.source, sp.said, sp.playbook, { subject: sp.subject ?? null, ...(sp.detail ? { detail: sp.detail } : {}), ...(sp.repairs ? { repairs: sp.repairs } : {}) }); } catch (e) {
         o.log.warn('resilience', 'A problem from the supervisor couldn’t be recorded.', { error: (e as Error).message });
       }
@@ -106,7 +116,7 @@ export class Resilience {
     return { target: typeof s.target === 'string' && s.target ? s.target : null, keep, encrypted_target: typeof s.encrypted_target === 'string' && s.encrypted_target ? s.encrypted_target : null };
   }
 
-  setSettings(body: Record<string, unknown>): BackupSettings {
+  setSettings(body: Record<string, unknown>): BackupSettings & { recovery_key?: string } {
     const folder = (v: unknown, what: string): string | null => {
       if (v === null) return null;
       if (typeof v !== 'string' || !v.trim() || !isAbsolute(v.trim())) throw new CoreError('validation', `${what} is a folder’s full path (or null for none).`);
@@ -115,6 +125,8 @@ export class Resilience {
       try { dir = statSync(p).isDirectory(); } catch { /* not there */ }
       if (!dir) throw new CoreError('validation', `${p} isn’t a folder Nova can see. Make it first (or plug in its drive): Nova never creates a backup folder itself.`);
       if (inside(p, this.#o.home) || inside(this.#o.home, p)) throw new CoreError('validation', `${what} can’t be inside Nova’s home or contain it: a backup would contain itself.`);
+      const unsafe = folderProblem(p);
+      if (unsafe) throw new CoreError('validation', unsafe);
       return p;
     };
     const next = { ...this.settings() };
@@ -127,12 +139,27 @@ export class Resilience {
     if (next.encrypted_target && next.encrypted_target === next.target) throw new CoreError('validation', 'The encrypted copy goes to a second folder, not the backup folder itself.');
     if (next.encrypted_target && !next.target) throw new CoreError('validation', 'Choose the backup folder first; the encrypted copy is made from each backup.');
     // The encrypted copy's key goes into the vault now, so a vault that can't take it says so here.
-    if (next.encrypted_target) this.#key();
+    const key = next.encrypted_target ? this.#key() : null;
+    this.#seal();
     this.#o.profile.set('backups', 'target', next.target, 'settings');
     this.#o.profile.set('backups', 'encrypted_target', next.encrypted_target, 'settings');
     this.#o.profile.set('backups', 'keep', next.keep, 'settings');
     this.#schedules(!!next.target);
+    // The encrypted copy is only worth having if it opens without this machine: its key is the
+    // person's recovery key, shown here once (and again only at tier 3).
+    if (key && this.#o.profile.get<string>('backups', 'recovery_shown') !== keyFingerprint(key)) {
+      this.#o.profile.set('backups', 'recovery_shown', keyFingerprint(key), 'settings');
+      return { ...next, recovery_key: formatRecoveryKey(key) };
+    }
     return next;
+  }
+
+  // The recovery key again (tier 3: the hub's own screen, confirmed every time).
+  revealRecoveryKey(): { recovery_key: string; said: string } {
+    if (!this.settings().encrypted_target && !this.#o.vault.get(KEY_NAME)) throw new CoreError('conflict', 'There is no encrypted copy yet, so there is no recovery key.');
+    const key = this.#key();
+    this.#o.profile.set('backups', 'recovery_shown', keyFingerprint(key), 'settings');
+    return { recovery_key: formatRecoveryKey(key), said: 'Keep this somewhere other than this computer. With it, the encrypted copies open on any machine; without it, they can’t be opened if this one is lost.' };
   }
 
   // The nightly backup and the weekly drill, as heartbeat rules everyone can see and pause.
@@ -211,21 +238,33 @@ export class Resilience {
 
   // Runs the drill now, records it, and returns its checks. A passed drill closes an open
   // drill-failed problem; a failed one opens it (through the ledger's failure).
-  async drill(o: { source?: 'folder' | 'encrypted'; taskId?: string } = {}): Promise<DrillResult & { id: string }> {
+  //
+  // The encrypted copy is opened with the recovery key, as the person would on another machine:
+  // the one they give (`recoveryKey`), or the one they were shown, never just whatever key the
+  // vault holds now. Every kept backup (or copy) is checked for forgotten things, not only the
+  // one restored.
+  async drill(o: { source?: 'folder' | 'encrypted'; taskId?: string; recoveryKey?: string } = {}): Promise<DrillResult & { id: string }> {
     const id = randomUUID();
     let dir: string | null = null;
     let scratch: string | null = null;
+    const opened: DrillCheck[] = [];
+    // Forgets owed to a folder that is back go in first: the drill checks what is really there.
+    this.nightly.applyOwed();
     try {
+      let key: Buffer | null = null;
       if (o.source === 'encrypted') {
         const latest = this.nightly.encrypted()[0];
         if (latest) {
-          scratch = mkdtempSync(join(tmpdir(), 'nova-drill-open-'));
+          const fail = (said: string) => this.#record(id, { ok: false, backup: latest.path, source: 'encrypted', checks: [{ name: 'decrypt', ok: false, said }] }, o.taskId);
+          let how: string;
+          try { ({ key, how } = this.#recoveryKey(o.recoveryKey)); } catch (e) { return fail((e as Error).message); }
+          scratch = makeScratch('drill-open');
           try {
-            this.nightly.decrypt(latest.path, join(scratch, 'backup'));
+            this.nightly.decrypt(latest.path, join(scratch, 'backup'), key);
             dir = join(scratch, 'backup');
+            opened.push({ name: 'decrypt', ok: true, said: `Opened ${latest.path} with ${how}, as you would on another machine.` });
           } catch (e) {
-            const r: DrillResult = { ok: false, backup: latest.path, source: 'encrypted', checks: [{ name: 'decrypt', ok: false, said: `The encrypted copy couldn’t be opened: ${(e as Error).message}` }] };
-            return this.#record(id, r, o.taskId);
+            return fail(`The encrypted copy couldn’t be opened with ${how}: ${(e as Error).message}`);
           }
         }
       } else dir = this.nightly.complete()[0]?.path ?? null;
@@ -234,10 +273,61 @@ export class Resilience {
         ...(this.#o.drill?.root ? { root: this.#o.drill.root } : {}), ...(this.#o.drill?.env ? { sandboxEnv: this.#o.drill.env } : {}), ...(this.#o.drill?.timeoutMs ? { timeoutMs: this.#o.drill.timeoutMs } : {}),
       });
       if (o.source === 'encrypted' && r.backup) r.backup = this.nightly.encrypted()[0]?.path ?? r.backup;
+      if (dir) r.checks.push(this.#forgottenEverywhere(o.source === 'encrypted' ? key : null));
+      r.checks.unshift(...opened);
+      r.ok = r.checks.every((c) => c.ok);
       return this.#record(id, r, o.taskId);
     } finally {
-      if (scratch) rmSync(scratch, { recursive: true, force: true });
+      if (scratch) dropScratch(scratch);
     }
+  }
+
+  // The key that opens the encrypted copies, as the person holds it: the recovery key they give,
+  // or the one they were shown (checked by its fingerprint, so a vault whose key changed since
+  // can't make the drill pass with a key the person doesn't have).
+  #recoveryKey(given?: string): { key: Buffer; how: string } {
+    if (given !== undefined) return { key: parseRecoveryKey(given), how: 'the recovery key you gave' };
+    const shown = this.#o.profile.get<string>('backups', 'recovery_shown');
+    const stored = this.#o.vault.get(KEY_NAME);
+    if (!stored) throw new Error('There is no recovery key: the encrypted copies were never set up on this Nova.');
+    const key = parseRecoveryKey(formatRecoveryKey(Buffer.from(stored, 'base64')));
+    if (!shown || shown !== keyFingerprint(key)) throw new Error('The encrypted copies are made with a key you haven’t been shown, so they couldn’t be opened if this computer were lost. Show the recovery key on the hub’s screen (POST /api/v1/backups/recovery-key) and keep it safe, then run the drill again.');
+    return { key, how: 'the recovery key you were shown' };
+  }
+
+  // Every kept backup in the folder (or every encrypted copy, opened with the recovery key) holds
+  // nothing the live Nova forgot.
+  #forgottenEverywhere(key: Buffer | null): DrillCheck {
+    const bad: string[] = [];
+    let n = 0;
+    const look = (name: string, db: string) => {
+      n++;
+      const d = new DatabaseSync(db, { readOnly: true });
+      try {
+        const f = forgottenIn(d, this.#o.db);
+        if (f.memories + f.capture) bad.push(`${name} holds ${f.memories + f.capture} forgotten ${f.memories + f.capture === 1 ? 'item' : 'items'}`);
+      } finally {
+        d.close();
+      }
+    };
+    try {
+      if (key) {
+        for (const c of this.nightly.encrypted()) {
+          const scratch = makeScratch('drill-open');
+          try {
+            this.nightly.decrypt(c.path, join(scratch, 'backup'), key);
+            look(c.path, join(scratch, 'backup', 'nova.db'));
+          } catch (e) {
+            bad.push(`${c.path} couldn’t be opened to check (${(e as Error).message})`);
+          } finally {
+            dropScratch(scratch);
+          }
+        }
+      } else for (const b of this.nightly.complete()) look(b.path, join(b.path, 'nova.db'));
+    } catch (e) {
+      bad.push(`Nova couldn’t read a kept backup: ${(e as Error).message}`);
+    }
+    return { name: 'forgotten-everywhere', ok: !bad.length, said: bad.length ? `${bad.join('; ')}.` : `None of the ${n} kept ${key ? 'encrypted copies' : 'backups'} holds anything you asked Nova to forget.` };
   }
 
   #record(id: string, r: DrillResult, taskId?: string): DrillResult & { id: string } {
@@ -288,14 +378,11 @@ export class Resilience {
     }
   }
 
-  // Nova's own leftovers only: sandbox and drill copies in the temporary folder it made.
+  // Nova's own leftovers only: scratch this process made and no longer uses, and scratch of Nova
+  // processes that have stopped. Never a folder another running process is using (scratch.ts).
   async #freeScratch() {
-    let n = 0;
-    for (const e of readdirSync(tmpdir())) {
-      if (!/^nova-(drill|drill-open|forget|sandbox)-/.test(e)) continue;
-      try { rmSync(join(tmpdir(), e), { recursive: true, force: true }); n++; } catch { /* in use */ }
-    }
-    return { ok: true, said: n ? `Deleted ${n} of Nova’s own scratch folders.` : 'Nova had no scratch of its own to delete.' };
+    const n = freeScratch().deleted.length;
+    return { ok: true, said: n ? `Deleted ${n} of Nova’s own leftover scratch folders.` : 'Nova had no leftover scratch of its own to delete.' };
   }
 
   // ---- the clock ----------------------------------------------------------------------------
@@ -354,6 +441,23 @@ export class Resilience {
     return Buffer.from(k, 'base64');
   }
 
+  #seal(): Buffer {
+    const v = this.#o.vault;
+    let k = v.get(SEAL_NAME);
+    if (!k) { k = newKey().toString('base64'); v.put(SEAL_NAME, k); }
+    return Buffer.from(k, 'base64');
+  }
+
+  // A folder owes forgets (it isn't there): said plainly, one problem per folder, closed once
+  // they are carried in.
+  #owed(folder: string, kind: FolderKind, owes: boolean): void {
+    const open = this.playbooks.openFor('forget-owed', folder);
+    if (!owes) { if (open) this.playbooks.settle(open.id, `The backups in ${folder} are cleaned of what you asked Nova to forget.`); return; }
+    if (open) return;
+    const what = kind === 'folder' ? 'backup folder' : 'folder for the encrypted copies';
+    this.playbooks.open('backups', `You asked Nova to forget something, but the ${what} ${folder} isn’t there (a drive unplugged?), so the backups in it still hold it. Nova owes that folder the forget and carries it in as soon as the folder is back, before it backs up, prunes or drills there.`, 'forget-owed', { subject: folder });
+  }
+
   // What Health shows: the supervisor, releases, backups and the last drill.
   view() {
     const s = this.settings();
@@ -373,6 +477,10 @@ export class Resilience {
         last_ok: lastOk,
         count: complete.length,
         encrypted: s.encrypted_target ? this.nightly.encrypted().length : null,
+        // Named like Nova's backups, but not made (or changed since) by this Nova: ignored.
+        strays: this.nightly.strays(),
+        // Forgets waiting for a folder that isn't there.
+        owed: this.nightly.owedView(),
         schedule: { nightly: NIGHTLY.cron, drill: DRILL.cron },
       },
       drill: drills[0] ?? null,
@@ -400,10 +508,21 @@ export class Resilience {
     };
     return [
       { method: 'GET', path: '/resilience', summary: 'Keeping Nova running: the supervisor, releases (current, previous, a canary in progress), backups and the last restore drill.', handle: () => this.view() },
-      { method: 'GET', path: '/backups', summary: 'Backups: the settings, recent runs, the backups in the folder and the encrypted copies.', handle: () => ({ settings: this.settings(), runs: this.nightly.runs(), complete: this.nightly.complete().map((b) => ({ path: b.path, ...b.manifest, files: b.manifest.files.length })), encrypted: this.nightly.encrypted(), drills: this.drills() }) },
+      { method: 'GET', path: '/backups', summary: 'Backups: the settings, recent runs, the backups in the folder and the encrypted copies, anything there Nova didn’t make (strays), and forgets owed to a folder that isn’t there.', handle: () => ({ settings: this.settings(), runs: this.nightly.runs(), complete: this.nightly.complete().map((b) => ({ path: b.path, ...b.manifest, files: b.manifest.files.length })), encrypted: this.nightly.encrypted(), strays: this.nightly.strays(), owed: this.nightly.owedView(), drills: this.drills() }) },
       {
-        method: 'PUT', path: '/backups/settings', summary: 'Where backups go (a folder that must already exist, outside Nova’s home), how many to keep, and a second folder for an encrypted copy (AES-256-GCM, key in the vault). Setting a folder starts the nightly backup and the weekly drill.',
+        // Where copies of everything go is not any paired phone's to change: an approver or the
+        // hub's own screen (tier 2).
+        method: 'PUT', path: '/backups/settings', access: 'approver', summary: 'Where backups go (a folder of yours that must already exist, outside Nova’s home, that no one else can write), how many to keep, and a second folder for an encrypted copy (AES-256-GCM). Setting up the encrypted copy shows its recovery key once. Setting a folder starts the nightly backup and the weekly drill. An approver or the hub’s own screen only.',
         body: '{target?, keep?, encrypted_target?}', handle: ({ body }) => this.setSettings(body),
+      },
+      {
+        method: 'POST', path: '/backups/recovery-key', summary: 'Show the encrypted copies’ recovery key again (tier 3: {confirm: true}, the hub’s own screen only). It opens them on any machine, without this one’s vault.',
+        body: '{confirm}',
+        handle: ({ body, who }) => {
+          if (who.principal.kind !== 'console') throw new CoreError('forbidden', 'The recovery key is shown on the hub’s own screen only.');
+          if (body.confirm !== true) throw new CoreError('validation', 'Showing the recovery key again needs your explicit confirmation every time (confirm: true).');
+          return this.revealRecoveryKey();
+        },
       },
       { method: 'POST', path: '/backups', status: 202, summary: 'Back up now, as a ledger task.', handle: () => this.request('backup') },
       { method: 'POST', path: '/backups/drill', status: 202, summary: 'Run the restore drill now, as a ledger task. {source: encrypted} drills the encrypted copy.', body: '{source?}', handle: ({ body }) => this.request('drill', body.source === 'encrypted' ? { source: 'encrypted' } : {}) },
@@ -439,6 +558,12 @@ export class Resilience {
   // retries of repairs.
   async sweep(): Promise<void> {
     this.checkClock();
+    // A crash or a hang the supervisor dealt with: this Nova is running, so it is over.
+    for (const pb of UP_AGAIN) {
+      for (let p = this.playbooks.openFor(pb, null); p; p = this.playbooks.openFor(pb, null)) this.playbooks.settle(p.id, 'Nova is running again.');
+    }
+    // A backup folder that is back gets the forgets it owes.
+    try { this.nightly.applyOwed(); } catch (e) { this.#o.log.warn('resilience', 'Owed forgets couldn’t be carried in yet.', { error: (e as Error).message }); }
     for (const w of this.#watches) await w().catch((e) => this.#o.log.warn('resilience', 'A health watch stumbled.', { error: (e as Error).message }));
     await this.playbooks.sweep();
   }
