@@ -45,6 +45,7 @@ import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './model
 import { secretName } from './providers/types.ts';
 import { Resilience } from './resilience/index.ts';
 import { FactoryReset } from './resilience/reset.ts';
+import { ensureMark } from './resilience/home-mark.ts';
 import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
@@ -107,6 +108,7 @@ export type { Sandbox, ProbeResult } from './resilience/sandbox.ts';
 export { restoreInto, backupFiles, sha256File, openEncrypted } from './resilience/backup.ts';
 // Factory reset (M7 amendment §2): finished at start, before the database opens (server.js too).
 export { RESET_MARKER, RESET_REPORT, finishReset, homeEntries } from './resilience/reset.ts';
+export { HOME_MARK, ensureMark } from './resilience/home-mark.ts';
 export type { ResetReport } from './resilience/reset.ts';
 export { makeScratch, dropScratch } from './resilience/scratch.ts';
 export type { Manifest as BackupManifest } from './resilience/backup.ts';
@@ -179,6 +181,8 @@ export function createCore(o: CoreOptions) {
   // A restore or a factory reset staged before the last stop is applied first, before the database
   // opens; a checkpoint stopped part-way is dropped. A reset that can't finish throws: a half-reset
   // Nova never runs.
+  // Nova's mark on its home (home-mark.ts): written when the folder is clearly Nova's.
+  if (!o.sandbox) ensureMark(o.home, { now });
   const staged = o.sandbox ? null : finishStaged(o.home, { vaultAt: (home) => new Vault({ home, ...(o.vault ?? {}) }), now, reset: { ...(o.vault ? { vault: o.vault } : {}), ...(o.reset?.step ? { step: o.reset.step } : {}), now } });
   if (!o.sandbox) dropPartials(o.home);
   const db = new Db(join(o.home, 'nova.db'));
@@ -425,7 +429,9 @@ export function createCore(o: CoreOptions) {
     home: o.home, db, log, version: o.version, now, vault, nightly: keep.nightly, memory, devices, access, spokes, role,
     emit: (event, data) => bus.emit('event', event, data),
     // Restart in place (resilience/restart.ts): the next start finishes the wipe.
-    restarter, restorePending: () => stagedPending(o.home), stopWork,
+    restarter, restorePending: () => stagedPending(o.home),
+    // The hub's own work stops too (the heartbeat, so no nightly backup starts), then the queue.
+    stopWork: async (ms) => { stopHub(); await stopWork(ms); },
     ...(o.reset?.tellMs ? { tellMs: o.reset.tellMs } : {}),
   });
   wireRepairs(keep.playbooks, { ledger, providers, models, connectors, role, spokes, devices });

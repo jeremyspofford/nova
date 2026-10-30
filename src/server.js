@@ -46,7 +46,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   // A factory reset staged before the last stop (M7 amendment §2) finishes before anything touches
   // the home, seeding included, so a reset home is seeded fresh. (A staged restore is applied by the
   // core, with its options.) It throws when it can't finish: a half-reset Nova never runs.
-  if (process.env.NOVA_SANDBOX !== '1') finishReset(config.home);
+  if (process.env.NOVA_SANDBOX !== '1') finishReset(config.home, { leaveUnverified: true });
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
   // The core (src/core): database, Work Ledger, profile, identity, setup, extensions, /api/v1.
   const { version } = JSON.parse(readFileSync(join(config.root, 'package.json'), 'utf8'));

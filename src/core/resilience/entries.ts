@@ -52,8 +52,9 @@ export function isNovaEntry(name: string): boolean {
 }
 
 // The top-level entries of a home that aren't Nova's, sorted: left exactly as they are.
+// Nova's mark on its home (home-mark.ts) is neither: it stays, and is never copied or swapped.
 export function foreignEntries(home: string): string[] {
   let names: string[] = [];
   try { names = readdirSync(home); } catch { return []; }
-  return names.filter((n) => !isNovaEntry(n)).sort();
+  return names.filter((n) => !isNovaEntry(n) && n !== '.nova-home' && n !== '.nova-home.tmp').sort();
 }

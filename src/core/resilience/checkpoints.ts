@@ -578,7 +578,7 @@ export interface FinishOptions {
 // Returns what was applied (or null) and any problem to tell the person.
 export function finishStaged(home: string, o: FinishOptions = {}): { restored: RestoreMarker | null; problems: string[] } {
   const problems: string[] = [];
-  if (finishReset(home, o.reset)) return { restored: null, problems };
+  if (finishReset(home, { ...o.reset, problem: (p) => problems.push(p) })) return { restored: null, problems };
   const m = readMarker(home);
   if (!m) {
     // A staging that never got its marker (stopped while copying, or while being dropped): nothing

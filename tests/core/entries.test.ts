@@ -29,7 +29,8 @@ test('Nova’s own top-level entries, by name; everything else in the home is fo
     mkdirSync(join(home, 'notes-of-mine'));
     // Everything a started core wrote is Nova’s; only what the person put there is foreign.
     assert.deepEqual(foreignEntries(home), ['notes-of-mine', 'proxy.js']);
-    assert.deepEqual(readdirSync(home).filter((n) => !isNovaEntry(n)).sort(), ['notes-of-mine', 'proxy.js']);
+    // Nova's mark on its home (.nova-home) is neither: never copied, swapped or erased (home-mark.ts).
+    assert.deepEqual(readdirSync(home).filter((n) => !isNovaEntry(n) && n !== '.nova-home').sort(), ['notes-of-mine', 'proxy.js']);
   } finally {
     await c.close();
   }

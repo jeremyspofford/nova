@@ -34,7 +34,7 @@ import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import { cleanDbFile } from '../backups.ts';
 import { CoreError } from '../errors.ts';
-import { decryptTo, encryptDir, keyFingerprint, readHeader, safeRel } from './archive.ts';
+import { decryptTo, encryptDir, keyFingerprint, readHeader, safeRel, verifyFile } from './archive.ts';
 import { dropScratch, makeScratch } from './scratch.ts';
 
 export interface BackupSettings { target: string | null; keep: number; encrypted_target: string | null }
@@ -89,6 +89,7 @@ const SKIP_TOP: Record<string, string> = {
   'nova.pid': 'which process runs this home',
   checkpoints: 'checkpoints stay on this machine and are restore points, not backups',
   'factory-reset.json': 'a factory reset in progress acts on this home only',
+  '.nova-home': 'Nova’s mark on this home, with the key that seals a reset, stays here',
 };
 const SKIP_FILE: Record<string, string> = {
   'vault/key': 'the vault’s key never leaves this machine',
@@ -297,6 +298,11 @@ export class NightlyBackups {
     }
     const r = this.#scan(folder);
     return { found: r.found.map((f) => ({ path: f.path, seq: f.seq, seal: f.manifest.seal ?? null })), strays: r.strays };
+  }
+
+  // Whether an encrypted copy opens under the backup key (its tag checks out), without unpacking it.
+  authentic(file: string): boolean {
+    try { return verifyFile(file, this.#o.key()); } catch { return false; }
   }
 
   // Whether a folder is there to act on (the rule forgetting uses: see #reachable).

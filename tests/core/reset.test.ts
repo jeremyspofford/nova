@@ -7,9 +7,11 @@
 // Throwaway homes only: every home here is a fresh temp folder passed explicitly.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
-import { RESET_MARKER, RESET_REPORT, finishReset, stagedPending, type KeyStore } from '../../src/core/index.ts';
+import { HOME_MARK, RESET_MARKER, RESET_REPORT, ensureMark, finishReset, stagedPending, type KeyStore } from '../../src/core/index.ts';
 import { open, world } from './resilience-support.ts';
 import { call, enroll, hub } from './mesh-support.ts';
 
@@ -253,7 +255,36 @@ test('a restart that fails: the reset finishes when Nova starts next, said plain
   }
 });
 
-test('a marker that changed since it was staged is never acted on: Nova doesn’t start, and nothing is erased', async () => {
+// A marker Nova didn't write is never acted on (review finding 1): Nova starts as it was, says so,
+// and keeps the file aside. Forged (its plain sha256 recomputed, as anyone could), changed, or junk.
+const problemsOf = (c: ReturnType<typeof open>) => c.log.problems({ open: true }).map((p) => p.message);
+const asideIn = (home: string) => readdirSync(home).filter((n) => n.startsWith(`${RESET_MARKER}.set-aside-`));
+
+test('a forged reset marker (one Nova didn’t seal) erases nothing: Nova starts as it was, says so, and keeps it aside', async () => {
+  const w = world('nova-reset-forged-');
+  const c = open(w.home);
+  c.memory.remember({ kind: 'fact', content: WORDS, recorded_by: 'person' });
+  liveIn(w.home);
+  const id = c.mesh.identity.id;
+  await c.close();
+  // What a file write into the home could make: every field right, and a plain sha256 over them.
+  const forged: Record<string, unknown> = { v: 1, id: '00000000-0000-4000-8000-000000000000', kind: 'hub', home: w.home, staged_at: '2026-10-30T00:00:00.000Z', version: '0.1.0', vault_ids: [], own: [], backups: [], strays: [], unreachable: [], devices: null, export: null };
+  forged.sum = createHash('sha256').update(JSON.stringify(forged)).digest('hex');
+  writeFileSync(join(w.home, RESET_MARKER), JSON.stringify(forged));
+  const n = open(w.home);
+  try {
+    assert.equal(n.mesh.identity.id, id, 'the same Nova, nothing erased');
+    assert.equal(n.memory.list()[0]?.content, WORDS);
+    assert.ok(existsSync(join(w.home, 'sessions', 's1.jsonl')));
+    assert.ok(!existsSync(join(w.home, RESET_MARKER)));
+    assert.equal(asideIn(w.home).length, 1, 'kept aside for the person to see');
+    assert.ok(problemsOf(n).some((m) => /found a note asking to erase it that Nova didn’t write/.test(m)), problemsOf(n).join(' | '));
+  } finally {
+    await n.close();
+  }
+});
+
+test('a marker changed since it was staged, or junk, is never acted on either: a normal start, said, kept aside', async () => {
   const w = world('nova-reset-tamper-');
   const c = open(w.home);
   c.memory.remember({ kind: 'fact', content: WORDS, recorded_by: 'person' });
@@ -263,7 +294,112 @@ test('a marker that changed since it was staged is never acted on: Nova doesn’
   const m = JSON.parse(readFileSync(file, 'utf8'));
   m.backups.push({ path: join(w.dir, 'elsewhere'), folder: w.dir, kind: 'folder', check: null });
   writeFileSync(file, JSON.stringify(m));
-  assert.throws(() => open(w.home), /changed since it was staged/);
-  assert.ok(existsSync(join(w.home, 'nova.db')) && existsSync(join(w.home, 'mesh')), 'nothing was erased');
-  assert.ok(existsSync(file), 'and the marker stays for the person to see');
+  let n = open(w.home);
+  try {
+    assert.equal(n.memory.list()[0]?.content, WORDS, 'nothing was erased');
+    assert.ok(problemsOf(n).some((x) => /didn’t write/.test(x)));
+  } finally {
+    await n.close();
+  }
+  writeFileSync(file, 'not json at all');
+  n = open(w.home);
+  try {
+    assert.equal(n.memory.list()[0]?.content, WORDS);
+    assert.equal(asideIn(w.home).length, 2);
+  } finally {
+    await n.close();
+  }
+});
+
+// Only a folder that is Nova's alone is ever erased (review finding 2).
+test('a reset is refused for a home that is your own home folder (or contains it), and for a folder without Nova’s mark', async () => {
+  const w = world('nova-reset-unsafe-');
+  const fakeUser = join(w.dir, 'person');
+  mkdirSync(fakeUser);
+  const saved = process.env.HOME;
+  process.env.HOME = fakeUser;
+  try {
+    for (const home of [fakeUser, w.dir]) {
+      const c = open(home);
+      try {
+        assert.ok(!existsSync(join(home, HOME_MARK)), 'Nova never marks such a folder as its own');
+        assert.throws(() => c.reset.stage({ confirm: true, who: CONSOLE }), /your own home folder/);
+        assert.ok(!existsSync(join(home, RESET_MARKER)));
+      } finally {
+        await c.close();
+      }
+    }
+  } finally {
+    process.env.HOME = saved;
+  }
+  const c = open(w.home);
+  try {
+    assert.ok(existsSync(join(w.home, HOME_MARK)), 'a home Nova set up carries its mark');
+    rmSync(join(w.home, HOME_MARK));
+    assert.throws(() => c.reset.stage({ confirm: true, who: CONSOLE }), /doesn’t carry Nova’s mark/);
+  } finally {
+    await c.close();
+  }
+});
+
+test('an existing home from before the mark gets it at its next start; one holding another database doesn’t', async () => {
+  const w = world('nova-reset-mark-');
+  await open(w.home).close();
+  rmSync(join(w.home, HOME_MARK));
+  await open(w.home).close();
+  const mark = JSON.parse(readFileSync(join(w.home, HOME_MARK), 'utf8'));
+  assert.match(mark.id, /^[0-9a-f-]{36}$/);
+  assert.equal(statSync(join(w.home, HOME_MARK)).mode & 0o777, 0o600);
+  const other = join(w.dir, 'other');
+  mkdirSync(other);
+  const db = new DatabaseSync(join(other, 'nova.db'));
+  db.exec('CREATE TABLE notes (x TEXT)');
+  db.close();
+  assert.equal(ensureMark(other), null);
+  assert.ok(!existsSync(join(other, HOME_MARK)));
+});
+
+// Backups made after the reset was staged are found and erased too, and half-written ones (the
+// database in the clear) go (review finding 4).
+test('a backup that finishes after staging, and a half-written one, are erased too', async () => {
+  const w = world('nova-reset-late-');
+  const c = open(w.home);
+  c.resilience.setSettings({ target: w.target });
+  c.resilience.nightly.run();
+  mkdirSync(join(w.target, '.nova-backup-000009.partial'));
+  writeFileSync(join(w.target, '.nova-backup-000009.partial', 'nova.db'), WORDS);
+  const s = c.reset.stage({ confirm: true, who: CONSOLE });
+  // It was already running when the reset was staged, and finishes now.
+  const late = c.resilience.nightly.run();
+  await s.done;
+  const m = JSON.parse(readFileSync(join(w.home, RESET_MARKER), 'utf8'));
+  assert.ok(m.backups.some((b: { path: string }) => b.path === late.path), 'listed again once work had stopped');
+  await c.close();
+  const n = open(w.home);
+  try {
+    assert.deepEqual(readdirSync(w.target), [], 'all of them, the half-written one too');
+    assert.ok(n.reset.report()!.wiped.backups.includes(late.path!));
+  } finally {
+    await n.close();
+  }
+});
+
+// An encrypted copy is erased only if it opens under the backup key (review finding 7).
+test('a file named like an encrypted copy that doesn’t open under the backup key is never erased', async () => {
+  const w = world('nova-reset-nbk-');
+  const c = open(w.home);
+  c.resilience.setSettings({ target: w.target, encrypted_target: w.second });
+  c.resilience.nightly.run();
+  const copy = join(w.second, readdirSync(w.second)[0]!);
+  // Its header (unsigned), followed by something else.
+  const real = readFileSync(copy);
+  const headLen = 12 + real.readUInt32BE(8);
+  writeFileSync(copy, Buffer.concat([real.subarray(0, headLen), Buffer.alloc(4096, 7)]));
+  const p = c.reset.preview();
+  assert.deepEqual(p.wipes.backups.filter((b) => b.kind === 'encrypted'), []);
+  assert.ok(p.keeps.strays.includes(copy));
+  await (await c.reset.stage({ confirm: true, who: CONSOLE })).done;
+  await c.close();
+  await open(w.home).close();
+  assert.ok(existsSync(copy), 'left as it is');
 });

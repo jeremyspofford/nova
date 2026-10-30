@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { openEncrypted } from '../../src/core/index.ts';
@@ -79,5 +79,33 @@ test('the export opens with the recovery key shown once, has the memory files in
     }
   } finally {
     if (!closed) await c.close();
+  }
+});
+
+// An export folder reached through a link into Nova's home would be erased with it: refused, by
+// where it really is (review finding 3). And one that is gone by the time the reset finishes is
+// said to be gone, never "untouched".
+test('an export through a link into Nova’s home is refused, and an export gone by the end is said to be gone', async () => {
+  const w = world('nova-export-link-');
+  const c = open(w.home);
+  mkdirSync(join(w.home, 'workspace', 'inside'), { recursive: true, mode: 0o700 });
+  const link = join(w.dir, 'looks-outside');
+  symlinkSync(join(w.home, 'workspace', 'inside'), link);
+  assert.throws(() => c.reset.exportTo(link), /inside Nova’s home/);
+  const out = join(w.dir, 'export-here');
+  mkdirSync(out, { mode: 0o700 });
+  const e = c.reset.exportTo(out);
+  await (await c.reset.stage({ confirm: true, who: CONSOLE })).done;
+  await c.close();
+  rmSync(out, { recursive: true });
+  const n = open(w.home);
+  try {
+    const r = n.reset.report()!;
+    assert.equal(r.left.export, null);
+    assert.match(r.said, new RegExp(`isn’t there any more`));
+    assert.ok(!r.said.includes('untouched'));
+    assert.ok(r.said.includes(e.folder));
+  } finally {
+    await n.close();
   }
 });

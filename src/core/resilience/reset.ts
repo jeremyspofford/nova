@@ -23,8 +23,8 @@
 //
 // What stays, said before and after: backup folders that aren't there (an unplugged drive), devices
 // that couldn't be told, the export, and the supervisor's code releases (code, not data).
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Db } from '../db.ts';
@@ -45,6 +45,7 @@ import { EXCLUDED, backupFiles, folderProblem, formatRecoveryKey, keyFingerprint
 import { dropScratch, freeScratch, makeScratch } from './scratch.ts';
 import { foreignEntries, isNovaEntry } from './entries.ts';
 import type { Restarter } from './restart.ts';
+import { readMark, rekeyMark, sealOk, sealWith, unsafeHome } from './home-mark.ts';
 
 export const RESET_MARKER = 'factory-reset.json';
 export const RESET_REPORT = 'reset-report.json';
@@ -66,7 +67,8 @@ const EXPORT_SKIP: Record<string, string> = {
 };
 
 export interface DeviceLine { id: string; name: string; kind: string; said: string }
-export interface BackupItem { path: string; folder: string; kind: FolderKind; check: string | null }
+// `partial`: a backup or copy left half-written (it holds the database in the clear).
+export interface BackupItem { path: string; folder: string; kind: FolderKind | 'partial'; check: string | null }
 export interface Unreachable { folder: string; kind: FolderKind; said: string }
 
 interface Marker {
@@ -84,16 +86,35 @@ interface Marker {
   unreachable: Unreachable[];
   devices: { told: DeviceLine[]; not_told: DeviceLine[] } | null;
   export: string | null;
-  // The sha256 of everything above: a marker that changed since it was staged is never acted on.
-  sum?: string;
+  // An HMAC of everything above under the key in the home's mark (home-mark.ts): a marker Nova
+  // didn't write, or one changed since, is never acted on.
+  seal?: string;
 }
 
-const markerSum = (m: Marker) => { const { sum: _s, ...rest } = m; return createHash('sha256').update(JSON.stringify(rest)).digest('hex'); };
+const body = (m: Marker) => { const { seal: _s, ...rest } = m as Marker & { sum?: unknown }; delete (rest as { sum?: unknown }).sum; return JSON.stringify(rest); };
 
-// The marker, sealed with its own sum, written whole (beside, then renamed into place).
+// The marker, sealed, written whole (beside, then renamed into place). Throws when the home
+// carries no mark: then it is no home Nova may erase.
 function writeMarker(home: string, m: Marker): void {
-  m.sum = markerSum(m);
+  const mark = readMark(home);
+  if (!mark) throw new CoreError('conflict', `${home} doesn’t carry Nova’s mark (${'.nova-home'}), so Nova won’t erase it. Start Nova again (it marks a home it set up), then erase it from Settings.`);
+  m.seal = sealWith(mark, body(m));
   writeJson(join(home, RESET_MARKER), m);
+}
+
+// Why a marker can't be acted on, or null when it is one Nova wrote for this home.
+function unverified(home: string, m: Marker | null): string | null {
+  if (!m || m.v !== 1 || typeof m.home !== 'string') return 'it can’t be read';
+  const unsafe = unsafeHome(home);
+  if (unsafe) return unsafe;
+  const mark = readMark(home);
+  if (!mark) return 'this folder doesn’t carry Nova’s mark';
+  if (!sealOk(mark, body(m), m.seal)) return 'Nova didn’t write it, or it changed since';
+  let here = resolve(home);
+  let there = resolve(m.home);
+  try { here = realpathSync(home); there = realpathSync(m.home); } catch { /* compared as written */ }
+  if (here !== there) return 'it was made for another folder';
+  return null;
 }
 
 export interface ResetReport {
@@ -104,7 +125,7 @@ export interface ResetReport {
   finished_at: string;
   version: string;
   wiped: { home: string[]; keychain: string | null; key_file: boolean; backups: string[]; folders: string[]; scratch: number };
-  left: { foreign: string[]; unreachable: Unreachable[]; strays: string[]; changed: string[]; releases: string; export: string | null; keychain: string | null };
+  left: { foreign: string[]; unreachable: Unreachable[]; strays: string[]; changed: string[]; releases: string; export: string | null; export_gone: string | null; keychain: string | null };
   devices: { told: DeviceLine[]; not_told: DeviceLine[] };
   said: string;
 }
@@ -143,6 +164,10 @@ export interface FinishOptions {
   step?: (what: string) => void;
   scratchRoot?: string;
   now?: () => Date;
+  // A marker that doesn't verify: told here (the core opens a problem), kept aside, never acted on.
+  problem?: (said: string) => void;
+  // Leave an unverified marker where it is (server.js, before seeding: the core reports it).
+  leaveUnverified?: boolean;
 }
 
 // Finishes a staged reset, before anything opens the database. Null when none is staged. Throws
@@ -150,21 +175,19 @@ export interface FinishOptions {
 export function finishReset(home: string, o: FinishOptions = {}): ResetReport | null {
   const file = join(home, RESET_MARKER);
   if (!existsSync(file)) return null;
-  let m: Marker;
-  try {
-    m = JSON.parse(readFileSync(file, 'utf8')) as Marker;
-  } catch (e) {
-    throw new Error(`Nova was part way through erasing itself, and its note of what is left (${file}) can’t be read: ${(e as Error).message}. Nova won’t start on a half-erased home.`);
-  }
-  // A marker copied into another folder (a copy of the home) acts nowhere but where it was made.
-  if (m?.v !== 1 || typeof m.home !== 'string' || resolve(m.home) !== resolve(home)) {
-    rmSync(file, { force: true });
+  let m: Marker | null = null;
+  try { m = JSON.parse(readFileSync(file, 'utf8')) as Marker; } catch { /* below */ }
+  // Verified before anything is acted on: only a marker Nova sealed for this home, which is Nova's
+  // alone. Anything else is never acted on: it is kept aside and said, and Nova starts as it was.
+  const why = unverified(home, m);
+  if (why) {
+    if (o.leaveUnverified) return null;
+    const aside = `${file}.set-aside-${(o.now?.() ?? new Date()).toISOString().replace(/[:.]/g, '-')}`;
+    renameSync(file, aside);
+    o.problem?.(`Nova found a note asking to erase it that Nova didn’t write (${why}), so it erased nothing and started as it was. The note is kept aside as ${aside}. If you want Nova erased, do it from Settings › Danger zone on the hub’s own screen.`);
     return null;
   }
-  // Verified before anything is acted on: what it names is exactly what was staged.
-  if (m.sum !== markerSum(m)) {
-    throw new Error(`Nova was asked to erase itself, but its note of what to erase (${file}) has changed since it was staged, so Nova won’t act on it, and won’t start on a home that may be half-erased. Nothing more was erased. If you still want Nova erased, delete that file, start Nova, and erase it again from Settings.`);
-  }
+  m = m!;
   const step = o.step ?? (() => {});
   const now = o.now ?? (() => new Date());
 
@@ -203,12 +226,14 @@ export function finishReset(home: string, o: FinishOptions = {}): ResetReport | 
   const report: ResetReport = {
     v: 1, id: m.id, kind: m.kind, staged_at: m.staged_at, finished_at: now().toISOString(), version: m.version,
     wiped: { home: [...new Set([...(m.own ?? []), ...own.filter((n) => n !== RESET_REPORT)])].sort(), keychain: key.keychain, key_file: key.file, backups: wipedBackups, folders, scratch },
-    left: { foreign, unreachable: m.unreachable ?? [], strays: m.strays ?? [], changed, releases: RELEASES_SAID, export: m.export ?? null, keychain: key.problem },
+    left: { foreign, unreachable: m.unreachable ?? [], strays: m.strays ?? [], changed, releases: RELEASES_SAID, export: m.export && existsSync(m.export) ? m.export : null, export_gone: m.export && !existsSync(m.export) ? m.export : null, keychain: key.problem },
     devices,
     said: '',
   };
   report.said = summary(report);
   writeJson(join(home, RESET_REPORT), report);
+  // Nothing sealed before the reset opens again.
+  rekeyMark(home);
   rmSync(file, { force: true });
   return report;
 }
@@ -218,11 +243,12 @@ export function finishReset(home: string, o: FinishOptions = {}): ResetReport | 
 function backupState(b: BackupItem): 'same' | 'gone' | 'changed' {
   if (!existsSync(b.path)) return 'gone';
   try {
+    if (b.kind === 'partial') return 'same';
     if (b.kind === 'folder') {
       const seal = (JSON.parse(readFileSync(join(b.path, 'manifest.json'), 'utf8')) as Manifest).seal ?? null;
       return seal && seal === b.check ? 'same' : 'changed';
     }
-    return readHeader(b.path).nonce === b.check ? 'same' : 'changed';
+    return sha256File(b.path) === b.check ? 'same' : 'changed';
   } catch {
     return 'changed';
   }
@@ -244,6 +270,7 @@ function summary(r: ResetReport): string {
   if (r.devices.told.length) parts.push(`Told: ${r.devices.told.map((d) => d.name).join(', ')}.`);
   if (r.devices.not_told.length) parts.push(`Couldn’t be told: ${r.devices.not_told.map((d) => d.name).join(', ')}. Their copy stays on them until they are reset or removed there.`);
   if (r.left.export) parts.push(`Your export is in ${r.left.export}, untouched.`);
+  if (r.left.export_gone) parts.push(`Your export at ${r.left.export_gone} isn’t there any more: Nova didn’t erase it on purpose, but it is gone. If you need it, look for another copy.`);
   if (r.left.keychain) parts.push(r.left.keychain);
   if (r.kind === 'hub') parts.push(RELEASES_SAID);
   return parts.join(' ');
@@ -315,6 +342,7 @@ export class FactoryReset {
     const b = this.#backups();
     const by = new Map<string, { folder: string; kind: FolderKind; count: number }>();
     for (const x of b.items) {
+      if (x.kind === 'partial') continue;
       const k = `${x.kind}\0${x.folder}`;
       const v = by.get(k) ?? { folder: x.folder, kind: x.kind, count: 0 };
       v.count++;
@@ -350,10 +378,16 @@ export class FactoryReset {
       const r = n.inFolder(f.folder, f.kind);
       strays.push(...r.strays);
       for (const x of r.found) {
-        let check: string | null = x.seal;
-        if (f.kind === 'encrypted') { try { check = readHeader(x.path).nonce; } catch { check = null; } }
-        items.push({ path: x.path, folder: f.folder, kind: f.kind, check });
+        if (f.kind === 'folder') { items.push({ path: x.path, folder: f.folder, kind: f.kind, check: x.seal }); continue; }
+        // An encrypted copy counts only if it opens under the backup key: a name and an unsigned
+        // header are not enough. It is then known by its whole file's hash.
+        if (n.authentic(x.path)) items.push({ path: x.path, folder: f.folder, kind: f.kind, check: sha256File(x.path) });
+        else strays.push(x.path);
       }
+      // Half-written ones Nova left (a backup that was stopped): the database in the clear.
+      let names: string[] = [];
+      try { names = readdirSync(f.folder); } catch { /* checked above */ }
+      for (const e of names) if (f.kind === 'folder' ? /^\.nova-backup-\d+\.partial$/.test(e) : /^nova-backup-\d+\.nbk\.partial$/.test(e)) items.push({ path: join(f.folder, e), folder: f.folder, kind: 'partial', check: null });
     }
     return { items, strays, unreachable };
   }
@@ -386,13 +420,15 @@ export class FactoryReset {
     let isDir = false;
     try { isDir = statSync(dir).isDirectory(); } catch { /* not there */ }
     if (!isDir) throw new CoreError('validation', `${dir} isn’t a folder Nova can see. Make it first (or plug in its drive): Nova never creates the folder for an export.`);
-    if (inside(dir, this.#o.home) || inside(this.#o.home, dir)) throw new CoreError('validation', 'The export can’t go inside Nova’s home or contain it: erasing Nova would take it too.');
+    const realDir = realpathSync(dir);
+    const realHome = realpathSync(this.#o.home);
+    if (inside(realDir, realHome) || inside(realHome, realDir)) throw new CoreError('validation', 'The export can’t go inside Nova’s home or contain it (where it really is, following links): erasing Nova would take it too.');
     const unsafe = folderProblem(dir);
     if (unsafe) throw new CoreError('validation', unsafe.replaceAll('backups', 'files'));
     const at = this.#o.now();
     const stamp = at.toISOString().replace(/[:.]/g, '-');
     const id = `nova-export-${stamp}`;
-    const out = join(dir, id);
+    const out = join(realDir, id);
     if (existsSync(out)) throw new CoreError('conflict', `${out} is already there. Wait a moment and export again.`);
     const key = randomBytes(32);
     const scratch = makeScratch('export');
@@ -452,6 +488,8 @@ export class FactoryReset {
     if (this.#o.role.role() !== 'hub') throw new CoreError('conflict', 'This is the standby. Reset the hub: it tells this node to wipe its copy.');
     if (this.staged()) throw new CoreError('conflict', 'Nova is already erasing itself.');
     if (this.#o.restorePending?.()) throw new CoreError('conflict', 'A restore is staged and finishes when Nova restarts. Erase Nova after that.');
+    const unsafe = unsafeHome(this.#o.home);
+    if (unsafe) throw new CoreError('conflict', `Nova won’t erase this home: ${unsafe}. Move Nova’s home to a folder of its own first.`);
     const b = this.#backups();
     const { own } = homeEntries(this.#o.home);
     const m: Marker = {
@@ -462,7 +500,18 @@ export class FactoryReset {
     writeMarker(this.#o.home, m);
     this.#staging = true;
     this.#o.log.info('reset', 'A factory reset is staged; telling devices first.', { id: m.id });
-    const done = this.#tell(m).then(async (devices) => {
+    const done = (async () => {
+      // Nothing keeps working, so nothing new is made while Nova is told to erase: the heartbeat,
+      // the work queue and every child process stop first. A backup that finished in the meantime
+      // is then listed too.
+      await this.#o.stopWork?.(5000);
+      const again = this.#backups();
+      const seen = new Set(m.backups.map((x) => x.path));
+      m.backups.push(...again.items.filter((x) => !seen.has(x.path)));
+      m.strays = [...new Set([...m.strays, ...again.strays])];
+      writeMarker(this.#o.home, m);
+      return this.#tell(m);
+    })().then(async (devices) => {
       m.devices = devices;
       writeMarker(this.#o.home, m);
       // Every session ends, and whatever devices hold open closes.
@@ -470,8 +519,6 @@ export class FactoryReset {
       for (const d of this.#o.devices.list()) this.#o.access.close(d.id);
       this.#o.spokes.resetNotice = null;
       this.#o.role.resetNotice = null;
-      // Nothing keeps writing: every worker and child process stops first.
-      await this.#o.stopWork?.(5000);
       // Restart in place: the next start finishes the wipe before the database opens. A restart
       // that fails doesn't undo anything: the person confirmed an erase, so it finishes when Nova
       // starts next, and until then Nova takes nothing new (blocks()).
