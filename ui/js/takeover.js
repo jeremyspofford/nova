@@ -29,8 +29,12 @@ export function openTakeover(task, view, { me = 'console', canTake = true, onEnd
     try { f = JSON.parse(e.data); } catch { return; }
     const img = $('.takeover-frame');
     if (!img) return;
+    const first = !img.dataset.seq;
     img.src = `data:image/jpeg;base64,${f.jpeg}`;
     img.dataset.seq = String(f.seq);
+    // On a phone the page is wider than the screen: start with its middle in view, where pages
+    // put their content.
+    if (first) img.decode().then(() => { const s = $('.takeover-screen'); if (s && s.scrollWidth > s.clientWidth) s.scrollLeft = (s.scrollWidth - s.clientWidth) / 2; }).catch(() => {});
     img.hidden = false;
     const wait = $('.takeover-wait');
     if (wait) wait.hidden = true;

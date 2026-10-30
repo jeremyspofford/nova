@@ -2,7 +2,7 @@
 // it uses the one named by NOVA_CHROMIUM (or CHROMIUM), or one in a known install path, and says
 // plainly when there is none. Each task gets a fresh, throwaway profile, and the browser is
 // reached only over its debugging pipe.
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { accessSync, constants, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,17 +31,30 @@ function playwrightBrowsers(env: NodeJS.ProcessEnv): string[] {
 
 export interface Found { path: string | null; from: string; detail: string }
 
+// Whether a browser there can start at all (a copy missing its system libraries can't), asked
+// once per path: `--version` loads everything the browser needs and opens no window.
+const probed = new Map<string, string | null>();
+function cannotStart(path: string): string | null {
+  if (!probed.has(path)) {
+    const r = spawnSync(path, ['--version'], { timeout: 10_000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    probed.set(path, r.error ? r.error.message : r.status === 0 ? null : lastLine(r.stderr || r.stdout || `exit ${r.status}`) || `exit ${r.status}`);
+  }
+  return probed.get(path) ?? null;
+}
+
 export function findChromium(env: NodeJS.ProcessEnv = process.env): Found {
   for (const name of ['NOVA_CHROMIUM', 'CHROMIUM'] as const) {
     const v = env[name]?.trim();
     if (!v) continue;
     // A path the person named and that isn't there is said as such, not silently replaced.
     if (!existsSync(v) || !runnable(v)) return { path: null, from: name, detail: `${name} names ${v}, and there is no runnable browser there.` };
+    const why = cannotStart(v);
+    if (why) return { path: null, from: name, detail: `${name} names ${v}, and it can’t start here: ${why}` };
     return { path: v, from: name, detail: `Chromium at ${v} (from ${name}).` };
   }
-  for (const p of [...KNOWN, ...playwrightBrowsers(env)]) {
-    if (existsSync(p) && runnable(p)) return { path: p, from: 'known path', detail: `Chromium at ${p}.` };
-  }
+  const found = [...KNOWN, ...playwrightBrowsers(env)].filter((p) => existsSync(p) && runnable(p));
+  for (const p of found) if (!cannotStart(p)) return { path: p, from: 'known path', detail: `Chromium at ${p}.` };
+  if (found.length) return { path: null, from: 'none', detail: `Browser work is unavailable: the Chromium at ${found[0]} can’t start on this machine (${cannotStart(found[0]!)}). Install Chromium, or set NOVA_CHROMIUM to one that runs.` };
   return { path: null, from: 'none', detail: 'Browser work is unavailable: Nova found no Chromium on this machine. Install Chromium, or set NOVA_CHROMIUM to its path.' };
 }
 

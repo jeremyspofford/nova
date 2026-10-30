@@ -10,10 +10,30 @@ built-ins only.
 | Dependency | Kind | Why |
 | --- | --- | --- |
 | `jsqr` 1.4.0 | dev | Test-only: decodes the QR codes Nova draws (`tests/qr.test.js`, the M4 UI tests), so the encoder is checked by an independent decoder. Never loaded by Nova itself. |
-| `playwright-core` 1.56.1 | dev | Drives Chromium for `npm run shots` (golden screens, keyboard path, budgets); no bundled browser download. |
+| `playwright-core` 1.56.1 | dev | Drives Chromium for `npm run shots` (golden screens, keyboard path, budgets); no bundled browser download. Never used by Nova at run time: the browser worker speaks CDP itself (M5c). |
 | `claude` CLI | external | The default `agent_cmd`. Swappable by config; nothing in Nova depends on it. |
 
 ## Decisions
+
+**2026-10-30 (M5c): browser work with human takeover.** Branch `m5c/takeover`; the plan's §3
+"as built" note has the details and the gate's interfaces.
+
+- **Nova drives Chromium itself over CDP** (`src/core/browser/`), through `--remote-debugging-pipe`:
+  no port is opened, so nothing else on the machine can attach to the browser, and there is no
+  runtime dependency. Playwright stays a dev dependency, used only by the tests.
+- **Declared hosts are enforced twice:** CDP Fetch holds every request of every target (pages,
+  popups, iframes, workers), and a local refusing proxy catches what Fetch can't see
+  (WebSockets). Every refusal is in the task's record. Chromium's own calls home reach that proxy
+  and are refused too.
+- **The ledger learned to wait for a person mid-run**: `needsPerson`/`personDone` (active ⇄
+  waiting while the worker runs) and `note`. A worker's egress may depend on its brief
+  (`egressFor`), so a browser task on this machine or a private address counts as local.
+- **Evidence Nova checks itself:** a screenshot its own browser took into the task's folder
+  (`workers/browser/<task>/`, untracked), and the final page read afresh, re-fetched inside the
+  declared hosts or read from the final DOM. `screenshot` and `url` checkers are registered with
+  the verifier (`registerKind`).
+- **Takeover** is for the console and approver devices only. Frames and screenshots live under
+  `/api/v1/browser`, which the service worker never caches.
 
 **2026-10-30 (M4, re-check of the blocker fixes): three more ways out of the runtime's sandbox,
 closed; key replacement made safe.**
