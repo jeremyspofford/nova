@@ -389,8 +389,14 @@ export class Design extends EventEmitter {
       check: manifestRules,
       protect: (x) => (this.#builtins.has(x.id) ? `${x.manifest.name} is built in, so it can’t be removed. Choose another design system instead.` : null),
     });
-    // Removing a package that is in use falls back to what came before it.
-    this.#extensions.on('change', (c: { id: string; state: string }) => { if (c.state === 'removed') this.#forget(c.id); });
+    // Removing or turning off a package that is in use falls back to what came before it, and
+    // open pages hear about it. Turning one on can change what shows where it is the fallback.
+    this.#extensions.on('change', (c: { id: string; state: string }) => {
+      if (c.state === 'removed') return this.#forget(c.id, 'removed'); // already gone: a no-op unless it was in use
+      if (!this.#installed().some((x) => x.id === c.id)) return; // another kind of extension
+      if (c.state === 'disabled') this.#forget(c.id, 'turned-off');
+      else if (c.state === 'enabled') this.#changed('turned-on', this.active().id, null);
+    });
   }
 
   // Built-ins are present on every install without the person doing anything, and are updated
@@ -546,7 +552,7 @@ export class Design extends EventEmitter {
     return o.device_id;
   }
 
-  #changed(action: 'apply' | 'rollback' | 'mode' | 'removed', id: string, device: string | null) {
+  #changed(action: 'apply' | 'rollback' | 'mode' | 'removed' | 'turned-off' | 'turned-on', id: string, device: string | null) {
     const out = { action, id, scope: device ? 'device' : 'user', ...(device ? { device_id: device } : {}), mode: this.appearance().mode };
     this.emit('change', out);
     return this.state(device);
@@ -585,7 +591,8 @@ export class Design extends EventEmitter {
     return x;
   }
 
-  #forget(id: string) {
+  #forget(id: string, action: 'removed' | 'turned-off') {
+    const before = this.active().id;
     const a = this.appearance();
     let touched = false;
     if (a.design_system === id) {
@@ -597,6 +604,7 @@ export class Design extends EventEmitter {
     const previous = Object.fromEntries(Object.entries(a.device_previous).filter(([, v]) => v !== id));
     if (Object.keys(overrides).length !== Object.keys(a.device_overrides).length) { this.#set('device_overrides', overrides); touched = true; }
     if (Object.keys(previous).length !== Object.keys(a.device_previous).length) this.#set('device_previous', previous);
-    if (touched) this.#changed('removed', this.active().id, null);
+    // Also when it was only the fallback (a built-in turned off): what shows has changed.
+    if (touched || before === id) this.#changed(action, this.active().id, null);
   }
 }

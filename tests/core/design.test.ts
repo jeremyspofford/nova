@@ -341,3 +341,28 @@ test('built-ins can’t be removed; a disabled design system can’t be applied'
   extensions.disable('example.slate');
   assert.throws(() => design.apply('example.slate', { scope: 'user' }), /turned off/);
 });
+
+// Review finding: turning off the design system in use changed what showed without telling open
+// pages, and left the stored choice and its rollback pointing at a package that was off.
+test('turning off the design system in use falls back to the previous one and says so', () => {
+  const { design, extensions, profile, events } = host();
+  design.apply('paper', { scope: 'user' });
+  design.apply('companion-light', { scope: 'user' });
+  design.apply('companion-light', { scope: 'device', device_id: 'device-aaaa1111' });
+  events.length = 0;
+  extensions.disable('companion-light');
+  assert.equal(design.active().id, 'paper', 'back to the one before');
+  assert.equal(design.active('device-aaaa1111').id, 'paper', 'a device override on it is dropped too');
+  assert.equal(profile.get('appearance', 'design_system'), 'paper');
+  assert.equal(events.length, 1, 'one design-system event for open pages');
+  assert.deepEqual([events[0]!.action, events[0]!.id], ['turned-off', 'paper']);
+  assert.throws(() => design.rollback({ scope: 'user' }), /nothing to go back to/, 'no rollback onto a package that is off');
+
+  // A built-in that is only the fallback: turning it off moves the fallback, and that is announced.
+  events.length = 0;
+  extensions.disable('paper');
+  assert.notEqual(design.active().id, 'paper');
+  assert.equal(events.length, 1);
+  extensions.enable('paper', { approved: true });
+  assert.equal(events.length, 2, 'turning one back on is announced as well');
+});
