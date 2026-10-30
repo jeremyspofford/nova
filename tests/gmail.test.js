@@ -45,10 +45,12 @@ test('connecting: PKCE, the modify scope (never send or delete), token kept priv
   assert.deepEqual([notice.ok, notice.text], [true, 'Gmail is connected as you@example.com.']);
   const s = g.status();
   assert.deepEqual([s.connected, s.account, s.broken], [true, 'you@example.com', false]);
-  const file = join(g.dir, 'token.json');
-  assert.equal(statSync(file).mode & 0o777, 0o600);
-  assert.equal(statSync(join(g.dir, 'client.json')).mode & 0o777, 0o600);
-  assert.doesNotMatch(readFileSync(file, 'utf8'), /at-\d/); // access tokens stay in memory
+  // M5b: the client and the sign-in are in the vault (encrypted, 0600), not plaintext files.
+  assert.equal(statSync(g.vault.file).mode & 0o777, 0o600);
+  assert.equal(existsSync(join(g.dir, 'token.json')), false);
+  assert.deepEqual(g.vault.list(), ['connector/gmail/GOOGLE_OAUTH_CLIENT', 'connector/gmail/GOOGLE_REFRESH_TOKEN']);
+  assert.doesNotMatch(readFileSync(g.vault.file, 'utf8'), /rt-|shh/);
+  assert.doesNotMatch(g.vault.get('connector/gmail/GOOGLE_REFRESH_TOKEN'), /at-\d/); // access tokens stay in memory
 });
 
 test('a sign-in with a stolen or stale state is refused', async () => {

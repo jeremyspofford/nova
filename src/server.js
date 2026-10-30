@@ -12,6 +12,7 @@ import { SessionStore, validId } from './sessions.js';
 import { Runner, BusyError } from './runner.js';
 import { SkillError } from './skills.js';
 import { GmailError } from './connectors/gmail.js';
+import { gmailConnector } from './connectors/gmail-connector.js';
 import { ZipError, unzip } from './zip.js';
 import { ScheduleError } from './schedules.js';
 import { Scheduler } from './scheduler.js';
@@ -48,7 +49,9 @@ export function createNova(config = loadConfig(), deps = {}) {
   const store = new SessionStore(config.home, config.timezone);
   // Curated memory lives in the core; MEMORY.md is rendered from it. The first start imports
   // an existing MEMORY.md once, and every start takes in hand edits made while Nova was off.
-  const runner = new Runner(config, store, { ...deps, records: core.memory });
+  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault });
+  // Era 2's Gmail as a connector: its secrets in the vault, Settings › Connections, mail events.
+  core.connectors.register(gmailConnector(runner.gmail));
   // Forgetting through the core's API reaches MEMORY.md and the day notes as well.
   core.memory.onForget((records) => runner.memory.forgotten(records));
   runner.memory.readOnly = () => !!core.mesh.role.replica();
@@ -355,6 +358,7 @@ export function createNova(config = loadConfig(), deps = {}) {
           return json(res, 200, { url: gmail.authUrl(`http://${req.headers.host}/oauth/gmail`) });
         } else return json(res, 404, { error: 'Not found' });
         announce('skills');
+        core.connectors.touched('gmail');
         return json(res, 200, body);
       } catch (e) {
         if (e instanceof GmailError) return json(res, 400, { error: e.message });
@@ -441,6 +445,7 @@ export function createNova(config = loadConfig(), deps = {}) {
         const q = Object.fromEntries(url.searchParams);
         await runner.gmail.finish({ code: q.code, state: q.state, error: q.error });
         announce('skills');
+        core.connectors.touched('gmail');
         res.writeHead(303, { location: '/skills#gmail', 'cache-control': 'no-store' });
         return res.end();
       }

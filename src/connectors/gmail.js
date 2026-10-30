@@ -4,13 +4,14 @@
 // Connecting: the person saves a "Desktop app" OAuth client from Google Cloud
 // once. Nova sends them to Google's consent screen (PKCE, a loopback redirect
 // back to Nova's own server, the gmail.modify scope only) and keeps the
-// refresh token in ~/connectors/gmail/token.json: readable only by them, out
-// of the home's history, never shown to the model. Disconnecting revokes it at
-// Google and deletes it.
+// refresh token in Nova's vault (src/core/vault.ts): encrypted, out of the
+// home's history, never shown to the model. Disconnecting revokes it at Google
+// and deletes it. Era 2 kept these as plaintext files; they move in on start.
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, rmdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { htmlToText } from '../tools.js';
+import { Vault } from '../core/index.ts';
 import { GmailImap, IMAP_URL } from './gmail-imap.js';
 import { GmailError, asReply, checkId, nothing, readResult, searchArgs, searchResult, when, changeArgs, changeResult, changeWords, checkDraft, draftArgs, draftResult, drafts, matchLabels, mime, name } from './mail.js';
 
@@ -35,9 +36,22 @@ export function googleEndpoints(base = '') {
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 
+// Where each of Gmail's secrets lives in the vault. The keys are Era 2's file names, which the
+// rest of this module still uses to mean them. Under connector/gmail/, so removing the connector
+// revokes them all (src/core/connectors).
+const VAULT_NAMES = { 'client.json': 'GOOGLE_OAUTH_CLIENT', 'token.json': 'GOOGLE_REFRESH_TOKEN', 'password.json': 'GMAIL_APP_PASSWORD' };
+const vaultName = (file) => {
+  if (!VAULT_NAMES[file]) throw new Error(`Gmail has no secret called ${file}`);
+  return `connector/gmail/${VAULT_NAMES[file]}`;
+};
+export const GMAIL_SECRETS = Object.values(VAULT_NAMES);
+
 export class GmailOAuth {
-  constructor(home, { endpoints = googleEndpoints(), timezone = 'UTC', fetch: f = globalThis.fetch } = {}) {
+  // vault: the core's (server.js passes it); a Gmail made on its own opens the home's vault.
+  constructor(home, { endpoints = googleEndpoints(), timezone = 'UTC', fetch: f = globalThis.fetch, vault = null } = {}) {
     this.home = home;
+    this.vault = vault ?? new Vault({ home });
+    // Era 2's folder for these secrets: read once, to move them into the vault.
     this.dir = join(home, 'connectors', 'gmail');
     this.e = endpoints;
     this.timezone = timezone;
@@ -47,17 +61,35 @@ export class GmailOAuth {
     this.notice = null;       // how the last sign-in went, for the page Google sends back to
   }
 
-  // ---- files ---------------------------------------------------------------
+  // ---- secrets: in the vault, by name -------------------------------------------
 
   read(name) {
-    try { return JSON.parse(readFileSync(join(this.dir, name), 'utf8')); } catch { return null; }
+    try { return JSON.parse(this.vault.get(vaultName(name)) ?? 'null'); } catch { return null; }
   }
 
   writeSecret(name, data) {
-    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-    const path = join(this.dir, name);
-    writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-    chmodSync(path, 0o600);
+    this.vault.put(vaultName(name), JSON.stringify(data));
+  }
+
+  removeSecret(name) {
+    this.vault.delete(vaultName(name));
+  }
+
+  // Era 2 kept these as plaintext files in connectors/gmail/ (0600). Each moves into the vault, is
+  // read back, and only then is its file deleted.
+  migratePlaintext() {
+    const moved = [];
+    for (const name of Object.keys(VAULT_NAMES)) {
+      const path = join(this.dir, name);
+      if (!existsSync(path)) continue;
+      let data;
+      try { data = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
+      // The vault's copy wins if there already is one (the file is then a leftover).
+      if (!this.read(name)) this.writeSecret(name, data);
+      if (this.read(name)) { rmSync(path, { force: true }); moved.push(name); }
+    }
+    try { rmdirSync(this.dir); rmdirSync(join(this.home, 'connectors')); } catch { /* not empty, or not there */ }
+    return moved;
   }
 
   client() {
@@ -81,7 +113,7 @@ export class GmailOAuth {
   }
 
   forgetClient() {
-    rmSync(join(this.dir, 'client.json'), { force: true });
+    this.removeSecret('client.json');
     return this.status();
   }
 
@@ -163,7 +195,7 @@ export class GmailOAuth {
         revoked = res.ok || res.status === 400; // 400: Google already let it go
       } catch {}
     }
-    rmSync(join(this.dir, 'token.json'), { force: true });
+    this.removeSecret('token.json');
     this.access = null;
     return { ...this.status(), revoked };
   }
@@ -385,6 +417,8 @@ export class Gmail extends GmailOAuth {
   constructor(home, { imapUrl, openImap, ...opts } = {}) {
     super(home, opts);
     this.imap = new GmailImap(this, { url: imapUrl ?? IMAP_URL, timezone: this.timezone, ...(openImap ? { open: openImap } : {}) });
+    // A vault that can't open leaves the old files where they are: nothing is lost, and it is retried next start.
+    try { this.migrated = this.migratePlaintext(); } catch (e) { this.migrated = []; this.migrateError = e.message; }
   }
 
   get way() { return this.imap.saved() ? this.imap : null; }

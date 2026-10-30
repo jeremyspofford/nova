@@ -3,7 +3,7 @@
 // IMAP parsing underneath.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Gmail, googleEndpoints } from '../src/connectors/gmail.js';
@@ -34,7 +34,11 @@ test('connecting with an app password: plain words when it is wrong', async () =
 
   const s = await g.connectPassword({ email: ' You@Example.com ', password: 'abcd efgh ijkl mnop' });
   assert.deepEqual([s.connected, s.method, s.account, s.notice.text], [true, 'password', 'you@example.com', 'Gmail is connected as you@example.com.']);
-  assert.equal(statSync(join(g.dir, 'password.json')).mode & 0o777, 0o600);
+  // M5b: in the vault, encrypted and 0600, never as a plaintext file.
+  assert.equal(statSync(g.vault.file).mode & 0o777, 0o600);
+  assert.equal(existsSync(join(g.dir, 'password.json')), false);
+  assert.doesNotMatch(readFileSync(g.vault.file, 'utf8'), /abcdefghijklmnop/);
+  assert.deepEqual(g.vault.list(), ['connector/gmail/GMAIL_APP_PASSWORD']);
 });
 
 test('search and read over IMAP say the same as over the API', async () => {
