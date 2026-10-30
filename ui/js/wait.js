@@ -73,6 +73,12 @@ export function since(key) {
   if (!begun.has(key)) begun.set(key, Date.now());
   return begun.get(key);
 }
+// A wait that began before it had a name here: the page's own moment, carried over (a message that
+// was pending becomes the server's turn, and its Thinking keeps the time the person pressed Send).
+export function begin(key, at = Date.now()) {
+  if (at > 0) begun.set(key, at);
+  return begun.get(key);
+}
 export function over(key) {
   const t = begun.get(key);
   begun.delete(key);

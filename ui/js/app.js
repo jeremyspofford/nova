@@ -21,7 +21,7 @@ import { bindCheckpoints, loadCheckpoints, renderCheckpoints } from './checkpoin
 import { bindReset, loadReset, renderReset } from './reset.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
-import { over, remember, waitingLine } from './wait.js';
+import { begin, over, remember, waitingLine } from './wait.js';
 import { blocksOf, doneWaiting, keepShape, showWaiting } from './skeleton.js';
 
 const $ = (id) => document.getElementById(id);
@@ -392,7 +392,8 @@ function open(id, { quiet = false } = {}) {
 
 function onEvent(ev) {
   applyEvent(state.session, ev);
-  if (ev.type === 'user') { state.pending = null; over('send'); }
+  // The person's message is in: its send is over, and Nova's turn is timed from when they sent it.
+  if (ev.type === 'user') { if (state.pending) begin(`reply-${ev.turn}`, state.pending.at); state.pending = null; over('send'); }
   if (ev.type === 'done') { const t = state.session.turns.find((x) => x.id === ev.turn); if (t?.ts && ev.ts) remember('reply', Date.parse(ev.ts) - Date.parse(t.ts)); }
   if (ev.type === 'assistant' && state.live?.turn === ev.turn) state.live.text = '';
   if (ev.type === 'session' || ev.type === 'title') loadList();
@@ -694,7 +695,9 @@ async function send() {
   const text = el.input.value.trim();
   if (!text || running() || !state.reachable) return;
   const sessionId = state.id;
-  state.pending = { text, since: new Date().toISOString(), sessionId };
+  // A new wait begins now, on this page's clock: the send, and Nova's turn after it.
+  state.pending = { text, since: new Date().toISOString(), at: begin('send'), sessionId };
+  begin('reply-pending', state.pending.at);
   el.input.value = '';
   autosize();
   clearTimeout(draftTimer); // a pending save would bring the sent text back as a draft
@@ -707,12 +710,13 @@ async function send() {
       const { id } = await post('/api/sessions', { text });
       state.pending.sessionId = id;
       state.pending.sent = true;
+      over('send');
       history.pushState(null, '', `/c/${id}`);
       open(id);
       loadList();
     } else {
       await post(`/api/sessions/${sessionId}/messages`, { text });
-      if (state.pending) { state.pending.sent = true; renderThread(); }
+      if (state.pending) { state.pending.sent = true; over('send'); renderThread(); }
     }
   } catch (e) {
     state.pending = null;

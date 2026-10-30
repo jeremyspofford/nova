@@ -153,6 +153,10 @@ test('M9 gate, progress: optimistic UI is honest — a slow send says so, a fail
     assert.match(w[0]!.text, /^Sending…/);
     release();
     await d.page.waitForFunction(() => !document.querySelector('#thread [data-waiting="send"]'), null, { timeout: 10000 });
+    // How long that send took is kept, for "it usually takes…" next time (review of #234, item 5).
+    const sends = await d.page.evaluate(() => JSON.parse(localStorage.getItem('nova.waits') ?? '{}').send ?? []);
+    assert.equal(sends.length, 1, 'the send’s length is kept');
+    assert.ok(sends[0] >= 1400 && sends[0] < 10000, `and it is the real one (${sends[0]} ms; the server held it ~1.5 s)`);
     await d.page.unroute(`**/api/sessions/${CHAT}/messages`);
     await d.page.waitForFunction(() => /the peas go first/.test(document.getElementById('thread')?.textContent ?? ''), null, { timeout: 15000 });
 

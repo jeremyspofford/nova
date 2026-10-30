@@ -236,7 +236,8 @@ function renderTool(tool, turnOpen) {
   const cls = `record is-${state}" data-tool="${esc(tool.id)}`;
   const output = tool.result?.output;
   if (state === 'running') {
-    const w = waitState(`step-${tool.name}`, Date.parse(tool.ts) || since(`step-${tool.id}`));
+    // Timed by this page's clock from when it first saw the step, never by the hub's timestamps.
+    const w = waitState(`step-${tool.name}`, since(`step-${tool.id}`));
     return `<div class="record is-running${w.cls}" data-tool="${esc(tool.id)}"${w.attrs} role="status"><span class="wait-dot" aria-hidden="true"><span class="pulse"></span></span>${label}…${w.more}</div>`;
   }
   const inside = tool.result?.link?.startsWith('/');
@@ -312,7 +313,7 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
   if (running && live.text) nova += `<div class="prose is-live" data-live>${renderMarkdown(live.text)}<span class="caret" aria-hidden="true"></span></div>`;
   else if (running && live.phase === 'thinking') {
     const steps = turn.items.filter((it) => it.kind === 'tool' && it.result).length;
-    nova += waitingLine('Thinking', { key: 'reply', since: Date.parse(turn.ts) || since(`reply-${turn.id}`), done: steps || null, noun: 'step', tag: 'div' });
+    nova += waitingLine('Thinking', { key: 'reply', since: since(`reply-${turn.id}`), done: steps || null, noun: 'step', tag: 'div' });
   }
   if (turn.state === 'stopped') nova += '<p class="notice">Stopped.</p>';
   if (open && !live) nova += '<p class="notice">This reply was interrupted.</p>';
@@ -325,7 +326,7 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
   // orb: the orb is in the view once (DESIGN-SYSTEM §1).
   const started = novaStart(turn);
   return `<section class="turn" id="t-${esc(turn.id)}" data-turn="${esc(turn.id)}">
-  ${turn.followup ? '' : `<div class="msg-user msg" data-author="person">${turn.ts ? msgTime(turn.ts, times.person) : ''}<div class="bubble">${esc(turn.text)}</div>${turn.sending ? waitingLine('Sending', { key: 'send', since: Date.parse(turn.ts) }) : ''}
+  ${turn.followup ? '' : `<div class="msg-user msg" data-author="person">${turn.ts ? msgTime(turn.ts, times.person) : ''}<div class="bubble">${esc(turn.text)}</div>${turn.sending ? waitingLine('Sending', { key: 'send' }) : ''}
     <div class="actions"><button type="button" class="act" data-action="copy-user" data-turn="${esc(turn.id)}" aria-label="Copy message">${icons.copy}<span>Copy</span></button></div></div>`}
   <div class="msg-nova msg" data-author="nova">${started ? msgTime(started, times.nova) : ''}${nova}${actions.length ? `<div class="actions">${actions.join('')}</div>` : ''}</div>
 </section>`;
