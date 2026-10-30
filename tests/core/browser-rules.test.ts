@@ -117,3 +117,8 @@ test('the url checker: Nova’s own re-fetch decides when there is one; a page w
   write(records, [{ source: 'fetch', url: records, status: 200, text: '[{"name":"Ada Example"}]' }]);
   assert.equal(url({ kind: 'url', url: records }, sending).ok, true);
 });
+
+test('local: only addresses on this network count; a name that sounds local proves nothing', () => {
+  for (const h of ['printer.local', 'nas.home.arpa', 'router.local:80', '*.home.arpa']) assert.equal(hostEgress(h), 'remote', h);
+  for (const h of ['localhost', 'app.localhost', '127.0.0.1:4321', '192.168.1.20', '[::1]:80', '[fd00::1]']) assert.equal(hostEgress(h), 'local', h);
+});

@@ -119,11 +119,13 @@ export const HUB_REFUSAL = 'Nova’s own address: a browser task never reaches N
 const PRIVATE_V4 = [/^127\./, /^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^169\.254\./, /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./];
 
 // Where a declared host's data would go: this machine and private or mesh addresses are local;
-// anything else is remote. A name Nova can't place counts as remote, so local-only never reaches
-// the internet by assumption.
+// anything else is remote, every name included, so local-only never reaches the internet by
+// assumption.
 export function hostEgress(raw: string): Egress {
   const h = normalizeHost(raw).replace(/^\*\./, '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
-  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.home.arpa')) return 'local';
+  // A name proves nothing about where it leads (a .local or .home.arpa name can be answered from
+  // anywhere), so only addresses count, and localhost, which Chromium never looks up.
+  if (h === 'localhost' || h.endsWith('.localhost')) return 'local';
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return PRIVATE_V4.some((r) => r.test(h)) ? 'local' : 'remote';
   if (h === '::1' || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h)) return 'local';
   return 'remote';
