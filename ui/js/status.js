@@ -56,6 +56,14 @@ export const label = (status) => STATUS[status]?.label ?? STATUS.quiet.label;
 // Live work for the "Nova is handling" surface: not finished, and not hidden by the person.
 export const isOpen = (t) => ['queued', 'active', 'waiting', 'verifying'].includes(t?.state);
 
+// The retry button says what it will ask for: running work again that needed the person's OK
+// asks for it again (tier 2), or for their confirmation (tier 3).
+export function retryLabel(t) {
+  const tier = Number(t?.approval_tier ?? 1);
+  if (tier >= 2 && Number(t?.attempts ?? 0) > 0) return tier === 3 ? 'Try again (you confirm first)' : 'Try again (asks for your OK)';
+  return 'Try again';
+}
+
 // The orb's state, from real signals, most urgent first:
 //   offline   the server isn't answering;
 //   listening the person is talking to Nova;

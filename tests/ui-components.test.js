@@ -77,6 +77,23 @@ test('the approval sheet is tiered: tier 3 needs an explicit confirmation', () =
   assert.match(t3, /explicit confirmation every time/);
 });
 
+test('the approval sheet for running what a provider wrote: tier 2, the files and a preview of each change, and what running it means', () => {
+  const run = {
+    command: 'node --test calc/sum.test.mjs', provider_name: 'Example coder', more: 0,
+    words: 'This runs code the provider wrote, as you, with access to your files.',
+    files: [{ path: 'calc/sum.mjs', kind: 'modified', added: 1, removed: 1, preview: '@@ -1,1 +1,1 @@\n-export const sum = (a, b) => a - b;\n+export const sum = (a, b) => a + b;' }],
+  };
+  const html = approvalSheet(task('r', 'waiting', { approval_tier: 1, owner: 'openai-compatible' }), { run });
+  assert.match(html, /data-tier="2"/);
+  assert.match(html, /data-test-run="r"/);
+  assert.match(html, /This runs code the provider wrote, as you, with access to your files\./);
+  assert.match(html, /calc\/sum\.mjs/);
+  assert.match(html, /\+1 −1/);
+  assert.match(html, /\+export const sum = \(a, b\) =&gt; a \+ b;/);
+  assert.match(html, /<code>node --test calc\/sum\.test\.mjs<\/code>/);
+  assert.match(html, />Run the test</);
+});
+
 test('Nova is handling shows at most three open tasks, never finished or silent ones', () => {
   const tasks = [task('1', 'active'), task('2', 'queued'), task('3', 'waiting', { approval_tier: 2 }), task('4', 'verifying'), task('5', 'done'), task('6', 'active', { user_visibility: 'silent' })];
   const html = handlingCard({ tasks });

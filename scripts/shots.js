@@ -27,7 +27,7 @@ const imap = await startFakeImap({ mail: mailbox, labels: google.state.labels })
 function startServer() {
   const t0 = performance.now();
   const child = spawn(process.execPath, [join(root, 'src/server.js')], {
-    env: { ...process.env, NOVA_HOME: home, NOVA_PORT: String(port), NOVA_GOOGLE_BASE: google.base, NOVA_SEARCH_URL: `${google.base}/search`, NOVA_IMAP_URL: imap.url, NOVA_AGENT_CMD: `FAKE_DELAY=${process.env.FAKE_DELAY ?? 18} node ${join(root, 'scripts/fake-agent.js')}` },
+    env: { ...process.env, NOVA_VAULT_KEY: 'file', NOVA_HOME: home, NOVA_PORT: String(port), NOVA_GOOGLE_BASE: google.base, NOVA_SEARCH_URL: `${google.base}/search`, NOVA_IMAP_URL: imap.url, NOVA_AGENT_CMD: `FAKE_DELAY=${process.env.FAKE_DELAY ?? 18} node ${join(root, 'scripts/fake-agent.js')}` },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   return new Promise((ok) => child.stdout.on('data', (d) => { if (String(d).includes('ready')) ok({ child, ms: performance.now() - t0 }); }));

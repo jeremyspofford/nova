@@ -20,6 +20,33 @@ export interface Worker extends WorkerInfo {
   health(): { ok: boolean; detail?: string };
   // How long one run may take before the ledger stops waiting; the ledger's default otherwise.
   timeoutMs?: number;
+  // A worker whose reach depends on the brief (a browser task's declared hosts) says where this
+  // brief's data would go; `egress` is then the most it could ever reach. It throws a validation
+  // error for a brief it could never run, so a bad one is refused when it is delegated.
+  egressFor?(brief: Brief): Egress;
+  // What this brief may change outside Nova (Effects above); none when not said.
+  effects?(brief: Brief): Effects;
+  // Whether this brief marks the point where its outside effect happens (a step flagged
+  // `commits`): the worker calls ledger.committing() just before it, and a failure before that
+  // point may still be rerun by itself.
+  commits?(brief: Brief): boolean;
+}
+
+export const egressOf = (w: Worker, brief: Brief): Egress => w.egressFor?.(brief) ?? w.egress;
+
+// What running a brief may change outside Nova, so the ledger knows whether running it again by
+// itself is safe:
+//  - none: nothing outside (it reads, or works in its own folder);
+//  - idempotent: the far end takes a second run of the same brief as the first (it honours the
+//    brief's idempotency key);
+//  - external: it may have changed something outside (sent a form, switched a light) that a
+//    second run would change again. After a failure such work is never rerun by itself.
+export type Effects = 'none' | 'idempotent' | 'external';
+
+// A worker that can't say counts as external: a rerun nobody asked for is the costlier mistake.
+export function effectsOf(w: Worker, brief: Brief): Effects {
+  if (!w.effects) return 'none';
+  try { return w.effects(brief); } catch { return 'external'; }
 }
 
 const STRICTNESS: PrivacyMode[] = ['local-only', 'local-preferred', 'cloud-allowed'];

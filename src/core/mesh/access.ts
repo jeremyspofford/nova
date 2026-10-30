@@ -29,6 +29,12 @@ export const PUBLIC_PATHS: ReadonlySet<string> = new Set([
 
 const FORWARDING = /^(forwarded|x-forwarded-.+|tailscale-.+|x-real-ip)$/i;
 
+// Nova's own browser runs browser tasks on the hub, so their requests come from this machine. Each
+// one it lets through carries this header, added beneath the page where no script can take it off
+// (browser/session.ts): whatever a task's page asks of Nova, it asks as nobody in particular.
+export const BROWSER_TASK_HEADER = 'x-nova-browser-task';
+export const fromBrowserTask = (headers: IncomingHttpHeaders): boolean => headers[BROWSER_TASK_HEADER] !== undefined;
+
 const bare = (a: string) => a.replace(/^::ffff:/i, '');
 
 export function loopbackAddress(addr: string | undefined): boolean {
@@ -45,8 +51,11 @@ export function forwarded(headers: IncomingHttpHeaders): boolean {
   return Object.keys(headers).some((h) => FORWARDING.test(h));
 }
 
+// A WebSocket handshake is never the console either: the console uses none, and one from a task's
+// page is the one kind of request the browser's interception can't see (or mark).
 export function isConsole(listener: Listener, req: IncomingMessage): boolean {
-  return listener === 'console' && loopbackAddress(req.socket.remoteAddress) && loopbackHost(req.headers.host) && !forwarded(req.headers);
+  return listener === 'console' && loopbackAddress(req.socket.remoteAddress) && loopbackHost(req.headers.host) && !forwarded(req.headers)
+    && !fromBrowserTask(req.headers) && req.headers.upgrade === undefined;
 }
 
 export function allows(scope: Scope, p: Principal): Verdict {
@@ -98,6 +107,8 @@ export class Access {
   }
 
   identify(req: IncomingMessage, listener: Listener): Principal {
+    // Not a device either, whatever session a page of the task got hold of.
+    if (fromBrowserTask(req.headers)) return { kind: 'public' };
     if (isConsole(listener, req)) return { kind: 'console' };
     // Sessions are honoured only where §0 lets them travel: the mesh listener, over TLS or a
     // transport the person vouched for. The console port is plain HTTP; with NOVA_HOST beyond

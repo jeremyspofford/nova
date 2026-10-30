@@ -140,7 +140,7 @@ test('briefs and files are checked before a helper starts', () => {
   const spawn = (args) => () => nova.helpers.spawn({ parent: asked, task: 'Look into it.', ...args });
   assert.throws(spawn({ task: '  ' }), /needs a task/);
   assert.throws(spawn({ files: ['workspace/nope.md'] }), /There's no file at workspace\/nope\.md/);
-  assert.throws(spawn({ files: ['connectors/gmail/token.json'] }), /can't be passed to a helper/);
+  for (const f of ['connectors/gmail/token.json', 'vault/key', 'vault/secrets.json', 'mesh/identity.json', '~/vault/key']) assert.throws(spawn({ files: [f] }), /can't be passed to a helper/, f);
   assert.throws(spawn({ files: ['../outside.md'] }), /outside Nova's home/);
   assert.throws(spawn({ files: Array(6).fill('workspace/bikes.md') }), /up to 5 files/);
   assert.throws(spawn({ task: 'x'.repeat(9000) }), /too long/);

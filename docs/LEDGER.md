@@ -10,10 +10,188 @@ built-ins only.
 | Dependency | Kind | Why |
 | --- | --- | --- |
 | `jsqr` 1.4.0 | dev | Test-only: decodes the QR codes Nova draws (`tests/qr.test.js`, the M4 UI tests), so the encoder is checked by an independent decoder. Never loaded by Nova itself. |
-| `playwright-core` 1.56.1 | dev | Drives Chromium for `npm run shots` (golden screens, keyboard path, budgets); no bundled browser download. |
+| `playwright-core` 1.56.1 | dev | Drives Chromium for `npm run shots` (golden screens, keyboard path, budgets); no bundled browser download. Never used by Nova at run time: the browser worker speaks CDP itself (M5c). |
 | `claude` CLI | external | The default `agent_cmd`. Swappable by config; nothing in Nova depends on it. |
 
 ## Decisions
+
+**2026-10-30 (M5 review fixes): providers, vault, connectors.** Branch `m5-fix/providers-vault`.
+
+- **What a provider may change.** A brief's `inputs.editable` (paths or globs in the workspace)
+  is the list; without it, everything the brief's refs cover except tests (`*.test.*`,
+  `*.spec.*`, `*_test.*`, `test_*.*`, `tests/`, `test/`, `__tests__/`, `spec/`, `conftest.py`),
+  test-runner settings (jest/vitest/playwright/karma/cypress/ava configs, `.mocharc*`,
+  `pytest.ini`, `tox.ini`), every word of the test command taken as a path (so a script it names
+  counts, even one the provider added), and the files the command's program reads its scripts
+  from (`package.json` for npm/node and kin, `Makefile` for make, `setup.cfg`/`pyproject.toml`
+  for pytest). A named folder protects only the tests in it, or nothing would be left to fix. Any
+  change outside the list refuses the work whole (failed, not retried: a provider that touched
+  its checks doesn't get two more goes).
+- **No approval when a task is made; one after the provider finishes.** The creation-time tier 2
+  (`minTier`) was approving code that didn't exist yet, so the provider worker no longer sets it.
+  When the provider changed anything, Nova always asks before running the test (the task waits
+  as *partial*, with the diff), whatever `task_tests` says; `allow` still covers a run on files
+  nobody changed. The OK re-queues the task through `ledger.retry`, and the next run sees the
+  approved question and runs only the test, on the folder's hash as shown. No ledger change was
+  needed. A plain "Try again" without the OK starts the provider afresh. Each retry after a
+  failed verification runs the provider again and asks again: that is the ledger's existing
+  retry, and each ask is about new code.
+- **Process groups.** Every command Nova starts for a provider or a test has its whole process
+  group killed when it exits. A process that leaves the group on purpose (`setsid`, a double
+  fork into a new session) escapes; containing that needs namespaces or a cgroup, which Nova
+  doesn't set up. The test run's environment is PATH (with Nova's node first), a temp HOME and
+  TMPDIR, and LANG/LC_ALL only; it still runs as the person, with their files in reach, which
+  the approval says in those words.
+- **Claude Code's flags.** `--setting-sources project` and `--safe-mode` are as `claude --help`
+  2.1.259 describes them; no real session was run, so it is unverified that an older CLI accepts
+  them (one that doesn't fails the task with its own message). Project settings are Nova's home's
+  (the git root above the task folder), which has no `.claude/`.
+- **Vault re-key on delete.** Every delete (and `deletePrefix`) makes a new key and re-encrypts;
+  the standby is unaffected because the key travels at serve time with the current file. The new
+  file is written beside the old, then the key stored, then the file swapped in; an interrupted
+  re-key is finished on the next open. A lost vault (no key that fits, a damaged file) is set
+  aside as `secrets.json.unopenable-<time>` on the next save; one whose key may be in a keychain
+  that isn't answering is not, and `POST /vault/reset` (tier 3) does it on purpose.
+- **Not done, and why.** Asking Ollama's `/api/show` whether a model is remote: a call per check,
+  for what the `*-cloud` / `*:cloud` naming already tells. Home Assistant's WebSocket isn't given
+  `redirect: 'error'` (WebSocket handshakes don't follow redirects). A bare-name Home Assistant
+  is resolved once, when connected; if the name later moves off the network, Nova keeps counting
+  it local until it is connected again.
+
+**2026-10-30 (M5 review fixes): browser work, and work with outside effects.** Branch
+`m5-fix/browser-effects`.
+
+- **A browser task never reaches Nova itself.** Its browser runs on the hub, so loopback from it
+  was the console. Two walls, each enough alone: the plan can't name Nova's listeners (console and
+  mesh ports, on a loopback name or one of this machine's addresses, or a name resolving here),
+  and the session's interception refuses them whatever the declared hosts say; and every request
+  the browser lets through carries `x-nova-browser-task`, set at the CDP layer, which makes it
+  public to the access policy (not a device either). This machine without a port can't be
+  declared at all: Chromium sends a declared host's WebSockets straight there, past interception,
+  and a WebSocket handshake is never the console. Nova's ports reach the core as `hubPorts`.
+- **Workers say what a brief may change outside (`effects`: none, idempotent, external).** For
+  external work, a failure after dispatch (evidence that didn't hold up, a throw, an unreadable
+  report, a time-out, a restart) leaves the task waiting, Needs you: "May already have happened:
+  <why>. Check, then retry or cancel." Only `retry()` runs it again, and it clears the approval of
+  a tier-2 or tier-3 task first. Browser: external with fill/select/click/person steps; Home
+  Assistant service calls: external; n8n: idempotent only with its "Safe to send twice" setting
+  (`idempotent: true`); the providers that work in the task's folder: none. A plan may flag the
+  step that commits its effect (`commits: true`): `commit_point` is written before it runs (and
+  when someone takes over), and a failure before that point may still rerun by itself; each such
+  decision is a `rerun_decision` event.
+- **Browser plans:** fill/select/click asks first (tier 2). A `url` requirement needs
+  `verify.expect`; a plan with outside effects needs `url` evidence on a page it names
+  (`verify.url`), and the checker judges by Nova's own re-fetch whenever there is one. Only
+  addresses count as local (not `.local` or `.home.arpa` names). The worker re-checks a takeover
+  right before each acting CDP call; a revoked device, or one that may no longer approve, loses
+  the browser at once; left-behind profiles are removed at start (each names its process); and
+  Chromium resolves only the declared names (`--host-resolver-rules`).
+- **Not done, and why.** A name that resolves to a private address at check time doesn't count as
+  local (no lookup at delegation; it would need pinning in Chromium to mean anything). Pages may
+  still open WebSockets to a declared host:port directly (the proxy bypass), as before; only
+  Nova's own ports are now out of reach that way.
+
+**2026-10-30 (M5b): the vault, the connector kind, Home Assistant, Gmail as a connector.** Branch
+`m5b/connectors`; the plan's §2 has the "as built" note.
+
+- **One vault file, the key elsewhere.** `home/vault/secrets.json` (0600) is AES-256-GCM over the
+  whole name → value map, the vault id as associated data (a vault can't be passed off as another).
+  The key is in the OS keychain when one answers, else `home/vault/key` (0600) and the person is
+  told, in Settings › Connections and health, that the key sits next to the vault. A file key
+  moves into a keychain once one answers (written, read back, then deleted). Era 1 encrypted with
+  ChaCha20-Poly1305 and kept the secrets themselves in the keychain; the plan says AES-256-GCM and
+  "the key held by the keychain", so only the key goes there, which also makes the standby simple.
+  The Windows backend (Credential Locker through PowerShell) is written and its command shape
+  tested, but has not run on Windows. Tests never reach a real keychain: `auto` means `file`
+  under the test runner, test servers set `NOVA_VAULT_KEY=file`, and the real `secret-tool` is
+  tried only where it exists, with a throwaway account it removes.
+- **Redaction is by value**, not only by key name: every value the vault reads or writes (8
+  characters or more, and each field of a JSON value) is replaced in log lines, problems (stored
+  and replicated) and receipts.
+- **The standby gets the vault sealed.** `vault/` isn't journalled. The hub's sync log carries
+  one `vault` entry, the ciphertext, and adds the key only while serving a batch, inside the
+  batch already sealed to the standby's X25519 key; the standby stores the entry without it and
+  puts the key in its own key store. No sync log on either node holds the key (tested in-process
+  and with two real processes and a failover). This closes M4's note that connectors had to be
+  reconnected after a failover. Known gap: a database backup taken before a secret was revoked
+  still holds the old ciphertext, which the same key opens; the revoked token is revoked at the
+  service where the service allows it.
+- **A built-in connector is in the extension host only while it is connected.** The host lists
+  what the person chose (the fresh-user check that it starts empty still holds); connecting is the
+  OK on the permissions the Connections page shows; Disconnect removes the record and its data
+  folder. Disconnect is full revocation: sign out at the service where it can, then delete its
+  secrets, the rules listening to it and its settings. `DELETE /extensions/{id}` does the same
+  through a new kind hook, `revoke`, which runs before the data folder goes. Era 2's own Gmail
+  disconnect on the Skills page is unchanged (it keeps the OAuth client).
+- **Connector events fire only for what a rule listens to.** An event rule names
+  `{connector, topic}` (source `connector:<id>/<topic>`, no webhook token); a Home Assistant state
+  change or new Gmail becomes a trigger record only when a rule listens for that entity or for
+  `inbox`. A record per state change would flood the trigger table, which replicates. One rule
+  per entity (the existing unique source index for event rules).
+- **Home Assistant service calls are ledger tasks.** The tier comes from the domain (2, or 3 for
+  marked domains; locks and alarms marked to start, a recommendation the person can undo with a
+  confirmation), and the worker refuses a brief below it, so a task can't lower its own gate. The
+  evidence is a `confirmation` that Nova's own read-back of the entity backs (a sync checker, so
+  the worker takes the reading and the checker accepts only readings Nova took). Local-only never
+  contacts a Home Assistant at a remote address: reads are refused in plain words, live events
+  stay off, and the ledger refuses the task. Egress is decided from the address as written
+  (loopback, private ranges, `.local`/`.lan`/`.home.arpa`/`.internal`, single-label names and
+  mesh device hosts are local). Worker egress stays `local | remote`; M5a's `remote:<host>`
+  form can replace it at integration.
+- **Gmail's mail events are a poll** (every 5 minutes, only while a rule listens and the privacy
+  setting allows it); the first look only learns what is already there.
+- **Gmail tests.** Two assertions checked plaintext files in `connectors/gmail/` with mode 0600;
+  they now check the vault (0600, encrypted, no plaintext file). Behaviour is unchanged.
+- **Also:** the file tools refuse `vault/` as they refuse `connectors/`; approved `exec` runs as
+  the person and can still read `vault/key` where there is no keychain. The service worker never
+  caches `/api/v1/connectors` or `/api/v1/vault`; its cache name is now `nova-shell-v5` (after M5c's v4).
+- **Providers' secrets come from the vault** (after merging M5a): `secret://NAME` in a provider's settings is the vault's `provider/NAME`, set with `PUT /api/v1/vault/NAME`. M5a's `NOVA_SECRET_<NAME>` environment variables stay only as a development and test fallback: the vault wins, and a value from them is redacted like a vault value. There is no PWA field for entering a provider's secret yet; the API sets it.
+- **For the owner to check by hand:** a real Home Assistant (connect, a light on and off, a
+  door sensor rule, Disconnect deleting the token there), and the vault's key in the keychain on a
+  desktop with one.
+
+**2026-10-30 (M5a): the provider registry and agent/automation adapters.** Branch
+`m5a/providers`; the plan's §1 "as built" note has the details and the gate's interfaces.
+
+- **Providers are extensions** (agent-adapter, automation-adapter) whose `adapter` block picks
+  one of five built-in implementations (`claude-code`, `codex`, `openai-compatible`, `custom-cli`,
+  `n8n`); no extension code runs. Each enabled one is a ledger worker in its own lane, gated by its
+  egress (an HTTP provider's address decides: loopback or a mesh device is local), with a context
+  receipt per call. Enabling is tier 2 (the permissions OK).
+- **Nova verifies, not the provider:** each coding or chat task works in `workspace/tasks/<id>/`;
+  Nova computes the diff against a baseline kept outside the workspace, runs the brief's declared
+  test command itself (tier 2 unless policy allows, tier 3 to allow), and copies results back only
+  once the task is done. A provider that says it succeeded when it didn't ends failed with the
+  verifier's reason (tested with lying stand-ins).
+- **Chat goes through the registry.** `agent_cmd` is the `custom-cli` provider and stays the
+  default, run by Era 2's runner unchanged; a chosen chat model (the Ollama profile by default)
+  carries its own egress into privacy checks and receipts.
+- **n8n both ways**, signed with HMAC-SHA256: out to the workflow webhook, back through M2's token
+  webhook carrying a confirmation that Nova checks against the signed callback it kept.
+- **Secrets by name only** (`secret://NAME`), resolved through `CoreOptions.secrets`; until the vault
+  (M5b) plugs in, the server reads `NOVA_SECRET_<NAME>`.
+- **Core hooks added:** `minTier` on a laned worker, `ledger.note` and `verifier.registerKind`
+  (shared with M5c), the profile's `providers` section.
+
+**2026-10-30 (M5c): browser work with human takeover.** Branch `m5c/takeover`; the plan's §3
+"as built" note has the details and the gate's interfaces.
+
+- **Nova drives Chromium itself over CDP** (`src/core/browser/`), through `--remote-debugging-pipe`:
+  no port is opened, so nothing else on the machine can attach to the browser, and there is no
+  runtime dependency. Playwright stays a dev dependency, used only by the tests.
+- **Declared hosts are enforced twice:** CDP Fetch holds every request of every target (pages,
+  popups, iframes, workers), and a local refusing proxy catches what Fetch can't see
+  (WebSockets). Every refusal is in the task's record. Chromium's own calls home reach that proxy
+  and are refused too.
+- **The ledger learned to wait for a person mid-run**: `needsPerson`/`personDone` (active ⇄
+  waiting while the worker runs) and `note`. A worker's egress may depend on its brief
+  (`egressFor`), so a browser task on this machine or a private address counts as local.
+- **Evidence Nova checks itself:** a screenshot its own browser took into the task's folder
+  (`workers/browser/<task>/`, untracked), and the final page read afresh, re-fetched inside the
+  declared hosts or read from the final DOM. `screenshot` and `url` checkers are registered with
+  the verifier (`registerKind`).
+- **Takeover** is for the console and approver devices only. Frames and screenshots live under
+  `/api/v1/browser`, which the service worker never caches.
 
 **2026-10-30 (M4, re-check of the blocker fixes): three more ways out of the runtime's sandbox,
 closed; key replacement made safe.**

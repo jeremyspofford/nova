@@ -3,9 +3,10 @@
 // nothing outside src/core imports anything but this file.
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
+import { hostname, networkInterfaces } from 'node:os';
 import { CoreError } from './errors.ts';
 import { Db } from './db.ts';
-import { Log } from './log.ts';
+import { Log, addSecretValue } from './log.ts';
 import { Profile, SECTIONS, type Section } from './profile.ts';
 import { Workspace, workspaceWorker } from './workspace.ts';
 import { Verifier, type Checker } from './verify.ts';
@@ -19,7 +20,7 @@ import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInpu
 import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
-import { info, permits, stricter, type Egress } from './workers.ts';
+import { egressOf, info, permits, stricter, type Egress } from './workers.ts';
 import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
 import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
@@ -29,6 +30,14 @@ import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
 import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
 import { agentTar, joinScript } from './mesh/agent.ts';
+import { Vault, type KeyMode, type KeyStore } from './vault.ts';
+import { Connectors } from './connectors/index.ts';
+import { homeAssistant, type HomeAssistantOptions } from './connectors/home-assistant.ts';
+import { Providers } from './providers/registry.ts';
+import { Browser, type BrowserOptions } from './browser/worker.ts';
+import type { Hub } from './browser/plan.ts';
+import { browserRoutes } from './browser/routes.ts';
+import { checkers as browserCheckers } from './browser/evidence.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
@@ -50,7 +59,7 @@ export * from './mesh/wire.ts';
 export { SlidingWindowLimiter } from './mesh/limiter.ts';
 export { KINDS as DEVICE_KINDS, ROLE_OF, SESSION_TTL_MS } from './mesh/devices.ts';
 export { JOIN_REVEAL_TTL_MS, JOIN_APPROVE_TTL_MS, rateKey } from './mesh/enroll.ts';
-export { PUBLIC_PATHS, SESSION_COOKIE, allows, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
+export { BROWSER_TASK_HEADER, PUBLIC_PATHS, SESSION_COOKIE, allows, fromBrowserTask, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
 export { DEVICE_CONFIG_SECTIONS, INBOX_KINDS, MAX_BATCH as INBOX_MAX_BATCH } from './mesh/spokes.ts';
 export { RUNTIME_FILES, agentFiles, agentTar, joinScript, tar } from './mesh/agent.ts';
 export type { Device, Kind as DeviceKind, Role as DeviceRole, MeshState } from './mesh/devices.ts';
@@ -63,8 +72,18 @@ export { ROLE_FILE, readRole, writeRole } from './mesh/replica.ts';
 export type { RoleFile } from './mesh/replica.ts';
 export { REPLICATED, NOT_JOURNALLED } from './mesh/sync.ts';
 export type { Who } from './api.ts';
+// Providers (M5a): the registry's chat handle for Era 2's runner, and the stand-ins' signing helpers.
+export type { ChatHandle } from './providers/registry.ts';
+export { signatureHeader as n8nSignature, SIGNATURE_HEADER as N8N_SIGNATURE_HEADER } from './providers/n8n.ts';
 export { originHost } from './api.ts';
 export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
+// The vault and connectors (M5b): Era 2's Gmail keeps its secrets in the vault and registers as a connector.
+export { Vault, FILE_KEY_NOTICE, SECRET_SCHEME, secretRef, keyMode, fileKeyStore, secretToolKeyStore, macKeyStore, windowsKeyStore, platformKeyStore } from './vault.ts';
+export type { KeyMode, KeyStore, Run as KeyCommandRunner, VaultStatus } from './vault.ts';
+export { addressEgress, secretPrefix } from './connectors/index.ts';
+export type { Connector, ConnectorContext, ConnectorFactory, ConnectorStatus, ConnectorView } from './connectors/index.ts';
+export { HA_ID, HA_MANIFEST, DEFAULT_TIER3, tokenIssuer } from './connectors/home-assistant.ts';
+export { redactText } from './log.ts';
 
 export interface CoreOptions {
   home: string;
@@ -81,6 +100,18 @@ export interface CoreOptions {
   designSystems?: string;
   // The mesh listener, when there is one: where devices reach Nova, and what carries it.
   mesh?: MeshListenerInfo | null;
+  // Where the vault's key lives (vault.ts): NOVA_VAULT_KEY by default; tests inject a keychain.
+  vault?: { mode?: KeyMode; keychain?: ((account: string) => KeyStore | null) | null };
+  // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
+  hubPorts?: () => number[];
+  // How the browser worker starts a browser: Chromium, or a stand-in in tests.
+  browserLaunch?: BrowserOptions['launch'];
+  // Home Assistant's reconnect pauses and timeouts (tests shorten them).
+  homeAssistant?: HomeAssistantOptions;
+  // The model command Era 2 chats with (agent_cmd, agent_egress): the custom-cli provider (M5a).
+  agent?: { command: string; egress: Egress };
+  // A secret by name (secret://NAME), for providers that need one; the vault (M5b) answers it.
+  secrets?: (name: string) => string | null;
   now?: () => Date;
 }
 
@@ -101,10 +132,26 @@ export function createCore(o: CoreOptions) {
   const workspace = new Workspace(join(o.home, 'workspace'));
   const verifier = new Verifier(workspace, now);
   for (const [system, check] of Object.entries(o.confirmations ?? {})) verifier.registerConfirmation(system, check);
+  // Browser work with takeover (M5c): a worker of its own, and the checks for what it proves.
+  // Its browser runs here, so it is told where Nova itself listens: this machine's addresses and
+  // names, at the console's and the mesh listener's ports (browser/plan.ts, `Hub`).
+  const hubAddress = (): Hub => ({
+    ports: o.hubPorts?.() ?? [],
+    hosts: [
+      hostname(),
+      ...(o.mesh?.publicUrl ? [(() => { try { return new URL(o.mesh!.publicUrl).hostname; } catch { return ''; } })()] : []),
+      ...Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((a) => a.address)),
+    ].filter(Boolean),
+  });
+  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}) });
+  const browserChecks = browserCheckers(o.home);
+  verifier.registerKind('screenshot', browserChecks.screenshot);
+  verifier.registerKind('url', browserChecks.url);
   const rules = new RulesProvider();
   const templates = new Templates({ db, verifier, rules, now });
-  const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace')), templates.worker, ...(o.workers ?? [])], defaultPrivacy: () => profile.privacyDefault(), now });
+  const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace')), templates.worker, browser.worker, ...(o.workers ?? [])], defaultPrivacy: () => profile.privacyDefault(), now });
   templates.bind(ledger);
+  browser.bind(ledger);
   // Remote decision providers (JevProvider) are registered only once configured; local-only skips them anyway.
   const decisions = new Decisions({ templates, providers: [rules], privacy: () => profile.privacyDefault(), log });
   const triggers = new Triggers({
@@ -119,6 +166,30 @@ export function createCore(o: CoreOptions) {
   const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)) });
   const receipts = new Receipts({ db, log, now });
   for (const p of design.ensureBuiltins()) log.problem('design', p);
+  // Providers (M5a): each enabled one is a ledger worker. A model on one of the person's own
+  // devices counts as local.
+  const meshHosts = () => new Set([
+    ...(o.mesh?.publicUrl ? [o.mesh.publicUrl] : []),
+    ...db.all<{ address: string | null }>("SELECT address FROM device WHERE trust = 'trusted' AND address IS NOT NULL").map((d) => d.address!),
+  ].map((a) => { try { return new URL(a.includes('://') ? a : `http://${a}`).hostname.replace(/^\[|\]$/g, ''); } catch { return ''; } }).filter(Boolean));
+  // The vault (M5b): secrets by name, encrypted at rest. Providers name theirs secret://NAME, kept
+  // as provider/NAME; `o.secrets` (server.js: NOVA_SECRET_<NAME>) is a fallback for development
+  // and tests only, and anything it answers is redacted like a vault value.
+  const vault = new Vault({ home: o.home, ...(o.vault ?? {}) });
+  const providerSecret = (name: string): string | null => {
+    let v: string | null = null;
+    try { v = vault.get(`provider/${name}`); } catch { /* a vault that won't open: its problem shows in health */ }
+    if (v === null && o.secrets) {
+      v = o.secrets(name);
+      if (v) addSecretValue(v);
+    }
+    return v;
+  };
+  const providers = new Providers({
+    db, log, home: o.home, workspace, extensions, ledger, verifier, receipts, profile, now,
+    custom: o.agent, secret: providerSecret, meshHost: (h) => meshHosts().has(h),
+    fire: (input) => triggers.fire(input),
+  });
   // The device mesh: this node's keys, the registry, enrollment, and who may do what.
   const meshInfo = o.mesh ?? null;
   const publicUrl = () => meshInfo?.publicUrl ?? null;
@@ -130,6 +201,11 @@ export function createCore(o: CoreOptions) {
   // Hub, standby and sync (M4 plan §3).
   const sync = new SyncLog({ db, log, home: o.home, node: meshIdentity.id, now });
   memory.onForgetDone((records) => sync.forgotten(records.map((r) => r.content)));
+  // A standby gets the vault sealed through sync.
+  sync.vault = vault;
+  vault.on('change', () => {
+    try { sync.vaultChanged(); } catch (e) { log.problem('sync', 'Nova couldn’t record a change to its vault for the standby.', { detail: (e as Error)?.stack ?? String(e) }); }
+  });
   meshRole = new MeshRole({
     db, log, home: o.home, now, publicUrl, identity: meshIdentity, devices, access, sync, ledger, verifier, file: place.file,
     becameHub: () => startHub(), becameStandby: () => stopHub(),
@@ -158,8 +234,28 @@ export function createCore(o: CoreOptions) {
     },
   });
 
+  // Connectors (M5b): Home Assistant is built in; Era 2's Gmail registers itself (server.js).
+  const connectors = new Connectors({
+    extensions, vault, triggers, log, now,
+    privacy: () => profile.privacyDefault(),
+    meshHosts: () => devices.list().flatMap((d) => { try { return d.address ? [new URL(d.address).hostname.replace(/^\[|\]$/g, '')] : []; } catch { return []; } }),
+    delegate: (owner, input) => {
+      const task = ledger.create({ ...input, owner, origin: { kind: 'user' } } as TaskInput);
+      triggers.reactive(task, `connector:${owner}`);
+      return task;
+    },
+    addWorker: (w) => { ledger.workers.set(w.id, w); },
+    addConfirmation: (system, check) => verifier.registerConfirmation(system, check),
+  });
+  connectors.register(homeAssistant(o.homeAssistant));
+  // Every change to the privacy setting, or to the devices that count as local, is checked again
+  // against what connectors keep open.
+  profile.on('change', (c: { section: string }) => { if (c.section === 'privacy') connectors.recheck(); });
+  devices.on('change', () => connectors.recheck());
+
   const bus = new EventEmitter();
   bus.setMaxListeners(100);
+  connectors.on('change', (c) => bus.emit('event', 'connector', c));
   ledger.on('task', (t) => bus.emit('event', 'task', { id: t.id, title: t.title, state: t.state, reason: t.reason, user_visibility: t.user_visibility }));
   log.on('problem', (p) => bus.emit('event', 'problem', p));
   setup.on('change', (v) => bus.emit('event', 'setup', { step: v.step, done: v.done }));
@@ -171,10 +267,11 @@ export function createCore(o: CoreOptions) {
     for (const t of ledger.list({ state: 'waiting', limit: 500 })) {
       const w = ledger.workers.get(t.owner);
       if (!w || !t.reason?.includes('local capacity')) continue;
-      if (permits(stricter(t.privacy_mode, profile.privacyDefault()), w.egress)) ledger.retry(t.id, 'Your privacy setting changed, so this can run now.');
+      if (permits(stricter(t.privacy_mode, profile.privacyDefault()), (() => { try { return egressOf(w, t.brief); } catch { return w.egress; } })())) ledger.retry(t.id, 'Your privacy setting changed, so this can run now.');
     }
   });
   extensions.on('change', (c) => bus.emit('event', 'extension', c));
+  providers.on('change', (c) => bus.emit('event', 'provider', c));
   // The UI swaps its design-system stylesheet when this arrives: no reload, no restart.
   design.on('change', (c) => bus.emit('event', 'design-system', c));
   triggers.on('trigger', (t) => bus.emit('event', 'trigger', { trigger_id: t.trigger_id, rule_id: t.rule_id, class: t.class, decision: t.triage.decision, reason: t.triage.reason, ledger_task_id: t.ledger_task_id, message_id: t.message_id }));
@@ -185,6 +282,12 @@ export function createCore(o: CoreOptions) {
   enroll.on('change', (r) => bus.emit('event', 'join_request', r));
   role.on('change', (s) => bus.emit('event', 'mesh', s));
   role.on('applied', (a) => bus.emit('event', 'sync', a));
+  browser.on('change', (v) => bus.emit('event', 'browser', v));
+  // A device that may no longer approve may no longer hold a browser either (browser/routes.ts).
+  devices.on('revoked', (d: Device) => browser.release(`device:${d.id}`, `ended by Nova: its device was removed`));
+  devices.on('change', (c: { action: string; device: Device }) => {
+    if (c.action === 'can_approve' && !c.device.can_approve) browser.release(`device:${c.device.id}`, 'ended by Nova: its device may no longer take over');
+  });
   const stream = {
     on(listener: (event: string, data: unknown) => void) {
       const fn = (event: string, data: unknown) => listener(event, data);
@@ -237,8 +340,24 @@ export function createCore(o: CoreOptions) {
       memory: { ok: true, counts: memory.counts() },
       receipts: { ok: true, counts: receipts.counts() },
       mesh: { ok: true, ...meshHealth() },
+      vault: vaultHealth(),
+      connectors: connectors.health(),
+      browser: browserHealth(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
+  }
+
+  // Names only, never values; where the key lives, said plainly when it is a file.
+  function vaultHealth() {
+    const s = vault.status();
+    return { ok: s.ok, detail: s.problem ?? (s.secrets ? `${s.secrets} secret${s.secrets === 1 ? '' : 's'}, key in ${s.where}.` : 'Empty.'), secrets: s.secrets, key: s.key, notice: s.notice };
+  }
+
+  // No Chromium is said plainly, but isn't a fault: browser work is simply unavailable. A browser
+  // named in NOVA_CHROMIUM that isn't there is.
+  function browserHealth() {
+    const f = browser.chromium();
+    return { ok: f.path !== null || f.from === 'none', available: f.path !== null, detail: f.detail, running: browser.list().length };
   }
 
   function meshHealth() {
@@ -273,6 +392,7 @@ export function createCore(o: CoreOptions) {
         const section = params.section as Section;
         if (!SECTIONS.includes(section) || section === 'setup') throw new CoreError('validation', `There is no profile section called "${params.section}".`);
         if (section === 'mesh') meshSetting(params.key!, body.value, body.confirm === true, who);
+        if (section === 'providers' || (section === 'policy' && params.key === 'task_tests')) throw new CoreError('validation', 'Providers are set through /api/v1/providers, so their settings are checked.');
         if (section === 'appearance') {
           if (params.key !== 'mode') throw new CoreError('validation', 'Choose a design system with POST /api/v1/design-systems/{id}/apply, so it is checked and can be rolled back.');
           design.setMode(body.value);
@@ -298,6 +418,8 @@ export function createCore(o: CoreOptions) {
       method: 'POST', path: '/tasks', status: 201, summary: 'Delegate a task. It must name a worker and the evidence that will prove it done.',
       body: '{title, owner, goal, evidence_required[], privacy_mode?, approval_tier?, inputs?, context_refs?, constraints?, idempotency_key?}',
       handle: ({ body }) => {
+        const off = typeof body.owner === 'string' && !ledger.workers.has(body.owner) ? providers.explain(body.owner) : null;
+        if (off) throw new CoreError('conflict', off);
         const task = ledger.create({ ...(body as unknown as TaskInput), origin: { kind: 'user' } });
         triggers.reactive(task);
         return task;
@@ -338,7 +460,7 @@ export function createCore(o: CoreOptions) {
     { method: 'GET', path: '/triggers/rules', summary: 'Every automation Nova runs: event, heartbeat and proactive rules. Nothing runs that isn’t listed here.', handle: () => triggers.listRules() },
     {
       method: 'POST', path: '/triggers/rules', status: 201, summary: 'Add a rule. For an event rule the reply carries its webhook token, shown this once only.',
-      body: '{name, class: proactive|event|heartbeat, hook? (event), cron? (heartbeat), action: {kind: task, task} | {kind: message, text}, dedup_window_s?, cooldown_s?}',
+      body: '{name, class: proactive|event|heartbeat, hook? or connector + topic? (event), cron? (heartbeat), action: {kind: task, task} | {kind: message, text}, dedup_window_s?, cooldown_s?}',
       handle: ({ body }) => {
         const { rule, token } = triggers.createRule(body as unknown as RuleInput, 'person');
         return token ? { rule, token, note: 'Keep this token somewhere safe. Nova keeps only a hash of it and won’t show it again.' } : { rule };
@@ -361,6 +483,9 @@ export function createCore(o: CoreOptions) {
       summary: 'Call an event rule’s webhook. Authenticated by the x-nova-hook-token header instead of X-Nova, so automations can call it. The body is kept only as a hash; x-nova-dedup-key is optional.',
       body: 'any JSON object',
       handle: async ({ params, body, headers }) => {
+        // A provider's callback (n8n) comes through the same token webhooks (M5a).
+        const cb = await providers.hook(params.name!, header(headers, 'x-nova-hook-token'), body, headers);
+        if (cb) return cb;
         const t = await triggers.hook(params.name!, header(headers, 'x-nova-hook-token'), body, header(headers, 'x-nova-dedup-key'));
         return { trigger_id: t.trigger_id, decision: t.triage.decision, reason: t.triage.reason };
       },
@@ -503,6 +628,39 @@ export function createCore(o: CoreOptions) {
     },
     { method: 'GET', path: '/mesh/runtime', access: 'device', summary: 'The runtime agent this node ships, {manifest: {version, sha256, files}, signature, signer, files}, signed over nova-runtime-v1.<manifest>.', handle: () => spokes.runtime() },
     ...role.routes(),
+    // ---- the vault and connectors (M5 plan §2) ----
+    { method: 'GET', path: '/vault', summary: 'The vault: how many secrets, their names (never their values), and where its key is, said plainly when it is a file.', handle: () => ({ ...vault.status(), names: vault.status().ok ? vault.list() : [] }) },
+    {
+      method: 'PUT', path: '/vault/{name}', summary: 'Keep a provider’s secret (an API key, a signing secret) in the vault under the name its settings use as secret://NAME. The value is never shown again.', body: '{value}',
+      handle: ({ params, body }) => {
+        if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(params.name!)) throw new CoreError('validation', 'A secret’s name is capital letters, digits and underscores, like API_KEY.');
+        if (typeof body.value !== 'string' || !body.value.trim()) throw new CoreError('validation', 'value is the secret itself, and it can’t be empty.');
+        vault.put(`provider/${params.name}`, body.value.trim());
+        return { name: params.name, ref: `secret://${params.name}`, stored: true };
+      },
+    },
+    {
+      method: 'POST', path: '/vault/reset', summary: 'Start a new, empty vault (tier 3: needs {confirm: true}), for one that can’t be opened: the old file is kept aside in vault/ as secrets.json.unopenable-<time>. Every connection and key must be set again.', body: '{confirm}',
+      handle: ({ body }) => vault.reset(body.confirm === true),
+    },
+    {
+      method: 'DELETE', path: '/vault/{name}', summary: 'Delete a provider’s secret from the vault.',
+      handle: ({ params }) => {
+        if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(params.name!)) throw new CoreError('validation', 'A secret’s name is capital letters, digits and underscores, like API_KEY.');
+        return { name: params.name, deleted: vault.delete(`provider/${params.name}`) };
+      },
+    },
+    { method: 'GET', path: '/connectors', summary: 'Connections to outside services: status, what each can do in plain words, where its calls go, and the one Nova recommends connecting next.', handle: () => ({ connectors: connectors.list(), vault: vaultHealth() }) },
+    { method: 'GET', path: '/connectors/{id}', summary: 'One connection.', handle: ({ params }) => connectors.view(params.id!) },
+    { method: 'POST', path: '/connectors/{id}/connect', summary: 'Connect a service with what its setup asks for (an address, a token). Secrets go into the vault.', body: '{…setup fields}', handle: ({ params, body }) => connectors.connect(params.id!, body) },
+    { method: 'POST', path: '/connectors/{id}/disconnect', summary: 'Disconnect: sign Nova out at the service where it can, then delete its secrets, the rules listening to it and its settings.', handle: ({ params }) => connectors.disconnect(params.id!) },
+    ...connectors.routes(),
+    ...providers.routes(),
+    // ---- browser work with takeover (M5 plan §3) ----
+    ...browserRoutes(browser, {
+      home: o.home,
+      holder: (w) => (w.principal.kind === 'device' ? { key: `device:${w.principal.device.id}`, label: w.principal.device.name } : { key: 'console', label: 'The hub’s own screen' }),
+    }),
   ];
 
   // Tests drive the heartbeat's clock through the API; this route doesn't exist otherwise.
@@ -526,16 +684,19 @@ export function createCore(o: CoreOptions) {
   // The hub's own work: the ledger, recovered, and the heartbeat. A standby runs neither.
   function startHub() {
     const recovered = ledger.recover();
+    providers.recover();
     if (!heartbeat) {
       heartbeat = setInterval(beat, 30_000);
       heartbeat.unref();
       beat();
     }
+    connectors.start();
     return recovered;
   }
   function stopHub() {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
+    connectors.stop().catch(() => {});
   }
   // On a standby (or a hub that stepped down) every change is refused, saying which node is hub;
   // the only change it takes is becoming the hub.
@@ -565,7 +726,8 @@ export function createCore(o: CoreOptions) {
   });
 
   return {
-    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
+    vault, connectors,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
@@ -587,6 +749,7 @@ export function createCore(o: CoreOptions) {
     // A hub recovers the ledger, then starts the heartbeat: once now (to catch up), then every
     // 30 s. A standby starts copying the hub instead, and runs nothing else.
     start() {
+      browser.sweep();
       const recovered = role.role() === 'hub' ? startHub() : { requeued: [], reverified: [] };
       role.start();
       return recovered;
@@ -595,6 +758,8 @@ export function createCore(o: CoreOptions) {
     async close() {
       stopHub();
       await role.close();
+      // Browsers close first and their tasks stay as they are: the next start runs them again.
+      await browser.close();
       await Promise.race([ticking.then(() => ledger.idle()), new Promise((r) => setTimeout(r, 2000).unref())]);
       db.close();
     },

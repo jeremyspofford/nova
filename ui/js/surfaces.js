@@ -3,10 +3,11 @@
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
 import { ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, orb, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
-import { greeting, isOpen, needsApproval, statusOf } from './status.js';
+import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
 import { MODES, current as appearance, previewCss, rollback, setMode, use } from './theme.js';
+import { openTakeover } from './takeover.js';
 
 // What the core has told this page, kept fresh by the event stream.
 export const store = {
@@ -15,6 +16,8 @@ export const store = {
   // The device mesh: the registry, whether other devices can reach Nova (and who this page is),
   // and devices waiting for an OK.
   devices: [], mesh: null, requests: [],
+  // Settings › Providers: GET /providers, loaded when Settings opens (M5a).
+  providers: null,
 };
 
 const settle = (p, fallback) => p.catch(() => fallback);
@@ -53,7 +56,10 @@ export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'm
   return { any, live: results.some(([, v, s]) => v !== undefined && !s) };
 }
 
-export const needsYou = () => store.tasks.filter(needsApproval).length + store.messages.filter((m) => m.hold === 'needs_ok').length + store.requests.length;
+// Everything in the one vocabulary's Needs you: an OK to give, a step only the person can do
+// (a browser task waiting for a takeover), a task that is stuck without them.
+const asksYou = (t) => statusOf(t) === 'needs-you';
+export const needsYou = () => store.tasks.filter(asksYou).length + store.messages.filter((m) => m.hold === 'needs_ok').length + store.requests.length;
 export const working = () => store.tasks.filter((t) => t.state === 'active' || t.state === 'verifying').length;
 export const privacy = () => store.profile?.privacy?.default ?? 'local-only';
 
@@ -91,7 +97,7 @@ const today = (now = new Date()) => now.toLocaleDateString('en-US', { weekday: '
 export function renderHome(el, now = new Date()) {
   const name = store.identity?.address_as ?? store.identity?.user_name ?? '';
   const unread = store.messages.filter((m) => (m.hold === 'needs_ok' || (m.delivered_at && !m.read_at)));
-  const asking = store.tasks.filter(needsApproval);
+  const asking = store.tasks.filter(asksYou);
   const verified = store.tasks.find((t) => t.state === 'done' && t.verification?.ok);
   const needsCard = asking.length
     ? card({ kind: 'needs-you-card', title: 'Needs you', icon: 'handling', body: `<ul class="task-list">${asking.slice(0, 3).map((t) => taskRow(t, { now })).join('')}</ul>` })
@@ -154,11 +160,53 @@ export async function openTask(id) {
     openSheet(approvalSheet(t, { worker }), { label: 'Needs your OK' });
     return;
   }
+  // A provider has finished and Nova asks before running the test on what it wrote. Only a task whose
+  // history says so is asked about it (other waiting tasks, a browser waiting for a person, have none).
+  const lastAsk = events.findLastIndex((e) => e.kind === 'test_run_asked');
+  if (t.state === 'waiting' && lastAsk >= 0 && !events.slice(lastAsk).some((e) => e.kind === 'test_run_approved')) {
+    const run = await api('GET', `/providers/tasks/${encodeURIComponent(id)}/test-run`).catch(() => null);
+    if (run) {
+      const worker = store.workers.find((w) => w.id === t.owner) ?? null;
+      openSheet(approvalSheet(t, { worker, run }), { label: 'Needs your OK' });
+      return;
+    }
+  }
+  // A browser task with its browser open: the live view, where the person can take over.
+  if (t.owner === 'browser' && isOpen(t)) {
+    const view = await api('GET', `/browser/tasks/${encodeURIComponent(id)}`).catch(() => null);
+    if (view?.live) {
+      const you = store.mesh?.you;
+      openTakeover(t, view, { me: you && !you.console ? `device:${you.device_id}` : 'console', canTake: you?.can_approve !== false, onEnd: () => afterBrowser(id) });
+      return;
+    }
+  }
   const actions = [];
-  if (t.state === 'waiting') actions.push(`<button type="button" class="btn primary" data-action="retry-task" data-task="${esc(t.id)}">Try again</button>`);
+  if (t.state === 'waiting') actions.push(`<button type="button" class="btn primary" data-action="retry-task" data-task="${esc(t.id)}">${esc(retryLabel(t))}</button>`);
   if (isOpen(t)) actions.push(`<button type="button" class="btn" data-action="cancel-task" data-task="${esc(t.id)}">Cancel the task</button>`);
-  const timeline = events.length ? `<details class="raw"><summary>What happened</summary><ul class="timeline">${events.map((e) => `<li>${esc(new Date(e.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))} · ${esc(e.kind.replace(/_/g, ' '))}${e.to_state ? ` → ${esc(e.to_state)}` : ''}</li>`).join('')}</ul></details>` : '';
+  const timeline = events.length ? `<details class="raw"><summary>What happened</summary><ul class="timeline">${events.map((e) => `<li data-kind="${esc(e.kind)}">${esc(new Date(e.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))} · ${esc(e.kind.replace(/_/g, ' '))}${e.to_state ? ` → ${esc(e.to_state)}` : ''}${esc(eventDetail(e))}</li>`).join('')}</ul></details>` : '';
   openSheet(`${evidenceViewer(t)}${timeline}${actions.length ? `<div class="sheet-actions">${actions.join('')}</div>` : ''}`, { label: t.title });
+}
+
+// The few events whose detail the person needs in the timeline: who took over and for how long,
+// what was refused, which step.
+function eventDetail(e) {
+  const d = e.detail ?? {};
+  if (e.kind === 'takeover_started') return ` · ${d.who ?? d.by}${d.requested ? ', as Nova asked' : ''}`;
+  if (e.kind === 'takeover_ended') return ` · ${d.who ?? d.by}, after ${Math.max(1, Math.round((d.duration_ms ?? 0) / 1000))} s`;
+  if (e.kind === 'blocked_request') return ` · ${d.host}`;
+  if (e.kind === 'step') return ` · ${d.n} of ${d.of}: ${d.what}`;
+  return '';
+}
+
+// Once a browser task's browser closes, Nova checks the evidence; the sheet moves on to the
+// result when that is in (a few seconds at most), or to whatever the task shows by then.
+async function afterBrowser(id) {
+  for (let i = 0; i < 20; i++) {
+    const t = await api('GET', `/tasks/${encodeURIComponent(id)}`).catch(() => null);
+    if (!t || !['active', 'verifying'].includes(t.state)) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (sheetOpen()) openTask(id);
 }
 
 export async function approve(form) {
@@ -166,6 +214,8 @@ export async function approve(form) {
   if (form.dataset.revoke) return confirmRevoke(form);
   if (form.dataset.allow) return confirmAllow(form);
   if (form.dataset.promote) return confirmPromote(form);
+  if (form.dataset.provider) return confirmProvider(form);
+  if (form.dataset.testRun) return approveTestRun(form.dataset.testRun);
   const id = form.dataset.task;
   const tier = Number(form.dataset.tier);
   const confirm = form.querySelector('input[name="confirm"]');
@@ -178,19 +228,30 @@ export async function approve(form) {
   } catch (e) { toast(e.message); }
 }
 
+async function approveTestRun(id) {
+  try {
+    await api('POST', `/providers/tasks/${encodeURIComponent(id)}/test-run`, {});
+    closeSheet();
+    toast('Approved. Nova runs the test.');
+    await load(['tasks']);
+  } catch (e) { toast(e.message); }
+}
+
 export async function taskAction(action, id) {
   try {
-    if (action === 'retry-task') await api('POST', `/tasks/${encodeURIComponent(id)}/retry`);
+    const t = action === 'retry-task' ? await api('POST', `/tasks/${encodeURIComponent(id)}/retry`) : null;
     if (action === 'cancel-task') await api('POST', `/tasks/${encodeURIComponent(id)}/cancel`, { reason: 'Cancelled by you.' });
+    await load(['tasks']);
+    // Running it again needs the person's OK again: straight to asking for it.
+    if (t && needsApproval(t)) return openTask(id);
     closeSheet();
     toast(action === 'retry-task' ? 'Trying again.' : 'Cancelled.');
-    await load(['tasks']);
   } catch (e) { toast(e.message); }
 }
 
 // ---- Health -------------------------------------------------------------------------------
 
-const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices' };
+const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices', browser: 'Browser work' };
 function checkLine(key, c) {
   if (key === 'workers') return c.ok ? `${c.workers?.length ?? 0} ready.` : c.detail;
   if (key === 'ledger') return Object.entries(c.counts ?? {}).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ') || 'No tasks yet.';
@@ -525,6 +586,165 @@ async function confirmPromote(form) {
     toast(`This node is the hub now (epoch ${r.epoch}).`);
   } catch (e) { toast(e.message); }
   await load();
+}
+
+// ---- Settings › Providers (M5a) ------------------------------------------------------------------
+// Who Nova can hand work to. Nova recommends one for chat rather than listing choices; that is the
+// one standout here. The full list waits one layer down. Turning a provider on is tier 2: its own
+// sheet, with what it may do and where its data goes.
+
+const CLASS_WORDS = { 'coding-agent': 'Coding agent', chat: 'Chat model', automation: 'Automation' };
+const providerById = (id) => store.providers?.providers?.find((p) => p.id === id) ?? null;
+
+export function renderProviders() {
+  const data = store.providers;
+  const head = '<h2 class="memory-heading" id="set-providers">Providers</h2>';
+  if (!data) return `<section class="memory-section" id="providers" aria-labelledby="set-providers">${head}<p class="memory-lede">Nova hasn’t heard back about its providers yet.</p></section>`;
+  const name = (id) => providerById(id)?.name ?? id;
+  const advice = (what, standout) => {
+    const c = what === 'chat' ? data.chat : data.defaults[what];
+    const rec = c.recommended;
+    const better = rec.id && rec.id !== c.current;
+    const title = what === 'chat' ? `Chat uses ${name(c.current)}` : c.current ? `Coding tasks go to ${name(c.current)}` : 'Coding tasks';
+    return settingsRow({
+      title,
+      note: better ? `Nova recommends ${name(rec.id)}. ${rec.why}` : rec.why,
+      control: better ? `<button type="button" class="btn small${standout ? ' primary' : ''}" data-action="provider-choose" data-for="${what}" data-provider="${esc(rec.id)}">Use ${esc(name(rec.id))}</button>` : '',
+    });
+  };
+  const rows = data.providers.map((p) => {
+    const usable = p.health.state === 'ready' || p.health.state === 'unchecked';
+    const pill = `<span class="pill${p.enabled && p.health.state === 'ready' ? ' is-on' : p.enabled ? ' is-warn' : ''}">${p.enabled ? 'On' : 'Off'}</span>`;
+    const setup = p.fields.some((f) => !f.fixed) ? `<button type="button" class="btn small quiet" data-action="provider-setup" data-provider="${esc(p.id)}">Settings</button>` : '';
+    const toggle = p.enabled
+      ? `<button type="button" class="btn small" data-action="provider-off" data-provider="${esc(p.id)}">Turn off</button>`
+      : `<button type="button" class="btn small" data-action="provider-on" data-provider="${esc(p.id)}"${usable ? '' : ' disabled'}>Turn on</button>`;
+    return settingsRow({ id: `provider-${p.id}`, title: p.name, note: `${CLASS_WORDS[p.class] ?? p.class}. ${p.egress.words} ${p.health.words}`, control: `${pill}${setup}${toggle}` });
+  }).join('');
+  const chatBetter = data.chat.recommended.id && data.chat.recommended.id !== data.chat.current;
+  // Redrawn on every change; the full list stays open if the person opened it.
+  const open = document.querySelector('#providers details.raw')?.open ? ' open' : '';
+  return `<section class="memory-section" id="providers" aria-labelledby="set-providers">${head}
+<p class="memory-lede">Other AIs and automations Nova can hand work to. Each is off until you turn it on, and Nova checks what they do before it counts.</p>
+<ul class="settings-list">${advice('chat', true)}${advice('coding-agent', !chatBetter)}</ul>
+<details class="raw"${open}><summary>All providers (${data.providers.length})</summary><ul class="settings-list">${rows}</ul></details>
+<p class="settings-note">Test commands a brief declares: ${data.task_tests === 'allow' ? 'Nova runs them without asking.' : 'Nova asks before running them.'}</p></section>`;
+}
+
+export async function loadProviders() {
+  try {
+    store.providers = await api('GET', '/providers');
+  } catch { /* the part keeps what it had; the next event tries again */ }
+  window.dispatchEvent(new CustomEvent('nova:providers'));
+}
+
+export async function chooseProvider(what, id) {
+  try {
+    await api('PUT', '/providers/choice', { for: what, id });
+    toast(what === 'chat' ? `Chat uses ${providerById(id)?.name ?? id} now.` : `Coding tasks go to ${providerById(id)?.name ?? id} now.`);
+  } catch (e) { toast(e.message); }
+  await loadProviders();
+}
+
+export async function providerOff(id) {
+  try {
+    const p = await api('POST', `/providers/${encodeURIComponent(id)}/disable`);
+    toast(`${p.name} is off. Its tasks wait until it is on again.`);
+  } catch (e) { toast(e.message); }
+  await loadProviders();
+}
+
+// Turning one on asks first (tier 2): what it may do, and where its data goes.
+export function providerOn(id) {
+  const p = providerById(id);
+  if (!p) return;
+  openSheet(`<form class="approval-sheet" data-tier="2" data-provider="${esc(p.id)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">Turn on ${esc(p.name)}?</h2>
+  <p class="sheet-line">${esc(p.about)}</p>
+  <dl class="facts"><dt>Where it sends</dt><dd>${esc(p.egress.words)}</dd><dt>It may</dt><dd>${p.review.map(esc).join('<br>')}</dd></dl>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve">Turn it on</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`, { label: `Turn on ${p.name}` });
+}
+
+async function confirmProvider(form) {
+  try {
+    const p = await api('POST', `/providers/${encodeURIComponent(form.dataset.provider)}/enable`, { approved: true });
+    closeSheet();
+    toast(`${p.name} is on.`);
+  } catch (e) { toast(e.message); }
+  await loadProviders();
+}
+
+export function providerSetup(id) {
+  const p = providerById(id);
+  if (!p) return;
+  const field = (f) => {
+    const fid = `pf-${f.key}`;
+    if (f.kind === 'boolean') return `<label class="choice" for="${fid}"><input type="checkbox" id="${fid}" name="${esc(f.key)}"${p.config[f.key] === true ? ' checked' : ''}${f.fixed ? ' disabled' : ''}><span class="choice-name">${esc(f.label)}</span></label>${f.note ? `<p class="settings-note">${esc(f.note)}</p>` : ''}`;
+    const plain = `<label class="field-label" for="${fid}">${esc(f.label)}<input class="input field" id="${fid}" name="${esc(f.key)}" value="${esc(p.config[f.key] ?? '')}" autocomplete="off"${f.fixed ? ' readonly' : ''}></label>${f.note ? `<p class="settings-note">${esc(f.note)}</p>` : ''}`;
+    // A secret's value is typed here and goes into the vault; it is never shown back.
+    const value = f.kind === 'secret' && !f.fixed
+      ? `<label class="field-label" for="${fid}-value">${esc(f.label)}: the value<input class="input field" type="password" id="${fid}-value" name="${esc(f.key)}__value" value="" autocomplete="new-password" placeholder="Kept in the vault, never shown again"></label>`
+      : '';
+    return plain + value;
+  };
+  openSheet(`<form class="provider-form" data-provider="${esc(p.id)}" method="dialog">
+  <h2 class="sheet-title" id="sheet-title">${esc(p.name)}</h2>
+  <p class="sheet-line">${esc(p.health.words)}</p>
+  ${p.fields.map(field).join('')}
+  ${p.enabled ? `<label class="confirm"><input type="checkbox" name="confirm"> ${esc(p.name)} is on. Changing what it runs or where it sends needs this: I confirm it.</label>` : ''}
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary">Save</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Cancel</button>
+  </div>
+</form>`, { label: `${p.name} settings` });
+}
+
+// The vault name a secret field's value goes under: the one it already names, or one made from the
+// provider and the field (OPENAI_COMPATIBLE_API_KEY).
+const secretNameFor = (p, f, ref) => /^secret:\/\/([A-Z][A-Z0-9_]*)$/.exec(ref)?.[1] ?? `${p.id}_${f.key}`.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^[^A-Z]+/, '').slice(0, 64);
+
+export async function saveProvider(form) {
+  const p = providerById(form.dataset.provider);
+  if (!p) return;
+  const config = {};
+  for (const f of p.fields) {
+    if (f.fixed) continue;
+    if (f.kind === 'boolean') {
+      const on = !!form.elements[f.key]?.checked;
+      if (on !== (p.config[f.key] === true)) config[f.key] = on;
+      continue;
+    }
+    const v = form.elements[f.key]?.value.trim() ?? '';
+    if (v !== String(p.config[f.key] ?? '')) config[f.key] = v;
+  }
+  try {
+    // A secret typed here goes straight into the vault; the setting keeps only its name.
+    for (const f of p.fields.filter((x) => x.kind === 'secret' && !x.fixed)) {
+      const input = form.elements[`${f.key}__value`];
+      const value = input?.value.trim() ?? '';
+      if (!value) continue;
+      const name = secretNameFor(p, f, form.elements[f.key]?.value.trim() ?? '');
+      await api('PUT', `/vault/${encodeURIComponent(name)}`, { value });
+      input.value = '';
+      if (`secret://${name}` !== String(p.config[f.key] ?? '')) config[f.key] = `secret://${name}`;
+    }
+    const confirm = form.elements.confirm?.checked === true;
+    const r = await api('PUT', `/providers/${encodeURIComponent(p.id)}/config`, { config, ...(confirm ? { confirm: true } : {}) });
+    if (r.token) {
+      openSheet(`<div class="provider-token"><h2 class="sheet-title" id="sheet-title">The workflow’s callback token</h2>
+<p class="sheet-line">${esc(r.note)}</p><p class="fingerprint">${esc(r.token)}</p>
+<div class="sheet-actions"><button type="button" class="btn primary" data-action="close-sheet">Done</button></div></div>`, { label: 'Callback token' });
+    } else {
+      closeSheet();
+      toast(`Saved. ${r.provider.health.words}`);
+    }
+  } catch (e) { toast(e.message); }
+  await loadProviders();
 }
 
 export { ICONS };

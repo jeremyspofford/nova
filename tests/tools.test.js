@@ -8,6 +8,14 @@ import { seedHome } from '../src/home.js';
 
 const home = () => { const h = mkdtempSync(join(tmpdir(), 'nova-t-')); seedHome(h, new URL('../templates/home', import.meta.url).pathname); return h; };
 
+test('no file tool reads or writes the vault, the mesh keys, or Era 2’s connection secrets', async () => {
+  const h = home();
+  for (const path of ['vault/key', 'vault/secrets.json', 'mesh/identity.json', 'connectors/gmail/token.json', '~/mesh/x']) {
+    await assert.rejects(TOOLS.read_file.run({ path }, { home: h }), /can't be read/, path);
+    await assert.rejects(TOOLS.write_file.run({ path, content: 'x' }, { home: h }), /can't be written/, path);
+  }
+});
+
 test('the filter never lets tool markup reach the screen', () => {
   const f = new ToolTagFilter();
   const chunks = ['Let me check.', ' <tool', '_call name="read_file">', '{"path":"USER.md"}</tool_call>'];

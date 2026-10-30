@@ -24,6 +24,8 @@ export interface RuleInput {
   name: string;
   class: RuleClass;
   hook?: string;          // event: the webhook's name, /api/v1/hooks/<hook>
+  connector?: string;     // event, instead of a hook: a connector's id and what it sends (M5b)
+  topic?: string;
   cron?: string;          // heartbeat
   action: Action;
   dedup_window_s?: number;
@@ -89,6 +91,10 @@ export function triageRule(i: Inputs): { answers: { decision: TriageDecision }; 
 }
 
 const HOOK_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const CONNECTOR_ID = /^[a-z0-9][a-z0-9.-]{0,62}$/;
+const TOPIC = /^[A-Za-z0-9_.:-]{1,128}$/;
+// An event rule that listens to a connector has the source connector:<id>/<topic>.
+export const connectorSource = (connector: string, topic: string) => `connector:${connector}/${topic}`;
 const CATCH_UP_MS = 6 * 3_600_000;
 const UNSURE = 'Not sure this should happen on its own, so it waits for you.';
 const DEFAULT_DEDUP_S = 600;
@@ -142,6 +148,8 @@ export interface TriggersOptions {
 export interface FireInput { class: TriggerClass; source: string; rule?: string; payload: unknown; dedup_key?: string; claim_key?: string; action?: Action; name?: string }
 
 export class Triggers extends EventEmitter {
+  // Set by the connectors module: null when a connector can send that topic, else why not.
+  connectorCheck: ((connector: string, topic: string) => string | null) | null = null;
   #db: Db;
   #log: Log;
   #ledger: Ledger;
@@ -172,7 +180,16 @@ export class Triggers extends EventEmitter {
     const at = this.#now().toISOString();
     let token = '';
     let source = 'nova';
-    if (v.class === 'event') {
+    if (v.class === 'event' && input.connector !== undefined) {
+      // A connector's event (a state change, new mail): no webhook and no token; the connector
+      // itself fires it (connectors/index.ts), and only for what a rule listens to.
+      const { connector, topic } = input;
+      if (!isStr(connector) || !CONNECTOR_ID.test(connector) || !isStr(topic) || !TOPIC.test(topic)) throw new CoreError('validation', 'A connector rule names the connector and what it listens for (topic).');
+      const why = this.connectorCheck ? this.connectorCheck(connector, topic) : `There is no connector called ${connector}.`;
+      if (why) throw new CoreError('validation', why);
+      source = connectorSource(connector, topic);
+      if (this.#db.get('SELECT 1 FROM trigger_rule WHERE source = ?', source)) throw new CoreError('conflict', `There is already a rule listening for ${topic} from ${connector}.`);
+    } else if (v.class === 'event') {
       const hook = input.hook;
       if (!isStr(hook) || !HOOK_NAME.test(hook)) throw new CoreError('validation', 'An event rule needs a hook name: lowercase letters, digits and dashes.');
       source = `webhook:${hook}`;
@@ -249,6 +266,30 @@ export class Triggers extends EventEmitter {
       throw new CoreError('forbidden', 'That webhook token isn’t right.');
     }
     return (await this.fire({ class: 'event', source: row.source as string, rule: row.id as string, payload, ...(dedupKey ? { dedup_key: dedupKey } : {}) }))!;
+  }
+
+  // A connector saw something. It becomes an event trigger record only when a rule listens for it;
+  // the payload is kept as a hash, like a webhook's.
+  async connectorEvent(connector: string, topic: string, payload: unknown, dedupKey?: string): Promise<TriggerRecord | null> {
+    const source = connectorSource(connector, topic);
+    const row = this.#db.get<Row>(`SELECT id FROM trigger_rule WHERE class = 'event' AND source = ?`, source);
+    if (!row) return null;
+    return this.fire({ class: 'event', source, rule: row.id as string, payload, ...(dedupKey ? { dedup_key: dedupKey } : {}) });
+  }
+
+  // The topics rules listen for from one connector, so it subscribes to just those.
+  connectorTopics(connector: string): string[] {
+    const prefix = connectorSource(connector, '');
+    return this.#db.all<{ source: string; paused: number }>(`SELECT source, paused FROM trigger_rule WHERE class = 'event' AND substr(source, 1, ?) = ?`, prefix.length, prefix)
+      .filter((r) => !r.paused).map((r) => r.source.slice(prefix.length));
+  }
+
+  // Removing a connector removes what listens to it (EXTENSION-MODEL: no orphaned triggers).
+  removeConnectorRules(connector: string): string[] {
+    const prefix = connectorSource(connector, '');
+    const ids = this.#db.all<{ id: string }>(`SELECT id FROM trigger_rule WHERE substr(source, 1, ?) = ?`, prefix.length, prefix).map((r) => r.id);
+    for (const id of ids) this.deleteRule(id);
+    return ids;
   }
 
   // Runs a proactive or heartbeat rule now, as the person asked.

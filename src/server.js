@@ -12,6 +12,7 @@ import { SessionStore, validId } from './sessions.js';
 import { Runner, BusyError } from './runner.js';
 import { SkillError } from './skills.js';
 import { GmailError } from './connectors/gmail.js';
+import { gmailConnector } from './connectors/gmail-connector.js';
 import { ZipError, unzip } from './zip.js';
 import { ScheduleError } from './schedules.js';
 import { Scheduler } from './scheduler.js';
@@ -19,7 +20,8 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore, originHost } from './core/index.ts';
+import { createCore, fromBrowserTask, originHost } from './core/index.ts';
+import { AgentError } from './agent.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -42,17 +44,39 @@ export function createNova(config = loadConfig(), deps = {}) {
   const core = createCore({
     home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
     mesh: meshInfo,
+    // Nova's own listeners, which a browser task never reaches (browser/plan.ts). Read when a
+    // task is checked or run, by then both are listening (port 0 means the port they got).
+    hubPorts: () => {
+      let bound = [];
+      try { bound = [server, mesh].map((s) => s?.address()?.port); } catch { /* not created yet */ }
+      return [config.port, config.mesh?.port, ...bound].filter((p) => Number.isInteger(p) && p > 0);
+    },
     workers: [chatRun], confirmations: { [SYSTEM]: (e, brief) => chatRun.confirm(e, brief) },
+    // Era 2's model command is the custom-cli provider (M5a). A provider's secret://NAME comes from
+    // the vault (PUT /api/v1/vault/NAME). NOVA_SECRET_<NAME> in the environment is a fallback for
+    // development and tests only: the vault wins, and such a value is redacted like a vault one.
+    agent: { command: config.agentCmd, egress: config.agentEgress },
+    secrets: deps.secrets ?? ((name) => process.env[`NOVA_SECRET_${name}`] ?? null),
   });
+  // Chat goes through the registry: the provider the profile names for chat, or agent_cmd (the
+  // default), which the runner runs exactly as before. Scheduled runs and helpers follow it.
+  const chatProvider = () => {
+    const h = core.providers.chat();
+    return h && { ...h, call: (o) => h.call(o).catch((e) => { throw e instanceof AgentError ? e : new AgentError(e.message, `provider=${h.id}`); }) };
+  };
+  Object.defineProperty(chatRun, 'egress', { get: () => core.providers.chat()?.egress ?? config.agentEgress });
   if (!config.timezonePinned && core.identity().timezone) config.timezone = core.identity().timezone;
   const store = new SessionStore(config.home, config.timezone);
   // Curated memory lives in the core; MEMORY.md is rendered from it. The first start imports
   // an existing MEMORY.md once, and every start takes in hand edits made while Nova was off.
-  const runner = new Runner(config, store, { ...deps, records: core.memory });
+  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault });
+  // Era 2's Gmail as a connector: its secrets in the vault, Settings › Connections, mail events.
+  core.connectors.register(gmailConnector(runner.gmail));
   // Forgetting through the core's API reaches MEMORY.md and the day notes as well.
   core.memory.onForget((records) => runner.memory.forgotten(records));
   runner.memory.readOnly = () => !!core.mesh.role.replica();
   runner.memory.sync();
+  runner.chatProvider = chatProvider;
   runner.identity = { persona: core.persona, name: () => core.identity().name, privacy: () => core.profile.privacyDefault(), receipt: (r) => core.receipts.record(r) };
   runner.ensureMain();
   // permissions.md is written once, so it can be read and edited by hand; Settings keeps it current.
@@ -351,10 +375,11 @@ export function createNova(config = loadConfig(), deps = {}) {
         else if (action === 'forget-client') body = gmail.forgetClient();
         else if (action === 'disconnect') body = await gmail.disconnect();
         else if (action === 'connect') {
-          if (!loopback(req.headers.host)) return json(res, 400, { error: 'Open Nova on this computer, at localhost, to connect Gmail. Google sends you back to this computer only.' });
+          if (!loopback(req.headers.host) || fromBrowserTask(req.headers)) return json(res, 400, { error: 'Open Nova on this computer, at localhost, to connect Gmail. Google sends you back to this computer only.' });
           return json(res, 200, { url: gmail.authUrl(`http://${req.headers.host}/oauth/gmail`) });
         } else return json(res, 404, { error: 'Not found' });
         announce('skills');
+        core.connectors.touched('gmail');
         return json(res, 200, body);
       } catch (e) {
         if (e instanceof GmailError) return json(res, 400, { error: e.message });
@@ -441,6 +466,7 @@ export function createNova(config = loadConfig(), deps = {}) {
         const q = Object.fromEntries(url.searchParams);
         await runner.gmail.finish({ code: q.code, state: q.state, error: q.error });
         announce('skills');
+        core.connectors.touched('gmail');
         res.writeHead(303, { location: '/skills#gmail', 'cache-control': 'no-store' });
         return res.end();
       }

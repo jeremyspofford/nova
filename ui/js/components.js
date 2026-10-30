@@ -142,7 +142,8 @@ export function evidenceViewer(t) {
       case 'test_result': return `Test ${esc(e.name)} ${e.passed ? 'passed' : 'failed'}`;
       case 'file_diff': return `A change to ${esc(e.target)}`;
       case 'url': return `Link: ${esc(e.url)}`;
-      case 'screenshot': return `Screenshot ${esc(e.ref)}`;
+      // A screenshot the browser worker took is shown, straight from Nova (never from a cache).
+      case 'screenshot': return /^workers\/browser\//.test(String(e.ref)) ? `<img class="evidence-shot" src="/api/v1/browser/tasks/${encodeURIComponent(t.id)}/screenshot" alt="The page when the task finished" loading="lazy">` : `Screenshot ${esc(e.ref)}`;
       case 'confirmation': return `Confirmed by ${esc(e.system)} (${esc(e.id)})`;
       default: return esc(e.kind);
     }
@@ -156,6 +157,7 @@ export function evidenceViewer(t) {
   <p class="sheet-kicker">${status(statusOf(t))}</p>
   <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
   <p class="sheet-line">${esc(t.brief?.goal ?? '')}</p>
+  ${t.state === 'waiting' && t.reason ? `<p class="sheet-line task-reason">${esc(t.reason)}</p>` : ''}
   ${t.report?.summary ? `<p class="sheet-line">${esc(t.report.summary)}</p>` : ''}
   ${v ? `<h3 class="sheet-heading">How Nova checked</h3><ul class="checks">${checks}</ul><p class="sheet-line is-faint">Checked ${esc(new Date(v.at).toLocaleString('en-US'))}.</p>` : `<p class="sheet-line">${t.state === 'done' ? 'Done.' : 'Not checked yet: Nova checks the evidence before it calls anything done.'}</p>`}
   <details class="raw"><summary>The ledger entry</summary><pre tabindex="0">${esc(JSON.stringify({ id: t.id, state: t.state, reason: t.reason, owner: t.owner, privacy_mode: t.privacy_mode, approval_tier: t.approval_tier, brief: t.brief, report: t.report, verification: t.verification }, null, 2))}</pre></details>
@@ -330,10 +332,31 @@ const TIER_WORDS = {
 };
 const PRIVACY_WORDS = { 'local-only': 'Nothing leaves this machine.', 'local-preferred': 'Local first; cloud help only if needed, and recorded.', 'cloud-allowed': 'Nova may use cloud services for this.' };
 
-export function approvalSheet(t, { worker = null } = {}) {
+// `run`: Nova asking to run a brief's test on what a provider wrote (GET /providers/tasks/{id}/test-run).
+// The person sees each file it changed, a short preview of the change, and what running it means.
+function testRunSheet(t, run, where) {
+  const KIND = { added: 'added', modified: 'changed', deleted: 'deleted' };
+  const files = run.files.map((f) => `<li><p class="card-line"><strong>${esc(f.path)}</strong> · ${esc(KIND[f.kind] ?? f.kind)} · +${Number(f.added)} −${Number(f.removed)}</p>${f.preview ? `<pre tabindex="0">${esc(f.preview)}</pre>` : ''}</li>`).join('');
+  return `<form class="approval-sheet" data-tier="2" data-test-run="${esc(t.id)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
+  <p class="sheet-line">${esc(run.provider_name)} has finished. Before Nova checks its work, it needs to run <code>${esc(run.command)}</code>.</p>
+  <p class="sheet-line"><strong>${esc(run.words)}</strong></p>
+  ${run.files.length ? `<h3 class="sheet-heading">What it changed</h3><ul class="checks">${files}</ul>${run.more ? `<p class="sheet-line is-faint">And ${Number(run.more)} more.</p>` : ''}` : ''}
+  <dl class="facts"><dt>Who did it</dt><dd>${where}</dd><dt>Why it asks</dt><dd>${esc(TIER_WORDS[2])}</dd></dl>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve">Run the test</button>
+    <button type="button" class="btn" data-action="cancel-task" data-task="${esc(t.id)}">Cancel the task</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+export function approvalSheet(t, { worker = null, run = null } = {}) {
   const tier = Number(t.approval_tier) >= 3 ? 3 : 2;
   const EGRESS = { none: 'stays on this machine', local: 'stays on your devices', remote: 'reaches the internet' };
   const where = worker ? `${esc(worker.name ?? worker.id)}${EGRESS[worker.egress] ? ` · ${EGRESS[worker.egress]}` : ''}` : esc(t.owner);
+  if (run) return testRunSheet(t, run, where);
   return `<form class="approval-sheet" data-tier="${tier}" data-task="${esc(t.id)}" method="dialog">
   <p class="sheet-kicker">${status('needs-you')}</p>
   <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
@@ -348,11 +371,75 @@ export function approvalSheet(t, { worker = null } = {}) {
 </form>`;
 }
 
+// ---- browser takeover (M5c) -----------------------------------------------------------------
+
+const TAKE_OVER_ONLY = 'Only the hub’s own screen, or a device you’ve allowed to approve, can take over.';
+const stepLine = (v) => (v.step ? `Step ${v.step.n} of ${v.step.of}: ${v.step.what}.` : '');
+
+// What the takeover view says and offers, from the session's real state (GET /browser/tasks/{id}).
+// `me`: this client's key (console or device:<id>); `canTake`: whether it may take over.
+export function takeoverState(v, { me = 'console', canTake = true } = {}) {
+  const mine = !!v?.holder && v.holder.key === me;
+  const held = !!v?.holder;
+  if (!v?.live) return { status: 'quiet', line: 'The browser work is over. Nova is checking what it proves.', action: null, held: false, mine: false };
+  if (held) {
+    const line = mine
+      ? `You have control. Nova waits until you hand back.${v.asked ? ` It asked you to: ${v.asked}` : ''}`
+      : `${v.holder.label} has control. Nova waits until they hand back.`;
+    // The hub's own screen can end someone else's takeover; nobody else can.
+    const action = mine || (me === 'console' && canTake) ? 'hand-back' : null;
+    return { status: 'waiting', line, action, held, mine };
+  }
+  if (v.mode === 'needs_person') return { status: 'needs-you', line: `Needs you: ${v.asked ?? 'a step only a person can do.'}`, action: canTake ? 'take-over' : null, held, mine };
+  if (v.mode === 'starting') return { status: 'working', line: 'Nova is opening a browser.', action: null, held, mine };
+  if (v.mode === 'finishing') return { status: 'working', line: 'Nova has finished the steps and is taking its evidence.', action: null, held, mine };
+  return { status: 'working', line: `Nova is working. ${stepLine(v)}`.trim(), action: canTake ? 'take-over' : null, held, mine };
+}
+
+export function takeoverActions(st, { canTake = true } = {}) {
+  const primary = st.action === 'take-over'
+    ? '<button type="button" class="btn primary" data-action="take-over">Take over</button>'
+    : st.action === 'hand-back' ? `<button type="button" class="btn primary" data-action="hand-back">${st.mine ? 'Hand back' : 'End their takeover'}</button>` : '';
+  const why = !canTake && !st.held && st.status !== 'quiet' ? `<p class="sheet-line takeover-only">${esc(TAKE_OVER_ONLY)}</p>` : '';
+  return `${why}${primary}<button type="button" class="btn quiet" data-action="close-sheet">Close</button>`;
+}
+
+export function takeoverRefused(v) {
+  const list = (v?.blocked ?? []);
+  if (!list.length) return '';
+  return `<details class="raw"><summary>Refused ${list.length} host${list.length === 1 ? '' : 's'} the task didn’t declare</summary><ul class="timeline">${list.map((b) => `<li>${esc(b.host)}${b.count > 1 ? ` · ${b.count} times` : ''}</li>`).join('')}</ul></details>`;
+}
+
+// The live view of a browser task: its picture, what is happening in plain words, and the one
+// standout action (Take over, or Hand back). The picture fills in from the frame stream.
+export function takeoverPanel(t, v, opts = {}) {
+  const st = takeoverState(v, opts);
+  const host = (() => { try { return new URL(v?.url ?? '').host; } catch { return ''; } })();
+  return `<section class="takeover" data-task="${esc(t.id)}" data-mode="${esc(v?.mode ?? 'closed')}" aria-labelledby="sheet-title">
+  <p class="sheet-kicker takeover-status">${status(st.status)}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
+  <p class="sheet-line takeover-line" role="status" aria-live="polite">${esc(st.line)}</p>
+  <div class="takeover-screen" data-held="${st.mine}">
+    <img class="takeover-frame" alt="The browser’s screen, live${host ? `, at ${esc(host)}` : ''}" tabindex="0" hidden>
+    <p class="takeover-wait">Waiting for the browser’s picture…</p>
+  </div>
+  <form class="takeover-type"${st.mine ? '' : ' hidden'}>
+    <label class="takeover-type-label" for="takeover-text">Type into the page</label>
+    <div class="takeover-type-row"><input id="takeover-text" name="text" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send"><button type="submit" class="btn">Type</button><button type="button" class="btn" data-action="takeover-key" data-key="Enter">Enter</button></div>
+  </form>
+  <p class="sheet-line is-faint takeover-where">${esc(host)}</p>
+  <div class="takeover-refused">${takeoverRefused(v)}</div>
+  <div class="sheet-actions takeover-actions">${takeoverActions(st, opts)}</div>
+</section>`;
+}
+
 // ---- automations ------------------------------------------------------------------------------
 
 const CLASS_WORDS = { heartbeat: 'On a schedule', event: 'When something happens', proactive: 'When Nova has something to say' };
 export function triggerRow(r) {
-  const when = r.schedule ?? r.cron ?? (r.hook_path ? `Webhook ${r.hook_path}` : '');
+  // A connector's event (M5b): source connector:<id>/<topic>.
+  const from = /^connector:([^/]+)\/(.+)$/.exec(r.source ?? '');
+  const when = r.schedule ?? r.cron ?? (r.hook_path ? `Webhook ${r.hook_path}` : from ? `${from[1] === 'home-assistant' ? 'Home Assistant' : from[1] === 'gmail' ? 'Gmail' : from[1]}: ${from[2]}` : '');
   const what = r.action?.kind === 'message' ? `Says: “${clip(r.action.text, 60)}”` : r.action?.kind === 'task' ? `Starts: ${clip(r.action.task?.title ?? 'a task', 60)}` : '';
   return `<li class="trigger-row${r.paused ? ' is-paused' : ''}" id="tr-${esc(r.id)}" data-rule="${esc(r.id)}">
   <div class="trigger-text"><p class="trigger-name">${esc(r.name)}</p><p class="trigger-meta">${esc(CLASS_WORDS[r.class] ?? r.class)}${when ? ` · ${esc(when)}` : ''}</p>${what ? `<p class="trigger-meta">${esc(what)}</p>` : ''}</div>

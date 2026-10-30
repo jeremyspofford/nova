@@ -24,8 +24,9 @@ import { stricter } from './chat-run.js';
 const shortId = () => randomUUID().slice(0, 8);
 
 export class Runner extends EventEmitter {
-  // records: the core's memory, where MEMORY.md's entries live (passed in by the server).
-  constructor(config, store, { agent = runAgent, records = null } = {}) {
+  // records: the core's memory, where MEMORY.md's entries live (passed in by the server). vault: the
+  // core's, where connection secrets live.
+  constructor(config, store, { agent = runAgent, records = null, vault = null } = {}) {
     super();
     this.config = config;
     this.store = store;
@@ -34,7 +35,7 @@ export class Runner extends EventEmitter {
     this.memory = new Memory(config.home, config.timezone, { records });
     this.skills = new Skills(config.root, config.home);
     this.schedules = new Schedules(config.root, config.home, config.timezone);
-    this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone });
+    this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone, vault });
     this.permissions = new Permissions(config.home, () => TOOLS);
     this.helpers = null; // set by the server: where delegate hands work
   }
@@ -165,13 +166,26 @@ export class Runner extends EventEmitter {
       });
   }
 
+  // The chat model the provider registry names (M5a), or null for agent_cmd, which this runner
+  // runs itself exactly as Era 2 did. Set by the server: { id, name, egress, receiptEgress, model, call }.
+  chat() {
+    return this.chatProvider?.() ?? null;
+  }
+
   // Privacy first (LOCAL-FIRST-AND-DEVICE-MESH §2): a model that would send this conversation
   // somewhere the setting (or the run's own, stricter mode) doesn't allow is never called. Nothing
   // has been sent when this throws.
   privacyFor(run) {
     const setting = this.identity?.privacy?.() ?? 'local-only';
     const mode = run.privacy ? stricter(run.privacy, setting) : setting;
-    if (!permits(mode, this.config.agentEgress)) {
+    const chat = this.chat();
+    if (chat && !permits(mode, chat.egress)) {
+      throw new AgentError(
+        `Your privacy setting is ${mode}, and the model I chat with (${chat.name}) sends conversations off your devices, so I haven't sent this anywhere. Choose a local model in Settings › Providers, or allow cloud help in your privacy setting.`,
+        `provider=${chat.id}; egress=${chat.receiptEgress}; privacy=${mode}`,
+      );
+    }
+    if (!chat && !permits(mode, this.config.agentEgress)) {
       const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command';
       throw new AgentError(
         `Your privacy setting is ${mode}, and the model I chat with (${program}) runs in the cloud, so I haven't sent this anywhere. Add a local model (agent_cmd with agent_egress set to local), or allow cloud help in your privacy setting.`,
@@ -186,13 +200,14 @@ export class Runner extends EventEmitter {
     const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'model';
     // "/usr/local/bin/Claude" → "claude": the receipt names a provider, not a path.
     const name = program.split('/').pop().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, 64) || 'model';
+    const chat = this.chat();
     return {
       session_id: sessionId,
-      provider: name,
-      model: name,
+      provider: chat?.id ?? name,
+      model: chat?.model ?? name,
       purpose: run.helper ? 'helper' : run.unattended ? 'scheduled run' : 'chat',
       privacy_mode: mode,
-      egress: this.config.agentEgress === 'remote' ? `remote:${name}` : 'local',
+      egress: chat ? chat.receiptEgress : this.config.agentEgress === 'remote' ? `remote:${name}` : 'local',
       context_items: [
         { kind: 'file', ref: 'system prompt', sha256: hash(system) },
         ...readStanding(this.config.home).filter((f) => !(run.helper && f.name === 'MEMORY.md')).map((f) => ({ kind: 'standing', ref: `~/${f.name}`, sha256: hash(f.text) })),
@@ -245,7 +260,8 @@ export class Runner extends EventEmitter {
       // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
       // hash, and where it went. Written before the call, so it exists even if the call fails.
       this.identity?.receipt?.(this.receipt(sessionId, run, mode, { system, prompt, recall }));
-      const { text, aborted } = await this.agent({
+      const chat = this.chat();
+      const { text, aborted } = await (chat ? (o) => chat.call(o) : this.agent)({
         cmd: this.config.agentCmd,
         system,
         prompt,
