@@ -144,12 +144,13 @@ const errorOf = (r: Res) => (typeof r.body === 'object' && r.body?.error ? r.bod
 
 // ---- join ---------------------------------------------------------------------------------------
 
-export interface JoinOptions { hub: string; code: string; name?: string; kind?: 'computer' | 'standby'; novaHome?: string; address?: string; pollMs?: number; timeoutMs?: number }
+export interface JoinOptions { say?: (line: string) => void; hub: string; code: string; name?: string; kind?: 'computer' | 'standby'; novaHome?: string; address?: string; pollMs?: number; timeoutMs?: number }
 
 // Enrollment (CONTRACTS §5) from this side: make keys here, ask with the code, show the six digits,
 // wait for the person to approve on the hub, then pin the roster the hub signed.
 export async function joinHub(home: string, o: JoinOptions, env: NodeJS.ProcessEnv = process.env): Promise<DeviceFile> {
   const p = paths(home);
+  const say = o.say ?? console.log;
   const kind = o.kind ?? 'computer';
   if (kind !== 'computer' && kind !== 'standby') throw new Error('--kind must be computer or standby.');
   if (kind === 'standby' && !o.novaHome) throw new Error('A standby needs --nova-home <dir>: the home its Nova server will use.');
@@ -403,9 +404,15 @@ export class Boot {
   #done: (code: number) => void = () => {};
   // Whether this process runs the runtime (run), or only installs one (the recover command).
   #running = false;
+  // Shut down (or revoked): nothing more is looked for, installed or started.
+  #closed = false;
   readonly finished: Promise<number>;
 
-  constructor(home: string, env: NodeJS.ProcessEnv = process.env) {
+  // Where the agent's plain-words lines go (its log).
+  readonly say: (line: string) => void;
+
+  constructor(home: string, env: NodeJS.ProcessEnv = process.env, o: { say?: (line: string) => void } = {}) {
+    this.say = o.say ?? say;
     this.p = paths(home);
     this.o = runOptions(env);
     const d = readJson<DeviceFile>(this.p.device);
@@ -419,32 +426,35 @@ export class Boot {
     this.finished = new Promise((r) => { this.#done = r; });
   }
 
-  async start(): Promise<void> {
+  async start(o: { signals?: boolean } = {}): Promise<void> {
     if (this.state.revoked) return this.#revoked(this.state.revoked_reason ?? 'It was revoked earlier.', false);
     ensureDirs(this.p);
     this.#lock();
     this.#running = true;
-    this.watchdog.on('crash', ({ code, signal, count }) => say(`The runtime stopped (${signal ?? `exit ${code}`}); crash ${count} in a minute.`));
-    this.watchdog.on('backoff', (ms) => say(`Starting it again in ${ms} ms.`));
+    this.watchdog.on('crash', ({ code, signal, count }) => this.say(`The runtime stopped (${signal ?? `exit ${code}`}); crash ${count} in a minute.`));
+    this.watchdog.on('backoff', (ms) => this.say(`Starting it again in ${ms} ms.`));
     this.watchdog.on('safe_mode', () => this.#enterSafeMode());
     await this.#connect();
     if (this.#session) await this.update();
     if (!runtimeIntact(this.p)) {
       const inst = installLocalRuntime(this.p);
-      say(`Installed the runtime from this agent’s own files (${inst.version}); the hub’s will replace it when it can be reached.`);
+      this.say(`Installed the runtime from this agent’s own files (${inst.version}); the hub’s will replace it when it can be reached.`);
     }
     if (this.state.safe_mode) {
       this.watchdog.safeMode = true;
-      say('The agent is in safe mode: the runtime stays stopped. Run recover, or wait for a new runtime from the hub.');
+      this.say('The agent is in safe mode: the runtime stays stopped. Run recover, or wait for a new runtime from the hub.');
     } else this.watchdog.run();
     if (!this.#session) void this.#lookForHub();
     // Safe mode heartbeats come from here; so do session renewals and the search for the hub.
     this.#timers.push(setInterval(() => void this.#tick(), this.o.heartbeatMs));
-    for (const s of ['SIGINT', 'SIGTERM'] as const) process.on(s, () => void this.shutdown(0));
-    process.on('SIGHUP', () => void this.recover());
+    if (o.signals !== false) {
+      for (const s of ['SIGINT', 'SIGTERM'] as const) process.on(s, () => void this.shutdown(0));
+      process.on('SIGHUP', () => void this.recover());
+    }
   }
 
   async shutdown(code: number): Promise<void> {
+    this.#closed = true;
     for (const t of this.#timers) clearInterval(t);
     this.#timers = [];
     await this.watchdog.stop();
@@ -454,12 +464,12 @@ export class Boot {
 
   // Reinstall the runtime from the hub and leave safe mode.
   async recover(): Promise<void> {
-    say('Recovering: reinstalling the runtime from the hub.');
+    this.say('Recovering: reinstalling the runtime from the hub.');
     if (!this.#session) await this.#connect();
     await this.update({ force: true });
     if (!runtimeIntact(this.p)) installLocalRuntime(this.p);
     this.#leaveSafeMode();
-    if (this.#running) await this.watchdog.restart();
+    if (this.#running && !this.#closed) await this.watchdog.restart();
   }
 
   // A runtime from the hub, when it differs from the one installed: verified against the pinned
@@ -484,7 +494,7 @@ export class Boot {
       const sha = String(b?.manifest?.sha256 ?? '');
       const again = this.state.refused_bundle?.sha256 === sha && Date.now() - Date.parse(this.state.refused_bundle.at) < 10 * 60_000;
       if (!again) {
-        say(`Refused a runtime update from the hub: ${v.reason} The current runtime keeps running.`);
+        this.say(`Refused a runtime update from the hub: ${v.reason} The current runtime keeps running.`);
         this.#saveState({ refused_bundle: { sha256: sha, at: new Date().toISOString() }, last_update: { version: String(b?.manifest?.version ?? '?'), at: new Date().toISOString(), result: `refused: ${v.reason}` } });
       }
       await call(s.url, 'POST', '/api/v1/mesh/devices/me/report', { token: s.token, body: { problem: 'runtime_update_refused', detail: v.reason } }).catch(() => {});
@@ -492,15 +502,15 @@ export class Boot {
     }
     const inst = installRuntime(this.p, v.files, b.manifest.version, 'hub');
     this.#saveState({ refused_bundle: null, last_update: { version: inst.version, at: inst.installed_at, result: 'installed' } });
-    say(`Installed runtime ${inst.version}, signed by the hub.`);
+    this.say(`Installed runtime ${inst.version}, signed by the hub.`);
     this.#leaveSafeMode();
-    if (this.#running) await this.watchdog.restart();
+    if (this.#running && !this.#closed) await this.watchdog.restart();
   }
 
   #startRuntime(): ChildProcess {
     const c = spawnRuntime(this.p);
     c.on('message', (m: FromRuntime) => void this.#fromRuntime(m));
-    c.on('error', (e) => say(`The runtime couldn’t start: ${e.message}`));
+    c.on('error', (e) => this.say(`The runtime couldn’t start: ${e.message}`));
     return c;
   }
 
@@ -538,9 +548,9 @@ export class Boot {
   // Looks for the hub until it is found: now, then every retry interval. One search at a time.
   #lookForHub(): Promise<void> {
     this.#looking ??= (async () => {
-      while (!this.#session && !this.state.revoked) {
+      while (!this.#session && !this.state.revoked && !this.#closed) {
         await this.#connect();
-        if (this.#session || this.state.revoked) break;
+        if (this.#session || this.state.revoked || this.#closed) break;
         await new Promise((r) => setTimeout(r, this.o.retryMs));
       }
     })().finally(() => { this.#looking = null; });
@@ -551,21 +561,23 @@ export class Boot {
     const before = this.d.hub_url;
     const beforeEpoch = this.d.epoch;
     const f = await findHub(this.p, this.d, this.#signer);
+    if (this.#closed) return;
     if (f.ok) {
       const wasOffline = !this.#session;
       this.#session = { url: f.url, token: f.token, expires_at: f.expires_at };
-      if (f.url !== before || f.epoch > beforeEpoch) say(`Moved to the hub at ${f.url} (epoch ${f.epoch}).`);
-      else if (wasOffline) say(`Connected to the hub at ${f.url} (epoch ${f.epoch}).`);
+      if (f.url !== before || f.epoch > beforeEpoch) this.say(`Moved to the hub at ${f.url} (epoch ${f.epoch}).`);
+      else if (wasOffline) this.say(`Connected to the hub at ${f.url} (epoch ${f.epoch}).`);
       this.#toRuntime();
       return;
     }
     if (f.revoked) return this.#revoked(f.reason, true);
-    if (!this.#lastReason || this.#lastReason !== f.reason) say(`The hub can’t be reached yet; what is made here waits in the queue. ${f.reason}`);
+    if (!this.#lastReason || this.#lastReason !== f.reason) this.say(`The hub can’t be reached yet; what is made here waits in the queue. ${f.reason}`);
     this.#lastReason = f.reason;
   }
   #lastReason = '';
 
   async #tick(): Promise<void> {
+    if (this.#closed) return;
     const s = this.#session;
     if (!s) { if (!this.#looking) void this.#lookForHub(); return; }
     // Renew two hours before the session ends.
@@ -585,20 +597,21 @@ export class Boot {
 
   #enterSafeMode(): void {
     this.#saveState({ safe_mode: true, safe_mode_since: new Date().toISOString() });
-    say('The runtime crashed three times in a minute. The agent is in safe mode: the runtime stays stopped, and the hub is told. Run recover, or wait for a new runtime from the hub.');
+    this.say('The runtime crashed three times in a minute. The agent is in safe mode: the runtime stays stopped, and the hub is told. Run recover, or wait for a new runtime from the hub.');
     void this.#tick();
   }
 
   #leaveSafeMode(): void {
-    if (this.state.safe_mode) say('Leaving safe mode.');
+    if (this.state.safe_mode) this.say('Leaving safe mode.');
     this.#saveState({ safe_mode: false, safe_mode_since: null });
     this.watchdog.reset();
   }
 
   async #revoked(reason: string, now: boolean): Promise<void> {
+    this.#closed = true;
     if (now) this.#saveState({ revoked: true, revoked_at: new Date().toISOString(), revoked_reason: reason });
-    say('This computer was removed from Nova: the hub revoked it. The agent has stopped and won’t start again.');
-    say('To use this computer with Nova again, add it again with a new code (its old key can never be used again).');
+    this.say('This computer was removed from Nova: the hub revoked it. The agent has stopped and won’t start again.');
+    this.say('To use this computer with Nova again, add it again with a new code (its old key can never be used again).');
     for (const t of this.#timers) clearInterval(t);
     this.#timers = [];
     await this.watchdog.stop();
