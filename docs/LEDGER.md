@@ -15,6 +15,49 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M5 review fixes): providers, vault, connectors.** Branch `m5-fix/providers-vault`.
+
+- **What a provider may change.** A brief's `inputs.editable` (paths or globs in the workspace)
+  is the list; without it, everything the brief's refs cover except tests (`*.test.*`,
+  `*.spec.*`, `*_test.*`, `test_*.*`, `tests/`, `test/`, `__tests__/`, `spec/`, `conftest.py`),
+  test-runner settings (jest/vitest/playwright/karma/cypress/ava configs, `.mocharc*`,
+  `pytest.ini`, `tox.ini`), every word of the test command taken as a path (so a script it names
+  counts, even one the provider added), and the files the command's program reads its scripts
+  from (`package.json` for npm/node and kin, `Makefile` for make, `setup.cfg`/`pyproject.toml`
+  for pytest). A named folder protects only the tests in it, or nothing would be left to fix. Any
+  change outside the list refuses the work whole (failed, not retried: a provider that touched
+  its checks doesn't get two more goes).
+- **No approval when a task is made; one after the provider finishes.** The creation-time tier 2
+  (`minTier`) was approving code that didn't exist yet, so the provider worker no longer sets it.
+  When the provider changed anything, Nova always asks before running the test (the task waits
+  as *partial*, with the diff), whatever `task_tests` says; `allow` still covers a run on files
+  nobody changed. The OK re-queues the task through `ledger.retry`, and the next run sees the
+  approved question and runs only the test, on the folder's hash as shown. No ledger change was
+  needed. A plain "Try again" without the OK starts the provider afresh. Each retry after a
+  failed verification runs the provider again and asks again: that is the ledger's existing
+  retry, and each ask is about new code.
+- **Process groups.** Every command Nova starts for a provider or a test has its whole process
+  group killed when it exits. A process that leaves the group on purpose (`setsid`, a double
+  fork into a new session) escapes; containing that needs namespaces or a cgroup, which Nova
+  doesn't set up. The test run's environment is PATH (with Nova's node first), a temp HOME and
+  TMPDIR, and LANG/LC_ALL only; it still runs as the person, with their files in reach, which
+  the approval says in those words.
+- **Claude Code's flags.** `--setting-sources project` and `--safe-mode` are as `claude --help`
+  2.1.259 describes them; no real session was run, so it is unverified that an older CLI accepts
+  them (one that doesn't fails the task with its own message). Project settings are Nova's home's
+  (the git root above the task folder), which has no `.claude/`.
+- **Vault re-key on delete.** Every delete (and `deletePrefix`) makes a new key and re-encrypts;
+  the standby is unaffected because the key travels at serve time with the current file. The new
+  file is written beside the old, then the key stored, then the file swapped in; an interrupted
+  re-key is finished on the next open. A lost vault (no key that fits, a damaged file) is set
+  aside as `secrets.json.unopenable-<time>` on the next save; one whose key may be in a keychain
+  that isn't answering is not, and `POST /vault/reset` (tier 3) does it on purpose.
+- **Not done, and why.** Asking Ollama's `/api/show` whether a model is remote: a call per check,
+  for what the `*-cloud` / `*:cloud` naming already tells. Home Assistant's WebSocket isn't given
+  `redirect: 'error'` (WebSocket handshakes don't follow redirects). A bare-name Home Assistant
+  is resolved once, when connected; if the name later moves off the network, Nova keeps counting
+  it local until it is connected again.
+
 **2026-10-30 (M5b): the vault, the connector kind, Home Assistant, Gmail as a connector.** Branch
 `m5b/connectors`; the plan's §2 has the "as built" note.
 
