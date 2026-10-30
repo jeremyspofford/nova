@@ -83,6 +83,7 @@ async function pair(o: { failoverAfterS?: number } = {}) {
   const role: RoleFile = {
     version: 1, role: 'standby', device_id: dev.deviceId, epoch: signed.roster.epoch, roster: signed,
     hub: { id: signed.roster.hub.id, url: h.mesh, public_key: signed.roster.hub.public_key, x25519_public_key: signed.roster.hub.x25519_public_key, name: 'Hub' },
+    raw: { joined_at: '2026-10-29T10:00:00.000Z', pinned: [signed.roster.hub.public_key] },
   };
   writeRole(home, role);
   const core = createCore({ home, version: '0.1.0', trustedOrigin: () => true, now: () => new Date(h.clock.t), mesh: { publicUrl: 'http://standby.example:4321', transport: 'network' } });
@@ -235,6 +236,14 @@ test('role.json: the documented shape, the tolerated variants, and a plain refus
   writeFileSync(join(home, 'mesh/role.json'), JSON.stringify({ role: 'standby', device_id: 'dev-1', hub_url: 'https://hub.example:4320/', hub: { id: 'hub-1', public_key: 'k', x25519_public_key: 'x' } }));
   assert.equal(readRole(home)!.hub.url, 'https://hub.example:4320');
   assert.equal(readRole(home)!.epoch, 1);
+  // What `boot.ts join --kind standby --nova-home` writes (M4b).
+  writeFileSync(join(home, 'mesh/role.json'), JSON.stringify({
+    version: 1, role: 'standby', device_id: 'dev-1', hub_url: 'https://hub.example:4320', hub_id: 'hub-1', identity: 'identity.json',
+    roster: { roster: { epoch: 1, hub: hubKeys, standby: { id: 'dev-1', url: 'https://standby.example:4320', public_key: 's', x25519_public_key: 'sx' }, issued_at: 't' }, signature: 's' },
+    pinned: ['k', 's'], epoch: 1, address: 'https://standby.example:4320', ca_file: '/placeholder/ca.pem', joined_at: 't',
+  }));
+  const m4b = readRole(home)!;
+  assert.deepEqual([m4b.device_id, m4b.hub.id, m4b.hub.url, m4b.hub.public_key, m4b.epoch, m4b.address, m4b.ca_file], ['dev-1', 'hub-1', 'https://hub.example:4320', 'k', 1, 'https://standby.example:4320', '/placeholder/ca.pem']);
   writeFileSync(join(home, 'mesh/role.json'), JSON.stringify({ role: 'standby', device_id: 'dev-1' }));
   assert.throws(() => readRole(home), /missing hub\.id, hub\.url, hub\.public_key, hub\.x25519_public_key/);
   assert.equal(readRole(mkdtempSync(join(tmpdir(), 'nova-role-'))), null);
@@ -327,6 +336,7 @@ test('a standby catches up from nothing, keeps up, refuses changes, and gets for
 test('promotion: a new epoch, a roster signed by the standby’s own key, a verified ledger record; the old hub fences itself; revoked stays revoked', async () => {
   const p = await pair();
   const { h, core } = p;
+  let hubGone = false;
   try {
     // A phone, then revoked on the hub.
     const code = (await h.c('POST', '/mesh/pairings')).body.code;
@@ -336,6 +346,10 @@ test('promotion: a new epoch, a roster signed by the standby’s own key, a veri
     await h.c('POST', `/mesh/requests/${phone.requestId}/approve`, { confirm: true });
     await phone.poll();
     assert.equal((await h.c('POST', `/mesh/devices/${phone.deviceId}/revoke`, { confirm: true })).status, 200);
+    // A computer whose queued items reached the hub once.
+    const { dev: computer, token } = await import('./mesh-support.ts').then((m) => m.enroll(h, { kind: 'computer', name: 'Desk computer' }));
+    const sent = await call(h.mesh, 'POST', '/api/v1/mesh/inbox', { items: [{ key: 'item-0001', kind: 'event', body: { name: 'woke' } }] }, { authorization: `Bearer ${token}` });
+    assert.equal(sent.body.results?.[0]?.status, 'accepted', JSON.stringify([sent.status, sent.body]));
     core.start();
     await synced(p);
     assert.equal(core.mesh.devices.get(phone.deviceId).trust, 'revoked');
@@ -345,6 +359,7 @@ test('promotion: a new epoch, a roster signed by the standby’s own key, a veri
     assert.equal((await h.c('POST', '/mesh/promote', { confirm: true })).status, 409, 'the hub is already hub');
     const pinned = h.core.mesh.devices.get(p.dev.deviceId).public_key;
     const oldHubId = h.core.mesh.identity.id;
+    hubGone = true;
     await h.stop(); // the hub is gone
     const r = await p.s.api('POST', '/mesh/promote', { confirm: true });
     assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -369,6 +384,15 @@ test('promotion: a new epoch, a roster signed by the standby’s own key, a veri
     // No orphaned trust: the revoked phone can't start a session with the new hub.
     const s = await phone.session({ base: p.s.mesh });
     assert.equal(s.status, 401);
+    // The computer signs in to the new hub; what it already delivered is a duplicate there too.
+    const cs = await computer.session({ base: p.s.mesh });
+    assert.equal(cs.status, 200);
+    const again = await call(p.s.mesh, 'POST', '/api/v1/mesh/inbox', { items: [{ key: 'item-0001', kind: 'event', body: { name: 'woke' } }, { key: 'item-0002', kind: 'event', body: { name: 'slept' } }] }, { authorization: `Bearer ${cs.body.token}` });
+    const results = again.body.results;
+    assert.deepEqual(results.map((x: { key: string; duplicate: boolean }) => [x.key, x.duplicate]), [['item-0001', true], ['item-0002', false]], 'exactly once across the failover');
+    // The role file says hub now, and keeps what the boot agent wrote.
+    const raw = JSON.parse(readFileSync(join(p.home, 'mesh/role.json'), 'utf8'));
+    assert.deepEqual([raw.role, raw.epoch, raw.joined_at, raw.pinned?.length], ['hub', 2, '2026-10-29T10:00:00.000Z', 1]);
 
     // The old hub comes back and asks its peers: it finds a higher epoch and steps down.
     const old = createCore({ home: h.home, version: '0.1.0', trustedOrigin: () => true, now: () => new Date(h.clock.t), mesh: { publicUrl: 'http://hub.example:4320', transport: 'network' } });
@@ -399,6 +423,7 @@ test('promotion: a new epoch, a roster signed by the standby’s own key, a veri
   } finally {
     p.s.close();
     await core.close();
+    if (!hubGone) await h.stop();
   }
 });
 

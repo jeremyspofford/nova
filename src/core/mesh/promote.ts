@@ -210,7 +210,7 @@ export class MeshRole extends EventEmitter {
     if (this.#file && this.#file.hub.id !== me) peers.set(this.#file.hub.url, this.#file.hub.id);
     const answers = await Promise.all([...peers.keys()].map(async (url) => {
       checked.push(url);
-      try { return { url, res: await ask(`${url}/api/v1/mesh/hello`, { timeoutMs: 3000 }) }; } catch { return null; }
+      try { return { url, res: await ask(`${url}/api/v1/mesh/hello`, { timeoutMs: 3000, caFile: this.#file?.ca_file ?? null }) }; } catch { return null; }
     }));
     for (const a of answers) {
       if (!a || a.res.status !== 200 || this.role() !== 'hub') continue;

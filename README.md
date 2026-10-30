@@ -165,6 +165,29 @@ for five minutes. Only enter a code at your hub's own address, on a device you
 already trust. Revoke a device in the same place; it is signed out at once and
 its key never works again.
 
+### A computer
+
+The one-line command needs Node.js 26 or newer on the computer, and installs
+nothing outside its device home (`NOVA_DEVICE_HOME`, default `~/.nova-device`):
+
+```sh
+curl -fsS https://hub.example:4320/join.sh | sh -s -- ABCD-EFGH [--name "Desk computer"]
+# A hub whose certificate the system doesn't know: trust its CA for this command only.
+export CURL_CA_BUNDLE=ca.pem NOVA_CA_FILE=ca.pem
+```
+
+It shows six digits; approve on the hub if they match. The agent then runs in
+the background and the computer shows Online in Settings › Devices. It is two
+programs (ADR-3): a small boot agent that holds the keys, and a runtime it
+starts under Node's permission model, which can't read those keys or change
+the boot agent. What the computer sends while the hub is down waits in a queue
+and arrives once, in order. Ask it how it is, or put it right:
+
+```sh
+node ~/.nova-device/agent/src/device/boot.ts status
+node ~/.nova-device/agent/src/device/boot.ts recover   # reinstall the runtime, leave safe mode
+```
+
 ## Check it
 
 ```sh

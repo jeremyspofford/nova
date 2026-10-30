@@ -14,11 +14,13 @@ import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import { HybridClock } from './wire.ts';
 
-// Replicated tables and their keys, as in migration 0006. Everything else stays on its own node.
+// Replicated tables and their keys, as in migrations 0006 and 0007. Everything else stays on its own node.
 export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
   profile: ['section', 'key'], task: ['id'], task_event: ['seq'], memory: ['id'], memory_event: ['id'],
   decision_template: ['template_id', 'version'], decision_template_event: ['seq'], trigger_rule: ['id'], trigger_rule_event: ['seq'],
   trigger: ['trigger_id'], message: ['id'], extension: ['id'], device: ['id'], problem: ['id'], receipt: ['id'],
+  // Migration 0007: a device's queued items, taken in exactly once, on whichever node is hub.
+  device_inbox: ['device_id', 'key'],
 };
 export const FILE = 'file';
 
