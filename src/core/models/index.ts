@@ -18,7 +18,7 @@ import { stricter } from '../workers.ts';
 import { chatMessages } from '../providers/openai.ts';
 import { str, type Usage } from '../providers/types.ts';
 import { checkHardware, detectHardware, gb, hardwareWords, type Hardware } from './hardware.ts';
-import { Ollama, RuntimeDown, type InstalledModel, type Message } from './ollama.ts';
+import { Ollama, RuntimeDown, runsRemotely, type InstalledModel, type Message } from './ollama.ts';
 import { CATALOG, HEADROOM, ROLES, ROLE_WORDS, capacityWords, recommend, type DeviceModels, type Pick, type Role, type RoleAdvice } from './recommend.ts';
 import { sendMagic } from './wake.ts';
 import type { Db } from '../db.ts';
@@ -36,6 +36,7 @@ export type { Hardware } from './hardware.ts';
 export const HUB = 'hub';
 export const DEFAULT_OLLAMA = 'http://127.0.0.1:11434';
 export const CONFIRMATION_SYSTEM = 'model-runtime';
+const MODEL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/;
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/;
 const PERIODS = ['day', 'week', 'month'] as const;
 type Period = (typeof PERIODS)[number];
@@ -149,6 +150,9 @@ export class Models extends EventEmitter {
     // Cloud usage that came back in a report from a provider that sends off the devices (a coding
     // agent in the cloud) is tracked here too, so the budget sees every dollar.
     o.ledger.on('task', (t: Task) => this.#trackReport(t));
+    // A computer revoked (or no longer a trusted computer for any reason) loses its roles at once.
+    o.devices.on('revoked', () => this.#forgetUntrusted());
+    o.devices.on('change', () => this.#forgetUntrusted());
   }
 
   // ---- settings ------------------------------------------------------------------------------
@@ -158,9 +162,54 @@ export class Models extends EventEmitter {
 
   hubUrl(): string { return str(this.#get<string>('runtime.hub')) || this.#o.ollamaUrl || DEFAULT_OLLAMA; }
 
+  // Where a role runs, as long as its device is still one Nova may send work to. A computer that
+  // was revoked has no roles, whatever the profile still says.
   placement(role: Role): Placement | null {
+    const p = this.#stored(role);
+    return p && this.#trusted(p.device) ? p : null;
+  }
+
+  #stored(role: Role): Placement | null {
     const p = this.#get<Placement>(`role.${role}`);
     return isObj(p) && typeof p.model === 'string' && typeof p.device === 'string' ? { ...p, runtime: 'ollama', url: p.device === HUB ? this.hubUrl() : p.url } : null;
+  }
+
+  // The hub, or a paired computer the person still trusts. Checked on every call, not only when a
+  // role is assigned: trust can be taken back at any time.
+  #trusted(device: string): boolean {
+    if (device === HUB) return true;
+    const d = this.#o.devices.find(device);
+    return !!d && d.trust === 'trusted' && d.kind === 'computer' && d.role !== 'hub';
+  }
+
+  // A computer that is no longer trusted loses its roles and the address Nova kept for it, so
+  // nothing reaches it again until the person pairs and assigns it anew.
+  #forgetUntrusted(): void {
+    const gone = new Set<string>();
+    for (const r of ROLES) {
+      const p = this.#stored(r);
+      if (p && !this.#trusted(p.device)) { gone.add(p.device); this.unassign(r); }
+    }
+    for (const row of this.#o.db.all<{ key: string }>(`SELECT key FROM profile WHERE section = 'models' AND key LIKE 'runtime.%' AND key != 'runtime.hub'`)) {
+      const device = row.key.slice('runtime.'.length);
+      if (!this.#trusted(device)) { gone.add(device); this.#del(row.key); }
+    }
+    for (const device of gone) {
+      this.#inventory.delete(device);
+      this.#o.log.info('models', `${this.#deviceName(device)} is no longer trusted, so its model roles were cleared and Nova sends it nothing.`);
+    }
+  }
+
+  #del(key: string): void {
+    this.#o.db.run(`DELETE FROM profile WHERE section = 'models' AND key = ?`, key);
+    this.#o.profile.emit('change', { section: 'models', key });
+  }
+
+  // Whether a model runs somewhere other than the device that lists it (an Ollama cloud model),
+  // by its name or by what Nova last read of that device's list.
+  #remote(device: string, model: string): boolean {
+    const m = (this.#inventory.get(device) ?? this.#remembered(device))?.models.find((x) => x.name === model);
+    return runsRemotely(model, m);
   }
 
   cloud(): Cloud | null {
@@ -181,14 +230,20 @@ export class Models extends EventEmitter {
   // Decisions go to the local model on the sorting role when it is assigned, unless the person
   // keeps them on the rules.
   decisionsByModel(): boolean {
-    return this.#get<string>('decisions') !== 'rules' && !!this.placement('triage-text');
+    return this.#get<string>('decisions') !== 'rules' && this.#sorts();
   }
 
   // Whether the local model answers a template: once a sorting model is assigned, every template,
   // or (decisions kept on the rules) only those the rules have no rule for, which they couldn't
   // answer anyway (capture's proposals, for one).
   decidesWithModel(hasRule: boolean): boolean {
-    return !!this.placement('triage-text') && (this.#get<string>('decisions') !== 'rules' || !hasRule);
+    return this.#sorts() && (this.#get<string>('decisions') !== 'rules' || !hasRule);
+  }
+
+  // A sorting model is assigned, and it is one that runs on the person's devices.
+  #sorts(): boolean {
+    const p = this.placement('triage-text');
+    return !!p && !this.#remote(p.device, p.model) && !(p.hub_model && this.#remote(HUB, p.hub_model));
   }
 
   #privacy(): PrivacyMode { return this.#o.profile.privacyDefault(); }
@@ -236,6 +291,7 @@ export class Models extends EventEmitter {
   // device points.
   #urlFor(device: string): string | null {
     if (device === HUB) return this.hubUrl();
+    if (!this.#trusted(device)) return null;
     const saved = this.#get<string>(`runtime.${device}`);
     if (str(saved)) return saved!;
     for (const r of ROLES) { const p = this.placement(r); if (p?.device === device) return p.url; }
@@ -272,6 +328,9 @@ export class Models extends EventEmitter {
   // Versions are recorded: each model, by digest, when Nova first and last saw it, and when it
   // went. A new digest under the same name is a new version.
   #observe(device: string, url: string, models: InstalledModel[], taskId: string | null): void {
+    // Only a list Nova read itself from the runtime it resolved for that device counts; the
+    // verifier trusts these rows.
+    if (url !== this.#urlFor(device)) return;
     const at = this.#now().toISOString();
     this.#o.db.tx(() => {
       for (const m of models) {
@@ -332,6 +391,7 @@ export class Models extends EventEmitter {
       this.#set(`runtime.${device}`, url);
     }
     const inv = await this.inventory(device);
+    if (runsRemotely(model, inv.models.find((m) => m.name === model))) throw new CoreError('validation', cloudWords(model));
     if (!inv.models.some((m) => m.name === model)) {
       throw new CoreError('conflict', inv.ok ? `${this.#deviceName(device)} doesn’t have ${model}. Download it first.` : `Nova can’t check ${this.#deviceName(device)}’s models right now (${inv.problem}), and hasn’t seen ${model} there before.`);
     }
@@ -339,6 +399,7 @@ export class Models extends EventEmitter {
     const hubModel = str(body.hub_model);
     if (hubModel && device !== HUB) {
       const hub = await this.inventory(HUB);
+      if (runsRemotely(hubModel, hub.models.find((m) => m.name === hubModel))) throw new CoreError('validation', cloudWords(hubModel));
       if (!hub.models.some((m) => m.name === hubModel)) throw new CoreError('conflict', `The hub doesn’t have ${hubModel}.`);
       p.hub_model = hubModel;
     }
@@ -362,6 +423,7 @@ export class Models extends EventEmitter {
     for (const a of await this.recommendation()) {
       if (!a.pick) { left.push({ role: a.role, why: a.words }); continue; }
       if (!a.pick.installed) { left.push({ role: a.role, why: `${a.pick.model} needs downloading first.` }); continue; }
+      if (runsRemotely(a.pick.model) || (a.pick.hub_model && runsRemotely(a.pick.hub_model))) { left.push({ role: a.role, why: cloudWords(a.pick.model) }); continue; }
       await this.assign(a.role, { device: a.pick.device, model: a.pick.model, ...(a.pick.url && a.pick.device !== HUB ? { url: a.pick.url } : {}), ...(a.pick.hub_model ? { hub_model: a.pick.hub_model } : {}) });
       assigned.push(a.role);
     }
@@ -424,8 +486,11 @@ export class Models extends EventEmitter {
 
   // The person's local model: the placement, a spoke woken if it's worth it, the call.
   async #local(req: InferRequest, mode: PrivacyMode, notes: string[]): Promise<Omit<InferResult, 'notes'>> {
+    const stored = this.#stored(req.role);
+    if (stored && !this.#trusted(stored.device)) throw new LocalDown(`${this.#deviceName(stored.device)} is no longer one of your trusted computers, so Nova sends it nothing`);
     const p = this.placement(req.role);
     if (!p) throw new LocalDown(`no model is assigned to ${ROLE_WORDS[req.role].name.toLowerCase()} yet`);
+    if (this.#remote(p.device, p.model)) throw new LocalDown(cloudWords(p.model).replace(/\.$/, ''));
     let device = p.device;
     let url = p.url;
     let model = p.model;
@@ -447,6 +512,9 @@ export class Models extends EventEmitter {
         }
       }
     }
+    // Checked again on every call, whatever was assigned: an Ollama cloud model would take this off
+    // the person's devices while the receipt said local.
+    if (this.#remote(device, model)) throw new LocalDown(cloudWords(model).replace(/\.$/, ''));
     const rt = new Ollama(url);
     const receipt = this.#receipt(req, mode, 'ollama', model, 'local');
     try {
@@ -601,6 +669,7 @@ export class Models extends EventEmitter {
 
   async #wake(device: string): Promise<WakeResult> {
     const name = this.#deviceName(device);
+    if (device === HUB || !this.#trusted(device)) return { ok: false, waited_ms: 0, limit_ms: 0, words: `${name} isn’t one of your trusted computers, so Nova won’t wake it.` };
     const hw = this.#spokeHardware(device);
     const url = this.#urlFor(device);
     if (!url) return { ok: false, waited_ms: 0, limit_ms: 0, words: `Nova doesn’t know where ${name}’s models answer.` };
@@ -705,7 +774,7 @@ export class Models extends EventEmitter {
   // Asks for a download. Refused at once when the disk budget can't take what Nova knows of its size.
   async requestPull(body: Record<string, unknown>): Promise<Task> {
     const model = str(body.model);
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/.test(model)) throw new CoreError('validation', 'model is the name to download, like nomic-embed-text or qwen3:8b.');
+    if (!MODEL_NAME.test(model)) throw new CoreError('validation', 'model is the name to download, like nomic-embed-text or qwen3:8b.');
     const device = str(body.device) || HUB;
     const url = this.#urlFor(device);
     if (!url) throw new CoreError('conflict', `Nova doesn’t know where ${this.#deviceName(device)}’s models answer.`);
@@ -736,8 +805,8 @@ export class Models extends EventEmitter {
     const device = str(body.device) || HUB;
     const url = this.#urlFor(device);
     if (!model || !url) throw new CoreError('validation', 'model is the installed model to remove.');
-    const using = ROLES.filter((r) => { const p = this.placement(r); return p && ((p.device === device && p.model === model) || (device === HUB && p.hub_model === model)); });
-    if (using.length) throw new CoreError('conflict', `${model} serves ${using.map((r) => ROLE_WORDS[r].name.toLowerCase()).join(' and ')}. Assign another model first.`);
+    const using = this.#inUse(device, model);
+    if (using) throw new CoreError('conflict', using);
     return this.#o.ledger.create({
       title: `Remove ${model}${device === HUB ? '' : ` from ${this.#deviceName(device)}`}`,
       owner: this.worker.id,
@@ -749,6 +818,12 @@ export class Models extends EventEmitter {
       approval_tier: 2,
       user_visibility: 'handling',
     });
+  }
+
+  // Why a model can't be removed: it serves a role. Null when nothing uses it.
+  #inUse(device: string, model: string): string | null {
+    const using = ROLES.filter((r) => { const p = this.placement(r); return p && ((p.device === device && p.model === model) || (device === HUB && p.hub_model === model)); });
+    return using.length ? `${model} serves ${using.map((r) => ROLE_WORDS[r].name.toLowerCase()).join(' and ')}. Assign another model first.` : null;
   }
 
   async #used(device: string): Promise<number> {
@@ -779,6 +854,9 @@ export class Models extends EventEmitter {
       timeoutMs: 12 * 3600_000,
       health: () => ({ ok: true }),
       lane: () => ({ key: 'pull', max: 1 }),
+      // Downloading or removing a model takes disk, bandwidth and time, or takes away what a role
+      // runs on: it always asks first, whoever made the task (a device, a trigger, the API).
+      minTier: () => 2,
       run: (brief, signal) => this.#run(brief, signal),
     };
   }
@@ -792,11 +870,18 @@ export class Models extends EventEmitter {
     });
     const model = str(i.model);
     const device = str(i.device) || HUB;
-    const url = str(i.url);
-    if (!model || !url) return report('failed', 'The brief doesn’t say which model, or where.');
+    // Everything the brief says is checked again here, whoever wrote it: the address is never the
+    // brief's (Nova's own runtime for that device is the one asked), the name must be a model name,
+    // and the device must still be trusted.
+    if (!MODEL_NAME.test(model)) return report('failed', 'The brief doesn’t name a model Nova can download or remove.');
+    const url = this.#urlFor(device);
+    if (!url) return report('failed', `Nova doesn’t know where ${this.#deviceName(device)}’s models answer, or it isn’t one of your trusted computers.`);
     const rt = new Ollama(url);
     const name = this.#deviceName(device);
     if (i.action === 'remove') {
+      // A role may have been assigned to it since the task was asked for.
+      const using = this.#inUse(device, model);
+      if (using) return report('blocked', using);
       try {
         const had = await rt.remove(model);
         if (!had) return report('failed', `${name} doesn’t have ${model}.`);
@@ -817,8 +902,11 @@ export class Models extends EventEmitter {
     try { used = (await rt.tags()).reduce((n, m) => n + m.size, 0); } catch (e) {
       return e instanceof RuntimeDown ? report('blocked', `Waiting on local capacity: ${e.message}`) : report('failed', (e as Error).message);
     }
-    if (typeof i.size === 'number') {
-      const refusal = await this.#diskRefusal(device, i.size, model);
+    // The size Nova knows from its catalog wins over what a brief says; the budget is checked
+    // again mid-download either way, once Ollama says how big the layers are.
+    const size = CATALOG.find((c) => c.name === model)?.size ?? (typeof i.size === 'number' && i.size > 0 ? i.size : null);
+    if (size !== null) {
+      const refusal = await this.#diskRefusal(device, size, model);
       if (refusal) return report('failed', refusal);
     }
     const dl: Download = { task_id: brief.task_id, action: 'pull', model, device, status: 'starting', completed: 0, total: 0, digest: null };
@@ -1052,6 +1140,7 @@ export class Models extends EventEmitter {
 
 export interface WakeResult { ok: boolean; waited_ms: number; limit_ms: number; words: string }
 
+const cloudWords = (model: string) => `${model} runs in Ollama’s cloud, not on your devices, so it can’t serve a role: what it is given would leave them. Pick a model that runs locally.`;
 const secs = (ms: number) => `${Math.max(1, Math.round(ms / 1000))} s`;
 const usd = (n: number) => (n > 0 && n < 0.01 ? 'under $0.01' : `$${n.toFixed(2)}`);
 

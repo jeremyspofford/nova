@@ -21,7 +21,7 @@ import { CONFIRMATION_SYSTEM, Inbox, STATUSES, checkSignature, n8n, timeoutS as 
 import { openaiCompatible, roleOf } from './openai.ts';
 import { CONTRACT_SYSTEM, agentPrompt, contractPrompt, parseContract, summarize } from './prompt.ts';
 import { applyFiles, fileRefs, notCopied, outOfScope, treeHash, unifiedDiff, type Change, type Scope, type TaskSpace, type TestAsk } from './taskspace.ts';
-import { CLASSES, EGRESS, IMPLEMENTATIONS, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where } from './types.ts';
+import { CLASSES, EGRESS, IMPLEMENTATIONS, OLLAMA_CLOUD, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where } from './types.ts';
 import type { Db } from '../db.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
@@ -45,7 +45,6 @@ const COMPANY: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenA
 type Choice = (typeof CHOICES)[number];
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/;
-const OLLAMA_CLOUD = /[:-]cloud$/i;
 // Settings that decide what a provider runs or where its data goes.
 const WHERE_KEYS = ['command', 'base_url', 'webhook_url', 'callback_url'] as const;
 // Permission settings, strictest first.

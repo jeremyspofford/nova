@@ -2,7 +2,7 @@
 // fetch, no redirects (what Nova sends goes only to the address it checked), and every failure in
 // words. A runtime that can't be reached throws RuntimeDown, which the model manager treats as
 // "local capacity is missing" rather than as a bug.
-import { NO_REDIRECT, reachProblem } from '../providers/types.ts';
+import { NO_REDIRECT, OLLAMA_CLOUD, reachProblem } from '../providers/types.ts';
 
 export class RuntimeDown extends Error {
   constructor(message: string) { super(message); this.name = 'RuntimeDown'; }
@@ -19,7 +19,14 @@ export interface InstalledModel {
   params_b: number | null;
   quantization: string;
   capabilities: string[];
+  // Listed by this Ollama but run somewhere else (its tags name a remote host or model).
+  remote: boolean;
 }
+
+// A model Ollama lists but doesn't run on this machine: one of its cloud models (by the registry's
+// rule for their names), or a tag that names a remote host or model. Whatever it is sent leaves
+// the person's devices, so it never serves a role.
+export const runsRemotely = (name: string, m?: { remote?: boolean } | null): boolean => OLLAMA_CLOUD.test(name) || m?.remote === true;
 
 export interface PullProgress { status: string; digest?: string; total?: number; completed?: number }
 export interface Message { role: 'system' | 'user' | 'assistant'; content: string }
@@ -40,6 +47,7 @@ export function toInstalled(m: Record<string, any>): InstalledModel {
     name: String(m.name ?? m.model ?? ''), size: Number(m.size) || 0, digest: String(m.digest ?? ''), modified_at: String(m.modified_at ?? ''),
     family: String(d.family ?? ''), parameter_size: String(d.parameter_size ?? ''), params_b: paramsB(d.parameter_size), quantization: String(d.quantization_level ?? ''),
     capabilities: Array.isArray(m.capabilities) ? m.capabilities.map(String) : [],
+    remote: !!(m.remote_host || m.remote_model || d.remote_host || d.remote_model),
   };
 }
 
