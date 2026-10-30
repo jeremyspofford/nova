@@ -1,0 +1,33 @@
+/* Settings › Changes (M7a): the pipeline's changes, the one that waits, canaries. Tokens only. */
+.change-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+.change-row { display: grid; gap: var(--space-1); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+.change-row .settings-note { margin: 0; }
+.change-version { color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-mono); }
+.change-words { color: var(--text-primary); }
+.change-ship { display: grid; gap: var(--space-2); margin-top: var(--space-4); padding: var(--space-5); border: 1px solid var(--status-attention); border-radius: var(--radius-card); background: var(--surface-card); box-shadow: var(--shadow-card); }
+.change-ship .change-title { margin: 0; font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-display); color: var(--text-primary); }
+.change-ship .settings-note, .change-ship .conn-sub { margin: 0; }
+.change-asks { margin: 0; padding-left: var(--space-5); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+/* A task's inputs are shown whole, as JSON: long runs wrap rather than widen the card. */
+.change-asks li { overflow-wrap: anywhere; }
+.change-stages { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.change-stage { padding-left: var(--space-3); border-left: 2px solid var(--border-subtle); }
+.change-stage .settings-note { margin: 0; }
+.change-stage-name { font: var(--type-weight-strong) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-primary); }
+.change-stage-state { font: var(--type-weight-regular) var(--type-caption)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.change-stage[data-state="passed"] { border-left-color: var(--status-ok); }
+.change-stage[data-state="running"] { border-left-color: var(--status-working); }
+.change-stage[data-state="failed"] { border-left-color: var(--status-error); }
+.change-canary { margin-top: var(--space-2); padding: var(--space-3); border-radius: var(--radius-input); background: var(--bg-raised); }
+.change-canary .settings-note { margin: 0; }
+.change-probes { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-1); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.change-probe { display: flex; gap: var(--space-2); align-items: baseline; }
+.change-probe::before { content: ''; flex: none; width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: var(--text-faint); }
+.change-probe[data-ok="true"]::before { background: var(--status-ok); }
+.change-probe[data-ok="false"]::before { background: var(--status-error); }
+.change-evidence { margin-top: var(--space-1); }
+.change-evidence .change-stages { margin-top: var(--space-2); }
+.change-release { font-family: var(--font-mono); }
+.change-confirm { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
+.change-row .sheet-actions, .change-confirm .sheet-actions { margin-top: 0; }
+@media (prefers-reduced-motion: reduce) { .change-row, .change-ship { transition: none; } }

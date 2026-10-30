@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { hostname, networkInterfaces } from 'node:os';
 import { CoreError } from './errors.ts';
-import { Db } from './db.ts';
+import { Db, loadMigrations } from './db.ts';
 import { Log, addSecretValue } from './log.ts';
 import { Profile, SECTIONS, type Section } from './profile.ts';
 import { Workspace, workspaceWorker } from './workspace.ts';
@@ -43,6 +43,11 @@ import { captureRoutes } from './capture/routes.ts';
 import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { secretName } from './providers/types.ts';
+import { Resilience } from './resilience/index.ts';
+import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
+import type { SupervisorLink } from './resilience/link.ts';
+import { Changes } from './changes/pipeline.ts';
+import { Foundry } from './changes/foundry.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
@@ -89,6 +94,16 @@ export { addressEgress, secretPrefix } from './connectors/index.ts';
 export type { Connector, ConnectorContext, ConnectorFactory, ConnectorStatus, ConnectorView } from './connectors/index.ts';
 export { HA_ID, HA_MANIFEST, DEFAULT_TIER3, tokenIssuer } from './connectors/home-assistant.ts';
 export { redactText } from './log.ts';
+// Resilience (M7b): the supervisor's link and shared pieces (src/supervisor imports only this file).
+export { ipcLink } from './resilience/link.ts';
+export type { SupervisorLink, SupervisorState, SupervisorProblem, ReleaseSlot, Stage as DeployStage, ProbeLine, ServerMode } from './resilience/link.ts';
+export { PLAYBOOKS } from './resilience/playbooks.ts';
+export { CODE_ROOT, copyHome, smoke, startSandbox, sandboxEnv } from './resilience/sandbox.ts';
+export type { Sandbox, ProbeResult } from './resilience/sandbox.ts';
+export { restoreInto, backupFiles, sha256File } from './resilience/backup.ts';
+export { makeScratch, dropScratch } from './resilience/scratch.ts';
+export type { Manifest as BackupManifest } from './resilience/backup.ts';
+export { restoreBackup, loadMigrations } from './db.ts';
 
 export interface CoreOptions {
   home: string;
@@ -123,6 +138,16 @@ export interface CoreOptions {
   // The local model manager (M6b): where the hub's Ollama answers by default, and (tests) a fixed
   // hardware reading and quicker watch and wake polls.
   models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number };
+  // The supervisor that started this server, when one did (resilience/link.ts: ipcLink).
+  supervisor?: SupervisorLink | null;
+  // Resilience (M7b), for tests: the clock watch's monotonic time, and the restore drill's sandbox.
+  resilience?: { monotonic?: () => number; drill?: { root?: string; env?: Record<string, string>; timeoutMs?: number }; lookup?: (host: string) => Promise<unknown> };
+  // This process is a sandbox copy started by the change pipeline (M7a, NOVA_SANDBOX=1): it runs
+  // none of the hub's outside work (connectors, capture, models, the heartbeat), takes no changes,
+  // and answers the sandbox routes.
+  sandbox?: boolean;
+  // The change pipeline (M7a), for tests: the monotonic clock its canary windows are measured on.
+  changes?: { monotonic?: () => number };
   now?: () => Date;
 }
 
@@ -166,7 +191,7 @@ export function createCore(o: CoreOptions) {
   // Remote decision providers (JevProvider) are registered only once configured; local-only skips them anyway.
   const decisions = new Decisions({ templates, providers: [rules], privacy: () => profile.privacyDefault(), log });
   const triggers = new Triggers({
-    db, log, ledger, templates, rules, decisions, now,
+    db, log, ledger, templates, rules, decisions, now, sandbox: o.sandbox === true,
     policy: () => profile.section('policy') as Policy,
     timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
   });
@@ -199,6 +224,8 @@ export function createCore(o: CoreOptions) {
   // The model manager (M6b) is made once the device registry exists (below); providers reach it
   // through these, for a provider set to a role and for cloud budgets.
   let models: Models | null = null;
+  // Made once the ledger's other parts exist (below); capture asks it whether retention may run.
+  let resilience: Resilience | null = null;
   const providers = new Providers({
     db, log, home: o.home, workspace, extensions, ledger, verifier, receipts, profile, now,
     custom: o.agent, secret: providerSecret, meshHost: (h) => meshHosts().has(h),
@@ -256,6 +283,26 @@ export function createCore(o: CoreOptions) {
     failoverAfterS: () => { const v = profile.get<number>('mesh', 'auto_failover_after_s'); return typeof v === 'number' && v > 0 ? v : null; },
   });
   const role = meshRole;
+  // The change pipeline and the foundry (M7a): changes to Nova go through gates, never live edits.
+  const changes = new Changes({
+    db, log, ledger, verifier, home: o.home, now, sandbox: o.sandbox === true, testClock: process.env.NOVA_TEST_CLOCK === '1',
+    routes: () => routes, health: () => health(), hubDevice: () => meshIdentity.id, privacy: () => profile.privacyDefault(),
+    knownDevice: (id) => id === meshIdentity.id || devices.find(id)?.trust === 'trusted',
+    // The canary's window on a clock that only moves forward. An injected clock (tests) is the
+    // only clock there is, so it stands in unless a test gives one of its own.
+    ...(o.changes?.monotonic ? { monotonic: o.changes.monotonic } : o.now ? { monotonic: () => now().getTime() } : {}),
+    live: {
+      db, extensions, design, profile, triggers, templates, ledger, now, novaVersion: o.version,
+      timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
+      workerEgress: (owner) => { const w = ledger.workers.get(owner); return w ? w.egress : null; },
+    },
+  });
+  ledger.workers.set(changes.worker.id, changes.worker);
+  const foundry = new Foundry({
+    home: o.home, ledger, changes, receipts, privacy: () => profile.privacyDefault(),
+    infer: (r) => models!.infer(r) as never, chat: () => providers.chat(),
+  });
+  ledger.workers.set(foundry.worker.id, foundry.worker);
   // Capture (M6a): consent, storage on the hub, classification, promotion; Screenpipe pulled, and
   // device agents' capture events through the inbox below.
   const capture = new Capture({
@@ -268,6 +315,7 @@ export function createCore(o: CoreOptions) {
     fire: (topic, payload, key) => triggers.connectorEvent('capture', topic, payload, key),
     proposer: () => (models!.decidesWithModel(rules.has(PROMOTE.template_id)) ? LOCAL_MODEL_PROVIDER : null),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
+    retentionHold: () => resilience?.retentionHeld() ?? null,
     ...(o.capture?.fetch ? { fetch: o.capture.fetch } : {}),
   });
   // A forgotten memory takes the capture it was promoted from with it; on a standby, what the hub
@@ -309,6 +357,18 @@ export function createCore(o: CoreOptions) {
     addConfirmation: (system, check) => verifier.registerConfirmation(system, check),
   });
   connectors.register(homeAssistant(o.homeAssistant));
+  // Resilience (M7b): nightly backups and the restore drill as ledger work, repair playbooks, the
+  // clock watch, and what the supervisor says.
+  resilience = new Resilience({
+    db, log, home: o.home, version: o.version, profile, ledger, verifier, triggers, vault, backups, now,
+    migrations: () => loadMigrations(), supervisor: o.supervisor ?? null,
+    ...(o.resilience?.monotonic ? { monotonic: o.resilience.monotonic } : {}), ...(o.resilience?.drill ? { drill: o.resilience.drill } : {}),
+  });
+  const keep = resilience;
+  ledger.workers.set(keep.worker.id, keep.worker);
+  wireRepairs(keep.playbooks, { ledger, providers, models, connectors, role, spokes, devices });
+  keep.watch(connectorWatch(keep.playbooks, connectors, o.resilience?.lookup));
+
   // Capture feeds event rules too, as the connector "capture" (topics: capture/routes.ts).
   const connectorCheck = triggers.connectorCheck;
   triggers.connectorCheck = (id, topic) => (id === 'capture' ? capture.topicCheck(topic) : connectorCheck ? connectorCheck(id, topic) : `There is no connector called ${id}.`);
@@ -337,6 +397,7 @@ export function createCore(o: CoreOptions) {
     }
   });
   extensions.on('change', (c) => bus.emit('event', 'extension', c));
+  changes.on('change', (c) => bus.emit('event', 'change', c));
   providers.on('change', (c) => bus.emit('event', 'provider', c));
   // The UI swaps its design-system stylesheet when this arrives: no reload, no restart.
   design.on('change', (c) => bus.emit('event', 'design-system', c));
@@ -355,6 +416,7 @@ export function createCore(o: CoreOptions) {
   role.on('applied', () => capture.synced());
   browser.on('change', (v) => bus.emit('event', 'browser', v));
   capture.on('change', (c) => bus.emit('event', 'capture', c));
+  keep.playbooks.on('change', (c) => bus.emit('event', 'playbook', c));
   // A device that may no longer approve may no longer hold a browser either (browser/routes.ts).
   devices.on('revoked', (d: Device) => browser.release(`device:${d.id}`, `ended by Nova: its device was removed`));
   // Nor capture from it: its sources go off.
@@ -418,6 +480,8 @@ export function createCore(o: CoreOptions) {
       connectors: connectors.health(),
       browser: browserHealth(),
       capture: capture.health(),
+      backups: keep.health(),
+      changes: changes.health(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
   }
@@ -470,6 +534,7 @@ export function createCore(o: CoreOptions) {
         if (section === 'providers' || (section === 'policy' && params.key === 'task_tests')) throw new CoreError('validation', 'Providers are set through /api/v1/providers, so their settings are checked.');
         if (section === 'capture') throw new CoreError('validation', 'Capture settings are set through PUT /api/v1/capture/settings, so they are checked.');
         if (section === 'models') throw new CoreError('validation', 'Models are set through /api/v1/models, so their settings are checked.');
+        if (section === 'backups') throw new CoreError('validation', 'Backups are set through PUT /api/v1/backups/settings, so the folders are checked.');
         if (section === 'appearance') {
           if (params.key !== 'mode') throw new CoreError('validation', 'Choose a design system with POST /api/v1/design-systems/{id}/apply, so it is checked and can be rolled back.');
           design.setMode(body.value);
@@ -712,7 +777,14 @@ export function createCore(o: CoreOptions) {
       handle: ({ params, body }) => {
         if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(params.name!)) throw new CoreError('validation', 'A secret’s name is capital letters, digits and underscores, like API_KEY.');
         if (typeof body.value !== 'string' || !body.value.trim()) throw new CoreError('validation', 'value is the secret itself, and it can’t be empty.');
-        vault.put(`provider/${params.name}`, body.value.trim());
+        try {
+          vault.put(`provider/${params.name}`, body.value.trim());
+        } catch (e) {
+          // A full disk is the person's to know about beyond this one refusal (M7b): a problem
+          // with its playbook.
+          if (e instanceof CoreError && e.details.some((d) => d.startsWith('ENOSPC'))) log.problem('vault', 'Nova couldn’t save a secret because the disk is full. Nothing in the vault changed.', { detail: e.details.join('\n') });
+          throw e;
+        }
         return { name: params.name, ref: `secret://${params.name}`, stored: true };
       },
     },
@@ -736,6 +808,15 @@ export function createCore(o: CoreOptions) {
     // ---- capture (M6 plan §1) ----
     ...captureRoutes(capture),
     ...models.routes(),
+    // ---- resilience (M7 plan §2–§3): backups, the drill, playbooks, the supervisor ----
+    ...keep.routes((w) => { if (w.principal.kind !== 'console') throw new CoreError('forbidden', 'Releases are deployed and rolled back from the hub’s own screen only.'); }),
+    // ---- the change pipeline and the foundry (M7 plan §1) ----
+    ...changes.routes(),
+    {
+      method: 'POST', path: '/foundry', status: 201, summary: 'Ask the foundry for an extension: it writes it with its tests and probe (the local model by default) and proposes it as a change, tier 3.',
+      body: '{need, kind: trigger-rules | template | skill-pack | design-system, via?: local-model | chat}',
+      handle: ({ body }) => foundry.request(body),
+    },
     // ---- browser work with takeover (M5 plan §3) ----
     ...browserRoutes(browser, {
       home: o.home,
@@ -760,11 +841,16 @@ export function createCore(o: CoreOptions) {
   const beat = () => {
     try { enroll.sweep(); } catch (e) { log.problem('mesh', 'Nova couldn’t tidy up old requests to join.', { detail: (e as Error)?.stack ?? String(e) }); }
     ticking = triggers.tick().catch((e) => log.problem('triggers', 'The heartbeat couldn’t check the schedules.', { detail: (e as Error)?.stack ?? String(e) }));
+    // The clock watch, and Nova's own retries of repairs that haven't worked yet.
+    void keep.sweep().catch((e) => log.warn('resilience', 'The repair sweep stumbled.', { error: (e as Error).message }));
   };
   // The hub's own work: the ledger, recovered, and the heartbeat. A standby runs neither.
   function startHub() {
     const recovered = ledger.recover();
     providers.recover();
+    // A sandbox copy reaches nothing outside itself and keeps no clock of its own: the pipeline
+    // drives it.
+    if (o.sandbox) return recovered;
     models!.start();
     if (!heartbeat) {
       heartbeat = setInterval(beat, 30_000);
@@ -773,11 +859,13 @@ export function createCore(o: CoreOptions) {
     }
     connectors.start();
     capture.start();
+    changes.start();
     return recovered;
   }
   function stopHub() {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
+    changes.stop();
     models!.stop();
     connectors.stop().catch(() => {});
     capture.stop().catch(() => {});
@@ -811,7 +899,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
-    vault, connectors, capture, models,
+    vault, connectors, capture, models, changes, foundry, resilience: keep,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
@@ -833,6 +921,16 @@ export function createCore(o: CoreOptions) {
     // A hub recovers the ledger, then starts the heartbeat: once now (to catch up), then every
     // 30 s. A standby starts copying the hub instead, and runs nothing else.
     start() {
+      // Under the supervisor: where the data stands before any work runs (recovery, the
+      // heartbeat), so going back to an older release can tell whether it would undo any of it.
+      o.supervisor?.mark?.({
+        seq: db.get<{ s: number }>('SELECT IFNULL(MAX(seq), 0) AS s FROM sync_log')?.s ?? 0,
+        problem: db.get<{ p: number }>('SELECT IFNULL(MAX(id), 0) AS p FROM problem')?.p ?? 0,
+      });
+      // A clock that went back while Nova was off shows as records written "in the future". A
+      // sandbox copy (M7a's sandbox mode, also used by the restore drill and release deploys)
+      // keeps no clock of its own.
+      if (!o.sandbox) keep.checkClock(true);
       browser.sweep();
       const recovered = role.role() === 'hub' ? startHub() : { requeued: [], reverified: [] };
       role.start();

@@ -268,9 +268,18 @@ export class Vault extends EventEmitter {
       if (this.#unopenable !== 'lost') throw e;
       map = this.#startOver();
     }
+    const before = map.get(name);
     map.set(name, value);
     addSecretValue(value);
-    this.#save(map);
+    try {
+      this.#save(map);
+    } catch (e) {
+      // Not saved means not kept: the vault goes on holding what is on disk (a full disk, M7b).
+      if (before === undefined) map.delete(name); else map.set(name, before);
+      rmSync(`${this.file}.tmp`, { force: true });
+      const full = (e as NodeJS.ErrnoException).code === 'ENOSPC';
+      throw new CoreError('conflict', full ? 'Nova couldn’t save the secret: the disk is full. Nothing was changed; free some space and save it again.' : `Nova couldn’t save the secret: ${(e as Error).message}. Nothing was changed.`, [`${(e as NodeJS.ErrnoException).code ?? 'error'}: ${(e as Error).message}`]);
+    }
     return secretRef(name);
   }
 

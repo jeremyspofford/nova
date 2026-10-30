@@ -15,6 +15,276 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (owner decision): real-phone pairing check deferred; pairing clocks logged as a
+usability defect.** The owner's first real pairing attempt, from a phone over Tailscale, didn't
+finish. Before that, it was refused as cross-origin: a proxy pointed at the console, not the device
+door. That is fixed: the preview opens the device door on loopback, and Tailscale Serve 9446 points
+at it.
+- **Deferral.** The owner decided that the real-device pairing check waits until they are back at
+  their desk. The emulated-phone pairing in the M4 gate (`tests/ui/m4-mesh.test.ts`) stands in for
+  it. No milestone blocks on it.
+- **Defect, open (usability), as the owner reported it.** A person juggling two devices loses the
+  race against the clocks: the code seemed to expire about 7 minutes after it was made, and a
+  pending request had about 2 minutes to be approved.
+- **The code's clocks today:**
+  - a pairing code works once, for 5 minutes (`PAIRING_CODE_TTL_MS`, `src/core/mesh/wire.ts`);
+  - after the phone joins, the confirmation must be revealed within 2 minutes
+    (`JOIN_REVEAL_TTL_MS`);
+  - then it must be approved within 10 minutes (`JOIN_APPROVE_TTL_MS`, `src/core/mesh/enroll.ts`).
+
+  The 2-minute reveal window is very likely the "approval window" the owner hit. The reveal happens
+  on the phone's side, so a slow step there ends the request.
+- **When pairing is revisited**, the windows get longer, or the flow tolerates a retry without
+  starting over (for example, an expired request can be re-revealed under the same code while the
+  code is still valid). Both keep commit-then-reveal and the single use of a code. Not changed now.
+
+**2026-10-30 (M7 review fixes): the change pipeline's guards.** Branch `m7-fix/changes`; tests in
+`tests/core/changes-guards.test.ts` (the reviewer's probes, made real), each failing on the code
+before its fix (checked against `fdd33ea2`).
+
+- **Only the pipeline makes its tasks.** A worker may be `internal` (`ledger.ts`): the ledger
+  refuses `create()` for it unless the caller holds the worker's own key, before even the
+  idempotency look-up. `changes` and `foundry` are internal, so POST /tasks, a device's
+  task_request, a connector's delegate and a trigger's action (heartbeat, webhook or a firing
+  that carries its own action) can't make one; `createRule` refuses such an owner too. Backstops:
+  the changes worker runs a brief only when its `task_id` is the record's own check/ship/rollback
+  task, its `minTier` is the change's tier for ship and 2 for rollback, and `#ship` refuses a task
+  whose ledger approval is below the change's tier or absent. The approval stage's evidence is read
+  from the ledger (task id, tier, `approved_at`, the `approved` event); `confirmed` is true only for
+  a tier-3 task the ledger approved, never asserted.
+- **The sandbox is inert.** A sandbox core's triggers record a task action as it would have acted
+  and start nothing (`Triggers({sandbox})`). `inert()` also deletes the `backups`, `providers` and
+  `models` profile sections and turns capture sources off with no config (also used by the restore
+  drill, which checks before `inert`; that edit is two lines in `changes/sandbox.ts`). A rule
+  pack's task may be for `workspace` at any tier; any other worker needs an explicit
+  `approval_tier` of 2 or 3; `changes`/`foundry` never (already refused by `weakens`). A change
+  that fails its contract stops at tests without its own tests running on the copy.
+- **Rollback is exact.** An extension's snapshot copies aside, byte for byte, only the paths the
+  change will write (`workers/changes/<id>-previous/`, removed once it is rolled back), with their
+  hashes; rollback writes back only those (a copy that doesn't hash as recorded is not written:
+  the change goes `broken` with the reason) and deletes what wasn't there. `Extensions.restoreState`
+  puts `installed`/`enabled`/`disabled` back exactly; a brand-new extension is removed with
+  `remove(id, {purge: true})` (no kept/ or exports/ copies). Design systems use the same state and
+  purge, and put back only what the change set: the person's choice while it is still this one,
+  and the canary device's own entry; other devices' choices stay.
+- **A rollback by hand during a canary is immediate.** Rollback tasks have their own lane
+  (`rollback:<id>`); the Ship task is cancelled with "You rolled it back during its canary." (the
+  person's decision: no failure, no problem).
+- **The approval card shows what ships.** A rule pack's task line names the worker, tier (in
+  words), privacy mode and the task's inputs as JSON.
+- **Ship and roll back need an approver** (`access: 'approver'`). A canary `device_id` must be the
+  hub or a trusted paired device (`knownDevice`), else the proposal is refused (400).
+- **Minors.** The canary record carries `applied` (false until apply finishes; a rerun applies it
+  again; ticks skip it meanwhile) and `elapsed_ms` measured on a monotonic clock between looks in
+  this process (a wall-clock jump can't end a window early; time Nova was stopped doesn't count;
+  `ends_at` stays as the estimate shown). On the test clock, or with an injected `now` in tests,
+  that clock is the monotonic one. A promotion that throws rolls the change back. Right before
+  apply the artifact is hashed again and the release file read back; a mismatch stops the change
+  unapplied.
+- **Known limits.** The set-aside copies live under `workers/`, which isn't journalled to a
+  standby: rolling back an extension change on a standby promoted mid-canary can't put files back
+  and ends `broken`, saying so.
+
+**2026-10-30 (M7 review fixes): resilience — supervisor, releases, backups, drill, playbooks.**
+Branch `m7-fix/resilience` from `m7/self-modification`. Every fix has a test that failed first.
+
+- **Forgets owed to a missing folder.** A forget reaches every folder Nova ever backed up to
+  (from `backup_run`), not only the one set now. A folder that isn't there owes it: the forget
+  is written to `kept/.nova/forgets-owed.json` (in the home's `kept`, so never in a backup, a
+  sandbox copy or the standby; its words sealed with AES-GCM under a key derived from the seal
+  key) and carried in before any backup run, prune or drill, and on every heartbeat. A problem
+  (`forget-owed`, one per folder) says so until then. A folder counts as back when it exists and
+  holds Nova's backups (or never had any): an empty mount point doesn't silently drop a forget.
+  Residual: if the person deletes every backup in that folder themselves, the problem stays open
+  until they mark it dealt with. The drill checks every kept backup (or encrypted copy) for
+  forgotten things (`forgotten-everywhere`), not only the one restored.
+- **Only Nova's backups count.** A backup is a folder recorded in `backup_run` (id and seq) whose
+  manifest carries Nova's HMAC seal (key `nova/backup-seal` in the vault). Anything else named
+  like one is a stray: never restored, never latest, never pruned, shown in GET /backups and on
+  Health. No migration was needed. Backups made before this fix carry no seal and are strays
+  (M7 is unreleased; nothing is deleted). Manifest paths go through the same check as untar
+  (`safeRel`) in `restoreInto` and `cleanBackup`.
+- **Backups are the person's alone.** 0700 folders, 0600 files whatever the umask; a folder
+  owned by someone else, or writable by group or others, is refused when chosen and at backup
+  time. `PUT /backups/settings` is approver-only (tier 2).
+- **The recovery key.** The encrypted copy's key is shown once as a recovery key (64 hex digits,
+  eight groups) when the copy is set up; again only at tier 3 (`POST /backups/recovery-key
+  {confirm: true}`, the hub's own screen). `openEncrypted(file, key, out)` opens a copy with no
+  home and no vault. The drill opens copies with the recovery key the person was shown (checked
+  by fingerprint), or one given to it, never whatever the vault holds now. The key is in no
+  backup in readable form; the vault's file in a backup carries it encrypted under the vault key,
+  which never leaves the machine.
+- **Supervisor problems close; restarts don't run away.** A crash or hang the supervisor dealt
+  with closes at the next sweep of the server it started. `restart-server` is never run by Nova
+  itself, and a person's restart repair is the console's or an approver's. The supervisor takes
+  at most one asked-for restart per window (a minute), and each counts toward safe mode.
+- **free-scratch** deletes only this process's leftover scratch and that of stopped processes
+  (scratch names carry the pid: `nova-<kind>-p<pid>-…`), never a running process's folder.
+- **Rollback restores.** The release reports its mark (sync log seq, newest problem) over IPC as
+  `core.start()` begins, before recovery, ticks or dispatch. The slot records `mark.by`
+  (`release`, or `supervisor` for a release too old to say, read after its start). A restore says
+  in the history and on its problem what it restored.
+- **Minor.** Tags `current` and `base` are never releases. Any failure after the running release
+  stops puts it back. Rollback from safe mode with nowhere to go keeps safe mode. A refused
+  rollback whose release won't start again goes to safe mode, with the refusal in the database.
+  `base` runs a slot pinned to the repository's HEAD at supervisor start
+  (`releases/.base-<commit>`), never the checkout on disk. The supervisor's folder must be the
+  person's and 0700. The control socket wants the typed confirmation (the version, or
+  `rollback`); `rollback --confirm` is now `--confirm rollback`. **Residual:** any program running
+  as the person can connect to the 0600 socket and send the same bytes as the CLI. Node has no
+  peer-credential check, and a same-user process could drive the CLI anyway. The confirmation
+  guards against slips, not against code already running as the person. Sandboxes always get
+  `NOVA_HOST=127.0.0.1`.
+
+**2026-10-30 (M7b): the supervisor, code releases, backups, the restore drill and the chaos pass.**
+Branch `m7b/resilience`; the plan's §2–§3. Code in `src/supervisor/` and `src/core/resilience/`,
+migration `0012_resilience.sql` (local tables: playbooks, backup runs, drills).
+
+- **The supervisor is its own process** (`node src/supervisor/main.ts run`), the server its child
+  over an IPC channel (no listening port: only the child can ask it anything). Crashes restart
+  after 1 s, doubling to 30 s; three within a minute is safe mode: the server is held, the reason
+  goes into the state file, the database (a problem with the `safe-mode` playbook, written
+  directly since no server runs) and a small page on Nova's own port (loopback, 503 for the API),
+  with `rollback` (to the last good release) and `recover` offered. Safe mode survives a restart of
+  the supervisor. Health is asked every 30 s; three unanswered in a row restart the server (3 s
+  grace, then SIGKILL). The command line reaches a running supervisor through a 0600 Unix socket in
+  its state folder. It refuses to start when a server already runs the home (`nova.pid`).
+- **Releases are git tags**, each in a slot `<dir>/releases/<tag>/` (a worktree of the tag's commit;
+  a slot that isn't exactly its tag any more is made again), `current` a symlink swapped by rename.
+  `base` is the checkout the supervisor runs from. Deploying is tier 3: the command line asks for
+  the tag to be typed (or `--confirm <tag>`); the API (`POST /api/v1/supervisor/deploy`) is the
+  console's only, with `confirm: true`. Stages: the release's tests (`npm test` by default, run in
+  the slot with a scratch HOME; a slot borrows the base's `node_modules` when the lockfiles match)
+  → a sandbox start on a copy of the home → smoke probes → switch → canary (2 min by default, never
+  under 2 s or two probes) → promote. A release from before M7b (no sandbox mode) is refused at
+  prepare. Health that already failed before the deploy (a backup drive unplugged) is no fault of
+  the release and doesn't fail its canary or smoke probes.
+- **The database across a release.** "Nothing was written since" is the sync log (migration 0006)
+  not moving past the mark taken when the new release first answered: every write to the person's
+  data adds an entry with a rising sequence. Set aside: problems (Nova's own diagnostics, carried
+  over into the restored database so none is lost) and the file journal (the files stay on disk and
+  the journal records them again). Deviation worth knowing: writes the new release made between its
+  migration and its first answer are Nova's own start-up, and are undone with the restore.
+- **Backups** go to a folder the person names, which Nova never creates (a drive not mounted must
+  not become a folder on the wrong disk) and which can't be inside the home. Retention keeps the
+  newest N by sequence number, never by date, and only after a new backup is complete. The
+  encrypted copy is one file per backup (a ustar archive, AES-256-GCM, header bound as AAD, written
+  in chunks, nothing unpacked until the tag checks); its key is `nova/backup-key` in the vault. The
+  vault's own file is in a backup, its key is not: a restored home can't open its vault, said
+  plainly (the drill sets that check aside). The home's git history isn't in a backup (it can hold
+  keys exposed before M4c untracked them). Forgetting: `Backups.also` carries every forget into
+  each nightly backup (the snapshot cleaned like M2's, text files rid of the lines with the words,
+  hashes rewritten) and each encrypted copy (decrypted, cleaned, encrypted again); one that can't be
+  cleaned is destroyed and reported.
+- **Schedules are visible rules**: setting a folder adds "Nightly backup" (03:30) and "Weekly
+  restore drill" (Sunday 04:00) heartbeat rules; both run as `resilience` ledger tasks whose
+  evidence Nova reads itself (the backup's database hash against its manifest; the drill's record).
+- **The sandbox is M7a's.** Its sandbox mode (`createCore({sandbox})`, `NOVA_SANDBOX=1`) and its
+  `inert()` (exported for this) are used by the drill (after the restored copy is checked) and by
+  the release sandbox (on `copyHome`, a snapshot plus the files a backup carries). The drill and the
+  supervisor start the process themselves (a release's code; a restored home), so M7a's `Sandbox`
+  class, which snapshots the live database in process, isn't used as is. server.js also skips
+  fencing, schedules and helpers in a sandbox; config.js gives a sandbox no mesh listener whatever
+  `nova.config.json` says.
+- **Playbooks** (`resilience/playbooks.ts`): problems opened in other modules' own words are
+  classified (a failed task by its worker, the model manager's fault, the standby behind, a device
+  in safe mode, a full disk), so no module had to change how it reports. Automatic repairs only
+  where nothing of the person's can change; at most three by Nova, a minute apart; the person can
+  run one any time. A failed task's problem stays open after its worker answers again: the task is
+  the person's to retry. Changes to M5/M6 behaviour, each found by the chaos pass: the model manager
+  opens its fault problem in local-only too (it only did when the cloud answered instead); a
+  secret that didn't reach the disk is no longer kept in memory; a problem the database can't take
+  (a full disk) is still emitted and listed, from memory, and the log never throws; the hub can ask
+  a device agent in safe mode, once, to restart its runtime (`restart_runtime` in the heartbeat
+  reply; the boot agent runs `recover`); a connection that keeps failing to reconnect is watched,
+  and its problem says when the name won't resolve.
+- **The clock**: the heartbeat compares wall time with the time that really passed; a start
+  compares now with the newest time written down. A jump opens `clock-jump`: schedules whose last
+  run is "in the future" are put back on time, device sign-ins dated in the future end, and capture
+  retention is held until the person marks it dealt with. Backup retention needs no hold (by
+  sequence).
+- **Chaos simulations, all safe**: a full disk is SQLite's own `max_page_count` (the same "database
+  or disk is full") and ENOSPC injected into Node's fs for one test folder (`syncBuiltinESMExports`);
+  DNS failing is an injected resolver (no real query); partitions and slow links are a loopback
+  proxy the test controls; crashes are SIGKILL/SIGSTOP to processes the test started.
+- **Gaps.** No OS service unit for the supervisor (run it as you'd run Nova). A device that is
+  simply off isn't a problem (devices sleep); its queue delivering exactly once on reconnect is
+  what is tested. The standby's own "unreachable for a minute" is wall time, so its test records
+  that problem rather than wait a minute. No remote backup target (the owner's choice later).
+
+**2026-10-30 (M7a): the governed change pipeline and the foundry.** Branch `m7a/changes`; the
+plan's §1. Code in `src/core/changes/`, migration `0011_changes.sql` (the integrator renumbers).
+
+- **Two ledger tasks per change.** *Check* (worker `changes`, tier 0) runs sandbox → tests →
+  health → release and never asks anyone; a change that fails it is stopped with the reason and
+  never offered. *Ship* is made only once the ledger has verified Check (Nova re-reads the release
+  file and re-hashes it), at the change's tier, so approval always comes after the sandbox
+  evidence; it then runs the canary and ends Done (promoted) or Failed with the probe's reason
+  (rolled back by itself; the ledger opens the problem). A Ship task waits on the canary's outcome;
+  the canary is driven by the clock (every 60 s; `POST /changes/tick` under `NOVA_TEST_CLOCK`).
+  Every stage is also a `stage` ledger event with its evidence. Rollback by hand is a third task,
+  tier 2, OK'd by the click that asked for it (`{confirm: true}`).
+- **The sandbox is a real Nova process** (`src/server.js` with `NOVA_SANDBOX=1`, loopback, port 0,
+  the parent's preloads so the egress tripwire covers it) on a scratch home in `workers/changes/<id>`
+  built from `VACUUM INTO` plus the standing files and, for an extension, its folder. The copy is
+  made inert before it starts: queued and running tasks cancelled, the person's rules paused,
+  provider/automation/connector extensions disabled, device addresses and sessions cleared, the
+  sync log dropped; no vault is copied. Sandbox mode (`createCore({sandbox})`) starts no
+  connectors, capture, model watch, heartbeat or canary clock, and takes no changes. Its chat model
+  is declared remote so the privacy probe has something to refuse. Deviation: the plan says
+  "needed files"; only the standing files and the extension's own folder are needed today.
+- **Gates.** Frozen constants (`gates.ts`): stage order, minimum canary per kind (rules and
+  extensions 30 min, templates 15, design systems and settings 10), at most 7 days, three passing
+  probe runs minimum, the fixed sandbox and canary probe sets. No route or profile section holds
+  them. `weakens()` refuses a proposal that names a gate field (`skip_stages`, `tier`, …), asks
+  for a shorter canary, replaces the core probes, changes a `changes`/`pipeline`/`gates` setting
+  or a canary/probe/stage key, asks to write the pipeline's records, starts pipeline work from a
+  rule, or carries files into Nova's code. Refusals are kept as `refused` records; nothing of them
+  runs. `enter()` refuses any stage whose predecessors haven't passed, whoever asks.
+- **Tiers.** Proposed by the foundry or a provider: 3, every time. Privacy and policy settings: 3.
+  An extension update asking for permissions the installed version didn't have: 3; any
+  permissions: 2. Rule packs whose rules start tasks: 2. Otherwise a person's own change is 1 (act
+  and report), its proposal being the OK.
+- **Kinds and canary scopes.** Rule packs: the rules (created_by `changes:<pack>`, changed in place
+  by name so their history stays), watched over their first firings (its error probe counts firings
+  that failed to start work or whose tasks failed). Design systems: one device (the hub's, or
+  `canary.device_id`), then everyone; the live check is the device showing it with contrast
+  holding. Extensions: skill packs, plugins and MCP servers as manifest and files (providers,
+  connectors and design systems keep their own ways in); tests and the health probe are
+  declarative, since Nova runs no extension code. Settings: identity, user, tuning, privacy,
+  policy (the rest have checked routes of their own). Templates: proposed, dry-run, activated
+  through the ledger; rollback reinstates the previous version (`Templates.reinstate`, new).
+- **Rollback restores the snapshot taken just before the canary**, and only that target: an
+  extension's previous manifest, state and files; a design system's package and the four
+  appearance keys; a setting's value or its absence; a pack's rules; a template's active version.
+  Rolling back by hand is offered only for the newest live change of a target; the one it had
+  replaced is live again.
+- **Release.** `changes/<target>/<version>-<id8>/` holds `artifact.json` (canonical JSON, hashed as
+  the record's `content_hash`), `change.json` and `evidence.json`, committed with
+  `git commit -- <that folder>` when the home keeps history (files only; the privacy check fails a
+  change carrying a vault value, so none reaches history). Previous releases stay. The folder is
+  journalled, so it reaches the standby with the record (`change_record` replicates).
+- **The foundry** asks the local model by default (`models.infer`, role reasoner, receipts by the
+  model manager) or the chat model (`via: chat`, a receipt when the handle keeps none), with M5's
+  JSON files contract, and writes the reply into `workers/foundry/<task>/` with M5's path checks.
+  It needs `manifest.json`, `tests.json` and `probe.json` and proposes the package as the
+  foundry's change; the Check/Ship path is the same as anyone's.
+- **PWA:** Settings › Changes (`ui/js/changes.js`, `ui/styles/changes.css`): the waiting change
+  with what the sandbox showed and "Ship it" (the one standout; tier 3 needs the confirm box), the
+  list with status in the one vocabulary, canaries with their probes as last run, evidence one
+  layer down, Roll back that asks first. `/api/v1/changes` is network-only in the service worker.
+- **Tests:** `tests/core/changes.test.ts` (8, real sandbox processes), `tests/acceptance/
+  m7a-changes.test.ts` (2: hub and standby with the egress tripwire, the foundry on the stand-in
+  Ollama; canary sabotage over the API), `tests/ui/m7a-changes.test.ts` (Chromium, via
+  `scripts/ui-test.sh`), and opt-in `tests/acceptance/m7a-real-ollama.test.ts`
+  (`NOVA_REAL_OLLAMA=1`, read and infer only). Run once here with Qwen3:8b: the first prompt
+  (placeholder shapes) got a pack with `"cron": "M H * * *"`, which the gates stopped at tests;
+  with example-filled shapes it wrote a 21:00 wind-down pack that passed every gate, waited for
+  the OK, canaried and went live. Both outcomes are the pipeline working; only the second is the
+  prompt working.
+- `tests/acceptance/m4b-device-agent.test.ts` now picks its restartable mesh port below the
+  ephemeral range (M4c's `freePort`): the sandboxes' port-0 listeners made the old race show up.
+
 **2026-10-30 (M6b review fixes): the model manager's guards.**
 Branch `m6-fix/models`; tests in `tests/core/models-guards.test.ts` (the reviewer's probes, made
 real), each failing on the code before its fix.

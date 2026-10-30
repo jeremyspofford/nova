@@ -111,6 +111,14 @@ its steps (what it read, searched, ran and kept), what it asked you and what
 you said. Stop or retry a helper there. Activity is read from the session
 logs; it keeps no data of its own.
 
+**Changes.** Nova never edits itself live. A change (a rule pack, a design
+system, a setting, a decision template, an extension), whether you propose it
+or Nova's foundry writes it for something you asked for, is tried on a sandbox
+copy of Nova first, tested, released as a version in your home's history, and
+then watched live in a canary before it stays; if a probe fails, the previous
+version comes back by itself. Anything Nova writes for itself waits for your
+confirmed OK, every time. Settings › Changes shows each one with its evidence.
+
 ## Configure
 
 Optional `nova.config.json` at the repo root (environment variables win):
@@ -140,6 +148,48 @@ Optional `nova.config.json` at the repo root (environment variables win):
 system prompt to a file and substitutes its path for `{system_file}`, sends the
 conversation on stdin, and reads the reply from stdout, as plain text or as
 Claude Code's stream-json. Any command that does that works.
+
+## Keep it running
+
+The supervisor runs Nova as its child, restarts it when it stops (waiting a
+little longer each time), restarts it when it stops answering, and holds it in
+safe mode if it keeps stopping right after it starts, saying why at Nova's
+address and on Health:
+
+```sh
+node src/supervisor/main.ts run               # instead of npm start
+node src/supervisor/main.ts status            # what it's doing, in words
+node src/supervisor/main.ts recover           # leave safe mode once the cause is fixed
+```
+
+**Releases.** A release is a git tag. `deploy <tag>` asks you to type the tag
+(every time), then runs the release's tests, starts it on a sandbox copy of
+your home, probes it, switches, and watches health for a canary window (two
+minutes by default, `--canary-s`); if health fails there it goes back to the
+previous release by itself. `rollback` goes back by hand (type `rollback`, or
+pass `--confirm rollback`). Going back across a database upgrade restores the
+backup taken before it only if nothing was written since the newer release
+started, its own start-up work included; otherwise Nova refuses, says why, and
+keeps the newer release. Releases live in `~/.nova-supervisor/releases/<tag>/`
+(`--dir`, a folder only you can open), each a git worktree of its tag. The
+code you started the supervisor from runs as it was committed then, so editing
+the checkout never changes what runs.
+
+**Backups.** `PUT /api/v1/backups/settings {"target": "/path/to/folder"}`
+(a folder of yours that already exists, outside Nova's home, that no one else
+can write; from this screen or a device that may approve) starts a nightly
+backup and a weekly restore drill, both in Automations. Each backup is a
+consistent copy of the database and your home's files, with a manifest of
+hashes, readable by you only; the vault's key and this computer's private keys
+are never in it. Add `"encrypted_target"` for an AES-256-GCM copy in a second
+folder: the reply shows its **recovery key once**. Keep it somewhere other
+than this computer: with it the copy opens anywhere; without it the copy can't
+be opened if this computer is lost. `POST /api/v1/backups/recovery-key
+{"confirm": true}` shows it again, from this screen only. `"keep"` is how many
+to keep (7). Forgetting something removes it from every backup too; a backup
+drive that is unplugged at the time gets the forget as soon as it is back.
+Health shows the last backup and the last drill; a failed drill is a problem
+with steps.
 
 ## Your other devices
 

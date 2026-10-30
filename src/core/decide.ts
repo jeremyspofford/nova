@@ -409,6 +409,24 @@ export class Templates {
     return this.version(id, version)!;
   }
 
+  // A rollback (the change pipeline, M7a): `version` is the one in use again, as it was before the
+  // change that replaced it, and the version that replaced it is retired with the reason. With no
+  // version to go back to, the replacement is retired and the template is simply not in use.
+  reinstate(id: string, version: number | null, replaced: number, why: string): void {
+    const at = this.#now().toISOString();
+    this.#db.tx(() => {
+      const t = this.version(id, replaced);
+      if (t && t.state !== 'retired') {
+        this.#db.run(`UPDATE decision_template SET state = 'retired', updated_at = ? WHERE template_id = ? AND version = ?`, at, id, replaced);
+        this.#event(id, replaced, 'retired', { why });
+      }
+      if (version !== null && this.version(id, version)) {
+        this.#db.run(`UPDATE decision_template SET state = 'active', updated_at = ? WHERE template_id = ? AND version = ?`, at, id, version);
+        this.#event(id, version, 'reinstated', { why });
+      }
+    });
+  }
+
   use(id: string, version: number): void {
     this.#db.run('UPDATE decision_template SET uses = uses + 1 WHERE template_id = ? AND version = ?', id, version);
   }

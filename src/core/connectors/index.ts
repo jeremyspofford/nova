@@ -58,6 +58,8 @@ export interface Connector {
   recheck?(): void;
   // What an event rule may listen for: null when the topic is fine, else why not.
   topic?(topic: string): string | null;
+  // The host name it connects to, so a repair playbook can tell a name that won't resolve (M7b).
+  host?(): string | null;
   worker?: Worker;
   confirm?: Checker;
   routes?: Route[];
@@ -259,6 +261,15 @@ export class Connectors extends EventEmitter {
       try { c.recheck?.(); } catch (e) { this.#o.log.problem('connectors', `${c.manifest.name} couldn’t follow the change to your privacy setting.`, { detail: (e as Error)?.stack ?? String(e) }); }
       this.emit('change', { id: c.manifest.id, connected: safeStatus(c).connected });
     }
+  }
+
+  // One connection stopped and started again, so it tries now rather than after its longest pause
+  // (a repair playbook's reconnect, M7b). Only while it is connected and the node is hub.
+  async restart(id: string): Promise<void> {
+    const c = this.get(id);
+    try { await c.stop?.(); } catch { /* stopping anyway */ }
+    if (this.#started && safeStatus(c).connected) this.#startOne(c);
+    this.emit('change', { id, connected: safeStatus(c).connected });
   }
 
   async stop(): Promise<void> {

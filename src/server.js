@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore, fromBrowserTask, originHost } from './core/index.ts';
+import { createCore, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -71,6 +71,10 @@ export function createNova(config = loadConfig(), deps = {}) {
     agent: { command: config.agentCmd, egress: config.agentEgress },
     secrets: deps.secrets ?? ((name) => process.env[`NOVA_SECRET_${name}`] ?? null),
     models: modelOptions(process.env),
+    // Started by the supervisor (src/supervisor), it can ask for a deploy or rollback (M7b).
+    supervisor: deps.supervisor ?? ipcLink(process),
+    // A sandbox copy started by the change pipeline (M7a): no outside work, no changes taken.
+    sandbox: process.env.NOVA_SANDBOX === '1',
   });
   // Chat goes through the registry: the provider the profile names for chat, or agent_cmd (the
   // default), which the runner runs exactly as before. Scheduled runs and helpers follow it.
@@ -518,14 +522,17 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   });
   // A hub first asks its roster peers whether one of them became hub while it was away (fencing).
   const { role } = nova.core.mesh;
-  await role.fence();
+  // A sandbox (a release on a copy of the home, a restore drill) runs no work and asks no peer
+  // anything: it is never the hub anyone uses (M7b).
+  const sandbox = process.env.NOVA_SANDBOX === '1';
+  if (!sandbox) await role.fence();
   // Only the hub runs work. A standby copies the hub and starts all of this when it is promoted.
   const runWork = () => {
     nova.helpers.recover(); // helper logs from before the ledger; the rest is the ledger's recovery
     nova.chatRun.recover();
     nova.scheduler.start();
   };
-  const hub = !role.replica();
+  const hub = !role.replica() && !sandbox;
   if (hub) nova.helpers.recover();
   const recovered = nova.core.start();
   if (hub) {
@@ -533,7 +540,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     nova.scheduler.start();
   }
   if (recovered.requeued.length) console.log(`Resumed ${recovered.requeued.length} task(s) that were running when Nova stopped.`);
-  if (!hub) console.log(role.replica().reason);
+  if (!hub && !sandbox) console.log(role.replica().reason);
   role.on('promoted', ({ epoch }) => { runWork(); console.log(`This node is the hub now (epoch ${epoch}).`); });
   role.on('demoted', ({ reason }) => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); console.log(reason); });
   nova.server.listen(config.port, config.host, () => {

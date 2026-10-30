@@ -93,7 +93,10 @@ function toTask(r: Row): Task {
 export interface Lane { key: string; max: number }
 // `minTier`: the least approval a task for this worker needs, whatever the caller asked for (a
 // provider whose brief declares a test command for Nova to run asks first: tier 2, M5a).
-export type LanedWorker = Worker & { lane?(brief: Brief): Lane; minTier?(input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier };
+// `internal`: a worker whose tasks only its own module makes (the change pipeline, the foundry).
+// Anyone else asking — the API, a device, a connector, a trigger — is refused with `why`, so a
+// brief can't be forged to drive it past the person's OK.
+export type LanedWorker = Worker & { lane?(brief: Brief): Lane; minTier?(input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier; internal?: { key: symbol; why: string } };
 const DEFAULT_LANE: Lane = { key: 'default', max: 1 };
 
 export interface LedgerOptions {
@@ -134,7 +137,11 @@ export class Ledger extends EventEmitter {
     this.#timeoutMs = o.timeoutMs ?? 10 * 60_000;
   }
 
-  create(input: TaskInput): Task {
+  // `as`: the key of an internal worker, from the module that owns it.
+  create(input: TaskInput, o: { as?: symbol } = {}): Task {
+    // Before the idempotency look-up too: a forged key mustn't even read back the real task.
+    const closed = this.closed(input?.owner);
+    if (closed && o.as !== this.workers.get(input.owner)!.internal!.key) throw new CoreError('forbidden', closed);
     const key = input.idempotency_key ?? randomUUID();
     const existing = this.#db.get<Row>('SELECT * FROM task WHERE idempotency_key = ?', key);
     if (existing) return toTask(existing);
@@ -184,6 +191,11 @@ export class Ledger extends EventEmitter {
     this.emit('task', gated);
     void this.pump();
     return gated;
+  }
+
+  // Why nobody but its own module may give this worker a task, or null when anyone may.
+  closed(owner: unknown): string | null {
+    return typeof owner === 'string' ? this.workers.get(owner)?.internal?.why ?? null : null;
   }
 
   get(id: string): Task {

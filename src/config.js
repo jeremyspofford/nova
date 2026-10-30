@@ -47,7 +47,8 @@ export function loadConfig(env = process.env, root = ROOT) {
     searchUrl: env.NOVA_SEARCH_URL ?? undefined,
     // The mesh listener for paired devices (M4 plan §0), or null: then nothing beyond this machine
     // can reach Nova's console, and devices can't pair.
-    mesh: meshConfig(env, file),
+    // A sandbox (M7b) never listens for devices, whatever nova.config.json says.
+    mesh: env.NOVA_SANDBOX === '1' ? null : meshConfig(env, file),
   };
 }
 

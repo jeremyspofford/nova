@@ -3,6 +3,7 @@
 // cleaned in place, so it stays restorable and can never bring a forgotten memory back.
 // Retention: backups are kept until the person removes them, except that a backup Nova can't
 // clean is destroyed (and that is reported), never kept with the forgotten content in it.
+// The nightly backups (resilience/backup.ts, M7b) are cleaned by the same forget, through `also`.
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,9 +13,12 @@ export interface Backup { path: string; bytes: number; at: string }
 
 const TABLE = /^[a-z_]+$/;
 
+type Also = (table: string, ids: string[], words: string[]) => { cleaned: string[]; destroyed: string[] };
+
 export class Backups {
   readonly dir: string;
   #log: Log;
+  #also: Also[] = [];
 
   constructor(o: { dir: string; log: Log }) {
     this.dir = o.dir;
@@ -34,6 +38,7 @@ export class Backups {
   // the file. A backup without that table (older than the feature) has nothing to clean. A backup
   // with a sync log (M4c) loses the log's entries for those rows too, and, for memory, any entry of
   // memory's or of the files that show it (MEMORY.md, the day notes) that still carries `words`.
+  // The same forget then reaches every other place that keeps copies (`also`).
   forget(table: string, ids: string[], words: string[] = []): { cleaned: string[]; destroyed: string[] } {
     if (!TABLE.test(table)) throw new Error(`Not a table name: ${table}`);
     const cleaned: string[] = [];
@@ -41,31 +46,7 @@ export class Backups {
     if (!ids.length) return { cleaned, destroyed };
     for (const { path } of this.list()) {
       try {
-        const db = new DatabaseSync(path);
-        try {
-          db.exec('PRAGMA secure_delete = ON');
-          const has = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
-          if (has) {
-            // The whole chain goes at once, so records that point at each other (a correction and
-            // what it corrected) can't block one another.
-            db.exec('PRAGMA foreign_keys = OFF');
-            db.exec('BEGIN');
-            const del = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
-            for (const id of ids) del.run(id);
-            if (db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_log'`).get()) {
-              const entry = db.prepare('DELETE FROM sync_log WHERE tbl = ? AND pk = ?');
-              for (const id of ids) entry.run(table, id);
-              if (table === 'memory') {
-                const carrying = db.prepare(`DELETE FROM sync_log WHERE (tbl = 'memory' OR (tbl = 'file' AND (pk = 'MEMORY.md' OR pk LIKE 'memory/%'))) AND instr(row, ?) > 0`);
-                for (const w of words) for (const v of new Set([w.trim(), w.trim().replace(/\s+/g, ' ')])) if (v) carrying.run(JSON.stringify(v).slice(1, -1));
-              }
-            }
-            db.exec('COMMIT');
-            db.exec('VACUUM');
-          }
-        } finally {
-          db.close();
-        }
+        cleanDbFile(path, table, ids, words);
         cleaned.push(path);
       } catch (e) {
         for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(path + suffix, { force: true });
@@ -73,6 +54,50 @@ export class Backups {
         this.#log.problem('backups', 'A backup couldn’t be cleaned of something you asked Nova to forget, so Nova deleted that backup rather than keep it.', { detail: `${path}: ${(e as Error).message}` });
       }
     }
+    for (const fn of this.#also) {
+      try {
+        const r = fn(table, ids, words);
+        cleaned.push(...r.cleaned);
+        destroyed.push(...r.destroyed);
+      } catch (e) {
+        this.#log.problem('backups', 'Nova couldn’t carry something you asked it to forget into all of its backups.', { detail: (e as Error)?.stack ?? String(e) });
+      }
+    }
     return { cleaned, destroyed };
+  }
+
+  // Another place that keeps copies of the database (the nightly backups), cleaned by every forget.
+  also(fn: Also): void {
+    this.#also.push(fn);
+  }
+}
+
+// Cleans one database file of the rows (and, for memory, of the sync log's entries that carry the
+// words), overwriting the freed pages. Throws when it can't, so the caller destroys the copy.
+export function cleanDbFile(path: string, table: string, ids: string[], words: string[] = []): void {
+  if (!TABLE.test(table)) throw new Error(`Not a table name: ${table}`);
+  const db = new DatabaseSync(path);
+  try {
+    db.exec('PRAGMA secure_delete = ON');
+    const has = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
+    if (!has) return;
+    // The whole chain goes at once, so records that point at each other (a correction and
+    // what it corrected) can't block one another.
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN');
+    const del = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
+    for (const id of ids) del.run(id);
+    if (db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_log'`).get()) {
+      const entry = db.prepare('DELETE FROM sync_log WHERE tbl = ? AND pk = ?');
+      for (const id of ids) entry.run(table, id);
+      if (table === 'memory') {
+        const carrying = db.prepare(`DELETE FROM sync_log WHERE (tbl = 'memory' OR (tbl = 'file' AND (pk = 'MEMORY.md' OR pk LIKE 'memory/%'))) AND instr(row, ?) > 0`);
+        for (const w of words) for (const v of new Set([w.trim(), w.trim().replace(/\s+/g, ' ')])) if (v) carrying.run(JSON.stringify(v).slice(1, -1));
+      }
+    }
+    db.exec('COMMIT');
+    db.exec('VACUUM');
+  } finally {
+    db.close();
   }
 }

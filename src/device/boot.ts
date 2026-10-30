@@ -682,6 +682,12 @@ export class Boot {
     try {
       const r = await call(s.url, 'POST', '/api/v1/mesh/devices/me/heartbeat', { token: s.token, body: { capabilities: CAPABILITIES, version: AGENT_VERSION, runtime_version: inst?.version ?? null, safe_mode: true } });
       if (r.status === 401) return this.#unauthorized();
+      // The hub's repair playbook asks once for a fresh start (M7b): reinstall and leave safe mode;
+      // the watchdog's limit still holds, so three more crashes bring it back here.
+      if (r.status === 200 && r.body?.restart_runtime === true) {
+        this.say('The hub asked for the runtime to be started again.');
+        return await this.recover();
+      }
       if (r.status === 200 && inst && r.body?.runtime?.version && r.body.runtime.version !== inst.version) await this.update();
     } catch {
       this.#session = null;
