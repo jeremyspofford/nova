@@ -2,6 +2,7 @@
 // until the person configures and turns them on (tier 2: enabling asks for an OK on the
 // permissions). Each is an ordinary extension manifest with an `adapter` block.
 import { OLLAMA_BASE } from './openai.ts';
+import { DEFAULT_URL as RELAY_URL } from './relay.ts';
 import type { AdapterBlock, Implementation } from './types.ts';
 
 const base = { version: '1.0.0', secrets: [] as string[], setup_flow: null, nova_compat: '>=0.1.0', on_remove: { delete: [], keep: [], export: [] } };
@@ -51,6 +52,21 @@ export const BUILTINS: (Record<string, unknown> & { id: string; name: string; ad
     health_check: { kind: 'http' },
     adapter: { implementation: 'n8n', class: 'automation', transport: 'http', egress: 'local', capabilities: ['webhook', 'callback'], config: { webhook_url: '', signing_secret: 'secret://N8N_SIGNING_SECRET', callback_url: '', timeout_s: 900 }, secrets: ['N8N_SIGNING_SECRET'] },
   },
+  {
+    // Relay (M8): a worker service on this computer, briefed over its HTTP contract v1. Its workers
+    // work in worktrees of a copy Nova makes; where they send the brief is what Relay reports
+    // (egress here is only what Relay reports when nothing else is set).
+    ...base, id: 'relay', kind: 'agent-adapter', name: 'Relay',
+    capabilities: ['code.edit'],
+    permissions: [
+      reads, writes,
+      { kind: 'network', target: 'Relay, on this computer', why: 'to brief Relay’s workers and read their run back; Relay says where its workers send the brief, and Nova keeps local-only work from them unless that is this computer' },
+      { kind: 'device', target: 'this computer: runs git', why: 'to give Relay the task’s files as a repository, in Nova’s own folder for the task' },
+    ],
+    config_schema: { type: 'object', properties: { base_url: { type: 'string' }, profile: { type: 'string' }, poll_ms: { type: 'number' }, busy_retry_s: { type: 'number' }, timeout_s: { type: 'number' } } },
+    health_check: { kind: 'http', path: '/api/status' },
+    adapter: { implementation: 'relay', class: 'coding-agent', transport: 'http', egress: 'remote:anthropic', capabilities: ['edit-files', 'worktrees'], config: { base_url: RELAY_URL, profile: '', poll_ms: 1000, busy_retry_s: 30, timeout_s: 1800 }, secrets: [] },
+  },
 ];
 
 export const BUILTIN_IDS: ReadonlySet<string> = new Set(BUILTINS.map((b) => b.id));
@@ -82,5 +98,9 @@ export const FIELDS: Record<Implementation, Field[]> = {
     { key: 'signing_secret', label: 'Signing secret', kind: 'secret', note: 'secret://NAME in the vault; the workflow signs with the same secret.' },
     { key: 'callback_url', label: 'Nova’s address for the workflow', kind: 'text', note: 'Optional: where the workflow reaches Nova.' },
     { key: 'idempotent', label: 'Safe to send twice', kind: 'boolean', note: 'On only if the workflow treats a brief with an idempotency-key it has seen as already done. Otherwise Nova never sends a brief again by itself.' },
+  ],
+  relay: [
+    { key: 'base_url', label: 'Relay’s address', kind: 'text', note: 'On this computer: Relay listens on http://127.0.0.1:8766 unless you set RELAY_PORT.' },
+    { key: 'profile', label: 'Profile', kind: 'text', note: 'A Relay profile by name. Empty for the first one that can run workers.' },
   ],
 };

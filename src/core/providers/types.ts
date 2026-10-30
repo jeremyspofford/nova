@@ -9,7 +9,7 @@ export const CLASSES = ['coding-agent', 'chat', 'automation'] as const;
 export type ProviderClass = (typeof CLASSES)[number];
 export const TRANSPORTS = ['cli', 'http'] as const;
 export type Transport = (typeof TRANSPORTS)[number];
-export const IMPLEMENTATIONS = ['claude-code', 'codex', 'openai-compatible', 'custom-cli', 'n8n'] as const;
+export const IMPLEMENTATIONS = ['claude-code', 'codex', 'openai-compatible', 'custom-cli', 'n8n', 'relay'] as const;
 export type Implementation = (typeof IMPLEMENTATIONS)[number];
 export const EGRESS = /^(none|local|remote:[a-z0-9][a-z0-9._-]{0,63})$/;
 
@@ -64,6 +64,11 @@ export interface WorkOutcome {
   reply?: string;
   evidence?: Evidence[];
   blockers?: string[];
+  // What the provider reports of its own run (a Relay run: its id, worktree, branch, diff), kept in
+  // the report's artifacts for the person. Never evidence: Nova's own checks decide.
+  artifacts?: ({ kind: string; ref: string } & Record<string, unknown>)[];
+  // Blocked only for now (the service is busy): Nova asks again by itself after this many seconds.
+  retry_after_s?: number;
 }
 
 // `receipt` and `privacy` come from a caller whose handle records its own receipts (ownReceipt): the
@@ -86,6 +91,11 @@ export interface Impl {
   probe?(c: Config, secret: (v: unknown) => string | null, signal: AbortSignal): Promise<string | null>;
   // The address an HTTP provider talks to, for working out its egress.
   url?(c: Config): string | null;
+  // For a service that says itself where its work sends data (Relay's workerEgress): that, from its
+  // last check, instead of what the address implies. It is checked again before every run.
+  reportedWhere?(c: Config): Where;
+  // Its probe's reasons are whole sentences in plain words, not only about reaching it.
+  plainProbe?: boolean;
   model(c: Config): string;
   // What a brief may change outside Nova (workers.ts, Effects); none when not said.
   effects?(c: Config): Effects;

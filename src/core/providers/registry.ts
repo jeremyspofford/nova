@@ -19,9 +19,10 @@ import { codex } from './codex.ts';
 import { customCli, programOf } from './custom-cli.ts';
 import { CONFIRMATION_SYSTEM, Inbox, STATUSES, checkSignature, n8n, timeoutS as n8nTimeout, SIGNATURE_HEADER, type Callback } from './n8n.ts';
 import { openaiCompatible, roleOf } from './openai.ts';
+import { relay } from './relay.ts';
 import { CONTRACT_SYSTEM, agentPrompt, contractPrompt, parseContract, summarize } from './prompt.ts';
 import { applyFiles, fileRefs, notCopied, outOfScope, treeHash, unifiedDiff, type Change, type Scope, type TaskSpace, type TestAsk } from './taskspace.ts';
-import { CLASSES, EGRESS, IMPLEMENTATIONS, OLLAMA_CLOUD, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where } from './types.ts';
+import { CLASSES, EGRESS, IMPLEMENTATIONS, OLLAMA_CLOUD, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where, type WorkOutcome } from './types.ts';
 import type { Db } from '../db.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
@@ -143,6 +144,7 @@ export class Providers extends EventEmitter {
   #impls: Record<Implementation, Impl>;
   #workers = new Map<string, LanedWorker>();
   #probes = new Map<string, { key: string; problem: string | null; at: string }>();
+  #later = new Map<string, ReturnType<typeof setTimeout>>();
   #now: () => Date;
 
   constructor(o: ProvidersOptions) {
@@ -152,7 +154,7 @@ export class Providers extends EventEmitter {
     this.state = join(o.home, 'workers', 'providers');
     this.checks = new Checks(o.workspace, this.state);
     this.inbox = new Inbox(join(this.state, 'n8n'));
-    this.#impls = { 'claude-code': claudeCode, codex, 'openai-compatible': openaiCompatible, 'custom-cli': customCli, n8n: n8n(this.inbox) };
+    this.#impls = { 'claude-code': claudeCode, codex, 'openai-compatible': openaiCompatible, 'custom-cli': customCli, n8n: n8n(this.inbox), relay };
     const rules = {
       check: (m: Manifest) => {
         const out = checkAdapter(m);
@@ -244,6 +246,8 @@ export class Providers extends EventEmitter {
         : `Uses ${cloud}, off your devices, when Nova chooses it (within your cloud budget), and otherwise the ${roleOf(c)} model on your devices. Each receipt says where.`;
       return { coarse: 'local', receipt: 'local', words };
     }
+    // A service that says where its work goes (Relay's workerEgress): what it last said.
+    if (impl.reportedWhere) return impl.reportedWhere(c);
     const url = impl.url?.(c);
     // Ollama serves its cloud models (names ending -cloud or :cloud) through the same local address,
     // passing the brief on to ollama.com: by where the data goes, that is the cloud.
@@ -280,10 +284,10 @@ export class Providers extends EventEmitter {
     if (!impl.probe && !roleOf(c)) return { state: 'ready', words: 'Installed.', checked_at: null };
     const p = this.#probes.get(id);
     if (!p || p.key !== canonicalJson(c)) {
-      const held = this.where(id).coarse === 'remote' && !permits(this.#o.profile.privacyDefault(), 'remote');
+      const held = !impl.reportedWhere && this.where(id).coarse === 'remote' && !permits(this.#o.profile.privacyDefault(), 'remote');
       return { state: 'unchecked', words: held ? 'Not checked: it is off your devices, and your privacy setting keeps Nova from reaching it.' : 'Not checked yet.', checked_at: null };
     }
-    return p.problem ? { state: 'unreachable', words: `Unreachable. ${p.problem}`, checked_at: p.at } : { state: 'ready', words: `Reachable${impl.url?.(c) ? ` at ${new URL(impl.url(c)!).host}` : ''}.`, checked_at: p.at };
+    return p.problem ? { state: 'unreachable', words: impl.plainProbe ? p.problem : `Unreachable. ${p.problem}`, checked_at: p.at } : { state: 'ready', words: `Reachable${impl.url?.(c) ? ` at ${new URL(impl.url(c)!).host}` : ''}.`, checked_at: p.at };
   }
 
   // Asks an HTTP provider's address whether it answers, and keeps the answer.
@@ -291,8 +295,9 @@ export class Providers extends EventEmitter {
     const x = this.#entry(id);
     const impl = this.#impl(x);
     const c = this.config(id);
-    // Even a check is a connection: under local-only, nothing reaches a remote address.
-    const held = this.where(id).coarse === 'remote' && !permits(this.#o.profile.privacyDefault(), 'remote');
+    // Even a check is a connection: under local-only, nothing reaches a remote address. A service that
+    // reports where its work goes is itself on this computer (its address is checked as loopback).
+    const held = !impl.reportedWhere && this.where(id).coarse === 'remote' && !permits(this.#o.profile.privacyDefault(), 'remote');
     const role = roleOf(c);
     if (role && this.#o.models && !impl.unconfigured(c, this.#secret)) {
       const problem = await this.#o.models.probe(role as 'reasoner').catch((e) => (e as Error).message);
@@ -627,6 +632,12 @@ export class Providers extends EventEmitter {
     });
     // The task's own mode, and never looser than the person's setting right now.
     const mode: PrivacyMode = stricter(brief.privacy_mode, this.#o.profile.privacyDefault());
+    // A service that reports where its work goes is asked again now: what it said at the last check
+    // may have changed (Relay restarted with another model endpoint).
+    if (impl.reportedWhere && impl.probe && x.state === 'enabled') {
+      const v = await this.check(id);
+      if (v.health.state === 'unreachable') return report('blocked', v.health.words);
+    }
     const where = this.where(id);
     if (!permits(mode, where.coarse)) return report('blocked', `Waiting on local capacity: ${name} would send this off your devices (${where.words.replace(/\.$/, '')}), and this task is ${mode}.`);
     if (x.state !== 'enabled') return report('blocked', `${name} is turned off.`);
@@ -660,7 +671,7 @@ export class Providers extends EventEmitter {
       space.setAsk(null);
       if (treeHash(space.root) !== asked.tree) return report('failed', `The task’s folder changed after you OK’d running \`${test}\`, so Nova didn’t run it. Nothing was copied back.`);
       const changes = space.recorded() ?? space.changes();
-      return this.#finish(brief, space, changes, test, `You OK’d running \`${test}\` on what ${name} wrote.`, config, signal, report, (asked.usage ?? {}) as Usage);
+      return this.#finish(brief, space, changes, test, `You OK’d running \`${test}\` on what ${name} wrote.`, config, signal, report, (asked.usage ?? {}) as Usage, (asked.artifacts ?? []) as Report['artifacts']);
     }
     let copied: { path: string; sha256: string }[];
     try { copied = space.prepare(fileRefs(brief)); } catch (e) { return report('blocked', `Nova couldn’t set up the task’s folder: ${(e as Error).message}`); }
@@ -691,14 +702,19 @@ export class Providers extends EventEmitter {
         return report('failed', (e as Error).message);
       }
     }
-    let out;
+    let out: WorkOutcome;
     try {
-      out = role ? await this.#roleWork(role, brief, mode, system, prompt, items, signal) : await impl.work({ provider: id, brief, config, cwd: space.root, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log });
+      out = role ? await this.#roleWork(role, brief, mode, system, prompt, items, signal) : await impl.work({ provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd: space.root, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log });
     } catch (e) {
       if (signal.aborted) throw e;
       return report('failed', `${name} stopped with an error: ${(e as Error).message}`);
     }
-    if (out.status !== 'done') return report(out.status, out.summary, out.blockers ? { blockers: out.blockers } : {}, out.usage);
+    if (out.status !== 'done') {
+      // Busy for now: Nova asks again by itself (safe: the provider works on a copy).
+      if (out.status === 'blocked' && out.retry_after_s) this.#retryLater(brief.task_id, out.retry_after_s, out.summary);
+      return report(out.status, out.summary, out.blockers ? { blockers: out.blockers } : {}, out.usage);
+    }
+    const reported: Report['artifacts'] = out.artifacts ?? [];
 
     let summary = out.summary;
     if (contract) {
@@ -726,8 +742,8 @@ export class Providers extends EventEmitter {
     // The test runs code: what the provider wrote, as the person, with their files in reach. So
     // Nova always asks first when the provider changed anything, whatever the test policy says; the
     // policy only covers a run on files nobody changed.
-    if (test && (changes.length || !this.#testsAllowed())) return this.#ask(id, name, brief, space, changes, test, summary, report, out.usage);
-    return this.#finish(brief, space, changes, test, summary, config, signal, report, out.usage);
+    if (test && (changes.length || !this.#testsAllowed())) return this.#ask(id, name, brief, space, changes, test, summary, report, out.usage, reported);
+    return this.#finish(brief, space, changes, test, summary, config, signal, report, out.usage, reported);
   }
 
   // A provider set to a role (M6b): the brief goes to the model manager's inference API, which
@@ -752,7 +768,8 @@ export class Providers extends EventEmitter {
   }
 
   // Nova's own evidence: each change, from the folder itself, then the brief's test, run by Nova.
-  async #finish(brief: Brief, space: TaskSpace, changes: Change[], test: string, summary: string, config: Config, signal: AbortSignal, report: Reporter, usage: Usage): Promise<Report> {
+  // `reported`: what the provider said of its own run (artifacts, never evidence).
+  async #finish(brief: Brief, space: TaskSpace, changes: Change[], test: string, summary: string, config: Config, signal: AbortSignal, report: Reporter, usage: Usage, reported: Report['artifacts'] = []): Promise<Report> {
     const evidence: Evidence[] = changes.map((c) => ({ kind: 'file_diff', target: `workspace:${c.path}`, diff: unifiedDiff(c.path, space.readBaseline(c.path), space.read(c.path)) }));
     if (test) {
       let run;
@@ -772,14 +789,14 @@ export class Providers extends EventEmitter {
     if (kept.length) summary = `${summary} Not copied into your workspace: ${kept.map((k) => `${k.path} (${k.why})`).join('; ')}.`;
     return report('done', summary, {
       evidence,
-      artifacts: changes.map((c) => ({ kind: 'file', ref: `workspace:${c.path}`, ...(c.sha256 ? { sha256: c.sha256 } : {}) })),
+      artifacts: [...changes.map((c) => ({ kind: 'file', ref: `workspace:${c.path}`, ...(c.sha256 ? { sha256: c.sha256 } : {}) })), ...reported],
     }, usage);
   }
 
   // Asks the person before the test runs: what changed (each file, with a short preview), and in
   // plain words what running it means. The task waits, partly done, until they OK it (approveTest)
   // or cancel it.
-  #ask(id: string, name: string, brief: Brief, space: TaskSpace, changes: Change[], test: string, summary: string, report: Reporter, usage: Usage): Report {
+  #ask(id: string, name: string, brief: Brief, space: TaskSpace, changes: Change[], test: string, summary: string, report: Reporter, usage: Usage, reported: Report['artifacts'] = []): Report {
     const diffs = changes.map((c) => ({ c, diff: unifiedDiff(c.path, space.readBaseline(c.path), space.read(c.path)) }));
     const files = diffs.slice(0, 20).map(({ c, diff }) => {
       const lines = diff.split('\n');
@@ -790,11 +807,12 @@ export class Providers extends EventEmitter {
         preview: lines.slice(2, 14).join('\n').slice(0, 1200),
       };
     });
-    space.setAsk({ task_id: brief.task_id, provider: id, command: test, tree: treeHash(space.root), files, more: Math.max(0, changes.length - files.length), asked_at: this.#now().toISOString(), approved_at: null, usage: { ...usage } });
+    space.setAsk({ task_id: brief.task_id, provider: id, command: test, tree: treeHash(space.root), files, more: Math.max(0, changes.length - files.length), asked_at: this.#now().toISOString(), approved_at: null, usage: { ...usage }, ...(reported.length ? { artifacts: reported } : {}) });
     try { this.#o.ledger.note(brief.task_id, 'test_run_asked', { command: test, files: changes.slice(0, 50).map((c) => c.path) }); } catch { /* the record is a courtesy; the question stands */ }
     const ask = changes.length ? `Nova needs your OK to run \`${test}\`. ${RUNS_THEIR_CODE}` : `${name} changed nothing. Nova needs your OK to run \`${test}\` on your files as they were.`;
     return report('partial', `${summary} ${ask}`, {
       evidence: diffs.map(({ c, diff }) => ({ kind: 'file_diff' as const, target: `workspace:${c.path}`, diff })),
+      artifacts: reported,
       blockers: [ask],
     }, usage);
   }
@@ -847,8 +865,38 @@ export class Providers extends EventEmitter {
     }
   }
 
-  // After a restart: verified work whose results never made it back is copied back now.
+  // A provider that was busy (Relay's single run slot taken): the task waits with that reason, and
+  // Nova asks again after `s` seconds, unless the task moved on meanwhile. Noted in the ledger, so a
+  // restart asks again too.
+  #retryLater(taskId: string, s: number, why: string, note = true): void {
+    clearTimeout(this.#later.get(taskId));
+    if (note) { try { this.#o.ledger.note(taskId, 'retry_later', { after_s: s, why }); } catch { /* the wait stands; the person can retry */ } }
+    const t = setTimeout(() => {
+      this.#later.delete(taskId);
+      let task: Task;
+      try { task = this.#o.ledger.get(taskId); } catch { return; }
+      // Its report isn't settled yet: look again shortly.
+      if (task.state === 'active') { this.#retryLater(taskId, 1, why, false); return; }
+      if (task.state !== 'waiting' || !task.reason?.includes(why)) return;
+      try { this.#o.ledger.retry(taskId, 'It was busy earlier; Nova asks again now.'); } catch { /* it moved on meanwhile */ }
+    }, s * 1000);
+    t.unref();
+    this.#later.set(taskId, t);
+  }
+
+  stop(): void {
+    for (const t of this.#later.values()) clearTimeout(t);
+    this.#later.clear();
+  }
+
+  // After a restart: verified work whose results never made it back is copied back now, and a task
+  // waiting on a busy provider is asked about again.
   recover(): string[] {
+    for (const t of this.#o.ledger.list({ state: 'waiting', limit: 500 })) {
+      if (!this.#installed().some((x) => x.id === t.owner)) continue;
+      const n = this.#o.ledger.events(t.id).filter((e) => e.kind === 'retry_later').at(-1)?.detail as { after_s?: number; why?: string } | undefined;
+      if (n?.why && t.reason?.includes(n.why)) this.#retryLater(t.id, num(n.after_s, 30), n.why, false);
+    }
     const done: string[] = [];
     for (const t of this.#o.ledger.list({ state: 'done', limit: 500 })) {
       if (!this.#installed().some((x) => x.id === t.owner)) continue;
