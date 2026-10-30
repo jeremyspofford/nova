@@ -25,6 +25,7 @@ test('M3: an irreversible command needs the confirm box; an ordinary one asks on
     await card.waitFor({ timeout: 10000 });
     const allow = card.locator('[data-action="allow"]');
     assert.equal(await allow.isDisabled(), true, 'Allow starts locked');
+    assert.doesNotMatch((await card.locator('.keys').textContent()) ?? '', /Enter/, 'the hint doesn’t offer Enter');
     assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.confirm !== undefined), true, 'focus starts on the confirm box');
     await page.keyboard.press('Enter');
     await page.waitForTimeout(500);

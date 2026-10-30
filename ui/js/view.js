@@ -173,7 +173,7 @@ function renderApproval(tool) {
   <div class="approval-actions">
     <button type="button" class="btn primary" data-action="allow" data-tool="${esc(tool.id)}"${tier === 3 ? ' disabled' : ''}>${yes}</button>
     <button type="button" class="btn" data-action="deny" data-tool="${esc(tool.id)}">${change ? 'Not now' : 'Deny'}</button>
-    <span class="keys" aria-hidden="true"><kbd>Enter</kbd> ${verb} · <kbd>Esc</kbd> ${change ? 'not now' : 'deny'}</span>
+    <span class="keys" aria-hidden="true">${tier === 3 ? 'Tick the box first' : `<kbd>Enter</kbd> ${verb}`} · <kbd>Esc</kbd> ${change ? 'not now' : 'deny'}</span>
   </div>
 </div>`;
 }

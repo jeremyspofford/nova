@@ -309,7 +309,12 @@ export function previewDs(id) {
 
 export async function appearanceAction(action, el) {
   try {
-    if (action === 'apply-ds') { await use(el.dataset.ds, el.dataset.scope); toast(el.dataset.scope === 'device' ? 'Applied on this device.' : 'Applied on every device.'); }
+    if (action === 'apply-ds') {
+      await use(el.dataset.ds, el.dataset.scope);
+      // This device's own choice still wins here; say so rather than claim the screen changed.
+      const own = el.dataset.scope !== 'device' && appearance().scope === 'device';
+      toast(el.dataset.scope === 'device' ? 'Applied on this device.' : own ? 'Applied on every other device. This one keeps the design you chose for it.' : 'Applied on every device.');
+    }
     if (action === 'rollback-ds') { await rollback(el.dataset.scope); toast('Back to the one before.'); }
     if (action === 'mode') await setMode(el.value);
   } catch (e) { toast(e.message); }
