@@ -1,8 +1,9 @@
 // The runtime agent (ADR-3, M4 plan §2): the part of the device agent that changes often. The boot
 // agent starts it as a child under Node's permission model: it may read <device home>/runtime and
-// <device home>/state, write only state, use the network, and nothing else (no child processes, no
-// addons, no boot folder). It never sees a private key: the boot agent hands it a session token
-// over IPC and a new one when that one is renewed or the hub changes.
+// <device home>/state, write only state, and nothing else: no network, no child processes, no
+// addons, no node:sqlite, no boot folder (runtimeCommand in boot.ts has the whole list, and why).
+// It never sees a private key or a session token: it asks the boot agent, over IPC, to make the
+// few hub calls it needs (heartbeat, inbox), and the boot agent makes them with its session.
 //
 // What it does: heartbeats, so the hub shows this computer Online; and flushes the offline queue to
 // the hub's inbox, in order, settling each item only once the hub has answered it. When the hub
@@ -11,28 +12,28 @@
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import tls from 'node:tls';
 import { Queue, type QueueResult } from './queue.ts';
 
+// The boot agent says the hub is reachable, and where. No token: that stays with the boot agent.
 export interface SessionMessage {
   type: 'session';
-  token: string;
   hub_url: string;
   device_id: string;
   expires_at: string;
   version: string;
   capabilities: string[];
-  ca?: string | null;
   heartbeat_ms?: number;
   tick_ms?: number;
 }
-export type ToRuntime = SessionMessage | { type: 'stop' } | { type: 'flush' };
+export interface CallAnswer { type: 'answer'; id: number; status?: number; body?: unknown; error?: string }
+export type ToRuntime = SessionMessage | { type: 'stop' } | { type: 'flush' } | CallAnswer;
 export type FromRuntime =
   | { type: 'ready' }
   | { type: 'unreachable'; detail: string }
   | { type: 'unauthorized'; detail: string }
   | { type: 'update'; version: string }
-  | { type: 'heartbeat'; at: string; epoch: number };
+  | { type: 'heartbeat'; at: string; epoch: number }
+  | { type: 'call'; id: number; method: 'POST'; path: string; body: unknown };
 
 class Unreachable extends Error {}
 class Unauthorized extends Error {}
@@ -45,26 +46,23 @@ export class Runtime {
   #timers: ReturnType<typeof setInterval>[] = [];
   #busy = false;
   #offline = false;
-  #caSet = false;
   #status: Record<string, unknown> = {};
   #stopped = false;
+  #calls = new Map<number, (a: CallAnswer) => void>();
+  #nextCall = 1;
 
   constructor(home: string, send: (m: FromRuntime) => void) {
     this.home = home;
     this.#send = send;
     mkdirSync(join(home, 'state'), { recursive: true });
-    this.queue = new Queue(join(home, 'state', 'queue.db'));
+    this.queue = new Queue(join(home, 'state', 'queue'));
   }
 
   receive(m: ToRuntime): void {
     if (m.type === 'stop') return this.stop();
     if (m.type === 'flush') { void this.flush(); return; }
+    if (m.type === 'answer') { this.#calls.get(m.id)?.(m); return; }
     if (m.type !== 'session') return;
-    if (m.ca && !this.#caSet) {
-      // The hub's certificate authority, when the system doesn't know it (NOVA_CA_FILE on the boot side).
-      tls.setDefaultCACertificates([...tls.getCACertificates('default'), m.ca]);
-      this.#caSet = true;
-    }
     const first = !this.#session;
     this.#session = m;
     this.#offline = false;
@@ -115,6 +113,7 @@ export class Runtime {
     this.#stopped = true;
     for (const t of this.#timers) clearInterval(t);
     this.#timers = [];
+    for (const [id, done] of [...this.#calls]) done({ type: 'answer', id, error: 'The runtime is stopping.' });
     this.queue.close();
   }
 
@@ -131,25 +130,22 @@ export class Runtime {
     }
   }
 
-  async #call(method: string, path: string, body?: unknown): Promise<unknown> {
+  // A hub call, made by the boot agent with its session; the answer comes back over IPC.
+  async #call(method: 'POST', path: string, body: unknown): Promise<unknown> {
     const s = this.#session!;
-    let res: Response;
-    try {
-      res = await fetch(new URL(path, s.hub_url), {
-        method, signal: AbortSignal.timeout(15_000),
-        headers: { authorization: `Bearer ${s.token}`, 'content-type': 'application/json', ...(method === 'GET' ? {} : { 'x-nova': '1' }) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      });
-    } catch (e) {
-      throw new Unreachable(`The hub at ${s.hub_url} can’t be reached (${(e as { cause?: { code?: string } })?.cause?.code ?? (e as Error).message}).`);
-    }
-    const text = await res.text();
-    if (res.status === 401) throw new Unauthorized('The hub ended this device’s session.');
+    const id = this.#nextCall++;
+    const a = await new Promise<CallAnswer>((resolve) => {
+      const t = setTimeout(() => { this.#calls.delete(id); resolve({ type: 'answer', id, error: 'the boot agent didn’t answer in time' }); }, 30_000);
+      this.#calls.set(id, (m) => { clearTimeout(t); this.#calls.delete(id); resolve(m); });
+      this.#send({ type: 'call', id, method, path, body });
+    });
+    if (a.error !== undefined || typeof a.status !== 'number') throw new Unreachable(`The hub at ${s.hub_url} can’t be reached (${a.error ?? 'no answer'}).`);
+    if (a.status === 401) throw new Unauthorized('The hub ended this device’s session.');
     // A hub that is up but not answering as a hub (a 5xx, a fenced or demoted node) counts as
     // unreachable: the boot agent looks for the hub again.
-    if (res.status >= 500 || res.status === 409 || res.status === 421) throw new Unreachable(`The hub at ${s.hub_url} answered ${res.status}.`);
-    if (!res.ok) throw new Error(`The hub refused ${method} ${path} (${res.status}): ${text.slice(0, 200)}`);
-    return text ? JSON.parse(text) : null;
+    if (a.status >= 500 || a.status === 409 || a.status === 421) throw new Unreachable(`The hub at ${s.hub_url} answered ${a.status}.`);
+    if (a.status < 200 || a.status >= 300) throw new Error(`The hub refused ${method} ${path} (${a.status}): ${JSON.stringify(a.body ?? null).slice(0, 200)}`);
+    return a.body ?? null;
   }
 
   // state/runtime.json: what the boot agent's `status` command shows. Written whole, then moved.

@@ -30,7 +30,15 @@ import {
 import { acceptRoster, checkProof, rosterKeys, sameRoster, verifyBundle, type Bundle, type Proof } from './trust.ts';
 import { Watchdog } from './watchdog.ts';
 import { Queue, QUEUE_KINDS, type QueueKind } from './queue.ts';
-import type { FromRuntime, SessionMessage } from './runtime.ts';
+import type { CallAnswer, FromRuntime, SessionMessage } from './runtime.ts';
+
+// The hub calls the runtime may ask this agent to make for it, and nothing else; and how big one
+// may be (the hub takes request bodies up to 1 MB).
+export const RUNTIME_CALLS: ReadonlyArray<{ method: 'POST'; path: string }> = [
+  { method: 'POST', path: '/api/v1/mesh/devices/me/heartbeat' },
+  { method: 'POST', path: '/api/v1/mesh/inbox' },
+];
+export const MAX_CALL_BYTES = 900_000;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const AGENT_VERSION = (() => {
@@ -54,7 +62,7 @@ export function paths(home: string) {
     home, boot, runtime: join(home, 'runtime'), state: join(home, 'state'),
     keys: join(boot, 'keys.json'), device: join(boot, 'device.json'), bootState: join(boot, 'state.json'),
     installed: join(boot, 'installed.json'), ca: join(boot, 'ca.pem'), pid: join(boot, 'run.pid'),
-    queue: join(home, 'state', 'queue.db'), runtimeStatus: join(home, 'state', 'runtime.json'),
+    queue: join(home, 'state', 'queue'), runtimeStatus: join(home, 'state', 'runtime.json'),
   };
 }
 export type Paths = ReturnType<typeof paths>;
@@ -366,18 +374,46 @@ export function installLocalRuntime(p: Paths): Installed {
   return installRuntime(p, files, `local+${runtimeManifest('', files).sha256.slice(0, 12)}`, 'local');
 }
 
-// How the runtime is started: Node's permission model, reading runtime/ and state/, writing only
-// state/, with the network and nothing else (no child processes, no addons, no workers, no boot/).
+// Run before the runtime's own code: takes away the few things Node's permission model doesn't
+// guard. process.report writes a diagnostic report to any folder it is told (checking only the
+// working folder), v8.setFlagsFromString can switch on V8 tracers that write files anywhere
+// (--trace-turbo-path, --redirect-code-traces-to), and process.kill reaches every process of the
+// person's. None of them can be had back: they are replaced, not hidden, and can't be redefined.
+export const RUNTIME_SANDBOX = `
+const lock = (o, k, v) => Object.defineProperty(o, k, { value: v, writable: false, configurable: false, enumerable: true });
+const no = (what) => function () { throw Object.assign(new Error(what + ' isn’t available to the runtime agent.'), { code: 'ERR_ACCESS_DENIED' }); };
+lock(process, 'report', undefined);
+lock(process, 'kill', no('process.kill'));
+lock(process.getBuiltinModule('node:v8'), 'setFlagsFromString', no('v8.setFlagsFromString'));
+process.getBuiltinModule('node:module').syncBuiltinESMExports();
+`;
+
+// How the runtime is started (ADR-3): Node's permission model, reading runtime/ and state/, writing
+// only state/, and nothing else. Each flag closes a way around that, found by trying them (the
+// sandbox test runs every one under these exact flags):
+//  - no --allow-net: with it, a unix socket anywhere (an SSH agent, a container daemon) and any
+//    loopback service are reachable. The boot agent makes the runtime's hub calls instead;
+//  - --no-experimental-sqlite: node:sqlite ignores the permission model and opens, ATTACHes or
+//    VACUUMs INTO any path the person can (the queue is plain JSON files for this reason);
+//  - --no-experimental-webstorage: no localStorage file of its own;
+//  - diagnostics (trace events, heap snapshots near the limit) go to state/, not to whichever
+//    folder it was started from; the inspector can't be opened by a signal;
+//  - RUNTIME_SANDBOX, above, first.
+// Child processes, workers, addons, WASI and the inspector are refused by --permission itself.
 export function runtimeCommand(p: Paths, entry = join(p.runtime, 'runtime.ts')): string[] {
   return [
-    '--permission', `--allow-fs-read=${p.runtime}/`, `--allow-fs-read=${p.state}/`, `--allow-fs-write=${p.state}/`, '--allow-net',
+    '--permission', `--allow-fs-read=${p.runtime}/`, `--allow-fs-read=${p.state}/`, `--allow-fs-write=${p.state}/`,
+    '--no-experimental-sqlite', '--no-experimental-webstorage', `--diagnostic-dir=${p.state}`,
+    `--trace-event-file-pattern=${join(p.state, 'node_trace.${rotation}.log')}`, '--disable-sigusr1',
+    `--import=data:text/javascript,${encodeURIComponent(RUNTIME_SANDBOX)}`,
     '--disable-warning=ExperimentalWarning', entry, p.home,
   ];
 }
 
 export function spawnRuntime(p: Paths): ChildProcess {
-  // An empty environment: nothing of the boot agent's (or the person's shell) leaks into it.
-  return spawn(process.execPath, runtimeCommand(p), { stdio: ['ignore', 'inherit', 'inherit', 'ipc'], env: { TZ: process.env.TZ ?? 'UTC' } });
+  // An empty environment: nothing of the boot agent's (or the person's shell) leaks into it. It
+  // starts in state/, the one folder it may write.
+  return spawn(process.execPath, runtimeCommand(p), { cwd: p.state, stdio: ['ignore', 'inherit', 'inherit', 'ipc'], env: { TZ: process.env.TZ ?? 'UTC' } });
 }
 
 // ---- run ----------------------------------------------------------------------------------------
@@ -396,7 +432,6 @@ export class Boot {
   state: BootState;
   watchdog: Watchdog<ChildProcess>;
   #signer: Signer;
-  #ca: string | null;
   #session: { url: string; token: string; expires_at: string } | null = null;
   #looking: Promise<void> | null = null;
   #timers: ReturnType<typeof setInterval>[] = [];
@@ -421,7 +456,8 @@ export class Boot {
     this.d = d;
     this.state = readJson<BootState>(this.p.bootState) ?? { safe_mode: false };
     this.#signer = new Signer(loadKeys(this.p));
-    this.#ca = caPem(this.p, env);
+    // The hub calls (its own, and the runtime’s) trust the hub’s CA from here on.
+    caPem(this.p, env);
     this.watchdog = new Watchdog({ start: () => this.#startRuntime(), backoffMs: this.o.backoffMs, maxBackoffMs: Math.max(this.o.backoffMs, 30_000) });
     this.finished = new Promise((r) => { this.#done = r; });
   }
@@ -519,9 +555,28 @@ export class Boot {
     const inst = readJson<Installed>(this.p.installed);
     if (!s) return null;
     return {
-      type: 'session', token: s.token, hub_url: s.url, device_id: this.d.device_id, expires_at: s.expires_at, version: inst?.version ?? 'unknown',
-      capabilities: CAPABILITIES, ca: this.#ca, heartbeat_ms: this.o.heartbeatMs, tick_ms: this.o.tickMs,
+      type: 'session', hub_url: s.url, device_id: this.d.device_id, expires_at: s.expires_at, version: inst?.version ?? 'unknown',
+      capabilities: CAPABILITIES, heartbeat_ms: this.o.heartbeatMs, tick_ms: this.o.tickMs,
     };
+  }
+
+  // The runtime has no network: it asks for one of the hub calls it is allowed, and this agent
+  // makes it with its own session (TLS trust included). Anything else is refused without a call.
+  async #callForRuntime(m: Extract<FromRuntime, { type: 'call' }>): Promise<void> {
+    const c = this.watchdog.child;
+    const answer = (a: Omit<CallAnswer, 'type' | 'id'>) => { if (c?.connected) c.send({ type: 'answer', id: m.id, ...a } satisfies CallAnswer); };
+    if (!RUNTIME_CALLS.some((r) => r.method === m.method && r.path === m.path)) return answer({ status: 403, body: { error: `The runtime may not call ${String(m.method)} ${String(m.path)}.` } });
+    let size = 0;
+    try { size = Buffer.byteLength(JSON.stringify(m.body ?? null)); } catch { return answer({ status: 400, body: { error: 'That body can’t be sent.' } }); }
+    if (size > MAX_CALL_BYTES) return answer({ status: 413, body: { error: `That call is ${size} bytes; the hub takes up to ${MAX_CALL_BYTES}.` } });
+    const s = this.#session;
+    if (!s) return answer({ error: 'no session with the hub yet' });
+    try {
+      const r = await call(s.url, m.method, m.path, { token: s.token, body: m.body });
+      answer({ status: r.status, body: r.body });
+    } catch (e) {
+      answer({ error: (e as Error).message });
+    }
   }
 
   #toRuntime(): void {
@@ -537,6 +592,7 @@ export class Boot {
       case 'unauthorized': return this.#unauthorized();
       case 'update': return this.update();
       case 'heartbeat': return;
+      case 'call': return this.#callForRuntime(m);
     }
   }
 

@@ -15,6 +15,40 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (M4 review): the device agent's sandbox, and failover.** Fixes
+from the M4 review, branch `m4-fix/agent-failover`; each has a test that
+failed before the fix.
+
+- **The runtime's sandbox had holes (ADR-3).** Tried by hand on Node 26.3.1
+  under the runtime's flags: `node:sqlite` ignores the permission model (it
+  opened, ATTACHed and VACUUMed INTO any path); with `--allow-net`, unix
+  sockets anywhere (an SSH agent, a container daemon) and loopback services
+  were reachable; `process.report` (signal and uncaught-exception reports)
+  wrote into any folder (Node checks only the working folder);
+  `v8.setFlagsFromString('--trace-turbo-path=…')` and
+  `--redirect-code-traces-to` wrote files anywhere; trace-event files landed
+  in the folder it was started from. Already refused by `--permission`: WASI,
+  the inspector, `process.binding`, child processes, `execve`, workers,
+  addons, links and renames out of `state/`, `loadEnvFile`, `chdir` out;
+  `localStorage` has no file. Now: no `--allow-net` (the boot agent makes the
+  runtime's two hub calls, heartbeat and inbox, over IPC with its own session,
+  refusing any other path and anything over 900 kB; the runtime no longer
+  holds a session token either), `--no-experimental-sqlite`,
+  `--no-experimental-webstorage`, diagnostics and trace files pinned to
+  `state/`, `--disable-sigusr1`, started in `state/`, and a preload that
+  replaces `process.report`, `process.kill` and `v8.setFlagsFromString`
+  (non-configurable, so they can't be had back). `tests/core/device-sandbox.test.ts`
+  runs every route above under the exact flags.
+- **The offline queue is JSON files** (`state/queue/{pending,done,tmp}/`,
+  one file per item, named by its key), not SQLite: written whole to `tmp/`,
+  then hard-linked into `pending/` (which also refuses a key already there);
+  answered by writing `done/` and then removing it from `pending/`. Order is a
+  sequence stamped at add time. Node's permission model refuses `fsync`, so
+  only the boot agent's `queue` command (outside the sandbox) flushes what it
+  adds; an answer the runtime records and a power cut loses is sent again, and
+  the hub answers it as a duplicate (exactly once still holds). The newest
+  1,000 answers are kept. No migration from `queue.db`: M4 hasn't shipped.
+
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and
 `0007_device_inbox.sql`.

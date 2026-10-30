@@ -7,10 +7,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { generateDeviceKeys, helloProofMessage, signMessage, signRoster, type Roster } from '../../src/core/index.ts';
 import { Queue } from '../../src/device/queue.ts';
 import { acceptRoster, checkProof, verifyBundle } from '../../src/device/trust.ts';
@@ -22,7 +21,7 @@ const SRC = join(import.meta.dirname, '../../src/device');
 const goodFiles = () => ({ 'runtime.ts': readFileSync(join(SRC, 'runtime.ts'), 'utf8'), 'queue.ts': readFileSync(join(SRC, 'queue.ts'), 'utf8') });
 
 test('the queue keeps items in order, takes a key once, survives reopening, and drops bodies once answered', () => {
-  const file = join(mkdtempSync(join(tmpdir(), 'nova-queue-')), 'queue.db');
+  const file = join(mkdtempSync(join(tmpdir(), 'nova-queue-')), 'queue');
   let q = new Queue(file);
   const a = q.add('event', { name: 'one' });
   const b = q.add('memory_note', { content: 'A test note.' }, 'note-0000001');
@@ -37,10 +36,13 @@ test('the queue keeps items in order, takes a key once, survives reopening, and 
   assert.equal(q.settled().find((s) => s.key === b.key)!.reason, 'Test reason.');
   q.settle([{ key: a.key, status: 'refused' }]);
   assert.equal(q.settled().find((s) => s.key === a.key)!.status, 'accepted', 'a settled item stays as answered first');
+  assert.equal(q.add('memory_note', { content: 'A test note.' }, 'note-0000001').added, false, 'an answered key is still one item');
   q.close();
-  const raw = new DatabaseSync(file);
-  assert.equal((raw.prepare('SELECT body FROM item WHERE key = ?').get(b.key) as { body: string | null }).body, null, 'an answered item keeps no body');
-  raw.close();
+  // On disk: every file the queue keeps, and an answered item's words are in none of them.
+  const files = readdirSync(file, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name));
+  assert.ok(!files.some((f) => readFileSync(f, 'utf8').includes('A test note.')), 'an answered item keeps no body');
+  assert.ok(files.some((f) => readFileSync(f, 'utf8').includes('Test task')), 'a waiting one does');
+  assert.deepEqual(readdirSync(join(file, 'tmp')), [], 'nothing half-written is left');
   assert.throws(() => new Queue(file).add('teleport' as 'event', {}), /kind must be/);
 });
 
@@ -155,7 +157,6 @@ test('the runtime runs under the permission model: it can’t write boot/, read 
   // A probe in runtime/, started with exactly the flags the boot agent uses for runtime.ts.
   writeFileSync(join(p.runtime, 'probe.ts'), `
 import { readFileSync, writeFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
 const home = process.argv[2];
 const out = {};
 const t = (k, f) => { try { f(); out[k] = 'ok'; } catch (e) { out[k] = e.code ?? e.message; } };
@@ -167,7 +168,6 @@ t('spawn', () => process.getBuiltinModule('node:child_process').spawnSync('true'
 t('worker', () => new (process.getBuiltinModule('node:worker_threads').Worker)('1', { eval: true }));
 t('write_state', () => writeFileSync(home + '/state/probe.txt', 'ok'));
 t('read_runtime', () => readFileSync(home + '/runtime/runtime.ts'));
-t('sqlite_state', () => new DatabaseSync(home + '/state/probe.db').exec('CREATE TABLE t (x)'));
 console.log(JSON.stringify(out));
 `);
   const run = spawnSync(process.execPath, runtimeCommand(p, join(p.runtime, 'probe.ts')), { encoding: 'utf8', env: {} });
@@ -181,13 +181,14 @@ console.log(JSON.stringify(out));
   assert.equal(out.worker, 'ERR_ACCESS_DENIED');
   assert.equal(out.write_state, 'ok');
   assert.equal(out.read_runtime, 'ok');
-  assert.equal(out.sqlite_state, 'ok');
   assert.ok(!existsSync(join(p.boot, 'planted.json')));
   assert.equal(JSON.parse(readFileSync(p.keys, 'utf8')).secret, 'test-private-key');
-  // The flags themselves: no child processes, addons, workers or wider reads were granted.
+  // The flags themselves: no network, child processes, addons, workers or wider reads were
+  // granted (device-sandbox.test.ts tries every other way out).
   const flags = runtimeCommand(p);
   assert.ok(flags.includes('--permission'));
-  assert.deepEqual(flags.filter((f) => f.startsWith('--allow-')).sort(), [`--allow-fs-read=${p.runtime}/`, `--allow-fs-read=${p.state}/`, `--allow-fs-write=${p.state}/`, '--allow-net'].sort());
+  assert.ok(flags.includes('--no-experimental-sqlite'));
+  assert.deepEqual(flags.filter((f) => f.startsWith('--allow-')).sort(), [`--allow-fs-read=${p.runtime}/`, `--allow-fs-read=${p.state}/`, `--allow-fs-write=${p.state}/`].sort());
 });
 
 // A hub and its standby (stand-ins), a roster naming both signed by the hub, and a device that
@@ -219,15 +220,55 @@ test('boot hands the runtime a session over IPC; the runtime heartbeats and flus
     q.add('event', { name: 'online' }, 'later-0000001');
     await until(() => m.hub.received.length, (n) => n === 2);
     assert.deepEqual(m.hub.received.map((r) => r.key), ['early-0000001', 'later-0000001']);
-    assert.equal(q.counts().pending, 0);
+    // The answer reaches the runtime through the boot agent, a moment after the hub has it.
+    assert.equal((await until(() => q.counts().pending, (n) => n === 0)), 0, readFileSync(m.dev.p.runtimeStatus, 'utf8'));
     q.close();
     // What the runtime was started with: its own folder, the device home, nothing else.
     assert.deepEqual(child.spawnargs.slice(1), runtimeCommand(m.dev.p));
+    // It makes no hub call itself: the boot agent made them, with a token the runtime never had.
+    assert.ok(!readFileSync(m.dev.p.runtimeStatus, 'utf8').includes('nvs_'), 'no session token in its status');
     const st = status(m.dev.home);
     assert.equal(st.running, true);
     assert.equal((st.runtime_status as { hub_url: string }).hub_url, m.hub.url);
     // The runtime's status file holds no key material.
     assert.ok(!readFileSync(m.dev.p.runtimeStatus, 'utf8').includes(m.dev.keys.ed25519.publicKey));
+  } finally {
+    await m.stop();
+  }
+});
+
+test('the boot agent makes only the runtime’s own hub calls for it: anything else is refused without reaching the hub', async () => {
+  const m = await mesh();
+  try {
+    // A runtime that asks for more than it should, and writes down what it was told.
+    const greedy = `
+import { writeFileSync } from 'node:fs';
+const home = process.argv[2];
+const answers = {};
+const ask = (id, method, path, body) => process.send({ type: 'call', id, method, path, body });
+process.on('message', (m) => {
+  if (m.type === 'session') {
+    ask(1, 'GET', '/api/v1/mesh/roster');
+    ask(2, 'POST', '/api/v1/mesh/devices/someone-else/revoke', { confirm: true });
+    ask(3, 'POST', '/api/v1/mesh/inbox', { items: [{ key: 'greedy-000001', kind: 'event', body: { name: 'big', data: 'x'.repeat(1_000_000) } }] });
+    ask(4, 'POST', '/api/v1/mesh/devices/me/heartbeat', { safe_mode: false });
+  }
+  if (m.type === 'answer') {
+    answers[m.id] = { status: m.status ?? null, error: m.error ?? null };
+    writeFileSync(home + '/state/answers.json', JSON.stringify(answers));
+  }
+});
+process.send({ type: 'ready' });
+`;
+    m.hub.bundle = bundle({ 'runtime.ts': greedy, 'queue.ts': '' }, m.hub.keys);
+    await m.boot.start({ signals: false });
+    const file = join(m.dev.p.state, 'answers.json');
+    const answers = await until(() => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}), (a) => Object.keys(a).length === 4);
+    assert.equal(answers[1].status, 403, 'not one of its calls');
+    assert.equal(answers[2].status, 403, 'not one of its calls');
+    assert.equal(answers[3].status, 413, 'too big to send');
+    assert.equal(answers[4].status, 200, 'its heartbeat goes through');
+    assert.equal(m.hub.received.length, 0, 'nothing refused reached the hub');
   } finally {
     await m.stop();
   }
@@ -283,7 +324,8 @@ test('failover: queued while the hub is down, waits for the standby to be promot
     await m.boot.start({ signals: false });
     const q = new Queue(m.dev.p.queue);
     q.add('event', { name: 'before' }, 'fail-0000001');
-    await until(() => m.hub.received.length, (n) => n === 1);
+    await until(() => q.counts().pending, (n) => n === 0);
+    assert.equal(m.hub.received.length, 1);
 
     await m.hub.stop();
     q.add('task_request', { title: 'Queued while the hub is down' }, 'fail-0000002');
