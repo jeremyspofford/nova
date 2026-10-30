@@ -23,8 +23,8 @@ built-ins only.
   `scripts/preview.sh` sets preview), data home, device, version and commit; the person's profile
   summary and memory counts; the chat model; providers with their health; the hub's Ollama, read
   now (cached 30 s); connections; capture sources with their detail; devices; schedules and
-  automation rules; approvals; appearance; open problems. About 2,700 characters on a typical
-  instance. The runner builds it once per turn and `buildSystem` puts it after the system prompt.
+  automation rules; approvals; appearance; open problems. About 3,100 characters (some 750 tokens) on a
+  typical instance. The runner builds it once per turn and `buildSystem` puts it after the system prompt.
   Per turn, not per session: the main conversation lives for weeks, and a briefing from its first
   turn would go stale. Helpers don't get it; their context is scoped to their brief.
 - **Status tools.** `nova_instance`, `nova_capture`, `nova_devices`, `nova_schedules` and
@@ -57,6 +57,15 @@ built-ins only.
     Novas still takes a call to `POST /api/v1/memory/export`.
 - **UI.** The conversation view has plain labels for the new tools and an approval sentence for
   `memory_import`.
+- **Live check (local Ollama, opt-in).**
+  - qwen3.8:27b answered all four questions from the real registry.
+  - gemma4:12b avoided "I can't, I run on X", but stayed general: it didn't name the real
+    schedule or design system, and it once claimed a check it hadn't made.
+  - Two briefing fixes came from these runs:
+    - keys are never asked for in chat or in a file;
+    - there is one OpenAI-compatible provider, and repointing it replaces what it serves now.
+  - Small local models rarely call the status tools on their own. The briefing carries the answer
+    for the common questions; the tools carry the detail.
 
 **2026-10-30 (Screenpipe source: edit in the console, API key).** Branch `capture/screenpipe-key`.
 These are two gaps the owner found live.
