@@ -476,9 +476,10 @@ export class Providers extends EventEmitter {
     if (body.status === 'done' && !isObj(conf)) throw new CoreError('validation', 'A done callback carries a confirmation {id}: Nova doesn’t take done without evidence.');
     const task = this.#o.ledger.get(taskId);
     if (task.owner !== x.id) throw new CoreError('forbidden', `That task wasn’t sent to ${x.manifest.name}.`);
+    if (this.inbox.lastSent(taskId) === null) throw new CoreError('conflict', `Nova hasn’t sent that task to ${x.manifest.name}, so it takes no callback for it.`);
     const have = this.inbox.get(taskId);
     if (have) return { ok: true, task_id: taskId, duplicate: true };
-    const t = await this.#o.fire?.({ class: 'event', source: `webhook:${name}`, payload: body, dedup_key: `callback:${taskId}`, name: `${x.manifest.name} reported back` });
+    const t = await this.#o.fire?.({ class: 'event', source: `webhook:${name}`, payload: body, dedup_key: `callback:${taskId}:${this.inbox.lastSent(taskId)}`, name: `${x.manifest.name} reported back` });
     const cb: Callback = {
       task_id: taskId, status: body.status as Callback['status'], summary: typeof body.summary === 'string' ? body.summary : '',
       confirmation: isObj(conf) ? { id: String(conf.id).trim().slice(0, 200) } : null,
@@ -579,7 +580,7 @@ export class Providers extends EventEmitter {
     // An automation works elsewhere: the brief goes out, a signed report comes back.
     if (a.class === 'automation') {
       try { this.#receipt(id, brief, mode, where.receipt, impl.model(config), [{ kind: 'file', ref: `brief:${brief.task_id}`, sha256: sha256(canonicalJson(brief)) }]); } catch (e) { return report('failed', (e as Error).message); }
-      const out = await impl.work({ provider: id, brief, config, cwd: null, system: '', prompt: '', signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log });
+      const out = await impl.work({ provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd: null, system: '', prompt: '', signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log });
       return report(out.status, out.summary, { evidence: out.evidence ?? [], ...(out.blockers ? { blockers: out.blockers } : {}) }, out.usage);
     }
 

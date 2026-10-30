@@ -34,36 +34,63 @@ export function checkSignature(secret: string, header: string | undefined, body:
 }
 
 export const STATUSES = ['done', 'partial', 'blocked', 'failed'] as const;
-export interface Callback { task_id: string; status: (typeof STATUSES)[number]; summary: string; confirmation: { id: string } | null; signed_at: number; received_at: string; provider: string; trigger_id: string | null }
+export interface Callback { task_id: string; status: (typeof STATUSES)[number]; summary: string; confirmation: { id: string } | null; signed_at: number; received_at: string; provider: string; trigger_id: string | null; attempt?: number; used?: boolean }
 
-// Callbacks Nova has checked, one per task, kept as files so a restart doesn't lose one that
-// arrived while nothing was waiting. Waiters are woken when theirs arrives.
+// Callbacks Nova has checked, kept as files so a restart doesn't lose one that arrived while
+// nothing was waiting. Each belongs to the attempt that was last sent for its task: one that
+// arrives for a task Nova never sent is refused, and an answer an attempt has used doesn't stand
+// in for the next. Waiters are woken when theirs arrives.
 export class Inbox {
   readonly dir: string;
   #waiting = new Map<string, Set<(c: Callback) => void>>();
   constructor(dir: string) { this.dir = dir; }
 
-  #file(taskId: string) {
+  #file(taskId: string, what: string | number) {
     if (!/^[A-Za-z0-9-]{1,64}$/.test(taskId)) throw new CoreError('validation', 'task_id isn’t a task id.');
-    return join(this.dir, `${taskId}.json`);
+    return join(this.dir, `${taskId}.${what}.json`);
   }
 
+  #write(f: string, v: unknown): void {
+    mkdirSync(this.dir, { recursive: true });
+    writeFileSync(`${f}.tmp`, JSON.stringify(v));
+    renameSync(`${f}.tmp`, f);
+  }
+
+  // The brief went out (or is about to) as this attempt.
+  sent(taskId: string, attempt: number): void {
+    this.#write(this.#file(taskId, 'sent'), { attempt, at: new Date().toISOString() });
+  }
+
+  lastSent(taskId: string): number | null {
+    const f = this.#file(taskId, 'sent');
+    try { return (JSON.parse(readFileSync(f, 'utf8')) as { attempt: number }).attempt; } catch { return null; }
+  }
+
+  // The callback for the attempt last sent, if it came.
   get(taskId: string): Callback | null {
-    const f = this.#file(taskId);
+    const attempt = this.lastSent(taskId);
+    if (attempt === null) return null;
+    const f = this.#file(taskId, attempt);
     return existsSync(f) ? (JSON.parse(readFileSync(f, 'utf8')) as Callback) : null;
   }
 
+  // Kept for the attempt last sent; refused when nothing was sent.
   put(c: Callback): void {
-    mkdirSync(this.dir, { recursive: true });
-    const f = this.#file(c.task_id);
-    writeFileSync(`${f}.tmp`, JSON.stringify(c));
-    renameSync(`${f}.tmp`, f);
-    for (const wake of this.#waiting.get(c.task_id) ?? []) wake(c);
+    const attempt = this.lastSent(c.task_id);
+    if (attempt === null) throw new CoreError('conflict', 'Nova hasn’t sent that task to the workflow, so it takes no callback for it.');
+    const kept = { ...c, attempt };
+    this.#write(this.#file(c.task_id, attempt), kept);
+    for (const wake of this.#waiting.get(c.task_id) ?? []) wake(kept);
+  }
+
+  // An attempt's report is made from it: the next attempt waits for its own.
+  use(c: Callback): void {
+    if (c.attempt !== undefined) this.#write(this.#file(c.task_id, c.attempt), { ...c, used: true });
   }
 
   wait(taskId: string, signal: AbortSignal): Promise<Callback> {
     const have = this.get(taskId);
-    if (have) return Promise.resolve(have);
+    if (have && !have.used) return Promise.resolve(have);
     return new Promise((ok, fail) => {
       const set = this.#waiting.get(taskId) ?? new Set();
       this.#waiting.set(taskId, set);
@@ -117,9 +144,10 @@ export const n8n = (inbox: Inbox): Impl => ({
       evidence: cb.confirmation ? [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: cb.confirmation.id }] : [],
       usage,
     });
-    // It already called back (Nova restarted while waiting): that is the answer; nothing is sent again.
+    // It already called back for the attempt last sent, and no attempt used that answer yet (Nova
+    // restarted while waiting): that is the answer, and nothing is sent again.
     const already = inbox.get(i.brief.task_id);
-    if (already) return outcome(already);
+    if (already && !already.used) { inbox.use(already); return outcome(already); }
     const secret = i.secret(i.config.signing_secret);
     if (!secret) return { status: 'blocked', summary: 'The n8n signing secret isn’t in the vault.', blockers: ['The n8n signing secret isn’t in the vault.'], usage };
     const body = canonicalJson({
@@ -127,6 +155,8 @@ export const n8n = (inbox: Inbox): Impl => ({
       callback: { path: `/api/v1/hooks/${i.provider}-callback`, ...(str(i.config.callback_url) ? { url: str(i.config.callback_url) } : {}) },
     });
     const host = new URL(str(i.config.webhook_url)).host;
+    // Recorded before sending, so a workflow that answers at once is taken.
+    inbox.sent(i.brief.task_id, i.attempt ?? 1);
     let res: Response;
     try {
       res = await fetch(str(i.config.webhook_url), {
@@ -141,6 +171,7 @@ export const n8n = (inbox: Inbox): Impl => ({
     if (!res.ok) return { status: 'failed', summary: `The workflow at ${host} turned the brief down (${res.status}).`, usage };
     i.log(`sent to ${host}; waiting for its callback`);
     const cb = await inbox.wait(i.brief.task_id, i.signal);
+    inbox.use(cb);
     return outcome(cb);
   },
 });

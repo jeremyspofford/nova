@@ -40,6 +40,8 @@ export interface Usage { model?: string; tokens_in?: number; tokens_out?: number
 export interface WorkInput {
   provider: string;
   brief: Brief;
+  // Which attempt at the task this is (the ledger counts them from 1).
+  attempt?: number;
   config: Config;
   // The task's own folder, or null for a provider that works elsewhere (automation).
   cwd: string | null;
