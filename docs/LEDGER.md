@@ -55,6 +55,15 @@ failed before the fix.
   this hub's standby … revoke it"), once per claim. Approving a new standby
   turns any earlier one still in the registry into a `spoke` with no
   address, so devices don't look for the hub there and fencing doesn't ask it.
+- **Automatic failover counts only silence.** The standby counted any
+  non-200 answer, and a batch it couldn't apply, as "unreachable", so a live
+  hub answering 500s or sending a newer schema was taken over after
+  `auto_failover_after_s`. Now only transport failures (refused, reset, timed
+  out) count; any answer is a problem for the person ("The standby can't copy
+  the hub: …") and resets the count. Before promoting itself, the standby also
+  asks the hub's `/mesh/hello`; any answer there starts the count again.
+  Trade-off: a dead hub behind a proxy that answers 502 isn't taken over
+  automatically; the person promotes by hand.
 
 **2026-10-30 (M4 review): trust, pairing and access fixes.**
 

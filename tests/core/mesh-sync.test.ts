@@ -530,6 +530,34 @@ test('automatic failover: only when turned on, and only after the hub has been u
   }
 });
 
+test('automatic failover never fires against a hub that is up: errors and batches it can’t apply are problems, not an outage', async () => {
+  const p = await pair({ failoverAfterS: 1 });
+  try {
+    p.core.start();
+    await synced(p);
+    assert.equal(p.core.profile.get('mesh', 'auto_failover_after_s'), 1);
+    // The hub answers, but with 500s.
+    const sync = p.h.core.mesh.sync as unknown as { batch: (...a: unknown[]) => unknown };
+    const batch = sync.batch;
+    sync.batch = () => { throw new Error('placeholder failure'); };
+    p.h.core.profile.set('user', 'name', 'Sam', 'settings');
+    await sleep(3000);
+    assert.equal(p.core.mesh.role.role(), 'standby', 'a hub answering 500 is up');
+    assert.ok(p.core.log.problems().some((x) => /can’t copy the hub/.test(x.message)), 'the person is told');
+    sync.batch = batch;
+    await synced(p);
+    // The hub sends something this standby can't apply (a newer schema, say).
+    p.h.core.db.run(`INSERT INTO sync_log (tbl, pk, op, row, hlc) VALUES ('profile', '["user","x"]', 'put', '{"column_from_the_future":1}', 'placeholder')`);
+    await sleep(3000);
+    assert.equal(p.core.mesh.role.role(), 'standby', 'a batch it can’t apply is no outage');
+    assert.equal(p.h.core.mesh.role.role(), 'hub');
+    assert.ok(p.core.log.problems().some((x) => /can’t apply/.test(x.message)), 'the person is told why');
+    assert.equal(p.core.mesh.role.status().replica!.sync!.unreachable_since, null);
+  } finally {
+    await stopPair(p);
+  }
+});
+
 test('the failover setting is checked, is tier 3, and only an approver may change it', async () => {
   const h = await hub();
   try {

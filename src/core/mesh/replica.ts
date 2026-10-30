@@ -142,8 +142,17 @@ export interface ReplicaStatus {
   running: boolean;
 }
 
-// Why the puller gave up on the hub without it being down: the hub refused this standby.
+// Only this counts towards automatic failover: no answer at all (refused connection, timeout,
+// reset). Anything the hub answers, a 500 or a batch this standby can't apply included, means the
+// hub is up: that is a problem for the person, never a reason to take over.
+class Unreachable extends Error {}
+// The hub answered, and refused this standby or sent what it can't use.
 class Refused extends Error {}
+
+const unreachable = (url: string) => (e: unknown): never => {
+  const code = (e as { code?: string })?.code;
+  throw new Unreachable(`${new URL(url).host} can’t be reached (${code ?? (e as Error)?.message ?? e}).`);
+};
 
 export class Replica extends EventEmitter {
   #sync: SyncLog;
@@ -252,7 +261,7 @@ export class Replica extends EventEmitter {
         if (!this.#running) break;
         const msg = (e as Error).message;
         this.#lastError = msg;
-        if (e instanceof Refused) {
+        if (!(e instanceof Unreachable)) {
           // Not down, so no failover: the person needs to look.
           if (this.#refused !== msg) this.#log.problem('sync', `The standby can’t copy the hub: ${msg}`);
           this.#refused = msg;
@@ -270,6 +279,13 @@ export class Replica extends EventEmitter {
         }
         const after = this.#failoverAfterS();
         if (after && downMs >= after * 1000) {
+          // One more look, by another door: a hub that still says hello is up, whatever the sync
+          // route did. Start counting again rather than take over from it.
+          if (await this.#helloAnswers()) {
+            this.#unreachableSince = Date.now();
+            await this.#sleep(backoff);
+            continue;
+          }
           this.#running = false;
           this.emit('failover', { down_s: down, error: msg });
           break;
@@ -296,7 +312,7 @@ export class Replica extends EventEmitter {
       body: { device_id: role.device_id, time, signature: this.#identity.sign(sessionMessage(role.device_id, time)) },
       ...(this.#abort ? { signal: this.#abort.signal } : {}),
       caFile: role.ca_file ?? null,
-    });
+    }).catch(unreachable(role.hub.url));
     if (res.status === 401 || res.status === 403) throw new Refused(String(res.body?.error ?? 'The hub won’t start a session for this standby.'));
     if (res.status !== 200 || typeof res.body?.token !== 'string') throw new Error(`The hub answered ${res.status} to a new session.`);
     this.#token = res.body.token;
@@ -304,7 +320,16 @@ export class Replica extends EventEmitter {
 
   #call(url: string, o: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<{ status: number; body: any }> {
     this.#abort = new AbortController();
-    return ask(url, { ...o, headers: { authorization: `Bearer ${this.#token}`, ...(o.method && o.method !== 'GET' ? { 'x-nova': '1' } : {}) }, signal: this.#abort.signal, caFile: this.#role().ca_file ?? null });
+    return ask(url, { ...o, headers: { authorization: `Bearer ${this.#token}`, ...(o.method && o.method !== 'GET' ? { 'x-nova': '1' } : {}) }, signal: this.#abort.signal, caFile: this.#role().ca_file ?? null }).catch(unreachable(url));
+  }
+
+  async #helloAnswers(): Promise<boolean> {
+    try {
+      await ask(`${this.#role().hub.url}/api/v1/mesh/hello`, { timeoutMs: 5000, caFile: this.#role().ca_file ?? null });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // A pause that stop() cuts short.
