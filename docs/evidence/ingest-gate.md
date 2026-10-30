@@ -4,8 +4,8 @@ Plan: `docs/plans/ingest-gate.md`. Decisions: `docs/LEDGER.md`, 2026-10-30, "the
 
 ## Runs (2026-10-30, after the review fixes)
 
-- **`npm run check`** (lint:tokens, check:themes, typecheck, unit, acceptance and chaos), after merging main with the grounding PR: **891 tests, 882 pass, 0 fail, 9 skipped.** The skipped ones are the opt-in real-model and real-service runs.
-- **`tests/ingest/`: 80 tests, 80 pass.**
+- **`npm run check`** (lint:tokens, check:themes, typecheck, unit, acceptance and chaos), after merging main (the grounding PR and #232) and closing the `memory_import` gap: **897 tests, 888 pass, 0 fail, 9 skipped.** The skipped ones are the opt-in real-model and real-service runs.
+- **`tests/ingest/`: 85 tests, 85 pass** (`import.test.js` adds 5).
 - **`scripts/ui-test.sh`** (Chromium in the Playwright container): **32 tests, 32 pass.**
   - M5c also checks that each browser page read carries its screen's verdict.
   - Screenshots the run rewrote were restored, and stray ones deleted.
@@ -32,6 +32,7 @@ Each finding became a test that failed first. Where the finding is in the agent 
 | Minor: corpus through the runner | `review.test.js` | 10 items served and fetched through the runner match the core's verdicts, with origin `127.0.0.1`. |
 | Minor: browser fails closed | `review-core.test.ts` | A screen that throws leaves the read blocked. |
 | Minor: forget candidate names the memory | `review.test.js` | "Forget “…”". |
+| `memory_import` (grounding PR) bypassed the memory guard | `import.test.js` (5) | The import file is screened, and a block refuses it with the reason. Its records wait as candidates ("imported from <file>"), never in MEMORY.md or the prompt, even with `memory-import: yes`. An injected record waits flagged. The tool doc and briefing say the memories wait for the person's OK. |
 
 **Still not caught:**
 - Hiding by an external stylesheet or by script. That text is treated as visible, but still checked for instructions.
