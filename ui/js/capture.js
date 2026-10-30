@@ -22,7 +22,9 @@ export const captureData = () => data;
 
 export async function loadCapture() {
   try {
-    data = await api('GET', '/capture');
+    const d = await api('GET', '/capture');
+    if (!d?.status) throw new Error('Nova’s server didn’t answer.');
+    data = d;
     failed = '';
     unreachable = '';
   } catch (e) {
@@ -34,9 +36,11 @@ export async function loadCapture() {
 }
 
 // Whether capture is on can change while this page can't hear about it: asked again when the
-// connection comes back, and when it drops (that ask fails, and the indicator says so).
-onCore('open', () => loadCapture());
-onCore('error', () => loadCapture());
+// connection comes back, and a little after it drops (that ask fails, and the indicator says so).
+// The wait lets a page that is only being left go quietly.
+let dropped = 0;
+onCore('open', () => { clearTimeout(dropped); loadCapture(); });
+onCore('error', () => { clearTimeout(dropped); dropped = setTimeout(loadCapture, 2000); });
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => loadCapture());
   window.addEventListener('offline', () => { unreachable = 'You’re offline.'; renderIndicator(); });
