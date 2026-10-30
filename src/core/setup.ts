@@ -18,9 +18,9 @@ export interface SetupState { step: Step; transcript: Turn[]; first_task: string
 export interface SetupView extends SetupState { done: boolean; question: string | null }
 
 const MAX_TURNS = 400;
-const YES = /^(y|yes|yeah|yep|sure|ok(ay)?|correct|right|that'?s right|please|go( ahead)?|do it)\b/i;
+const YES = /^(y|yes|yeah|yep|sure|ok(ay)?|correct|right|that['’]?s right|please|go( ahead)?|do it)\b/i;
 const NO = /^(n|no|nope|nah|not now|no thanks?|skip)\b/i;
-const SKIP = /^(skip|pass|next|whatever|don'?t care|you (pick|choose)|default)\b/i;
+const SKIP = /^(skip|pass|next|whatever|don['’]?t care|you (pick|choose)|default)\b/i;
 
 const clean = (s: string) => s.trim().replace(/\s+/g, ' ').replace(/[.!]+$/, '');
 
@@ -28,7 +28,7 @@ const clean = (s: string) => s.trim().replace(/\s+/g, ' ').replace(/[.!]+$/, '')
 export function nameFrom(text: string): string | null {
   const t = clean(text)
     .replace(/^(hi|hello|hey|hiya|howdy|good (morning|afternoon|evening))( there)?\b[!,.]*\s*/i, '')
-    .replace(/^(you can |please )?(call me|i'?m|i am|it'?s|my name is|name'?s|this is)\s+/i, '')
+    .replace(/^(you can |please )?(call me|i['’]?m|i am|it['’]?s|my name is|name['’]?s|this is)\s+/i, '')
     .replace(/[!.,]+$/, '');
   return t && t.length <= 40 && !/[<>{}\n]/.test(t) ? t : null;
 }
@@ -51,12 +51,12 @@ function directnessFrom(text: string): 'gentle' | 'balanced' | 'blunt' | null {
 }
 
 // Saying no to the cloud must never turn it on, so refusals and local answers are read first.
-function privacyFrom(text: string): PrivacyMode | null {
+export function privacyFrom(text: string): PrivacyMode | null {
   const t = text.toLowerCase().replace(/’/g, "'");
-  if (/\b(no|not|never|don'?t|do not|without|nothing (in|to|on)( the)?)\b[^.]*\bcloud/.test(t) || /\bcloud\b[^.]*\b(no|never|not)\b/.test(t)) return 'local-only';
+  if (/\b(no|not|never|don['’]?t|do not|without|nothing (in|to|on)( the)?)\b[^.]*\bcloud/.test(t) || /\bcloud\b[^.]*\b(no|never|not)\b/.test(t)) return 'local-only';
   if (/local[- ]?only|^(keep|stay)|keep (it|everything)|stay local|private|this machine|^yes\b/.test(t)) return 'local-only';
   if (/always.*cloud|cloud.*(always|freely|any ?time|whenever)|cloud[- ]allowed/.test(t)) return 'cloud-allowed';
-  if (/allow|when (it'?s )?needed|fallback|fall back|if needed|local[- ]preferred|\bcloud\b/.test(t)) return 'local-preferred';
+  if (/allow|when (it['’]?s )?needed|fallback|fall back|if needed|local[- ]preferred|\bcloud\b/.test(t)) return 'local-preferred';
   if (/\blocal\b/.test(t)) return 'local-only';
   return null;
 }
@@ -130,7 +130,7 @@ export class Setup extends EventEmitter {
           return then(`${this.#detectedTz} it is.`, 'nova_name');
         }
         // "no, it's Europe/Paris" → Europe/Paris; a bare city like "new york" → New_York.
-        const said = clean(text).replace(/^(no|nope|nah)\b[,.]?\s*/i, '').replace(/^(it'?s|i'?m (in|on))\s+/i, '');
+        const said = clean(text).replace(/^(no|nope|nah)\b[,.]?\s*/i, '').replace(/^(it['’]?s|i['’]?m (in|on))\s+/i, '');
         const tz = (/[A-Za-z_]+\/[A-Za-z_/]+/.exec(said)?.[0] ?? said).replace(/\s+/g, '_').toLowerCase();
         const zones = Intl.supportedValuesOf('timeZone');
         const match = zones.find((z) => z.toLowerCase() === tz) ?? zones.find((z) => z.toLowerCase().endsWith(`/${tz}`));
@@ -139,7 +139,7 @@ export class Setup extends EventEmitter {
         return then(`${match} it is.`, 'nova_name');
       }
       case 'nova_name': {
-        if (skip || NO.test(text) || /^(keep( it)?|nova|fine|that'?s fine|it'?s fine)$/i.test(clean(text))) {
+        if (skip || NO.test(text) || /^(keep( it)?|nova|fine|that['’]?s fine|it['’]?s fine)$/i.test(clean(text))) {
           set('identity', 'name', DEFAULTS.name);
           return then(`${DEFAULTS.name} it stays.`, 'directness');
         }

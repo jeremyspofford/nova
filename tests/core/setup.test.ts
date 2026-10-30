@@ -7,7 +7,7 @@ import { Db } from '../../src/core/db.ts';
 import { Log } from '../../src/core/log.ts';
 import { Ledger } from '../../src/core/ledger.ts';
 import { Profile } from '../../src/core/profile.ts';
-import { Setup, nameFrom } from '../../src/core/setup.ts';
+import { Setup, nameFrom, privacyFrom } from '../../src/core/setup.ts';
 import { Verifier } from '../../src/core/verify.ts';
 import { Workspace, workspaceWorker } from '../../src/core/workspace.ts';
 import { CHARTER, identityOf, render } from '../../src/core/identity.ts';
@@ -142,4 +142,14 @@ test('reading the setup state writes nothing', () => {
   assert.equal(profile.isEmpty(), true);
   s.answer('Sam');
   assert.equal(s.view().transcript.length, 3, 'question, answer, reply');
+});
+
+// Phone keyboards type ’ for '. Found by the M3 UI gate: "I’m Alex" was stored as the name. (The
+// privacy answer already read ’ correctly; its cases are here so it stays that way.)
+test('curly apostrophes read the same as straight ones', () => {
+  assert.equal(nameFrom('Hi! I’m Alex.'), 'Alex');
+  assert.equal(nameFrom('it’s Robin'), 'Robin');
+  assert.equal(privacyFrom('I don’t want anything in the cloud'), 'local-only');
+  assert.equal(privacyFrom("I don't want anything in the cloud"), 'local-only');
+  assert.equal(privacyFrom('only when it’s needed'), 'local-preferred');
 });
