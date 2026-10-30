@@ -35,6 +35,9 @@ export interface Manifest {
 export interface KindRules {
   check?: (m: Manifest) => string[];
   protect?: (x: Installed) => string | null;
+  // On removal, before its data folder goes: what the kind revokes beyond that folder (a
+  // connector's sign-in at its service, its secrets in the vault, its event subscriptions).
+  revoke?: (x: Installed) => void;
 }
 
 export interface Installed { id: string; version: string; kind: Kind; state: 'installed' | 'enabled' | 'disabled'; manifest: Manifest; installed_at: string; updated_at: string }
@@ -204,6 +207,7 @@ export class Extensions extends EventEmitter {
     });
     const exported = copyOut(x.manifest.on_remove.export, join(this.#home, 'exports', `${id}-${stamp}`));
     const kept = copyOut(x.manifest.on_remove.keep, join(this.#home, 'kept', id));
+    this.#kinds[x.kind]?.revoke?.(x);
     const deleted = existsSync(data) ? [data] : [];
     rmSync(data, { recursive: true, force: true });
     this.#db.run('DELETE FROM extension WHERE id = ?', id);

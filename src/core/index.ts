@@ -29,6 +29,9 @@ import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
 import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
 import { agentTar, joinScript } from './mesh/agent.ts';
+import { Vault, type KeyMode, type KeyStore } from './vault.ts';
+import { Connectors } from './connectors/index.ts';
+import { homeAssistant, type HomeAssistantOptions } from './connectors/home-assistant.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
@@ -65,6 +68,13 @@ export { REPLICATED, NOT_JOURNALLED } from './mesh/sync.ts';
 export type { Who } from './api.ts';
 export { originHost } from './api.ts';
 export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
+// The vault and connectors (M5b): Era 2's Gmail keeps its secrets in the vault and registers as a connector.
+export { Vault, FILE_KEY_NOTICE, SECRET_SCHEME, secretRef, keyMode, fileKeyStore, secretToolKeyStore, macKeyStore, windowsKeyStore, platformKeyStore } from './vault.ts';
+export type { KeyMode, KeyStore, Run as KeyCommandRunner, VaultStatus } from './vault.ts';
+export { egressOf, secretPrefix } from './connectors/index.ts';
+export type { Connector, ConnectorContext, ConnectorFactory, ConnectorStatus, ConnectorView } from './connectors/index.ts';
+export { HA_ID, HA_MANIFEST, DEFAULT_TIER3, tokenIssuer } from './connectors/home-assistant.ts';
+export { redactText } from './log.ts';
 
 export interface CoreOptions {
   home: string;
@@ -81,6 +91,10 @@ export interface CoreOptions {
   designSystems?: string;
   // The mesh listener, when there is one: where devices reach Nova, and what carries it.
   mesh?: MeshListenerInfo | null;
+  // Where the vault's key lives (vault.ts): NOVA_VAULT_KEY by default; tests inject a keychain.
+  vault?: { mode?: KeyMode; keychain?: ((account: string) => KeyStore | null) | null };
+  // Home Assistant's reconnect pauses and timeouts (tests shorten them).
+  homeAssistant?: HomeAssistantOptions;
   now?: () => Date;
 }
 
@@ -130,6 +144,12 @@ export function createCore(o: CoreOptions) {
   // Hub, standby and sync (M4 plan §3).
   const sync = new SyncLog({ db, log, home: o.home, node: meshIdentity.id, now });
   memory.onForgetDone((records) => sync.forgotten(records.map((r) => r.content)));
+  // The vault (M5b): secrets by name, encrypted at rest; a standby gets it sealed through sync.
+  const vault = new Vault({ home: o.home, ...(o.vault ?? {}) });
+  sync.vault = vault;
+  vault.on('change', () => {
+    try { sync.vaultChanged(); } catch (e) { log.problem('sync', 'Nova couldn’t record a change to its vault for the standby.', { detail: (e as Error)?.stack ?? String(e) }); }
+  });
   meshRole = new MeshRole({
     db, log, home: o.home, now, publicUrl, identity: meshIdentity, devices, access, sync, ledger, verifier, file: place.file,
     becameHub: () => startHub(), becameStandby: () => stopHub(),
@@ -158,8 +178,24 @@ export function createCore(o: CoreOptions) {
     },
   });
 
+  // Connectors (M5b): Home Assistant is built in; Era 2's Gmail registers itself (server.js).
+  const connectors = new Connectors({
+    extensions, vault, triggers, log, now,
+    privacy: () => profile.privacyDefault(),
+    meshHosts: () => devices.list().flatMap((d) => { try { return d.address ? [new URL(d.address).hostname.replace(/^\[|\]$/g, '')] : []; } catch { return []; } }),
+    delegate: (owner, input) => {
+      const task = ledger.create({ ...input, owner, origin: { kind: 'user' } } as TaskInput);
+      triggers.reactive(task, `connector:${owner}`);
+      return task;
+    },
+    addWorker: (w) => { ledger.workers.set(w.id, w); },
+    addConfirmation: (system, check) => verifier.registerConfirmation(system, check),
+  });
+  connectors.register(homeAssistant(o.homeAssistant));
+
   const bus = new EventEmitter();
   bus.setMaxListeners(100);
+  connectors.on('change', (c) => bus.emit('event', 'connector', c));
   ledger.on('task', (t) => bus.emit('event', 'task', { id: t.id, title: t.title, state: t.state, reason: t.reason, user_visibility: t.user_visibility }));
   log.on('problem', (p) => bus.emit('event', 'problem', p));
   setup.on('change', (v) => bus.emit('event', 'setup', { step: v.step, done: v.done }));
@@ -237,8 +273,16 @@ export function createCore(o: CoreOptions) {
       memory: { ok: true, counts: memory.counts() },
       receipts: { ok: true, counts: receipts.counts() },
       mesh: { ok: true, ...meshHealth() },
+      vault: vaultHealth(),
+      connectors: connectors.health(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
+  }
+
+  // Names only, never values; where the key lives, said plainly when it is a file.
+  function vaultHealth() {
+    const s = vault.status();
+    return { ok: s.ok, detail: s.problem ?? (s.secrets ? `${s.secrets} secret${s.secrets === 1 ? '' : 's'}, key in ${s.where}.` : 'Empty.'), secrets: s.secrets, key: s.key, notice: s.notice };
   }
 
   function meshHealth() {
@@ -338,7 +382,7 @@ export function createCore(o: CoreOptions) {
     { method: 'GET', path: '/triggers/rules', summary: 'Every automation Nova runs: event, heartbeat and proactive rules. Nothing runs that isn’t listed here.', handle: () => triggers.listRules() },
     {
       method: 'POST', path: '/triggers/rules', status: 201, summary: 'Add a rule. For an event rule the reply carries its webhook token, shown this once only.',
-      body: '{name, class: proactive|event|heartbeat, hook? (event), cron? (heartbeat), action: {kind: task, task} | {kind: message, text}, dedup_window_s?, cooldown_s?}',
+      body: '{name, class: proactive|event|heartbeat, hook? or connector + topic? (event), cron? (heartbeat), action: {kind: task, task} | {kind: message, text}, dedup_window_s?, cooldown_s?}',
       handle: ({ body }) => {
         const { rule, token } = triggers.createRule(body as unknown as RuleInput, 'person');
         return token ? { rule, token, note: 'Keep this token somewhere safe. Nova keeps only a hash of it and won’t show it again.' } : { rule };
@@ -503,6 +547,13 @@ export function createCore(o: CoreOptions) {
     },
     { method: 'GET', path: '/mesh/runtime', access: 'device', summary: 'The runtime agent this node ships, {manifest: {version, sha256, files}, signature, signer, files}, signed over nova-runtime-v1.<manifest>.', handle: () => spokes.runtime() },
     ...role.routes(),
+    // ---- the vault and connectors (M5 plan §2) ----
+    { method: 'GET', path: '/vault', summary: 'The vault: how many secrets, their names (never their values), and where its key is, said plainly when it is a file.', handle: () => ({ ...vault.status(), names: vault.status().ok ? vault.list() : [] }) },
+    { method: 'GET', path: '/connectors', summary: 'Connections to outside services: status, what each can do in plain words, where its calls go, and the one Nova recommends connecting next.', handle: () => ({ connectors: connectors.list(), vault: vaultHealth() }) },
+    { method: 'GET', path: '/connectors/{id}', summary: 'One connection.', handle: ({ params }) => connectors.view(params.id!) },
+    { method: 'POST', path: '/connectors/{id}/connect', summary: 'Connect a service with what its setup asks for (an address, a token). Secrets go into the vault.', body: '{…setup fields}', handle: ({ params, body }) => connectors.connect(params.id!, body) },
+    { method: 'POST', path: '/connectors/{id}/disconnect', summary: 'Disconnect: sign Nova out at the service where it can, then delete its secrets, the rules listening to it and its settings.', handle: ({ params }) => connectors.disconnect(params.id!) },
+    ...connectors.routes(),
   ];
 
   // Tests drive the heartbeat's clock through the API; this route doesn't exist otherwise.
@@ -531,11 +582,13 @@ export function createCore(o: CoreOptions) {
       heartbeat.unref();
       beat();
     }
+    connectors.start();
     return recovered;
   }
   function stopHub() {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
+    connectors.stop().catch(() => {});
   }
   // On a standby (or a hub that stepped down) every change is refused, saying which node is hub;
   // the only change it takes is becoming the hub.
@@ -566,6 +619,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups,
+    vault, connectors,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),
