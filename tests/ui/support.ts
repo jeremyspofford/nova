@@ -11,9 +11,12 @@ export { ROOT, blank };
 
 const CI = !!process.env.CI;
 
+// Where the test's Chromium is (also handed to Nova's browser worker as NOVA_CHROMIUM).
+export const chromiumPath = (): string => process.env.CHROMIUM || chromium.executablePath();
+
 // The browser, or a reason there isn't one.
 export async function browser(): Promise<Browser | string> {
-  const path = process.env.CHROMIUM || chromium.executablePath();
+  const path = chromiumPath();
   if (!path || !existsSync(path)) return missing(`no Chromium at ${path || '(none)'}`);
   try {
     return await chromium.launch({ executablePath: path, args: ['--disable-background-networking'] });

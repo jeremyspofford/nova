@@ -20,7 +20,13 @@ export interface Worker extends WorkerInfo {
   health(): { ok: boolean; detail?: string };
   // How long one run may take before the ledger stops waiting; the ledger's default otherwise.
   timeoutMs?: number;
+  // A worker whose reach depends on the brief (a browser task's declared hosts) says where this
+  // brief's data would go; `egress` is then the most it could ever reach. It throws a validation
+  // error for a brief it could never run, so a bad one is refused when it is delegated.
+  egressFor?(brief: Brief): Egress;
 }
+
+export const egressOf = (w: Worker, brief: Brief): Egress => w.egressFor?.(brief) ?? w.egress;
 
 const STRICTNESS: PrivacyMode[] = ['local-only', 'local-preferred', 'cloud-allowed'];
 export const stricter = (a: PrivacyMode, b: PrivacyMode): PrivacyMode => (STRICTNESS.indexOf(a) <= STRICTNESS.indexOf(b) ? a : b);

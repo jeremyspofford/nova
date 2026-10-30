@@ -61,6 +61,13 @@ export class Verifier {
     });
   }
 
+  // Lets the module that can check a kind of evidence itself say how (the browser checks
+  // `screenshot` and `url`). Until one does, that kind fails.
+  registerKind(kind: Evidence['kind'], check: Checker): void {
+    if (this.#checkers.has(kind)) throw new Error(`${kind} evidence already has a checker.`);
+    this.#checkers.set(kind, check);
+  }
+
   // Lets another module check its own test results, by name prefix ("template:").
   registerTest(prefix: string, check: Checker): void {
     if (this.#tests.has(prefix)) throw new Error(`Tests named ${prefix}… already have a checker.`);
