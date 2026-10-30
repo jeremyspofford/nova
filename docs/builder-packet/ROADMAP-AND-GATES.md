@@ -58,10 +58,92 @@ Build in this order. A milestone is complete only when its gate passes with evid
     - It uses the same explicit confirmation as other destructive actions.
     - It says plainly what happens to existing backups. Expected: they are wiped too, after the export offer.
 
+## UI fixes — Amendment 2026-10-30-C Part 1 (one PR, straight after M7)
+Small, low-risk fixes; one PR. Spec: AMENDMENT-2026-10-30-C Part 1.
+- **The orb shows once per view.** No per-message avatars or orbs in chat.
+- **Chat:**
+  - Nova's turn is full width and has no bubble.
+  - The person's turn is a tinted bubble.
+  - No bubble tails.
+- **Timestamps:**
+  - Date or gap dividers always.
+  - A group shows its time on its first message. A group is the same author, less than 5 minutes apart.
+  - The exact time of each message is shown on hover, on long-press, or in details.
+  - Work-trail entries show how long they took and when they finished.
+  - Timestamps meet 4.5:1 contrast.
+- **Settings: one structure, two layouts.**
+  - On a phone: a grouped list with search.
+  - On wider screens: a sidebar, a detail pane, and search.
+  - Grouped by the person's task, with at most one level of nesting.
+  - Search knows synonyms, shows each result's path, and jumps to the setting and highlights it.
+- **Appearance:**
+  - Picking a theme applies it live to the real UI. The embedded preview mock is removed.
+  - A theme for this device applies instantly, with a visible Undo. A theme for all devices needs an explicit Save.
+  - The current scope is always shown.
+  - A live WCAG check warns below 4.5:1 for body text and below 3:1 for components, and offers a one-tap fix.
+  - One design is recommended, not six listed as equals.
+- **Scrolling:**
+  - One scroll container per view. Any inner scroller scrolls sideways only.
+  - The OS scrollbar setting is respected. No thin custom bars.
+  - `scrollbar-gutter: stable`.
+- **Gate:** browser tests for each item, at phone and desktop widths and in every starter package, plus the fresh-user test.
+
 ## M8 — Relay adapter
 - Relay stabilized standalone first (its own bounded pass: interface freeze, tests green, contracts documented).
 - Nova↔Relay adapter over the task envelope.
 - Gate: a coding task briefed from Nova is executed by Relay workers in worktrees and reported back with diff evidence.
+
+## M9 — Feel & Polish (Amendment 2026-10-30-C Part 2)
+The numbers below are evidence gates, not aspirations. Spec: AMENDMENT-2026-10-30-C Part 2. Evidence base: UX-RESEARCH-2026-10-30.
+- **Core Web Vitals** at the 75th percentile, measured in CI on the main views at phone and desktop widths:
+  - CLS ≤ 0.1, INP ≤ 200 ms, LCP ≤ 2.5 s.
+  - A skeleton's shape matches the final layout exactly.
+- **Progress rules:** DESIGN-SYSTEM §1, applied to every waiting state and checked by tests.
+- **Animation tokens:**
+  - 150–300 ms, animating only transform and opacity.
+  - `prefers-reduced-motion` is honoured.
+  - No bounce or elastic motion on frequent actions.
+- **Contrast:**
+  - Every theme in every state meets WCAG AA: 4.5:1 for body text, 3:1 for large text and components.
+  - Hit areas are 44 pt / 48 dp.
+- **Foldable and responsive tests, in this order:**
+  1. State survives fold, unfold and resize: scroll position, drafts, settings edits.
+  2. No stretched single column on wide screens: prose is capped at 45–75ch, and the extra width goes to a second pane.
+  3. Nothing sits under the hinge.
+  4. 200% text survives.
+- **Gate:** all of the above pass in CI, with the measurements in the PR, plus the fresh-user test.
+
+## Ingest security gate (Amendment 2026-10-30-C Part 3)
+Built with M9, or as its own PR before M10. No Nova browser opens a real page until it is merged. Spec: AMENDMENT-2026-10-30-C Part 3.
+- **Every external read goes through the ingest pipeline before any acting model sees it.** That covers web pages, email, files, OCR, transcripts, QR payloads, and tool or MCP output.
+- **An isolated Noul screen:**
+  - No tools, memory or secrets.
+  - It returns probabilities only.
+  - In local-only mode it uses a local model.
+- **Thresholds:** below a low bar, content passes as data; in the middle, it is quarantined; above a high bar, it is blocked and recorded in the ledger.
+- **Deterministic checks run in parallel.** For example, hidden text, encoded blobs, mismatched links, the SSRF guard, and email authentication.
+- **Taint:** an action whose origin is external content never runs on its own.
+- **Separation:** the reader has no tools beyond reading, and the actor sees only the screened extract.
+- **Memory guard and outbound guard.**
+- **Gate:** a regression set of known injection payloads, plus canary secrets, passes in CI.
+
+## M10 — Execution Plane (Amendment 2026-10-30-C Part 4)
+Nova gets its own sandboxed computer and browser. A design doc (ADR) comes first, then the build. It requires the ingest security gate. Spec: AMENDMENT-2026-10-30-C Part 4.
+- **Nova Computer:**
+  - Container or VM workspaces with a shell and toolchain, one per project.
+  - Checkpointed sessions, and a reset to a clean state.
+  - First target: the hub's WSL environment.
+- **Nova Browser:**
+  - Nova's own Chromium profile, driven through accessibility and the DOM first.
+  - The person can watch, pause, stop or take over.
+  - Logins come from the vault at the moment of use.
+  - Every page passes the ingest gate.
+  - Noul makes the small step-by-step calls, and DOM ground truth always outranks a probability.
+  - Validated flows are kept as templates per site.
+  - Checkout stops at the itemised total: paying is Tier 3.
+- **Chat as the control plane** for coding (Relay workers in worktrees), infrastructure (a plan is shown before any apply, and apply is Tier 3), networking (Tier 3, with a snapshot, a diff and a dead-man's switch), and accounts (Tier 3; passwords never enter model context).
+- **Approval tiers apply throughout,** and everything goes in the Work Ledger.
+- **Gate:** set in the M10 design doc before the build starts; at least, the Part 4 tier rules are each proven by tests, plus the fresh-user test.
 
 ## Sequencing rules
 - Relay stabilization may run parallel to M1–M2 (it is independent), integration only at M8.

@@ -46,3 +46,19 @@ These come from the owner and supersede any reading of the packet that waits for
    - After every merge, restart it from the new `main` and verify that it answers an HTTP request.
    - Put the URL in every progress report.
    - Serve only what is built. Don't fake UI that doesn't exist yet.
+
+## Addendum — Amendment 2026-10-30-C (owner, approved)
+`AMENDMENT-2026-10-30-C.md` is binding spec, and `UX-RESEARCH-2026-10-30.md` is its evidence base. The owner approved all of it, including two research-backed overrides of their first instincts:
+- chat bubbles have no tails;
+- timestamps are grouped, not shown on every message.
+
+It also sets the hybrid theme flow: a theme for this device applies instantly with a visible Undo; a theme for all devices needs an explicit Save.
+
+Where it lands:
+- **Part 1, UI fixes:** one PR, straight after M7.
+- **Part 2:** milestone M9, "Feel & Polish".
+- **Part 3, the ingest security gate:** built before any Nova browser opens a real page.
+- **Part 4:** milestone M10, "Execution Plane", with a design doc first.
+- **The progress rules:** in DESIGN-SYSTEM §1.
+
+Where it differs from earlier packet text, the amendment wins: for example, the orb shows once per view and is no longer a per-message chat avatar. Standing orders are unchanged. Nothing in it waits on a Jev account or on real-device pairing.
