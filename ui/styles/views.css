@@ -23,8 +23,10 @@
 }
 /* Long threads: the browser skips laying out and painting turns that are off
    screen. The newest turns always render, so a conversation opens exactly at
-   its end; `auto` remembers each turn's real height once it has been seen. */
-.block:not(:nth-last-child(-n + 3)) > .turn {
+   its end; `auto` remembers each turn's real height once it has been seen. The newest ten
+   blocks always render: more than a tall screen shows, so nothing on screen at the end of a
+   conversation is laid out from an estimate and then moved (M9: a 0.09 layout shift). */
+.block:not(:nth-last-child(-n + 10)) > .turn {
   content-visibility: auto;
   contain-intrinsic-size: auto 480px;
 }
