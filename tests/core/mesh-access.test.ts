@@ -157,6 +157,26 @@ test('a malformed or "null" Origin is a 403, never a 500 or a problem, even on t
   }
 });
 
+test('a device session counts only on the mesh listener, never on the console port', async () => {
+  const b = await boot();
+  try {
+    const phone = await b.enroll({ kind: 'phone', name: 'Phone' });
+    const s = await phone.session();
+    const bearer = { authorization: `Bearer ${s.body.token}` };
+    assert.equal((await call(b.mesh, 'GET', '/api/v1/tasks', undefined, bearer)).status, 200, 'where devices belong');
+    // As if NOVA_HOST reached beyond this machine: the console port, but not the console. Its
+    // plain HTTP is no transport for a session.
+    const remote = { ...bearer, 'x-forwarded-for': '198.51.100.7' };
+    assert.equal((await b.c('GET', '/api/v1/tasks', undefined, remote)).status, 401);
+    assert.equal((await b.c('GET', '/api/sessions', undefined, remote)).status, 401, 'Era 2 too');
+    assert.equal((await b.c('GET', '/styles/views.css', undefined, remote)).status, 401);
+    const cookie = await phone.session({ cookie: true });
+    assert.equal((await b.c('GET', '/api/v1/tasks', undefined, { cookie: cookieOf(cookie), 'x-forwarded-for': '198.51.100.7' })).status, 401, 'nor a cookie');
+  } finally {
+    await b.stop();
+  }
+});
+
 test('a webhook answers over the mesh listener without a session: its own token is its key', async () => {
   const b = await boot();
   try {

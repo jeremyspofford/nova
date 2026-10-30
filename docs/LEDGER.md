@@ -55,6 +55,10 @@ built-ins only.
 - **Webhooks are public, as this ledger already said.** `POST /hooks/{name}`
   now carries `access: 'public'`; it was `person` by default, so an
   automation calling the mesh address got a 401. Its token is still checked.
+- **Device sessions count only on the mesh listener.** With `NOVA_HOST`
+  beyond loopback, the console port took a device's cookie or bearer token
+  over plain HTTP, a transport §0 doesn't accept. There it is now public, like
+  any unpaired caller.
 
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and

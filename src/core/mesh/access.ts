@@ -99,6 +99,10 @@ export class Access {
 
   identify(req: IncomingMessage, listener: Listener): Principal {
     if (isConsole(listener, req)) return { kind: 'console' };
+    // Sessions are honoured only where §0 lets them travel: the mesh listener, over TLS or a
+    // transport the person vouched for. The console port is plain HTTP; with NOVA_HOST beyond
+    // loopback a token sent to it could be read on the way.
+    if (listener !== 'mesh') return { kind: 'public' };
     const auth = String(req.headers.authorization ?? '');
     const token = /^Bearer\s+/i.test(auth) ? auth.replace(/^Bearer\s+/i, '').trim() : cookie(req.headers.cookie, SESSION_COOKIE);
     const device = token ? this.#devices.sessionDevice(token) : null;
