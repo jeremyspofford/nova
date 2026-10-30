@@ -127,6 +127,8 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
 
     function again(): void {
       if (!wanted) { setLive('off'); return; }
+      // Reconnecting is contacting it again: only while the privacy setting allows it.
+      if (!ctx.permits(egress())) { setLive('off'); return; }
       setLive('reconnecting');
       if (retry) return;
       retry = setTimeout(() => { retry = null; open(); }, pause);
@@ -142,6 +144,19 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
       if (!ctx.topics().includes(entity)) return;
       const payload = { entity_id: entity, from: d.old_state?.state ?? null, to: d.new_state.state, at: d.new_state.last_changed ?? at ?? null };
       ctx.emit(entity, payload, `${entity}@${payload.at}`).catch((e) => ctx.problem('A change in Home Assistant couldn’t be recorded.', (e as Error)?.stack));
+    }
+
+    // The privacy setting (or where Home Assistant counts as being) changed: a socket it no longer
+    // allows closes now, and one it allows again opens.
+    function recheck(): void {
+      if (!wanted) return;
+      if (ctx.permits(egress())) { if (!ws && !retry) { pause = backoff.first; open(); } return; }
+      if (retry) clearTimeout(retry);
+      retry = null;
+      const s = ws;
+      ws = null;
+      try { s?.close(); } catch { /* already closed */ }
+      setLive('off');
     }
 
     function stopLive(): void {
@@ -371,6 +386,7 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
         if (!ws && !retry) open();
       },
       stop: stopLive,
+      recheck,
       topic: (t) => (ENTITY.test(t) ? null : 'Home Assistant rules listen to one entity, named like binary_sensor.front_door.'),
       worker,
       confirm,

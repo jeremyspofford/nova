@@ -53,6 +53,9 @@ export interface Connector {
   disconnect(): Promise<{ revoked: boolean; note?: string }>;
   start?(): void;
   stop?(): Promise<void> | void;
+  // The privacy setting, or the devices that count as local, changed: close what is no longer
+  // allowed, reopen what is again.
+  recheck?(): void;
   // What an event rule may listen for: null when the topic is fine, else why not.
   topic?(topic: string): string | null;
   worker?: Worker;
@@ -247,6 +250,15 @@ export class Connectors extends EventEmitter {
   start(): void {
     this.#started = true;
     for (const c of this.#all.values()) this.#ready(c);
+  }
+
+  // Whatever a connector keeps open was allowed by the setting when it opened; asked again now.
+  recheck(): void {
+    if (!this.#started) return;
+    for (const c of this.#all.values()) {
+      try { c.recheck?.(); } catch (e) { this.#o.log.problem('connectors', `${c.manifest.name} couldn’t follow the change to your privacy setting.`, { detail: (e as Error)?.stack ?? String(e) }); }
+      this.emit('change', { id: c.manifest.id, connected: safeStatus(c).connected });
+    }
   }
 
   async stop(): Promise<void> {

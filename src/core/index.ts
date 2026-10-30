@@ -232,6 +232,10 @@ export function createCore(o: CoreOptions) {
     addConfirmation: (system, check) => verifier.registerConfirmation(system, check),
   });
   connectors.register(homeAssistant(o.homeAssistant));
+  // Every change to the privacy setting, or to the devices that count as local, is checked again
+  // against what connectors keep open.
+  profile.on('change', (c: { section: string }) => { if (c.section === 'privacy') connectors.recheck(); });
+  devices.on('change', () => connectors.recheck());
 
   const bus = new EventEmitter();
   bus.setMaxListeners(100);
