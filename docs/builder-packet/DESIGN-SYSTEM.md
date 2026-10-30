@@ -10,6 +10,15 @@ This is the contract between Nova's product design and every line of UI code. It
 - **"Nova is handling"** is the standard component for background work: task rows with plain-language titles and status, expandable to the ledger entry.
 - **Calm motion.** Slow, small, purposeful. Motion conveys state (orb, status transitions), never decoration for its own sake. Reduced-motion setting honored everywhere.
 
+### Perception principles (binding, non-negotiable — owner amendment, 2026-10-29)
+1. **Show real progress.** Task state comes from the Work Ledger, never simulated activity.
+2. **One standout element per view:** the primary action. Approvals and destructive actions always stand out.
+3. **Fewer choices.** Nova recommends; it does not dump option lists.
+
+**Prohibited:** artificial delays or simulated work of any kind; streaks or engagement/guilt mechanics.
+
+**Endings matter:** close every task with a clear, verified outcome — clarity, not celebration.
+
 ## 2. Semantic token schema (required in full by every package)
 Components may reference ONLY these tokens. Raw hex, px, or font names in component code are lint errors (`lint:tokens`), and CI enforces it.
 

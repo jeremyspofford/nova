@@ -14,6 +14,28 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (packet amendment): perception principles added to DESIGN-SYSTEM §1
+as binding.** Owner's amendment; not a milestone, and M3/M4 scope is unchanged.
+The current design already largely complies, so there is no UI rework for it alone:
+
+- **Real progress:** the orb and every status come from real signals (ledger
+  activity, approvals waiting, open problems, reachability) through one mapping
+  (`ui/js/status.js`). A scan of `ui/js` found no simulated work or artificial
+  delays: every timer is a reconnect check, a debounce or a toast's lifetime.
+  The scripted stand-in model's `FAKE_DELAY` is a test tool, never shipped
+  behaviour.
+- **One standout:** each card and sheet has one primary button; approvals use
+  the approval sheet, and tier-3 steps (including irreversible Era 2 commands)
+  add the confirm box.
+- **No engagement mechanics:** no streaks, badges for use, praise or guilt
+  copy anywhere.
+- **Endings:** ledger tasks end Verified with evidence, or Failed/Cancelled with
+  a reason; setup ends on the welcome task's VerifiedResultCard.
+- **Where it doesn't fully comply yet** (fix when the surface is next touched):
+  the Appearance picker lists every installed design system as equal options,
+  with the current one marked but no recommendation; Era 2's settings screens
+  weren't audited view by view for a single primary action.
+
 **2026-10-29 (M3c): the M3 gate runs in a real browser.**
 
 - **Where:** `tests/ui/*.test.ts` drive Chromium (playwright-core) against the
