@@ -51,6 +51,8 @@ export async function loadCaptureView() {
     const [recent, unclassified, proposals] = await Promise.all([
       api('GET', '/capture/events?limit=30'), api('GET', '/capture/events?unclassified=1&limit=50'), api('GET', '/capture/proposals'),
     ]);
+    // An answer cut off as the page is left reads as null: kept as no answer, not drawn.
+    if (![recent, unclassified, proposals].every(Array.isArray)) throw new Error('Nova’s server didn’t answer.');
     view = { recent, unclassified, proposals };
     failed = '';
   } catch (e) {
