@@ -47,7 +47,7 @@ import { Resilience } from './resilience/index.ts';
 import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
-import { Checkpoints, finishStaged, takeCheckpoint } from './resilience/checkpoints.ts';
+import { Checkpoints, dropPartials, finishStaged, takeCheckpoint } from './resilience/checkpoints.ts';
 import { Restarter } from './resilience/restart.ts';
 import { Foundry } from './changes/foundry.ts';
 import { createHash } from 'node:crypto';
@@ -166,8 +166,9 @@ export type Core = ReturnType<typeof createCore>;
 export function createCore(o: CoreOptions) {
   const started = Date.now();
   const now = o.now ?? (() => new Date());
-  // A restore (or reset) staged before the last stop is applied first, before the database opens.
-  if (!o.sandbox) finishStaged(o.home);
+  // A restore (or reset) staged before the last stop is applied first, before the database opens;
+  // a checkpoint stopped part-way is dropped.
+  if (!o.sandbox) { finishStaged(o.home); dropPartials(o.home); }
   const db = new Db(join(o.home, 'nova.db'));
   // An automatic checkpoint before a database upgrade, beside the pre-upgrade copy: one that can't
   // be taken stops the upgrade (and so the start), with the reason.

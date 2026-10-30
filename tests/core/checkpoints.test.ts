@@ -131,20 +131,59 @@ test('a disk too full refuses in plain words, keeps nothing half-made, and never
   }
 });
 
-test('deleting a named checkpoint is tier 2: confirmed, an approver only; automatic ones are kept by the rule', async () => {
+test('deleting a named checkpoint is tier 3: confirmed every time, from the hub’s own screen only; automatic ones are kept by the rule', async () => {
   const h = await hub();
   try {
     const mine = (await h.c('POST', '/resilience/checkpoints', { name: 'Mine' })).body;
     const auto = h.core.checkpoints.auto('Before upgrading');
-    const { token } = await enroll(h);
+    const { dev, token } = await enroll(h, { name: 'Approving phone' });
+    assert.equal((await h.c('PATCH', `/mesh/devices/${dev.deviceId}`, { can_approve: true, confirm: true })).status, 200);
     const phone = await fetch(`${h.mesh}/api/v1/resilience/checkpoints/${mine.id}/delete`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1', authorization: `Bearer ${token}` }, body: JSON.stringify({ confirm: true }) });
-    assert.equal(phone.status, 403, 'a paired phone that may not approve can’t delete one');
-    assert.equal((await h.c('POST', `/resilience/checkpoints/${mine.id}/delete`, {})).status, 400, 'not without the OK');
+    assert.equal(phone.status, 403, 'not from a paired device, even one that may approve');
+    assert.match((await phone.json()).error, /hub’s own screen/);
+    const bare = await h.c('POST', `/resilience/checkpoints/${mine.id}/delete`, {});
+    assert.equal(bare.status, 400, 'not without the confirmation');
+    assert.match(bare.body.error, /every time/);
     assert.equal((await h.c('POST', `/resilience/checkpoints/${auto.id}/delete`, { confirm: true })).status, 409);
     assert.equal((await h.c('POST', `/resilience/checkpoints/${mine.id}/delete`, { confirm: true })).status, 200);
     assert.deepEqual(h.core.checkpoints.list().map((x) => x.id), [auto.id]);
   } finally {
     await h.stop();
+  }
+});
+
+test('at most 20 named checkpoints: the next is refused in plain words, so no device can fill the disk with them', async () => {
+  const w = world('nova-cp-cap-');
+  const c = open(w.home);
+  try {
+    for (let i = 0; i < 20; i++) c.checkpoints.take({ kind: 'named', name: `Mine ${i}` });
+    assert.throws(() => c.checkpoints.take({ kind: 'named', name: 'One too many' }), (e: Error & { code?: string }) => e.message === 'You have 20 named checkpoints. Delete one to take another.' && e.code === 'conflict');
+    // Automatic ones are kept by their own rule and don't count.
+    assert.doesNotThrow(() => c.checkpoints.auto('Before something'));
+    assert.equal(c.checkpoints.list().filter((x) => x.kind === 'named').length, 20);
+  } finally {
+    await c.close();
+  }
+});
+
+test('a half-taken checkpoint is never left holding data: removed at start and before every forget', async () => {
+  const w = world('nova-cp-partial-');
+  let c = open(w.home);
+  const m = c.memory.remember({ kind: 'fact', content: SECRET, recorded_by: 'person' });
+  // As if Nova stopped in the middle of taking one: a full copy of the database, unfinished.
+  const partial = (n: number) => join(w.home, 'checkpoints', `.partial-00000${n}-stopped`);
+  const half = (n: number) => { mkdirSync(partial(n), { recursive: true }); c.db.raw.exec(`VACUUM INTO '${join(partial(n), 'nova.db')}'`); };
+  try {
+    half(1);
+    assert.ok(has(join(partial(1), 'nova.db'), SECRET));
+    await c.close();
+    c = open(w.home);
+    assert.equal(existsSync(partial(1)), false, 'gone at the next start');
+    half(2);
+    c.memory.forget(m.id);
+    assert.equal(existsSync(partial(2)), false, 'gone before a forget, which would otherwise miss it');
+  } finally {
+    await c.close();
   }
 });
 

@@ -41,6 +41,8 @@ import type { Restarter } from './restart.ts';
 export const CHECKPOINTS_DIR = 'checkpoints';
 export const KEEP_AUTO = 10;
 export const NAME_MAX = 80;
+// Named checkpoints are kept until deleted, so their number is capped: no device can fill the disk.
+export const NAMED_MAX = 20;
 export const RETENTION = `Nova keeps the newest ${KEEP_AUTO} automatic checkpoints, counted in the order they were taken, never by date, and every checkpoint you name until you delete it. A new checkpoint is complete before an old one is removed, and a named one is never removed to make room.`;
 
 export type CheckpointKind = 'auto' | 'named';
@@ -183,7 +185,10 @@ export function takeCheckpoint(o: TakeOptions): CheckpointManifest {
   const dbPath = join(o.home, 'nova.db');
   if (!o.db && !existsSync(dbPath)) throw new CheckpointError('failed', `${o.home} has no database to checkpoint.`);
   const r = ensureRoot(o.home);
-  for (const e of readdirSync(r)) if (e.startsWith('.partial-')) rmSync(join(r, e), { recursive: true, force: true });
+  dropPartials(o.home);
+  if (o.kind === 'named' && scanCheckpoints(o.home).found.filter((f) => f.manifest.kind === 'named').length >= NAMED_MAX) {
+    throw new CheckpointError('failed', `You have ${NAMED_MAX} named checkpoints. Delete one to take another.`);
+  }
   const key = sealKey(o.home, true)!;
   const files = checkpointFiles(o.home);
 
@@ -254,6 +259,16 @@ export function takeCheckpoint(o: TakeOptions): CheckpointManifest {
   // Only now, with the new one complete: the oldest automatic ones past the limit go.
   pruneCheckpoints(o.home);
   return manifest;
+}
+
+// What a checkpoint stopped part-way left behind: never used, and never kept holding data. Removed
+// at every start, before every checkpoint and before every forget.
+export function dropPartials(home: string): string[] {
+  const out: string[] = [];
+  let names: string[] = [];
+  try { names = readdirSync(root(home)); } catch { return out; }
+  for (const e of names) if (e.startsWith('.partial-')) { rmSync(join(root(home), e), { recursive: true, force: true }); out.push(e); }
+  return out;
 }
 
 function mkdirDeep(base: string, rel: string): void {
@@ -348,6 +363,8 @@ export function verifyCheckpoint(f: Found): { db: string; files: number; bytes: 
 export function forgetInCheckpoints(home: string, table: string, ids: string[], words: string[], at: Date): { cleaned: string[]; destroyed: string[] } {
   const cleaned: string[] = [];
   const destroyed: string[] = [];
+  // A half-taken checkpoint holds a whole copy of the database and no manifest to clean by: it goes.
+  dropPartials(home);
   if (!ids.length) return { cleaned, destroyed };
   const key = sealKey(home, false);
   const { found, strays } = scanCheckpoints(home);
@@ -593,8 +610,10 @@ export class Checkpoints {
     return listCheckpoints(this.#o.home);
   }
 
-  remove(id: string, confirm: boolean): CheckpointView {
-    if (!confirm) throw new CoreError('validation', 'Deleting a checkpoint can’t be undone: it needs your OK (confirm: true).');
+  // Deleting data is tier 3 (NOVA-SPEC §6): the hub's own screen, confirmed every time.
+  remove(id: string, o: { confirm: boolean; who: Who }): CheckpointView {
+    if (o.who.principal.kind !== 'console') throw new CoreError('forbidden', 'Deleting a checkpoint is done from the hub’s own screen only.');
+    if (!o.confirm) throw new CoreError('validation', 'Deleting a checkpoint can’t be undone: it needs your explicit confirmation every time (confirm: true).');
     const v = deleteCheckpoint(this.#o.home, id);
     this.#o.log.info('resilience', 'Checkpoint deleted.', { id });
     return v;
@@ -740,12 +759,12 @@ export class Checkpoints {
     return [
       { method: 'GET', path: '/resilience/checkpoints', summary: `Checkpoints, newest first: each one’s name or reason, kind (auto or named), date, size and Nova version, and the retention rule. ${RETENTION}`, handle: ({ who }) => this.view(who) },
       {
-        method: 'POST', path: '/resilience/checkpoints', status: 201, summary: `Take a named checkpoint of the whole home now (tier 1). The name is up to ${NAME_MAX} characters.`, body: '{name}',
+        method: 'POST', path: '/resilience/checkpoints', status: 201, summary: `Take a named checkpoint of Nova’s own entries in the home now (tier 1). The name is up to ${NAME_MAX} characters; at most ${NAMED_MAX} named ones are kept.`, body: '{name}',
         handle: ({ body }) => this.take({ kind: 'named', name: body.name as string }),
       },
       {
-        method: 'POST', path: '/resilience/checkpoints/{id}/delete', access: 'approver', summary: 'Delete a checkpoint you named (tier 2: {confirm: true}, an approver or the hub’s own screen). Automatic ones are kept by the retention rule.', body: '{confirm}',
-        handle: ({ params, body }) => this.remove(params.id!, body.confirm === true),
+        method: 'POST', path: '/resilience/checkpoints/{id}/delete', summary: 'Delete a checkpoint you named (tier 3: {confirm: true}, the hub’s own screen only). Automatic ones are kept by the retention rule.', body: '{confirm}',
+        handle: ({ params, body, who }) => this.remove(params.id!, { confirm: body.confirm === true, who }),
       },
       { method: 'GET', path: '/resilience/checkpoints/{id}/restore', summary: 'What restoring this checkpoint would do, in the words the confirmation shows.', handle: ({ params }) => this.preview(params.id!) },
       {
