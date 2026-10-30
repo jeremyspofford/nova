@@ -13,6 +13,7 @@ import { routeOf } from './nav.js';
 import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
 import { bindConnections, loadConnections, renderConnections } from './connections.js';
+import { bindModels, loadModels, renderModels } from './models.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
 
@@ -1388,7 +1389,7 @@ function showSettings() {
   renderChrome();
   renderToc_();
   renderSettingsView({ enter: true });
-  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders()]).then(() => {
+  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadModels()]).then(() => {
     renderSettingsView({ only: 'you' });
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
     if (target) { target.scrollIntoView({ block: 'center' }); (target.querySelector('.switch') ?? target.querySelector('input:checked') ?? target.querySelector('button, input'))?.focus({ preventScroll: true }); flash(target); }
@@ -1402,6 +1403,7 @@ const PARTS = {
   perms: () => (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
 <p class="memory-lede">${permissionsError}</p><button type="button" class="btn set-retry" data-action="retry-settings">Try again</button></section>` : ''),
   connections: () => renderConnections(),
+  models: () => renderModels(),
   look: () => core.renderAppearance(),
   devices: () => core.renderDevices(),
 };
@@ -1528,6 +1530,8 @@ onCore('profile', () => scheduleRefresh(['profile']));
 // A connection changed (connected, dropped, reconnecting, disconnected), here or elsewhere.
 onCore('connector', () => { if (state.view === 'settings') loadConnections(); });
 bindConnections(el.settings, () => { if (state.view === 'settings' && $('settings-connections')) renderSettingsView({ only: 'connections' }); });
+// Settings › Models (M6b): hardware, roles, downloads with live progress, budgets.
+bindModels(el.settings, () => { if (state.view === 'settings' && $('settings-models')) renderSettingsView({ only: 'models' }); });
 // A provider was set up, turned on or off, or checked (M5a): Settings shows it at once.
 onCore('provider', () => { if (state.view === 'settings') core.loadProviders(); });
 // The device mesh: the registry changed, or a device is asking to join (only approvers hear that).

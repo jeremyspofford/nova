@@ -909,6 +909,13 @@ export class Models extends EventEmitter {
     const spentPeriod = this.spent({ since: this.periodStart(b.period) });
     const installed = (hubInv?.models ?? []).map((m) => ({ name: m.name, size: m.size, digest: m.digest, parameter_size: m.parameter_size, capabilities: m.capabilities, serves: ROLES.filter((r) => { const p = this.placement(r); return p && ((p.device === HUB && p.model === m.name) || p.hub_model === m.name); }) }));
     const acceptable = roles.filter((r) => r.recommended?.installed).length;
+    // Downloads and removals lately, from the ledger: what waits for an OK, what is running, how
+    // each ended, with the digest Nova read.
+    const recent = this.#o.ledger.list({ limit: 200 }).filter((t) => t.owner === this.worker.id).slice(0, 6).map((t) => {
+      const conf = t.report?.evidence.find((e) => e.kind === 'confirmation') as { id?: string } | undefined;
+      const i = (t.brief.inputs ?? {}) as { action?: string; model?: string; size?: number };
+      return { id: t.id, title: t.title, state: t.state, reason: t.reason, needs_ok: t.state === 'waiting' && t.approval_tier >= 2 && !t.approved_at, action: i.action ?? null, model: i.model ?? null, size: i.size ?? null, digest: conf?.id?.split('@')[1] ?? null, at: t.updated_at };
+    });
     return {
       privacy: this.#privacy(),
       devices,
@@ -917,6 +924,7 @@ export class Models extends EventEmitter {
       standout: acceptable ? 'accept' : null,
       installed,
       downloads: this.downloads(),
+      recent,
       disk: { budget_bytes: budget, used_bytes: used, free_bytes: hubHw.disk?.free_bytes ?? null, words: `${gb(used)} used by models${budget !== null ? ` of a ${gb(budget)} budget` : ', no budget set'}${hubHw.disk ? `; ${gb(hubHw.disk.free_bytes)} free on the disk` : ''}.` },
       cloud: {
         configured: !!cloud, name: cloud?.name ?? null, model: cloud?.model ?? null, priced: !!cloud && cloud.usd_per_mtok_in !== undefined && cloud.usd_per_mtok_out !== undefined,
