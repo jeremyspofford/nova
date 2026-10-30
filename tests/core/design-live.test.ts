@@ -128,6 +128,18 @@ test('nothing to fix says so; removing a design forgets its fixes', () => {
   assert.deepEqual(profile.get('appearance', 'device_fixes'), {});
 });
 
+test('a device can drop its own choice and follow the person’s again, and roll that back', () => {
+  const { design, events } = host();
+  design.apply('paper', { scope: 'user' });
+  design.apply('obsidian', { scope: 'device', device_id: 'device-aaaa1111' });
+  const out = design.follow({ device_id: 'device-aaaa1111' });
+  assert.equal(out.active.id, 'paper');
+  assert.equal(out.active.scope, 'user');
+  assert.equal(events.at(-1)!.device_id, 'device-aaaa1111');
+  assert.equal(design.rollback({ scope: 'device', device_id: 'device-aaaa1111' }).active.id, 'obsidian');
+  assert.equal(design.follow({ device_id: 'device-bbbb2222' }).active.id, 'paper', 'nothing to drop is fine');
+});
+
 test('the list says how each look reads, with colours for a thumbnail, and which are starters', () => {
   const { design } = host();
   const list = design.list();

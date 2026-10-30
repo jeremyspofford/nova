@@ -668,6 +668,10 @@ export function createCore(o: CoreOptions) {
       handle: ({ body }) => design.fixContrast({ device_id: typeof body.device_id === 'string' ? body.device_id : null }),
     },
     {
+      method: 'POST', path: '/design-systems/follow', summary: 'One device drops its own design system and shows the person’s again. Rolling back on that device brings its own back.', body: '{device_id}',
+      handle: ({ body }) => design.follow({ device_id: typeof body.device_id === 'string' ? body.device_id : null }),
+    },
+    {
       method: 'POST', path: '/design-systems/contrast-fix/undo', summary: 'Take a device’s contrast fix away again.', body: '{device_id}',
       handle: ({ body }) => design.undoFix({ device_id: typeof body.device_id === 'string' ? body.device_id : null }),
     },

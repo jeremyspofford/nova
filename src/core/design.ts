@@ -525,6 +525,7 @@ export class Design extends EventEmitter {
       components: COMPONENTS,
       content_rules: CONTENT_RULES,
       contrast: CONTRAST_PAIRS.map(([fg, bg, min, what]) => ({ fg, bg, min, what })),
+      live_checks: LIVE_CHECKS.map(([fg, bg, min, kind, what]) => ({ fg, bg, min, kind, what })),
       reduced_motion: { always: REDUCED_MOTION, max_ms: REDUCED_MOTION_MAX_MS },
     };
   }
@@ -638,6 +639,20 @@ export class Design extends EventEmitter {
       this.#set('design_system', id);
     }
     return this.#changed('apply', id, device);
+  }
+
+  // A device drops its own choice and shows the person's again. Rollback on that device brings
+  // its own choice back.
+  follow(o: { device_id?: string | null }) {
+    const device = this.#scope({ scope: 'device', device_id: o.device_id })!;
+    const a = this.appearance();
+    const own = a.device_overrides[device];
+    if (!own) return this.state(device);
+    const overrides = { ...a.device_overrides };
+    delete overrides[device];
+    this.#set('device_previous', { ...a.device_previous, [device]: own });
+    this.#set('device_overrides', overrides);
+    return this.#changed('apply', this.active(device).id, device);
   }
 
   // One step back. Rolling back twice goes forward again.
