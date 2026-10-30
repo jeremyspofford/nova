@@ -97,7 +97,7 @@ export function renderIndicator() {
 
 // ---- Settings › Capture ----------------------------------------------------------------------
 
-const STATE = (s) => (!s.enabled ? ['Off', ''] : s.paused ? ['Paused', ''] : s.status === 'unreachable' || s.status === 'refused' || s.status === 'elsewhere' ? ['Needs you', 'is-warn'] : ['Capturing', 'is-on']);
+const STATE = (s) => (!s.enabled ? ['Off', ''] : s.paused ? ['Paused', ''] : s.status === 'unreachable' || s.status === 'refused' || s.status === 'elsewhere' || s.status === 'needs_key' ? ['Needs you', 'is-warn'] : ['Capturing', 'is-on']);
 
 function counts(s) {
   const c = s.counts ?? {};
@@ -121,7 +121,22 @@ function sourceRow(s) {
   <div class="conn-head"><p class="settings-label">${esc(s.name)}${esc(where)}</p><span class="pill ${tone}">${word}</span></div>
   <p class="settings-note">${esc(note)}</p>
   <div class="sheet-actions">${actions}</div>
+  ${s.adapter === 'screenpipe' ? screenpipeEdit(s) : ''}
 </li>`;
+}
+
+// A saved Screenpipe's address, how far back each pull asks again, and its API key. The key is a
+// password field that is never filled in: Nova keeps it in its vault and never shows it back.
+function screenpipeEdit(s) {
+  const open = s.status === 'needs_key' || s.status === 'unreachable';
+  return `<details class="raw capture-edit"${open ? ' open' : ''}><summary>Address and API key</summary>
+<form class="capture-form" data-form="screenpipe-edit" data-source="${esc(s.id)}"><div class="field-row">
+<div><label class="field-label">Screenpipe’s address<input class="field" name="url" value="${esc(s.url)}" autocomplete="off" spellcheck="false" required></label></div>
+<div><label class="field-label">Ask again for the last (minutes)<input class="field" name="lookback_minutes" type="number" min="1" max="240" step="1" value="${esc(s.lookback_minutes)}" required></label></div>
+<div><label class="field-label">API key${s.has_api_key ? ' (saved; type a new one to replace it)' : ' (if Screenpipe asks for one)'}<input class="field" name="api_key" type="password" autocomplete="new-password" spellcheck="false" placeholder="${s.has_api_key ? '••••••••' : 'From Screenpipe’s Settings › Privacy'}"></label></div>
+</div>
+<p class="settings-note">${s.has_api_key ? 'A key is saved. Nova keeps it in its vault and sends it with every request to Screenpipe.' : 'No key saved. Screenpipe asks for one only if its API key is turned on.'}</p>
+<div class="sheet-actions"><button type="submit" class="btn small">Save</button>${s.has_api_key ? `<button type="button" class="btn small quiet" data-action="capture-key-remove" data-source="${esc(s.id)}">Remove the key</button>` : ''}</div></form></details>`;
 }
 
 // What each kind of exclusion keeps out, said plainly: audio has no app or site, so only a time
@@ -170,7 +185,8 @@ ${status.active ? '<button type="button" class="btn small" data-action="capture-
 <a class="btn small" href="/capture">Open Capture</a></div></div>
 <h3 class="conn-sub">Sources</h3>
 ${sources.length ? `<ul class="conn-list">${sources.map(sourceRow).join('')}</ul>` : '<p class="settings-note">No source yet. A paired computer lists what it can capture here once its device agent says so.</p>'}
-${screenpipe ? '' : `<form class="capture-form" data-form="screenpipe"><div class="field-row"><div><label class="field-label">Screenpipe’s address<input class="field" name="url" value="http://localhost:3030" autocomplete="off" spellcheck="false" required></label></div></div>
+${screenpipe ? '' : `<form class="capture-form" data-form="screenpipe"><div class="field-row"><div><label class="field-label">Screenpipe’s address<input class="field" name="url" value="http://localhost:3030" autocomplete="off" spellcheck="false" required></label></div>
+<div><label class="field-label">API key (if Screenpipe asks for one)<input class="field" name="api_key" type="password" autocomplete="new-password" spellcheck="false" placeholder="From Screenpipe’s Settings › Privacy"></label></div></div>
 <p class="settings-note">If Screenpipe runs on this computer, Nova can take in what it records. It stays off until you turn it on.</p>
 <div class="sheet-actions"><button type="submit" class="btn small">Add Screenpipe</button></div></form>`}
 <details class="raw"><summary>What each kind of device can capture</summary><ul class="capture-posture">${posture.map((p) => `<li><p class="settings-label">${esc(p.label)}</p><p class="settings-note">${esc(p.can)}</p></li>`).join('')}</ul></details>
@@ -272,9 +288,12 @@ function forgetSheet(e) {
 
 // ---- actions -----------------------------------------------------------------------------------
 
-async function act(fn, done) {
+// `form`, when given, is reset once the change is saved: what was typed is now what Nova has, and a
+// failed change leaves it as typed, to fix.
+async function act(fn, done, form = null) {
   try {
     const r = await fn();
+    form?.reset();
     if (done) toast(typeof done === 'function' ? done(r) : done);
   } catch (e) { toast(e.message); }
   await loadCapture();
@@ -299,6 +318,7 @@ export function bindCapture(roots, render) {
       if (a === 'retry-capture') { loadCapture(); loadCaptureView(); }
       else if (a === 'capture-on') act(() => api('POST', `${src(b)}/enable`), (r) => `${r.name} is on. The top bar shows while it captures.`);
       else if (a === 'capture-off') act(() => api('POST', `${src(b)}/disable`), (r) => `${r.name} is off.`);
+      else if (a === 'capture-key-remove') act(() => api('PATCH', src(b), { api_key: null }), 'The key is removed.');
       else if (a === 'capture-pause') act(() => api('POST', `${src(b)}/pause`), (r) => (r.adapter === 'screenpipe' ? `${r.name} is paused: Nova takes nothing in. Screenpipe keeps recording until you pause it there too.` : `${r.name} is paused.`));
       else if (a === 'capture-resume') act(() => api('POST', `${src(b)}/resume`), (r) => `${r.name} is capturing again, from now.`);
       else if (a === 'capture-pause-all') act(() => api('POST', '/capture/pause', { paused: true }), 'Capture is paused: Nova takes nothing in. Screenpipe keeps recording until you pause it there too.');
@@ -327,16 +347,20 @@ export function bindCapture(roots, render) {
       ev.preventDefault();
       const f = Object.fromEntries(new FormData(form));
       const s = data?.settings;
-      if (form.dataset.form === 'screenpipe') act(() => api('POST', '/capture/sources/screenpipe', { url: f.url }), 'Screenpipe is added. It stays off until you turn it on.');
+      if (form.dataset.form === 'screenpipe') act(() => api('POST', '/capture/sources/screenpipe', { url: f.url, ...(f.api_key ? { api_key: f.api_key } : {}) }), 'Screenpipe is added. It stays off until you turn it on.', form);
+      else if (form.dataset.form === 'screenpipe-edit') {
+        const body = { url: f.url, lookback_minutes: Number(f.lookback_minutes), ...(f.api_key ? { api_key: f.api_key } : {}) };
+        act(() => api('PATCH', `/capture/sources/${enc(form.dataset.source)}`, body), f.api_key ? 'Saved, with the new key.' : 'Saved.', form);
+      }
       else if (form.dataset.form === 'exclusion') {
         const v = String(f.value).trim();
         const rule = f.kind === 'time' ? { kind: 'time', window: parseWindow(v) ?? { start: v, end: v } } : { kind: f.kind, [f.kind]: v };
         const said = { app: 'Added. Nova won’t take in screen text from it; audio has no app, so this doesn’t stop audio.', site: 'Added. Nova won’t take in pages there; audio isn’t tied to a site.', space: 'Added. Nothing filed in that space is kept, audio included.', time: 'Added. Nothing from those hours is kept, audio included.' };
-        act(() => api('PUT', '/capture/settings', { exclusions: [...s.exclusions, rule] }), said[f.kind] ?? 'Added.');
+        act(() => api('PUT', '/capture/settings', { exclusions: [...s.exclusions, rule] }), said[f.kind] ?? 'Added.', form);
       } else if (form.dataset.form === 'signal') {
         const v = String(f.value).trim();
         const rule = f.kind === 'calendar' ? { kind: 'calendar', window: parseWindow(v) ?? { start: v, end: v }, space: f.space } : { kind: 'app', app: v, space: f.space };
-        act(() => api('PUT', '/capture/settings', { signals: [...s.signals, rule] }), 'Added.');
+        act(() => api('PUT', '/capture/settings', { signals: [...s.signals, rule] }), 'Added.', form);
       }
     });
   }

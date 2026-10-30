@@ -28,7 +28,7 @@ import {
   KINDS, SPACE, checkExclusions, checkSignals, checkSwitch, classify, describeExclusion, excludedBy, instant, isPrivate,
   type Exclusion, type Facts, type Kind, type Signal, type Switch,
 } from './rules.ts';
-import { DEFAULT_LOOKBACK_MS, DEFAULT_URL, Screenpipe, Unreachable, type Cursor, type RawEvent } from './screenpipe.ts';
+import { DEFAULT_LOOKBACK_MS, DEFAULT_URL, KeyRefused, Screenpipe, Unreachable, type Cursor, type RawEvent } from './screenpipe.ts';
 
 export { KINDS, type Kind } from './rules.ts';
 export type { RawEvent } from './screenpipe.ts';
@@ -108,6 +108,8 @@ export interface SourceView {
   egress: 'local' | 'remote' | null;
   // How far back each pull asks again, for items Screenpipe reports late (Screenpipe only).
   lookback_minutes: number | null;
+  // Whether an API key is saved for it (Screenpipe only). The key itself is never shown back.
+  has_api_key: boolean | null;
 }
 
 export interface Settings { retention_days: number; exclusions: Exclusion[]; signals: Signal[]; switch: Switch | null; spaces: string[] }
@@ -138,6 +140,8 @@ export interface CaptureOptions {
   // one is assigned), or null. When it should but another answered (it was down), the event isn't
   // counted as looked at, so a later pass asks again once it is back.
   proposer?: () => string | null;
+  // Where a Screenpipe's API key is kept: the vault, never the source's config.
+  secrets?: { get(name: string): string | null; put(name: string, value: string): unknown; delete(name: string): unknown; has(name: string): boolean };
   fetch?: typeof fetch;
   pollMs?: number;
   // How far back a Screenpipe pull asks again by default, for items reported late (5 minutes).
@@ -147,6 +151,8 @@ export interface CaptureOptions {
 }
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+// The vault name a source's API key is kept under.
+const keyName = (sourceId: string) => `capture/${sourceId.replace(/[^A-Za-z0-9._-]/g, '-')}`;
 const clip = (v: unknown, n: number): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : null);
 const parse = <T>(s: string | null, fallback: T): T => { if (!s) return fallback; try { return JSON.parse(s) as T; } catch { return fallback; } };
 
@@ -223,23 +229,28 @@ export class Capture extends EventEmitter {
     const url = this.#url(body.url ?? DEFAULT_URL);
     const self = this.#o.self();
     const id = `screenpipe:${self}`;
-    if (this.#db.get('SELECT 1 FROM capture_source WHERE id = ?', id)) return this.configure(id, { url });
+    const key = body.api_key === undefined ? {} : { api_key: body.api_key };
+    if (this.#db.get('SELECT 1 FROM capture_source WHERE id = ?', id)) return this.configure(id, { url, ...key });
+    if (body.api_key !== undefined) this.#checkKey(body.api_key);
     const at = this.#now().toISOString();
     const name = clip(body.name, 80) ?? 'Screenpipe';
     this.#db.run(
       `INSERT INTO capture_source (id, device_id, adapter, name, kinds, config, created_at, updated_at) VALUES (?, ?, 'screenpipe', ?, ?, ?, ?, ?)`,
       id, self, name, JSON.stringify(['screen', 'audio']), JSON.stringify({ url }), at, at,
     );
+    if (body.api_key !== undefined) this.#saveKey(id, body.api_key);
     this.#changed('sources');
     return this.source(id);
   }
 
-  // A Screenpipe's address, and how far back each pull asks again (lookback_minutes, 1 to 240).
+  // A Screenpipe's address, how far back each pull asks again (lookback_minutes, 1 to 240), and its
+  // API key (api_key: kept in the vault; null or "" removes it).
   configure(id: string, body: Record<string, unknown>): SourceView {
     const s = this.#source(id);
     if (s.adapter !== 'screenpipe') throw new CoreError('validation', 'Only a Screenpipe source has an address to set.');
+    if (body.api_key !== undefined) this.#checkKey(body.api_key);
     const change: Record<string, unknown> = {};
-    if (body.url !== undefined || body.lookback_minutes === undefined) {
+    if (body.url !== undefined || (body.lookback_minutes === undefined && body.api_key === undefined)) {
       change.url = this.#url(body.url);
       if (s.enabled) this.#refuseRemote(change.url as string);
     }
@@ -249,8 +260,27 @@ export class Capture extends EventEmitter {
       change.lookback_minutes = m;
     }
     this.#db.run('UPDATE capture_source SET config = ?, updated_at = ? WHERE id = ?', JSON.stringify({ ...parse<object>(s.config, {}), ...change }), this.#now().toISOString(), id);
+    if (body.api_key !== undefined) this.#saveKey(id, body.api_key);
     this.#changed('sources');
+    // A changed address or key is tried at once, so the person sees whether it works.
+    if (s.enabled && !s.paused && this.#timer && (change.url !== undefined || body.api_key !== undefined)) void this.pull(id);
     return this.source(id);
+  }
+
+  // An API key as Screenpipe issues one: printable, no spaces, at most 1024 characters. null or ""
+  // means remove it.
+  #checkKey(v: unknown): void {
+    if (v === null || v === '') return;
+    if (typeof v !== 'string' || v.length > 1024 || !/^[\x21-\x7e]+$/.test(v)) {
+      throw new CoreError('validation', 'api_key is the key from Screenpipe’s Settings > Privacy: letters, numbers and symbols, no spaces, at most 1024 characters. Send null to remove it.');
+    }
+    if (!this.#o.secrets) throw new CoreError('conflict', 'Nova has nowhere safe to keep the key here, so it wasn’t saved.');
+  }
+
+  #saveKey(id: string, v: unknown): void {
+    const name = keyName(id);
+    if (v === null || v === '') { if (this.#o.secrets?.has(name)) this.#o.secrets.delete(name); return; }
+    this.#o.secrets!.put(name, v as string);
   }
 
   // Consent: the person turns a source on. Capture starts now, or from `since` when they ask for
@@ -695,8 +725,13 @@ export class Capture extends EventEmitter {
     const since = cursor.since ?? s.consent_at ?? this.#now().toISOString();
     let got;
     try {
-      got = await new Screenpipe({ url, lookbackMs: this.#lookback(s) * 60_000, ...(this.#o.fetch ? { fetch: this.#o.fetch } : {}) }).pull(cursor.read ?? {}, since);
+      const apiKey = this.#o.secrets?.get(keyName(id)) ?? null;
+      got = await new Screenpipe({ url, apiKey, lookbackMs: this.#lookback(s) * 60_000, ...(this.#o.fetch ? { fetch: this.#o.fetch } : {}) }).pull(cursor.read ?? {}, since);
     } catch (e) {
+      if (e instanceof KeyRefused) {
+        if (!this.#outage.has(id)) this.#outage.set(id, this.#o.log.problem('capture', `${e.message} Nothing new is captured from it until it lets Nova in; nothing Screenpipe keeps meanwhile is lost.`).id);
+        return this.#status(id, 'needs_key', e.message);
+      }
       const why = e instanceof Unreachable ? e.message : `Screenpipe at ${url} sent something Nova couldn’t read.`;
       if (!(e instanceof Unreachable)) this.#o.log.warn('capture', why, { error: (e as Error)?.message });
       if (!this.#outage.has(id)) {
@@ -864,6 +899,7 @@ export class Capture extends EventEmitter {
       status: r.status, detail: r.status_detail, checked_at: r.status_at, counts: parse<Record<string, number>>(r.counts, {}),
       egress: url ? this.#egress(url) : null,
       lookback_minutes: r.adapter === 'screenpipe' ? this.#lookback(r) : null,
+      has_api_key: r.adapter === 'screenpipe' ? (this.#o.secrets?.has(keyName(r.id)) ?? false) : null,
     };
   }
 

@@ -8,15 +8,19 @@
 // And, for driving it from another process (the gate), POST /__items {items: [...]} adds items
 // (the same shapes as add() below) and POST /__reset empties it.
 //
-//   startFakeScreenpipe({ port? }) → { base, port, add(...items), clear(), down(), up(), requests, close() }
+//   startFakeScreenpipe({ port? }) → { base, port, add(...items), clear(), down(), up(), requests, auths, requireKey(key), close() }
 //   item: { type: 'ocr', at, app, window, text, url?, private? } | { type: 'audio', at, text, device? } | { type: 'ui', at, app, window, text }
 // down() stops listening (connections are refused, as when Screenpipe isn't running); up() listens
-// again on the same port. `node scripts/fake-screenpipe.js [--port N]` runs one and prints its address.
+// again on the same port. requireKey(key) makes /search answer 403 without "Authorization: Bearer
+// <key>", as Screenpipe 0.4 does once its API key is on (null turns that off); `auths` holds each
+// request's Authorization header, or null. `node scripts/fake-screenpipe.js [--port N]` runs one and prints its address.
 import { createServer } from 'node:http';
 
 export async function startFakeScreenpipe({ port = 0 } = {}) {
   const items = [];
   const requests = [];
+  const auths = [];
+  let key = null;
   let nextId = 1;
   const sockets = new Set();
 
@@ -65,12 +69,16 @@ export async function startFakeScreenpipe({ port = 0 } = {}) {
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     requests.push(`${req.method} ${url.pathname}${url.search}`);
+    auths.push(req.headers.authorization ?? null);
     const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
     if (req.method === 'GET' && url.pathname === '/health') {
       const last = items.length ? items.map((i) => i.at).sort().at(-1) : null;
       return json(200, { status: 'healthy', status_code: 200, frame_status: 'ok', audio_status: 'ok', ui_status: 'ok', last_frame_timestamp: last, last_audio_timestamp: last, message: 'all systems are functioning normally.' });
     }
-    if (req.method === 'GET' && url.pathname === '/search') return json(200, search(url.searchParams));
+    if (req.method === 'GET' && url.pathname === '/search') {
+      if (key !== null && req.headers.authorization !== `Bearer ${key}`) return json(403, { error: 'forbidden' });
+      return json(200, search(url.searchParams));
+    }
     if (req.method === 'POST' && (url.pathname === '/__items' || url.pathname === '/__reset')) {
       let body = '';
       req.on('data', (d) => { body += d; });
@@ -93,6 +101,8 @@ export async function startFakeScreenpipe({ port = 0 } = {}) {
     port: bound,
     items,
     requests,
+    auths,
+    requireKey: (k) => { key = k; },
     add,
     clear: () => { items.length = 0; },
     down: () => (server.listening ? stopListening() : Promise.resolve()),

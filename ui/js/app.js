@@ -1419,6 +1419,28 @@ const PARTS = {
   danger: () => renderReset(),
 };
 
+// What the person has typed or picked in a part's forms, and which of its details are open, carried
+// over a redraw: a status changing underneath (a source that can't be reached, say) must not throw
+// away a fix they are halfway through typing. Fields are matched by their form and name. A form
+// that was sent successfully is reset first, so it shows what was saved.
+function keepEdits(box) {
+  const where = (n) => { const form = n.closest('form'); const src = n.closest('[data-source]')?.dataset.source ?? ''; return `${form?.dataset.form ?? form?.id ?? ''}|${src}`; };
+  const keyOf = (f) => `${where(f)}|${f.name || f.id}|${f.type === 'radio' ? f.value : ''}`;
+  const toggle = (f) => f.type === 'checkbox' || f.type === 'radio';
+  const changed = (f) => (toggle(f) ? f.checked !== f.defaultChecked : f.tagName === 'SELECT' ? [...f.options].some((o) => o.selected !== o.defaultSelected) : f.value !== f.defaultValue);
+  const edits = new Map([...box.querySelectorAll('input, select, textarea')].filter((f) => (f.name || f.id) && changed(f)).map((f) => [keyOf(f), toggle(f) ? f.checked : f.value]));
+  const detailKey = (d) => `${where(d)}|${d.querySelector('summary')?.textContent ?? ''}`;
+  const open = new Set([...box.querySelectorAll('details')].filter((d) => d.open).map(detailKey));
+  return () => {
+    for (const f of box.querySelectorAll('input, select, textarea')) {
+      const k = keyOf(f);
+      if (!edits.has(k)) continue;
+      if (toggle(f)) f.checked = edits.get(k); else f.value = edits.get(k);
+    }
+    for (const d of box.querySelectorAll('details')) if (open.has(detailKey(d))) d.open = true;
+  };
+}
+
 function renderSettingsView({ enter: entering = false, only = null } = {}) {
   if (!$('settings-you')) {
     el.settings.innerHTML = `<header class="view-head"><h2 class="view-title">Settings</h2></header>
@@ -1428,9 +1450,12 @@ ${Object.keys(PARTS).map((k) => `<div class="settings-part" id="settings-${k}"><
     const box = $(`settings-${k}`);
     const active = document.activeElement;
     // Don't redraw a part under the person's typing.
-    if (box.contains(active) && active.matches('input[type="text"], input:not([type]), textarea')) continue;
+    if (box.contains(active) && active.matches('input[type="text"], input[type="number"], input[type="password"], input[type="url"], input[type="search"], input:not([type]), textarea')) continue;
     const focus = box.contains(active) ? (active.dataset.id ? `[data-id="${CSS.escape(active.dataset.id)}"]` : active.name ? `input[name="${CSS.escape(active.name)}"]:checked` : active.dataset.action ? `[data-action="${CSS.escape(active.dataset.action)}"]${active.dataset.ds ? `[data-ds="${CSS.escape(active.dataset.ds)}"]` : ''}${active.dataset.scope ? `[data-scope="${CSS.escape(active.dataset.scope)}"]` : ''}` : null) : null;
+    // Capture's forms sit under a status that changes by itself; what is typed there is kept.
+    const restore = k === 'capture' ? keepEdits(box) : () => {};
     box.innerHTML = PARTS[k]();
+    restore();
     if (focus) box.querySelector(focus)?.focus({ preventScroll: true });
   }
   if (entering) enter(el.settings);
