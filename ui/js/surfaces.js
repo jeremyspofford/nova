@@ -3,7 +3,7 @@
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
 import { ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, orb, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
-import { greeting, isOpen, needsApproval, statusOf } from './status.js';
+import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
 import { MODES, current as appearance, previewCss, rollback, setMode, use } from './theme.js';
@@ -170,7 +170,7 @@ export async function openTask(id) {
     }
   }
   const actions = [];
-  if (t.state === 'waiting') actions.push(`<button type="button" class="btn primary" data-action="retry-task" data-task="${esc(t.id)}">Try again</button>`);
+  if (t.state === 'waiting') actions.push(`<button type="button" class="btn primary" data-action="retry-task" data-task="${esc(t.id)}">${esc(retryLabel(t))}</button>`);
   if (isOpen(t)) actions.push(`<button type="button" class="btn" data-action="cancel-task" data-task="${esc(t.id)}">Cancel the task</button>`);
   const timeline = events.length ? `<details class="raw"><summary>What happened</summary><ul class="timeline">${events.map((e) => `<li data-kind="${esc(e.kind)}">${esc(new Date(e.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))} · ${esc(e.kind.replace(/_/g, ' '))}${e.to_state ? ` → ${esc(e.to_state)}` : ''}${esc(eventDetail(e))}</li>`).join('')}</ul></details>` : '';
   openSheet(`${evidenceViewer(t)}${timeline}${actions.length ? `<div class="sheet-actions">${actions.join('')}</div>` : ''}`, { label: t.title });
@@ -218,11 +218,13 @@ export async function approve(form) {
 
 export async function taskAction(action, id) {
   try {
-    if (action === 'retry-task') await api('POST', `/tasks/${encodeURIComponent(id)}/retry`);
+    const t = action === 'retry-task' ? await api('POST', `/tasks/${encodeURIComponent(id)}/retry`) : null;
     if (action === 'cancel-task') await api('POST', `/tasks/${encodeURIComponent(id)}/cancel`, { reason: 'Cancelled by you.' });
+    await load(['tasks']);
+    // Running it again needs the person's OK again: straight to asking for it.
+    if (t && needsApproval(t)) return openTask(id);
     closeSheet();
     toast(action === 'retry-task' ? 'Trying again.' : 'Cancelled.');
-    await load(['tasks']);
   } catch (e) { toast(e.message); }
 }
 
