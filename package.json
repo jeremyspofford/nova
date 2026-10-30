@@ -17,7 +17,9 @@
     "check:themes": "node scripts/check-themes.js",
     "check": "npm run lint:tokens && npm run check:themes && npm run typecheck && npm test",
     "shots": "node scripts/shots.js",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "test:ui": "node --test --test-concurrency=1 'tests/ui/*.test.ts'",
+    "ui-test": "scripts/ui-test.sh"
   },
   "devDependencies": {
     "@types/node": "26.6.6",
