@@ -171,8 +171,9 @@ export class Changes extends EventEmitter {
   overview() {
     const changes = this.list().map((c) => this.view(c));
     // One standout: the change that waits for the person, the highest tier first.
-    const waiting = changes.filter((c) => c.needs_ok).sort((a, b) => b.tier - a.tier || a.created_at.localeCompare(b.created_at));
-    return { changes, standout: waiting[0]?.id ?? null, gates: GATES };
+    // The list is newest first, so among equals the last is the one that has waited longest.
+    const waiting = changes.map((c, i) => ({ c, i })).filter((x) => x.c.needs_ok).sort((a, b) => b.c.tier - a.c.tier || a.c.created_at.localeCompare(b.c.created_at) || b.i - a.i);
+    return { changes, standout: waiting[0]?.c.id ?? null, gates: GATES };
   }
 
   // ---- proposing ----------------------------------------------------------------------------------
