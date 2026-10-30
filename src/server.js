@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
+import { createCore, finishReset, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -43,6 +43,9 @@ function modelOptions(env) {
 
 export function createNova(config = loadConfig(), deps = {}) {
   const started = performance.now();
+  // A factory reset that was staged finishes first (M7 amendment §2), so the home is seeded fresh
+  // afterwards. It throws when it can't finish: a half-reset Nova never runs.
+  finishReset(config.home);
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
   // The core (src/core): database, Work Ledger, profile, identity, setup, extensions, /api/v1.
   const { version } = JSON.parse(readFileSync(join(config.root, 'package.json'), 'utf8'));
