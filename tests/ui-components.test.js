@@ -1,7 +1,7 @@
 // The PWA's components are pure functions; these check the rules they carry.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { approvalSheet, briefCard, deviceMeshCard, emptyState, evidenceViewer, handlingCard, healthCard, memoryHighlightCard, orb, proactiveBanner, status, taskRow, triggerRow, verifiedResultCard, voiceState } from '../ui/js/components.js';
+import { approvalSheet, briefCard, chatBubble, deviceMeshCard, emptyState, evidenceViewer, handlingCard, healthCard, memoryHighlightCard, orb, proactiveBanner, status, taskRow, triggerRow, verifiedResultCard, voiceState } from '../ui/js/components.js';
 import { ORB_STATES } from '../ui/js/status.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { contrast } from '../scripts/check-themes.js';
@@ -118,4 +118,14 @@ test('rows and notices', () => {
   assert.match(row, /Paused/);
   assert.match(proactiveBanner({ id: 'm1', text: 'Hello', hold: 'needs_ok' }), /data-action="send-message"/);
   assert.match(emptyState(), /Nothing needs you/);
+});
+
+// Setup redraws its whole conversation after each answer; lines already on screen must not fade
+// out and rise in again (found in the M3 gate screenshots).
+test('a chat bubble already on screen does not animate again', () => {
+  assert.doesNotMatch(chatBubble({ from: 'nova', text: 'Hi' }), /is-still/);
+  assert.match(chatBubble({ from: 'nova', text: 'Hi', still: true }), /class="chat-bubble from-nova is-still"/);
+  assert.match(chatBubble({ from: 'person', text: 'yes', still: true }), /class="chat-bubble from-person is-still"/);
+  const css = readFileSync(new URL('../ui/styles/components.css', import.meta.url), 'utf8');
+  assert.match(css, /\.chat-bubble\.is-still \.bubble-body \{ animation: none; \}/);
 });

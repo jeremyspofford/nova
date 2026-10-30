@@ -243,11 +243,13 @@ export function triggerRow(r) {
 
 // ---- conversation pieces ----------------------------------------------------------------------
 
-export function chatBubble({ from = 'nova', text = '', html = null, orbState: os = 'idle' }) {
+// `still`: already on screen before this render, so it doesn't rise in again.
+export function chatBubble({ from = 'nova', text = '', html = null, orbState: os = 'idle', still = false }) {
   const inner = html ?? esc(text).replace(/\n/g, '<br>');
+  const cls = still ? ' is-still' : '';
   return from === 'nova'
-    ? `<div class="chat-bubble from-nova">${orb({ state: os, size: 'avatar', decorative: true })}<div class="bubble-body">${inner}</div></div>`
-    : `<div class="chat-bubble from-person"><div class="bubble-body">${inner}</div></div>`;
+    ? `<div class="chat-bubble from-nova${cls}">${orb({ state: os, size: 'avatar', decorative: true })}<div class="bubble-body">${inner}</div></div>`
+    : `<div class="chat-bubble from-person${cls}"><div class="bubble-body">${inner}</div></div>`;
 }
 
 // The voice button and the line that says why it's off, when it is.

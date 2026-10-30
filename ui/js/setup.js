@@ -11,6 +11,7 @@ let view = null;
 let task = null;
 let sending = false;
 let finished = null;
+let shown = 0; // transcript lines already on screen: a re-render must not animate them again
 
 // Resolves true when setup is showing (the profile is blank), false when it's already done.
 export async function startSetup({ done }) {
@@ -49,7 +50,8 @@ function result() {
 }
 
 function render() {
-  const log = view.transcript.map((t) => chatBubble({ from: t.from === 'person' ? 'person' : 'nova', text: t.text })).join('');
+  const log = view.transcript.map((t, i) => chatBubble({ from: t.from === 'person' ? 'person' : 'nova', text: t.text, still: i < shown })).join('');
+  shown = view.transcript.length;
   const dock = view.done
     ? '<div class="dock"><button type="button" class="btn primary" data-action="setup-continue">Continue to Nova</button></div>'
     : `<div class="dock"><form class="composer" id="setup-form"><label class="sr-only" for="setup-input">Answer Nova</label><textarea id="setup-input" rows="1" placeholder="Your answer…" autocomplete="off"></textarea><button type="submit" class="send" aria-label="Send">${ICONS.send}</button></form></div>`;
