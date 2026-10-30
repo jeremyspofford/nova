@@ -110,6 +110,8 @@ export { restoreBackup, loadMigrations } from './db.ts';
 // home; the server applies a staged restore before anything opens the home.
 export { takeCheckpoint, listCheckpoints, finishStaged, stagedPending, KEEP_AUTO, RETENTION as CHECKPOINT_RETENTION } from './resilience/checkpoints.ts';
 export type { CheckpointView, CheckpointManifest } from './resilience/checkpoints.ts';
+// Nova's own entries in a home, by name: what checkpoints, restore and factory reset may touch.
+export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.ts';
 
 export interface CoreOptions {
   home: string;
