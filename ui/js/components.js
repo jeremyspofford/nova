@@ -80,8 +80,9 @@ export function card({ kind, title, icon = null, body = '', action = '', id = nu
 }
 
 // "Nothing needs you" is a valid, designed state.
-export function emptyState({ title = 'Nothing needs you', line = '', action = '', orbState = null } = {}) {
-  return `<div class="empty-state">${orbState ? orb({ state: orbState, size: 'avatar', decorative: true }) : ''}<p class="empty-title">${esc(title)}</p>${line ? `<p class="empty-sub">${esc(line)}</p>` : ''}${action}</div>`;
+// No orb of its own: the view already shows it once (DESIGN-SYSTEM §1).
+export function emptyState({ title = 'Nothing needs you', line = '', action = '' } = {}) {
+  return `<div class="empty-state"><p class="empty-title">${esc(title)}</p>${line ? `<p class="empty-sub">${esc(line)}</p>` : ''}${action}</div>`;
 }
 
 // ---- cards ----------------------------------------------------------------------------------
@@ -120,7 +121,6 @@ export function verifiedResultCard(t, { now = new Date() } = {}) {
   const checks = t.verification?.checks ?? [];
   const passed = checks.filter((c) => c.ok).length;
   return `<section class="card verified-result-card" aria-labelledby="vr-${esc(t.id)}" data-task="${esc(t.id)}">
-  ${orb({ state: 'idle', size: 'avatar', decorative: true })}
   <div class="vr-text">
     <p class="card-kicker">Verified result</p>
     <h3 class="card-lead" id="vr-${esc(t.id)}">${esc(clip(t.title, 80))}</h3>
@@ -454,12 +454,11 @@ export function triggerRow(r) {
 // ---- conversation pieces ----------------------------------------------------------------------
 
 // `still`: already on screen before this render, so it doesn't rise in again.
-export function chatBubble({ from = 'nova', text = '', html = null, orbState: os = 'idle', still = false }) {
+// Nova's words carry no avatar or orb: the orb shows once per view (DESIGN-SYSTEM §1).
+export function chatBubble({ from = 'nova', text = '', html = null, still = false }) {
   const inner = html ?? esc(text).replace(/\n/g, '<br>');
   const cls = still ? ' is-still' : '';
-  return from === 'nova'
-    ? `<div class="chat-bubble from-nova${cls}">${orb({ state: os, size: 'avatar', decorative: true })}<div class="bubble-body">${inner}</div></div>`
-    : `<div class="chat-bubble from-person${cls}"><div class="bubble-body">${inner}</div></div>`;
+  return `<div class="chat-bubble from-${from === 'nova' ? 'nova' : 'person'}${cls}"><div class="bubble-body">${inner}</div></div>`;
 }
 
 // The voice button and the line that says why it's off, when it is.
@@ -478,7 +477,7 @@ export function toast({ text, tone = 'info', action = null }) {
 // A message Nova started (CONTRACTS §6): one line and one action.
 export function proactiveBanner(m) {
   const held = m.hold === 'needs_ok';
-  return `<div class="proactive-banner" data-message="${esc(m.id)}" role="status">${orb({ state: held ? 'attention' : 'idle', size: 'mini', decorative: true })}
+  return `<div class="proactive-banner" data-message="${esc(m.id)}"${held ? ' data-held' : ''} role="status">
   <p class="banner-text">${esc(clip(m.text, 140))}</p>
   <button type="button" class="btn small" data-action="${held ? 'send-message' : 'read-message'}" data-message="${esc(m.id)}">${held ? 'Let it through' : 'Got it'}</button>
 </div>`;
