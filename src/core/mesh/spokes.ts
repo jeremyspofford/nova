@@ -20,7 +20,7 @@ import { runtimeBundle, type RuntimeBundle } from './agent.ts';
 
 // Its tables, device_inbox and device_heartbeat, are migration 0007's.
 
-export const INBOX_KINDS = ['event', 'task_request', 'memory_note', 'config_change'] as const;
+export const INBOX_KINDS = ['event', 'task_request', 'memory_note', 'config_change', 'capture_event'] as const;
 export type InboxKind = (typeof INBOX_KINDS)[number];
 export type InboxStatus = 'accepted' | 'refused' | 'rejected';
 export interface InboxResult { key: string; kind: InboxKind | string; status: InboxStatus; duplicate: boolean; reason?: string; ref?: string; version?: string | null }
@@ -44,6 +44,9 @@ export interface InboxEffects {
     read(section: string, key: string): { value: unknown; version: string } | null;
     write(section: string, key: string, value: unknown): string;
   };
+  // A captured event (M6a): kept (ref, the event's id), not kept with the reason (consent off,
+  // paused, private, excluded), or refused when it can't be read.
+  capture?(device: Device, key: string, body: Record<string, unknown>): { ref?: string; reason?: string; refused?: boolean };
 }
 
 interface InboxRow { key: string; kind: string; status: InboxStatus; reason: string | null; ref: string | null }
@@ -184,6 +187,17 @@ export class Spokes extends EventEmitter {
           // Only the new memory's id is kept here, never its words, so forgetting it is complete.
           try {
             return keep('accepted', { ref: this.#db.tx(() => this.#effects.memory(device, body)).id });
+          } catch (e) {
+            return keep('refused', { reason: refusal(e) });
+          }
+        }
+        case 'capture_event': {
+          // Only the event's id is kept here, never what it captured, so forgetting it is complete;
+          // one that isn't kept (no consent, paused, private, excluded) is still taken in once.
+          if (!this.#effects.capture) return keep('refused', { reason: 'This hub doesn’t take capture.' });
+          try {
+            const r = this.#db.tx(() => this.#effects.capture!(device, key, body));
+            return r.refused ? keep('refused', { reason: r.reason ?? 'Nova couldn’t read this.' }) : keep('accepted', { ...(r.ref ? { ref: r.ref } : {}), ...(r.reason ? { reason: r.reason } : {}) });
           } catch (e) {
             return keep('refused', { reason: refusal(e) });
           }
