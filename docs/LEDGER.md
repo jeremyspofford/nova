@@ -14,6 +14,69 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-29 (M3b): the PWA: layouts, navigation, components; Era 2's
+aliases removed.**
+
+- **Breakpoints** live only in `ui/styles/layout.css`. It turns widths into
+  words on `:root` (`--viewport`: narrow < 600 px, medium 600–1023 px, wide
+  ≥ 1024 px; `--aside-room`: yes ≥ 1280 px; `--segments` from the
+  `viewport-segments` media features), and `ui/js/layout.js` combines them
+  with the posture into `<body data-layout data-posture data-aside
+  data-room>`. No script holds a pixel width.
+  - phone: narrow, or `folded`. tablet: medium, or any half-open posture.
+    desktop: wide and flat. The right column (desktop) shows at ≥ 1280 px
+    unless the person closes it (kept per browser); on a tablet the same three
+    quiet cards are the context pane.
+- **Postures**, in Nova's words: `continuous`, `folded` (the cover screen),
+  `half-open-horizontal` (segments side by side, book), `half-open-vertical`
+  (segments stacked, laptop: conversation on top, the active card below).
+  The Device Posture API's own `folded` means half-open, so Nova maps it to
+  half-open by orientation. `?posture=` emulates one for tests and is read
+  once per page load.
+- **Navigation**: nine destinations, Home, Chat, Tasks, Memory, Automations,
+  Skills, Activity, Health, Settings, reachable in every layout
+  (`ui/js/nav.js`, tested). Phone tabs: Home · Chat · Tasks · Memory · More
+  (Automations, Skills, Activity, Health, Settings). Rail: the orb is Home,
+  then Chat, Tasks, Memory, Automations, More (Skills, Activity, Health), and
+  Settings at the foot. `/` is Home now; the main conversation moved to
+  `/chat`; `/schedules` still works and shows Automations. Conversations are
+  a drawer from Chat's top bar in every layout.
+- **Status**: one function maps ledger states (queued → Waiting; active,
+  verifying → Working; waiting for an OK or flagged for attention → Needs you;
+  other waiting → Waiting; done → Verified; failed → Failed; cancelled →
+  Quiet). Era 2's activity states use the same words and never claim
+  Verified. Automation rules and health checks are not work, so they show a
+  plain pill (Paused, Fine), not the vocabulary.
+- **The orb** is CSS light (gradients from `orb/*` tokens), no face. Its state
+  comes from real signals, most urgent first: offline, listening, alert (open
+  problems), attention (an OK waiting), speaking (a reply streaming), working,
+  idle.
+- **Buttons on the accent.** With the aliases gone there is no computed
+  `--accent-text`; primary buttons, Send and the person's bubble are lit with
+  the accent mixed 24% into `bg/raised`, labelled in `text/primary`. A test
+  checks that pair reaches 4.5:1 in every built-in package and mode.
+- **Device id**: `nova.device` in localStorage (a random UUID) is the only
+  appearance state in the browser; the design system and mode come from the
+  API. `scripts/shots.js` gives each browser context its own device id and
+  applies its design system through the API.
+- **Service worker**: the shell is precached, but every request is
+  network-first, so a running Nova always serves fresh code. Offline GETs come
+  from the cache with `x-nova-offline`, and the page says so. Memory and
+  receipts are never cached (forgetting must hold everywhere); changes and
+  event streams are never answered offline. The manifest's colours are Orb
+  Teal's literal values, since a manifest can't read CSS variables.
+- **Honest surfaces**: Devices shows this browser only; the Brief card says
+  no brief exists yet; there is no Smart Home card. Voice is disabled in
+  local-only with the reason under the composer, and elsewhere only where
+  the browser has speech recognition.
+- **Removed**: `ERA2_ALIASES`, `ERA2_NAMES`, `--accent-text`, the schema's
+  `era2_aliases`, and the lint's `LEGACY` list. Every file in `ui/` uses
+  schema tokens only, raw spacing is an error everywhere, and `@container`
+  width queries count as breakpoints.
+- **shots.js** now completes setup through the API first, and its memory
+  margin-link check clicks the oat-milk note by text: since M2 a day note is
+  also a linked memory, so "the first link" was no longer the one meant.
+
 **2026-10-29 (M3a): design systems are token packages; Era 2's names are
 temporary aliases.**
 
