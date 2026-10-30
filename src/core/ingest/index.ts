@@ -84,5 +84,5 @@ export function wireIngest(o: WiredOptions): { ingest: Ingest; worker: LanedWork
   return { ingest, worker };
 }
 
-export { Ingest, BLOCK_LINE, SCREEN, QUESTIONS, DEFAULT_THRESHOLDS, escapeProtocol, wrapData, fence, type Screened, type Source, type SourceKind, type Taint, type Verdict, type Candidate, type Hold, type ScreenInput } from './screen.ts';
+export { Ingest, BLOCK_LINE, SCREEN, QUESTIONS, DEFAULT_THRESHOLDS, cleanOrigin, escapeProtocol, wrapData, fence, type Screened, type Source, type SourceKind, type Taint, type Verdict, type Candidate, type Hold, type ScreenInput } from './screen.ts';
 export { PROTOCOL_NAMES, KIND_WORDS } from './checks.ts';

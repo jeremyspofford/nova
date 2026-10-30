@@ -49,7 +49,42 @@ export const KIND_WORDS: Record<string, string> = {
   attachment_macro: 'a document with macros',
   attachment_archive: 'an archive',
   attachment_type_mismatch: 'an attachment whose type doesn’t match its name',
+  too_long: 'more than Nova reads in full',
+  too_deep: 'markup nested deeper than Nova reads',
 };
+
+// What the checks read at most. Past this the rest is not read, and the content is held back
+// (quarantine at least), never passed.
+export const HTML_CAP = 1_000_000;
+export const TEXT_CAP = 2_000_000;
+const MAX_DEPTH = 256;
+
+// ---- folding ------------------------------------------------------------------------------------
+// Before any check, text is folded so a disguise can't hide a pattern: compatibility forms
+// (full-width letters, ligatures) become plain ones (NFKC); in a word that mixes Latin with
+// Cyrillic or Greek lookalikes, the lookalikes become the Latin letters they imitate; soft hyphens
+// go; and letters spelled out one by one ("i g n o r e") are joined. A word wholly in another
+// script stays as it is. A copy with every lookalike folded is checked too, for detection only.
+const CONFUSABLES: Record<string, string> = {
+  '\u0430': 'a', '\u0435': 'e', '\u043e': 'o', '\u0440': 'p', '\u0441': 'c', '\u0443': 'y', '\u0445': 'x', '\u0456': 'i', '\u0458': 'j', '\u0455': 's', '\u0501': 'd', '\u043a': 'k', '\u04bb': 'h', '\u0432': 'b', '\u043c': 'm', '\u043d': 'h', '\u0442': 't', '\u0433': 'r', '\u0457': 'i', '\u04cf': 'l',
+  '\u0410': 'A', '\u0412': 'B', '\u0415': 'E', '\u041a': 'K', '\u041c': 'M', '\u041d': 'H', '\u041e': 'O', '\u0420': 'P', '\u0421': 'C', '\u0422': 'T', '\u0425': 'X', '\u0423': 'Y', '\u0406': 'I', '\u0408': 'J', '\u0405': 'S',
+  '\u03b1': 'a', '\u03bf': 'o', '\u03c1': 'p', '\u03bd': 'v', '\u03b9': 'i', '\u03ba': 'k', '\u03c4': 't', '\u03c5': 'u', '\u03b5': 'e', '\u03c7': 'x',
+  '\u0391': 'A', '\u0392': 'B', '\u0395': 'E', '\u0396': 'Z', '\u0397': 'H', '\u0399': 'I', '\u039a': 'K', '\u039c': 'M', '\u039d': 'N', '\u039f': 'O', '\u03a1': 'P', '\u03a4': 'T', '\u03a5': 'Y', '\u03a7': 'X',
+};
+const LOOKALIKE = new RegExp(`[${Object.keys(CONFUSABLES).join('')}]`, 'u');
+const LOOKALIKES = new RegExp(`[${Object.keys(CONFUSABLES).join('')}]`, 'gu');
+const swap = (w: string) => w.replace(LOOKALIKES, (c) => CONFUSABLES[c] ?? c);
+
+export function fold(text: string): string {
+  return text.normalize('NFKC')
+    .replace(/\u00ad/g, '')
+    // A word mixing Latin letters with lookalikes from another script.
+    .replace(/[\p{L}\p{M}]+/gu, (w) => (/[A-Za-z]/.test(w) && LOOKALIKE.test(w) ? swap(w) : w))
+    // Letters spelled out one by one, four or more.
+    .replace(/(?<![\p{L}\p{N}])(?:[\p{L}\p{N}] ){3,}[\p{L}\p{N}](?![\p{L}\p{N}])/gu, (run) => run.replace(/ /g, ''));
+}
+// Every lookalike folded, wherever it is: for detection only.
+export const foldAll = (text: string) => swap(fold(text));
 
 // ---- characters ---------------------------------------------------------------------------------
 
@@ -139,11 +174,14 @@ export function instructionSpans(text: string): Span[] {
   return merge(spans);
 }
 
+// Widened at most 300 characters each way, so a long text without full stops stays linear.
 function sentence(text: string, start: number, end: number): Span {
   let s = start;
-  while (s > 0 && !/[.!?\n]/.test(text[s - 1]!)) s--;
+  const low = Math.max(0, start - 300);
+  while (s > low && !/[.!?\n]/.test(text[s - 1]!)) s--;
   let e = end;
-  while (e < text.length && !/[.!?\n]/.test(text[e - 1] ?? '')) e++;
+  const high = Math.min(text.length, end + 300);
+  while (e < high && !/[.!?\n]/.test(text[e - 1] ?? '')) e++;
   return { start: s, end: Math.min(text.length, e), kind: 'instructions' };
 }
 
@@ -151,8 +189,8 @@ export function protocolSpans(text: string): Span[] {
   return [...text.matchAll(PROTOCOL)].map((m) => ({ start: m.index ?? 0, end: (m.index ?? 0) + m[0].length, kind: 'protocol_tags' }));
 }
 
-export const looksLikeInstructions = (text: string) => instructionSpans(squash(text)).length > 0;
-export const hasProtocolTags = (text: string) => protocolSpans(text).length > 0;
+export const looksLikeInstructions = (text: string) => instructionSpans(squash(fold(text))).length > 0 || instructionSpans(squash(foldAll(text))).length > 0;
+export const hasProtocolTags = (text: string) => protocolSpans(fold(text)).length > 0 || protocolSpans(foldAll(text)).length > 0;
 const squash = (s: string) => s.replace(ZERO_WIDTH, '').replace(JOINERS, '').replace(/\s+/g, ' ');
 
 // ---- encoded blobs ------------------------------------------------------------------------------
@@ -223,7 +261,20 @@ export function decodeEntities(s: string): string {
 }
 
 type Rgb = [number, number, number, number];
-const NAMED: Record<string, Rgb> = { white: [255, 255, 255, 1], black: [0, 0, 0, 1], transparent: [0, 0, 0, 0], red: [255, 0, 0, 1], green: [0, 128, 0, 1], blue: [0, 0, 255, 1], gray: [128, 128, 128, 1], grey: [128, 128, 128, 1], silver: [192, 192, 192, 1], yellow: [255, 255, 0, 1] };
+const NAMED: Record<string, Rgb> = {
+  white: [255, 255, 255, 1], black: [0, 0, 0, 1], transparent: [0, 0, 0, 0], red: [255, 0, 0, 1], green: [0, 128, 0, 1], blue: [0, 0, 255, 1],
+  gray: [128, 128, 128, 1], grey: [128, 128, 128, 1], silver: [192, 192, 192, 1], yellow: [255, 255, 0, 1], navy: [0, 0, 128, 1], maroon: [128, 0, 0, 1],
+  purple: [128, 0, 128, 1], teal: [0, 128, 128, 1], olive: [128, 128, 0, 1], lime: [0, 255, 0, 1], aqua: [0, 255, 255, 1], cyan: [0, 255, 255, 1],
+  fuchsia: [255, 0, 255, 1], magenta: [255, 0, 255, 1], orange: [255, 165, 0, 1], whitesmoke: [245, 245, 245, 1], snow: [255, 250, 250, 1],
+  ivory: [255, 255, 240, 1], beige: [245, 245, 220, 1], linen: [250, 240, 230, 1], gainsboro: [220, 220, 220, 1], lightgray: [211, 211, 211, 1],
+  lightgrey: [211, 211, 211, 1], darkgray: [169, 169, 169, 1], darkgrey: [169, 169, 169, 1], dimgray: [105, 105, 105, 1], dimgrey: [105, 105, 105, 1],
+};
+
+function hsl(h: number, sat: number, l: number): [number, number, number] {
+  const a = sat * Math.min(l, 1 - l);
+  const f = (n: number) => { const k = (n + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))); };
+  return [f(0), f(8), f(4)];
+}
 
 export function parseColor(v: string | undefined): Rgb | null {
   if (!v) return null;
@@ -241,6 +292,11 @@ export function parseColor(v: string | undefined): Rgb | null {
   if (m) {
     const a = m[4] === undefined ? 1 : m[4].endsWith('%') ? Number(m[4].slice(0, -1)) / 100 : Number(m[4]);
     return [Number(m[1]), Number(m[2]), Number(m[3]), a];
+  }
+  m = /^hsla?\(\s*(-?[\d.]+)(?:deg)?[\s,]+([\d.]+)%[\s,]+([\d.]+)%(?:[\s,/]+([\d.]+%?))?\s*\)$/.exec(s);
+  if (m) {
+    const a = m[4] === undefined ? 1 : m[4].endsWith('%') ? Number(m[4].slice(0, -1)) / 100 : Number(m[4]);
+    return [...hsl(((Number(m[1]) % 360) + 360) % 360, Number(m[2]) / 100, Number(m[3]) / 100), a];
   }
   return null;
 }
@@ -271,10 +327,12 @@ export function hiddenBy(style: string): string | null {
   const op = num(get('opacity'));
   if (op && op.n <= 0.05) return 'opacity:0';
   const fs = num(get('font-size'));
-  if (fs && (fs.n <= 0 || (fs.unit === 'px' && fs.n <= 1) || (fs.unit === 'pt' && fs.n <= 1) || ((fs.unit === 'em' || fs.unit === 'rem') && fs.n <= 0.1))) return 'font-size:0';
+  if (fs && (fs.n <= 0 || (fs.unit === 'px' && fs.n < 2) || (fs.unit === 'pt' && fs.n < 1.5) || ((fs.unit === 'em' || fs.unit === 'rem') && fs.n <= 0.15) || (fs.unit === '%' && fs.n < 10))) return 'font-size:0';
   const zero = (k: string) => { const x = num(get(k)); return !!x && x.n <= 1 && (x.unit === '' || x.unit === 'px' || x.unit === '%' || x.unit === 'em'); };
   if ((zero('height') || zero('max-height') || zero('width') || zero('max-width')) && /hidden|clip/.test(get('overflow') ?? '')) return 'zero size';
-  if (/rect\(\s*0/.test(get('clip') ?? '') || /inset\(\s*(50|100)%/.test(get('clip-path') ?? '')) return 'clipped';
+  const clip = get('clip');
+  const clipPath = get('clip-path');
+  if ((clip && clip !== 'auto') || (clipPath && clipPath !== 'none')) return 'clipped';
   const far = (k: string) => { const x = num(get(k)); return !!x && x.n <= -500; };
   if (/absolute|fixed/.test(get('position') ?? '') && (far('left') || far('top') || far('right'))) return 'off-screen';
   if (far('text-indent') || far('margin-left')) return 'off-screen';
@@ -297,8 +355,17 @@ function attrsOf(s: string): Map<string, string> {
 function hidingRules(html: string): { classes: Set<string>; ids: Set<string> } {
   const classes = new Set<string>();
   const ids = new Set<string>();
-  for (const block of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi)) {
-    for (const rule of block[1]!.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  const lower = html.toLowerCase();
+  const blocks: string[] = [];
+  for (let at = lower.indexOf('<style'); at >= 0; at = lower.indexOf('<style', at)) {
+    const open = lower.indexOf('>', at);
+    const end = open < 0 ? -1 : lower.indexOf('</style', open);
+    if (end < 0) break; // unclosed: the rest is read as text by htmlParts, never twice
+    blocks.push(html.slice(open + 1, end));
+    at = end;
+  }
+  for (const block of blocks) {
+    for (const rule of block.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
       if (!hiddenBy(rule[2]!)) continue;
       for (const sel of rule[1]!.split(',').map((x) => x.trim())) {
         const m = /^[a-z0-9]*((?:[.#][\w-]+)+)$/i.exec(sel);
@@ -310,14 +377,18 @@ function hidingRules(html: string): { classes: Set<string>; ids: Set<string> } {
   return { classes, ids };
 }
 
-const TOKEN = /<!--([\s\S]*?)(?:-->|$)|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>|<\?[^>]*>|<\/\s*([a-zA-Z][\w:-]*)\s*>|<([a-zA-Z][\w:-]*)((?:\s+[^\s=/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*(\/?)>|([^<]+)|(<)/g;
+// Linear: no part of a token can run past the next "<", so a broken tag fails at once and is read
+// as text, instead of every "<" scanning to the end of the page.
+const TOKEN = /<!--([\s\S]*?)(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<![^<>]*>|<\?[^<>]*>|<\/\s*([a-zA-Z][\w:-]*)\s*>|<([a-zA-Z][\w:-]*)((?:\s+[^\s=/<>]+(?:\s*=\s*(?:"[^"<]*"|'[^'<]*'|[^\s<>]+))?)*)\s*(\/?)>|([^<]+)|(<)/g;
 const WHITE: Rgb = [255, 255, 255, 1];
 
 export interface HtmlParts { visible: string; hidden: Hidden[]; links: { text: string; href: string }[]; attrs: { text: string; where: string }[]; comments: string[] }
 
 // The page as a reader sees it, and what it hides.
-export function htmlParts(html: string): HtmlParts {
+export function htmlParts(html: string): HtmlParts & { deep: boolean } {
   const rules = hidingRules(html);
+  const lower = html.toLowerCase();
+  let deep = false;
   const out: string[] = [];
   const hidden: Hidden[] = [];
   const links: { text: string; href: string }[] = [];
@@ -366,10 +437,15 @@ export function htmlParts(html: string): HtmlParts {
       const parent = top();
       if (RAW.has(tag)) {
         // Raw text up to its own closing tag, read as text, never as markup.
-        const end = html.toLowerCase().indexOf(`</${tag}`, TOKEN.lastIndex);
+        const end = lower.indexOf(`</${tag}`, TOKEN.lastIndex);
         const body = html.slice(TOKEN.lastIndex, end < 0 ? html.length : end);
         TOKEN.lastIndex = end < 0 ? html.length : html.indexOf('>', end) + 1 || html.length;
         if (tag === 'title') attrs.push({ text: decodeEntities(body).trim(), where: 'title' });
+        // Text in an SVG or a noscript block isn't dropped silently: it is kept apart and screened.
+        if (tag === 'svg' || tag === 'noscript' || tag === 'math') {
+          const text = decodeEntities(body.replace(/<[^<>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+          if (text) hidden.push({ text, why: tag });
+        }
         if (tag === 'textarea' && !parent.dropped) emit(decodeEntities(body));
         continue;
       }
@@ -391,6 +467,8 @@ export function htmlParts(html: string): HtmlParts {
       };
       if (BREAK.has(tag)) emit('\n');
       if (tag === 'li') emit('- ');
+      // Nesting past MAX_DEPTH isn't followed (each element is read as its parent); that is said.
+      if (stack.length >= MAX_DEPTH) { deep = true; continue; }
       stack.push(frame);
       continue;
     }
@@ -403,7 +481,7 @@ export function htmlParts(html: string): HtmlParts {
     .replace(/ *\n */g, '\n')
     .replace(/\n\s*\n\s*/g, '\n\n')
     .trim();
-  return { visible, hidden: hidden.filter((h) => h.text), links, attrs: attrs.filter((x) => x.text), comments };
+  return { visible, hidden: hidden.filter((h) => h.text), links, attrs: attrs.filter((x) => x.text), comments, deep };
 }
 
 // ---- links --------------------------------------------------------------------------------------
@@ -494,22 +572,36 @@ class Flags {
   list(): Flag[] { return [...this.#m.values()]; }
 }
 
+// Markup in content that didn't come as HTML (a text/plain page, a file): it may still be read as
+// markup by someone, so it gets the HTML checks too, for what it hides.
+const MARKUP = /<(?:[a-z][\w-]*\s[^<>]*\b(?:style|hidden|aria-hidden|class)\b|!--|template\b|noscript\b|svg\b)/i;
+
+function fromHtml(html: string, flags: Flags, hidden: Hidden[]): string {
+  const p = htmlParts(html);
+  for (const h of p.hidden) hidden.push(h);
+  if (p.hidden.length) flags.add('hidden_text', 'note', p.hidden.length);
+  if (p.deep) flags.add('too_deep', 'quarantine');
+  for (const c of p.comments) if (looksLikeInstructions(c) || hasProtocolTags(c)) hidden.push({ text: c, why: 'comment' });
+  for (const a of p.attrs) if (looksLikeInstructions(a.text) || hasProtocolTags(a.text)) hidden.push({ text: a.text, why: a.where });
+  linkChecks(p.links, flags);
+  return p.visible;
+}
+
 export function check(input: CheckInput): Checked {
   const flags = new Flags();
   const hidden: Hidden[] = [];
   let visible: string;
   if (typeof input.html === 'string' && input.html.trim()) {
-    const p = htmlParts(input.html);
-    visible = p.visible;
-    for (const h of p.hidden) hidden.push(h);
-    if (p.hidden.length) flags.add('hidden_text', 'note', p.hidden.length);
-    for (const c of p.comments) if (looksLikeInstructions(c) || hasProtocolTags(c)) hidden.push({ text: c, why: 'comment' });
-    for (const a of p.attrs) if (looksLikeInstructions(a.text) || hasProtocolTags(a.text)) hidden.push({ text: a.text, why: a.where });
-    linkChecks(p.links, flags);
+    let html = input.html;
+    if (html.length > HTML_CAP) { html = html.slice(0, HTML_CAP); flags.add('too_long', 'quarantine'); }
+    visible = fromHtml(html, flags, hidden);
   } else {
     visible = String(input.text ?? '');
+    if (visible.length > TEXT_CAP) { visible = visible.slice(0, TEXT_CAP); flags.add('too_long', 'quarantine'); }
+    // The text stays as it is (a plain-text reader sees the markup); what the markup hides is checked.
+    if (MARKUP.test(visible)) fromHtml(visible.slice(0, HTML_CAP), new Flags(), hidden);
   }
-  visible = characters(visible, flags, hidden);
+  visible = fold(characters(visible, flags, hidden));
   blobs(visible, flags, hidden);
   // Hidden text is judged as a whole: instructions there block, and so do Nova's tags.
   for (const h of [...hidden]) {
@@ -520,11 +612,16 @@ export function check(input: CheckInput): Checked {
     if (looksLikeInstructions(h.text)) flags.add('hidden_instructions', 'block');
     if (hasProtocolTags(h.text)) flags.add('hidden_protocol', 'block');
   }
-  const spans = merge([...instructionSpans(visible), ...protocolSpans(visible)]);
-  const said = instructionSpans(visible).length;
-  const tags = protocolSpans(visible).length;
-  if (said) flags.add('instructions', 'quarantine', said);
-  if (tags) flags.add('protocol_tags', 'quarantine', tags);
+  const said = instructionSpans(visible);
+  const tags = protocolSpans(visible);
+  const spans = merge([...said, ...tags]);
+  if (said.length) flags.add('instructions', 'quarantine', said.length);
+  if (tags.length) flags.add('protocol_tags', 'quarantine', tags.length);
+  // Lookalikes in words wholly of another script, folded for detection only: what they spell
+  // can't be cut out precisely, so the content is held back.
+  const all = foldAll(visible);
+  if (!said.length && instructionSpans(all).length) flags.add('instructions', 'quarantine');
+  if (!tags.length && protocolSpans(all).length) flags.add('protocol_tags', 'quarantine');
   if (input.headers && Object.keys(input.headers).length) mailChecks(lower(input.headers), flags);
   if (input.attachments?.length) attachmentChecks(input.attachments, flags);
   return { visible, hidden, flags: flags.list(), spans };
