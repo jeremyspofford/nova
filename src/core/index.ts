@@ -29,6 +29,7 @@ import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
 import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
 import { agentTar, joinScript } from './mesh/agent.ts';
+import { Providers } from './providers/registry.ts';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
@@ -63,6 +64,9 @@ export { ROLE_FILE, readRole, writeRole } from './mesh/replica.ts';
 export type { RoleFile } from './mesh/replica.ts';
 export { REPLICATED, NOT_JOURNALLED } from './mesh/sync.ts';
 export type { Who } from './api.ts';
+// Providers (M5a): the registry's chat handle for Era 2's runner, and the stand-ins' signing helpers.
+export type { ChatHandle } from './providers/registry.ts';
+export { signatureHeader as n8nSignature, SIGNATURE_HEADER as N8N_SIGNATURE_HEADER } from './providers/n8n.ts';
 export { originHost } from './api.ts';
 export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM } from './design.ts';
 
@@ -81,6 +85,10 @@ export interface CoreOptions {
   designSystems?: string;
   // The mesh listener, when there is one: where devices reach Nova, and what carries it.
   mesh?: MeshListenerInfo | null;
+  // The model command Era 2 chats with (agent_cmd, agent_egress): the custom-cli provider (M5a).
+  agent?: { command: string; egress: Egress };
+  // A secret by name (secret://NAME), for providers that need one; the vault (M5b) answers it.
+  secrets?: (name: string) => string | null;
   now?: () => Date;
 }
 
@@ -119,6 +127,17 @@ export function createCore(o: CoreOptions) {
   const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)) });
   const receipts = new Receipts({ db, log, now });
   for (const p of design.ensureBuiltins()) log.problem('design', p);
+  // Providers (M5a): each enabled one is a ledger worker. A model on one of the person's own
+  // devices counts as local.
+  const meshHosts = () => new Set([
+    ...(o.mesh?.publicUrl ? [o.mesh.publicUrl] : []),
+    ...db.all<{ address: string | null }>("SELECT address FROM device WHERE trust = 'trusted' AND address IS NOT NULL").map((d) => d.address!),
+  ].map((a) => { try { return new URL(a.includes('://') ? a : `http://${a}`).hostname.replace(/^\[|\]$/g, ''); } catch { return ''; } }).filter(Boolean));
+  const providers = new Providers({
+    db, log, home: o.home, workspace, extensions, ledger, verifier, receipts, profile, now,
+    custom: o.agent, secret: o.secrets, meshHost: (h) => meshHosts().has(h),
+    fire: (input) => triggers.fire(input),
+  });
   // The device mesh: this node's keys, the registry, enrollment, and who may do what.
   const meshInfo = o.mesh ?? null;
   const publicUrl = () => meshInfo?.publicUrl ?? null;
@@ -175,6 +194,7 @@ export function createCore(o: CoreOptions) {
     }
   });
   extensions.on('change', (c) => bus.emit('event', 'extension', c));
+  providers.on('change', (c) => bus.emit('event', 'provider', c));
   // The UI swaps its design-system stylesheet when this arrives: no reload, no restart.
   design.on('change', (c) => bus.emit('event', 'design-system', c));
   triggers.on('trigger', (t) => bus.emit('event', 'trigger', { trigger_id: t.trigger_id, rule_id: t.rule_id, class: t.class, decision: t.triage.decision, reason: t.triage.reason, ledger_task_id: t.ledger_task_id, message_id: t.message_id }));
@@ -273,6 +293,7 @@ export function createCore(o: CoreOptions) {
         const section = params.section as Section;
         if (!SECTIONS.includes(section) || section === 'setup') throw new CoreError('validation', `There is no profile section called "${params.section}".`);
         if (section === 'mesh') meshSetting(params.key!, body.value, body.confirm === true, who);
+        if (section === 'providers' || (section === 'policy' && params.key === 'task_tests')) throw new CoreError('validation', 'Providers are set through /api/v1/providers, so their settings are checked.');
         if (section === 'appearance') {
           if (params.key !== 'mode') throw new CoreError('validation', 'Choose a design system with POST /api/v1/design-systems/{id}/apply, so it is checked and can be rolled back.');
           design.setMode(body.value);
@@ -298,6 +319,8 @@ export function createCore(o: CoreOptions) {
       method: 'POST', path: '/tasks', status: 201, summary: 'Delegate a task. It must name a worker and the evidence that will prove it done.',
       body: '{title, owner, goal, evidence_required[], privacy_mode?, approval_tier?, inputs?, context_refs?, constraints?, idempotency_key?}',
       handle: ({ body }) => {
+        const off = typeof body.owner === 'string' && !ledger.workers.has(body.owner) ? providers.explain(body.owner) : null;
+        if (off) throw new CoreError('conflict', off);
         const task = ledger.create({ ...(body as unknown as TaskInput), origin: { kind: 'user' } });
         triggers.reactive(task);
         return task;
@@ -361,6 +384,9 @@ export function createCore(o: CoreOptions) {
       summary: 'Call an event rule’s webhook. Authenticated by the x-nova-hook-token header instead of X-Nova, so automations can call it. The body is kept only as a hash; x-nova-dedup-key is optional.',
       body: 'any JSON object',
       handle: async ({ params, body, headers }) => {
+        // A provider's callback (n8n) comes through the same token webhooks (M5a).
+        const cb = await providers.hook(params.name!, header(headers, 'x-nova-hook-token'), body, headers);
+        if (cb) return cb;
         const t = await triggers.hook(params.name!, header(headers, 'x-nova-hook-token'), body, header(headers, 'x-nova-dedup-key'));
         return { trigger_id: t.trigger_id, decision: t.triage.decision, reason: t.triage.reason };
       },
@@ -503,6 +529,7 @@ export function createCore(o: CoreOptions) {
     },
     { method: 'GET', path: '/mesh/runtime', access: 'device', summary: 'The runtime agent this node ships, {manifest: {version, sha256, files}, signature, signer, files}, signed over nova-runtime-v1.<manifest>.', handle: () => spokes.runtime() },
     ...role.routes(),
+    ...providers.routes(),
   ];
 
   // Tests drive the heartbeat's clock through the API; this route doesn't exist otherwise.
@@ -526,6 +553,7 @@ export function createCore(o: CoreOptions) {
   // The hub's own work: the ledger, recovered, and the heartbeat. A standby runs neither.
   function startHub() {
     const recovered = ledger.recover();
+    providers.recover();
     if (!heartbeat) {
       heartbeat = setInterval(beat, 30_000);
       heartbeat.unref();
@@ -565,7 +593,7 @@ export function createCore(o: CoreOptions) {
   });
 
   return {
-    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers,
     health,
     openapi: api.doc,
     identity: () => identityOf(profile),

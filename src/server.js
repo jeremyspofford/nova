@@ -20,6 +20,7 @@ import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
 import { createCore, originHost } from './core/index.ts';
+import { AgentError } from './agent.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -43,7 +44,18 @@ export function createNova(config = loadConfig(), deps = {}) {
     home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
     mesh: meshInfo,
     workers: [chatRun], confirmations: { [SYSTEM]: (e, brief) => chatRun.confirm(e, brief) },
+    // Era 2's model command is the custom-cli provider (M5a). Secrets are named NOVA_SECRET_<NAME>
+    // in the environment until the vault (M5b) answers for them.
+    agent: { command: config.agentCmd, egress: config.agentEgress },
+    secrets: deps.secrets ?? ((name) => process.env[`NOVA_SECRET_${name}`] ?? null),
   });
+  // Chat goes through the registry: the provider the profile names for chat, or agent_cmd (the
+  // default), which the runner runs exactly as before. Scheduled runs and helpers follow it.
+  const chatProvider = () => {
+    const h = core.providers.chat();
+    return h && { ...h, call: (o) => h.call(o).catch((e) => { throw e instanceof AgentError ? e : new AgentError(e.message, `provider=${h.id}`); }) };
+  };
+  Object.defineProperty(chatRun, 'egress', { get: () => core.providers.chat()?.egress ?? config.agentEgress });
   if (!config.timezonePinned && core.identity().timezone) config.timezone = core.identity().timezone;
   const store = new SessionStore(config.home, config.timezone);
   // Curated memory lives in the core; MEMORY.md is rendered from it. The first start imports
@@ -53,6 +65,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   core.memory.onForget((records) => runner.memory.forgotten(records));
   runner.memory.readOnly = () => !!core.mesh.role.replica();
   runner.memory.sync();
+  runner.chatProvider = chatProvider;
   runner.identity = { persona: core.persona, name: () => core.identity().name, privacy: () => core.profile.privacyDefault(), receipt: (r) => core.receipts.record(r) };
   runner.ensureMain();
   // permissions.md is written once, so it can be read and edited by hand; Settings keeps it current.
