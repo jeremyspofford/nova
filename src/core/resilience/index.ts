@@ -560,7 +560,11 @@ export class Resilience {
     this.checkClock();
     // A crash or a hang the supervisor dealt with: this Nova is running, so it is over.
     for (const pb of UP_AGAIN) {
-      for (let p = this.playbooks.openFor(pb, null); p; p = this.playbooks.openFor(pb, null)) this.playbooks.settle(p.id, 'Nova is running again.');
+      const seen = new Set<number>();
+      for (let p = this.playbooks.openFor(pb, null); p && !seen.has(p.id); p = this.playbooks.openFor(pb, null)) {
+        seen.add(p.id);
+        this.playbooks.settle(p.id, 'Nova is running again.');
+      }
     }
     // A backup folder that is back gets the forgets it owes.
     try { this.nightly.applyOwed(); } catch (e) { this.#o.log.warn('resilience', 'Owed forgets couldn’t be carried in yet.', { error: (e as Error).message }); }
