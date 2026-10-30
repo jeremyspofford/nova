@@ -9,6 +9,7 @@ import { trackChild } from './core/index.ts';
 import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { inHome, inSecretDir } from './home.js';
+import { safeFetch } from './safe-fetch.js';
 
 const MAX_READ = 200_000;
 const MAX_OUTPUT = 16_000;
@@ -124,16 +125,15 @@ export const TOOLS = {
     doc: 'Fetch a web page (http or https) and read it as text.',
     needsApproval: false,
     online: true,
-    async run({ url }, { signal }) {
+    // Only the public web: never Nova itself or the person's own network (safe-fetch.js).
+    // `fetchAllow` is for tests alone; the runner never passes it.
+    async run({ url }, { signal, fetchAllow }) {
       if (!/^https?:\/\//i.test(String(url))) throw new Error('Only http and https URLs can be fetched');
-      const res = await fetch(url, {
-        signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(20_000)]),
-        headers: { 'user-agent': UA },
-      });
+      const res = await safeFetch(String(url), { signal, headers: { 'user-agent': UA }, ...(fetchAllow ? { allow: fetchAllow } : {}) });
       // A page that didn't come back is a failed step, not a page to read.
-      if (!res.ok) { res.body?.cancel(); throw new Error(`The page answered HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`); }
-      const type = res.headers.get('content-type') ?? '';
-      let text = await res.text();
+      if (res.status < 200 || res.status > 299) throw new Error(`The page answered HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`);
+      const { type } = res;
+      let { text } = res;
       if (/html/i.test(type)) text = htmlToText(text);
       const head = `HTTP ${res.status} ${res.statusText} · ${type || 'unknown type'}\n\n`;
       return head + (text.length > MAX_FETCH ? `${text.slice(0, MAX_FETCH)}\n[truncated]` : text);

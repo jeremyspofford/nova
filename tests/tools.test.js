@@ -105,8 +105,10 @@ test('web_fetch fails when the page answers with an error, and reads it when it 
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    await assert.rejects(TOOLS.web_fetch.run({ url: `${base}/busy` }, {}), /HTTP 429/);
-    assert.match(await TOOLS.web_fetch.run({ url: `${base}/` }, {}), /^HTTP 200 OK[\s\S]*Three to compare/);
+    // A local stand-in for a public site: only a test may let web_fetch reach this machine.
+    const ctx = { fetchAllow: () => true };
+    await assert.rejects(TOOLS.web_fetch.run({ url: `${base}/busy` }, ctx), /HTTP 429/);
+    assert.match(await TOOLS.web_fetch.run({ url: `${base}/` }, ctx), /^HTTP 200 OK[\s\S]*Three to compare/);
   } finally { server.close(); }
 });
 

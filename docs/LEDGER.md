@@ -15,6 +15,26 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (security: web_fetch could read Nova itself — Amendment C Part 3, first piece).**
+Branch `fix/web-fetch-ssrf`.
+- **The hole:** Nova's console answers any request from this machine as the person. The agent's
+  `web_fetch` had no address guard, needed no approval, and followed redirects. So a page could
+  talk the agent into fetching `http://localhost:<port>/api/v1/memory` (or `/capture/events`,
+  `/tasks`), and then into sending what it read out in another URL. Neither step asks the person
+  (web pages never set the mail "taint"). I confirmed it on the preview: a plain local GET, made the
+  way `web_fetch` makes it, returned memory.
+- **Found by:** the Part 3 inventory, ahead of the gate's design.
+- **Fix:** `src/safe-fetch.js`. Only public unicast addresses can be reached. A name is resolved,
+  every address it resolves to must be public, and the socket connects to the very address that was
+  checked, so DNS rebinding can't slip through. Every redirect is re-checked. Names that only exist
+  on a private network (`.local`, `.ts.net`, …) are refused. IPv4 inside IPv6 is judged as IPv4.
+- **Tests:** they failed first on the old tool. A test may widen the rule; the runner can't, because
+  the model controls only a tool's arguments.
+- **Still open, and the ingest gate's job:**
+  - outbound checks on what a URL carries;
+  - taint for web content;
+  - the screen itself.
+
 **2026-10-30 (Amendment 2026-10-30-C, owner-approved).** `AMENDMENT-2026-10-30-C.md` and
 `UX-RESEARCH-2026-10-30.md` were added to the packet exactly as given (sha256 `e3b1862d…` and
 `dda206f4…`).
