@@ -6,7 +6,7 @@
 // a problem is marked dealt with only when the repair could tell the cause is gone.
 import { EventEmitter } from 'node:events';
 import type { Db } from '../db.ts';
-import type { Log, Problem } from '../log.ts';
+import { UNSAVED_FROM, type Log, type Problem } from '../log.ts';
 import type { Route } from '../api.ts';
 import { CoreError } from '../errors.ts';
 
@@ -198,7 +198,12 @@ export class Playbooks extends EventEmitter {
     const row = this.#db.get<{ problem_id: number }>(
       `SELECT pp.problem_id FROM problem_playbook pp JOIN problem p ON p.id = pp.problem_id
        WHERE pp.playbook = ? AND pp.subject IS ? AND p.resolved_at IS NULL ORDER BY pp.problem_id DESC LIMIT 1`, playbook, subject);
-    return row ? this.#problem(row.problem_id) : null;
+    if (row) return this.#problem(row.problem_id);
+    for (const [id, r] of this.#mem) {
+      const p = this.#problem(id);
+      if (r.playbook === playbook && r.subject === subject && p && !p.resolved_at) return p;
+    }
+    return null;
   }
 
   // `done`: repairs already made before the problem was recorded (the supervisor restarted Nova);
@@ -206,7 +211,7 @@ export class Playbooks extends EventEmitter {
   attach(problemId: number, playbook: string, subject: string | null = null, done?: { name: string; ok: boolean; said: string }[]): void {
     const at = this.#now().toISOString();
     const repairs = (done ?? []).map((r) => ({ at, name: r.name, by: 'nova' as const, ok: r.ok, said: r.said }));
-    this.#db.run('INSERT OR REPLACE INTO problem_playbook (problem_id, playbook, subject, repairs, updated_at) VALUES (?, ?, ?, ?, ?)', problemId, playbook, subject, JSON.stringify(repairs), at);
+    this.#put(problemId, { playbook, subject, repairs: JSON.stringify(repairs) });
     this.emit('change', { problem_id: problemId, playbook });
     // A safe repair starts at once (after the current step, so the problem is fully recorded).
     if (PLAYBOOKS[playbook]?.repair && !done?.length) setImmediate(() => { void this.attempt(problemId, 'nova').catch(() => {}); });
@@ -252,11 +257,21 @@ export class Playbooks extends EventEmitter {
       this.#running.delete(problemId);
     }
     const repairs = [...(JSON.parse(this.#row(problemId)?.repairs ?? '[]') as Repair[]), { at: this.#now().toISOString(), name: def.repair, by, ok: out.ok, said: out.said }];
-    this.#db.run('UPDATE problem_playbook SET repairs = ?, updated_at = ? WHERE problem_id = ?', JSON.stringify(repairs), this.#now().toISOString(), problemId);
+    this.#update(problemId, repairs);
     this.#log.info('playbooks', `${def.title}: ${out.said}`, { problem: problemId, repair: def.repair, by, ok: out.ok });
     if (out.ok && out.resolved) this.#log.resolve(problemId);
     this.emit('change', { problem_id: problemId, repair: def.repair, ok: out.ok });
     return { ...out, repairs };
+  }
+
+  // The cause went away by itself (a connection is listening again): recorded, and closed.
+  settle(problemId: number, said: string): void {
+    const r = this.#row(problemId);
+    if (!r) return;
+    const repairs = [...(JSON.parse(r.repairs) as Repair[]), { at: this.#now().toISOString(), name: 'watch', by: 'nova' as const, ok: true, said }];
+    this.#update(problemId, repairs);
+    this.#log.resolve(problemId);
+    this.emit('change', { problem_id: problemId, settled: true });
   }
 
   // Nova's own retries of repairs that haven't worked yet (the heartbeat calls this).
@@ -280,11 +295,32 @@ export class Playbooks extends EventEmitter {
     ];
   }
 
+  // A playbook row: in the database, or, when it can't take it (a full disk, a problem that
+  // couldn't be saved either), kept in memory until Nova restarts.
+  #mem = new Map<number, { playbook: string; subject: string | null; repairs: string }>();
+
+  #put(problemId: number, r: { playbook: string; subject: string | null; repairs: string }): void {
+    if (problemId > UNSAVED_FROM) {
+      try {
+        this.#db.run('INSERT OR REPLACE INTO problem_playbook (problem_id, playbook, subject, repairs, updated_at) VALUES (?, ?, ?, ?, ?)', problemId, r.playbook, r.subject, r.repairs, this.#now().toISOString());
+        return;
+      } catch { /* kept in memory below */ }
+    }
+    this.#mem.set(problemId, r);
+  }
+
+  #update(problemId: number, repairs: Repair[]): void {
+    const r = this.#row(problemId);
+    if (!r) return;
+    if (this.#mem.has(problemId)) { this.#mem.set(problemId, { ...r, repairs: JSON.stringify(repairs) }); return; }
+    this.#put(problemId, { ...r, repairs: JSON.stringify(repairs) });
+  }
+
   #row(problemId: number) {
-    return this.#db.get<{ playbook: string; subject: string | null; repairs: string }>('SELECT playbook, subject, repairs FROM problem_playbook WHERE problem_id = ?', problemId);
+    return this.#mem.get(problemId) ?? this.#db.get<{ playbook: string; subject: string | null; repairs: string }>('SELECT playbook, subject, repairs FROM problem_playbook WHERE problem_id = ?', problemId);
   }
 
   #problem(id: number): Problem | null {
-    return this.#db.get<Problem>('SELECT * FROM problem WHERE id = ?', id) ?? null;
+    return this.#db.get<Problem>('SELECT * FROM problem WHERE id = ?', id) ?? this.#log.unsaved(id);
   }
 }

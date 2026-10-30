@@ -433,10 +433,17 @@ export class Resilience {
     ];
   }
 
-  // The heartbeat's part: the clock, and Nova's own retries of repairs.
+  // The heartbeat's part: the clock, the watches other modules add (connections), and Nova's own
+  // retries of repairs.
   async sweep(): Promise<void> {
     this.checkClock();
+    for (const w of this.#watches) await w().catch((e) => this.#o.log.warn('resilience', 'A health watch stumbled.', { error: (e as Error).message }));
     await this.playbooks.sweep();
+  }
+
+  #watches: (() => Promise<void>)[] = [];
+  watch(fn: () => Promise<void>): void {
+    this.#watches.push(fn);
   }
 
   problemFor(p: Problem) {

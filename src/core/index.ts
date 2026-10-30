@@ -44,7 +44,7 @@ import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { secretName } from './providers/types.ts';
 import { Resilience } from './resilience/index.ts';
-import { wireRepairs } from './resilience/repairs.ts';
+import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
 import { Foundry } from './changes/foundry.ts';
@@ -140,7 +140,7 @@ export interface CoreOptions {
   // The supervisor that started this server, when one did (resilience/link.ts: ipcLink).
   supervisor?: SupervisorLink | null;
   // Resilience (M7b), for tests: the clock watch's monotonic time, and the restore drill's sandbox.
-  resilience?: { monotonic?: () => number; drill?: { root?: string; env?: Record<string, string>; timeoutMs?: number } };
+  resilience?: { monotonic?: () => number; drill?: { root?: string; env?: Record<string, string>; timeoutMs?: number }; lookup?: (host: string) => Promise<unknown> };
   // This process is a sandbox copy started by the change pipeline (M7a, NOVA_SANDBOX=1): it runs
   // none of the hub's outside work (connectors, capture, models, the heartbeat), takes no changes,
   // and answers the sandbox routes.
@@ -360,6 +360,7 @@ export function createCore(o: CoreOptions) {
   const keep = resilience;
   ledger.workers.set(keep.worker.id, keep.worker);
   wireRepairs(keep.playbooks, { ledger, providers, models, connectors, role, spokes, devices });
+  keep.watch(connectorWatch(keep.playbooks, connectors, o.resilience?.lookup));
 
   // Capture feeds event rules too, as the connector "capture" (topics: capture/routes.ts).
   const connectorCheck = triggers.connectorCheck;
@@ -769,7 +770,14 @@ export function createCore(o: CoreOptions) {
       handle: ({ params, body }) => {
         if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(params.name!)) throw new CoreError('validation', 'A secret’s name is capital letters, digits and underscores, like API_KEY.');
         if (typeof body.value !== 'string' || !body.value.trim()) throw new CoreError('validation', 'value is the secret itself, and it can’t be empty.');
-        vault.put(`provider/${params.name}`, body.value.trim());
+        try {
+          vault.put(`provider/${params.name}`, body.value.trim());
+        } catch (e) {
+          // A full disk is the person's to know about beyond this one refusal (M7b): a problem
+          // with its playbook.
+          if (e instanceof CoreError && e.details.some((d) => d.startsWith('ENOSPC'))) log.problem('vault', 'Nova couldn’t save a secret because the disk is full. Nothing in the vault changed.', { detail: e.details.join('\n') });
+          throw e;
+        }
         return { name: params.name, ref: `secret://${params.name}`, stored: true };
       },
     },

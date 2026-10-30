@@ -3,6 +3,7 @@
 // reconnecting a connection, letting the standby copy again, asking a computer's boot agent to
 // start its runtime again. Each is safe: none deletes or changes the person's data, and none
 // runs work again that may already have had an outside effect (the ledger's own rule decides).
+import { lookup as dnsLookup } from 'node:dns/promises';
 import type { Problem } from '../log.ts';
 import type { Ledger } from '../ledger.ts';
 import type { Providers } from '../providers/registry.ts';
@@ -95,7 +96,7 @@ export function wireRepairs(pb: Playbooks, d: RepairDeps): void {
     await d.connectors.restart(subject);
     const v = d.connectors.view(subject);
     if (v.broken) return { ok: false, said: `${v.name} needs connecting again: the service no longer accepts Nova.` };
-    const up = v.connected && v.live !== 'reconnecting';
+    const up = v.connected && v.live === 'listening';
     return { ok: up, said: up ? `${v.name} is connected again.` : `${v.name} is still trying to reconnect.`, resolved: up };
   });
 
@@ -120,6 +121,30 @@ export function wireRepairs(pb: Playbooks, d: RepairDeps): void {
     const asked = d.spokes.restartRuntime(subject);
     return { ok: false, said: asked ? `Asked ${name}’s boot agent to start its runtime again; it does at its next heartbeat.` : `Waiting for ${name}’s boot agent to take the restart.` };
   });
+}
+
+// Connections that keep failing to reconnect become a problem on the second look in a row (one
+// failed reconnect is ordinary); when the service's name doesn't resolve, the problem says the
+// name lookup is what fails. A connection listening again closes its problem.
+export function connectorWatch(pb: Playbooks, connectors: Connectors, lookup: (host: string) => Promise<unknown> = (h) => dnsLookup(h)): () => Promise<void> {
+  const seen = new Map<string, number>();
+  return async () => {
+    for (const v of connectors.list()) {
+      if (v.connected && v.live === 'listening') {
+        seen.delete(v.id);
+        for (const id of ['connector-down', 'name-lookup']) { const p = pb.openFor(id, v.id); if (p) pb.settle(p.id, `${v.name} is connected and listening again.`); }
+        continue;
+      }
+      if (!v.connected || v.live !== 'reconnecting') { seen.delete(v.id); continue; }
+      const n = (seen.get(v.id) ?? 0) + 1;
+      seen.set(v.id, n);
+      if (n < 2) continue;
+      const host = connectors.get(v.id).host?.() ?? null;
+      const lookupFails = host ? await lookup(host).then(() => null, (e: NodeJS.ErrnoException) => (LOOKUP.test(`${e.code ?? ''} ${e.message}`) ? e.message : null)) : null;
+      if (lookupFails) pb.open('connectors', `Nova can’t look up the name ${host}, where ${v.name} is, so it can’t reconnect. It keeps trying; nothing is sent anywhere else instead.`, 'name-lookup', { subject: v.id, detail: lookupFails });
+      else pb.open('connectors', `${v.name} lost its connection and hasn’t come back yet. Nova keeps reconnecting.`, 'connector-down', { subject: v.id });
+    }
+  };
 }
 
 // Tasks of this worker waiting only because it couldn't run (not for an OK, not held because it

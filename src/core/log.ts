@@ -18,6 +18,8 @@ export interface Problem {
   resolved_at: string | null;
 }
 
+export const UNSAVED_FROM = -1_000_000_000;
+
 // Keys whose values never reach the log, whatever the caller passes.
 const SECRET = /pass(word)?|secret|token|api[_-]?key|authorization|cookie/i;
 
@@ -55,6 +57,9 @@ export class Log extends EventEmitter {
   // True on a standby, whose problem table is a copy of the hub's: its own problems take ids below
   // zero, so the hub's never overwrite them.
   local: () => boolean = () => false;
+  // Problems the database couldn't take (a full disk). Their ids are far below any standby's own.
+  #unsaved: Problem[] = [];
+  #unsavedId = UNSAVED_FROM;
 
   constructor(db: Db, file: string | null, now: () => Date = () => new Date()) {
     super();
@@ -67,7 +72,8 @@ export class Log extends EventEmitter {
   write(level: Level, source: string, msg: string, data: Record<string, unknown> = {}): void {
     if (!this.file) return;
     const line = { at: this.#now().toISOString(), level, source, msg: redactText(msg), ...(redact(data) as object) };
-    appendFileSync(this.file, `${JSON.stringify(line)}\n`);
+    // A log that can't be written (a full disk) never stops what was being logged.
+    try { appendFileSync(this.file, `${JSON.stringify(line)}\n`); } catch { /* the problem itself is still shown */ }
   }
 
   info(source: string, msg: string, data?: Record<string, unknown>): void { this.write('info', source, msg, data); }
@@ -80,19 +86,35 @@ export class Log extends EventEmitter {
     // Problems are stored, shown and copied to the standby: no secret value gets that far.
     const message = redactText(said);
     if (opts.detail) opts = { ...opts, detail: redactText(opts.detail) };
-    if (this.local()) this.#db.run('INSERT INTO problem (id, at, source, message, detail, task_id) VALUES ((SELECT MIN(0, IFNULL(MIN(id), 0)) - 1 FROM problem), ?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
-    else this.#db.run('INSERT INTO problem (at, source, message, detail, task_id) VALUES (?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
-    const row = this.#db.get<Problem>('SELECT * FROM problem WHERE id = last_insert_rowid()')!;
+    let row: Problem;
+    try {
+      if (this.local()) this.#db.run('INSERT INTO problem (id, at, source, message, detail, task_id) VALUES ((SELECT MIN(0, IFNULL(MIN(id), 0)) - 1 FROM problem), ?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
+      else this.#db.run('INSERT INTO problem (at, source, message, detail, task_id) VALUES (?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
+      row = this.#db.get<Problem>('SELECT * FROM problem WHERE id = last_insert_rowid()')!;
+    } catch (e) {
+      // The database can't take it (the disk is full, M7b's chaos pass): the problem is still
+      // shown and listed, kept in memory until Nova restarts, and written to the log file.
+      row = { id: --this.#unsavedId, at, source, message, detail: `${opts.detail ? `${opts.detail}\n` : ''}(Not saved: ${(e as Error).message})`, task_id: opts.taskId ?? null, resolved_at: null };
+      this.#unsaved = [row, ...this.#unsaved].slice(0, 50);
+    }
     this.write('error', source, message, { detail: opts.detail, task: opts.taskId });
     this.emit('problem', row);
     return row;
   }
 
   problems(opts: { open?: boolean } = {}): Problem[] {
-    return this.#db.all<Problem>(`SELECT * FROM problem ${opts.open ? 'WHERE resolved_at IS NULL' : ''} ORDER BY id DESC LIMIT 200`);
+    const kept = this.#unsaved.filter((p) => !opts.open || !p.resolved_at);
+    return [...kept, ...this.#db.all<Problem>(`SELECT * FROM problem ${opts.open ? 'WHERE resolved_at IS NULL' : ''} ORDER BY id DESC LIMIT 200`)];
+  }
+
+  // A problem that couldn't be saved (its id is below UNSAVED_FROM), or null.
+  unsaved(id: number): Problem | null {
+    return this.#unsaved.find((p) => p.id === id) ?? null;
   }
 
   resolve(id: number): void {
+    const u = this.#unsaved.find((p) => p.id === id);
+    if (u) { u.resolved_at ??= this.#now().toISOString(); return; }
     this.#db.run('UPDATE problem SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL', this.#now().toISOString(), id);
   }
 }

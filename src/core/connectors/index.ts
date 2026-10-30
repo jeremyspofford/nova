@@ -58,6 +58,8 @@ export interface Connector {
   recheck?(): void;
   // What an event rule may listen for: null when the topic is fine, else why not.
   topic?(topic: string): string | null;
+  // The host name it connects to, so a repair playbook can tell a name that won't resolve (M7b).
+  host?(): string | null;
   worker?: Worker;
   confirm?: Checker;
   routes?: Route[];

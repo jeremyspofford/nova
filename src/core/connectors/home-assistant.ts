@@ -369,6 +369,7 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
         ],
       },
       egress,
+      host: () => { try { return cfg().url ? new URL(cfg().url!).hostname : null; } catch { return null; } },
       status: () => {
         const c = cfg();
         const t = c.url ? ctx.secrets.has(TOKEN) : false;

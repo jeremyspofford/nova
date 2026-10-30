@@ -1,12 +1,33 @@
-// The supervisor keeps Nova running (M7 plan §2), with real processes: a crash is restarted after a
-// wait that doubles, a server that stops answering is restarted, and a crash loop goes to safe
-// mode: held, the reason written (state, database, a page at Nova's address) and offered a way on.
+// Chaos pass, the hub (M7 plan §3), with real processes under the supervisor: a crash is restarted
+// after a wait that doubles, a server that stops answering is restarted, and a crash loop goes to
+// safe mode: held, the reason written (state, database, a page at Nova's address) and offered a
+// way on. A hub that is dead for good (no supervisor can bring it back) is M4's failover: the
+// standby takes over, and says so with its playbook.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { freePort } from '../acceptance/m4c-support.ts';
-import { api, cli, releaseRepo, scratch, sleep, supervise, until } from './support.ts';
+import { api, cli, releaseRepo, scratch, sleep, supervise, until } from '../supervisor/support.ts';
+import { pair } from './mesh.ts';
+import { problemWith, until as waitFor } from './support.ts';
+
+test('a dead hub: the standby takes over (failover turned on), and the problem says what happened, with its playbook', async () => {
+  const p = await pair({ failoverAfterS: 1 });
+  try {
+    p.core.start();
+    p.h.core.memory.remember({ kind: 'fact', content: 'The meter is read on the 5th.', recorded_by: 'person' });
+    await waitFor(() => p.core.mesh.sync.cursor(), (c) => c >= p.h.core.mesh.sync.head(), 15_000, 'the standby to catch up');
+    await p.h.stop();
+    p.link.cut();
+    await waitFor(() => p.core.mesh.role.role(), (r) => r === 'hub', 20_000, 'the standby to take over');
+    const prob = await problemWith(p.core, 'hub-failover');
+    assert.match(prob.message, /making itself the hub/);
+    assert.ok(p.core.memory.list().some((m) => m.content === 'The meter is read on the 5th.'), 'what it had copied is here');
+  } finally {
+    await p.stop();
+  }
+});
 
 test('a crash is restarted with a growing wait, and told as a problem with what the supervisor did', async () => {
   const dir = scratch('nova-sup-crash-');
