@@ -11,19 +11,24 @@ import { lint } from '../scripts/lint-tokens.js';
 const fixture = () => JSON.parse(readFileSync(new URL('./core/fixtures/design-system.json', import.meta.url), 'utf8'));
 const msgs = (css, path = 'ui/x.css') => lint(path, css).map((p) => p[1]);
 
-test('a package’s transitions are 150–300 ms, in every mode', () => {
+// Outside the range is a warning, and the CSS is clamped (a design made before M9 still applies:
+// tests/core/design-before-m9.test.ts). Nova's own built-ins are in range (below).
+test('a package’s transitions outside 150–300 ms are named, in every mode, and clamped', () => {
   assert.equal(MOTION_MIN_MS, 150);
   assert.equal(MOTION_MAX_MS, 300);
   for (const [token, value, ok] of [['motion/transition', '200ms', true], ['motion/duration-fast', '149ms', false], ['motion/duration-fast', '150ms', true], ['motion/duration-slow', '300ms', true], ['motion/duration-slow', '0.42s', false], ['motion/transition', '120ms', false]]) {
     const p = fixture();
     p.tokens[token] = value;
-    const { problems } = validatePackage(p);
-    const said = problems.some((x) => x.includes(token) && /150–300ms/.test(x));
-    assert.equal(said, !ok, `${token} ${value}: ${problems.join(' ')}`);
+    const { problems, warnings } = validatePackage(p);
+    assert.deepEqual(problems, [], `${token} ${value}: never a problem`);
+    const said = warnings.some((x) => x.includes(token) && /150–300ms/.test(x));
+    assert.equal(said, !ok, `${token} ${value}: ${warnings.join(' ')}`);
+    const used = new RegExp(`--${token.replace('/', '-')}: (\\d+)ms;`).exec(generateCss(p, { mode: 'light' }))?.[1];
+    assert.ok(Number(used) >= 150 && Number(used) <= 300, `${token} ${value}: the CSS uses ${used}ms`);
   }
   const p = fixture();
   p.modes = { dark: { 'motion/duration-slow': '450ms' } };
-  assert.match(validatePackage(p).problems.join(' '), /In dark mode, motion\/duration-slow must be 150–300ms/);
+  assert.match(validatePackage(p).warnings.join(' '), /In dark mode, motion\/duration-slow should be 150–300ms/);
 });
 
 test('the loops (breathing, pulse) show a state as long as it lasts: not held to the range', () => {
@@ -42,7 +47,8 @@ test('no bounce or elastic: an easing curve may not overshoot', () => {
   assert.equal(overshoots('ease-out'), false);
   const p = fixture();
   p.tokens['motion/ease'] = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
-  assert.match(validatePackage(p).problems.join(' '), /motion\/ease overshoots/);
+  assert.match(validatePackage(p).warnings.join(' '), /motion\/ease overshoots/);
+  assert.doesNotMatch(generateCss(p, { mode: 'light' }), /--motion-ease: cubic-bezier\([^)]*1\.56/, 'the CSS never bounces');
 });
 
 test('every built-in design is within the range and doesn’t bounce', () => {

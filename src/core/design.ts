@@ -120,6 +120,20 @@ export const MOTION_MIN_MS = 150;
 export const MOTION_MAX_MS = 300;
 export const TRANSITION_TOKENS: readonly string[] = Object.freeze(['motion/transition', 'motion/duration-fast', 'motion/duration-slow']);
 // A cubic-bezier whose y control points leave [0, 1] overshoots its end (or its start): a bounce.
+// What Nova uses for a motion token (M9): a transition within 150–300 ms, a curve with its y values
+// clipped to [0, 1]. Everything else (the loops, reduced motion) as given.
+export function motionValue(name: string, v: string): string {
+  if (TRANSITION_TOKENS.includes(name) && /^\d*\.?\d+(?:ms|s)$/.test(v)) {
+    const t = v.endsWith('ms') ? Number(v.slice(0, -2)) : Number(v.slice(0, -1)) * 1000;
+    return t < MOTION_MIN_MS ? `${MOTION_MIN_MS}ms` : t > MOTION_MAX_MS ? `${MOTION_MAX_MS}ms` : v;
+  }
+  if (name === 'motion/ease' && overshoots(v)) {
+    const n = /^cubic-bezier\(([^)]*)\)$/.exec(v.trim())![1]!.split(',').map((x) => Number(x.trim()));
+    const c = (y: number) => Math.min(1, Math.max(0, y));
+    return `cubic-bezier(${n[0]}, ${c(n[1]!)}, ${n[2]}, ${c(n[3]!)})`;
+  }
+  return v;
+}
 export function overshoots(easing: string): boolean {
   const m = /^cubic-bezier\(([^)]*)\)$/.exec(easing.trim());
   if (!m) return false;
@@ -220,15 +234,17 @@ export function contrast(a: number[], b: number[]): number {
 }
 
 // Translucent text sits on its background.
-// A see-through surface is seen over the page, whose gradient runs from bg/raised to bg/base (M9:
-// measured in the browser, the raised end is often the worse one). The ratio is the worse of the two.
-function ratio(tokens: Record<string, unknown>, fg: string, bg: string): number | null {
+// A see-through surface is seen over the page. Validation, as before M9, sees it over bg/base. The
+// live check (`page: true`, M9) sees it over both ends of the page's gradient, bg/raised to bg/base:
+// measured in the browser, the raised end is often the worse one. That stricter view warns and offers
+// the fix; it never disables a design that was valid (review of PR #234).
+function ratio(tokens: Record<string, unknown>, fg: string, bg: string, page = false): number | null {
   const base = parseColor(tokens['bg/base']);
   const b0 = parseColor(tokens[bg]);
   const f0 = parseColor(tokens[fg]);
   if (!base || !b0 || !f0 || base[3] < 1) return null;
   const r0 = parseColor(tokens['bg/raised']);
-  const pages = [base, ...(r0 ? [r0[3] < 1 ? over(r0, base) : r0] : [])];
+  const pages = [base, ...(page && r0 ? [r0[3] < 1 ? over(r0, base) : r0] : [])];
   const backs = b0[3] < 1 ? pages.map((u) => over(b0, u)) : [b0];
   return Math.min(...backs.map((b) => contrast(f0[3] < 1 ? over(f0, b) : f0, b)));
 }
@@ -254,7 +270,7 @@ export interface CheckResult { fg: string; bg: string; min: number; kind: CheckK
 export function liveCheck(tokens: Record<string, unknown>): { ok: boolean; margin: number; results: CheckResult[] } {
   const results: CheckResult[] = [];
   for (const [fg, bg, min, kind, what] of LIVE_CHECKS) {
-    const r = ratio(tokens, fg, bg);
+    const r = ratio(tokens, fg, bg, true);
     if (r === null) continue;
     results.push({ fg, bg, min, kind, what, ratio: Math.round(r * 100) / 100, ok: r >= min });
   }
@@ -349,9 +365,12 @@ function checkValues(values: Record<string, unknown>, where: string, out: string
   }
 }
 
-export function validatePackage(input: unknown): { ok: boolean; problems: string[] } {
+// `problems` stop a package being applied; `warnings` don't (M9's motion range, say: a design made
+// before it is clamped when its CSS is generated, never refused).
+export function validatePackage(input: unknown): { ok: boolean; problems: string[]; warnings: string[] } {
   const out: string[] = [];
-  if (!isObj(input)) return { ok: false, problems: ['A design system must be an object.'] };
+  const warn: string[] = [];
+  if (!isObj(input)) return { ok: false, problems: ['A design system must be an object.'], warnings: [] };
   const p = input;
   try { validateManifest(p); } catch (e) { out.push(...((e as CoreError).details?.length ? (e as CoreError).details : [(e as Error).message])); }
   if (p.kind !== 'design-system') out.push('kind must be design-system.');
@@ -388,15 +407,16 @@ export function validatePackage(input: unknown): { ok: boolean; problems: string
   }
 
   // Motion: transitions in 150–300 ms, and no curve that bounces, in the default set and each mode.
+  // A warning: the generated CSS clamps it (motionValue), so a design made before M9 still applies.
   for (const [mode, set] of [['', tokens], ...Object.entries(modes).map(([m, v]) => [m, v])] as [string, Record<string, unknown>][]) {
     const lead = mode ? `In ${mode} mode, ` : '';
     for (const name of TRANSITION_TOKENS) {
       const v = set[name];
       if (typeof v !== 'string' || !validValue('duration', v)) continue;
-      if (ms(v) < MOTION_MIN_MS || ms(v) > MOTION_MAX_MS) out.push(`${lead}${name} must be ${MOTION_MIN_MS}–${MOTION_MAX_MS}ms (calm, and never felt as a wait); got ${v}.`);
+      if (ms(v) < MOTION_MIN_MS || ms(v) > MOTION_MAX_MS) warn.push(`${lead}${name} should be ${MOTION_MIN_MS}–${MOTION_MAX_MS}ms (calm, and never felt as a wait); got ${v}, so Nova uses ${motionValue(name, v)}.`);
     }
     const ease = set['motion/ease'];
-    if (typeof ease === 'string' && validValue('easing', ease) && overshoots(ease)) out.push(`${lead}motion/ease overshoots (${ease}): no bounce or elastic motion; keep both y values between 0 and 1.`);
+    if (typeof ease === 'string' && validValue('easing', ease) && overshoots(ease)) warn.push(`${lead}motion/ease overshoots (${ease}): no bounce or elastic motion, so Nova uses ${motionValue('motion/ease', ease)}.`);
   }
 
   // Reduced motion: loops stop, transitions stay short.
@@ -441,7 +461,7 @@ export function validatePackage(input: unknown): { ok: boolean; problems: string
   if (p.preview !== undefined && !(Array.isArray(p.preview) && p.preview.every((x) => typeof x === 'string' && /^(?!\/)(?!.*\.\.)[\w./-]+\.(png|jpe?g|webp)$/.test(x)))) {
     out.push('preview must be a list of image paths inside the package, like previews/home.png.');
   }
-  return { ok: out.length === 0, problems: out };
+  return { ok: out.length === 0, problems: out, warnings: warn };
 }
 
 // ---- CSS generation -------------------------------------------------------------------------------
@@ -469,7 +489,7 @@ export function generateCss(input: unknown, o: { mode?: Mode; nudge?: Record<str
   // Type sizes go out in rem (M9: 200% text), so a person's own text size scales Nova's text: a
   // package's 16px is 1rem, the same at the browser's default and twice as big at 200%.
   const css = (n: string, v: string) => (TOKENS[n]?.syntax === 'size' && /^\d*\.?\d+px$/.test(v) ? `${Number((parseFloat(v) / 16).toFixed(4))}rem` : v);
-  const vars = (t: Record<string, string>) => TOKEN_NAMES.filter((n) => n in t).map((n) => `${cssVar(n)}: ${css(n, t[n]!)};`);
+  const vars = (t: Record<string, string>, motion = true) => TOKEN_NAMES.filter((n) => n in t).map((n) => `${cssVar(n)}: ${css(n, motion ? motionValue(n, t[n]!) : t[n]!)};`);
   const safe = `${name} ${pkg.version} (${pkg.id})`.replace(/[^\w .,'’()-]/g, '');
 
   const root = [`color-scheme: ${scheme(resolved)};`, ...vars(resolved)];
@@ -485,7 +505,7 @@ export function generateCss(input: unknown, o: { mode?: Mode; nudge?: Record<str
     }
   }
   const reduced = { ...REDUCED_MOTION, ...(pkg.reduced_motion ?? {}) };
-  parts.push(`@media (prefers-reduced-motion: reduce) {\n${block(':root', vars(reduced), '  ')}\n}`);
+  parts.push(`@media (prefers-reduced-motion: reduce) {\n${block(':root', vars(reduced, false), '  ')}\n}`);
   return `${parts.join('\n')}\n`;
 }
 
@@ -788,7 +808,7 @@ export class Design extends EventEmitter {
     })) : {};
     // What the one-tap fix could do for it: the colours it would move, and those it can't fix.
     const fix = v.ok ? contrastNudge(m) : { nudge: {}, unfixable: [] };
-    return { id: x.id, name: m.name, version: x.version, description: m.description ?? '', state: x.state, builtin: this.#builtins.has(x.id), starter: STARTERS.includes(x.id), valid: v.ok, problems: v.problems, extras: m.extras ?? [], preview: m.preview ?? [], looks: seen, fixable: Object.keys(fix.nudge), unfixable: fix.unfixable };
+    return { id: x.id, name: m.name, version: x.version, description: m.description ?? '', state: x.state, builtin: this.#builtins.has(x.id), starter: STARTERS.includes(x.id), valid: v.ok, problems: v.problems, warnings: v.warnings, extras: m.extras ?? [], preview: m.preview ?? [], looks: seen, fixable: Object.keys(fix.nudge), unfixable: fix.unfixable };
   }
 
   #usable(id: string): boolean {
