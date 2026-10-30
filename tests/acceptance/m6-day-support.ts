@@ -322,11 +322,12 @@ export async function day(o: DayOptions): Promise<DayResult> {
   const memory = promoted.body.memory;
   assert.equal(memory.content, FACT);
   assert.equal(memory.source, `capture:${factEvent.id}`);
-  assert.equal(memory.recorded_by, 'person');
+  // Recorded as whoever asked: here the hub's own screen (a paired device would be device:<id>).
+  assert.equal(memory.recorded_by, 'console');
   assert.equal(memory.observed_at, factEvent.at);
   const provenance = await get(`/capture/memory/${memory.id}`);
   assert.equal(provenance.length, 1);
-  assert.deepEqual([provenance[0].event_id, provenance[0].by, provenance[0].present], [factEvent.id, 'person', true]);
+  assert.deepEqual([provenance[0].event_id, provenance[0].by, provenance[0].present], [factEvent.id, 'console', true]);
   if (proposal) assert.equal(provenance[0].proposal_id, proposal.id);
   say(`- ${proposal ? 'Accepted the local model’s proposal' : 'Promoted it directly (the model hadn’t proposed it)'}: memory “${memory.content}” (scope ${memory.scope}).`);
   say(`- Provenance: source \`capture:<event>\`, observed ${memory.observed_at}, recorded by ${memory.recorded_by}; GET /capture/memory/{id} → event captured ${provenance[0].event_at} on ${provenance[0].device_id === src.device.id ? 'the hub' : provenance[0].device_id}${provenance[0].proposal_id ? ', from the proposal' : ''}.`);

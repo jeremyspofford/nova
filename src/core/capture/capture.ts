@@ -620,12 +620,12 @@ export class Capture extends EventEmitter {
       } catch (e) {
         this.#o.log.warn('capture', 'A captured event couldn’t be triaged.', { error: (e as Error).message });
       }
-      looked++;
-      if (!this.#db.get('SELECT 1 FROM capture_event WHERE id = ?', r.id)) continue;
       // The provider that should answer didn't (its model is down): stop here and ask again on a
       // later pass, rather than count this and the rest as looked at.
       const expected = this.#o.proposer?.() ?? null;
-      if (expected && d?.provider !== expected) break;
+      if (expected && d?.provider !== expected) { waiting = true; break; }
+      looked++;
+      if (!this.#db.get('SELECT 1 FROM capture_event WHERE id = ?', r.id)) continue;
       this.#db.tx(() => {
         this.#db.run('UPDATE capture_event SET triaged = 1 WHERE id = ?', r.id);
         const p = d?.answers.remember;
