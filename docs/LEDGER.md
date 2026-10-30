@@ -99,6 +99,18 @@ failed before the fix.
   nested call is now `SAVEPOINT … RELEASE`, rolled back to on a throw; the
   outer one commits or rolls back as before. The inbox runs each item's effect
   in its own savepoint.
+- **join.sh: the archive's hash, and trust on first use, said plainly.** The
+  served `join.sh` names the SHA-256 of the `device-agent.tar` the hub serves
+  and refuses (installs and runs nothing) a download that doesn't match, or a
+  computer with no `sha256sum`, `shasum` or `openssl` to check it. That
+  catches a damaged or swapped archive, not a hostile hub address: script and
+  archive come over the same channel, and no fingerprint can be checked in
+  `sh` before the agent runs (the six digits prove the hub only afterwards).
+  So the command is trust on first use, and the Add a device sheet now says
+  so: "The command installs whatever <hub> sends. Run it only where that
+  address can only be this Nova: over HTTPS the computer trusts, or on a
+  network you control." Also: `--kind=standby` is recognised like
+  `--kind standby`, so a standby is never started as a computer agent.
 
 **2026-10-30 (M4 review): trust, pairing and access fixes.**
 

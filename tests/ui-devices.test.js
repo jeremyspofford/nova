@@ -56,6 +56,8 @@ test('the add sheet: a QR that decodes to the pairing address, the address and c
   assert.match(html, /ABCD-EFGH<\/dd>/);
   assert.match(html, /curl -fsS https:\/\/hub\.example:4320\/join\.sh \| sh -s -- ABCD-EFGH/);
   assert.match(html, /Only enter this code at https:\/\/hub\.example:4320 on a device you already trust\./);
+  // The command is trust on first use, and the sheet says so.
+  assert.match(html, /The command installs whatever https:\/\/hub\.example:4320 sends\. Run it only where that address can only be this Nova/);
   // The QR in the sheet is the pairing address.
   const { size, dark } = qrEncode(p.url);
   const n = (size + 8) * 4;

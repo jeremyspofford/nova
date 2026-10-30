@@ -546,7 +546,9 @@ export function createCore(o: CoreOptions) {
   function agentDownload(req: IncomingMessage, res: ServerResponse, url: URL): boolean {
     if ((url.pathname !== '/join.sh' && url.pathname !== '/device-agent.tar') || (req.method !== 'GET' && req.method !== 'HEAD')) return false;
     const sh = url.pathname === '/join.sh';
-    const body = sh ? Buffer.from(joinScript(publicUrl())) : (tarCache ??= agentTar(o.version));
+    tarCache ??= agentTar(o.version);
+    // The script names the archive's hash, and checks what it downloads against it.
+    const body = sh ? Buffer.from(joinScript(publicUrl(), createHash('sha256').update(tarCache).digest('hex'))) : tarCache;
     res.writeHead(200, {
       'content-type': sh ? 'text/x-shellscript; charset=utf-8' : 'application/x-tar', 'content-length': body.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
       ...(sh ? {} : { 'content-disposition': 'attachment; filename="device-agent.tar"' }),

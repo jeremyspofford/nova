@@ -294,6 +294,7 @@ export function addDeviceSheet(p, { now = new Date() } = {}) {
   <dl class="facts"><dt>Address</dt><dd>${esc(p.hub_url)}/pair</dd><dt>Code</dt><dd class="pair-code-text">${esc(p.code)}</dd></dl>
   <h3 class="sheet-heading">On a computer</h3>
   <div class="command"><code id="add-command">${esc(p.command)}</code><button type="button" class="btn small" data-action="copy-command">Copy</button></div>
+  <p class="sheet-line is-faint">The command installs whatever ${esc(p.hub_url)} sends. Run it only where that address can only be this Nova: over HTTPS the computer trusts, or on a network you control.</p>
   <p class="warning" role="note">Only enter this code at ${esc(p.hub_url)} on a device you already trust.</p>
   <p class="sheet-line is-faint">When the device shows six digits, they appear here too, to compare.</p>
 </div>`;

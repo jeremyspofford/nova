@@ -113,7 +113,14 @@ export function runtimeBundle(novaVersion: string, sign: (message: Uint8Array) =
 // The one-line command's script: `curl -fsS <hub>/join.sh | sh -s -- <code> [--name …]`. POSIX sh,
 // nothing installed system-wide: the agent goes to <device home>/agent and its keys to
 // <device home>/boot. TLS trust is the system's, or NOVA_CA_FILE's.
-export function joinScript(hubUrl: string | null): string {
+//
+// Trust on first use: the script and the archive come from whatever answers at the hub's address,
+// and the script names the archive's SHA-256, so the two must at least agree (a damaged or swapped
+// download is refused). Nothing outside that channel vouches for them: the command is only as
+// safe as the address it fetches from (HTTPS with a certificate the computer trusts, or a network
+// the person controls). The six digits, compared on both screens, then prove which hub the agent
+// joined, but by then the agent has already run.
+export function joinScript(hubUrl: string | null, tarSha256: string | null = null): string {
   if (!hubUrl) {
     return `#!/bin/sh
 echo "This Nova has no address other devices can reach, so nothing can join it yet. Start it with a mesh address (NOVA_MESH_URL); its README says how." >&2
@@ -121,6 +128,7 @@ exit 1
 `;
   }
   const hub = hubUrl.replace(/'/g, '');
+  const sha = /^[0-9a-f]{64}$/.test(tarSha256 ?? '') ? tarSha256! : '';
   return `#!/bin/sh
 # Adds this computer to Nova at ${hub}.
 #   curl -fsS ${hub}/join.sh | sh -s -- <code> [--name <name>] [--kind computer|standby] [--nova-home <dir>]
@@ -128,9 +136,11 @@ exit 1
 # unpacks it into the device home (NOVA_DEVICE_HOME, or ~/.nova-device), asks to join with the code,
 # and once you approve on the hub, starts the agent in the background. It installs nothing outside
 # the device home. Set NOVA_CA_FILE to trust a hub whose certificate the system doesn't know, and
-# NOVA_JOIN_NO_RUN=1 to start the agent yourself.
+# NOVA_JOIN_NO_RUN=1 to start the agent yourself. It checks the agent it downloads against the
+# SHA-256 below; both come from the same hub, so run this only where ${hub} can only be your Nova.
 set -eu
 HUB='${hub}'
+AGENT_SHA256='${sha}'
 if [ "$#" -lt 1 ] || [ -z "$1" ]; then
   echo "Usage: curl -fsS $HUB/join.sh | sh -s -- <code>" >&2
   exit 2
@@ -159,12 +169,28 @@ if [ -n "\${NOVA_CA_FILE:-}" ]; then
 else
   curl -fsS -o "$TMP/agent.tar" "$HUB/device-agent.tar"
 fi
+if command -v sha256sum >/dev/null 2>&1; then GOT=$(sha256sum "$TMP/agent.tar" | cut -d ' ' -f 1)
+elif command -v shasum >/dev/null 2>&1; then GOT=$(shasum -a 256 "$TMP/agent.tar" | cut -d ' ' -f 1)
+elif command -v openssl >/dev/null 2>&1; then GOT=$(openssl dgst -sha256 "$TMP/agent.tar" | sed 's/.*= *//')
+else
+  echo "This computer has no way to check the download (sha256sum, shasum or openssl), so nothing was installed." >&2
+  exit 1
+fi
+if [ -z "$AGENT_SHA256" ] || [ "$GOT" != "$AGENT_SHA256" ]; then
+  echo "The agent downloaded from $HUB doesn’t match the one this script names, so nothing was installed. Try again; if it happens again, something between this computer and Nova may be changing what it downloads." >&2
+  exit 1
+fi
 tar -xf "$TMP/agent.tar" -C "$TMP/agent"
 rm -rf "$DEVICE_HOME/agent"
 mv "$TMP/agent" "$DEVICE_HOME/agent"
 BOOT="$DEVICE_HOME/agent/src/device/boot.ts"
 NOVA_DEVICE_HOME="$DEVICE_HOME" node "$BOOT" join "$HUB" --code "$CODE" "$@"
-case " $* " in *" --kind standby "*) exit 0 ;; esac
+# A standby runs as a Nova server, not as this agent: --kind standby and --kind=standby alike.
+PREV=''
+for A in "$@"; do
+  if [ "$A" = "--kind=standby" ] || { [ "$PREV" = "--kind" ] && [ "$A" = "standby" ]; }; then exit 0; fi
+  PREV="$A"
+done
 if [ -n "\${NOVA_JOIN_NO_RUN:-}" ]; then
   echo "To start the agent: NOVA_DEVICE_HOME='$DEVICE_HOME' node '$BOOT' run"
   exit 0

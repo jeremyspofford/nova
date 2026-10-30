@@ -3,11 +3,12 @@
 // a node answers, and the installer and archive. Neutral placeholders only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { helloProofMessage, runtimeManifest, runtimeManifestMessage, verifyDeviceSignature } from '../../src/core/index.ts';
+import { helloProofMessage, joinScript, runtimeManifest, runtimeManifestMessage, verifyDeviceSignature } from '../../src/core/index.ts';
 import { call, enroll, hub } from './mesh-support.ts';
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
@@ -269,6 +270,51 @@ test('join.sh and device-agent.tar are public, and the archive unpacks to the ag
     } finally {
       await lone.stop();
     }
+  } finally {
+    await h.stop();
+  }
+});
+
+test('join.sh checks the archive against the hash it carries, and a standby is never started as a computer, however --kind is written', async () => {
+  const h = await hub();
+  try {
+    const tarBytes = Buffer.from(await (await fetch(`${h.mesh}/device-agent.tar`)).arrayBuffer());
+    const sha = createHash('sha256').update(tarBytes).digest('hex');
+    // What the hub serves: the script names the hash of the archive it serves.
+    assert.ok((await (await fetch(`${h.mesh}/join.sh`)).text()).includes(sha), 'join.sh carries the archive’s hash');
+
+    // A stand-in node that records how join.sh calls it, so the script runs end to end here.
+    const dir = mkdtempSync(join(tmpdir(), 'nova-join-sh-'));
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    const calls = join(dir, 'calls.log');
+    writeFileSync(join(bin, 'node'), `#!/bin/sh\nif [ "$1" = "-p" ]; then echo 26; exit 0; fi\nif [ "$1" = "--version" ]; then echo v26.0.0; exit 0; fi\nshift\necho "$*" >> '${calls}'\n`);
+    chmodSync(join(bin, 'node'), 0o755);
+    // Not spawnSync: the hub that serves the archive is in this process.
+    const run = (script: string, args: string[]) => {
+      writeFileSync(join(dir, 'join.sh'), script);
+      const c = spawn('sh', [join(dir, 'join.sh'), ...args], { env: { PATH: `${bin}:${process.env.PATH ?? ''}`, HOME: dir, NOVA_DEVICE_HOME: join(dir, 'device') } });
+      let stderr = '';
+      c.stderr.on('data', (d) => { stderr += d; });
+      c.stdout.resume();
+      const kill = setTimeout(() => c.kill('SIGKILL'), 30_000);
+      return new Promise<{ status: number | null; stderr: string }>((r) => c.on('close', (status) => { clearTimeout(kill); r({ status, stderr }); }));
+    };
+    const lines = () => (existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n') : []);
+
+    // A standby, with --kind=standby: joined, and not started as a computer agent.
+    const standby = await run(joinScript(h.mesh, sha), ['ABCD-EFGH', '--kind=standby', '--nova-home', join(dir, 'nova')]);
+    assert.equal(standby.status, 0, standby.stderr);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(lines().length, 1, lines().join('\n'));
+    assert.match(lines()[0]!, /^join .* --code ABCD-EFGH --kind=standby/);
+
+    // An archive that isn't the one the hub named: nothing is unpacked or run.
+    rmSync(calls, { force: true });
+    const swapped = await run(joinScript(h.mesh, '0'.repeat(64)), ['ABCD-EFGH']);
+    assert.notEqual(swapped.status, 0);
+    assert.match(swapped.stderr, /doesn’t match/);
+    assert.deepEqual(lines(), [], 'nothing ran');
   } finally {
     await h.stop();
   }
