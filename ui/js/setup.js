@@ -1,7 +1,7 @@
 // First run: on a blank profile, setup is a conversation (/api/v1/setup) that takes the whole
 // screen in every layout. It ends on the welcome task's VerifiedResultCard, with its evidence
 // one tap away, and then the person continues into Nova.
-import { api, on } from './core.js';
+import { Unreachable, api, on } from './core.js';
 import { ICONS, chatBubble, evidenceViewer, lookingIntoItCard, verifiedResultCard } from './components.js';
 import { liveOrb, openSheet, toast } from './shell.js';
 import { escapeHtml as esc } from './markdown.js';
@@ -20,7 +20,8 @@ let resetReport = null;
 // Resolves true when setup is showing (the profile is blank), false when it's already done.
 export async function startSetup({ done }) {
   finished = done;
-  try { view = await api('GET', '/setup'); } catch { return false; }
+  // Nova out of reach: the app opens as it is and says so, rather than waiting on setup.
+  try { view = await api('GET', '/setup'); } catch (e) { if (e instanceof Unreachable) window.dispatchEvent(new CustomEvent('nova:unreachable')); return false; }
   if (view.done) return false;
   try { resetReport = await api('GET', '/reset/report'); } catch { resetReport = null; }
   // After a reset this browser forgets what it kept of the Nova that was erased.

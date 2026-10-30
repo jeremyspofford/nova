@@ -332,7 +332,8 @@ function renderCore({ enter: entering = false } = {}) {
 let refreshing = null;
 function refreshCore(parts) {
   // The chrome too: the "saved earlier" banner depends on whether these answers were live.
-  refreshing = core.load(parts).then(({ any, live }) => { if (any) setReachable(live); renderChrome(); renderCore(); renderVoice(); });
+  // No part answered at all, not even from the offline cache: Nova is out of reach, and the page says so.
+  refreshing = core.load(parts).then(({ any, live }) => { setReachable(any && live); renderChrome(); renderCore(); renderVoice(); });
   return refreshing;
 }
 
@@ -2019,6 +2020,7 @@ function keepSession() {
 
 // ---- start -----------------------------------------------------------------
 
+window.addEventListener('nova:unreachable', () => setReachable(false));
 window.addEventListener('online', () => { state.online = true; renderChrome(); showSignals(); refreshCore(); });
 window.addEventListener('offline', () => { state.online = false; renderChrome(); showSignals(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !setupShowing()) { loadList(); refreshCore(); } });

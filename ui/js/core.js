@@ -29,10 +29,14 @@ export const fromCache = (res) => res.headers.get('x-nova-offline') === '1';
 
 // The answer and whether it came from the offline cache, kept together so concurrent requests
 // can't mix up whose answer was stale.
+// A read the hub hasn't answered in this long is no answer: the page says Nova is out of reach
+// instead of waiting forever (M9 review of #234). Changes (POST, PUT, DELETE) wait for their answer.
+export const NO_ANSWER_MS = 10_000;
 export async function request(method, path, body, retried = false) {
   let res;
   try {
-    res = await fetch(`${V1}${path}`, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const signal = method === 'GET' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(NO_ANSWER_MS) : undefined;
+    res = await fetch(`${V1}${path}`, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), ...(signal ? { signal } : {}) });
   } catch {
     throw new Unreachable('Nova’s server didn’t answer.');
   }
