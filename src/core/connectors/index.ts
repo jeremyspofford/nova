@@ -372,11 +372,14 @@ function safeStatus(c: Connector): ConnectorStatus {
 // ---- where a service is ---------------------------------------------------------------------
 
 // local: this computer, the home network, or a device in the mesh; remote: anywhere else. Decided
-// from the address as written (a name that resolves somewhere public still counts by its name).
-export function addressEgress(url: string, meshHosts: string[] = []): Egress {
+// from the address as written. A bare name (homeassistant) or one under .lan or .internal could
+// resolve anywhere, so it is local only when it was resolved to this network (`localNames`, see
+// needsResolving); .local (mDNS) and .home.arpa are this network by definition.
+export function addressEgress(url: string, meshHosts: string[] = [], localNames: string[] = []): Egress {
   let host: string;
   try { host = new URL(url).hostname.replace(/^\[|\]$/g, '').toLowerCase(); } catch { return 'remote'; }
   if (meshHosts.map((h) => h.toLowerCase()).includes(host)) return 'local';
+  if (localNames.map((h) => h.toLowerCase()).includes(host)) return 'local';
   if (host === 'localhost' || host.endsWith('.localhost')) return 'local';
   const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
   if (v4) {
@@ -384,6 +387,21 @@ export function addressEgress(url: string, meshHosts: string[] = []): Egress {
     return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) ? 'local' : 'remote';
   }
   if (host.includes(':')) return host === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(host) || /^fe[89ab][0-9a-f]?:/.test(host) ? 'local' : 'remote';
-  if (!host.includes('.') || /\.(local|lan|home\.arpa|internal)$/.test(host)) return 'local';
+  if (/\.(local|home\.arpa)$/.test(host)) return 'local';
   return 'remote';
+}
+
+// A name whose place only resolving it can tell: no dots, or under .lan or .internal.
+export function needsResolving(url: string): string | null {
+  let host: string;
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return null; }
+  if (host === 'localhost' || host.includes(':') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return null;
+  return !host.includes('.') || /\.(lan|internal)$/.test(host) ? host : null;
+}
+
+// Whether every address a name resolves to is on this network.
+export async function resolvesLocal(host: string, lookup: (host: string) => Promise<string[]>): Promise<boolean> {
+  let addrs: string[];
+  try { addrs = await lookup(host); } catch { return false; }
+  return addrs.length > 0 && addrs.every((a) => addressEgress(`http://${a.includes(':') ? `[${a}]` : a}`) === 'local');
 }

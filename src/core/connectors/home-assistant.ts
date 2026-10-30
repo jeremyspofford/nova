@@ -15,7 +15,8 @@ import type { Brief, Evidence } from '../envelope.ts';
 import type { Egress } from '../workers.ts';
 import type { Route } from '../api.ts';
 import type { Connector, ConnectorContext, ConnectorStatus } from './index.ts';
-import { addressEgress } from './index.ts';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { addressEgress, needsResolving, resolvesLocal } from './index.ts';
 import { NO_REDIRECT, reachProblem } from '../providers/types.ts';
 
 export const HA_ID = 'home-assistant';
@@ -46,13 +47,38 @@ export const HA_MANIFEST = {
 };
 
 interface State { entity_id: string; state: string; attributes?: Record<string, unknown>; last_changed?: string; last_updated?: string }
-interface Config { url?: string; since?: string; name?: string | null; broken?: boolean; tier3_domains?: string[] }
+// resolved_local: a bare name in the address that resolved to this network when it was connected.
+interface Config { url?: string; since?: string; name?: string | null; broken?: boolean; tier3_domains?: string[]; resolved_local?: string }
 
 export interface HomeAssistantOptions {
   // Pauses between reconnects: the first, and the most it grows to.
   reconnectMs?: { first: number; max: number };
   fetch?: typeof fetch;
   timeoutMs?: number;
+  // How a bare name is resolved, to tell whether it is on this network (tests inject one).
+  lookup?: (host: string) => Promise<string[]>;
+}
+
+// Service data: plain keys, and plain values (or short lists of them), small enough to read in an
+// approval. Entities are named like light.kitchen.
+const DATA_KEY = /^[a-z_][a-z0-9_]{0,63}$/;
+const plainValue = (v: unknown) => v === null || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.length <= 200);
+export function checkServiceData(raw: unknown, entity: unknown): { data: Record<string, unknown>; entities: string[] } {
+  if (raw !== undefined && (typeof raw !== 'object' || raw === null || Array.isArray(raw))) throw new CoreError('validation', 'data is an object of the service’s settings, like {"brightness": 120}.');
+  const data = { ...(raw as Record<string, unknown> | undefined) };
+  for (const [k, v] of Object.entries(data)) {
+    if (!DATA_KEY.test(k)) throw new CoreError('validation', `“${k.slice(0, 40)}” isn’t a setting name Home Assistant uses (lowercase letters, digits and _).`);
+    if (!(plainValue(v) || (Array.isArray(v) && v.length <= 50 && v.every(plainValue)))) throw new CoreError('validation', `${k} must be a plain value (text, a number, true or false) or a short list of them.`);
+  }
+  if (JSON.stringify(data).length > 2000) throw new CoreError('validation', 'That service data is too long to show you in an approval; send less.');
+  if (entity !== undefined) {
+    if (typeof entity !== 'string' || !ENTITY.test(entity)) throw new CoreError('validation', 'An entity is named like light.kitchen.');
+    if (data.entity_id !== undefined && data.entity_id !== entity) throw new CoreError('validation', 'entity_id and data.entity_id name different entities; name it once.');
+    data.entity_id = entity;
+  }
+  const ids = data.entity_id === undefined ? [] : Array.isArray(data.entity_id) ? data.entity_id : [data.entity_id];
+  if (!ids.every((e) => typeof e === 'string' && ENTITY.test(e))) throw new CoreError('validation', 'data.entity_id names entities like light.kitchen.');
+  return { data, entities: ids as string[] };
 }
 
 const wsUrl = (base: string) => `${base.replace(/^http/, 'ws')}/api/websocket`;
@@ -90,7 +116,9 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
     const backoff = o.reconnectMs ?? { first: 1000, max: 60_000 };
     const cfg = () => ctx.config.get() as Config;
     const token = () => ctx.secrets.get(TOKEN);
-    const egress = (): Egress => (cfg().url ? addressEgress(cfg().url!, ctx.meshHosts()) : 'local');
+    const lookup = o.lookup ?? (async (h: string) => (await dnsLookup(h, { all: true })).map((a) => a.address));
+    const localNames = () => (cfg().resolved_local ? [cfg().resolved_local!] : []);
+    const egress = (): Egress => (cfg().url ? addressEgress(cfg().url!, ctx.meshHosts(), localNames()) : 'local');
     const host = () => { try { return new URL(cfg().url!).host; } catch { return 'your Home Assistant'; } };
     // Readings Nova took itself after a service call, by confirmation id, for the verifier.
     const observed = new Map<string, State>();
@@ -180,12 +208,12 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
     }
 
     // ---- REST -----------------------------------------------------------------------------
-    async function api<T>(path: string, init: { method?: string; body?: unknown; base?: string; token?: string } = {}): Promise<T> {
+    async function api<T>(path: string, init: { method?: string; body?: unknown; base?: string; token?: string; local?: string[] } = {}): Promise<T> {
       const base = init.base ?? cfg().url;
       const t = init.token ?? token();
       if (!base || !t) throw new CoreError('conflict', 'Home Assistant isn’t connected. Connect it in Settings, under Connections.');
       if (!init.base && cfg().broken) throw new CoreError('conflict', 'Home Assistant needs reconnecting: it no longer accepts Nova’s token.');
-      const e = init.base ? addressEgress(base, ctx.meshHosts()) : egress();
+      const e = init.base ? addressEgress(base, ctx.meshHosts(), init.local ?? []) : egress();
       if (!ctx.permits(e)) throw new CoreError('forbidden', `Your Home Assistant is outside your network (${new URL(base).host}), and Nova is set to local-only, so Nova doesn’t contact it.`);
       let res: Response;
       try {
@@ -216,6 +244,8 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
     });
     const tier3 = () => cfg().tier3_domains ?? DEFAULT_TIER3;
     const tierFor = (domain: string): 2 | 3 => (tier3().includes(domain) ? 3 : 2);
+    // From the domain and every entity the call names: homeassistant.turn_off on a lock is a lock.
+    const tierOf = (domain: string, entities: string[]): 2 | 3 => (entities.some((e) => tierFor(e.split('.')[0]!) === 3) ? 3 : tierFor(domain));
 
     // ---- the worker: one service call per task, after the ledger's approval ----------------
     const worker = {
@@ -233,7 +263,9 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
         });
         if (!i.domain || !DOMAIN.test(i.domain) || !i.service || !DOMAIN.test(i.service)) return report('failed', 'The task doesn’t name a Home Assistant service.');
         // The tier comes from the domain, whatever the task asked for: a call can't lower its own gate.
-        const need = tierFor(i.domain);
+        let entities: string[];
+        try { entities = checkServiceData(i.data, undefined).entities; } catch (e) { return report('failed', (e as Error).message); }
+        const need = tierOf(i.domain, entities);
         if (brief.approval_tier < need) return report('blocked', `This changes your home, so it needs your OK first (tier ${need}).`, [], [`Tier ${need} is needed for ${i.domain}.`]);
         if (signal.aborted) return report('failed', 'Stopped before calling Home Assistant.');
         const changed = await api<State[]>(`/api/services/${i.domain}/${i.service}`, { method: 'POST', body: i.data ?? {} });
@@ -283,14 +315,15 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
           const { domain, service } = params as { domain: string; service: string };
           if (!DOMAIN.test(domain) || !DOMAIN.test(service)) throw new CoreError('validation', 'A service is named by its domain and service, like light and turn_on.');
           if (!cfg().url || !token()) throw new CoreError('conflict', 'Home Assistant isn’t connected. Connect it in Settings, under Connections.');
-          const entity = body.entity_id;
-          if (entity !== undefined && (typeof entity !== 'string' || !ENTITY.test(entity))) throw new CoreError('validation', 'An entity is named like light.kitchen.');
-          const data = { ...(typeof body.data === 'object' && body.data && !Array.isArray(body.data) ? body.data as Record<string, unknown> : {}), ...(entity ? { entity_id: entity } : {}) };
-          const tier = tierFor(domain);
+          const { data, entities } = checkServiceData(body.data, body.entity_id);
+          const entity = entities.length === 1 ? entities[0] : undefined;
+          const tier = tierOf(domain, entities);
+          // Everything the call carries is in the approval, in words.
+          const settings = Object.entries(data).filter(([k]) => k !== 'entity_id').map(([k, v]) => `${k} ${Array.isArray(v) ? v.join(', ') : String(v)}`);
           const expect = entity && EXPECT[service] ? EXPECT[service] : undefined;
           return ctx.delegate({
-            title: `${service.replace(/_/g, ' ')}${entity ? ` ${entity}` : ''} (Home Assistant)`,
-            goal: `Home Assistant runs ${domain}.${service}${entity ? ` on ${entity}` : ''}${expect ? `, and ${entity} shows ${expect}` : ''}.`,
+            title: `${service.replace(/_/g, ' ')}${entities.length ? ` ${entities.join(', ')}` : ''} (Home Assistant)`.slice(0, 200),
+            goal: `Home Assistant runs ${domain}.${service}${entities.length ? ` on ${entities.join(', ')}` : ''}${settings.length ? `, with ${settings.join('; ')}` : ''}${expect ? `, and ${entity} shows ${expect}` : ''}.`,
             approval_tier: tier,
             evidence_required: [{ kind: 'confirmation' }],
             inputs: { domain, service, data, ...(expect ? { expect } : {}) },
@@ -347,17 +380,20 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
         if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new CoreError('validation', 'The address starts with http:// or https://.');
         if (url.username || url.password) throw new CoreError('validation', 'Leave the name and password out of the address; the token is what signs Nova in.');
         const base = url.origin + url.pathname.replace(/\/+$/, '');
+        // A bare name is local only if it resolves to this network; that is checked now, and kept.
+        const bare = needsResolving(base);
+        const local = bare && await resolvesLocal(bare, lookup) ? [bare] : [];
         const t = String(input.token ?? '').trim();
         if (!t) throw new CoreError('validation', 'Paste a long-lived access token from your Home Assistant profile.');
-        const hello = await api<{ message?: string }>('/api/', { base, token: t });
+        const hello = await api<{ message?: string }>('/api/', { base, token: t, local });
         if (!hello?.message) throw new CoreError('validation', 'That address answers, but not like Home Assistant does.');
-        const info = await api<{ location_name?: string; version?: string }>('/api/config', { base, token: t }).catch(() => ({} as { location_name?: string }));
+        const info = await api<{ location_name?: string; version?: string }>('/api/config', { base, token: t, local }).catch(() => ({} as { location_name?: string }));
         // Connecting again (a new token): the old socket goes; the registry starts a new one.
         stopLive();
         ctx.secrets.put(TOKEN, t);
         const keep = cfg().url === base ? cfg().tier3_domains : undefined;
         ctx.config.clear();
-        ctx.config.set({ url: base, since: ctx.now().toISOString(), name: info.location_name ?? null, ...(keep ? { tier3_domains: keep } : {}) });
+        ctx.config.set({ url: base, since: ctx.now().toISOString(), name: info.location_name ?? null, ...(keep ? { tier3_domains: keep } : {}), ...(local.length ? { resolved_local: local[0] } : {}) });
         return this.status();
       },
       async disconnect() {
@@ -368,7 +404,7 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
         if (t && base) {
           const iss = tokenIssuer(t);
           if (!iss) note = 'Home Assistant’s token isn’t one Nova can revoke itself; delete it in your Home Assistant profile, under Long-lived access tokens.';
-          else if (!ctx.permits(addressEgress(base, ctx.meshHosts()))) note = 'Nova is local-only and your Home Assistant is outside your network, so Nova didn’t contact it: delete the token in your Home Assistant profile.';
+          else if (!ctx.permits(addressEgress(base, ctx.meshHosts(), localNames()))) note = 'Nova is local-only and your Home Assistant is outside your network, so Nova didn’t contact it: delete the token in your Home Assistant profile.';
           else {
             try {
               const r = await wsCommand(base, t, { type: 'auth/delete_refresh_token', refresh_token_id: iss }, timeoutMs);
