@@ -728,8 +728,8 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 .toast:not(:has(.toast-btn)) { padding-right: var(--space-5); }
 .toast[data-tone="alert"] { border-color: var(--status-error); }
 .toast[data-tone="alert"]::before { content: ''; flex: none; width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: var(--status-error); }
-.toast-btn { padding: var(--space-1) var(--space-3); border: 0; border-radius: var(--radius-pill); background: var(--surface-card-hover); font: var(--type-weight-strong) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--accent-primary); white-space: nowrap; }
-.toast-btn:hover { color: var(--text-primary); }
+.toast-btn { padding: var(--space-1) var(--space-3); border: 0; border-radius: var(--radius-pill); background: var(--surface-card-hover); font: var(--type-weight-strong) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-primary); white-space: nowrap; }
+.toast-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
 .proactive-banner { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
 .banner-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
@@ -785,7 +785,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 :root { --hit: 44px; }
 @media (pointer: coarse) { :root { --hit: 48px; } }
 .icon-btn, .send, .mic { width: var(--hit); height: var(--hit); }
-.btn:not(.small), .input, .field, .composer textarea, .memory-edit, select, .record > summary, .toc-item, .more .nav-item { min-height: var(--hit); }
+.btn:not(.small), .input, .field, .composer textarea, .memory-edit, select, .record > summary, .toc-item, .more .nav-item, .toast-btn { min-height: var(--hit); }
 .act { min-height: var(--hit); min-width: var(--hit); justify-content: center; }
 /* A disclosure's own row is as tall as its hit area, so two in a row don't share one. */
 summary { padding-block: max(0px, calc((var(--hit) - 1lh) / 2)); }
@@ -794,8 +794,8 @@ summary { padding-block: max(0px, calc((var(--hit) - 1lh) / 2)); }
 /* A message's actions stay pressable over its revealed time. */
 .msg-user .actions { z-index: 3; }
 /* The hit area is square even where the control is round or has rounded corners. */
-.icon-btn, .send, .mic, .act, .btn, button.status, a.link, .set-link, .switch, summary { position: relative; }
-.icon-btn::before, .send::before, .mic::before, .act::before, .btn::before, button.status::before, a.link::before, .set-link::before, .switch::before, summary::before {
+.icon-btn, .send, .mic, .act, .btn, button.status, a.link, .set-link, .switch, summary, .toast-btn { position: relative; }
+.icon-btn::before, .send::before, .mic::before, .act::before, .btn::before, button.status::before, a.link::before, .set-link::before, .switch::before, summary::before, .toast-btn::before {
   content: '';
   position: absolute;
   left: 50%;

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import type { Page } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
 import { browser, device, still } from './support.ts';
-import { CONTROLS, DESKTOP, VIEWS, seeded, settled } from './m9-support.ts';
+import { CONTROLS, DESKTOP, PHONE, VIEWS, seeded, settled } from './m9-support.ts';
 
 // In the page: the colour actually seen, for text and for what is behind it.
 function measures() {
@@ -115,10 +115,11 @@ function measures() {
 
 type Row = readonly [string, number, number];
 
-// One look of one design: the main views, each state.
-async function audit(page: Page, base: string, look: string) {
+// One look of one design: the main views, each state. `phone`: at a phone's width, where nothing is
+// hovered, but the tabs, the conversations drawer, More, a sheet and a toast are measured open.
+async function audit(page: Page, base: string, look: string, { phone = false } = {}) {
   const fails: string[] = [];
-  const states = { rest: 0, hover: 0, focus: 0, selected: 0, disabled: 0, error: 0, placeholder: 0, icon: 0 };
+  const states = { rest: 0, hover: 0, focus: 0, selected: 0, disabled: 0, error: 0, placeholder: 0, icon: 0, overlays: 0 };
   const add = (state: string, rows: readonly Row[], where: string) => {
     for (const [what, r, min] of rows) if (r < min) fails.push(`${look} · ${where} · ${state}: ${what} ${r}:1 (needs ${min}:1)`);
   };
@@ -158,8 +159,8 @@ async function audit(page: Page, base: string, look: string) {
     states.icon += ic.length;
     add('icon', ic, where);
 
-    // Hover: one of each kind of control.
-    const kinds = await page.$$eval(CONTROLS, (els) => {
+    // Hover: one of each kind of control (not on a phone: nothing is hovered there).
+    const kinds = phone ? [] : await page.$$eval(CONTROLS, (els) => {
       const seen = new Map<string, number>();
       els.forEach((e, i) => {
         const k = `${e.tagName}.${[...e.classList].sort().join('.')}`;
@@ -177,13 +178,21 @@ async function audit(page: Page, base: string, look: string) {
     }
     await page.mouse.move(0, 0);
 
-    // Focus: the keyboard through the view.
+    // Focus: the keyboard through the whole view, every stop, until focus comes round again.
     await page.locator('body').click({ position: { x: 1, y: 1 } }).catch(() => {});
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    for (let i = 0; i < 30; i++) {
+    await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur(); (window as any).__stops = new Set(); });
+    for (let i = 0; i < 400; i++) {
       await page.keyboard.press('Tab');
-      const ok = await page.evaluate(() => { const a = document.activeElement; return !!a && a !== document.body && (a as HTMLElement).checkVisibility() && a.matches(':focus-visible'); });
-      if (!ok) continue;
+      const ok = await page.evaluate(() => {
+        const a = document.activeElement;
+        if (!a || a === document.body) return 'skip';
+        const stops = (window as any).__stops as Set<Element>;
+        if (stops.has(a)) return 'round';
+        stops.add(a);
+        return (a as HTMLElement).checkVisibility() && a.matches(':focus-visible') ? 'measure' : 'skip';
+      });
+      if (ok === 'round') break;
+      if (ok !== 'measure') continue;
       // What the indicator looks like unfocused, then focused again from the keyboard.
       const before = await page.evaluate(() => { const c = (window as any).__c; const a = document.activeElement as HTMLElement; a.blur(); const b = c.candidates(a).map((x: Element) => c.ring(x)); (window as any).__last = a; return b; });
       await page.evaluate(() => (window as any).__last.focus());
@@ -194,6 +203,37 @@ async function audit(page: Page, base: string, look: string) {
       add('focus', rows.slice(1), where);
     }
   }
+  if (!phone) return { fails, states };
+
+  // At a phone's width: the tabs, and what opens over the page, each measured on its own (the page
+  // behind a veil isn't meant to be read).
+  const over = async (where: string, root: string) => {
+    await still(page);
+    add('at rest', await page.evaluate((r) => (window as any).__c.text(document.querySelector(r)), root), where);
+    add('icon', (await page.evaluate(() => (window as any).__c.icons())), where);
+    states.overlays++;
+  };
+  await page.goto('about:blank');
+  await page.goto(`${base}${VIEWS.chat}`);
+  await settled(page, 'chat');
+  await over('the tabs', '#tabs');
+  await page.click('#menu');
+  await page.waitForSelector('.app.drawer-open');
+  await over('the conversations drawer', '#sidebar');
+  await page.keyboard.press('Escape');
+  await page.click('#more-btn');
+  await page.waitForSelector('#more:not([hidden])');
+  await over('More', '#more');
+  await page.keyboard.press('Escape');
+  await page.goto(`${base}/tasks`);
+  await settled(page, 'tasks');
+  await page.locator('#tasks-view [data-action="open-task"]').first().click();
+  await page.waitForSelector('#sheet[open]');
+  await over('a task’s sheet', '#sheet');
+  await page.keyboard.press('Escape');
+  await page.evaluate(async () => (await import(String('/js/shell.js'))).toast('Saved. Nova will use it from the next message.', { action: { label: 'Undo', run: () => {} } }));
+  await page.waitForSelector('#toast:not([hidden])');
+  await over('a toast', '#toast');
   return { fails, states };
 }
 
@@ -210,21 +250,23 @@ test('M9 gate, contrast: every built-in design, in every look, in every state, a
       assert.equal((await m.send('POST', `/api/v1/design-systems/${ds.id}/apply`, { scope: 'user' })).status, 200);
       const looks = new Set<string>();
       for (const scheme of ['light', 'dark'] as const) {
-        const d = await device(b, { ...DESKTOP, scheme });
+       for (const phone of [false, true]) {
+        const d = await device(b, { ...(phone ? PHONE : DESKTOP), scheme });
         await d.ctx.addInitScript(measures);
         await d.page.goto(`${m.base}/`);
         await settled(d.page, 'home');
         await d.page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim() !== '');
         const bg = await d.page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim());
-        if (looks.has(bg)) { await d.ctx.close(); continue; }
-        looks.add(bg);
-        const look = `${ds.name}${scheme === 'dark' ? ' (dark system)' : ' (light system)'}`;
-        const r = await audit(d.page, m.base, look);
+        if (looks.has(`${bg}|${phone}`)) { await d.ctx.close(); continue; }
+        looks.add(`${bg}|${phone}`);
+        const look = `${ds.name}${scheme === 'dark' ? ' (dark system)' : ' (light system)'}, ${phone ? 'phone' : 'desktop'}`;
+        const r = await audit(d.page, m.base, look, { phone });
         fails.push(...r.fails);
         rows.push(`${look.padEnd(32)} ${Object.entries(r.states).map(([k, v]) => `${k} ${v}`).join(' · ')}${r.fails.length ? ` · ${r.fails.length} below` : ' · all pass'}`);
-        for (const [k, v] of Object.entries(r.states)) assert.ok(v > 0, `${look}: the ${k} state was measured`);
+        for (const [k, v] of Object.entries(r.states)) if (!(phone && k === 'hover') && !(!phone && k === 'overlays')) assert.ok(v > 0, `${look}: the ${k} state was measured`);
         assert.deepEqual(d.errors, [], `${look}: no errors in the page`);
         await d.ctx.close();
+       }
       }
     }
     console.log(`contrast: measured per look (views: home, chat, tasks, memory, settings and three of its categories)\n${rows.join('\n')}`);

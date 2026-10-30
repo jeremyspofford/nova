@@ -125,6 +125,11 @@ test('M9 gate, hit areas: every control at a phone’s width is 44×44, 48×48 t
     await settled(page, 'memory');
     await page.locator('#memory .memory-item .memory-text').first().tap();
     await check('memory, editing');
+    // A toast with its action (Undo, Edit again, See Health).
+    await page.keyboard.press('Escape');
+    await page.evaluate(async () => (await import(String('/js/shell.js'))).toast('Forgotten.', { action: { label: 'Undo', run: () => {} } }));
+    await page.waitForSelector('#toast:not([hidden])');
+    await check('a toast', '#toast');
     assert.deepEqual(d.errors, [], 'no errors in the page');
     console.log(`hit areas: controls checked per state\n${counts.join('\n')}`);
     assert.deepEqual(misses, [], `${misses.length} controls have less than 44×44 to press`);
