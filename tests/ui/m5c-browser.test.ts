@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stop } from '../acceptance/support.ts';
 import { blank, browser, finishSetup } from './support.ts';
-import { browserEnv, browserTask, events, formPlan, settled, startFormSite, waitTask } from './m5c-support.ts';
+import { browserEnv, browserTask, delegate, events, formPlan, settled, startFormSite, waitTask } from './m5c-support.ts';
 
 test('M5c: a browser task fills the form on its own and ends Verified, checked by Nova itself', { timeout: 120_000 }, async (t) => {
   const b = await browser();
@@ -23,15 +23,16 @@ test('M5c: a browser task fills the form on its own and ends Verified, checked b
     const health = await m.get('/api/v1/browser');
     assert.equal(health.chromium.available, true, health.chromium.detail);
 
-    const r = await m.send('POST', '/api/v1/tasks', browserTask(formPlan(site, { person: false })));
+    const r = await delegate(m, formPlan(site, { person: false }));
     assert.equal(r.status, 201, JSON.stringify(r.body));
     assert.equal(r.body.privacy_mode, 'local-only', 'a local site is fine for a local-only task');
+    assert.equal(r.body.approval_tier, 2, 'sending a form asks first');
     const task = await waitTask(m, r.body.id, settled);
     assert.equal(task.state, 'done', task.reason ?? '');
     assert.equal(task.verification!.ok, true);
     const why = Object.fromEntries(task.verification!.checks.map((c) => [c.requirement.kind, c.why]));
     assert.match(why.screenshot!, /Nova took this screenshot itself/);
-    assert.match(why.url!, /Nova fetched .*\/done\/R-[0-9a-f]+ again itself/);
+    assert.match(why.url!, /Nova fetched .*\/records again itself/);
 
     // Checked independently of Nova: the site's own record, and the screenshot on disk.
     assert.equal(site.records.length, 1);
@@ -87,7 +88,7 @@ test('M5c: hosts a task didnâ€™t declare are refused and recorded; the plan canâ
     assert.equal(bad.status, 400);
     assert.match(JSON.stringify(bad.body.details), /outside the allowed hosts \(elsewhere\.example\.test:80\)/);
     // And a remote host is refused for a local-only task, saying why.
-    const remote = await m.send('POST', '/api/v1/tasks', browserTask({ allowed_hosts: ['example.test'], steps: [{ do: 'navigate', url: 'https://example.test/' }] }, 'Go remote'));
+    const remote = await m.send('POST', '/api/v1/tasks', browserTask({ allowed_hosts: ['example.test'], steps: [{ do: 'navigate', url: 'https://example.test/' }], verify: { expect: ['Example'] } }, 'Go remote'));
     assert.equal(remote.status, 400);
     assert.match(remote.body.error, /sends data off your devices, and this task is local-only/);
   } finally {
