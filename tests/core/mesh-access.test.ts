@@ -356,4 +356,6 @@ test('the server process announces its mesh address', async () => {
   proc.kill('SIGTERM');
   await new Promise((r) => proc.on('exit', r));
   assert.match(out, /Devices pair and connect at http:\/\/127\.0\.0\.1:0 \(listening on 127\.0\.0\.1:\d+, over an encrypted network, as you said\)/);
+  // Something on this machine that forwards to the console port looks like the console: said plainly.
+  assert.match(out, /Warning: whoever reaches port \d+ from this computer controls Nova completely\. Don’t point a port forward, tunnel or proxy at it/);
 });

@@ -71,6 +71,24 @@ built-ins only.
   also deletes every service-worker cache: the shell and the `/api/v1/*`
   answers kept for offline use. Memory, receipts, health and the mesh were
   already never cached.
+- **Console residual (not new, not fixed): a silent forwarder is the
+  console.** The console test is a loopback socket, a loopback `Host` and no
+  forwarding headers. Anything on the hub that passes TCP or HTTP to the
+  console port without adding those headers (`ssh -L/-R`, `socat`, a tunnel,
+  a proxy that rewrites `Host` to `localhost`) gives whoever reaches it full
+  control. Now said in the README (a boxed warning) and in the startup log at
+  every start. **Proposed mitigation, not built** (each changes how the
+  person opens Nova, so it is the owner's call): a per-start console key, as
+  Jupyter does. `npm start` prints `http://localhost:4317/#k=<key>` once; the
+  page trades the key for an HttpOnly, SameSite=Strict cookie bound to the
+  console port; the console test then also needs that cookie. A forwarder
+  passes the cookie only from a browser that already has it, so a stranger at
+  the far end gets nothing. Cost: the first open after each start (or each
+  key rotation) needs the printed link, and `npm run shots`, the UI gate and
+  scripts would read the key from the home (0600). A cheaper half-measure,
+  refusing a `Host` whose port isn't the console's own, stops only forwarders
+  that keep the client's `Host`, and those already fail the loopback-`Host`
+  test.
 
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and

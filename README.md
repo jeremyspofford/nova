@@ -140,6 +140,14 @@ request counts as the console only if it comes from this machine, is addressed
 to it, and passed through no proxy. Anything else, including a reverse proxy
 pointed at the console port, gets nothing until it is paired.
 
+> **Never point a port forward, tunnel or proxy at the console port.** Nova
+> knows a proxy by the headers it adds (`X-Forwarded-For` and the like). A
+> program on this computer that passes connections on without adding them
+> (`ssh -L`/`-R`, `socat`, a TCP tunnel, a proxy that rewrites the address to
+> `localhost`) makes everyone who reaches it look like you at this screen,
+> with full control of Nova. Nova can't tell the difference, and says so
+> every time it starts. Other devices pair at the mesh address instead.
+
 To pair a phone, a browser or a computer, give Nova a second address, the
 mesh address, that your devices can reach:
 

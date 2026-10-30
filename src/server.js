@@ -497,6 +497,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // The real port, so NOVA_PORT=0 (any free port) still says where Nova is.
     console.log(`Nova is ready at http://${config.host === '127.0.0.1' ? 'localhost' : config.host}:${nova.server.address().port}  (${ms} ms)`);
     console.log(`Home: ${config.home}`);
+    // The console is "a request from this machine, to this machine, through no proxy". A program
+    // here that passes connections on to this port without saying so (no X-Forwarded-For) makes
+    // whoever reaches it look exactly like that. Nova can't tell, so the person must know.
+    console.log(`Warning: whoever reaches port ${nova.server.address().port} from this computer controls Nova completely. Don’t point a port forward, tunnel or proxy at it; other devices pair at the mesh address (NOVA_MESH_URL) instead.`);
     if (!['127.0.0.1', 'localhost', '::1'].includes(config.host)) {
       console.log('Note: the console port is listening beyond this machine. Only requests from this machine get the console; anything else must pair first, and pairing needs a mesh address (NOVA_MESH_URL).');
     }
