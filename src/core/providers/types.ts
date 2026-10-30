@@ -2,7 +2,7 @@
 // manifest (CONTRACTS §4) carries an `adapter` block, run by one of Nova's built-in adapter
 // implementations. Nova runs no code an extension ships; a provider extension picks an
 // implementation and gives it settings.
-import type { Brief, Evidence } from '../envelope.ts';
+import type { Brief, Evidence, PrivacyMode } from '../envelope.ts';
 import type { Effects } from '../workers.ts';
 
 export const CLASSES = ['coding-agent', 'chat', 'automation'] as const;
@@ -53,6 +53,11 @@ export interface WorkInput {
   secret: (value: unknown) => string | null;
   // Where this provider keeps its own state for the task (n8n callbacks).
   stateDir: string;
+  // The task's privacy mode, never looser than the person's setting: a provider that learns only now
+  // where its work would go (Relay) checks it against this before it sends anything.
+  privacy?: PrivacyMode;
+  // For such a provider, the receipt is written when the brief really goes out, with where it went.
+  receipt?: (egress: string) => void;
   log: (line: string) => void;
 }
 

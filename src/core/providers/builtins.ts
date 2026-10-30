@@ -63,9 +63,9 @@ export const BUILTINS: (Record<string, unknown> & { id: string; name: string; ad
       { kind: 'network', target: 'Relay, on this computer', why: 'to brief Relay’s workers and read their run back; Relay says where its workers send the brief, and Nova keeps local-only work from them unless that is this computer' },
       { kind: 'device', target: 'this computer: runs git', why: 'to give Relay the task’s files as a repository, in Nova’s own folder for the task' },
     ],
-    config_schema: { type: 'object', properties: { base_url: { type: 'string' }, profile: { type: 'string' }, poll_ms: { type: 'number' }, busy_retry_s: { type: 'number' }, timeout_s: { type: 'number' } } },
+    config_schema: { type: 'object', properties: { base_url: { type: 'string' }, profile: { type: 'string' }, poll_ms: { type: 'number' }, busy_retry_s: { type: 'number' }, busy_limit: { type: 'number' }, timeout_s: { type: 'number' } } },
     health_check: { kind: 'http', path: '/api/status' },
-    adapter: { implementation: 'relay', class: 'coding-agent', transport: 'http', egress: 'remote:anthropic', capabilities: ['edit-files', 'worktrees'], config: { base_url: RELAY_URL, profile: '', poll_ms: 1000, busy_retry_s: 30, timeout_s: 1800 }, secrets: [] },
+    adapter: { implementation: 'relay', class: 'coding-agent', transport: 'http', egress: 'remote:anthropic', capabilities: ['edit-files', 'worktrees'], config: { base_url: RELAY_URL, profile: '', poll_ms: 1000, busy_retry_s: 30, busy_limit: 120, timeout_s: 1800 }, secrets: [] },
   },
 ];
 

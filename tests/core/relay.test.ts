@@ -55,12 +55,13 @@ async function relayOn(core: Core, url: string, more: Record<string, unknown> = 
 const sum = (core: Core) => readFileSync(join(core.workspace.root, 'calc', 'sum.mjs'), 'utf8');
 const posts = (relay: { requests: { method: string; path: string; body: unknown; headers: Record<string, unknown> }[] }, path: string) => relay.requests.filter((r) => r.method === 'POST' && r.path === path);
 
-test('requestId: a UUID from the idempotency key and the attempt, the same every time', () => {
-  const a = requestId('key-1', 1);
+test('requestId: a UUID from the task, its key, the attempt and the commit, the same every time', () => {
+  const base = 'c'.repeat(40);
+  const a = requestId('task-1', 'key-1', 1, base);
   assert.match(a, /^[a-f0-9]{8}-[a-f0-9]{4}-5[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
-  assert.equal(requestId('key-1', 1), a, 'a retry of the same attempt never starts a second run');
-  assert.notEqual(requestId('key-1', 2), a);
-  assert.notEqual(requestId('key-2', 1), a);
+  assert.equal(requestId('task-1', 'key-1', 1, base), a, 'a repeat of the same attempt never starts a second run');
+  assert.notEqual(requestId('task-1', 'key-1', 2, base), a);
+  assert.notEqual(requestId('task-1', 'key-2', 1, base), a);
 });
 
 test('settings: Relay is reached on this computer only, and it has no secrets', async () => {
@@ -159,7 +160,7 @@ test('a run: Relay’s worker fixes it in a worktree, Nova copies it in, runs th
     const start = posts(relay, '/api/workers')[0]!.body as Record<string, unknown>;
     assert.equal(start.check, 'none');
     assert.equal(start.allowTests, false);
-    assert.equal(start.requestId, requestId(t.brief.idempotency_key, 1));
+    assert.equal(start.requestId, requestId(t.id, t.brief.idempotency_key, 1, String(start.baseCommit)));
     assert.match(String((posts(relay, '/api/tasks')[0]!.body as { outcome: string }).outcome), /Make the failing test in calc\/ pass/);
 
     // The Relay run, recorded as an artifact: its id, branch, worktree and base, and Relay's diff.
@@ -340,8 +341,10 @@ test('busy answers aren’t attempts: four of them, a run that fails verificatio
     assert.equal((returned[0]!.detail as { reason: string }).reason, 'Relay was busy; this didn’t count as an attempt.');
     // The busy asks reused the first attempt's requestId; Relay started no run for them, so the
     // first real start under that id was a fresh run.
-    const ids = posts(relay, '/api/workers').map((r) => (r.body as { requestId: string }).requestId);
-    assert.deepEqual(ids.slice(0, 5), Array(5).fill(requestId(t.brief.idempotency_key, 1)));
+    const starts = posts(relay, '/api/workers').map((r) => r.body as { requestId: string; baseCommit: string; taskId: string });
+    const ids = starts.map((b) => b.requestId);
+    assert.deepEqual(ids.slice(0, 5), Array(5).fill(requestId(t.id, t.brief.idempotency_key, 1, starts[0]!.baseCommit)));
+    assert.equal(new Set(starts.slice(0, 5).map((b) => b.taskId)).size, 1, 'one Relay task for the attempt and its busy asks');
     assert.equal(ids.length, 6);
   } finally {
     await relay.close();

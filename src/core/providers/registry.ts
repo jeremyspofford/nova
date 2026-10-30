@@ -66,6 +66,15 @@ function looserOf(patch: Record<string, unknown>, now: Config): string | null {
 // What one task may bring back from a coding agent, at most.
 const MAX_CHANGES = 200;
 const MAX_CHANGE_BYTES = 50 * 1024 * 1024;
+// What Nova says when it asks a busy provider again by itself.
+const ASK_AGAIN = 'It was busy earlier; Nova asks again now.';
+// A length of time in words: seconds, minutes, or hours.
+function duration(s: number): string {
+  if (s < 90) return `${s} second${s === 1 ? '' : 's'}`;
+  if (s < 3600 - 30) return `${Math.round(s / 60)} minutes`;
+  if (s < 5400) return 'an hour';
+  return `${Math.round(s / 360) / 10} hours`;
+}
 // Said every time Nova asks to run a test on what a provider wrote.
 export const RUNS_THEIR_CODE = 'This runs code the provider wrote, as you, with access to your files.';
 type Reporter = (status: Report['status'], summary: string, more?: Partial<Report>, usage?: Usage) => Report;
@@ -225,9 +234,12 @@ export class Providers extends EventEmitter {
   // Where a provider's calls go. An HTTP provider's address decides: this machine or one of the
   // person's devices is local; anywhere else is remote, named by its host.
   where(id: string): Where {
-    const x = this.#entry(id);
+    return this.#whereOf(this.#entry(id), this.config(id));
+  }
+
+  // Where a provider's calls go with these settings (a run judges one snapshot of them).
+  #whereOf(x: Installed & { manifest: ProviderManifest }, c: Config): Where {
     const impl = this.#impl(x);
-    const c = this.config(id);
     if (x.manifest.adapter.implementation === 'custom-cli') {
       const e = c.egress as string;
       const name = customCli.model(c);
@@ -634,11 +646,14 @@ export class Providers extends EventEmitter {
     const mode: PrivacyMode = stricter(brief.privacy_mode, this.#o.profile.privacyDefault());
     // A service that reports where its work goes is asked again now: what it said at the last check
     // may have changed (Relay restarted with another model endpoint).
+    // The settings are read once for the whole run: what is checked here is what the brief goes to.
     if (impl.reportedWhere && impl.probe && x.state === 'enabled') {
-      const v = await this.check(id);
-      if (v.health.state === 'unreachable') return report('blocked', v.health.words);
+      const problem = await impl.probe(config, this.#secret, AbortSignal.any([signal, AbortSignal.timeout(6000)])).catch((e) => (e as Error).message);
+      this.#probes.set(id, { key: canonicalJson(config), problem, at: this.#now().toISOString() });
+      this.emit('change', { id, action: 'checked' });
+      if (problem) return report('blocked', problem);
     }
-    const where = this.where(id);
+    const where = this.#whereOf(x, config);
     if (!permits(mode, where.coarse)) return report('blocked', `Waiting on local capacity: ${name} would send this off your devices (${where.words.replace(/\.$/, '')}), and this task is ${mode}.`);
     if (x.state !== 'enabled') return report('blocked', `${name} is turned off.`);
     // Cloud spend is a policy (LOCAL-MODELS, Budgets): over budget, work for a provider off the
@@ -695,7 +710,9 @@ export class Providers extends EventEmitter {
       { kind: 'file' as const, ref: `brief:${brief.task_id}`, sha256: sha256(`${system}\n\n${prompt}`) },
       ...copied.map((f) => ({ kind: 'file' as const, ref: `workspace:${f.path}`, sha256: f.sha256 })),
     ];
-    if (!role) {
+    // A provider that learns where its work goes only as it sends it (Relay) writes its receipt then,
+    // through `receipt`, with where it went; one whose work never started writes none.
+    if (!role && !impl.reportedWhere) {
       try {
         this.#receipt(id, brief, mode, where.receipt, impl.model(config), items);
       } catch (e) {
@@ -704,14 +721,25 @@ export class Providers extends EventEmitter {
     }
     let out: WorkOutcome;
     try {
-      out = role ? await this.#roleWork(role, brief, mode, system, prompt, items, signal) : await impl.work({ provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd: space.root, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log });
+      out = role ? await this.#roleWork(role, brief, mode, system, prompt, items, signal) : await impl.work({ provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd: space.root, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log,
+        privacy: mode, ...(impl.reportedWhere ? { receipt: (egress: string) => this.#receipt(id, brief, mode, egress, impl.model(config), items) } : {}) });
     } catch (e) {
       if (signal.aborted) throw e;
       return report('failed', `${name} stopped with an error: ${(e as Error).message}`);
     }
     if (out.status !== 'done') {
       // Busy for now: Nova asks again by itself (safe: the provider works on a copy).
-      if (out.status === 'blocked' && out.retry_after_s) this.#retryLater(brief.task_id, out.retry_after_s, out.summary);
+      if (out.status === 'blocked' && out.retry_after_s) {
+        // Asked again by itself, up to a limit (120 times in a row by default, an hour at 30 s);
+        // then the task waits for the person.
+        const streak = this.#busyStreak(brief.task_id) + 1;
+        if (streak >= num(config.busy_limit, 120)) {
+          const words = `${name} has been busy for ${duration(streak * out.retry_after_s)}; Nova stopped asking. Retry when ${name} is free.`;
+          if (out.not_started) { try { this.#o.ledger.notStarted(brief.task_id, out.not_started); } catch { /* counted, then */ } }
+          return report('blocked', words, { blockers: [words] }, out.usage);
+        }
+        this.#retryLater(brief.task_id, out.retry_after_s, out.summary);
+      }
       // Nothing was started, so this dispatch isn't an attempt (the ledger takes it only with a
       // blocked report).
       if (out.status === 'blocked' && out.not_started) { try { this.#o.ledger.notStarted(brief.task_id, out.not_started); } catch { /* counted, then */ } }
@@ -881,10 +909,21 @@ export class Providers extends EventEmitter {
       // Its report isn't settled yet: look again shortly.
       if (task.state === 'active') { this.#retryLater(taskId, 1, why, false); return; }
       if (task.state !== 'waiting' || !task.reason?.includes(why)) return;
-      try { this.#o.ledger.retry(taskId, 'It was busy earlier; Nova asks again now.'); } catch { /* it moved on meanwhile */ }
+      try { this.#o.ledger.retry(taskId, ASK_AGAIN); } catch { /* it moved on meanwhile */ }
     }, s * 1000);
     t.unref();
     this.#later.set(taskId, t);
+  }
+
+  // How many busy answers in a row this task has had: retry_later notes since the person last retried
+  // it themselves.
+  #busyStreak(taskId: string): number {
+    let n = 0;
+    for (const e of this.#o.ledger.events(taskId).reverse()) {
+      if (e.kind === 'retry_later') n++;
+      else if (e.kind === 'retried' && (e.detail as { reason?: string } | null)?.reason !== ASK_AGAIN) break;
+    }
+    return n;
   }
 
   stop(): void {

@@ -19,7 +19,10 @@
 //           fake worker fixture (test/fixtures/fake-claude-worker.mjs, FAKE_WORKER_SCRIPT)
 //   busy: answer runtime_busy to the next N worker starts; slowMs: hold the run slot this long while
 //   "running" (for cancel); lagMs: how stale a read of a run is (Relay saves about every 300 ms);
-//   workerEgress: 'local' | 'remote:anthropic'; workers: false for no worker engine; api: 1.
+//   workerEgress: 'local' | 'remote:anthropic'; workers: false for no worker engine; api: 1;
+//   startDelayMs: answer a worker start this late (the run already exists); hooks.request(r, o) at
+//   every request (o: the live options), hooks.beforeComplete(run) → a patch for the record once
+//   it completes, for a broken or hostile Relay.
 // From the command line:
 //   node scripts/stand-ins/fake-relay.js [--port 0] [--mode honest] [--egress local]
 //   It prints "fake-relay listening at <url>".
@@ -48,7 +51,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'core.hooksP
 const now = () => new Date().toISOString();
 
 /**
- * @param {{ mode?: string, script?: any, workerEgress?: string, busy?: number, slowMs?: number, lagMs?: number, workers?: boolean, api?: number, dataDir?: string, port?: number }} [opts]
+ * @param {{ mode?: string, script?: any, workerEgress?: string, busy?: number, slowMs?: number, lagMs?: number, workers?: boolean, api?: number, dataDir?: string, port?: number, startDelayMs?: number, hooks?: { request?: (r: any, o: any) => void, beforeComplete?: (run: any) => any } }} [opts]
  */
 export function startFakeRelay(opts = {}) {
   const o = { mode: 'honest', workerEgress: 'local', busy: 0, slowMs: 0, lagMs: 0, workers: true, api: 1, ...opts };
@@ -122,6 +125,10 @@ export function startFakeRelay(opts = {}) {
           const r = review(dir, run.baseCommit, script.reportOmits ?? []);
           const validation = { status: 'not-run', command: null, output: '', finishedAt: now() };
           change(run, { status: 'completed', review: r, validation, finishedAt: now() });
+          // A test may then make the record (or the worktree) say something else, as a broken or
+          // hostile Relay would.
+          const patch = o.hooks?.beforeComplete?.(run);
+          if (patch) change(run, patch);
           run.handoff = {
             task: { id: run.taskId, title: tasks.get(run.taskId)?.title ?? '', outcome: tasks.get(run.taskId)?.outcome ?? '' },
             profile: { id: run.profileId, revision: run.profileRevision, engine: 'claude' },
@@ -151,6 +158,8 @@ export function startFakeRelay(opts = {}) {
     let body = null;
     try { body = raw ? JSON.parse(raw) : null; } catch { /* checked below */ }
     requests.push({ method: req.method, path, headers: req.headers, body });
+    // A test may change the stand-in's behaviour at a given request (o is its live options).
+    o.hooks?.request?.({ method: req.method, path, body }, o);
 
     // Transport: the Host check, no foreign Origin, and for a mutation the header, JSON, 32 KB.
     if (![`127.0.0.1:${port}`, `localhost:${port}`].includes(String(req.headers.host))) return fail(403, 'Unexpected host.');
@@ -241,6 +250,8 @@ export function startFakeRelay(opts = {}) {
           save(run);
           launch(run, project, o.mode === 'script' ? o.script ?? {} : SCRIPTS[o.mode] ?? SCRIPTS.honest);
         }
+        // A slow answer: the run exists before the 202 arrives.
+        if (o.startDelayMs) await new Promise((r) => later(o.startDelayMs, r));
         return send(202, { id: run.id, taskId: run.taskId, projectId: run.projectId, status: run.status, ...(run.error ? { error: run.error } : {}), createdAt: run.createdAt });
       }
       case 'GET /api/workers/:id': {
