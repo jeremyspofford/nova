@@ -166,3 +166,35 @@ test('copy-back: only what the brief named and let the provider change; never th
     assert.deepEqual(note.skipped.map((s) => s.path), ['notes/outside.md', 'tasks/other-task/planted.txt']);
   });
 });
+
+test('changing where an enabled provider runs or sends, or loosening its permissions, needs confirm; the key never goes to a new host first', async () => {
+  const first = await startFakeOpenAI({ model: 'm' });
+  const second = await startFakeOpenAI({ model: 'm' });
+  const home = mkdtempSync(join(tmpdir(), 'nova-guard-'));
+  const core = createCore({ home, version: '0.1.0', trustedOrigin: () => true, agent: { command: 'my-model', egress: 'remote' }, secrets: (n) => (n === 'K' ? 'example-key-0000' : null) });
+  try {
+    core.providers.configure('openai-compatible', { base_url: first.url, model: 'm', api_key: 'secret://K' });
+    core.providers.enable('openai-compatible', { approved: true });
+    assert.throws(() => core.providers.configure('openai-compatible', { base_url: second.url }), /confirm: true/);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.deepEqual(second.requests, [], 'the new host heard nothing, and got no key');
+    assert.equal(core.providers.config('openai-compatible').base_url, first.url);
+    core.providers.configure('openai-compatible', { model: 'm' }); // nothing about where it sends
+    core.providers.configure('openai-compatible', { base_url: second.url }, { confirm: true });
+    assert.equal(core.providers.config('openai-compatible').base_url, second.url);
+    // Looser permissions need confirm whether it is on or not; stricter ones don't.
+    assert.throws(() => core.providers.configure('claude-code', { permission_mode: 'bypassPermissions' }), /confirm: true/);
+    core.providers.configure('claude-code', { permission_mode: 'plan' });
+    core.providers.configure('claude-code', { permission_mode: 'bypassPermissions' }, { confirm: true });
+    core.providers.configure('codex', { sandbox: 'read-only' });
+    assert.throws(() => core.providers.configure('codex', { sandbox: 'workspace-write' }), /confirm: true/);
+    // The route takes confirm too.
+    const put = core.providers.routes().find((r) => r.method === 'PUT' && r.path === '/providers/{id}/config')!;
+    assert.throws(() => put.handle({ params: { id: 'openai-compatible' }, body: { config: { base_url: first.url } } } as never), /confirm: true/);
+    put.handle({ params: { id: 'openai-compatible' }, body: { config: { base_url: first.url }, confirm: true } } as never);
+  } finally {
+    await core.close();
+    await first.close();
+    await second.close();
+  }
+});

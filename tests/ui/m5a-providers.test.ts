@@ -34,8 +34,14 @@ test('M5a: Settings › Providers recommends one chat model; set up, turned on w
     await page.locator('[data-action="provider-setup"][data-provider="openai-compatible"]').click();
     await page.fill('#pf-base_url', fake.url);
     await page.fill('#pf-model', 'example-chat');
+    // The key is typed here and goes into the vault; the setting keeps only its name.
+    await page.fill('#pf-api_key-value', 'example-key-0000');
     await page.locator('.provider-form button[type="submit"]').click();
     await page.locator('.toast', { hasText: 'Saved.' }).waitFor();
+    assert.ok((await m.get('/api/v1/vault')).names.includes('provider/OPENAI_COMPATIBLE_API_KEY'), 'the key is in the vault');
+    const saved = (await m.get('/api/v1/providers/openai-compatible')).config;
+    assert.equal(saved.api_key, 'secret://OPENAI_COMPATIBLE_API_KEY');
+    assert.ok(!JSON.stringify(saved).includes('example-key-0000'), 'never in a setting');
 
     // Turning it on asks first, saying where its data goes.
     await page.locator('[data-action="provider-on"][data-provider="openai-compatible"]').click();
@@ -61,6 +67,7 @@ test('M5a: Settings › Providers recommends one chat model; set up, turned on w
     const { body } = await m.send('POST', '/api/sessions', { text: 'hello' });
     const s = await until<any>(() => m.get(`/api/sessions/${body.id}`), (x) => x.live === null && x.session.turns[0]?.state !== 'open', 400);
     assert.match(JSON.stringify(s.session.turns[0].items), /Hello from the local model\./);
+    assert.ok(fake.requests.some((r) => r.url === '/v1/chat/completions' && r.headers.authorization === 'Bearer example-key-0000'), 'the key from the vault went with the call');
 
     // A task for it: once the model has written its fix, Nova asks before running the test on it,
     // in the approval sheet, showing what changed and what running it means.

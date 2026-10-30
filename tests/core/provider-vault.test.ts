@@ -86,7 +86,7 @@ test('the NOVA_SECRET_<NAME> fallback is for development only: the vault wins, a
     core.vault.put('provider/OPENAI_KEY', KEY);
     const fake = await startFakeOpenAI({ model: 'm', key: KEY });
     try {
-      core.providers.configure('openai-compatible', { base_url: fake.url });
+      core.providers.configure('openai-compatible', { base_url: fake.url }, { confirm: true });
       await core.providers.check('openai-compatible');
       assert.equal(core.providers.health('openai-compatible').state, 'ready', 'the vault’s key, not the environment’s');
     } finally { await fake.close(); }

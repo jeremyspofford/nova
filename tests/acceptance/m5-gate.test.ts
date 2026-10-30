@@ -79,7 +79,7 @@ test('M5 gate: one brief, two providers (a coding agent and a chat model), evide
     assert.deepEqual(await egress(results['openai-compatible'].id), ['local']);
 
     // A provider that says it worked when it didn't: failed, with Nova's reason, for each class.
-    await m.send('PUT', api('/providers/claude-code/config'), { config: { command: `node ${FAKE_CLAUDE} --script ${script('liar')}` } });
+    await m.send('PUT', api('/providers/claude-code/config'), { config: { command: `node ${FAKE_CLAUDE} --script ${script('liar')}` }, confirm: true });
     honest = false;
     for (const owner of ['claude-code', 'openai-compatible']) {
       writeCalc(join(m.home, 'workspace'));

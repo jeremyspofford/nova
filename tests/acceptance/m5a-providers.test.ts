@@ -77,7 +77,7 @@ test('M5a: providers over the API — a verified coding task, privacy in plain w
 
     // 4. A chat model elsewhere, under local-only: nothing is sent, and Nova says why.
     await m.send('PUT', api('/profile/privacy/default'), { value: 'local-only' });
-    await m.send('PUT', api('/providers/openai-compatible/config'), { config: { base_url: 'https://models.example/v1' } });
+    await m.send('PUT', api('/providers/openai-compatible/config'), { config: { base_url: 'https://models.example/v1' }, confirm: true });
     const held = await chat('anything');
     assert.equal(held.turn.state, 'error');
     assert.match(JSON.stringify(held.turn.items), /privacy setting is local-only, and the model I chat with \(Local model \(Ollama or compatible\)\) sends conversations off your devices/);
@@ -87,7 +87,7 @@ test('M5a: providers over the API — a verified coding task, privacy in plain w
     const token = (await m.send('PUT', api('/providers/n8n/config'), { config: { webhook_url: 'http://127.0.0.1:9/webhook/x' } })).body.token as string;
     assert.match(token, /.{30,}/);
     n8n = await startFakeN8n({ secret: SECRET, nova: m.base, token });
-    await m.send('PUT', api('/providers/n8n/config'), { config: { webhook_url: n8n.url } });
+    await m.send('PUT', api('/providers/n8n/config'), { config: { webhook_url: n8n.url }, confirm: true });
     assert.equal((await m.send('POST', api('/providers/n8n/enable'), { approved: true })).body.enabled, true);
     const job = await m.send('POST', api('/tasks'), { title: 'Run the example workflow', owner: 'n8n', goal: 'The example workflow ran.', evidence_required: [{ kind: 'confirmation' }], privacy_mode: 'local-only' });
     const ran = await settled(job.body.id);

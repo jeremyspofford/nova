@@ -206,14 +206,14 @@ test('a provider that lies (says it fixed it, changed nothing) ends failed with 
     assert.equal(end.report?.summary.startsWith('Fixed calc/sum.mjs and the test passes.'), true, 'its claim is kept as data');
     assert.equal(readFileSync(join(ws, 'calc', 'sum.mjs'), 'utf8'), BROKEN_SUM, 'nothing was copied back');
     // A change that doesn't fix it: the diff holds, the test doesn't.
-    core.providers.configure('claude-code', { command: `node ${FAKE_CLAUDE} --script ${script('wrong')}` });
+    core.providers.configure('claude-code', { command: `node ${FAKE_CLAUDE} --script ${script('wrong')}` }, { confirm: true });
     const w = await settleOK(core, core.ledger.create({ ...calcTask('claude-code'), origin: { kind: 'user' } } as never).id);
     assert.equal(w.state, 'failed');
     assert.match(w.reason ?? '', /it failed \(exit 1\)/);
     assert.doesNotMatch(w.reason ?? '', /file-diff/);
     assert.equal(readFileSync(join(ws, 'calc', 'sum.mjs'), 'utf8'), BROKEN_SUM);
     // An error result is a failure in plain words.
-    core.providers.configure('claude-code', { command: `node ${FAKE_CLAUDE} --script ${script('error')}` });
+    core.providers.configure('claude-code', { command: `node ${FAKE_CLAUDE} --script ${script('error')}` }, { confirm: true });
     const e = await settle(core, core.ledger.create({ ...calcTask('claude-code'), origin: { kind: 'user' } } as never).id);
     assert.equal(e.state, 'failed');
     assert.match(e.reason ?? '', /Claude Code stopped with an error: Credit balance is too low/);
@@ -318,7 +318,7 @@ test('privacy: a local-only task refuses a remote provider and says why; a model
     core.providers.enable('openai-compatible', { approved: true });
     assert.equal(core.providers.where('openai-compatible').receipt, 'remote:models.example');
     assert.throws(() => core.ledger.create({ ...calcTask('openai-compatible', { privacy_mode: 'local-only' }), origin: { kind: 'user' } } as never), /sends data off your devices/);
-    core.providers.configure('openai-compatible', { base_url: 'http://127.0.0.1:11434/v1' });
+    core.providers.configure('openai-compatible', { base_url: 'http://127.0.0.1:11434/v1' }, { confirm: true });
     assert.equal(core.providers.where('openai-compatible').coarse, 'local');
     // A cloud-allowed task under a local-only setting waits, rather than going out.
     const t = core.ledger.create({ ...calcTask('claude-code'), approval_tier: 2, origin: { kind: 'user' } } as never);
@@ -351,7 +351,7 @@ test('n8n: a signed brief out, a signed callback in through the token webhook, t
     assert.ok(token && note);
     await fake.close();
     fake = await startFakeN8n({ secret: SECRET, nova, token: token! });
-    core.providers.configure('n8n', { webhook_url: fake.url });
+    core.providers.configure('n8n', { webhook_url: fake.url }, { confirm: true });
     core.providers.enable('n8n', { approved: true });
     const task = (title: string) => core.ledger.create({ title, owner: 'n8n', goal: 'Archive this week’s example reports.', origin: { kind: 'user' }, evidence_required: [{ kind: 'confirmation' }], privacy_mode: 'local-only' });
     const t = await settle(core, task('Run the archive workflow').id);
@@ -367,7 +367,7 @@ test('n8n: a signed brief out, a signed callback in through the token webhook, t
     await fake.close();
     for (const [behavior, status] of [['bad-signature', 403], ['no-confirmation', 400], ['wrong-task', 404]] as const) {
       fake = await startFakeN8n({ secret: SECRET, nova, token: token!, behavior });
-      core.providers.configure('n8n', { webhook_url: fake.url, timeout_s: 5 });
+      core.providers.configure('n8n', { webhook_url: fake.url, timeout_s: 5 }, { confirm: true });
       const b = task(`Workflow that misbehaves: ${behavior}`);
       for (let i = 0; i < 200 && !fake.callbacks.length; i++) await new Promise((r) => setTimeout(r, 25));
       assert.equal(fake.callbacks[0]!.status, status, `${behavior}: ${fake.callbacks[0]!.answer}`);

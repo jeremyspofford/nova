@@ -680,18 +680,28 @@ export function providerSetup(id) {
   if (!p) return;
   const field = (f) => {
     const fid = `pf-${f.key}`;
-    return `<label class="field-label" for="${fid}">${esc(f.label)}<input class="input field" id="${fid}" name="${esc(f.key)}" value="${esc(p.config[f.key] ?? '')}" autocomplete="off"${f.fixed ? ' readonly' : ''}></label>${f.note ? `<p class="settings-note">${esc(f.note)}</p>` : ''}`;
+    const plain = `<label class="field-label" for="${fid}">${esc(f.label)}<input class="input field" id="${fid}" name="${esc(f.key)}" value="${esc(p.config[f.key] ?? '')}" autocomplete="off"${f.fixed ? ' readonly' : ''}></label>${f.note ? `<p class="settings-note">${esc(f.note)}</p>` : ''}`;
+    // A secret's value is typed here and goes into the vault; it is never shown back.
+    const value = f.kind === 'secret' && !f.fixed
+      ? `<label class="field-label" for="${fid}-value">${esc(f.label)}: the value<input class="input field" type="password" id="${fid}-value" name="${esc(f.key)}__value" value="" autocomplete="new-password" placeholder="Kept in the vault, never shown again"></label>`
+      : '';
+    return plain + value;
   };
   openSheet(`<form class="provider-form" data-provider="${esc(p.id)}" method="dialog">
   <h2 class="sheet-title" id="sheet-title">${esc(p.name)}</h2>
   <p class="sheet-line">${esc(p.health.words)}</p>
   ${p.fields.map(field).join('')}
+  ${p.enabled ? `<label class="confirm"><input type="checkbox" name="confirm"> ${esc(p.name)} is on. Changing what it runs or where it sends needs this: I confirm it.</label>` : ''}
   <div class="sheet-actions">
     <button type="submit" class="btn primary">Save</button>
     <button type="button" class="btn quiet" data-action="close-sheet">Cancel</button>
   </div>
 </form>`, { label: `${p.name} settings` });
 }
+
+// The vault name a secret field's value goes under: the one it already names, or one made from the
+// provider and the field (OPENAI_COMPATIBLE_API_KEY).
+const secretNameFor = (p, f, ref) => /^secret:\/\/([A-Z][A-Z0-9_]*)$/.exec(ref)?.[1] ?? `${p.id}_${f.key}`.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^[^A-Z]+/, '').slice(0, 64);
 
 export async function saveProvider(form) {
   const p = providerById(form.dataset.provider);
@@ -703,7 +713,18 @@ export async function saveProvider(form) {
     if (v !== String(p.config[f.key] ?? '')) config[f.key] = v;
   }
   try {
-    const r = await api('PUT', `/providers/${encodeURIComponent(p.id)}/config`, { config });
+    // A secret typed here goes straight into the vault; the setting keeps only its name.
+    for (const f of p.fields.filter((x) => x.kind === 'secret' && !x.fixed)) {
+      const input = form.elements[`${f.key}__value`];
+      const value = input?.value.trim() ?? '';
+      if (!value) continue;
+      const name = secretNameFor(p, f, form.elements[f.key]?.value.trim() ?? '');
+      await api('PUT', `/vault/${encodeURIComponent(name)}`, { value });
+      input.value = '';
+      if (`secret://${name}` !== String(p.config[f.key] ?? '')) config[f.key] = `secret://${name}`;
+    }
+    const confirm = form.elements.confirm?.checked === true;
+    const r = await api('PUT', `/providers/${encodeURIComponent(p.id)}/config`, { config, ...(confirm ? { confirm: true } : {}) });
     if (r.token) {
       openSheet(`<div class="provider-token"><h2 class="sheet-title" id="sheet-title">The workflow’s callback token</h2>
 <p class="sheet-line">${esc(r.note)}</p><p class="fingerprint">${esc(r.token)}</p>

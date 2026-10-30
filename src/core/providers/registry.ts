@@ -46,6 +46,23 @@ type Choice = (typeof CHOICES)[number];
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/;
 const OLLAMA_CLOUD = /[:-]cloud$/i;
+// Settings that decide what a provider runs or where its data goes.
+const WHERE_KEYS = ['command', 'base_url', 'webhook_url', 'callback_url'] as const;
+// Permission settings, strictest first.
+const ROOM: Record<string, string[]> = { permission_mode: ['plan', 'default', 'acceptEdits', 'bypassPermissions'], sandbox: ['read-only', 'workspace-write'] };
+// The setting a patch loosens, in words, or null.
+function looserOf(patch: Record<string, unknown>, now: Config): string | null {
+  for (const [k, order] of Object.entries(ROOM)) {
+    if (patch[k] === undefined) continue;
+    const was = order.indexOf(str(now[k]) || order[order.length - 2]!);
+    if (order.indexOf(str(patch[k])) > was) return `${k} ${str(patch[k])}`;
+  }
+  if (patch.allowed_tools !== undefined && JSON.stringify(patch.allowed_tools) !== JSON.stringify(now.allowed_tools)) {
+    const had = new Set(Array.isArray(now.allowed_tools) ? now.allowed_tools as string[] : []);
+    if (!Array.isArray(patch.allowed_tools) || (patch.allowed_tools as unknown[]).some((t) => !had.has(String(t)))) return 'Changing allowed_tools';
+  }
+  return null;
+}
 // What one task may bring back from a coding agent, at most.
 const MAX_CHANGES = 200;
 const MAX_CHANGE_BYTES = 50 * 1024 * 1024;
@@ -281,9 +298,19 @@ export class Providers extends EventEmitter {
 
   // Saves settings after checking them. Secrets are only ever names (secret://NAME). An n8n
   // provider gets its callback token here, shown this once; Nova keeps only its hash.
-  configure(id: string, patch: unknown): { provider: ReturnType<Providers['view']>; token?: string; note?: string } {
+  configure(id: string, patch: unknown, o: { confirm?: boolean } = {}): { provider: ReturnType<Providers['view']>; token?: string; note?: string } {
     const x = this.#entry(id);
     if (!isObj(patch)) throw new CoreError('validation', 'config must be an object of settings.');
+    // What it was OK'd to run, and where it sends, don't change under that OK unasked; nor do its
+    // permissions loosen without an explicit confirmation (tier 3). Checked before anything is
+    // saved or contacted, so a new address never hears from Nova, or gets its key, first.
+    if (o.confirm !== true) {
+      const now = this.config(id);
+      const moved = WHERE_KEYS.filter((k) => patch[k] !== undefined && str(patch[k]) !== str(now[k]));
+      if (x.state === 'enabled' && moved.length) throw new CoreError('validation', `${x.manifest.name} is on, and changing ${moved.join(' and ')} changes what it runs or where it sends your data${now.api_key ? ', and its key goes along' : ''}. Send confirm: true to do that.`);
+      const looser = looserOf(patch, now);
+      if (looser) throw new CoreError('validation', `${looser} gives ${x.manifest.name} more room than it has now. Send confirm: true to do that.`);
+    }
     if (x.manifest.adapter.implementation === 'custom-cli') throw new CoreError('validation', 'The model command is set in nova.config.json (agent_cmd and agent_egress), where Era 2 kept it.');
     const known = new Set([...Object.keys(x.manifest.adapter.config), 'timeout_s', 'test_timeout_s', ...FIELDS[x.manifest.adapter.implementation].map((f) => f.key)]);
     const unknown = Object.keys(patch).filter((k) => !known.has(k) || k === 'callback_token_hash');
@@ -744,7 +771,7 @@ export class Providers extends EventEmitter {
     return [
       { method: 'GET', path: '/providers', summary: 'Every provider: class, where its data goes, health in plain words, settings; with the chat model and each class’s default, current and recommended.', handle: () => ({ providers: this.list(), ...this.choices() }) },
       { method: 'GET', path: '/providers/{id}', summary: 'One provider.', handle: ({ params }) => this.view(id(params)) },
-      { method: 'PUT', path: '/providers/{id}/config', summary: 'Change a provider’s settings. Secrets are names only (secret://NAME). An n8n provider’s callback token is returned here once.', body: '{config}', handle: ({ params, body }) => this.configure(id(params), body.config) },
+      { method: 'PUT', path: '/providers/{id}/config', summary: 'Change a provider’s settings. Secrets are names only (secret://NAME). An n8n provider’s callback token is returned here once. Changing what an enabled provider runs or where it sends (command, base_url, webhook_url, callback_url), or loosening its permissions (tier 3), needs {confirm: true}.', body: '{config, confirm?}', handle: ({ params, body }) => this.configure(id(params), body.config, { confirm: body.confirm === true }) },
       { method: 'POST', path: '/providers/{id}/enable', summary: 'Turn a provider on (tier 2: needs {approved: true} for its permissions). It must be installed and configured.', body: '{approved}', handle: ({ params, body }) => this.enable(id(params), { approved: body.approved === true }) },
       { method: 'POST', path: '/providers/{id}/disable', summary: 'Turn a provider off. Its tasks wait until it is on again.', handle: ({ params }) => this.disable(id(params)) },
       { method: 'POST', path: '/providers/{id}/check', summary: 'Check whether an HTTP provider’s address answers, now.', handle: ({ params }) => this.check(id(params)) },
