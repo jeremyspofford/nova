@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore, finishStaged, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
+import { createCore, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -43,9 +43,6 @@ function modelOptions(env) {
 
 export function createNova(config = loadConfig(), deps = {}) {
   const started = performance.now();
-  // A restore staged before the last stop (a checkpoint, M7 amendment) is applied before anything
-  // touches the home, seeding included. The core does it too; the second call finds nothing.
-  if (process.env.NOVA_SANDBOX !== '1') finishStaged(config.home);
   const seeded = seedHome(config.home, join(config.root, 'templates', 'home'));
   // The core (src/core): database, Work Ledger, profile, identity, setup, extensions, /api/v1.
   const { version } = JSON.parse(readFileSync(join(config.root, 'package.json'), 'utf8'));

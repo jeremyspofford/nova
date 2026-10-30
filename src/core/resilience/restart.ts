@@ -39,8 +39,10 @@ export class Restarter {
 
   // The server's part: stop listening and close everything, then say which environment the fresh
   // start needs (the ports it is listening on now, so the new process binds the same ones).
-  attach(release: Release): void {
+  // `exec` replaces how the fresh start happens (tests: no re-execution).
+  attach(release: Release, o: { exec?: (env: Record<string, string>) => void } = {}): void {
     this.#release = release;
+    if (o.exec) this.#exec = o.exec;
   }
 
   get available(): boolean {
@@ -49,7 +51,9 @@ export class Restarter {
 
   // Restarts this Nova, soon: the caller's reply goes out first. Throws when nothing can restart it
   // (a core in a test, with no server around it).
-  async restartInPlace(why: string): Promise<RestartResult> {
+  // `failed` is told when a restart that was promised doesn't happen after all (the release hook
+  // threw), so whatever was staged for it can be dropped rather than fire at some later start.
+  async restartInPlace(why: string, o: { failed?: (e: Error) => void } = {}): Promise<RestartResult> {
     if (this.#supervisor) {
       const r = await this.#supervisor.request('restart', { staged: true });
       if (!r.ok) throw new CoreError('conflict', `The supervisor didn’t restart Nova: ${r.said}`);
@@ -63,7 +67,8 @@ export class Restarter {
     setTimeout(() => {
       void release().then((env) => this.#exec(env), (e) => {
         this.#pending = false;
-        this.#log.problem('resilience', 'Nova couldn’t restart itself. Stop it and start it again; what was staged is applied as it starts.', { detail: (e as Error)?.stack ?? String(e) });
+        if (o.failed) { try { o.failed(e as Error); } catch { /* reported below */ } return; }
+        try { this.#log.problem('resilience', 'Nova couldn’t restart itself. Stop it and start it again.', { detail: (e as Error)?.stack ?? String(e) }); } catch { /* closed */ }
       });
     }, 150).unref?.();
     return { how: 'in-place', said: 'Nova restarts in a moment, on the same address.' };

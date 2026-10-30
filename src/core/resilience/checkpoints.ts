@@ -23,13 +23,13 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { chmodSync, closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Db } from '../db.ts';
+import { Db } from '../db.ts';
 import { cleanDbFile } from '../backups.ts';
 import { CoreError } from '../errors.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
-import type { Vault } from '../vault.ts';
+import { Vault } from '../vault.ts';
 import type { Route, Who } from '../api.ts';
 import { ENVELOPE_VERSION, type Brief, type Report } from '../envelope.ts';
 import { cleanBackup, sha256File, writeManifest, type ManifestFile } from './backup.ts';
@@ -421,22 +421,33 @@ export function deleteCheckpoint(home: string, id: string): CheckpointView {
 // ---- restoring ------------------------------------------------------------------------------------
 
 // The staged restore: <home>/checkpoints/.restore/{marker.json, new/, old/}. `new` is the home as
-// it will be (the checkpoint with what is carried over from now), laid out like the home itself.
+// it will be, laid out like the home itself: the checkpoint at staging, with what is carried over
+// from now written in at the next start, just before the swap (so nothing done after staging is
+// lost).
 export const RESTORE_DIR = '.restore';
 const MARKER = 'marker.json';
+const DROPPED = /^\.restore-dropped-/;
 // What a restore never swaps: they stay as they are now (the checkpoints themselves among them).
 const STAYS = new Set(Object.keys(SKIP_TOP));
 
+export interface StagedFile { path: string; sha256: string }
+
+// staged: the copy is complete, as listed in `files`. carried: what is kept from now is in it, as
+// listed in `ready`. swapping: entries are moving (`had`: Nova's entries the home had then).
+// swapped: done, only the record and the leftovers remain.
 export interface RestoreMarker {
   v: 1;
   id: string;
-  state: 'staged' | 'swapped';
+  state: 'staged' | 'carried' | 'swapping' | 'swapped';
   at: string;
   checkpoint: { id: string; label: string; at: string; kind: CheckpointKind };
   verified: { db: string; files: number; bytes: number; seal: string };
   before: string | null;
-  carried: Carried;
-  // The top-level names the staged home has: the swap's plan, fixed when it was staged.
+  files: StagedFile[];
+  carried?: Carried;
+  ready?: StagedFile[];
+  had?: string[];
+  // The top-level names the restored home has: the swap's plan.
   names: string[];
 }
 
@@ -467,55 +478,147 @@ function writeMarker(home: string, m: RestoreMarker): void {
   renameSync(`${file}.tmp`, file);
 }
 
-// The staged copy of the home (the checkpoint as it was taken), before what is carried over goes in.
-export function stageCopy(home: string, f: Found): string {
-  const dir = join(ensureRoot(home), RESTORE_DIR);
-  rmSync(dir, { recursive: true, force: true });
-  const out = join(dir, 'new');
-  mkdirSync(out, { recursive: true, mode: 0o700 });
-  for (const file of f.manifest.files) {
-    const rel = safeRel(file.path);
-    // A checkpoint from before entries.ts may hold files that aren't Nova's: those are never put back.
-    if (!isNovaEntry(rel.split('/')[0]!)) continue;
-    mkdirDeep(out, rel);
-    copyFileSync(join(f.path, 'files', rel), join(out, rel), constants.COPYFILE_FICLONE);
+// Every file under `dir` (a staged home), with its hash.
+function listing(dir: string, top?: string): StagedFile[] {
+  const out: StagedFile[] = [];
+  const walk = (rel: string) => {
+    for (const e of readdirSync(join(dir, rel), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(r);
+      else if (e.isFile()) out.push({ path: r, sha256: sha256File(join(dir, r)) });
+    }
+  };
+  if (top === undefined) walk('');
+  else if (existsSync(join(dir, top))) {
+    if (lstatSync(join(dir, top)).isDirectory()) walk(top);
+    else out.push({ path: top, sha256: sha256File(join(dir, top)) });
   }
-  copyFileSync(join(f.path, 'nova.db'), join(out, 'nova.db'));
   return out;
 }
 
-// Seals the staging: from here the restore happens at the next start, whatever stops in between.
-export function writeStaged(home: string, m: Omit<RestoreMarker, 'v' | 'state' | 'names'>): RestoreMarker {
+const same = (a: StagedFile[], b: StagedFile[]) => a.length === b.length && a.every((f, i) => f.path === b[i]!.path && f.sha256 === b[i]!.sha256);
+const under = (files: StagedFile[], top: string) => files.filter((f) => f.path === top || f.path.startsWith(`${top}/`)).sort((a, b) => a.path.localeCompare(b.path));
+
+// The staged copy of the home (the checkpoint as it was taken). Refuses, in plain words, when the
+// disk hasn't room for it; nothing is left behind then.
+export function stageCopy(home: string, f: Found, o: { free?: (dir: string) => number | null } = {}): string {
+  const r = ensureRoot(home);
+  dropStaged(home);
+  const need = Math.ceil(f.manifest.total_bytes * 1.1) + 1_000_000;
+  let free: number | null = null;
+  try { free = o.free ? o.free(r) : (() => { const s = statfsSync(r); return Number(s.bavail) * Number(s.bsize); })(); } catch { free = null; }
+  if (free !== null && free < need) throw new CheckpointError('disk-full', `there isn’t enough free space on this disk to stage it: it needs about ${humanSize(need)} and ${humanSize(free)} is free. Free some space, then try again.`);
+  const out = join(r, RESTORE_DIR, 'new');
+  try {
+    mkdirSync(out, { recursive: true, mode: 0o700 });
+    for (const file of f.manifest.files) {
+      const rel = safeRel(file.path);
+      // A checkpoint from before entries.ts may hold files that aren't Nova's: those are never put back.
+      if (!isNovaEntry(rel.split('/')[0]!)) continue;
+      mkdirDeep(out, rel);
+      copyFileSync(join(f.path, 'files', rel), join(out, rel), constants.COPYFILE_FICLONE);
+    }
+    copyFileSync(join(f.path, 'nova.db'), join(out, 'nova.db'));
+  } catch (e) {
+    dropStaged(home);
+    if (isFull(e)) throw new CheckpointError('disk-full', 'the disk filled up while Nova staged it. Free some space, then try again.');
+    throw e;
+  }
+  return out;
+}
+
+// Seals the staging with the list of what was staged, by hash: from here the restore happens at the
+// next start, and only exactly as staged.
+export function writeStaged(home: string, m: Omit<RestoreMarker, 'v' | 'state' | 'names' | 'files'>): RestoreMarker {
   const out = join(root(home), RESTORE_DIR, 'new');
-  const marker: RestoreMarker = { v: 1, state: 'staged', names: readdirSync(out).filter(isNovaEntry).sort(), ...m };
+  const marker: RestoreMarker = { v: 1, state: 'staged', names: readdirSync(out).filter(isNovaEntry).sort(), files: listing(out), ...m };
   writeMarker(home, marker);
   return marker;
 }
 
+// Drops a staging: the whole folder is renamed away first (one atomic step, so its marker can never
+// be found with only part of what it staged), then deleted.
 export function dropStaged(home: string): void {
-  rmSync(join(root(home), RESTORE_DIR), { recursive: true, force: true });
+  const dir = join(root(home), RESTORE_DIR);
+  if (existsSync(dir)) {
+    const gone = join(root(home), `.restore-dropped-${process.pid}-${randomBytes(4).toString('hex')}`);
+    renameSync(dir, gone);
+    rmSync(gone, { recursive: true, force: true });
+  }
+  try { for (const e of readdirSync(root(home))) if (DROPPED.test(e)) rmSync(join(root(home), e), { recursive: true, force: true }); } catch { /* no checkpoints folder */ }
 }
 
-// Applies a staged restore, before the database opens: each top-level entry of the home moves
-// aside into .restore/old, and the staged one moves in, by rename (one disk, so each move is whole).
-// Every step can be done again: a start after a crash part-way picks up where it stopped, so Nova
-// only ever opens the home as it was or as restored, never a mix. Returns the restore's record
-// once it is applied (also kept as checkpoints/restores/<id>.json, the ledger task's evidence),
-// or null when nothing was staged.
-export function finishStaged(home: string, o: { interrupt?: (step: number, what: 'aside' | 'in') => void } = {}): RestoreMarker | null {
+export interface FinishOptions {
+  // The vault of a home, opened the way this Nova opens its own (createCore passes its options).
+  vaultAt?: (home: string) => Vault;
+  now?: () => Date;
+  // Tests: a crash at a step of the swap, or a full disk after it ('swapped', 'record').
+  interrupt?: (step: number, what: 'aside' | 'in' | 'swapped' | 'record') => void;
+}
+
+// Applies a staged restore at start, before the database opens, and only exactly as staged:
+//  1. staged: every staged file is there with its hash, or the staging is dropped and Nova starts
+//     as it was. Then what is kept from now (restore.ts) is read from the outgoing home and written
+//     into the staged one, so nothing done after staging is lost.
+//  2. carried → swapping: each of Nova's top-level entries moves aside into .restore/old and the
+//     staged one moves in, by rename (one disk, so each move is whole). Files that aren't Nova's
+//     are never moved. Every step can be done again: a start after a crash part-way picks up
+//     where it stopped. Before any move, each entry still to come is checked again by hash; one
+//     that doesn't add up puts back what moved and drops the staging: Nova never runs a mix.
+//  3. swapped: the record (checkpoints/restores/<id>.json, the ledger task's evidence), then the
+//     leftovers. A full disk here is reported, never a reason not to start.
+// Returns what was applied (or null) and any problem to tell the person.
+export function finishStaged(home: string, o: FinishOptions = {}): { restored: RestoreMarker | null; problems: string[] } {
+  const problems: string[] = [];
   const m = readMarker(home);
   if (!m) {
-    // A staging that never got its marker (stopped while copying) is dropped: nothing was promised.
-    if (existsSync(join(root(home), RESTORE_DIR))) dropStaged(home);
-    return null;
+    // A staging that never got its marker (stopped while copying, or while being dropped): nothing
+    // was promised.
+    try { dropStaged(home); } catch { /* nothing there */ }
+    return { restored: null, problems };
   }
   const dir = join(root(home), RESTORE_DIR);
   const neu = join(dir, 'new');
   const old = join(dir, 'old');
+  const label = m.checkpoint?.label ?? 'a checkpoint';
+  const refuse = (why: string) => {
+    dropStaged(home);
+    return { restored: null, problems: [...problems, `Nova didn’t restore “${label}”: ${why} Nova started as it was; nothing of yours changed.`] };
+  };
+  let step = 0;
+  const tick = (what: 'aside' | 'in') => { step++; o.interrupt?.(step, what); };
+
   if (m.state === 'staged') {
+    if (!Array.isArray(m.files) || !same(listing(neu), m.files)) return refuse('what it had staged was incomplete or had changed since.');
+    try {
+      m.carried = carryNow(home, neu, o);
+      m.ready = listing(neu);
+      m.names = readdirSync(neu).filter(isNovaEntry).sort();
+      m.state = 'carried';
+      writeMarker(home, m);
+    } catch (e) {
+      return refuse(isFull(e) ? 'the disk is full.' : `it couldn’t keep what has to stay from now (${(e as Error).message}).`);
+    }
+  }
+  if (m.state === 'carried') {
+    if (!m.ready || !same(listing(neu), m.ready)) return refuse('what it had staged was incomplete or had changed since.');
+    m.had = readdirSync(home).filter((n) => isNovaEntry(n) && !STAYS.has(n)).sort();
+    m.state = 'swapping';
+    try { writeMarker(home, m); } catch (e) { return refuse(isFull(e) ? 'the disk is full.' : (e as Error).message); }
+  }
+  if (m.state === 'swapping') {
+    const ready = m.ready ?? [];
+    const had = new Set(m.had ?? []);
+    // Every entry is whole: still staged with every hash, or moved in with what it replaced kept.
+    const whole = m.names.every((n) => {
+      if (existsSync(join(neu, n))) return same(listing(neu, n), under(ready, n));
+      return existsSync(join(home, n)) && (!had.has(n) || existsSync(join(old, n)));
+    });
+    if (!whole) {
+      putBack(home, m, neu, old);
+      return refuse('what it had staged was incomplete or had changed since.');
+    }
     mkdirSync(old, { recursive: true, mode: 0o700 });
-    let step = 0;
-    const tick = (what: 'aside' | 'in') => { step++; o.interrupt?.(step, what); };
     const incoming = new Set(m.names);
     // What of Nova's isn't in the restored home goes aside first (the database's WAL and SHM among
     // them). What isn't Nova's is never moved.
@@ -536,14 +639,52 @@ export function finishStaged(home: string, o: { interrupt?: (step: number, what:
       tick('in');
     }
     m.state = 'swapped';
-    writeMarker(home, m);
+    try { o.interrupt?.(++step, 'swapped'); writeMarker(home, m); } catch (e) { problems.push(full(e, 'its progress')); }
   }
   // The record, then the leftovers: the home as it was is in the "before" checkpoint already.
-  const records = join(root(home), 'restores');
-  mkdirSync(records, { recursive: true, mode: 0o700 });
-  writeFileSync(join(records, `${m.id}.json`), `${JSON.stringify({ ...m, finished_at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
-  dropStaged(home);
-  return m;
+  try {
+    o.interrupt?.(++step, 'record');
+    const records = join(root(home), 'restores');
+    mkdirSync(records, { recursive: true, mode: 0o700 });
+    writeFileSync(join(records, `${m.id}.json`), `${JSON.stringify({ ...m, finished_at: (o.now?.() ?? new Date()).toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  } catch (e) {
+    problems.push(full(e, 'its record, so the restore has no ledger task'));
+  }
+  try { dropStaged(home); } catch (e) { problems.push(full(e, 'away what it no longer needs')); }
+  return { restored: m, problems };
+}
+
+const full = (e: unknown, what: string) => (isFull(e)
+  ? `Nova restored a checkpoint, but the disk is full, so it couldn’t write ${what}. Free some space.`
+  : `Nova restored a checkpoint, but couldn’t write ${what}: ${(e as Error).message}`);
+
+// Mid-swap, something doesn't add up: everything moved goes back as it was, then the caller drops
+// the staging. If even that can't be done, Nova refuses to start rather than run a mix.
+function putBack(home: string, m: RestoreMarker, neu: string, old: string): void {
+  for (const n of m.names) {
+    if (existsSync(join(neu, n))) continue;
+    if (existsSync(join(home, n))) rmSync(join(home, n), { recursive: true, force: true });
+  }
+  if (!existsSync(old)) return;
+  for (const n of readdirSync(old)) {
+    if (existsSync(join(home, n))) throw new Error(`Nova can’t put ${n} back as it was after a restore that didn’t add up. Its home is in ${join(root(home), RESTORE_DIR)}; ask for help before starting Nova again.`);
+    renameSync(join(old, n), join(home, n));
+  }
+}
+
+// What is kept from now, read from the outgoing home just before the swap.
+function carryNow(home: string, staged: string, o: FinishOptions): Carried {
+  const vaultAt = o.vaultAt ?? ((h: string) => new Vault({ home: h }));
+  const dbFile = join(home, 'nova.db');
+  if (!existsSync(dbFile)) throw new Error('the home has no database to keep things from');
+  const live = new Db(dbFile);
+  try {
+    let hubId = live.get<{ hub_id: string | null }>('SELECT hub_id FROM mesh_state WHERE id = 1')?.hub_id ?? null;
+    if (!hubId) { try { hubId = (JSON.parse(readFileSync(join(home, 'mesh', 'identity.json'), 'utf8')) as { id: string }).id; } catch { hubId = ''; } }
+    return carryOver({ home, staged, live, hubId, now: o.now?.() ?? new Date(), vault: vaultAt(home), vaultAt });
+  } finally {
+    live.close();
+  }
 }
 
 export function restoreRecord(home: string, id: string): (RestoreMarker & { finished_at: string }) | null {
@@ -659,28 +800,41 @@ export class Checkpoints {
     if (stagedPending(this.#o.home)) throw new CoreError('conflict', 'A restore is already waiting for Nova to restart.');
     const f = findCheckpoint(this.#o.home, id);
     const v = viewOf(f.manifest);
-    if (f.manifest.schema_version > this.#o.schema()) throw new CoreError('conflict', `“${v.label}” was taken by a newer version of Nova (database version ${f.manifest.schema_version}); this one can’t open it.`);
+    const no = (why: string) => new CoreError('conflict', `Nova didn’t restore “${v.label}”: ${why}`);
+    if (f.manifest.schema_version > this.#o.schema()) throw no(`it was taken by a newer version of Nova (database version ${f.manifest.schema_version}); this one can’t open it.`);
+    // Nothing is staged that can't be applied: without a way to restart, there is no restore.
+    if (!this.#o.restarter.available) throw no('it couldn’t restart itself here (no supervisor, and no server to restart it). Nothing changed.');
     const verified = verifyCheckpoint(f);
-    const staged = stageCopy(this.#o.home, f);
+    const dropped = droppedDevices(join(f.path, 'nova.db'), this.#o.db, this.#o.hubId());
     let before: CheckpointView;
     let marker: RestoreMarker;
     try {
+      stageCopy(this.#o.home, f, this.#o.free ? { free: this.#o.free } : {});
       before = this.auto(`Before restoring to “${v.label}”`);
-      const carried = carryOver({ home: this.#o.home, staged, live: this.#o.db, hubId: this.#o.hubId(), now: this.#o.now(), vault: this.#o.vault, vaultAt: this.#o.vaultAt });
       marker = writeStaged(this.#o.home, {
         id: newRestoreId(), at: this.#o.now().toISOString(),
         checkpoint: { id: v.id, label: v.label, at: v.at, kind: v.kind },
-        verified: { ...verified, seal: f.manifest.seal ?? '' }, before: before.id, carried,
+        verified: { ...verified, seal: f.manifest.seal ?? '' }, before: before.id,
       });
     } catch (e) {
-      dropStaged(this.#o.home);
-      if (e instanceof CheckpointError) throw new CoreError('conflict', `Nova didn’t restore: it couldn’t take a checkpoint of now first. ${e.message}`);
+      try { dropStaged(this.#o.home); } catch { /* nothing staged */ }
+      if (e instanceof CheckpointError) throw no(/^there isn’t|^the disk filled/.test(e.message) ? e.message : `it couldn’t take a checkpoint of now first. ${e.message}`);
       throw e;
     }
     this.#o.log.info('resilience', 'Restore staged.', { id: marker.id, checkpoint: v.id, before: before.id });
+    // If the restart doesn't happen, neither does the restore: it never fires at some later start.
+    const failed = (e: Error) => {
+      try { dropStaged(this.#o.home); } catch { /* reported below */ }
+      try { this.#o.log.problem('resilience', `Nova didn’t restore “${v.label}”: it couldn’t restart itself (${e.message}). Nothing changed; you can try again.`); } catch { /* closing */ }
+    };
     let restart: { how: string; said: string };
-    try { restart = await this.#o.restarter.restartInPlace(`restore to ${v.id}`); } catch (e) { restart = { how: 'next-start', said: (e as Error).message }; }
-    return { restoring: true, id: marker.id, checkpoint: v, before, carried: marker.carried, verified: marker.verified, restart };
+    try {
+      restart = await this.#o.restarter.restartInPlace(`restore to ${v.id}`, { failed });
+    } catch (e) {
+      try { dropStaged(this.#o.home); } catch { /* nothing staged */ }
+      throw no(`it couldn’t restart itself (${(e as Error).message}). Nothing changed.`);
+    }
+    return { restoring: true, id: marker.id, checkpoint: v, before, verified: marker.verified, dropped, restart };
   }
 
   // Restores finished at this start: each becomes a ledger task with its evidence (once).
@@ -715,7 +869,7 @@ export class Checkpoints {
         const r = restoreRecord(this.#o.home, id);
         const base = { envelope: ENVELOPE_VERSION as typeof ENVELOPE_VERSION, task_id: brief.task_id, artifacts: [] as Report['artifacts'], follow_up_suggestions: [] as string[], usage: { duration_ms: 0 } };
         if (!r) return { ...base, status: 'failed', summary: 'Nova has no record of that restore.', evidence: [], blockers: [] };
-        const c = r.carried;
+        const c = r.carried!;
         const parts = [
           `Restored “${r.checkpoint.label}” (${r.checkpoint.at}) after checking its database and ${r.verified.files} files against their hashes.`,
           c.revoked.length ? `${c.revoked.length} revoked ${c.revoked.length === 1 ? 'device stays' : 'devices stay'} revoked.` : '',
@@ -737,7 +891,7 @@ export class Checkpoints {
     const r = restoreRecord(this.#o.home, m[1]!);
     if (!r) return { ok: false, why: 'Nova has no record of that restore.' };
     const epoch = this.#o.db.get<{ epoch: number }>('SELECT epoch FROM mesh_state WHERE id = 1')?.epoch ?? 0;
-    if (epoch < r.carried.epoch.restored) return { ok: false, why: `The mesh epoch is ${epoch}, lower than the restore set (${r.carried.epoch.restored}).` };
+    if (!r.carried || epoch < r.carried.epoch.restored) return { ok: false, why: `The mesh epoch is ${epoch}, lower than the restore set (${r.carried?.epoch.restored}).` };
     const f = scanCheckpoints(this.#o.home).found.find((x) => x.manifest.id === r.checkpoint.id);
     const same = f && !f.manifest.cleaned.length ? f.manifest.db.sha256 === r.verified.db : null;
     if (same === false) return { ok: false, why: 'The checkpoint’s manifest doesn’t name the database Nova verified.' };

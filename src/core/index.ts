@@ -168,7 +168,8 @@ export function createCore(o: CoreOptions) {
   const now = o.now ?? (() => new Date());
   // A restore (or reset) staged before the last stop is applied first, before the database opens;
   // a checkpoint stopped part-way is dropped.
-  if (!o.sandbox) { finishStaged(o.home); dropPartials(o.home); }
+  const staged = o.sandbox ? null : finishStaged(o.home, { vaultAt: (home) => new Vault({ home, ...(o.vault ?? {}) }), now });
+  if (!o.sandbox) dropPartials(o.home);
   const db = new Db(join(o.home, 'nova.db'));
   // An automatic checkpoint before a database upgrade, beside the pre-upgrade copy: one that can't
   // be taken stops the upgrade (and so the start), with the reason.
@@ -177,6 +178,8 @@ export function createCore(o: CoreOptions) {
     ...(o.sandbox ? {} : { before: (from: number) => { takeCheckpoint({ home: o.home, db, kind: 'auto', reason: `Before upgrading the database from version ${from}`, version: o.version, now, ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}) }); } }),
   });
   const log = new Log(db, join(o.home, 'logs', 'nova.log'), now);
+  // What a staged restore couldn't do (or did, with a full disk) is the person's to know.
+  for (const p of staged?.problems ?? []) log.problem('resilience', p);
   // Hub or standby, decided before anything writes: a standby copies the hub's sync log instead
   // of recording its own writes (mesh/promote.ts).
   const place = nodeRole(db, o.home);

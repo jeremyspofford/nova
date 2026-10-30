@@ -78,14 +78,16 @@ test('a restore on the hub: the epoch goes up, and the standby copies the hub af
     assert.deepEqual(standbyMemories(), ['Kept through the restore.', 'Undone by the restore.']);
     const epochBefore = h.core.mesh.devices.state().epoch;
 
+    h.core.restarter.attach(async () => ({}), { exec: () => {} });
     const r = await h.c('POST', `/resilience/checkpoints/${cp.id}/restore`, { confirm: true });
     assert.equal(r.status, 202, JSON.stringify(r.body));
-    assert.equal(r.body.carried.standby_resync, true, 'the standby is kept, and told to copy afresh');
     assert.ok(stagedPending(h.home));
     await h.restart();
 
     const epoch = h.core.mesh.devices.state().epoch;
     assert.equal(epoch, epochBefore + 1);
+    const task = await until(() => h.core.ledger.list({ limit: 20 }).find((t) => t.owner === 'checkpoints'), (t) => !!t);
+    assert.equal((task!.brief.inputs as { carried: { standby_resync: boolean } }).carried.standby_resync, true, 'the standby is kept, and told to copy afresh');
     assert.equal(h.core.mesh.devices.state().standby_id, dev.deviceId);
     const copied = await until(standbyMemories, (m) => m.length === 1);
     assert.deepEqual(copied, ['Kept through the restore.'], 'what the restore undid is gone from the standby too');
