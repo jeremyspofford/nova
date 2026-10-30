@@ -65,8 +65,6 @@ export class Devices extends EventEmitter {
   #now: () => Date;
   #publicUrl: () => string | null;
   #touched = new Map<string, number>();
-  // Signed session requests already used, by device and time, until they are too old to be fresh.
-  #used = new Map<string, number>();
 
   constructor(o: { db: Db; log: Log; identity: MeshIdentity; now: () => Date; publicUrl: () => string | null }) {
     super();
@@ -222,14 +220,14 @@ export class Devices extends EventEmitter {
     if (!freshTime(time, nowS)) throw new CoreError('unauthorized', 'The signed time is too far from the hub’s clock. Check the device’s clock.');
     const d = this.find(id);
     if (!d || d.trust !== 'trusted' || d.role === 'hub' || !verifyDeviceSignature(d.public_key, sessionMessage(id, time), signature)) throw refused();
-    for (const [k, until] of this.#used) if (until < nowMs) this.#used.delete(k);
-    const key = `${id}.${time}`;
-    if (this.#used.has(key)) throw new CoreError('unauthorized', 'That signed request was already used. Sign a new one.');
-    this.#used.set(key, nowMs + 2 * 60_000 + 1000);
     const token = `nvs_${randomBytes(32).toString('base64url')}`;
     const at = new Date(nowMs).toISOString();
     const expires = new Date(nowMs + SESSION_TTL_MS).toISOString();
     this.#db.tx(() => {
+      // Spent in the database, not in memory, so a restart doesn't make a request fresh again.
+      this.#db.run('DELETE FROM session_signature WHERE until < ?', at);
+      if (this.#db.get('SELECT 1 FROM session_signature WHERE device_id = ? AND time = ?', id, time)) throw new CoreError('unauthorized', 'That signed request was already used. Sign a new one.');
+      this.#db.run('INSERT INTO session_signature (device_id, time, until) VALUES (?, ?, ?)', id, time, new Date(nowMs + 2 * 60_000 + 1000).toISOString());
       this.#db.run('DELETE FROM device_session WHERE expires_at <= ?', at);
       this.#db.run('INSERT INTO device_session (token_hash, device_id, created_at, expires_at) VALUES (?, ?, ?, ?)', tokenHash(token), id, at, expires);
       this.#db.run('UPDATE device SET last_seen = ? WHERE id = ?', at, id);

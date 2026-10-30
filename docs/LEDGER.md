@@ -59,6 +59,13 @@ built-ins only.
   beyond loopback, the console port took a device's cookie or bearer token
   over plain HTTP, a transport §0 doesn't accept. There it is now public, like
   any unpaired caller.
+- **A spent session signature stays spent across a restart.** Migration
+  `0008_session_signature.sql` keeps `(device, signed time)` for each session
+  started, until the time is too old to be fresh (two minutes), instead of an
+  in-memory map a restart emptied. The same exact-match rule as before (not
+  "strictly newer"), so two tabs signing out of order aren't refused, and a
+  refusal stays a 401. Never replicated. If another branch also adds an
+  `0008`, renumber one of them: migrations must have no gaps or repeats.
 
 **2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
 `src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and

@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { generateDeviceKeys, keyFingerprint, normalizePairingCode, rateKey, verifyRoster } from '../../src/core/index.ts';
+import { generateDeviceKeys, keyFingerprint, normalizePairingCode, rateKey, sessionMessage, signMessage, verifyRoster } from '../../src/core/index.ts';
+import { Devices } from '../../src/core/mesh/devices.ts';
 import { Joiner, PUBLIC_URL, call, enroll, hub } from './mesh-support.ts';
 import { commitHome, ensureGit } from '../../src/home.js';
 
@@ -338,5 +339,29 @@ test('keys, codes and tokens stay out of the database, the log and git history; 
     assert.ok(core.log.problems().some((p) => /could be read by other users/.test(p.message)));
   } finally {
     await core.close();
+  }
+});
+
+test('a signed session request starts one session only, even across a restart', async () => {
+  const h = await hub();
+  try {
+    const { dev } = await enroll(h);
+    const time = dev.time();
+    const body = { device_id: dev.deviceId, time, signature: signMessage(dev.keys.ed25519.privateKey, sessionMessage(dev.deviceId, time)) };
+    assert.equal((await call(h.mesh, 'POST', '/api/v1/mesh/session', body)).status, 200);
+    assert.equal((await call(h.mesh, 'POST', '/api/v1/mesh/session', body)).status, 401, 'a replay');
+    // Nova restarts within the minute the signature is fresh: the registry starts again from the
+    // database, and the same request must still be spent.
+    const again = new Devices({ db: h.core.db, log: h.core.log, identity: h.core.mesh.identity, now: () => new Date(h.clock.t), publicUrl: () => PUBLIC_URL });
+    assert.throws(() => again.startSession(body), (e: { status: number; message: string }) => e.status === 401 && /already used/.test(e.message));
+    const next = dev.time();
+    assert.ok(again.startSession({ device_id: dev.deviceId, time: next, signature: signMessage(dev.keys.ed25519.privateKey, sessionMessage(dev.deviceId, next)) }).token, 'a new signature still works');
+    // What is remembered is let go once it is too old to be fresh anyway.
+    h.tick(3 * 60_000);
+    const later = dev.time();
+    again.startSession({ device_id: dev.deviceId, time: later, signature: signMessage(dev.keys.ed25519.privateKey, sessionMessage(dev.deviceId, later)) });
+    assert.equal(h.core.db.all('SELECT * FROM session_signature WHERE device_id = ?', dev.deviceId).length, 1);
+  } finally {
+    await h.stop();
   }
 });
