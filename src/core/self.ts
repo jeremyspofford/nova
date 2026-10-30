@@ -233,8 +233,9 @@ Not listed means not in this setup yet. Ways to add: a model provider in Setting
 
   #approvalsLine(): string {
     const p = this.#era2.permissions?.() ?? [];
-    const yes = p.filter((x) => x.yes).map((x) => x.label.toLowerCase());
-    const ask = p.filter((x) => !x.yes).map((x) => x.label.toLowerCase());
+    const lower = (t: string) => t.replace(/^\w/, (c) => c.toLowerCase());
+    const yes = p.filter((x) => x.yes).map((x) => lower(x.label));
+    const ask = p.filter((x) => !x.yes).map((x) => lower(x.label));
     return `${ask.length ? `asks first to ${ask.join('; ')}` : 'asks first for nothing listed'}. ${yes.length ? `Goes ahead without asking to ${yes.join('; ')}.` : 'Nothing is allowed without asking.'} Anything that can’t be undone always asks.`;
   }
 
@@ -247,7 +248,9 @@ Not listed means not in this setup yet. Ways to add: a model provider in Setting
   #problemsLine(): string {
     const open = this.#o.log.problems({ open: true });
     if (!open.length) return 'none.';
-    return `${open.length}; latest: ${open.slice(0, 2).map((p) => `${p.source}: ${quote(p.message)}`).join('; ')}.`;
+    // The first sentence of each: the rest is in the Health view, and the tools quote it whole.
+    const first = (m: string) => plain(m).match(/^.*?[.!?](?=\s|$)/)?.[0] ?? plain(m);
+    return `${open.length}; latest: ${open.slice(0, 2).map((p) => `${p.source}: ${quote(first(p.message))}`).join('; ')}.`;
   }
 
   // A fresh Nova says so, names its home, and offers the way in for what the person already knows.
