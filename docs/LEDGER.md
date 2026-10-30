@@ -76,6 +76,15 @@ This entry supersedes the one below where they differ.
   - **Approval cards:** the standing-file card shows the content, and a waiting forget names its
     memory.
   - **Case:** standing files are matched by exact name on a case-sensitive disk.
+- **After merging the grounding PR (#231):**
+  - Its read-only `nova_*` tools are Nova's own state: never screened, never taint. A test covers
+    this with a stand-in tool.
+  - Its `memory_import` needs an OK, so in a tainted run it always asks.
+  - *Open question:* in a run that read nothing from outside, a `memory-import: yes` setting loads
+    a workspace file's records without screening them. The file can be one a command or download
+    put there, and the records arrive unreviewed, which MEMORY.md shows. Screening the import, or
+    making it wait as candidates, is the safer follow-up. I left it, since it is the grounding PR's
+    feature.
 - **Still not caught (stated plainly):**
   - hiding by an external stylesheet or by script;
   - a paraphrased injection in visible text when there is no model. It is still never passed, but

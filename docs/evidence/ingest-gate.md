@@ -4,7 +4,7 @@ Plan: `docs/plans/ingest-gate.md`. Decisions: `docs/LEDGER.md`, 2026-10-30, "the
 
 ## Runs (2026-10-30, after the review fixes)
 
-- **`npm run check`** (lint:tokens, check:themes, typecheck, unit, acceptance and chaos): **879 tests, 871 pass, 0 fail, 8 skipped.** The 8 skipped are the opt-in real-model and real-service runs.
+- **`npm run check`** (lint:tokens, check:themes, typecheck, unit, acceptance and chaos), after merging main with the grounding PR: **891 tests, 882 pass, 0 fail, 9 skipped.** The skipped ones are the opt-in real-model and real-service runs.
 - **`tests/ingest/`: 80 tests, 80 pass.**
 - **`scripts/ui-test.sh`** (Chromium in the Playwright container): **32 tests, 32 pass.**
   - M5c also checks that each browser page read carries its screen's verdict.
