@@ -456,7 +456,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   box-sizing: border-box;
   width: calc(100% + 2 * var(--space-3));
   padding: var(--space-1) var(--space-3);
-  margin: calc(-1 * var(--space-1) - 1px) calc(-1 * var(--space-3));
+  margin: calc(-1 * var(--space-1) - 1px) calc(-1 * var(--space-3)) 0;
   border: 1px solid var(--accent-primary);
   border-radius: var(--radius-input);
   background: var(--surface-card);
@@ -809,7 +809,7 @@ kbd {
 .settings-head { gap: var(--space-3); }
 .settings-back { align-self: flex-start; gap: var(--space-1); padding-left: var(--space-2); }
 .settings-back svg { width: var(--space-4); height: var(--space-4); }
-.settings-search-input { width: 100%; min-height: 44px; font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body); }
+.settings-search-input { width: 100%; min-height: var(--hit); font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body); }
 .settings-results {
   list-style: none;
   margin: 0;

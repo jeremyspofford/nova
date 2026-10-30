@@ -774,3 +774,31 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   .orb-glow, .orb-swirl, .nav-badge { animation: none !important; }
 }
 .panel > .section-title:first-child { margin-top: 0; }
+
+/* ---- hit areas (M9, Amendment 2026-10-30-C Part 2) ---------------------------------------------
+   Every control is 44×44 to a pointer and 48×48 to a finger (Apple 44 pt, Material 48 dp): an
+   accessibility constant, like a breakpoint, not a design value. A control that looks smaller keeps
+   its look and takes the rest from an invisible ::before; the others are simply that big.
+   (tests/ui/m9-targets.test.ts measures it in the browser.) */
+:root { --hit: 44px; }
+@media (pointer: coarse) { :root { --hit: 48px; } }
+.icon-btn, .send, .mic { width: var(--hit); height: var(--hit); }
+.btn:not(.small), .input, .field, .composer textarea, .memory-edit, select, .record > summary, .toc-item, .more .nav-item { min-height: var(--hit); }
+.act { min-height: var(--hit); min-width: var(--hit); justify-content: center; }
+/* A disclosure's own row is as tall as its hit area, so two in a row don't share one. */
+summary { padding-block: max(0px, calc((var(--hit) - 1lh) / 2)); }
+/* A small button keeps its look; the room its hit area needs is kept clear around it. */
+.btn.small { margin-block: max(0px, calc((var(--hit) - var(--space-6)) / 2)); }
+/* A message's actions stay pressable over its revealed time. */
+.msg-user .actions { z-index: 3; }
+/* The hit area is square even where the control is round or has rounded corners. */
+.icon-btn, .send, .mic, .act, .btn, button.status, a.link, .set-link, .switch, summary { position: relative; }
+.icon-btn::before, .send::before, .mic::before, .act::before, .btn::before, button.status::before, a.link::before, .set-link::before, .switch::before, summary::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, var(--hit));
+  height: max(100%, var(--hit));
+  translate: -50% -50%;
+}
