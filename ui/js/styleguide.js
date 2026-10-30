@@ -4,7 +4,7 @@ const schema = await fetch('/api/v1/design-systems/schema').then((r) => r.json()
 const tokensOf = (test) => schema.tokens.filter(test).map((t) => t.css);
 import { MODES, apply, current, previewCss } from './theme.js';
 import { icons, memoryIndex, renderActivity, renderEmpty, renderHandoff, renderMemory, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
-import { ICONS, approvalSheet, briefCard, chatBubble, deviceMeshCard, emptyState, evidenceViewer, handlingCard, healthCard, lookingIntoItCard, memoryHighlightCard, orb, proactiveBanner, settingsRow, status, taskRow, triggerRow, verifiedResultCard, voiceState } from './components.js';
+import { ICONS, addDeviceSheet, approvalSheet, briefCard, chatBubble, deviceMeshCard, joinRequestSheet, emptyState, evidenceViewer, handlingCard, healthCard, lookingIntoItCard, memoryHighlightCard, orb, proactiveBanner, settingsRow, status, taskRow, triggerRow, verifiedResultCard, voiceState } from './components.js';
 import { ORB_STATES } from './status.js';
 
 const sg = document.getElementById('sg');
@@ -163,7 +163,7 @@ function render() {
       ${handlingCard({ tasks: [], now: t0 })}
       ${verifiedResultCard(doneTask, { now: t0 })}
       ${lookingIntoItCard(workTasks[0])}
-      ${deviceMeshCard({ devices: [{ name: 'This browser', detail: 'desktop layout', online: true, current: true }] })}
+      ${deviceMeshCard({ devices: [{ id: 'h', name: 'Hub', kind: 'computer', role: 'hub', trust: 'trusted', online: true, this: true }, { id: 'p', name: 'Phone', kind: 'phone', role: 'client', trust: 'trusted', online: false, last_seen: new Date(Date.now() - 600_000).toISOString() }] })}
       ${healthCard({ health: { ok: true, checks: { database: { ok: true }, workers: { ok: true, workers: [{}, {}, {}] } } } })}
       ${healthCard({ health: { ok: true, checks: {} }, problems: [{ id: 1, message: 'The heartbeat couldn’t check the schedules.' }] })}
       ${memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] })}
@@ -172,6 +172,8 @@ function render() {
     section('Sheets', 'Approvals are tiered: tier 3 needs an explicit confirmation. Evidence shows how Nova checked.', `<div class="sg-cards">
       <div class="sheet-inner panel">${approvalSheet(task('a2', 'Send the draft reply', 'waiting', { approval_tier: 2 }))}</div>
       <div class="sheet-inner panel">${approvalSheet(task('a3', 'Delete the old backups', 'waiting', { approval_tier: 3 }))}</div>
+      <div class="sheet-inner panel">${joinRequestSheet({ id: 'j1', name: 'Phone', kind: 'phone', platform: 'Android', capabilities: [], fingerprint: 'ABCD-EFGH-JKMN-PQRS-TVWX-YZ01-2345-6789', confirmation: '042917' })}</div>
+      <div class="sheet-inner panel">${addDeviceSheet({ pairing_id: 'p1', code: 'ABCD-EFGH', expires_at: new Date(Date.now() + 5 * 60_000).toISOString(), hub_url: 'https://hub.example:4320', url: 'https://hub.example:4320/pair#c=ABCD-EFGH&h=ABCD-EFGH-JKMN-PQRS-TVWX-YZ01-2345-6789', command: 'curl -fsS https://hub.example:4320/join.sh | sh -s -- ABCD-EFGH' })}</div>
       <div class="sheet-inner panel">${evidenceViewer(doneTask)}</div>
     </div>`),
     section('Automations, notices, settings', '', `<div class="sg-demo">
@@ -179,7 +181,7 @@ function render() {
       ${label('Proactive messages')}${proactiveBanner({ id: 'm1', text: 'The weekly review is ready when you are.' })}${proactiveBanner({ id: 'm2', text: 'I held this one because I wasn’t sure it should go out now.', hold: 'needs_ok' })}
       ${label('Toasts')}<div class="sg-frame sg-toasts"><div class="toast">Forgotten.<button type="button" class="toast-btn">Undo</button></div><div class="toast" data-tone="alert">The heartbeat couldn’t check the schedules.<button type="button" class="toast-btn">See Health</button></div></div>
       ${label('Banner')}<div class="banner">You’re offline. What you see was saved earlier; nothing new can arrive or be sent until you’re back.</div>
-      ${label('Settings rows')}<ul class="settings-list">${settingsRow({ title: 'Your name', note: 'What Nova calls you.', control: '<input class="input" value="Sam" aria-label="Your name"><button type="button" class="btn small">Save</button>' })}${settingsRow({ title: 'Device id', note: 'It lets this device keep its own appearance.' })}</ul>
+      ${label('Settings rows')}<ul class="settings-list">${settingsRow({ title: 'Your name', note: 'What Nova calls you.', control: '<input class="input" value="Sam" aria-label="Your name"><button type="button" class="btn small">Save</button>' })}${settingsRow({ title: 'Appearance id', note: 'It lets this browser keep its own appearance.' })}</ul>
       ${label('Empty state')}${emptyState({ line: 'No tasks yet.', orbState: 'idle' })}
       ${label('Buttons')}<div class="sg-demo-row"><button class="btn primary">Approve</button><button class="btn">Not now</button><button class="btn quiet">Cancel</button><button class="btn small">Pause</button><button class="btn" disabled>Disabled</button><button class="send" aria-label="Send">${icons.send}</button><button class="send is-stop" aria-label="Stop">${icons.stop}</button></div>
     </div>`),

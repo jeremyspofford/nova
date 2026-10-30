@@ -9,7 +9,7 @@ import { join } from 'node:path';
 export const ROOT = join(import.meta.dirname, '..', '..');
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export interface Running { proc: ChildProcess; out: string[]; port: number }
+export interface Running { proc: ChildProcess; out: string[]; port: number; mesh: string | null }
 
 export async function start(env: Record<string, string>): Promise<Running> {
   const out: string[] = [];
@@ -25,7 +25,18 @@ export async function start(env: Record<string, string>): Promise<Running> {
   // between choosing and binding.
   const port = Number(/Nova is ready at http:\/\/[^:]+:(\d+)/.exec(out.join(''))?.[1]);
   assert.ok(port > 0, `no port in:\n${out.join('')}`);
-  return { proc, out, port };
+  // With a mesh listener, it is ready only once that is listening too (it says where; with port 0
+  // in NOVA_MESH_URL that is the port it chose).
+  let mesh: string | null = null;
+  if (env.NOVA_MESH_URL) {
+    for (let i = 0; i < 200 && !/Devices pair and connect at /.test(out.join('')); i++) {
+      if (proc.exitCode !== null) break;
+      await sleep(25);
+    }
+    mesh = /Devices pair and connect at (\S+) /.exec(out.join(''))?.[1] ?? null;
+    assert.ok(mesh, `the mesh listener did not start:\n${out.join('')}`);
+  }
+  return { proc, out, port, mesh };
 }
 
 export async function stop(r: Running) {

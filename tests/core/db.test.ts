@@ -70,3 +70,19 @@ test('transactions roll back on a throw and nest into the outer one', () => {
   assert.throws(() => db.tx(() => { db.run('INSERT INTO a VALUES (1)'); db.tx(() => db.run('INSERT INTO a VALUES (2)')); throw new Error('no'); }));
   assert.equal(db.all('SELECT * FROM a').length, 0);
 });
+
+test('a nested transaction that fails is undone on its own; the outer one keeps the rest', () => {
+  const db = new Db(':memory:');
+  db.raw.exec('CREATE TABLE t (x TEXT)');
+  db.tx(() => {
+    db.run("INSERT INTO t VALUES ('outer-before')");
+    assert.throws(() => db.tx(() => {
+      db.run("INSERT INTO t VALUES ('inner')");
+      throw new Error('placeholder failure');
+    }), /placeholder failure/);
+    db.tx(() => db.run("INSERT INTO t VALUES ('inner-ok')"));
+    db.run("INSERT INTO t VALUES ('outer-after')");
+  });
+  assert.deepEqual(db.all<{ x: string }>('SELECT x FROM t ORDER BY rowid').map((r) => r.x), ['outer-before', 'inner-ok', 'outer-after']);
+  db.close();
+});

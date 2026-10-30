@@ -13,6 +13,7 @@ import { routeOf } from './nav.js';
 import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
 import { startSetup, setupShowing } from './setup.js';
+import { renew, sessionEnds } from './device-key.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -560,8 +561,19 @@ function renderChrome() {
   if (!state.online) banner = 'You’re offline. What you see was saved earlier; nothing new can arrive or be sent until you’re back.';
   else if (!state.reachable) banner = 'Nova’s server isn’t answering. Your conversations are safe on disk; this page reconnects when it’s back.';
   else if (core.store.stale) banner = 'Some of this was saved earlier, while Nova was out of reach.';
+  // A standby (or a hub that stepped down) says so on every screen, with which node is hub.
+  const replica = state.online && state.reachable ? core.store.mesh?.replica : null;
+  if (!banner && replica) banner = replica.reason;
   el.banner.hidden = !banner;
   el.banner.textContent = banner;
+  if (banner && replica && banner === replica.reason && !replica.demoted && core.store.mesh?.you?.can_approve) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn small';
+    b.dataset.action = 'promote';
+    b.textContent = 'Make this the hub';
+    el.banner.append(b);
+  }
 
   let hint = state.notice;
   if (!hint && run) hint = 'Esc to stop';
@@ -1505,6 +1517,17 @@ onCore('problem', (p) => {
 onCore('message', () => scheduleRefresh(['messages']));
 onCore('trigger', () => scheduleRefresh(['rules', 'messages']));
 onCore('profile', () => scheduleRefresh(['profile']));
+// The device mesh: the registry changed, or a device is asking to join (only approvers hear that).
+onCore('device', () => scheduleRefresh(['devices', 'mesh']));
+// Hub or standby changed (promoted, stepped down); on a standby, the hub's changes arrived.
+onCore('mesh', () => scheduleRefresh(['mesh', 'devices', 'health']));
+onCore('sync', () => scheduleRefresh(['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'devices', 'mesh']));
+onCore('join_request', (r) => {
+  scheduleRefresh(['requests']);
+  if (r?.state === 'pending') core.promptJoin(r);
+  else core.joinDecided(r);
+});
+window.addEventListener('nova:devices', () => { if (state.view === 'settings') renderSettingsView({ only: 'devices' }); renderCore(); renderChrome(); });
 
 // Actions on the core's surfaces, wherever they appear: Home, the right column, Tasks, Health,
 // Automations, and the sheet.
@@ -1515,13 +1538,21 @@ async function coreAction(b) {
   if (action === 'retry-task' || action === 'cancel-task') return core.taskAction(action, task);
   if (action === 'close-sheet') return closeSheet();
   if (['pause-rule', 'resume-rule', 'delete-rule'].includes(action)) return core.ruleAction(action, b.closest('[data-rule]').dataset.rule);
+  if (action === 'add-device') return core.addDevice();
+  if (action === 'copy-command') return core.copyCommand();
+  if (action === 'review-request') return core.openRequest(b.dataset.request);
+  if (action === 'deny-request') return core.denyRequest(b.dataset.request);
+  if (action === 'revoke-device') return core.revokeDevice(b.dataset.device);
+  if (action === 'allow-approve') return core.allowApprove(b.dataset.device, b.dataset.value);
+  if (action === 'promote') return core.promote();
   try {
     if (action === 'resolve-problem') { await post(`/api/v1/problems/${encodeURIComponent(b.dataset.problem)}/resolve`); scheduleRefresh(['problems', 'health']); toast('Marked as dealt with.'); }
     if (action === 'read-message') { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/read`); scheduleRefresh(['messages']); }
     if (action === 'send-message') { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/approve`); scheduleRefresh(['messages']); toast('Sent.'); }
   } catch (e) { toast(e.message); }
 }
-const CORE_ACTIONS = new Set(['open-task', 'evidence', 'retry-task', 'cancel-task', 'close-sheet', 'pause-rule', 'resume-rule', 'delete-rule', 'resolve-problem', 'read-message', 'send-message']);
+const CORE_ACTIONS = new Set(['open-task', 'evidence', 'retry-task', 'cancel-task', 'close-sheet', 'pause-rule', 'resume-rule', 'delete-rule', 'resolve-problem', 'read-message', 'send-message',
+  'add-device', 'copy-command', 'review-request', 'deny-request', 'revoke-device', 'allow-approve', 'promote']);
 document.addEventListener('click', (e) => {
   if (e.defaultPrevented || e.target.closest('#setup')) return;
   if (followLink(e)) return;
@@ -1607,6 +1638,23 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ---- a paired browser's session ---------------------------------------------
+
+// A paired browser (not the hub's own screen) signs in again before its 12-hour session runs out,
+// with the key it keeps in IndexedDB. If the hub won't have it (revoked), it goes to /pair.
+function keepSession() {
+  const ends = () => sessionEnds();
+  if (!ends()) return;
+  const check = async () => {
+    const at = Date.parse(ends() ?? '');
+    if (!(at - Date.now() < 2 * 3600_000)) return;
+    if (!(await renew())) location.assign('/pair');
+  };
+  check();
+  setInterval(check, 10 * 60_000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+}
+
 // ---- start -----------------------------------------------------------------
 
 window.addEventListener('online', () => { state.online = true; renderChrome(); showSignals(); refreshCore(); });
@@ -1623,6 +1671,7 @@ new ResizeObserver(() => $('main').style.setProperty('--gutter', `${el.scroller.
 el.topbarOrb.innerHTML = liveOrb('avatar');
 applyTheme();
 coreStream();
+keepSession();
 renderVoice();
 
 let booted = false;

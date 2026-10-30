@@ -2,20 +2,23 @@
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
-import { ICONS, ago, approvalSheet, briefCard, card, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, memoryHighlightCard, orb, proactiveBanner, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
+import { ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, orb, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
 import { greeting, isOpen, needsApproval, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
-import { closeSheet, layout, liveOrb, openSheet, toast } from './shell.js';
+import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
 import { MODES, current as appearance, previewCss, rollback, setMode, use } from './theme.js';
 
 // What the core has told this page, kept fresh by the event stream.
 export const store = {
   tasks: [], problems: [], resolved: [], health: null, profile: null, identity: null,
   memory: [], rules: [], messages: [], workers: [], reachable: true, stale: false, loaded: false,
+  // The device mesh: the registry, whether other devices can reach Nova (and who this page is),
+  // and devices waiting for an OK.
+  devices: [], mesh: null, requests: [],
 };
 
 const settle = (p, fallback) => p.catch(() => fallback);
-export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers']) {
+export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers', 'devices', 'mesh', 'requests']) {
   // Each part comes back as [value, stale].
   const get1 = (path) => request('GET', path).then((r) => [r.data, r.stale]);
   const get = {
@@ -27,6 +30,10 @@ export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'm
     rules: () => get1('/triggers/rules'),
     messages: () => get1('/messages'),
     workers: () => get1('/workers'),
+    devices: () => get1('/mesh/devices'),
+    mesh: () => get1('/mesh/status'),
+    // Only the hub's screen and devices allowed to approve can see who is asking.
+    requests: () => (store.mesh?.you?.can_approve === false ? Promise.resolve([[], false]) : get1('/mesh/requests')),
   };
   const results = await Promise.all(parts.map((p) => settle(get[p]().then(([v, s]) => [p, v, s]), [p, undefined, false])));
   let any = false;
@@ -41,11 +48,12 @@ export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'm
   }
   if (any) store.loaded = true;
   store.stale = wasStale;
+  if (parts.some((p) => p === 'devices' || p === 'mesh' || p === 'requests')) window.dispatchEvent(new CustomEvent('nova:devices'));
   // Live means at least one answer came from the server itself, not the offline cache.
   return { any, live: results.some(([, v, s]) => v !== undefined && !s) };
 }
 
-export const needsYou = () => store.tasks.filter(needsApproval).length + store.messages.filter((m) => m.hold === 'needs_ok').length;
+export const needsYou = () => store.tasks.filter(needsApproval).length + store.messages.filter((m) => m.hold === 'needs_ok').length + store.requests.length;
 export const working = () => store.tasks.filter((t) => t.state === 'active' || t.state === 'verifying').length;
 export const privacy = () => store.profile?.privacy?.default ?? 'local-only';
 
@@ -62,6 +70,9 @@ export function thisDevice() {
     current: true,
   };
 }
+
+// The registry once it has answered; until then, this browser alone.
+const meshDevices = () => (store.devices.length ? store.devices : [thisDevice()]);
 
 // ---- Home ---------------------------------------------------------------------------------
 
@@ -95,7 +106,7 @@ export function renderHome(el, now = new Date()) {
   ${briefCard()}
   ${verified ? verifiedResultCard(verified, { now }) : ''}
   <div data-asideable>${handlingCard({ tasks: store.tasks, now })}</div>
-  <div data-asideable>${deviceMeshCard({ devices: [thisDevice()] })}</div>
+  <div data-asideable>${deviceMeshCard({ devices: meshDevices(), now })}</div>
   ${memoryHighlightCard({ records: store.memory })}
   <div data-asideable>${healthCard({ health: store.health, problems: store.problems, reachable: store.reachable })}</div>
 </div>`;
@@ -104,7 +115,7 @@ export function renderHome(el, now = new Date()) {
 // The right column (desktop) or context pane (tablet): three quiet cards.
 export function renderAside(el, now = new Date()) {
   el.innerHTML = `${handlingCard({ tasks: store.tasks, now })}
-${deviceMeshCard({ devices: [thisDevice()] })}
+${deviceMeshCard({ devices: meshDevices(), now })}
 ${healthCard({ health: store.health, problems: store.problems, reachable: store.reachable })}`;
 }
 
@@ -151,6 +162,10 @@ export async function openTask(id) {
 }
 
 export async function approve(form) {
+  if (form.dataset.request) return approveJoin(form);
+  if (form.dataset.revoke) return confirmRevoke(form);
+  if (form.dataset.allow) return confirmAllow(form);
+  if (form.dataset.promote) return confirmPromote(form);
   const id = form.dataset.task;
   const tier = Number(form.dataset.tier);
   const confirm = form.querySelector('input[name="confirm"]');
@@ -175,14 +190,28 @@ export async function taskAction(action, id) {
 
 // ---- Health -------------------------------------------------------------------------------
 
-const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts' };
+const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices' };
 function checkLine(key, c) {
   if (key === 'workers') return c.ok ? `${c.workers?.length ?? 0} ready.` : c.detail;
   if (key === 'ledger') return Object.entries(c.counts ?? {}).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ') || 'No tasks yet.';
   if (key === 'design') return `Showing ${appearance().list.find((d) => d.id === c.active)?.name ?? c.active}.`;
   if (key === 'problems') return c.open ? `${c.open} open.` : 'None open.';
+  if (key === 'mesh') return `${c.counts.trusted} paired${c.counts.revoked ? `, ${c.counts.revoked} revoked` : ''}. ${c.listening ? 'Other devices can reach Nova.' : 'Other devices can’t reach Nova: no mesh address.'} ${meshRoleLine(c)}`;
   if (c.counts) return Object.entries(c.counts).filter(([, n]) => typeof n === 'number' && n).map(([s, n]) => `${n} ${s.replace(/_/g, ' ').replace(/s$/, n === 1 ? '' : 's')}`).join(', ') || 'Nothing yet.';
   return c.detail ?? (c.ok ? 'Fine.' : 'Not fine.');
+}
+
+// Hub or standby, and how far the copy is behind: the standby's lag on the hub, the hub on the standby.
+function meshRoleLine(c) {
+  if (c.role !== 'hub' && c.replica) {
+    const s = c.replica.sync;
+    const copied = s?.last_ok_at ? `Last copied ${ago(s.last_ok_at)}.` : 'Nothing copied yet.';
+    return `${c.replica.reason} ${s?.unreachable_since ? `It hasn’t reached the hub since ${ago(s.unreachable_since)}. ` : s?.refused ? `${s.refused} ` : ''}${copied}`;
+  }
+  if (!c.standby) return `This is the hub (epoch ${c.epoch}). No standby is paired.`;
+  const l = c.standby.lag;
+  const lag = !l?.acked_at && l?.rows ? 'it hasn’t copied anything yet' : l?.rows ? `${l.rows} ${l.rows === 1 ? 'change' : 'changes'} behind${l.behind ? `, nothing taken for ${l.seconds} s` : ''}` : 'caught up';
+  return `This is the hub (epoch ${c.epoch}). The standby “${c.standby.name}” is ${lag}.`;
 }
 
 export function renderHealth(el) {
@@ -192,7 +221,8 @@ export function renderHealth(el) {
   ${p.detail ? `<details class="raw"><summary>Technical detail</summary><pre tabindex="0">${esc(p.detail)}</pre></details>` : ''}</div>
   ${open ? `<div class="settings-control"><button type="button" class="btn small" data-action="resolve-problem" data-problem="${esc(String(p.id))}">Mark as dealt with</button></div>` : ''}
 </li>`;
-  const checks = h ? Object.entries(h.checks).map(([k, c]) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(CHECK_NAMES[k] ?? k)}</p><p class="settings-note">${esc(checkLine(k, c))}</p></div>${c.ok ? '<span class="pill is-on">Fine</span>' : '<span class="pill is-warn">Needs a look</span>'}</li>`).join('') : '';
+  const fine = (k, c) => c.ok && !(k === 'mesh' && (c.standby?.lag?.behind || c.replica?.sync?.unreachable_since || c.replica?.sync?.refused));
+  const checks = h ? Object.entries(h.checks).map(([k, c]) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(CHECK_NAMES[k] ?? k)}</p><p class="settings-note">${esc(checkLine(k, c))}</p></div>${fine(k, c) ? '<span class="pill is-on">Fine</span>' : '<span class="pill is-warn">Needs a look</span>'}</li>`).join('') : '';
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Health</h2>
 <p class="view-lede">${!store.reachable ? 'Nova isn’t answering. This page reconnects when it’s back.' : store.problems.length ? 'Something went wrong. Each problem says what happened; the detail is one tap away.' : 'Everything Nova runs on, and anything that went wrong.'}</p></header>
 <section class="panel" aria-labelledby="h-problems"><h3 class="section-title" id="h-problems">Problems</h3>
@@ -329,19 +359,172 @@ export async function install() {
   installPrompt = null;
 }
 
+// Settings › Devices: the real registry. Adding a device is the one standout, unless a device is
+// already waiting for an OK: then reviewing it is. Revoked devices are kept one layer down.
 export function renderDevices() {
-  const d = thisDevice();
+  const m = store.mesh;
+  const me = m?.you;
+  const approver = !!me?.can_approve;
+  // A standby shows the hub's registry as it copied it; devices are added and revoked on the hub.
+  const copy = !!m?.replica;
   const installRow = standalone()
     ? settingsRow({ title: 'Installed', note: 'Nova runs as an app on this device.' })
     : installPrompt
       ? settingsRow({ title: 'Install Nova', note: 'Open Nova like an app, with its own window and icon.', control: '<button type="button" class="btn small" data-action="install">Install</button>' })
       : settingsRow({ title: 'Install Nova', note: iosLimits() ? 'In Safari, tap Share, then Add to Home Screen.' : 'Your browser offers Install in its menu when it can.' });
+  const all = meshDevices();
+  const trusted = all.filter((d) => d.trust !== 'revoked');
+  const revoked = all.filter((d) => d.trust === 'revoked');
+  const actions = (d) => {
+    if (copy || !d.id || d.role === 'hub' || d.trust === 'revoked') return '';
+    const allow = approver && (d.kind === 'phone' || d.kind === 'browser') && !d.this
+      ? `<button type="button" class="btn small quiet" data-action="allow-approve" data-device="${esc(d.id)}" data-value="${d.can_approve ? 'false' : 'true'}">${d.can_approve ? 'Stop it approving' : 'Let it approve'}</button>` : '';
+    return `${allow}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
+  };
+  const waiting = store.requests.map((r) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(r.name)} is asking to join</p><p class="settings-note">${esc(KIND_WORDS[r.kind] ?? r.kind)} · compare the six digits it shows.</p></div><div class="settings-control"><button type="button" class="btn small primary" data-action="review-request" data-request="${esc(r.id)}">Review</button></div></li>`).join('');
+  const lede = !m
+    ? 'Paired devices show here.'
+    : copy
+      ? 'The hub’s devices, as this node last copied them. Add and revoke devices on the hub.'
+    : !m.listening
+      ? 'Other devices can’t reach this Nova yet, so only this one is here. To pair a phone or a computer, start Nova with a mesh address (NOVA_MESH_URL); the README says how.'
+      : `Phones, browsers and computers you’ve paired. Devices reach Nova at ${m.public_url}.`;
+  const add = m?.listening && approver && !copy ? `<div class="sheet-actions"><button type="button" class="btn${store.requests.length ? '' : ' primary'}" data-action="add-device">Add a device</button></div>` : '';
   return `<section class="memory-section" id="devices" aria-labelledby="set-devices"><h2 class="memory-heading" id="set-devices">Devices</h2>
-<p class="memory-lede">Only this device for now. Pairing your other devices comes in a later version.</p>
-<ul class="device-list">${deviceRow(d)}</ul>
+<p class="memory-lede">${esc(lede)}</p>
+${waiting ? `<ul class="settings-list">${waiting}</ul>` : ''}
+<ul class="device-list device-registry">${trusted.map((d) => deviceRow(d, { actions: actions(d) })).join('')}</ul>
+${add}
+${revoked.length ? `<details class="raw"><summary>Revoked (${revoked.length})</summary><ul class="device-list device-registry">${revoked.map((d) => deviceRow(d)).join('')}</ul></details>` : ''}
 <ul class="settings-list">${installRow}
 ${iosLimits() ? settingsRow({ title: 'On iPhone and iPad', note: 'An installed Nova can’t work in the background there. Your hub does the always-on work; this screen is a window onto it.' }) : ''}
-${settingsRow({ title: 'Device id', note: `${deviceId()}. It lets this device keep its own appearance.` })}</ul></section>`;
+${settingsRow({ title: 'Appearance id', note: `${deviceId()}. It lets this browser keep its own appearance.` })}</ul></section>`;
+}
+
+// ---- pairing and revoking ------------------------------------------------------------------
+
+let pairing = null;
+let expiry = 0;
+
+// A new code and its sheet. The sheet turns into "expired" when the code does: real state.
+export async function addDevice() {
+  try {
+    pairing = await api('POST', '/mesh/pairings');
+  } catch (e) { toast(e.message); return; }
+  const show = () => openSheet(addDeviceSheet(pairing), { label: 'Add a device', onClose: () => { clearTimeout(expiry); pairing = null; } });
+  show();
+  clearTimeout(expiry);
+  expiry = setTimeout(() => { if (pairing && document.querySelector(`#sheet .add-device[data-pairing="${CSS.escape(pairing.pairing_id)}"]`)) show(); }, Math.max(0, Date.parse(pairing.expires_at) - Date.now()) + 50);
+}
+
+export async function copyCommand() {
+  const text = document.getElementById('add-command')?.textContent ?? '';
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied. Run it on the computer you’re adding.');
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById('add-command'));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    toast('Selected. Copy it with your keyboard.');
+  }
+}
+
+// A device showing its digits. It takes the sheet if the sheet is free or showing the code it used;
+// otherwise it waits behind a toast, and in Settings and the orb.
+export function promptJoin(r) {
+  if (!r?.confirmation || r.state !== 'pending' || store.mesh?.you?.can_approve === false) return;
+  const busy = sheetOpen() && !document.querySelector('#sheet .add-device') && !document.querySelector(`#sheet [data-request="${CSS.escape(r.id)}"]`);
+  if (busy) { toast(`${r.name} is asking to join.`, { action: { label: 'Review', run: () => openRequest(r.id) } }); return; }
+  openSheet(joinRequestSheet(r), { label: 'A device is asking to join' });
+}
+
+// A request was answered somewhere else (or expired): its sheet goes.
+export function joinDecided(r) {
+  if (!r || r.state === 'pending') return;
+  if (document.querySelector(`#sheet [data-request="${CSS.escape(r.id)}"]`)) {
+    closeSheet();
+    if (r.state === 'expired') toast(`${r.name} waited too long; the request expired.`);
+  }
+}
+
+export async function openRequest(id) {
+  await load(['requests']);
+  const r = store.requests.find((x) => x.id === id);
+  if (!r) { toast('That request was already answered.'); return; }
+  openSheet(joinRequestSheet(r), { label: 'A device is asking to join' });
+}
+
+async function approveJoin(form) {
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (!confirm?.checked) { confirm?.focus(); return; }
+  try {
+    const { device } = await api('POST', `/mesh/requests/${encodeURIComponent(form.dataset.request)}/approve`, { confirm: true });
+    closeSheet();
+    toast(`${device.name} is paired.`);
+  } catch (e) { toast(e.message); }
+  await load(['devices', 'requests']);
+}
+
+export async function denyRequest(id) {
+  try {
+    await api('POST', `/mesh/requests/${encodeURIComponent(id)}/deny`);
+    closeSheet();
+    toast('Turned away.');
+  } catch (e) { toast(e.message); }
+  await load(['requests']);
+}
+
+export function revokeDevice(id) {
+  const d = store.devices.find((x) => x.id === id);
+  if (d) openSheet(revokeSheet(d), { label: `Revoke ${d.name}` });
+}
+
+async function confirmRevoke(form) {
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (!confirm?.checked) { confirm?.focus(); return; }
+  try {
+    const d = await api('POST', `/mesh/devices/${encodeURIComponent(form.dataset.revoke)}/revoke`, { confirm: true, reason: 'Revoked by you.' });
+    closeSheet();
+    toast(`${d.name} is revoked.`);
+  } catch (e) { toast(e.message); }
+  await load(['devices']);
+}
+
+// Letting a phone or browser approve new devices is a permissions change: tier 3, its own sheet.
+export function allowApprove(id, value) {
+  const d = store.devices.find((x) => x.id === id);
+  if (d) openSheet(allowApproveSheet(d, value === 'true'), { label: `Who approves new devices` });
+}
+
+async function confirmAllow(form) {
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (!confirm?.checked) { confirm?.focus(); return; }
+  const yes = form.dataset.value === 'true';
+  try {
+    const d = await api('PATCH', `/mesh/devices/${encodeURIComponent(form.dataset.allow)}`, { can_approve: yes, confirm: true });
+    closeSheet();
+    toast(yes ? `${d.name} can approve new devices.` : `${d.name} can no longer approve new devices.`);
+  } catch (e) { toast(e.message); }
+  await load(['devices']);
+}
+
+// ---- the standby: becoming the hub ------------------------------------------------------------
+
+export function promote() {
+  openSheet(promoteSheet(store.mesh?.replica), { label: 'Make this the hub' });
+}
+
+async function confirmPromote(form) {
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (!confirm?.checked) { confirm?.focus(); return; }
+  try {
+    const r = await api('POST', '/mesh/promote', { confirm: true });
+    closeSheet();
+    toast(`This node is the hub now (epoch ${r.epoch}).`);
+  } catch (e) { toast(e.message); }
+  await load();
 }
 
 export { ICONS };

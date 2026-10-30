@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="Pair this device with Nova.">
+  <title>Pair with Nova</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <!-- Only public files load here: this page is what an unpaired device can reach. -->
+  <link rel="stylesheet" href="/design-system.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/components.css">
+  <link rel="stylesheet" href="/styles/pair.css">
+  <script type="module" src="/js/pair.js"></script>
+</head>
+<body>
+  <main class="pair">
+    <span class="orb orb-hero" id="pair-orb" data-state="idle" aria-hidden="true"><span class="orb-glow"></span><span class="orb-core"></span><span class="orb-swirl"></span><span class="orb-sheen"></span></span>
+    <h1 class="pair-title" id="pair-title">Pair with Nova</h1>
+    <div class="pair-body" id="pair-body" aria-live="polite"><p class="pair-line">Checking this browser…</p></div>
+  </main>
+</body>
+</html>

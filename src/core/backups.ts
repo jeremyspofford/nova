@@ -31,8 +31,10 @@ export class Backups {
   }
 
   // Delete rows by id from one table in every backup, overwriting the freed pages and rebuilding
-  // the file. A backup without that table (older than the feature) has nothing to clean.
-  forget(table: string, ids: string[]): { cleaned: string[]; destroyed: string[] } {
+  // the file. A backup without that table (older than the feature) has nothing to clean. A backup
+  // with a sync log (M4c) loses the log's entries for those rows too, and, for memory, any entry of
+  // memory's or of the files that show it (MEMORY.md, the day notes) that still carries `words`.
+  forget(table: string, ids: string[], words: string[] = []): { cleaned: string[]; destroyed: string[] } {
     if (!TABLE.test(table)) throw new Error(`Not a table name: ${table}`);
     const cleaned: string[] = [];
     const destroyed: string[] = [];
@@ -50,6 +52,14 @@ export class Backups {
             db.exec('BEGIN');
             const del = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
             for (const id of ids) del.run(id);
+            if (db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_log'`).get()) {
+              const entry = db.prepare('DELETE FROM sync_log WHERE tbl = ? AND pk = ?');
+              for (const id of ids) entry.run(table, id);
+              if (table === 'memory') {
+                const carrying = db.prepare(`DELETE FROM sync_log WHERE (tbl = 'memory' OR (tbl = 'file' AND (pk = 'MEMORY.md' OR pk LIKE 'memory/%'))) AND instr(row, ?) > 0`);
+                for (const w of words) for (const v of new Set([w.trim(), w.trim().replace(/\s+/g, ' ')])) if (v) carrying.run(JSON.stringify(v).slice(1, -1));
+              }
+            }
             db.exec('COMMIT');
             db.exec('VACUUM');
           }

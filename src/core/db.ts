@@ -33,6 +33,7 @@ export class Db {
   readonly path: string;
   readonly raw: DatabaseSync;
   #inTx = false;
+  #depth = 0;
 
   constructor(path: string) {
     this.path = path;
@@ -44,9 +45,25 @@ export class Db {
   }
 
   // Synchronous on purpose: every statement in the core is synchronous, so a transaction can
-  // never interleave with another caller's. Nested calls join the outer transaction.
+  // never interleave with another caller's. A nested call is a savepoint inside the outer
+  // transaction: it commits with the outer one, and if it throws, only its own writes are undone,
+  // so a caller that catches the error never keeps half of what failed.
   tx<T>(fn: () => T): T {
-    if (this.#inTx) return fn();
+    if (this.#inTx) {
+      const sp = `nova_sp_${++this.#depth}`;
+      this.raw.exec(`SAVEPOINT ${sp}`);
+      try {
+        const out = fn();
+        this.raw.exec(`RELEASE ${sp}`);
+        return out;
+      } catch (e) {
+        this.raw.exec(`ROLLBACK TO ${sp}`);
+        this.raw.exec(`RELEASE ${sp}`);
+        throw e;
+      } finally {
+        this.#depth--;
+      }
+    }
     this.raw.exec('BEGIN IMMEDIATE');
     this.#inTx = true;
     try {

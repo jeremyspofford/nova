@@ -16,7 +16,9 @@ export type UserState = (typeof USER_STATES)[number];
 
 const HEADINGS: Record<Kind, string> = { timeline: 'Timeline', entity: 'People, places and things', fact: 'Facts', preference: 'Preferences', decision: 'Decisions', commitment: 'Commitments' };
 const SCOPE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-const RECORDER = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+// nova, person, import, a worker id, or device:<id> for a note a paired device sent (M4b).
+const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const RECORDER = /^(?:[a-z0-9][a-z0-9._-]{0,63}|device:[0-9a-f-]{36})$/;
 const LOW = 0.5;
 
 export interface MemoryInput {
@@ -76,11 +78,12 @@ export class Memory {
   readonly exportsDir: string;
   #db: Db;
   #now: () => Date;
-  #afterForget: (ids: string[]) => void;
+  #afterForget: (ids: string[], records: MemoryRecord[]) => void;
   #forgetListeners: ((records: MemoryRecord[]) => void)[] = [];
+  #doneListeners: ((records: MemoryRecord[]) => void)[] = [];
 
   // afterForget: where else the forgotten records must go (the backups).
-  constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[]) => void }) {
+  constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[], records: MemoryRecord[]) => void }) {
     this.#db = o.db;
     this.#now = o.now ?? (() => new Date());
     this.#afterForget = o.afterForget ?? (() => {});
@@ -98,7 +101,7 @@ export class Memory {
   // that is already here, or was forgotten, is skipped, so importing again adds nothing.
   importRecord(input: MemoryInput & { id: string }): { record: MemoryRecord | null; imported: boolean } {
     const id = input?.id;
-    if (typeof id !== 'string' || !RECORDER.test(id)) throw new CoreError('validation', 'id must be a short name in letters, digits, ., - or _.');
+    if (typeof id !== 'string' || !NAME.test(id)) throw new CoreError('validation', 'id must be a short name in letters, digits, ., - or _.');
     const row = this.#validate(input, id);
     return this.#db.tx(() => {
       if (this.#db.get('SELECT 1 FROM memory_event WHERE memory_id = ? AND kind = ?', id, 'forgotten')) return { record: null, imported: false };
@@ -144,6 +147,12 @@ export class Memory {
     this.#forgetListeners.push(fn);
   }
 
+  // Called last, once every onForget listener has rewritten what it keeps: the sync log then
+  // replaces or drops whatever still carries the words.
+  onForgetDone(fn: (records: MemoryRecord[]) => void): void {
+    this.#doneListeners.push(fn);
+  }
+
   forget(id: string, by = 'person'): { forgotten: string[] } {
     const who = this.#by(by);
     const records = this.history(id);
@@ -155,9 +164,21 @@ export class Memory {
     });
     // Old pages in the write-ahead log could still hold the content; fold them in now.
     if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    this.#afterForget(ids);
+    this.#afterForget(ids, records);
     for (const fn of this.#forgetListeners) fn(records);
+    for (const fn of this.#doneListeners) fn(records);
     return { forgotten: ids };
+  }
+
+  // On a standby: the hub forgot these, and sync has already deleted the rows here (the hub's own
+  // history of it arrives by sync too). The rest of a forget happens here as on the hub: the
+  // write-ahead log, the backups, the rendered files, the sync log.
+  forgottenElsewhere(rows: Record<string, unknown>[]): void {
+    const records = rows.map((r) => this.#shape(r as unknown as Row));
+    if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    this.#afterForget(records.map((r) => r.id), records);
+    for (const fn of this.#forgetListeners) fn(records);
+    for (const fn of this.#doneListeners) fn(records);
   }
 
   get(id: string): MemoryRecord {
@@ -292,7 +313,7 @@ export class Memory {
   }
 
   #by(v: unknown): string {
-    if (typeof v !== 'string' || !RECORDER.test(v)) throw new CoreError('validation', 'A memory must say who recorded it: nova, person, import, or a worker id.');
+    if (typeof v !== 'string' || !RECORDER.test(v)) throw new CoreError('validation', 'A memory must say who recorded it: nova, person, import, a worker id, or device:<id>.');
     return v;
   }
 

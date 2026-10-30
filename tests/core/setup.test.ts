@@ -29,7 +29,7 @@ test('a blank profile starts with Nova asking a question, and nothing about any 
   assert.equal(v.done, false);
   assert.match(v.question ?? '', /What should I call you\?/);
   assert.equal(v.transcript.length, 1);
-  assert.deepEqual(profile.all(), { identity: {}, user: {}, tuning: {}, privacy: {}, policy: {}, appearance: {} });
+  assert.deepEqual(profile.all(), { identity: {}, user: {}, tuning: {}, privacy: {}, policy: {}, appearance: {}, mesh: {} });
 });
 
 test('the whole conversation writes the profile and ends with a verified first task', async () => {
@@ -57,6 +57,7 @@ test('the whole conversation writes the profile and ends with a verified first t
     privacy: { default: 'local-only' },
     policy: {},
     appearance: {},
+    mesh: {},
   });
 
   await ledger.idle();

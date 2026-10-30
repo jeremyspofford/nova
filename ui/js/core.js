@@ -1,10 +1,12 @@
 // The core's API (/api/v1), its event stream, and this device's id. One stream for the whole
 // page; anything that wants to hear about tasks, problems, setup or the design system listens here.
 
+import { renew, sessionEnds } from './device-key.js';
+
 export const V1 = '/api/v1';
 
-// A device id is a random id this browser keeps (there is no device registry until M4). It picks
-// the device's own design system when it has one.
+// An appearance id: a random id this browser keeps, so it can have its own design system. (A
+// paired browser's place in the device registry is its key, in device-key.js.)
 let memoId = null;
 export function deviceId() {
   const ok = (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(v);
@@ -27,12 +29,18 @@ export const fromCache = (res) => res.headers.get('x-nova-offline') === '1';
 
 // The answer and whether it came from the offline cache, kept together so concurrent requests
 // can't mix up whose answer was stale.
-export async function request(method, path, body) {
+export async function request(method, path, body, retried = false) {
   let res;
   try {
     res = await fetch(`${V1}${path}`, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
   } catch {
     throw new Unreachable('Nova’s server didn’t answer.');
+  }
+  // Only a paired device ever hears 401 (the hub's own screen never does): its session ended, so
+  // it signs in again once with its key, or goes back to /pair.
+  if (res.status === 401 && !retried) {
+    if (sessionEnds() && (await renew())) return request(method, path, body, true);
+    location.assign('/pair');
   }
   const stale = fromCache(res);
   if (res.status === 503 && stale) throw new Unreachable('Nova’s server didn’t answer.');
@@ -57,6 +65,14 @@ export function stream() {
   if (source) return source;
   source = new EventSource(`${V1}/events`);
   for (const [event, set] of listeners) for (const fn of set) source.addEventListener(event, fn);
+  // A browser gives up on a stream the server refused (a paired device whose session ended or was
+  // revoked); it retries by itself only when the network dropped. Sign in again, then reopen.
+  const mine = source;
+  source.addEventListener('error', () => {
+    if (mine.readyState !== EventSource.CLOSED || !sessionEnds()) return;
+    source = null;
+    renew().then((ok) => (ok ? stream() : location.assign('/pair')));
+  });
   return source;
 }
 export function on(event, fn) {

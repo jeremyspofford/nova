@@ -1,9 +1,12 @@
 // Nova's local web server: the UI, a small JSON API, and a server-sent event
-// stream per conversation. Binds to 127.0.0.1 by default.
+// stream per conversation. Binds to 127.0.0.1 by default. A second listener, the
+// mesh listener, serves paired devices when one is configured (src/core/mesh/access.ts
+// says who may do what on either).
 import { createServer } from 'node:http';
-import { createReadStream, existsSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs';
+import { createServer as createTlsServer } from 'node:https';
+import { createReadStream, existsSync, readFileSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
-import { loadConfig } from './config.js';
+import { ConfigError, loadConfig } from './config.js';
 import { ensureGit, seedHome } from './home.js';
 import { SessionStore, validId } from './sessions.js';
 import { Runner, BusyError } from './runner.js';
@@ -16,7 +19,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { createCore } from './core/index.ts';
+import { createCore, originHost } from './core/index.ts';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -33,8 +36,12 @@ export function createNova(config = loadConfig(), deps = {}) {
   // through the runner (bound below, once it exists). Its evidence is checked by reading the
   // conversation the report went to.
   const chatRun = new ChatRun({ program, egress: config.agentEgress, privacy: () => core.profile.privacyDefault() });
+  // Shared with the core by reference: with port 0 in NOVA_MESH_URL, the real port is filled in
+  // once the mesh listener is bound (tests use that, so no other process can take the port first).
+  const meshInfo = config.mesh ? { publicUrl: config.mesh.publicUrl, transport: config.mesh.transport } : null;
   const core = createCore({
     home: config.home, version, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
+    mesh: meshInfo,
     workers: [chatRun], confirmations: { [SYSTEM]: (e, brief) => chatRun.confirm(e, brief) },
   });
   if (!config.timezonePinned && core.identity().timezone) config.timezone = core.identity().timezone;
@@ -44,6 +51,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   const runner = new Runner(config, store, { ...deps, records: core.memory });
   // Forgetting through the core's API reaches MEMORY.md and the day notes as well.
   core.memory.onForget((records) => runner.memory.forgotten(records));
+  runner.memory.readOnly = () => !!core.mesh.role.replica();
   runner.memory.sync();
   runner.identity = { persona: core.persona, name: () => core.identity().name, privacy: () => core.profile.privacyDefault(), receipt: (r) => core.receipts.record(r) };
   runner.ensureMain();
@@ -150,10 +158,12 @@ export function createNova(config = loadConfig(), deps = {}) {
 
   // Requests must come from Nova's own page. The Host check stops DNS
   // rebinding; the custom header makes cross-site POSTs impossible without a
-  // CORS preflight, which this server never grants.
+  // CORS preflight, which this server never grants. Devices address Nova by its
+  // mesh address.
+  const meshHosts = config.mesh ? [new URL(config.mesh.publicUrl).hostname.replace(/^\[|\]$/g, ''), config.mesh.bindHost] : [];
   const allowedHost = (host) => {
     const name = String(host ?? '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
-    return ['localhost', '127.0.0.1', '::1', config.host].includes(name);
+    return ['localhost', '127.0.0.1', '::1', config.host, ...meshHosts].includes(name);
   };
 
   // npm run dev: watch ui/ and tell open pages to refresh.
@@ -181,6 +191,7 @@ export function createNova(config = loadConfig(), deps = {}) {
 
   function serveStatic(req, res, path) {
     // The PWA's places (ui/js/nav.js); Era 2's paths keep working.
+    if (path === '/pair') return serveFile(res, join(ui, 'pair.html'));
     if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'));
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
@@ -196,7 +207,9 @@ export function createNova(config = loadConfig(), deps = {}) {
     if (req.method === 'POST') {
       if (req.headers['x-nova'] !== '1') return json(res, 403, { error: 'Missing X-Nova header' });
       const origin = req.headers.origin;
-      if (origin && !allowedHost(new URL(origin).host)) return json(res, 403, { error: 'Cross-origin request refused' });
+      // `Origin: null` or a malformed one names no host: refused, never a 500.
+      const host = origin ? originHost(origin) : null;
+      if (origin && (!host || !allowedHost(host))) return json(res, 403, { error: 'Cross-origin request refused' });
     }
 
     if (resource === 'health') return json(res, 200, { ok: true, agent: config.agentCmd.trim().split(/\s+/)[0] });
@@ -401,18 +414,22 @@ export function createNova(config = loadConfig(), deps = {}) {
     return json(res, 404, { error: 'Not found' });
   }
 
-  const server = createServer(async (req, res) => {
+  // One handler for both listeners; the listener is part of who is asking.
+  const handler = (listener) => async (req, res) => {
     try {
       if (!allowedHost(req.headers.host)) { res.writeHead(421); return res.end('Misdirected request'); }
       const url = new URL(req.url, 'http://nova.local');
       const parts = url.pathname.split('/');
+      // The console, a paired device, or no one yet: a refusal is sent here and nothing below runs.
+      const principal = core.gate(req, res, url, listener);
+      if (!principal) return;
       if (config.dev && url.pathname === '/__dev/events') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
         res.write(': dev\n\n');
         devClients.add(res);
         return req.on('close', () => devClients.delete(res));
       }
-      if (await core.handle(req, res, url)) return;
+      if (await core.handle(req, res, url, principal, listener)) return;
       // The active design system as CSS variables (?device= for a device's own choice). Pages
       // fetch it again on the core's design-system event, so a change needs no reload.
       if (url.pathname === '/design-system.css' && req.method === 'GET') {
@@ -433,31 +450,87 @@ export function createNova(config = loadConfig(), deps = {}) {
       if (!res.headersSent) json(res, e.message === 'bad json' || e.message === 'too large' ? 400 : 500, { error: e.message });
       else res.end();
     }
-  });
+  };
+  const server = createServer(handler('console'));
+  const m = config.mesh;
+  const mesh = !m ? null : m.tls
+    ? createTlsServer({ cert: readFileSync(m.tls.cert), key: readFileSync(m.tls.key) }, handler('mesh'))
+    : createServer(handler('mesh'));
 
-  return { server, runner, store, scheduler, helpers, chatRun, config, seeded, started, core };
+  return { server, mesh, meshInfo, runner, store, scheduler, helpers, chatRun, config, seeded, started, core };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const nova = createNova();
+  let nova;
+  try {
+    nova = createNova();
+  } catch (e) {
+    if (!(e instanceof ConfigError)) throw e;
+    console.error(`Nova didn't start: ${e.message}`);
+    process.exit(1);
+  }
   const { config } = nova;
-  ensureGit(config.home);
-  nova.helpers.recover(); // helper logs from before the ledger; the rest is the ledger's recovery
+  // Said once per open problem, not once per start: it stays open until the keys are replaced.
+  ensureGit(config.home, {
+    problem: (m) => { if (!nova.core.log.problems({ open: true }).some((p) => p.message === m)) nova.core.log.problem('mesh', m); },
+    // The keys were replaced since: the warning has done its job.
+    resolved: (m) => { for (const p of nova.core.log.problems({ open: true })) if (p.message === m) nova.core.log.resolve(p.id); },
+  });
+  // A hub first asks its roster peers whether one of them became hub while it was away (fencing).
+  const { role } = nova.core.mesh;
+  await role.fence();
+  // Only the hub runs work. A standby copies the hub and starts all of this when it is promoted.
+  const runWork = () => {
+    nova.helpers.recover(); // helper logs from before the ledger; the rest is the ledger's recovery
+    nova.chatRun.recover();
+    nova.scheduler.start();
+  };
+  const hub = !role.replica();
+  if (hub) nova.helpers.recover();
   const recovered = nova.core.start();
-  nova.chatRun.recover();
+  if (hub) {
+    nova.chatRun.recover();
+    nova.scheduler.start();
+  }
   if (recovered.requeued.length) console.log(`Resumed ${recovered.requeued.length} task(s) that were running when Nova stopped.`);
-  nova.scheduler.start();
+  if (!hub) console.log(role.replica().reason);
+  role.on('promoted', ({ epoch }) => { runWork(); console.log(`This node is the hub now (epoch ${epoch}).`); });
+  role.on('demoted', ({ reason }) => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); console.log(reason); });
   nova.server.listen(config.port, config.host, () => {
     const ms = Math.round(performance.now() - nova.started);
+    // Who is running this home, so tools that must only run while Nova is stopped (replacing the
+    // hub's keys) can tell. Removed on a clean stop; a stale one names a pid that is gone.
+    writeFileSync(join(config.home, 'nova.pid'), String(process.pid));
     if (nova.seeded.length) console.log(`Seeded ${nova.seeded.length} files into ${config.home}`);
     // The real port, so NOVA_PORT=0 (any free port) still says where Nova is.
     console.log(`Nova is ready at http://${config.host === '127.0.0.1' ? 'localhost' : config.host}:${nova.server.address().port}  (${ms} ms)`);
     console.log(`Home: ${config.home}`);
+    // The console is "a request from this machine, to this machine, through no proxy". A program
+    // here that passes connections on to this port without saying so (no X-Forwarded-For) makes
+    // whoever reaches it look exactly like that. Nova can't tell, so the person must know.
+    console.log(`Warning: whoever reaches port ${nova.server.address().port} from this computer controls Nova completely. Don’t point a port forward, tunnel or proxy at it; other devices pair at the mesh address (NOVA_MESH_URL) instead.`);
     if (!['127.0.0.1', 'localhost', '::1'].includes(config.host)) {
-      console.log('Warning: Nova is listening beyond this machine. Anyone who can reach it can talk to Nova and approve commands.');
+      console.log('Note: the console port is listening beyond this machine. Only requests from this machine get the console; anything else must pair first, and pairing needs a mesh address (NOVA_MESH_URL).');
     }
   });
-  const quit = async () => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); await nova.core.close(); process.exit(0); };
+  if (nova.mesh) {
+    const m = config.mesh;
+    nova.mesh.on('error', (e) => {
+      console.error(`Nova couldn’t listen for devices at ${m.bindHost}:${m.port}: ${e.message}`);
+      process.exit(1);
+    });
+    nova.mesh.listen(m.port, m.bindHost, () => {
+      const how = { tls: 'over TLS', proxy: 'through a TLS proxy, as you said', network: 'over an encrypted network, as you said' }[m.transport];
+      const port = nova.mesh.address().port;
+      const pub = new URL(nova.meshInfo.publicUrl);
+      if (pub.port === '0') {
+        pub.port = String(port);
+        nova.meshInfo.publicUrl = config.mesh.publicUrl = pub.origin;
+      }
+      console.log(`Devices pair and connect at ${nova.meshInfo.publicUrl} (listening on ${m.bindHost}:${port}, ${how}).`);
+    });
+  }
+  const quit = async () => { rmSync(join(config.home, 'nova.pid'), { force: true }); nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); nova.server.close(); nova.mesh?.close(); await nova.core.close(); process.exit(0); };
   process.on('SIGINT', quit);
   process.on('SIGTERM', quit);
 }

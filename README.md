@@ -123,11 +123,128 @@ Optional `nova.config.json` at the repo root (environment variables win):
 | `agent_cmd` | `NOVA_AGENT_CMD` | `claude -p …` (see `src/config.js`) |
 | `timezone` | `NOVA_TZ` | the system timezone |
 |  | `NOVA_IMAP_URL` | `imaps://imap.gmail.com:993` (tests point it at a stand-in) |
+| `mesh_url` | `NOVA_MESH_URL` | none: no other device can reach Nova |
+| `mesh_public_url` | `NOVA_MESH_PUBLIC_URL` | `NOVA_MESH_URL` (required when it listens on every address) |
+| `mesh_transport` | `NOVA_MESH_TRANSPORT` | none (`proxy` or `network`, for an `http://` mesh address) |
+| `tls_cert`, `tls_key` | `NOVA_TLS_CERT`, `NOVA_TLS_KEY` | none (PEM files, for an `https://` mesh address) |
 
 `agent_cmd` is the one place a model is chosen. Nova writes the assembled
 system prompt to a file and substitutes its path for `{system_file}`, sends the
 conversation on stdin, and reads the reply from stdout, as plain text or as
 Claude Code's stream-json. Any command that does that works.
+
+## Your other devices
+
+Nova's console, at `NOVA_HOST:NOVA_PORT`, answers only this computer: a
+request counts as the console only if it comes from this machine, is addressed
+to it, and passed through no proxy. Anything else, including a reverse proxy
+pointed at the console port, gets nothing until it is paired.
+
+> **Never point a port forward, tunnel or proxy at the console port.** Nova
+> knows a proxy by the headers it adds (`X-Forwarded-For` and the like). A
+> program on this computer that passes connections on without adding them
+> (`ssh -L`/`-R`, `socat`, a TCP tunnel, a proxy that rewrites the address to
+> `localhost`) makes everyone who reaches it look like you at this screen,
+> with full control of Nova. Nova can't tell the difference, and says so
+> every time it starts. Other devices pair at the mesh address instead.
+
+To pair a phone, a browser or a computer, give Nova a second address, the
+mesh address, that your devices can reach:
+
+```sh
+# Nova serves TLS itself, with a certificate your devices trust:
+NOVA_MESH_URL=https://0.0.0.0:4320 NOVA_MESH_PUBLIC_URL=https://hub.example:4320 \
+NOVA_TLS_CERT=cert.pem NOVA_TLS_KEY=key.pem npm start
+
+# Or a TLS proxy in front of a local port:
+NOVA_MESH_URL=http://127.0.0.1:4320 NOVA_MESH_TRANSPORT=proxy \
+NOVA_MESH_PUBLIC_URL=https://hub.example npm start
+```
+
+Behind a proxy, Nova limits pairing attempts by the address the proxy puts
+last in `X-Forwarded-For`. Make sure your proxy adds the client's address to
+that header, or replaces it (Caddy does by default; nginx with
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`); a proxy that passes on
+whatever the client sent lets a client choose its own address, and so its
+own limit.
+
+`NOVA_MESH_TRANSPORT=network` says an encrypted network (a tailnet) carries
+plain HTTP; browsers then can't pair (they need HTTPS for the keys), but
+computers can. Plain HTTP with neither statement is refused at startup.
+
+Then open Settings › Devices and choose **Add a device**. A phone scans the
+QR code; any browser opens the address and types the code; a computer runs the
+one-line command. Each device makes its own key, and shows six digits that
+your hub shows too: approve it on the hub only if they match. Codes work once,
+for five minutes. Only enter a code at your hub's own address, on a device you
+already trust. Revoke a device in the same place; it is signed out at once and
+its key never works again.
+
+### A computer
+
+The one-line command needs Node.js 26 or newer on the computer, and installs
+nothing outside its device home (`NOVA_DEVICE_HOME`, default `~/.nova-device`):
+
+```sh
+curl -fsS https://hub.example:4320/join.sh | sh -s -- ABCD-EFGH [--name "Desk computer"]
+# A hub whose certificate the system doesn't know: trust its CA for this command only.
+export CURL_CA_BUNDLE=ca.pem NOVA_CA_FILE=ca.pem
+```
+
+It shows six digits; approve on the hub if they match. The agent then runs in
+the background and the computer shows Online in Settings › Devices. It is two
+programs (ADR-3): a small boot agent that holds the keys, and a runtime it
+starts under Node's permission model, which can't read those keys or change
+the boot agent. What the computer sends while the hub is down waits in a queue
+and arrives once, in order. Ask it how it is, or put it right:
+
+```sh
+node ~/.nova-device/agent/src/device/boot.ts status
+node ~/.nova-device/agent/src/device/boot.ts recover   # reinstall the runtime, leave safe mode
+```
+
+### A standby
+
+A standby is a second Nova, on another machine, that keeps a copy of
+everything (your data, conversations and workspace) so it can take over if the
+hub fails. The hub is a role, not a box. Enroll it with a blank home of its
+own and the address devices will reach it at, approve it on the hub, then
+start it:
+
+```sh
+node src/device/boot.ts join https://hub.example:4320 --code ABCD-EFGH --kind standby \
+  --name Standby --nova-home ~/Nova-standby --address https://standby.example:4320
+NOVA_HOME=~/Nova-standby NOVA_MESH_URL=https://0.0.0.0:4320 \
+NOVA_MESH_PUBLIC_URL=https://standby.example:4320 NOVA_TLS_CERT=cert.pem NOVA_TLS_KEY=key.pem npm start
+```
+
+It copies the hub continuously and refuses changes ("This is the standby; …
+is the hub"); the hub's Health shows how far behind it is. If the hub fails,
+open the standby's own screen and choose **Make this the hub** (or set
+`mesh.auto_failover_after_s` on the hub, off by default, to let it take over
+by itself after that many seconds). Devices follow it. If the old hub comes
+back, it sees that it was replaced and steps down rather than act as a second
+hub. Connector sign-ins (Gmail) stay on the machine where you made them;
+connect them again on the new hub.
+
+### If the hub's keys were exposed
+
+The hub's private keys live in `<home>/mesh/identity.json`, readable only by
+you, and never in the home's git history. A home made before that rule saved
+them in its history once, where anyone who can read the folder can read them;
+Nova then shows a problem saying so at every start. Replace them, with Nova
+stopped:
+
+```sh
+node scripts/rotate-hub-keys.js ~/Nova
+```
+
+The hub keeps its place and gets new keys, and the epoch goes up. Computers
+and the standby trusted the old keys, so they are revoked: the script lists
+them. Add each one again, a computer with a new device home
+(`NOVA_DEVICE_HOME`), a standby with a new blank home. Phones and browsers stay
+signed in. The old keys stay in the history but no longer open anything, and
+the problem goes away.
 
 ## Check it
 

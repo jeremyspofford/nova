@@ -64,6 +64,8 @@ test('M3 gate: posture sweep — layout, no overflow, the same destinations ever
         assert.equal(body.layout, expected(width, posture), `${at}: layout`);
         const overflow = await d.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         assert.ok(overflow <= 0, `${at}: ${overflow}px of sideways scrolling`);
+        // Home draws its hero orb once its data arrives; on a busy machine that can trail "ready".
+        await d.page.waitForFunction(() => [...document.querySelectorAll('.orb')].some((o) => (o as HTMLElement).checkVisibility()), null, { timeout: 5000 }).catch(() => {});
         const found = await orbs(d.page);
         assert.ok(found.some((o) => o.visible), `${at}: an orb is on screen`);
         for (const o of found) {

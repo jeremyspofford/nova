@@ -9,10 +9,482 @@ built-ins only.
 
 | Dependency | Kind | Why |
 | --- | --- | --- |
+| `jsqr` 1.4.0 | dev | Test-only: decodes the QR codes Nova draws (`tests/qr.test.js`, the M4 UI tests), so the encoder is checked by an independent decoder. Never loaded by Nova itself. |
 | `playwright-core` 1.56.1 | dev | Drives Chromium for `npm run shots` (golden screens, keyboard path, budgets); no bundled browser download. |
 | `claude` CLI | external | The default `agent_cmd`. Swappable by config; nothing in Nova depends on it. |
 
 ## Decisions
+
+**2026-10-30 (M4, re-check of the blocker fixes): three more ways out of the runtime's sandbox,
+closed; key replacement made safe.**
+
+- **Process signals:** the runtime could still signal any process of the person's through the raw
+  binding under `process.kill` (`process._kill`). `process._debugProcess` sends any process the
+  signal that opens its inspector (the boot agent, the Nova server, editors). Both are locked in the
+  runtime's preload, with `_debugEnd`, `chdir` and `abort`. The boot agent is started with
+  `--disable-sigusr1` as well, so nothing else can open its inspector by signal.
+- **IPC messages:** the boot agent took `process.send(null)` from the runtime as an unhandled
+  rejection, which ends it. It now drops anything that isn't a message it knows, and says so if
+  handling one fails.
+- **Key replacement:** `scripts/rotate-hub-keys.js` refuses while a Nova server runs the home. The
+  server writes `nova.pid` at start and removes it on a clean stop; a stale one is ignored. The
+  "keys in history" warning closes by itself once the current keys are no longer in the history.
+- Each has a test that fails on the code before it: the sandbox probe signals a bystander process,
+  a runtime sends junk over IPC, and the key replacement is run against a home with a live pid.
+
+**2026-10-30 (M4 review): the device agent's sandbox, and failover.** Fixes
+from the M4 review, branch `m4-fix/agent-failover`; each has a test that
+failed before the fix.
+
+- **The runtime's sandbox had holes (ADR-3).** Tried by hand on Node 26.3.1
+  under the runtime's flags: `node:sqlite` ignores the permission model (it
+  opened, ATTACHed and VACUUMed INTO any path); with `--allow-net`, unix
+  sockets anywhere (an SSH agent, a container daemon) and loopback services
+  were reachable; `process.report` (signal and uncaught-exception reports)
+  wrote into any folder (Node checks only the working folder);
+  `v8.setFlagsFromString('--trace-turbo-path=…')` and
+  `--redirect-code-traces-to` wrote files anywhere; trace-event files landed
+  in the folder it was started from. Already refused by `--permission`: WASI,
+  the inspector, `process.binding`, child processes, `execve`, workers,
+  addons, links and renames out of `state/`, `loadEnvFile`, `chdir` out;
+  `localStorage` has no file. Now: no `--allow-net` (the boot agent makes the
+  runtime's two hub calls, heartbeat and inbox, over IPC with its own session,
+  refusing any other path and anything over 900 kB; the runtime no longer
+  holds a session token either), `--no-experimental-sqlite`,
+  `--no-experimental-webstorage`, diagnostics and trace files pinned to
+  `state/`, `--disable-sigusr1`, started in `state/`, and a preload that
+  replaces `process.report`, `process.kill` and `v8.setFlagsFromString`
+  (non-configurable, so they can't be had back). `tests/core/device-sandbox.test.ts`
+  runs every route above under the exact flags.
+- **The offline queue is JSON files** (`state/queue/{pending,done,tmp}/`,
+  one file per item, named by its key), not SQLite: written whole to `tmp/`,
+  then hard-linked into `pending/` (which also refuses a key already there);
+  answered by writing `done/` and then removing it from `pending/`. Order is a
+  sequence stamped at add time. Node's permission model refuses `fsync`, so
+  only the boot agent's `queue` command (outside the sandbox) flushes what it
+  adds; an answer the runtime records and a power cut loses is sent again, and
+  the hub answers it as a duplicate (exactly once still holds). The newest
+  1,000 answers are kept. No migration from `queue.db`: M4 hasn't shipped.
+- **Who can make a hub step down.** Only its current standby (`standby_id`)
+  or, for a node that was itself a standby, the hub its role file names, and
+  only with a roster signed by that device's registered key at a higher
+  epoch. Any other trusted device making that claim is a problem ("isn't
+  this hub's standby … revoke it"), once per claim. Approving a new standby
+  turns any earlier one still in the registry into a `spoke` with no
+  address, so devices don't look for the hub there and fencing doesn't ask it.
+- **Automatic failover counts only silence.** The standby counted any
+  non-200 answer, and a batch it couldn't apply, as "unreachable", so a live
+  hub answering 500s or sending a newer schema was taken over after
+  `auto_failover_after_s`. Now only transport failures (refused, reset, timed
+  out) count; any answer is a problem for the person ("The standby can't copy
+  the hub: …") and resets the count. Before promoting itself, the standby also
+  asks the hub's `/mesh/hello`; any answer there starts the count again.
+  Trade-off: a dead hub behind a proxy that answers 502 isn't taken over
+  automatically; the person promotes by hand.
+- **A hub that steps down owns up to what it never copied.** On demotion it
+  counts its sync-log entries past the standby's last ack and says so ("N
+  changes made here were never copied to … they are only on this node").
+  Forgets among them (memory `delete` entries) can't be left behind (order
+  4): their ids, never the words, go to `mesh/owed-forgets.json` (local, not
+  journalled), and the node signs in to the new hub with its own identity
+  key (its old record there: a trusted computer) and calls the new route
+  `POST /mesh/forgotten {ids}` (`access: 'device'`), at once and every 30 s
+  until it lands, also after restarts. The new hub takes it only from a
+  device named `previous_hub` in one of its "Standby promoted to hub" ledger
+  tasks (any other computer gets 403), forgets each memory the whole way
+  (`device:<id>` as who), and says so as a problem. A refusal is a problem on
+  the old node naming the memory ids to forget by hand; it keeps trying. Other
+  uncopied changes are reported, not carried over (still the documented gap:
+  enroll the old node again).
+- **A big item can't jam the queue.** The runtime sent the oldest 50 items in
+  one call whatever their size; past the hub's 1 MB body limit every flush
+  failed and nothing behind it moved. Now an item over 256 kB is refused when
+  queued ("too big to queue … put large content in a file"), a flush packs
+  items up to 768 kB a call, and an item that can never fit (queued by an
+  older agent) is answered here as refused ("too big to send … never sent",
+  marked `local`) so the rest flows.
+- **No runtime downgrades.** The runtime manifest now carries `epoch` and
+  `issued_at`, signed with the rest (a node signs its bundle again when its
+  epoch changes). The boot agent refuses a validly signed bundle that orders
+  before the hub-signed one installed (lower epoch, or same epoch and signed
+  earlier), and reports it like any refused update. A manifest without them
+  counts as oldest. A promoted standby's clock doesn't matter: its epoch is
+  higher.
+- **Nested transactions are savepoints.** `db.tx` inside `db.tx` used to join
+  the outer transaction, so an inbox task request that failed after its task
+  was written was recorded "refused" while the task was committed too. A
+  nested call is now `SAVEPOINT … RELEASE`, rolled back to on a throw; the
+  outer one commits or rolls back as before. The inbox runs each item's effect
+  in its own savepoint.
+- **join.sh: the archive's hash, and trust on first use, said plainly.** The
+  served `join.sh` names the SHA-256 of the `device-agent.tar` the hub serves
+  and refuses (installs and runs nothing) a download that doesn't match, or a
+  computer with no `sha256sum`, `shasum` or `openssl` to check it. That
+  catches a damaged or swapped archive, not a hostile hub address: script and
+  archive come over the same channel, and no fingerprint can be checked in
+  `sh` before the agent runs (the six digits prove the hub only afterwards).
+  So the command is trust on first use, and the Add a device sheet now says
+  so: "The command installs whatever <hub> sends. Run it only where that
+  address can only be this Nova: over HTTPS the computer trusts, or on a
+  network you control." Also: `--kind=standby` is recognised like
+  `--kind standby`, so a standby is never started as a computer agent.
+- **A file that outgrows the journal is dropped on the standby.** A
+  journalled file that grew past 8 MB stayed on the standby as its last small
+  version, with no delete. Now it gets a `file_delete` entry when it crosses
+  the limit, and the problem says the standby's older copy was removed and
+  that the file wouldn't be on a new hub. Shrinking back copies it again.
+- **The mesh listener takes port 0** (`NOVA_MESH_URL=http://127.0.0.1:0`):
+  it binds a free port, fills it into the public address the core hands out
+  (roster, `join.sh`, pairing links) and says so in its "Devices pair and
+  connect at <url>" line; it exits plainly if it can't bind. The two-process
+  tests start the hub that way and wait for that line, not just "Nova is
+  ready" (the mesh listener binds after the console one, which was the flaky
+  `ECONNREFUSED`). A standby's address is in the roster before it starts, so
+  its port is still chosen ahead, now from 20000–31999, below the ephemeral
+  ranges that port-0 servers and outgoing connections use.
+
+**2026-10-30 (M4 review): trust, pairing and access fixes.**
+
+- **The hub's private keys were committed to the home's git history.**
+  `src/home.js`'s `UNTRACKED` lacked `mesh/`, so the first `git add -A`
+  committed `mesh/identity.json` (both private keys) and `mesh/role.json` as
+  blobs anyone who can read the home can read. `mesh/` is untracked now, and
+  `ensureGit` stops tracking it on every start where it is still tracked. A
+  home whose history (any ref or the reflog) holds the *current* private key
+  gets a problem in plain words at every start until the keys are replaced.
+  **Rotation:** `node scripts/rotate-hub-keys.js <home>` with Nova stopped
+  (`rotateHubKeys` in the core): new keys under the same id, epoch + 1, and
+  every computer and the standby revoked, because they pinned the old key and
+  would follow a roster signed with it; phones and browsers keep their
+  sessions (they never take a roster on trust after pairing). The old blobs
+  stay in history, harmless once nothing trusts them; Nova doesn't rewrite the
+  person's history. The secret-scan test now also reads every git object.
+  Every M4 home made before this fix should be treated as exposed.
+- **What a computer may read** through `GET /mesh/config/{section}/{key}` is
+  what it may change: `DEVICE_CONFIG_SECTIONS` and the inbox's key pattern.
+  Setup (the transcript), privacy, appearance and mesh are a 403.
+- **`mesh.auto_failover_after_s` is the approvers' and tier 3.** It decides
+  which machine becomes hub, like promotion, so a phone without `can_approve`
+  gets a 403 and every change needs `confirm: true`. The PWA has no control
+  for it yet.
+- **A malformed or `null` Origin is a 403** (`originHost` in `api.ts`, and
+  Era 2's `api()`). It was a thrown `TypeError`: a 500 and a problem per
+  request, reachable without a session through the public enrollment routes
+  before their rate limit.
+- **Rate limits.** An IPv6 client is limited by its /64 (`rateKey`), since a
+  phone or a home network can pick a new address per call. Wrong codes are
+  also capped for the whole hub (50 in five minutes from every address
+  together; a right code still works), with one problem. Refusal reports are
+  forgotten after ten minutes, so many addresses can't grow that map. Behind
+  `NOVA_MESH_TRANSPORT=proxy` the client address is the last
+  `X-Forwarded-For` entry: **the proxy must append to that header or replace
+  it** (README); one that passes the client's header through lets a client
+  choose its own limit. Nova can't tell which kind it is behind.
+- **Webhooks are public, as this ledger already said.** `POST /hooks/{name}`
+  now carries `access: 'public'`; it was `person` by default, so an
+  automation calling the mesh address got a 401. Its token is still checked.
+- **Device sessions count only on the mesh listener.** With `NOVA_HOST`
+  beyond loopback, the console port took a device's cookie or bearer token
+  over plain HTTP, a transport §0 doesn't accept. There it is now public, like
+  any unpaired caller.
+- **A spent session signature stays spent across a restart.** Migration
+  `0008_session_signature.sql` keeps `(device, signed time)` for each session
+  started, until the time is too old to be fresh (two minutes), instead of an
+  in-memory map a restart emptied. The same exact-match rule as before (not
+  "strictly newer"), so two tabs signing out of order aren't refused, and a
+  refusal stays a 401. Never replicated. If another branch also adds an
+  `0008`, renumber one of them: migrations must have no gaps or repeats.
+- **A revoked phone keeps no cached answers.** `forget()` in
+  `ui/js/device-key.js` (what `/pair` calls when the hub refuses the key) now
+  also deletes every service-worker cache: the shell and the `/api/v1/*`
+  answers kept for offline use. Memory, receipts, health and the mesh were
+  already never cached.
+- **Console residual (not new, not fixed): a silent forwarder is the
+  console.** The console test is a loopback socket, a loopback `Host` and no
+  forwarding headers. Anything on the hub that passes TCP or HTTP to the
+  console port without adding those headers (`ssh -L/-R`, `socat`, a tunnel,
+  a proxy that rewrites `Host` to `localhost`) gives whoever reaches it full
+  control. Now said in the README (a boxed warning) and in the startup log at
+  every start. **Proposed mitigation, not built** (each changes how the
+  person opens Nova, so it is the owner's call): a per-start console key, as
+  Jupyter does. `npm start` prints `http://localhost:4317/#k=<key>` once; the
+  page trades the key for an HttpOnly, SameSite=Strict cookie bound to the
+  console port; the console test then also needs that cookie. A forwarder
+  passes the cookie only from a browser that already has it, so a stranger at
+  the far end gets nothing. Cost: the first open after each start (or each
+  key rotation) needs the printed link, and `npm run shots`, the UI gate and
+  scripts would read the key from the home (0600). A cheaper half-measure,
+  refusing a `Host` whose port isn't the console's own, stops only forwarders
+  that keep the client's `Host`, and those already fail the loopback-`Host`
+  test.
+
+**2026-10-29 (M4c): hub, standby and sync; promotion and fencing.** Plan §3.
+`src/core/mesh/{sync,replica,promote}.ts`, migrations `0006_sync.sql` and
+`0007_device_inbox.sql`.
+
+- **The sync log** is filled by SQLite triggers on every replicated table, with
+  the whole row as JSON, and keeps **one entry per row** (the newest): a
+  standby that is behind can't miss a change, one that starts from nothing
+  reads the state once, and an old entry can't keep a forgotten memory's words.
+  The migration backfills what was there before. `hlc` is wall-clock ms, a
+  counter from the log's sequence, and the node (SQL can't run the HLC class;
+  order is `seq`). A hub records (`sync_state.logging = 1`); a standby copies
+  the hub's entries with the hub's `seq` instead, so after promotion it serves
+  a new standby the same way.
+- **Replicated, beyond the plan's list:** `memory_event` (memory's history),
+  `decision_template` and its history, `trigger_rule_event`, and
+  `device_inbox` (M4b's table, now migration 0007 with `device_heartbeat`,
+  which stays local) so a computer's queued items are taken in exactly once on
+  whichever node is hub. Never: `device_session`, `pairing`, `join_request`,
+  `mesh_state`, `sync_state`, `sync_log`, `schema_migrations`, identity files.
+- **Home files** are journalled by a scan every 3 s and soon after a change
+  (`fs.watch`), as `file_put` (text, or base64 for binary; up to 8 MB, a
+  bigger file is a problem) and `file_delete`. **Deviation:** the plan says
+  "everything outside UNTRACKED" but names `MEMORY.md` and `skills/`, which
+  are in UNTRACKED (that list is about git history). What stays local:
+  `nova.db*`, `logs/`, `backups/`, `exports/`, `kept/`, `workers/`,
+  `connectors/` (connector secrets; reconnect after a failover), `mesh/`, and
+  the home's git folder. The standby applies files with a hash check and
+  refuses paths outside the home or into those folders.
+- **Forgetting holds (order 4).** After a forget, once MEMORY.md and the day
+  notes are rewritten, the hub rescans, so their old entries are replaced;
+  anything in memory's entries or those files still carrying the words is
+  removed, and the write-ahead log is folded in. The delete itself is an entry;
+  the standby applies it through `Memory.forgottenElsewhere`, which does what
+  a forget does there (WAL, backups, Era 2's files, its own log). Backups lose
+  the log's entries too. Tests scan the standby's whole home (database, WAL,
+  a backup taken while it held the memory, files) for the words, in-process
+  and with two real processes.
+- **Standby.** Reads its place from `mesh/role.json` (M4b's shape; a hand
+  shape is tolerated; unknown fields kept on rewrite) and takes its registry id
+  as its identity id. Runs no scheduler, heartbeat, workers or chat; Era 2's
+  MEMORY.md import is off (`readOnly`). Every non-GET except `POST
+  /mesh/promote` is 409 `This is the standby; “Hub” at <url> is the hub.` (Era
+  2's routes too; a computer's agent moves on from a 409). Its own problems
+  take ids below zero, so the hub's copies never overwrite them. It pulls
+  `GET /mesh/sync?after=&wait=` (long poll, `access: 'sync'`, only the current
+  standby), sealed to its X25519 key with AAD `nova-sync-v1|<standby>|<after>`,
+  applies each batch in one transaction with foreign keys off (entries arrive
+  newest-per-row, so a child can come before its parent), and acks.
+- **Lag** is entries not acknowledged, and seconds since the last ack (or the
+  approval) while there are some; over 60 s is "behind", one problem per
+  episode. Measured from acks, not entry times: the triggers' clock is
+  SQLite's, which tests can't move.
+- **Promotion** checks that its own key is the one in the registry (the one
+  devices pinned), then: epoch + 1, role hub, the old hub's record becomes a
+  `spoke` (still trusted: it is the person's computer), signs the roster,
+  rewrites role.json, starts the journal, fencing, the heartbeat and Era 2's
+  scheduler, recovers the ledger, and records "Standby promoted to hub" on a
+  `mesh` worker in its own lane, verified by a `nova-mesh` confirmation
+  checker that reads the mesh state and the roster's signature itself. A hub
+  that stepped down can't be promoted (it stopped copying). M4b's device
+  routes are in the same route table, so the promoted node serves computers.
+- **Fencing** at startup (before any work starts) and every 30 s: peers are
+  trusted devices with an `address` and role.json's hub. `/mesh/hello` now
+  carries the signed roster; a peer counts only if its roster is signed by the
+  key this hub has for it, at a higher epoch, naming it hub. A forged higher
+  epoch is a problem, not a demotion (tested). Stepping down ends every device
+  session and open stream. **Gap:** a node that stepped down doesn't copy the
+  new hub (its data diverged after the last sync); enroll it again.
+- **Automatic failover:** `mesh.auto_failover_after_s` (a new profile section
+  `mesh` with that one key, validated; the blank-profile tests now include
+  `mesh: {}`), off by default, counted in wall time. A standby cut off from a
+  healthy hub would promote itself too: that is the risk of turning it on, and
+  fencing settles it when they see each other again.
+- **PWA:** the banner on every page of a standby, with "Make this the hub"
+  (tier-3 sheet) on its own screen; Health's Devices check shows the standby
+  and its lag (hub) or the hub and the last copy (standby); the registry shows
+  roles, and a standby shows it without add or revoke.
+
+**2026-10-29 (M4b): the computer device agent, the one-line command, the
+offline queue.** Plan §2. `src/device/`, `src/core/mesh/{spokes,agent}.ts`.
+
+- **TypeScript on Node, not a port of Era 1's `novad`.** Evidence: no Rust
+  toolchain here (`cargo`, `rustc` not found); Node 26's permission model
+  enforces ADR-3's rule that the runtime can't touch the boot agent, and a test
+  proves it (writing `boot/`, replacing or reading `boot/keys.json`, writing
+  `runtime/`, spawning a process and starting a worker all fail with
+  `ERR_ACCESS_DENIED`, using the exact flags the boot agent starts the runtime
+  with); `novad`'s supervisor (`6e2cf142` `services/novad/src/supervisor.rs`:
+  backoff, disable after repeated crashes) and signed updates (`update.rs`:
+  verify, stage, swap) are the reference.
+- **Two agents.** `boot.ts` holds `boot/keys.json` (0600, folder 0700), joins,
+  pins the roster, signs sessions, runs the runtime under a watchdog and
+  installs runtime updates. `runtime.ts` (with `queue.ts`) heartbeats and
+  flushes the queue; it is started as
+  `node --permission --allow-fs-read=runtime/ --allow-fs-read=state/
+  --allow-fs-write=state/ --allow-net`, with an empty environment, and gets
+  its session token (and the hub's CA, when there is one) over IPC.
+  `--allow-net` is needed because Node 26's permission model also gates the
+  network.
+- **The agent ships alone.** `src/device` imports only `src/core/mesh/wire.ts`
+  from the core (a narrow, tested exception to "only `index.ts`"), so
+  `/device-agent.tar` is `src/device/**`, `wire.ts` and a package.json. The tar
+  is a hand-written ustar (no dependency), checked with the system `tar`.
+- **Who a device trusts.** Additions to `wire.ts`: `helloProofMessage` and the
+  runtime manifest. A node answers `GET /mesh/hello/proof?challenge=` with its
+  key; the agent signs a session request only for a node whose key it pinned,
+  that says it is hub, at an epoch ≥ the one it knows (so a stranger at the
+  hub's address never gets a usable signature), then takes its roster only if
+  a pinned key signed it, its epoch is ≥ known and it names that node as hub.
+  Lower epochs are never accepted. Tested with stand-in nodes and rosters the
+  test signs (promotion itself is M4c).
+- **Runtime updates.** `GET /mesh/runtime` is `{manifest: {version, sha256,
+  files}, signature, signer, files}`, signed over `nova-runtime-v1.<manifest>`
+  by the node's identity key; version is `<nova version>+<12 hex of sha256>`.
+  The boot agent checks the signer is pinned, the signature, every file's hash
+  and that the files are exactly the manifest's, then swaps `runtime/` by
+  rename. A refusal is printed, kept in `boot/state.json`, and reported
+  (`POST /mesh/devices/me/report` → a problem, once per ten minutes). The
+  installed runtime is re-hashed before every start. With no hub reachable on
+  first run, it installs the runtime from its own folder (`local+…`) and swaps
+  in the hub's signed one when it can.
+- **Watchdog.** Restarts after 1 s, 2 s, 4 s… (cap 30 s); three crashes within
+  60 s is safe mode: the runtime stays down, kept across restarts of the boot
+  agent; the boot agent heartbeats `safe_mode: true` (a problem on the hub, and
+  the registry row says so); a new signed runtime or `recover` ends it.
+- **Inbox** (`POST /mesh/inbox`, up to 100 items, in order). Each item is taken
+  in with its (device, key) row in the same transaction, so a key is answered
+  once and a repeat gets the same answer marked `duplicate`. `task_request` →
+  a ledger task (origin `{kind: 'device'}`, idempotency key
+  `device:<id>:<key>`) or a refusal kept with its reason and the request, plus
+  a problem. `memory_note` → memory with `recorded_by: device:<id>`
+  (`memory.ts` accepts that form now), unreviewed; the inbox keeps only the
+  memory's id, never its words, so forgetting stays complete. `config_change`
+  → identity, user, tuning and policy only (privacy, appearance and setup stay
+  with the person's own screens); its `base_version` must equal the setting's
+  current version (`GET /mesh/config/{section}/{key}`), else it is rejected,
+  reported to the device and recorded as a problem: the hub's value stands.
+  `event` → kept and sent on the stream as `device_event`. The device drops an
+  item's body once the hub has answered it.
+- **Additions to the plan's routes:** `GET /mesh/hello/proof`,
+  `POST /mesh/devices/me/report`, `GET /mesh/config/{section}/{key}`,
+  `GET /mesh/inbox/refusals` (person). Device views carry `agent: {version,
+  runtime_version, safe_mode, at}` for computers.
+- **Deviation: no numbered migration.** `device_inbox` and `device_heartbeat`
+  are created by `mesh/spokes.ts` with `CREATE TABLE IF NOT EXISTS`.
+  Migrations must be numbered without gaps, and 0006 belongs to M4c's sync,
+  written in parallel; numbering this 0007 would fail to load until 0006
+  exists. Both tables are new, so there is nothing to back up or convert. Once
+  M4b and M4c are both merged, this can become migration 0007 if wanted.
+- **TLS:** the system's trust, or `NOVA_CA_FILE` (copied into `boot/ca.pem` at
+  join; curl in `join.sh` uses `--cacert`). The one-line command's first curl
+  needs the CA too, through curl's own `CURL_CA_BUNDLE`. Tested over HTTPS with
+  a certificate made by `openssl`.
+- **Revocation:** the hub's refusal to start a session (after the node proved
+  a pinned key) stops the agent, records it in `boot/state.json`, and `run`
+  exits with status 3 from then on, saying why.
+
+**2026-10-29 (M4a): device enrollment, the registry, sessions, and who may do
+what.** Plan §0–§1. `src/core/mesh/`, migration `0005_mesh.sql`, Settings ›
+Devices, `/pair`.
+
+- **Who is asking** (`mesh/access.ts`), on every request, both listeners:
+  - console: the console listener, a loopback peer, a loopback `Host`, and no
+    `forwarded`, `x-forwarded-*`, `tailscale-*` or `x-real-ip` header;
+  - device: a session of a trusted device (cookie `nova_session` or
+    `Authorization: Bearer`), scoped by kind. Routes carry `access`:
+    `public`, `person` (default: console, browser, phone), `approver`
+    (console, or a browser/phone with `can_approve`), `device` (computer),
+    `sync` (standby), `mesh` (any trusted device). Outside `/api/v1`
+    everything is `person` except a short public list (`PUBLIC_PATHS`: the
+    pairing page and what it loads, `/design-system.css`, the icons, and the
+    reserved `/join.sh` and `/device-agent.tar`);
+  - public: everything else. API: 401 (before route matching, so nothing is
+    learnt about what exists). A page navigation: 303 to `/pair`. Another
+    device's kind outside its scope: 403.
+  - The `Host` check (421) and the X-Nova + Origin guard run as before, on
+    both listeners; the mesh's public host is a trusted origin.
+- **Tightening, said plainly:** with `NOVA_HOST` set beyond loopback, other
+  machines used to get everything; now they get 401 until paired, and pairing
+  needs a mesh address. Webhooks (`POST /hooks/{name}`) are `public`: they
+  authenticate with their own token, as before. No existing test changed.
+- **Transport** (`src/config.js` `meshConfig`): `NOVA_MESH_URL=https://…` needs
+  `NOVA_TLS_CERT`/`NOVA_TLS_KEY`; `http://…` needs
+  `NOVA_MESH_TRANSPORT=proxy|network`; otherwise Nova refuses to start and says
+  why. A wildcard bind needs `NOVA_MESH_PUBLIC_URL`; `proxy` and TLS need an
+  https public URL. Behind a stated proxy the rate limiter keys on the last
+  `x-forwarded-for` entry, and only then. Joining and sessions are served only
+  on the mesh listener.
+- **Keys and formats** (`mesh/wire.ts`, node:crypto only so the device agent
+  can carry it):
+  - Era 1's code primitives and the HLC ported nearly verbatim; Era 1's fixed
+    vectors still pass.
+  - Fingerprint: the first 20 bytes of SHA-256 of the raw Ed25519 key, in
+    Crockford base32 (the code alphabet), eight groups of four. A vector is
+    checked against Python.
+  - Every signed string has its own label: `nova-add-device-reveal-v1.<id>.<t>`,
+    `nova-add-device-status-v1.<id>.<t>`, `nova-session-v1.<device>.<t>`,
+    `nova-x25519-v1.<x25519 key>` (the join's `x25519_sig`: "over the X25519
+    key", with a label), `nova-roster-v1.<canonical JSON>`. Times are Unix
+    seconds within ±60 s.
+  - `seal`/`open`: static-static X25519, HKDF-SHA256 with a fresh 16-byte salt
+    per box and info `nova-seal-v1|<from>|<to>`, AES-256-GCM, optional AAD.
+    Layout: version 1, salt, iv, ciphertext, tag.
+- **Identity:** `home/mesh/identity.json` (0600, directory 0700, written
+  atomically) holds this node's id and both key pairs. A looser file is
+  tightened at start and recorded as a problem. The private halves never leave
+  the module; serializing the identity shows public parts only. A test scans
+  the database, its WAL and the log for the private keys, the code and the
+  session token.
+- **The hub is in its own registry** (role `hub`, kind `computer`), so the
+  roster, `mesh_state.hub_id` and promotion (M4c) have a record to point at;
+  for the console, "this device" is the hub. It can't be revoked.
+- **Enrollment** (`mesh/enroll.ts`):
+  - Codes: 20 an hour; single use; wrong, spent and expired codes all answer
+    400 "That code didn't work."
+  - The code is needed again for the digits, so between join and reveal the
+    hub holds it in memory only (Era 1's approach); a restart forgets it and
+    the request expires. **Deviation:** the join answer also carries
+    `pairing_id`, which the digits are computed over.
+  - Reveal within 2 minutes of the join, then approval within 10 minutes. A
+    request that expired after showing its digits is a problem; one that never
+    got that far is just tidied away.
+  - A commitment that doesn't match denies the request and records a problem.
+    A replayed reveal is 409; polls must be signed with a time newer than the
+    last accepted one.
+  - A revoked key is refused (403) without spending the code; a key already
+    paired or already asking is 409. One standby at a time.
+  - Rate limits per client address: 30 public calls a minute, 90 polls a
+    minute, 10 wrong codes in 5 minutes. A refusal is one problem per address
+    per 10 minutes.
+- **Sessions:** `nvs_` tokens, 12 hours, stored as a labelled SHA-256. A signed
+  session request starts one session only. `{cookie: true}` sets an HttpOnly,
+  SameSite=Strict cookie (Secure when the public URL is https) and never puts
+  the token in the body. `last_seen` is written at most every 30 s.
+- **Revocation:** sets `trust='revoked'`, deletes sessions, emits `device`,
+  and on the next turn destroys every response the device has open (core
+  stream, Era 2 streams, anything in flight). A test shows streams close in
+  well under a second, and fails without the closing.
+- **Additions to the plan's route list:** `GET /mesh/status` (whether devices
+  can reach Nova, where, and who is asking; the PWA needs it). `PATCH` joins
+  the route methods. `join_request` events go only to approvers.
+- **PWA:**
+  - Settings › Devices lists the registry. Add a device is the standout,
+    unless a device is waiting, when Review is. Revoke and "let it approve"
+    are tier-3 sheets in the approval-sheet pattern. The join prompt opens by
+    itself on the hub's screen and on approver devices, with the digits first.
+  - The "Device id" row (the appearance id in localStorage) is now
+    "Appearance id", since "device" means the registry now.
+  - `ui/js/qr.js`: byte mode, level M, versions 1–10, the lowest-penalty mask,
+    one `currentColor` path with a quiet zone. `.qr` uses `light-dark()` on
+    `text/primary` and `bg/base`, so it is dark on light in every scheme with
+    their 4.5:1 contrast. jsqr decodes every version and every mask, and, in
+    Chromium, the pixels the page drew in light and dark mode without
+    inversion.
+  - `/pair` makes a fresh non-extractable Ed25519 + X25519 pair per pairing
+    (IndexedDB); drops the fragment from the address bar; refuses a hub whose
+    fingerprint isn't the QR's; shows the digits it computed itself and stops
+    if the hub's differ; pins the hub's key and checks the roster's signature;
+    signs in with the cookie. No secure context or no Ed25519: it says so and
+    offers no way on.
+  - A paired browser renews its session with its key two hours before it ends,
+    and after a 401 (API or stream); if the hub refuses, it goes to `/pair`,
+    which forgets the revoked key.
+  - The service worker never caches `/api/v1/mesh/*`; shell cache v3.
+- **Left for later:** `/join.sh` and `/device-agent.tar` are reserved public
+  paths with no handler yet (M4b), so the command door answers 404 until then.
+  The standby's lag in Health is `null` until sync (M4c).
 
 **2026-10-29 (packet amendment): perception principles added to DESIGN-SYSTEM §1
 as binding.** Owner's amendment; not a milestone, and M3/M4 scope is unchanged.
