@@ -819,13 +819,18 @@ export function editRoles(id) {
 }
 
 // Step one done: the review at its tier, or nothing when nothing changed.
-export function reviewRoles(form) {
+export async function reviewRoles(form) {
   const d = store.devices.find((x) => x.id === form.dataset.roles);
   if (!d) return;
   const next = ALL_ROLES.filter((p) => pickedRoles(form).includes(p) || fixedRoles(d).includes(p));
   const change = roleChange(d.purposes ?? [], next);
   if (!change.added.length && !change.removed.length) { closeSheet(); toast('Nothing changed.'); return; }
-  openSheet(rolesReviewSheet(d, next, change), { label: `Change what ${d.name} is for` });
+  // What taking roles away would stop there, as the hub says (a dry run: nothing changes yet).
+  let stops = [];
+  if (change.removed.length) {
+    try { stops = (await api('PATCH', `/mesh/devices/${encodeURIComponent(d.id)}`, { purposes: next, dry_run: true })).stops ?? []; } catch (e) { toast(e.message); return; }
+  }
+  openSheet(rolesReviewSheet(d, next, change, stops), { label: `Change what ${d.name} is for` });
 }
 
 async function confirmRoles(form) {

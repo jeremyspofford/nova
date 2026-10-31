@@ -134,6 +134,9 @@ export interface CaptureOptions {
   timezone: () => string;
   privacy: () => PrivacyMode;
   meshHosts: () => string[];
+  // Whether a paired computer may capture (M10f: its capture-source role); the refusal in words, or
+  // null. Absent: every device may (tests of capture alone).
+  mayCapture?: (deviceId: string) => string | null;
   // An event trigger for a topic, only when a rule listens (triggers.connectorEvent).
   fire: (topic: string, payload: Record<string, unknown>, dedupKey: string) => Promise<unknown>;
   // The decision provider that should answer capture's proposals now (the local sorting model, once
@@ -291,6 +294,8 @@ export class Capture extends EventEmitter {
   // what Screenpipe already kept earlier (a deliberate choice, never the default).
   enable(id: string, body: { by: string; since?: unknown }): SourceView {
     const s = this.#source(id);
+    const not = s.adapter === 'device' ? this.#o.mayCapture?.(s.device_id) : null;
+    if (not) throw new CoreError('conflict', not);
     if (s.adapter === 'screenpipe') this.#refuseRemote(parse<{ url?: string }>(s.config, {}).url ?? DEFAULT_URL);
     const at = this.#now().toISOString();
     let since = at;
@@ -348,6 +353,7 @@ export class Capture extends EventEmitter {
   // becomes a source here, off until the person turns it on.
   offer(device: { id: string; name: string; capabilities: string[] }): string[] {
     const made: string[] = [];
+    if (this.#o.mayCapture?.(device.id)) return made;
     for (const cap of device.capabilities ?? []) {
       const kind = cap.startsWith('capture.') ? cap.slice('capture.'.length) : null;
       if (!kind || !(KINDS as readonly string[]).includes(kind)) continue;
@@ -443,6 +449,8 @@ export class Capture extends EventEmitter {
   // A capture_event from a device agent's inbox (mesh/spokes.ts), inside the inbox's transaction,
   // so it is taken in exactly once by its key. The item's body is never kept in the inbox.
   fromDevice(device: { id: string; name: string }, key: string, body: Record<string, unknown>): { ref?: string; reason?: string; refused?: boolean } {
+    const not = this.#o.mayCapture?.(device.id);
+    if (not) return { refused: true, reason: not };
     const kind = body.kind;
     if (typeof kind !== 'string' || !(KINDS as readonly string[]).includes(kind)) return { refused: true, reason: `kind must be one of ${KINDS.join(', ')}.` };
     const id = this.#ensureDeviceSource(device.id, kind as Kind) ?? `device:${device.id}:${kind}`;
@@ -793,14 +801,20 @@ export class Capture extends EventEmitter {
     await Promise.allSettled([...this.#pulling.values()]);
   }
 
-  // A device was revoked: what it captured stays (until retention or a forget), but nothing more is
-  // taken from it. Its sources go off, so turning one on again is a fresh consent.
-  deviceRemoved(deviceId: string): string[] {
+  // A device's capture sources that are on: what taking its capture-source role away stops.
+  sourcesOn(deviceId: string): string[] {
+    return this.#db.all<{ name: string }>(`SELECT name FROM capture_source WHERE device_id = ? AND adapter = 'device' AND enabled = 1 ORDER BY name`, deviceId).map((r) => r.name);
+  }
+
+  // A device was revoked, or is no longer a capture source: what it captured stays (until retention
+  // or a forget), but nothing more is taken from it. Its sources go off, so turning one on again is
+  // a fresh consent.
+  deviceRemoved(deviceId: string, why = 'Turned off: its device was removed from your devices.'): string[] {
     const at = this.#now().toISOString();
     const ids = this.#db.all<{ id: string }>('SELECT id FROM capture_source WHERE device_id = ? AND enabled = 1', deviceId).map((r) => r.id);
     for (const id of ids) {
       this.#db.run(`UPDATE capture_source SET enabled = 0, paused = 0, cursor = NULL, status = 'off', status_detail = ?, status_at = ?, updated_at = ? WHERE id = ?`,
-        'Turned off: its device was removed from your devices.', at, at, id);
+        why, at, at, id);
       this.#settle(id);
     }
     if (ids.length) this.#changed('sources');

@@ -118,7 +118,7 @@ test('Settings › Devices: widening is tier 3, narrowing tier 2 saying what sto
   } finally { await h.stop(); }
 });
 
-test('devices paired before roles: phones and browsers are thin clients, the standby a hub candidate, computers nothing, the hub its own', () => {
+test('devices paired before roles: phones and browsers are thin clients, the standby a hub candidate, computers what they already do, the hub its own', () => {
   const db = new Db(':memory:');
   const all = loadMigrations();
   db.migrate({ migrations: all.filter((m) => m.version < 19) });
@@ -128,14 +128,25 @@ test('devices paired before roles: phones and browsers are thin clients, the sta
     id, id, kind, role, `pk-${id}`, `xk-${id}`, `fp-${id}`, at,
   );
   row('p', 'phone', 'client'); row('b', 'browser', 'client'); row('s', 'standby', 'standby'); row('c', 'computer', 'spoke'); row('h', 'computer', 'hub');
+  // Computers already doing work (review finding 2): one serving a model role, one with a capture
+  // source, one with both.
+  row('m', 'computer', 'spoke'); row('k', 'computer', 'spoke'); row('mk', 'computer', 'spoke');
+  for (const [role, dev] of [['reasoner', 'm'], ['embedder', 'mk']]) db.run(`INSERT INTO profile (section, key, value, source, updated_at) VALUES ('models', ?, ?, 'settings', ?)`, `role.${role}`, JSON.stringify({ device: dev, runtime: 'ollama', url: 'http://192.0.2.5:11434', model: 'example' }), at);
+  for (const dev of ['k', 'mk']) db.run(`INSERT INTO capture_source (id, device_id, adapter, name, kinds, created_at, updated_at) VALUES (?, ?, 'device', 'App activity', '["app-activity"]', ?, ?)`, `device:${dev}:app-activity`, dev, at, at);
   db.migrate({ migrations: all });
   const of = (id: string) => JSON.parse(db.get<{ purposes: string }>('SELECT purposes FROM device WHERE id = ?', id)!.purposes);
   assert.deepEqual([of('p'), of('b'), of('s'), of('c'), of('h')], [['thin-client'], ['thin-client'], ['hub-candidate'], [], ['hub-candidate', 'general-server']]);
-  // The standby copies the column: the replication triggers carry it.
-  const logged = db.all<{ row: string }>("SELECT row FROM sync_log WHERE tbl = 'device' AND pk = 'c'");
+  assert.deepEqual([of('m'), of('k'), of('mk')], [['compute'], ['capture-source'], ['compute', 'capture-source']], 'what already runs there keeps running');
+  // The standby copies the column: a change to it is logged with it, every column there.
+  const before = db.get<{ m: number | null }>('SELECT MAX(seq) AS m FROM sync_log')!.m ?? 0;
   db.run(`UPDATE device SET purposes = '["compute"]' WHERE id = 'c'`);
-  const after = db.all<{ row: string | null }>("SELECT row FROM sync_log WHERE tbl = 'device' AND pk = 'c'");
-  assert.ok(logged.length >= 0 && after.some((r) => r.row && JSON.parse(r.row).purposes === '["compute"]'), JSON.stringify(after));
+  const logged = db.all<{ op: string; row: string | null }>("SELECT op, row FROM sync_log WHERE tbl = 'device' AND pk = 'c' AND seq > ?", before);
+  assert.equal(logged.length, 1, JSON.stringify(logged));
+  assert.equal(logged[0]!.op, 'put');
+  const sent = JSON.parse(logged[0]!.row!) as Record<string, unknown>;
+  assert.equal(sent.purposes, '["compute"]');
+  const columns = db.all<{ name: string }>("SELECT name FROM pragma_table_info('device')").map((c) => c.name).sort();
+  assert.deepEqual(Object.keys(sent).sort(), columns, 'the logged row carries every column, the new one included');
 });
 
 test('the hub tells a computer its roles in every heartbeat answer, and a dry run of placement refuses its thin client', async () => {

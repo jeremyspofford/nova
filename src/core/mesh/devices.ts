@@ -162,13 +162,16 @@ export class Devices extends EventEmitter {
   // computer is its own tier-3 confirmation every time (`confirm_candidate: true`, Decision 2): its
   // key is pinned in the next roster. The hub always holds hub candidate and general server.
   // `stops(id, removed)` names what would stop (nothing runs on other devices before M10h).
-  setPurposes(id: string, value: unknown, o: { confirm?: boolean; approved?: boolean; confirm_candidate?: boolean; by: string; stops?: (id: string, removed: Purpose[]) => string[] }): { device: Device; change: PurposeChange; stops: string[] } {
+  setPurposes(id: string, value: unknown, o: { confirm?: boolean; approved?: boolean; confirm_candidate?: boolean; dry?: boolean; by: string; stops?: (id: string, removed: Purpose[]) => string[] }): { device: Device; change: PurposeChange; stops: string[] } {
     const d = this.get(id);
     if (d.trust !== 'trusted') throw new CoreError('conflict', 'That device was revoked, so its roles can’t change.');
     const hub = d.role === 'hub';
     const next = checkPurposes(value, d.kind, { hub });
     const change = purposeChange(d.purposes, next);
     const stops = change.removed.length ? (o.stops?.(d.id, change.removed) ?? []) : [];
+    const stopWords = stops.length ? `It would stop ${stops.join(', ')} there.` : 'Nothing runs there that needs it, so nothing stops.';
+    // A dry run: what the change would be and stop, at which tier, with nothing written.
+    if (o.dry) return { device: d, change, stops };
     if (change.tier === 3 && o.confirm !== true) {
       throw new CoreError('validation', `Adding ${purposeWords(change.added).toLowerCase()} to “${d.name}” changes what may run there, so it needs your explicit confirmation (tier 3): send confirm: true.`);
     }
@@ -176,8 +179,7 @@ export class Devices extends EventEmitter {
       throw new CoreError('validation', `Making “${d.name}” a hub candidate means it could become the hub, and its key is pinned for that. That is confirmed on its own, every time (tier 3): send confirm_candidate: true.`);
     }
     if (change.tier === 2 && o.confirm !== true && o.approved !== true) {
-      const what = stops.length ? `It would stop ${stops.join(', ')} there.` : 'Nothing runs there that needs it, so nothing stops.';
-      throw new CoreError('validation', `Taking ${purposeWords(change.removed).toLowerCase()} from “${d.name}” may stop services there, so Nova asks first (tier 2). ${what} Send approved: true.`);
+      throw new CoreError('validation', `Taking ${purposeWords(change.removed).toLowerCase()} from “${d.name}” may stop work there, so Nova asks first (tier 2). ${stopWords} Send approved: true.`);
     }
     if (change.tier) {
       this.#db.run('UPDATE device SET purposes = ? WHERE id = ?', JSON.stringify(next), d.id);

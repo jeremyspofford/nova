@@ -351,7 +351,7 @@ test('capture feeds event rules, and capture.stream(device, kind) hands readers 
 test('a device agent’s capture events through the inbox: offered by its heartbeat, off until consent, exactly once, private never kept', async () => {
   const h = await hub();
   try {
-    const { dev, token } = await enroll(h, { kind: 'computer', name: 'Test computer' });
+    const { dev, token } = await enroll(h, { kind: 'computer', name: 'Test computer', purposes: ['capture-source'] });
     const hb = await call(h.mesh, 'POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: ['heartbeat', 'queue', 'capture.app-activity'] }, bearer(token));
     assert.equal(hb.status, 200);
     const sources = (await h.c('GET', '/capture')).body.sources;

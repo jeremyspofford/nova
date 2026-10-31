@@ -189,6 +189,23 @@ export class Models extends EventEmitter {
     return !!d && d.trust === 'trusted' && d.kind === 'computer' && d.role !== 'hub';
   }
 
+  // Model work on a paired computer needs its compute role (M10f, the orchestration ADR Point 9:
+  // roles bound what may run there). The hub runs Nova and its own local models whatever its roles.
+  // Checked on every call, like trust: roles can be narrowed at any time.
+  #computes(device: string): boolean {
+    if (device === HUB) return true;
+    return this.#o.devices.find(device)?.purposes.includes('compute') ?? false;
+  }
+
+  #noCompute(device: string): string {
+    return `${this.#deviceName(device)} isn’t a compute device, so Nova sends it no model work. Give it the Compute role in Settings › Devices first`;
+  }
+
+  // The model roles a paired computer serves now: what taking its compute role away stops.
+  rolesOn(device: string): Role[] {
+    return ROLES.filter((r) => this.#stored(r)?.device === device);
+  }
+
   // A computer that is no longer trusted loses its roles and the address Nova kept for it, so
   // nothing reaches it again until the person pairs and assigns it anew.
   #forgetUntrusted(): void {
@@ -388,7 +405,8 @@ export class Models extends EventEmitter {
   async #deviceModels(): Promise<DeviceModels[]> {
     const hub = await this.inventory(HUB);
     const out: DeviceModels[] = [{ id: HUB, name: this.#o.hubName(), hub: true, hardware: await this.hubHardware(), models: hub.ok || hub.models.length ? hub.models : null, url: this.hubUrl() }];
-    for (const d of this.#spokes()) {
+    // Only computers that may run model work are recommended for it.
+    for (const d of this.#spokes().filter((x) => this.#computes(x.id))) {
       const url = this.#urlFor(d.id);
       const inv = url ? await this.inventory(d.id, { timeoutMs: 1200 }) : null;
       out.push({ id: d.id, name: d.name, hub: false, hardware: this.#spokeHardware(d.id), models: inv && (inv.ok || inv.models.length) ? inv.models : null, url });
@@ -413,6 +431,7 @@ export class Models extends EventEmitter {
     if (device !== HUB) {
       const d = this.#o.devices.find(device);
       if (!d || d.trust !== 'trusted' || d.kind !== 'computer') throw new CoreError('validation', 'device is the hub, or one of your paired computers.');
+      if (!this.#computes(device)) throw new CoreError('conflict', `${this.#noCompute(device)}.`);
       url = str(body.url);
       if (!url) throw new CoreError('validation', `url is where ${d.name}’s Ollama answers, like http://<its address>:11434.`);
       const wrong = await this.#spokeAddress(device, url);
@@ -532,6 +551,7 @@ export class Models extends EventEmitter {
   async #local(req: InferRequest, mode: PrivacyMode, notes: string[]): Promise<Omit<InferResult, 'notes'>> {
     const stored = this.#stored(req.role);
     if (stored && !this.#trusted(stored.device)) throw new LocalDown(`${this.#deviceName(stored.device)} is no longer one of your trusted computers, so Nova sends it nothing`);
+    if (stored && !this.#computes(stored.device)) throw new LocalDown(this.#noCompute(stored.device));
     const p = this.placement(req.role);
     if (!p) throw new LocalDown(`no model is assigned to ${ROLE_WORDS[req.role].name.toLowerCase()} yet`);
     if (this.#remote(p.device, p.model)) throw new LocalDown(cloudWords(p.model).replace(/\.$/, ''));
@@ -907,6 +927,7 @@ export class Models extends EventEmitter {
     const model = str(body.model);
     if (!MODEL_NAME.test(model)) throw new CoreError('validation', 'model is the name to download, like nomic-embed-text or qwen3:8b.');
     const device = str(body.device) || HUB;
+    if (!this.#computes(device)) throw new CoreError('conflict', `${this.#noCompute(device)}.`);
     const url = this.#urlFor(device);
     if (!url) throw new CoreError('conflict', `Nova doesn’t know where ${this.#deviceName(device)}’s models answer.`);
     const known = CATALOG.find((c) => c.name === model)?.size;
@@ -1028,6 +1049,8 @@ export class Models extends EventEmitter {
       return report('done', `Removed ${model} from ${name}.`, { evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `${device}/${model}@removed` }] });
     }
     if (i.action !== 'pull') return report('failed', 'The brief asks for something the model manager doesn’t do.');
+    // Checked again when it runs: the computer's roles may have been narrowed since it was asked.
+    if (!this.#computes(device)) return report('failed', `${this.#noCompute(device)}.`);
     const budget = this.diskBudget();
     let used: number;
     try { used = (await rt.tags()).reduce((n, m) => n + m.size, 0); } catch (e) {

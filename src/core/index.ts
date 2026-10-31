@@ -46,7 +46,7 @@ import { browserRoutes } from './browser/routes.ts';
 import { checkers as browserCheckers } from './browser/evidence.ts';
 import { Capture, PROMOTE } from './capture/capture.ts';
 import { captureRoutes } from './capture/routes.ts';
-import { Models, type Hardware } from './models/index.ts';
+import { Models, ROLE_WORDS as MODEL_ROLE_WORDS, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { wireIngest, type ScreenInput, type Taint } from './ingest/index.ts';
 import { NovaComputer, type ComputerOptions } from './computer/index.ts';
@@ -506,6 +506,13 @@ export function createCore(o: CoreOptions) {
     timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
     privacy: () => profile.privacyDefault(),
     meshHosts: () => [...meshHosts()],
+    // Capture from a paired computer needs its capture-source role (M10f). The hub's own Screenpipe
+    // isn't a device source.
+    mayCapture: (id) => {
+      const d = devices.find(id);
+      if (!d || d.role === 'hub' || d.purposes.includes('capture-source')) return null;
+      return `${d.name} isn’t a capture source, so Nova takes no capture from it. Give it the Capture source role in Settings › Devices first.`;
+    },
     fire: (topic, payload, key) => triggers.connectorEvent('capture', topic, payload, key),
     proposer: () => (models!.decidesWithModel(rules.has(PROMOTE.template_id)) ? LOCAL_MODEL_PROVIDER : null),
     // Captured text is screened before triage reads it: audio and meetings as transcripts, the rest
@@ -679,6 +686,16 @@ export function createCore(o: CoreOptions) {
       this: p ? (p.kind === 'device' ? p.device.id === d.id : p.kind === 'console' && d.id === meshIdentity.id) : false,
     };
   }
+  // What taking roles away from a device stops there (M10f): model roles on it without compute,
+  // its capture sources without capture source. Nothing else runs on other devices before M10h.
+  const workStopping = (id: string, removed: string[]): string[] => [
+    ...(removed.includes('compute') && models ? models.rolesOn(id).map((r) => `its ${MODEL_ROLE_WORDS[r].name.toLowerCase()} model`) : []),
+    ...(removed.includes('capture-source') ? capture.sourcesOn(id) : []),
+  ];
+  // And it stops: a computer that is no longer a capture source has its sources turned off.
+  devices.on('change', (e: { action: string; device: Device; removed?: string[] }) => {
+    if (e.action === 'purposes' && e.device.role !== 'hub' && !e.device.purposes.includes('capture-source')) capture.deviceRemoved(e.device.id, 'Turned off: its computer is no longer a capture source (Settings › Devices).');
+  });
   // The devices placement is resolved against (M10f): roles, hardware and health, as the hub knows
   // them now.
   async function placementDevices(): Promise<PlacementDevice[]> {
@@ -996,7 +1013,8 @@ export function createCore(o: CoreOptions) {
         if (body.name !== undefined) devices.rename(params.id!, body.name);
         if (body.can_approve !== undefined) devices.setCanApprove(params.id!, body.can_approve, body.confirm === true);
         // Nothing runs on other devices before native workloads (M10h), so narrowing stops nothing.
-        if (body.purposes !== undefined) devices.setPurposes(params.id!, body.purposes, { confirm: body.confirm === true, approved: body.approved === true, confirm_candidate: body.confirm_candidate === true, by: by(who), stops: () => [] });
+        if (body.purposes !== undefined && body.dry_run === true) { const r = devices.setPurposes(params.id!, body.purposes, { dry: true, by: by(who), stops: workStopping }); return { ...deviceView(r.device, who.principal), change: r.change, stops: r.stops }; }
+        if (body.purposes !== undefined) devices.setPurposes(params.id!, body.purposes, { confirm: body.confirm === true, approved: body.approved === true, confirm_candidate: body.confirm_candidate === true, by: by(who), stops: workStopping });
         return deviceView(devices.get(params.id!), who.principal);
       },
     },

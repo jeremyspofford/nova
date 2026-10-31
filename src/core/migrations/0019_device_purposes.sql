@@ -5,8 +5,8 @@
 --
 -- Devices paired before this (the ADR, Point 9): phones and browsers become thin clients; the standby
 -- becomes a hub candidate with no new confirmation, its key already pinned through its tier-3 standby
--- enrollment; computers get no workload role until the person picks one (nothing runs on them, so
--- nothing moves); the hub holds hub-candidate and general-server, as it runs Nova and its services.
+-- enrollment; computers get no workload role until the person picks one, except what they already
+-- do (a model role: compute; a capture source: capture source), so nothing that runs there stops; the hub holds hub-candidate and general-server, as it runs Nova and its services.
 --
 -- The device table is replicated (0006), so its triggers are made again with the new column.
 ALTER TABLE device ADD COLUMN purposes TEXT NOT NULL DEFAULT '[]';
@@ -30,5 +30,11 @@ CREATE TRIGGER sync_device_delete AFTER DELETE ON "device" WHEN (SELECT logging 
 END;
 
 UPDATE device SET purposes = '["thin-client"]' WHERE kind IN ('phone', 'browser');
+-- Computers already doing work keep it (review finding 2): one serving a model role has compute;
+-- one with a capture source has capture source. Compute first, so the list stays in order.
+UPDATE device SET purposes = json_insert(purposes, '$[#]', 'compute') WHERE kind = 'computer' AND role != 'hub'
+  AND EXISTS (SELECT 1 FROM profile p WHERE p.section = 'models' AND p.key LIKE 'role.%' AND json_valid(p.value) AND json_extract(p.value, '$.device') = device.id);
+UPDATE device SET purposes = json_insert(purposes, '$[#]', 'capture-source') WHERE kind = 'computer' AND role != 'hub'
+  AND EXISTS (SELECT 1 FROM capture_source c WHERE c.device_id = device.id AND c.adapter = 'device');
 UPDATE device SET purposes = '["hub-candidate"]' WHERE kind = 'standby';
 UPDATE device SET purposes = '["hub-candidate","general-server"]' WHERE role = 'hub';

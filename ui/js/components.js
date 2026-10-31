@@ -247,11 +247,11 @@ export function rolesSheet(d, { allowed = [], fixed = [] } = {}) {
 
 // Step two, at its tier: widening is tier 3; narrowing tier 2, saying what it would stop. A new hub
 // candidacy is confirmed on its own (Decision 2).
-export function rolesReviewSheet(d, next, change) {
+export function rolesReviewSheet(d, next, change, stops = []) {
   const tier = change.added.length ? 3 : 2;
   const what = [
     ...(change.added.length ? [`<dt>Adding</dt><dd>${esc(rolesWords(change.added))}. That changes what may run there.</dd>`] : []),
-    ...(change.removed.length ? [`<dt>Taking away</dt><dd>${esc(rolesWords(change.removed))}. Nothing runs there that needs it, so nothing stops.</dd>`] : []),
+    ...(change.removed.length ? [`<dt>Taking away</dt><dd>${esc(rolesWords(change.removed))}. ${esc(stops.length ? `It stops ${stops.join(', ')} there.` : 'Nothing runs there that needs it, so nothing stops.')}</dd>`] : []),
   ].join('');
   const candidate = change.added.includes('hub-candidate') && d.kind === 'computer'
     ? '<label class="confirm"><input type="checkbox" name="confirm_candidate"> I want this computer to be able to become the hub. Its key is pinned for that.</label>' : '';
