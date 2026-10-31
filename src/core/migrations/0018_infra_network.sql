@@ -72,8 +72,11 @@ CREATE TABLE network_target (
 
 -- A change: prepare (snapshot and diff, tier 1), apply (tier 3), then the dead-man's switch, and a
 -- revert when it fires. The snapshot and the new configuration are files in workers/network/<id>/;
--- here only their hashes and versions, the patch as proposed (it never holds a secret: a patch that
--- sets one is refused), and the diff with every secret value masked. `devices` lists the devices
+-- here only their hashes and versions, the patch's shape (its keys; the patch itself is sealed beside
+-- the snapshot), and the diff with every secret value masked. `applied_sha` and `stamped`: what the
+-- target held right after Nova's write, and the paths the target set itself on it (a revision).
+-- `revert_attempts`, `next_revert_at`: the switch trying a failed revert again; `problem_id`: the
+-- problem that stays open until the snapshot is back or the person settles it. `devices` lists the devices
 -- whose contact counts (trusted at the apply); `deadline` is when the switch fires without one.
 CREATE TABLE network_change (
   id TEXT PRIMARY KEY,
@@ -97,6 +100,11 @@ CREATE TABLE network_change (
   contact_at TEXT,
   contact_device TEXT,
   checkpoint TEXT,
+  applied_sha TEXT,
+  stamped TEXT,
+  revert_attempts INTEGER NOT NULL DEFAULT 0,
+  next_revert_at TEXT,
+  problem_id INTEGER,
   tasks TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

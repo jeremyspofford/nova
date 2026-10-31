@@ -2,7 +2,7 @@
 // the project's monthly budget. Amounts are kept in cents. A change Nova can't price is never applied:
 // what can't be priced can't be kept inside a budget. Pure, so it is unit-tested on its own.
 import { CoreError } from '../errors.ts';
-import type { ResourceChange } from './tool.ts';
+import type { ResourceChange, StateResource } from './tool.ts';
 
 // A resource type's monthly price: a flat amount, or one by the value of an attribute (a size).
 export type Price = number | { by: string; prices: Record<string, number> };
@@ -19,7 +19,7 @@ const okAmount = (v: unknown): v is number => typeof v === 'number' && Number.is
 export function validatePrices(v: unknown): PriceSheet {
   const errors: string[] = [];
   if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new CoreError('validation', 'prices is a price sheet: {"resource_type": monthly USD} or {"resource_type": {"by": "attribute", "prices": {"value": monthly USD}}}.');
-  const out: PriceSheet = {};
+  const out: PriceSheet = Object.create(null) as PriceSheet;
   const entries = Object.entries(v as Record<string, unknown>);
   if (entries.length > 500) errors.push('prices lists at most 500 resource types');
   for (const [type, p] of entries) {
@@ -33,7 +33,7 @@ export function validatePrices(v: unknown): PriceSheet {
       errors.push(`prices.${type} is a monthly amount in USD (0 to ${MAX_USD}), or {"by": "attribute", "prices": {"value": amount}}`);
       continue;
     }
-    out[type] = { by, prices: prices as Record<string, number> };
+    out[type] = { by, prices: Object.assign(Object.create(null) as Record<string, number>, prices as Record<string, number>) };
   }
   if (errors.length) throw new CoreError('validation', 'The price sheet can’t be used.', errors);
   return out;
@@ -44,28 +44,44 @@ export function validateBudget(v: unknown): number {
   return cents(v);
 }
 
-// A resource's monthly price in cents, or null when the sheet can't say.
+// A resource's monthly price in cents, or null when the sheet can't say. Own properties only, and
+// only a finite amount: "constructor" or "__proto__" as a type or a size is no price at all (review of
+// PR #241, S1).
 export function priceOf(sheet: PriceSheet, type: string, attrs: Record<string, unknown> | null): number | null {
+  if (!Object.hasOwn(sheet, type)) return null;
   const p = sheet[type];
-  if (p === undefined) return null;
-  if (typeof p === 'number') return cents(p);
-  const key = attrs ? attrs[p.by] : undefined;
+  if (okAmount(p)) return cents(p);
+  if (typeof p !== 'object' || p === null || !Object.hasOwn(p, 'by') || !Object.hasOwn(p, 'prices')) return null;
+  const key = attrs && Object.hasOwn(attrs, p.by) ? attrs[p.by] : undefined;
   if (typeof key !== 'string' && typeof key !== 'number') return null;
+  if (!Object.hasOwn(p.prices, String(key))) return null;
   const v = p.prices[String(key)];
-  return v === undefined ? null : cents(v);
+  return okAmount(v) ? cents(v) : null;
+}
+
+// What a set of resources costs a month: every one of them, whoever made it (review of PR #241, B2).
+export function priceState(resources: StateResource[], sheet: PriceSheet): { cents: number; byAddress: Map<string, number>; unpriced: string[] } {
+  const byAddress = new Map<string, number>();
+  const unpriced: string[] = [];
+  for (const r of resources) {
+    const c = priceOf(sheet, r.type, r.values);
+    if (c === null) unpriced.push(`${r.address} (${r.type})`);
+    else byAddress.set(r.address, c);
+  }
+  return { cents: [...byAddress.values()].reduce((a, b) => a + b, 0), byAddress, unpriced };
 }
 
 export interface PricedChange { address: string; type: string; action: ResourceChange['action']; before_cents: number | null; after_cents: number | null; delta_cents: number }
 export interface Priced { lines: PricedChange[]; delta_cents: number; unpriced: string[] }
 
-// Each change's price: what it adds or takes away a month. `current`: what Nova recorded for the
-// project's resources (address → cents).
-export function priceChanges(changes: ResourceChange[], sheet: PriceSheet, current: ReadonlyMap<string, number>): Priced {
+// Each change's price, for the review: what it adds or takes away a month, from its own before and
+// after. (The month itself is priced from the plan's whole before and after: priceState.)
+export function priceChanges(changes: ResourceChange[], sheet: PriceSheet): Priced {
   const lines: PricedChange[] = [];
   const unpriced: string[] = [];
   for (const c of changes) {
     if (c.action === 'read' || c.action === 'no-op') continue;
-    const was = c.action === 'create' ? 0 : current.get(c.address) ?? priceOf(sheet, c.type, c.before) ?? 0;
+    const was = c.action === 'create' ? 0 : priceOf(sheet, c.type, c.before) ?? 0;
     let now: number | null = 0;
     if (c.action !== 'delete') {
       now = priceOf(sheet, c.type, c.after);
@@ -78,12 +94,13 @@ export function priceChanges(changes: ResourceChange[], sheet: PriceSheet, curre
 
 export interface Verdict { level: Level; current_cents: number; projected_cents: number; budget_cents: number; blocks: boolean; words: string }
 
-// Where the month would stand after the plan. A plan that adds cost and goes over is blocked; one
-// that only takes cost away never is, even over budget (it brings the month down).
-export function verdict(currentCents: number, deltaCents: number, budgetCents: number): Verdict {
+// Where the month would stand after the plan. A plan that ends over the budget is blocked unless every
+// change in it only takes cost away (it brings the month down). `increases`: whether any change adds
+// cost (a new resource, a bigger one), whatever the total does.
+export function verdict(currentCents: number, deltaCents: number, budgetCents: number, o: { increases?: boolean } = {}): Verdict {
   const projected = currentCents + deltaCents;
   const level: Level = projected > budgetCents ? 'over' : projected >= Math.ceil(budgetCents * WARN_AT) && projected > 0 ? 'warn' : 'ok';
-  const blocks = level === 'over' && deltaCents > 0;
+  const blocks = level === 'over' && (deltaCents > 0 || o.increases === true);
   const pct = budgetCents > 0 ? Math.round((projected / budgetCents) * 100) : projected > 0 ? Infinity : 0;
   const words = `${usd(projected)} a month of the ${usd(budgetCents)} budget${Number.isFinite(pct) ? ` (${pct} %)` : ''}`;
   return { level, current_cents: currentCents, projected_cents: projected, budget_cents: budgetCents, blocks, words };
