@@ -274,10 +274,18 @@ built-ins only.
   - each model's scorecard before a switch, or a plain none.
 - **Evals:** the injection suite runs Part 1's 99 cases (`tests/ingest/tev1-eval/cases.ts`, mapped from its shape; the set was not moved into `src/core/decision-service/`).
 - **Safety evidence:**
-  - the deterministic layer and taint tracking are unchanged (an empty diff of `checks.ts`, `outbound.ts`, `runner.js`, `context.js` and `tools.js`);
+  - the deterministic layer and taint tracking are unchanged (an empty diff of `checks.ts`, `outbound.ts`, `context.js` and `tools.js`; `runner.js` changes only in passing the run's mode and task to the screen);
   - the corpus and canary suites run in every mode with the seats unavailable, untrusted and a trusted stand-in. With no trusted seat, nothing is looser than checks plus quarantine;
   - the fresh-user test and the eval regression suite pass.
-- **Not done:** nothing calls TypeSafe. No ingest-screen eval has passed, so without a sorting model outside content is still held back as unsure.
+- **After the adversarial review:** each finding has a test that fails with its fix undone.
+  - A run's, a helper's or a ledger task's own mode now holds the screen.
+  - The mode and the opt-ins are re-read before every cloud send, and the receipt is held to the live setting.
+  - Records keep a status and a fixed reason, never a seat's words.
+  - The pin includes Tev1's digest, read again after every answer.
+  - Untrusted seats are a sample: 2 chunks per piece of content, 200 asks per seat per day. A screen has a 180 s limit.
+  - Capture-derived text never goes to a cloud seat (the owner's §2.1 rule; its per-source opt-in doesn't exist yet).
+  - Also: the receipt's task and state hash; sync with a standby a release behind; 422s for input that was dropped; a verdict pinned to its template's wording.
+- **Not done:** nothing calls TypeSafe. No ingest-screen eval has passed, so without a sorting model outside content is still held back as unsure. Sensitive-content detection at indexing and injection screening at recall, for capture-derived text, are follow-ups.
 
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:
