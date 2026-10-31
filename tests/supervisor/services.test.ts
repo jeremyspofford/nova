@@ -38,9 +38,15 @@ test('deployed alongside with no traffic, promoted on the typed word, soaked, an
     assert.equal((await whoami(preview))!.version, '2.0.0', 'it runs alongside on a port of its own');
     assert.equal((await whoami(port))!.version, '1.0.0', 'while the stable port still serves the live version');
 
+    // A client that keeps its connection open (fetch does) is on 1.0.0 now...
+    const kept = async () => (await (await fetch(`http://127.0.0.1:${port}/whoami`)).json() as { version: string }).version;
+    assert.equal(await kept(), '1.0.0');
     const p2 = await promote(s, '2.0.0');
     assert.equal(p2.ok, true, p2.said);
     assert.equal((await whoami(port))!.version, '2.0.0');
+    // ...and once 1.0.0 has stopped, its next request reaches 2.0.0, not a closed connection.
+    await until(() => !alive(one.pid), 'the old version to stop');
+    assert.equal(await kept(), '2.0.0');
     const st = statusOf(s);
     assert.deepEqual([st.live, st.previous], ['2.0.0', '1.0.0']);
     assert.equal(versionOf(s, '1.0.0').status, 'kept');
@@ -49,6 +55,7 @@ test('deployed alongside with no traffic, promoted on the typed word, soaked, an
     // Its whole process group went with it: the child it started too.
     const child = Number(readFileSync(join(h.dir, 'sup', 'services', 'stand-in', 'state', 'default', 'child-1.0.0.pid'), 'utf8'));
     await until(() => !alive(child), 'the old version’s child process to stop');
+    assert.ok(existsSync(join(h.dir, 'sup', 'services', 'stand-in', 'state', 'default', 'child-1.0.0.sigterm')), 'the group was asked to stop (SIGTERM) before it was made to');
     assert.ok(s.services.slots('stand-in').includes('1.0.0'), 'its slot is kept for the soak');
 
     // After the soak, the old slot goes, and the record says so.
