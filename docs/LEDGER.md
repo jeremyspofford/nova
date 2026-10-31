@@ -289,7 +289,7 @@ built-ins only.
 **2026-10-31 (M10f: device roles, placement, and onboarding, supervisor only).** Branch `m10f/roles-onboarding`.
 Plan `docs/plans/M10f.md`, evidence `docs/evidence/m10f-gate.md`, built from the orchestration ADR's M10f
 phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in.
-- **Roles are `purposes`, beside the mesh `role`** (migration 0019; the device table's replication
+- **Roles are `purposes`, beside the mesh `role`** (migration 0020; the device table's replication
   triggers made again with the column). A phone or browser runs no agent, so it is a thin client only;
   a standby is always a hub candidate; the hub always holds hub candidate and general server; a thin
   client can't also hold a workload role or a candidacy. Widening is tier 3 (`confirm`), narrowing
@@ -301,13 +301,18 @@ phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in
   standby's keys** (`trust.ts rosterKeys` unchanged): those keys also sign runtime bundles, so
   trusting a candidate's key before M10g's fencing covers candidates would widen what a computer
   accepts. "Pinned in the next roster" is met as the roster naming it; device-side trust is M10g's.
-- **The placement resolver is pure and checked twice:** the Service Manager (`placement` option)
-  and `POST /services/placement` (tier 0) refuse at proposal; the device agent's
-  `assignmentAllowed` refuses against the roles it keeps in `device.json` (from the approval and
-  every heartbeat answer, over its own session). A resolution to a device other than the hub is
-  refused: native workloads are M10h. The supervisor's own manager isn't given devices (it doesn't
-  read the hub's database), so on the supervisor's command line placement stays "this hub only",
-  as in M10e.
+- **The placement resolver is pure.** Today it is checked by `POST /services/placement` (tier 0,
+  advisory) and the device agent; the real proposal path (the supervisor's command line) keeps M10e's
+  "this hub only" rule, and its Service Manager isn't given devices until M10h (corrected after the
+  review: the first draft claimed a hub-side Service Manager check that wasn't wired). The device
+  agent's `assignmentAllowed` refuses against the roles it keeps in `device.json` (from the approval
+  and every heartbeat answer, over its own session).
+- **After the review of #268:** roles now bound the work that already reaches a computer (model roles,
+  downloads, inference: compute; capture: capture source), and the migration gives computers already
+  doing either the role; consent in setup fails closed (`onboard/consent.ts`); a promoted standby
+  gains the hub's roles; one mechanism for a standby a release behind (`ADDED_COLUMNS` in
+  `mesh/sync.ts`, which #258's receipt.opt_in now uses too); mDNS work bounded; import checks each
+  record and reads only plain files; `PATCH /mesh/devices` changes one thing per call.
 - **Onboarding is setup's conversation, not a new flow:** `device`, `roles`, `backend` before the
   person's questions (the ADR's order), `discover` and `import` after privacy (so the local-only
   answer is known before anything looks at the network), then the first task. `answer()` is now
