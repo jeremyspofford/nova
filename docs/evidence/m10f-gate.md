@@ -14,7 +14,14 @@ The branch is `m10f/roles-onboarding`, from main at `c0bae29d` (M10e merged), wi
 
 ## Suite
 
-SUITE_RESULTS
+`npm run check` passes (token lint, themes, typecheck, the suite under the tripwire): **1341 tests:
+1329 pass, 0 fail, 12 skipped** (the existing opt-in real-service tests), at `ccbb94bf` (main merged
+at `e343026f`). The log ends `no-Kubernetes tripwire: never fired`.
+
+`scripts/ui-test.sh` (the Playwright image, Chromium and WebKit, under the tripwire), at `ccbb94bf`:
+**100 tests: 100 pass, 0 fail**; the log ends `no-Kubernetes tripwire: never fired`. Screenshots in
+`docs/screenshots/m10f/`; the M3 setup screenshots (`docs/screenshots/m3/setup-*`) were taken again,
+since setup now starts with this device.
 
 The new and changed tests:
 
@@ -121,7 +128,42 @@ Screenshot `docs/screenshots/m10f/settings-services.png`.
 
 ### 9. The fresh-user test, with the timed first win
 
-FIRST_WIN
+`tests/acceptance/fresh-user.test.ts`: the real server as its own process on a blank home, with the
+egress tripwire preloaded, local-only. Every check it had still holds (the profile, the welcome note
+verified with Nova's evidence and checked again from disk, an extension in and out, a restart, no
+problems, no connection off the machine). New: the device steps; the backend step's choices (the
+supervisor the only one selected; K3s never available); discovery against the loopback stand-ins
+(three things found, each `connected: false`; the stand-in runtime saw one GET); the import of the
+blank user's notes, calendar file and bookmarks; the first view with `review-imports` as its one
+action; then the first win: the imported note waits in Memory and is not memory; the person keeps
+it (`POST /api/memory/candidates/{id}/keep`); `GET /api/v1/memory/search?q=Larkspur` finds it. The
+clock runs from the first `GET /setup`, and the test fails at 15 minutes.
+
+- Measured (machine speed, from the first GET /setup): **1759 ms**, under the 15-minute bound.
+- The human path, estimated: 11 answers, 2 clicks after setup, 773 words shown by Nova. At 200 words a minute, 10 s per answer and 5 s per click: **about 6 min 52 s**. An estimate, not a measurement of a person.
+
+| Step | ms from start |
+|---|---|
+| setup opened: this computer described | 132 |
+| answered device: “new” | 140 |
+| answered roles: “yes” | 145 |
+| answered backend: “yes” | 151 |
+| answered user_name: “Hi! I'm Sam.” | 156 |
+| answered timezone: “yes” | 159 |
+| answered nova_name: “keep” | 163 |
+| answered directness: “plainly, please” | 168 |
+| answered privacy: “keep everything on this machine” | 172 |
+| answered discover: “this computer and the network too” | 1697 |
+| answered import: “all” | 1728 |
+| answered first_task: “yes” | 1737 |
+| followed “Review what Nova brought in”: the imported note waits in Memory | 1751 |
+| kept the imported note | 1756 |
+| Nova found it: “Note “Garden plans”: Plant Larkspur by the north fence in sp…” | 1759 |
+
+The browser path (`tests/ui/m10f-onboarding.test.ts`, Chromium at phone width, by clicking and typing,
+ending with Keep pressed in Memory): **3064 ms** in the full UI run (2852 ms on its own run), from
+opening the page to Nova finding the kept note; its step times are in
+`docs/screenshots/m10f/first-win-browser.txt`.
 
 ### 10. The closing rule
 
@@ -142,9 +184,28 @@ evidence it is worded to. The register's own check (`tests/core/evals.test.ts`) 
 ## Guards removed, one at a time, to show their tests fail
 
 Each guard was removed on its own (`scratchpad/guards.py` in the build session: replace the guard,
-run the test file that should catch it, put it back), on the code at `0e46269f`:
+run the test file that should catch it, put it back), on the code at `138b33e4` (the last row at `0e46269f`):
 
-GUARDS
+| Guard removed | Test file | Result |
+|---|---|---|
+| thin client refused by the resolver | `tests/core/services-placement.test.ts` | caught: 4 failing: checked twice: a placement on a thin client is refused at proposal, and again by the device agent; pinned: that device only; down means the service is down; a thin client is refused; preferred: an inference service resolves to the compute device with the most GPU memory; refusals: no workload role, |
+| the proposal check in the Service Manager | `tests/core/services-placement.test.ts` | caught: 1 failing: checked twice: a placement on a thin client is refused at proposal, and again by the device agent |
+| the device agent refuses without a workload role | `tests/core/services-placement.test.ts` | caught: 1 failing: checked twice: a placement on a thin client is refused at proposal, and again by the device agent |
+| failover only past the window | `tests/core/services-placement.test.ts` | caught: 1 failing: preferred plus failover: stays while its device is healthy or briefly away, then moves past the window |
+| widening needs confirm (tier 3) | `tests/core/mesh-purposes.test.ts` | caught: 1 failing: Settings › Devices: widening is tier 3, narrowing tier 2 saying what stops, a candidacy confirmed every time and unpinned when removed |
+| narrowing asks first (tier 2) | `tests/core/mesh-purposes.test.ts` | caught: 1 failing: Settings › Devices: widening is tier 3, narrowing tier 2 saying what stops, a candidacy confirmed every time and unpinned when removed |
+| a candidacy confirmed on its own, in Settings | `tests/core/mesh-purposes.test.ts` | caught: 1 failing: Settings › Devices: widening is tier 3, narrowing tier 2 saying what stops, a candidacy confirmed every time and unpinned when removed |
+| a candidacy confirmed on its own, at pairing | `tests/core/mesh-purposes.test.ts` | caught: 1 failing: a hub candidate asks at tier 3 at pairing, on its own, and its key is pinned in the next roster |
+| the candidate pinned in the roster | `tests/core/mesh-purposes.test.ts` | caught: 1 failing: tests/core/mesh-purposes.test.ts |
+| a phone can only be a thin client | `tests/core/mesh-purposes.test.ts` | caught: 2 failing: pairing with roles: the device asks, the approval screen shows them and the person changes them there; the roles: what each kind may hold, a thin client is a screen only, and the tier of a change |
+| the heartbeat answer carries the roles | `tests/core/mesh-purposes.test.ts` | caught: 1 failing: the hub tells a computer its roles in every heartbeat answer, and a dry run of placement refuses its thin client |
+| import: a blocked file is held back | `tests/core/onboard.test.ts` | caught: 1 failing: import sources: listed by place without reading a file; only what is picked is read, screened, and left waiting |
+| import: every file screened before it is offered | `tests/core/onboard.test.ts` | caught: 1 failing: import sources: listed by place without reading a file; only what is picked is read, screened, and left waiting |
+| discovery: the network query only when asked | `tests/core/onboard.test.ts` | caught: 1 failing: discovery, on loopback stand-ins only: found and named, never connected; the network query bound to 127.0.0.1 |
+| the backend: K3s never available | `tests/core/onboard.test.ts` | caught: 1 failing: the backend, per OS: the supervisor pre-selected everywhere; K3s never offered as working; switching said to be in Settings › Services |
+| the first view: one action that fits | `tests/core/onboard.test.ts` | caught: 1 failing: setup, end to end in the core: the ADR’s order, discovery and import on loopback, the populated first view with one action |
+| discovery asked for: "no" looks for nothing | `tests/core/setup.test.ts` | caught: 2 failing: every question can be skipped, and the defaults hold; the whole conversation writes the profile and ends with a verified first task |
+| phones and browsers refused by the resolver | `tests/core/services-placement.test.ts` | caught: 1 failing: refusals… (first missed, since every phone fixture was also a thin client; a case with a phone record holding compute was added, then caught) |
 
 The browser's own checks (the approval sheet refusing to send without the candidacy box, the review
 sheet's disabled button) sit in front of the hub's refusals; with them removed, the browser test
