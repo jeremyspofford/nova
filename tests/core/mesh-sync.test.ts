@@ -248,6 +248,30 @@ test('a journalled file that grows too big leaves the standby with no copy, not 
   }
 });
 
+test('a file too big to carry is told once across restarts, and the problem closes once it fits', async () => {
+  const h = await hub();
+  const tooBig = (core: Core) => core.log.problems({ open: true }).filter((x) => x.source === 'sync' && x.message.startsWith('workspace/big.bin is larger than'));
+  let again: Core | null = null;
+  try {
+    mkdirSync(join(h.home, 'workspace'), { recursive: true });
+    const file = join(h.home, 'workspace/big.bin');
+    writeFileSync(file, Buffer.alloc(9 * 1024 * 1024, 0x61));
+    h.core.mesh.sync.scan();
+    assert.equal(tooBig(h.core).length, 1);
+    await h.stop();
+    // Nova starts again on the same home: the person was already told, and still is.
+    again = createCore({ home: h.home, version: '0.1.0', trustedOrigin: (o) => /^127\.0\.0\.1(:\d+)?$/.test(o), now: () => new Date(h.clock.t), mesh: { publicUrl: 'https://hub.example', transport: 'network' } });
+    again.mesh.sync.scan();
+    assert.equal(tooBig(again).length, 1, 'not told a second time');
+    writeFileSync(file, 'small now\n');
+    assert.deepEqual(again.mesh.sync.scan().put, ['workspace/big.bin']);
+    assert.equal(tooBig(again).length, 0, 'the standby has it again, so the problem is closed');
+  } finally {
+    if (again) await again.close();
+    else await h.stop();
+  }
+});
+
 test('role.json: the documented shape, the tolerated variants, and a plain refusal when it can’t say who the hub is', () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-role-'));
   const hubKeys = { id: 'hub-1', url: 'https://hub.example:4320', public_key: 'k', x25519_public_key: 'x' };
