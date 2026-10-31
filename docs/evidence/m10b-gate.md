@@ -21,6 +21,11 @@ After the adversarial review (the section of that name below):
 - `scripts/ui-test.sh` (the whole UI gate, in the Playwright image): **79 tests, 79 pass**, in 19
   minutes.
 
+CI's UI gate on `2b2d29f7` failed one test, a race in the test itself: the after-checkout page's
+script submitted the pay form 100 ms after marking that it had tried, the refused navigation landed
+on Chromium's error page, and on the slower runner that came before the wait step saw the mark.
+Nothing reached the stand-in. The script now sends its pay attempt by `fetch` (no navigation).
+
 Before the review the counts were 1042 (1033 pass) and 67 (67 pass, the M9 contrast test passing
 on its own once the per-test timeout went from 5 to 15 minutes).
 

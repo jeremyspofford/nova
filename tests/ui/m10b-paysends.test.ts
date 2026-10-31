@@ -59,7 +59,7 @@ test('review 2: after the itemised-total stop nothing that isn’t a GET leaves 
   const n = await startNova('nova-m10b-locked-');
   try {
     // The checkout page's script posts the pay form a moment after load, after Nova has read it.
-    shop.set({ checkoutScript: "setTimeout(() => { fetch('/api/commit', { method: 'POST', body: 'x' }).catch(() => {}); navigator.sendBeacon('/collect-order', 'x'); const i = document.createElement('i'); i.id = 'tried'; document.body.append(i); setTimeout(() => document.querySelector('form').submit(), 100); }, 600);" });
+    shop.set({ checkoutScript: "setTimeout(() => { fetch('/api/commit', { method: 'POST', body: 'x' }).catch(() => {}); navigator.sendBeacon('/collect-order', 'x'); const i = document.createElement('i'); i.id = 'tried'; document.body.append(i); fetch('/pay', { method: 'POST', body: new FormData(document.querySelector('form')) }).catch(() => {}); }, 600);" });
     const steps = [
       { do: 'navigate', url: `${shop.url}/cart/empty` }, { do: 'navigate', url: `${shop.url}/shop` },
       { do: 'click', selector: '#add-mug', sends: '/cart/add' }, { do: 'click', selector: '#to-checkout' },
