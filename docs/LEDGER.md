@@ -17,6 +17,34 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10b: the adversarial review of PR #238).** Same branch and PR. All seven items
+answered, test-first, on loopback stand-ins with fake per-test credentials; evidence in
+`docs/evidence/m10b-gate.md`, "The adversarial review of PR #238", with what failed when each fix
+was removed.
+1. **A pause didn't stop a pending selector action** (reproduced in a real browser). One check,
+   `#mustWait()`, now guards `act`, `actOn` and `clickAt`.
+2. **The pay guard was a word list.** **Choice:** a structural send guard in the session. While
+   Nova drives, a request that isn't a GET leaves only while a declared step acts and only to where
+   it accounts for (a new `sends` on fill, select, click and login, validated and never a pay
+   address); outside a checkout flow a click's own submit form also counts, and a sign-in's always;
+   on a checkout flow only `sends`; after the itemised-total stop, nothing. GETs to pay addresses
+   are refused; a stopped browser fails every request. The lists are a signal on top. **Trade-off:**
+   a site that sends by script on a click needs `sends` in the plan; a GET that pays at an address
+   no list names isn't stopped.
+3. **Declared hosts** are canonicalised with the WHATWG URL parser before every check, and kept so.
+4. **Screenshots after a sign-in**: the regions that could show a value are measured before and
+   after the capture and painted over in the PNG in Nova's own process (`png.ts`, node:zlib, no
+   dependency). **Choice:** cover over re-render: a picture taken before any re-render would still
+   miss what the page painted while Nova typed. Limits written down: unnamed regions, and the
+   person's live view.
+5. **Sign-ins over plain http** only to loopback; link-local hosts refused outright.
+6. **Live tests** for the reviewer's read-only findings. Two failed and were fixed: Forget left
+   local storage and IndexedDB (it now also clears from inside the origin, opened locally with
+   CDP answering, nothing reaching the site), and a field that swapped itself on focus got the
+   value (checked before and after focus now). **Choice:** Nova's page runs with focus emulation, as
+   a real window does, so pages' focus handlers fire in front of Nova's checks.
+7. Docs: this entry, the evidence and the known limits.
+
 **2026-10-31 (M10b: Nova Browser).** Branch `m10b/browser`. The plan is `docs/plans/M10b.md`, the
 evidence `docs/evidence/m10b-gate.md`. Nova Browser is the M5c browser worker grown, not forked:
 one worker, one CDP client, the same plans, declared hosts, walls, takeover and evidence.

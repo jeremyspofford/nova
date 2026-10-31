@@ -14,23 +14,21 @@ login, purchase or post was touched.
 
 ## Suite
 
-- `npm run check` passes: the token lint, themes, typecheck, and **1042 tests: 1033 pass, 0 fail, 9
-  skipped**. Before M10b, 1024 (1015 pass, 9 skipped). The 9 skips are the existing opt-in
-  real-service tests (real Ollama, real Claude, real Relay); none of the new tests skip.
-- `scripts/ui-test.sh` (the whole UI gate, in the Playwright image): **67 tests, 67 pass.** In the
-  full run, 66 passed and the M9 contrast test was cancelled by the per-test timeout I had first set
-  at 5 minutes (it takes about 5 on CI too: 309 s there, 328 s here); with the timeout at 15
-  minutes it passes on its own. The full run took 17 minutes.
-- Two runs of `npm test` on the way had one failure each, both outside M10b and both passing when
-  run again alone: the M7 restore acceptance test while the UI gate loaded the machine (it is known
-  to be sensitive to load), and the M9 wait test for a missing estimate of the new Settings part
-  (fixed: `browser-sites` is "under a second").
+After the adversarial review (the section of that name below):
+- `npm run check` passes: the token lint, themes, typecheck, and **1046 tests: 1037 pass, 0 fail, 9
+  skipped** (the existing opt-in real-service tests; none of the new tests skip). Before M10b,
+  1024.
+- `scripts/ui-test.sh` (the whole UI gate, in the Playwright image): **79 tests, 79 pass**, in 19
+  minutes.
+
+Before the review the counts were 1042 (1033 pass) and 67 (67 pass, the M9 contrast test passing
+on its own once the per-test timeout went from 5 to 15 minutes).
 
 The gate's tests:
 
 | File | Tests | What it proves |
 |---|---|---|
-| `tests/core/browser-m10b.test.ts` | 13 | Money and totals, pay controls, the validator's refusals, tiers, login and a11y steps, upsells, obstacles, intent, the co-pilot template, ground truth over a probability, the redactor, vault names |
+| `tests/core/browser-m10b.test.ts` | 17 | Money and totals, pay controls, the validator's refusals, tiers, login and a11y steps, upsells, obstacles, intent, the co-pilot template, ground truth over a probability, the redactor, vault names; since the review: canonical hosts, link-local, sign-in transport, `sends` |
 | `tests/core/browser-m10b-flows.test.ts` | 4 | A learnt flow through the template path in a real core; the rule; a template that presses pay is refused; sign-ins never returned |
 | `tests/ui/m10b-login.test.ts` | 1 | Gate 1, with a stand-in local model: the fake secret is nowhere; kept per site; forgotten |
 | `tests/ui/m10b-checkout.test.ts` | 3 | Gates 3, 4, 5 |
@@ -39,6 +37,11 @@ The gate's tests:
 | `tests/ui/m10b-settings.test.ts` | 1 | Settings › Site sign-ins in the PWA: save, list without the value, forget |
 | `tests/ui/m10b-vision.test.ts` | 1 | Vision only as a marked fallback; a picture's point that pays is refused |
 | `tests/ui-takeover.test.js`, `tests/ui-fixes.test.js` | +2 | Pause, Stop and Carry on in the takeover sheet; the Settings part and its search words |
+| `tests/ui/m10b-race.test.ts` | 1 | Review 1: a pause during the world read stops a pending fill and click |
+| `tests/ui/m10b-paysends.test.ts` | 2 | Review 2: seven hostile pay variants on two kinds of plan; nothing after the checkout stop |
+| `tests/ui/m10b-mask.test.ts` | 1 | Review 4: a page painting the value onto a canvas, CSS content and a shadow root; the PNG decoded |
+| `tests/ui/m10b-hostile-login.test.ts` | 3 | Review 6: read-back and exfiltration; host A never filled elsewhere; a swapped field |
+| `tests/ui/m10b-hostile-page.test.ts` | 5 | Review 6: hidden and changing text; Forget; downloads; Stop; schemes |
 
 `tests/acceptance/fresh-user.test.ts` passes unchanged.
 
@@ -65,6 +68,50 @@ file restored, by a small runner kept outside the repo:
 
 The UI-gate hang was reproduced before it was fixed (below).
 
+## The adversarial review of PR #238
+
+Every item was answered on the same branch, test-first, against loopback stand-ins and fake
+per-test credentials. The new tests and what failed with each fix removed:
+
+| # | Reproduced? | Fix | Test | Seen failing |
+|---|---|---|---|---|
+| 1 | Yes. The reviewer's model of the code ran the action while paused, and so did a real browser: the stand-in server got the fill while the session was paused. | One check, `#mustWait()`, for `act`, `actOn` and `clickAt`, after the last await and right before the call that acts: paused, held or waiting for the person waits; stopped throws. | `tests/ui/m10b-race.test.ts`: a real Chromium session whose CDP is wrapped so the pause lands during `Page.createIsolatedWorld` for a fill (selector and a11y) and a click: the server sees nothing until resume, then exactly one. A point click asked for while paused waits. Stop in the same window: nothing at all. | Before the fix: "fill (selector, act): nothing reached the server while paused: 1 !== 0". Removing `paused` from the shared check again: the same failure. |
+| 2 | Yes. With the old code the tokenised `fetch('/charge')` from "Continue" reached the stand-in on a checkout flow. | Structural (session.ts, what may send): a non-GET request leaves only while a declared step acts, and only to where it accounts for: its `sends` (new, validated, never a pay address) and, outside a checkout flow, the form its own submit button posts to (a sign-in's submit always). After the checkout stop, no non-GET at all. GETs to pay addresses refused. A stopped browser fails every request. The lists grew (`/charge`, order submissions, `POST /orders`, non-English pay words) and stay a signal. | `tests/ui/m10b-paysends.test.ts`: seven hostile stand-in pages, each on a checkout flow and on a plain plan (14 runs): `fetch()` of a token to `/charge` (and `/x/commit`) from "Continue", "Complete" posting to `/api/orders`, "Pagar ahora" posting to `/procesar`, GETs to `/charge?…` and `/payments/execute?…` from script, `navigator.sendBeacon`, a form that submits itself on load, and a link dressed as a button to `/pay?…`. **The stand-in's server log shows none of them.** After the itemised-total stop, a script's fetch, beacon and form submit are all refused. | Before the fix: "continue-charge (checkout): refused, and said so: done". With the fix in place, removing the rule for sends outside any step: "autosubmit (checkout): …" reached `/api/commit`; removing the checkout lock: the after-stop test found no refusal. |
+| 3 | Yes (the probe: `127.1:4318`, `2130706433:4318`, `0x7f000001:4318` accepted). | Every declared host goes through the WHATWG URL parser first and is kept in that form; the this-machine and hub-port checks see what Chromium sees. | `tests/core/browser-m10b.test.ts`: decimal, hex, octal, short, IPv4-mapped IPv6 and upper-case spellings of loopback at a hub port are refused; without a port, "name the port"; stored canonical. | Both new unit tests failed before the change. |
+| 4 | Yes: 72,491 pure-red pixels in Nova's screenshot from a page painting the typed value onto a canvas, CSS content and a closed shadow root. | After a sign-in, Nova measures, before and after the capture, every region that could show a value (the fields; canvas, video, images, frames, SVG, objects; shadow hosts, closed ones through CDP's pierced DOM; custom elements; generated content; data backgrounds) and paints over them in the PNG itself, in its own process (a small PNG codec on `node:zlib`), where the page can't undo it. Too many, or a measurement that fails, covers the whole picture. The vision fallback's picture goes the same way. | `tests/ui/m10b-mask.test.ts` decodes Nova's screenshot: no pure-red pixel; covered region by region (more than the canvas, less than a third of the picture). | Before the fix: 72,491 red pixels. With the cover removed again: "no pure-red pixel …" failed. |
+| 5 | Yes: plain http was refused only to hosts counted remote, so private, CGNAT and link-local addresses got a sign-in. | A sign-in goes over https, or plain http to loopback only (127/8, ::1, localhost: it never leaves the machine). Pages that aren't http(s) are refused. A link-local address (169.254.0.0/16, fe80::/10, any spelling) is never a declared host. | `tests/core/browser-m10b.test.ts` (both rules); the live host tests below. | The new unit tests failed before (the function didn't exist). |
+| 6 | Live tests for what the reviewer checked by reading. Two failed and were fixed: **Forget** left local storage and IndexedDB (cookies went), and a **field swapped as it took focus** got the value. | Forget now also clears by storage key, through the DOMStorage and IndexedDB domains, and from inside the origin (opened in Nova's profile, answered locally by CDP so nothing reaches the site) with the web's own APIs. The sign-in function checks, before and after focus, that the field is still the one the plan names, shown, on the right host; Nova's page runs with focus emulation so focus handlers fire as in a real window. Every ledger note of a running task now passes its redactor. | `tests/ui/m10b-hostile-login.test.ts` (read-back and exfiltration; host A never filled on B; cross-origin frame; swapped field) and `tests/ui/m10b-hostile-page.test.ts` (hidden and changing text; Forget; downloads and File System Access; Stop; schemes). | Forget: "cookie=no local=yes idb=yes" before the fix. Swap: `done` before. With the fix in place, removing the swap check: the swap test failed; removing the in-origin clearing: "all three gone" failed. Removing the rule that fails every request once stopped did **not** fail the Stop test (the browser closes fast enough without it): that rule is kept as defence in depth, and no test proves it. |
+| 7 | — | This document, the LEDGER and the known limits. | — | — |
+
+### Item 6 in detail
+
+- **Read-back and exfiltration** (`/exfil`): the page reads what Nova set through the value, input,
+  change and keyup listeners, a MutationObserver and polling; copies it into the title, the
+  address (`replaceState`) and the text; sends it to another host by image, `fetch` and beacon;
+  beacons it to itself; and serialises the form to itself on submit. The other host's log is
+  empty; the page's own non-GET sends are refused (`send_refused`); a byte search of every file
+  Nova wrote, its events, report and output finds neither value. What the page does with a value
+  on its own site by GET is the site's: it is the site the sign-in belongs to.
+- **Host A only:** with a sign-in saved for `localhost:<port>`, nothing is typed on another port, on
+  `sub.localhost`, on a Unicode lookalike (read as its punycode), after the page sends itself to
+  `about:blank` or a `blob:` page, on a page that opens a popup, or into a login form in a
+  cross-origin frame. A page that tries to open a `data:` page stays on A (Chromium refuses a
+  page's own top-level navigation to `data:`), and any sign-in there is A's own. Neither stand-in
+  got a sign-in it shouldn't.
+- **Hidden and changing text:** instructions in an accessible name, `alt` and `title`, hidden and
+  off-screen elements, CSS-generated content and `noscript`, and a paragraph that flips to an
+  instruction every 15 ms: every co-pilot prompt was checked, and none held them; the screen saw
+  them (that is its job).
+- **Forget:** a cookie, local storage and IndexedDB written by the site, kept between tasks, all
+  three gone after Forget.
+- **Downloads and File System Access:** a download link, a blob download and
+  `showSaveFilePicker` write nothing anywhere in the test machine's folder; the save is refused.
+- **Stop:** on a page that requests every 50 ms, nothing lands at the site 250 ms after the stop;
+  the browser is closed and the task cancelled.
+- **Schemes:** `file:`, `chrome:`, `devtools:` and `view-source:` are refused in a plan (400); a page
+  that frames `chrome:` and `devtools:` pages, opens `chrome://settings` and sends itself to
+  `file:` stays on its own http page.
+
 ## Gate items
 
 ### 1. A login runs from the vault, with nothing in transcripts, logs or evidence
@@ -81,13 +128,14 @@ with a stand-in local sorting model assigned, so the co-pilot and the screen run
   `/login`.
 - **The search** for the fake username and password, byte for byte (UTF-8 and UTF-16):
   - every file under the test's machine folder: Nova's home (its database and write-ahead log, the
-    vault, `logs/`, `sessions/`, `workers/browser/<task>/` with the screenshot, `final-read.json`,
-    `reads.json`, `steps.json`, and the whole browser profile) and the user's own folder;
+    vault, `logs/`, `sessions/`, `workers/browser/<task>/` with `final-read.json`, `reads.json`,
+    `steps.json`, and the whole browser profile) and the user's own folder;
   - the server's stdout and stderr;
   - the task and its report, its 18 events, the sites list and the log over the API;
   - every request the stand-in local model got (9 in the first task: co-pilot and screen).
 
-  **None holds either.** The reads say `Welcome back, [redacted].`
+  **None holds either.** The reads say `Welcome back, [redacted].` A byte search can't see pixels:
+  it proves nothing about the screenshot, which is tested on its own (review item 4, below).
 - **Kept per site:** a second task opens `/account` with no login step, reads "Signed in", and the
   stand-in still counts one sign-in (verified by Nova's own read of `/signins`: "Signed in: 1").
 - **Forget:** refused without `confirm` (400). With it, the site's cookies leave the profile
@@ -138,14 +186,17 @@ Nothing was paid." Event `total_mismatch`. No `/pay`.
   runs. Done; summary "Stopped at the checkout: 2 lines, total $12.50, as quoted. Paying is yours:
   Nova never presses pay." `checkout.json`: lines 900 and 350 cents, total and sum 1250, quoted
   1250, `pay_pressed: false`. Event `checkout_reached`.
-- **The pay control, refused three ways:**
-  1. the plan validator: a click on the checkout's `pay` selector, a click on `#pay`, and a click on
-     the a11y target "Pay $12.50" are each refused at delegation (400);
-  2. at the click: `main form button` (nothing in the selector says pay) fails before clicking:
-     "it is a pay control (it says “Pay $12.50”)… It never presses pay"; event `pay_refused`;
-  3. in the browser: on `/trap`, "Continue" looks harmless and its script submits the pay form; the
-     POST is refused in the browser (`pay_refused`, "A request that would pay was refused in the
-     browser").
+- **The pay control is refused structurally** (since the review, item 2): while Nova drives,
+  nothing that isn't a GET leaves the browser unless the step acting accounts for it, after the
+  checkout stop nothing that isn't a GET leaves at all, and GETs to pay addresses are refused. The
+  word and path lists are an extra signal on top:
+  1. the plan validator refuses a click on the checkout's `pay` selector, on `#pay`, and on the
+     a11y target "Pay $12.50" (400);
+  2. at the click, `main form button` fails before clicking: "it is a pay control (it says “Pay
+     $12.50”)…"; event `pay_refused`;
+  3. in the browser, `/trap`'s harmless-looking "Continue", whose script submits the pay form: the
+     POST is refused (`pay_refused`).
+  The seven hostile variants of review item 2 are below.
 - **The stand-in shop's server log has no request to `/pay`** after all of it.
 - A site template is refused the same way (`tests/core/browser-m10b-flows.test.ts`): a template
   whose steps click `#pay` passes its own dry runs (they check the rule, not the steps), is
@@ -213,6 +264,26 @@ the log never printed).
 
 ## Gaps, written down
 
+Since the review:
+- **A page always has the values it is given.** A sign-in page can read what Nova sets and do
+  anything with it on its own site (a GET to itself included): that is the site the sign-in is
+  for. Nova keeps it from other hosts, from non-GET sends no step accounts for, and from
+  everything Nova writes.
+- **The screenshot cover is measured, not proven.** Regions are measured just before and after the
+  capture; a page that paints a value somewhere no rule names (a plain element's background, a
+  favicon) is not covered. The person's live view (the screencast) is not covered: it is theirs,
+  and never stored.
+- **The send guard trusts a step's own form** outside checkout flows: a declared click on a
+  submit button may send to that button's form. On checkout flows only declared `sends` count. A
+  site that sends by script on a click needs `sends` in the plan.
+- **GETs that pay at an address no list names** are not stopped: only non-GET sends are refused
+  structurally.
+- **Plain http to loopback** carries a sign-in (it never leaves the machine).
+- **A page can stall Nova's calls** (an endless loop in its own script): the call times out after
+  30 s and the task fails, safely.
+- `data:` top-level navigation is refused by Chromium, not by Nova.
+
+Before the review:
 - No vision model ships; the fallback is tested with a stand-in locator.
 - The co-pilot is tested with a stand-in local model that answers fixed probabilities, not a real
   model.
