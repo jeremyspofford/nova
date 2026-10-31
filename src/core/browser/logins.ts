@@ -30,6 +30,19 @@ export function loginHost(name: string): string | null {
   return m[1]!.replace(/_(\d{1,5})$/, ':$1');
 }
 
+// Why a saved sign-in may not be sent from this page, or null (review of PR #238, 5). Only an http(s)
+// web page; plain http only to this machine itself (loopback never leaves it). A private, CGNAT,
+// link-local or mesh address is still a network: https or nothing.
+export function loginRefusal(pageUrl: string): string | null {
+  let u: URL;
+  try { u = new URL(pageUrl); } catch { return 'This page isn’t a web page Nova signs in to.'; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return `This page (${u.protocol}) isn’t a web page Nova signs in to.`;
+  if (u.protocol === 'https:') return null;
+  const h = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const loopback = h === 'localhost' || h.endsWith('.localhost') || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h) || h === '::1';
+  return loopback ? null : `${u.host} is plain http: Nova never sends a saved sign-in over plain http, except to this machine itself.`;
+}
+
 // Every value a session used, masked wherever it appears in what Nova writes. Values shorter than
 // three characters aren't masked: they'd mask ordinary words.
 export class Redactor {

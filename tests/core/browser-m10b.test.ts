@@ -191,6 +191,19 @@ test('review 5: a link-local address is never a declared host', () => {
   }
 });
 
+test('review 5: a saved sign-in never goes over plain http, except to this machine itself', async () => {
+  const { loginRefusal } = await import('../../src/core/browser/logins.ts');
+  for (const u of ['http://10.0.0.5/login', 'http://192.168.1.5:8080/login', 'http://172.16.0.9/', 'http://169.254.169.254/', 'http://100.100.100.200/', 'http://[fe80::1]/', 'http://[fd00::1]/', 'http://shop.example.test/', 'http://8.8.8.8/', 'http://router.local/']) {
+    assert.match(loginRefusal(u) ?? '', /plain http/, u);
+  }
+  for (const u of ['https://shop.example.test/login', 'https://10.0.0.5/', 'http://127.0.0.1:5000/login', 'http://localhost:5000/', 'http://[::1]:5000/', 'http://sub.localhost:5000/']) {
+    assert.equal(loginRefusal(u), null, u);
+  }
+  for (const u of ['about:blank', 'data:text/html,x', 'blob:http://127.0.0.1:5000/abc', 'file:///etc/passwd', 'chrome://settings']) {
+    assert.match(loginRefusal(u) ?? '', /isn’t a web page/, u);
+  }
+});
+
 // ---- review of PR #238, 2: where a step sends, and the lists as an extra signal -------------------
 
 test('review 2: a step names where it sends; a pay address there is refused; the lists know more ways to pay', async () => {

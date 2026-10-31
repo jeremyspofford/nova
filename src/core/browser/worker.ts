@@ -31,7 +31,7 @@ import {
 } from './copilot.ts';
 import { CHECKOUT_READ, CLICK, ELEMENT_FACTS, FILL, MASK, PAGE_FACTS, SECRET, SELECT, type ElementFacts, type PageFacts } from './facts.ts';
 import { FLOW_PREFIX, FLOW_RULE, dryRuns, flowDef, flowTemplateId, markerOf, stepsOf, type LearntStep } from './flows.ts';
-import { LOGIN_PREFIX, Redactor, loginHost, loginName, siteHost } from './logins.ts';
+import { LOGIN_PREFIX, Redactor, loginHost, loginName, loginRefusal, siteHost } from './logins.ts';
 import { profileDir } from './profile.ts';
 
 export const BROWSER_WORKER = 'browser';
@@ -540,8 +540,9 @@ export class Browser extends EventEmitter {
     const { s, red } = run;
     const w = this.#wired();
     let url: URL;
+    const refusal = loginRefusal(s.url);
+    if (refusal) throw new Stop(refusal);
     try { url = new URL(s.url); } catch { throw new Stop('The browser isn’t on a page to sign in to.'); }
-    if (url.protocol !== 'https:' && hostEgress(url.host) === 'remote') throw new Stop(`${url.host} isn’t on https: Nova never sends a saved sign-in over plain http to another machine.`);
     let site: string;
     try { site = siteHost(url.host); } catch { throw new Stop('Nova can’t tell which site this page is.'); }
     const user = w.vault.get(loginName(site, 'username'));
