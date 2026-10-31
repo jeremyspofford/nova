@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #266 · Pairing a phone no longer fails now and then for no reason**
+- What changed: the browser engine behind every iPhone (WebKit) sometimes refuses a security key it has just made. Nova's pairing page took that as "this browser can't pair". Now it quietly makes another key of the same strength and carries on. A browser that really can't make these keys is still told so plainly.
+- What you can now do: pair a phone without the occasional unexplained failure. It was also the cause of a pairing test that failed every so often.
+- Still unfinished: whether a real iPhone ever does this is unknown; Apple's WebKit uses a different crypto engine from the test browser.
+
 **2026-10-31 · #258 · The safety screen now asks Nova's decision service, and checks every part of a long page**
 - What changed: Nova's screen for outside content (pages, mail, files, tool output) now asks the new decision service. It checks every part of a long document, not a sample, and the parts overlap, so a trick split across a boundary is still seen. Every decision is recorded, without the content.
 - What you can now do: in Settings › Models › Decision model, you can choose Jev (TypeSafe's cloud model) or a Tev1 size, and see each model's test results before you switch. Two separate switches let Jev screen outside content (Screening) or images (Box, a preview) even in local modes. Both are off, and each says plainly what leaves your machine. Health shows how outside content is being screened.
@@ -315,6 +320,34 @@ built-ins only.
   - the route, Era 2's counts, and the Health "Download diagnostics" link (NOTES §1–3, a Track 1 follow-up);
   - the integrity scrub, which is Track 1's Health work.
 - **Limits:** a raw secret Nova never stored and not shaped like one can't be recognised. Hostnames and names the person gave stay in the bundle.
+
+**2026-10-31 (the flaky WebKit pairing test, M4a).** Branch `fix/webkit-pairing-flake`. The UI
+gate's "M4a in WebKit" test timed out waiting for the join screen three times in a day (main run
+41205581247; both runs of PR #257), after 40 clean runs.
+- **Root cause, an app defect:** WebKit sometimes turns down a key it has just made.
+  `crypto.subtle.generateKey` throws `OperationError` for about one Ed25519 key in 150 and one
+  X25519 key in 500 in Playwright's WebKit; the rate was the same at full speed and on half a CPU,
+  so it is per key, not timing. `/pair`'s check that the browser can pair took any error as "This
+  browser can't pair" and stopped there, with no form, so the test waited for `#join` until it
+  timed out. A test run makes six keys, so roughly one run in 20 to 35 failed. When the device's
+  own key was the one refused, the page said "That didn't work" instead. The failure comes before
+  any signed time, so the logged pairing-clock defect is not involved. Whether a real iPhone's
+  WebKit does this too is not known.
+- **Fix:** `ui/js/device-key.js` makes each key through one helper that tries again on
+  `OperationError`, up to five times. Each try is a new key of the same kind, never a weaker one.
+  Any other error, such as `NotSupportedError`, is final, so a browser with no Ed25519 is still
+  told plainly.
+- **A second, smaller race in the same test:** it chose the mesh port from the ephemeral range,
+  where the hub's own port-0 listener can be handed the same port first (`EADDRINUSE`, 1 run in
+  100). It now uses the shared `freePort`, which picks below that range.
+- **Gate:** two new tests in `tests/ui/m4a-webkit-pair.test.ts`. In one, a browser fails every
+  first try at a key and still pairs to Home; it failed first, with CI's timeout. In the other, a
+  browser with no Ed25519 still sees "This browser can't pair".
+- **Evidence:**
+  - The real test file, run 100 times (four in parallel): 3 failures before (two `#join`
+    timeouts matching CI, and one `EADDRINUSE`), none after.
+  - The same flow 150 times in one container on one CPU: 8 failures before, every one a refused
+    key, and none after.
 
 **2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
 - **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
