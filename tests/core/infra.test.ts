@@ -253,11 +253,11 @@ test('M10d budget: prices by attribute, deltas for create, update, replace and d
     { address: 'data.standin_zone.z', type: 'standin_zone', name: 'z', mode: 'data', change: { actions: ['read'] } },
   ] }));
   assert.deepEqual(changes.map((c) => c.action), ['create', 'update', 'replace', 'delete']);
-  const p = priceChanges(changes, sheet, new Map([['standin_server.d', 4000]]));
+  const p = priceChanges(changes, sheet);
   assert.deepEqual(p.lines.map((l) => l.delta_cents), [4000, 3500, -3500, -4000]);
   assert.equal(p.delta_cents, 0);
   assert.deepEqual(p.unpriced, []);
-  assert.deepEqual(priceChanges(parsePlan(JSON.stringify({ resource_changes: [{ address: 'standin_server.x', type: 'standin_server', name: 'x', change: { actions: ['create'], after: { size: 'huge' } } }] })), sheet, new Map()).unpriced, ['standin_server.x (standin_server)']);
+  assert.deepEqual(priceChanges(parsePlan(JSON.stringify({ resource_changes: [{ address: 'standin_server.x', type: 'standin_server', name: 'x', change: { actions: ['create'], after: { size: 'huge' } } }] })), sheet).unpriced, ['standin_server.x (standin_server)']);
   assert.equal(verdict(0, 500, 2000).level, 'ok');
   assert.equal(verdict(1500, 100, 2000).level, 'warn');
   assert.equal(verdict(1500, 600, 2000).blocks, true);

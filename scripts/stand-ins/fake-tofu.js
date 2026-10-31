@@ -51,6 +51,13 @@ const credential = () => {
   return t;
 };
 
+// The stand-in provider's schema marks an attribute sensitive by its name, as a real provider's
+// schema marks a password: `tofu show` prints "(sensitive value)", and the JSON carries
+// before_sensitive / after_sensitive / sensitive_values beside the values, as OpenTofu's does.
+const SENSITIVE = /password|secret|token|private_key/i;
+const sensitiveOf = (attrs) => (attrs ? Object.fromEntries(Object.keys(attrs).filter((k) => SENSITIVE.test(k)).map((k) => [k, true])) : false);
+const shown = (k, v) => (SENSITIVE.test(k) ? '(sensitive value)' : JSON.stringify(v));
+
 const show = (changes) => {
   const word = { create: '+ create', update: '~ update in-place', delete: '- destroy' };
   const lines = ['OpenTofu used the selected providers to generate the following execution plan.', ''];
@@ -59,7 +66,7 @@ const show = (changes) => {
     lines.push(`  # ${c.address} will be ${a === 'create' ? 'created' : a === 'delete' ? 'destroyed' : 'updated in-place'}`);
     lines.push(`  ${word[a]} "${c.type}" "${c.name}" {`);
     const after = c.change.after ?? c.change.before ?? {};
-    for (const [k, v] of Object.entries(after)) lines.push(`      ${k} = ${JSON.stringify(v)}`);
+    for (const [k, v] of Object.entries(after)) lines.push(`      ${k} = ${shown(k, v)}`);
     lines.push('    }', '');
   }
   const n = (a) => changes.filter((c) => c.change.actions[0] === a).length;
@@ -95,7 +102,16 @@ switch (cmd) {
       const names = new Set(want.map((w) => w.address));
       for (const r of s.resources) if (!names.has(`${r.type}.${r.name}`)) changes.push({ address: `${r.type}.${r.name}`, mode: 'managed', type: r.type, name: r.name, change: { actions: ['delete'], before: r.instances[0].attributes, after: null } });
     }
-    const plan = { format: 'fake-tofu-plan', lineage: s.lineage, serial: s.serial, resource_changes: changes };
+    for (const c of changes) { c.change.before_sensitive = sensitiveOf(c.change.before); c.change.after_sensitive = sensitiveOf(c.change.after); }
+    // What exists after the apply, every resource (OpenTofu's planned_values), and before it (prior_state).
+    const after = new Map(s.resources.map((r) => [`${r.type}.${r.name}`, { type: r.type, name: r.name, values: r.instances[0].attributes }]));
+    for (const c of changes) {
+      if (c.change.actions[0] === 'delete') after.delete(c.address);
+      else after.set(c.address, { type: c.type, name: c.name, values: c.change.after });
+    }
+    const mod = (list) => ({ root_module: { resources: [...list].map(([address, r]) => ({ address, mode: 'managed', type: r.type, name: r.name, values: r.values, sensitive_values: sensitiveOf(r.values) || {} })) } });
+    const prior = new Map(s.resources.map((r) => [`${r.type}.${r.name}`, { type: r.type, name: r.name, values: r.instances[0].attributes }]));
+    const plan = { format: 'fake-tofu-plan', lineage: s.lineage, serial: s.serial, resource_changes: changes, planned_values: mod(after), prior_state: { values: mod(prior) } };
     writeFileSync(planFile, JSON.stringify(plan));
     out(show(changes));
     process.exit(flag('-detailed-exitcode') && changes.length ? 2 : 0);
@@ -111,7 +127,7 @@ switch (cmd) {
     }
     const plan = readJson(files[0], null);
     if (!plan || plan.format !== 'fake-tofu-plan') fail(`${files[0]} isn't a saved plan.`);
-    if (flag('-json')) out(JSON.stringify({ format_version: '1.2', resource_changes: plan.resource_changes }));
+    if (flag('-json')) out(JSON.stringify({ format_version: '1.2', resource_changes: plan.resource_changes, planned_values: plan.planned_values, prior_state: plan.prior_state }));
     else out(show(plan.resource_changes));
     break;
   }

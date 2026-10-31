@@ -10,8 +10,8 @@
 // Built on what exists: the ledger's tiers, privacy gate, commit points and recovery; checkpoints;
 // the vault (provider secrets, handed to the tool's process only); log problems and the trigger
 // engine's messages for alerts; runLines and children.ts for every process.
-import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { createCipheriv, createHash, randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
@@ -20,8 +20,8 @@ import { checkFolder } from '../computer/policy.ts';
 import { addSecretValue } from '../log.ts';
 import { tail } from '../providers/cli.ts';
 import { Redactor } from '../browser/logins.ts';
-import { openTofu, toolEnv, type PlanApplyTool, type ResourceChange, type ToolContext } from './tool.ts';
-import { priceChanges, usd, validateBudget, validatePrices, verdict, type Level, type PriceSheet, type PricedChange, type Verdict } from './budget.ts';
+import { openTofu, toolEnv, type PlanApplyTool, type PlanData, type ToolContext } from './tool.ts';
+import { priceChanges, priceState, usd, validateBudget, validatePrices, verdict, type Level, type PriceSheet, type PricedChange, type Verdict } from './budget.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
@@ -33,9 +33,9 @@ export const INFRA_WORKER = 'infra';
 export const CONFIRMATION_SYSTEM = 'nova-infra';
 export const STEPS = ['plan', 'apply'] as const;
 export type Step = (typeof STEPS)[number];
-export const RUN_STATES = ['planning', 'review', 'applying', 'applied', 'nothing', 'over_budget', 'unpriced', 'failed', 'declined', 'cancelled'] as const;
+export const RUN_STATES = ['planning', 'review', 'applying', 'applied', 'nothing', 'over_budget', 'unpriced', 'too_large', 'failed', 'declined', 'cancelled'] as const;
 export type RunState = (typeof RUN_STATES)[number];
-const ENDED: readonly RunState[] = ['applied', 'nothing', 'over_budget', 'unpriced', 'failed', 'declined', 'cancelled'];
+const ENDED: readonly RunState[] = ['applied', 'nothing', 'over_budget', 'unpriced', 'too_large', 'failed', 'declined', 'cancelled'];
 const OPEN: readonly RunState[] = ['planning', 'review', 'applying'];
 const TIER: Record<Step, Tier> = { plan: 1, apply: 3 };
 const PLAN_FILE = 'plan.tfplan';
@@ -52,7 +52,10 @@ interface RunRow {
 }
 interface ResourceRow { project_id: string; address: string; type: string; monthly_cents: number; run_id: string; created_at: string; updated_at: string }
 interface TaskRef { step: Step; id: string }
-interface Changes { resources: ResourceChange[]; priced: PricedChange[]; unpriced: string[] }
+// What a run's record keeps of the plan: each change's address, type, action and price, never a
+// resource's values (review of PR #241, S6). `now`/`after`: the month before and after, priced from
+// the plan's whole before and after (B2).
+interface Changes { priced: PricedChange[]; unpriced: string[]; now_cents: number; after_cents: number; increases: boolean; too_large?: boolean; prior_unpriced?: string[] }
 type Reporter = (status: Report['status'], summary: string, more?: Partial<Report>) => Report;
 
 export interface InfraOptions {
@@ -247,7 +250,7 @@ export class Infra {
       title: step === 'plan' ? `Plan: ${r.title}` : `Apply: ${r.title}`,
       owner: INFRA_WORKER,
       goal: step === 'plan'
-        ? `Run ${this.tool.name}’s plan for “${p.name}” (${p.folder})${r.destroy ? ', destroying everything in it' : ''}, and price it against the project’s budget. Nothing is changed.`
+        ? `Run ${this.tool.name}’s plan for “${p.name}” (${p.folder})${r.destroy ? ', destroying everything in it' : ''}, and price it against the project’s budget. It changes no infrastructure, but OpenTofu runs the project’s providers and data sources, which reach their services and can run programs the configuration names (data "external").`
         : `Apply the reviewed plan for “${p.name}” (sha256 ${String(r.plan_sha).slice(0, 12)}…): ${signed(r.delta_cents ?? 0)} a month, ${v?.words ?? ''}. Nova takes a checkpoint first.`,
       origin, evidence_required: [{ kind: 'confirmation', note: step === 'plan' ? 'the saved plan, as Nova recorded it' : 'Nova reads the tool’s state back' }],
       privacy_mode: r.privacy_mode, approval_tier: TIER[step],
@@ -288,6 +291,11 @@ export class Infra {
         const ch = parse<Changes>(r.changes);
         const v = parse<Verdict>(r.verdict);
         if (!ch || !v) return;
+        if (ch.too_large) {
+          this.#set(r.id, { state: 'too_large', reason: `The plan for “${p.name}” is too large to show in full (over ${MAX_PLAN_TEXT / 1024 / 1024} MB of text), so Nova won’t offer it for apply: nobody could review it. Split the change into smaller ones.` });
+          this.#drop(r.id);
+          return;
+        }
         if (!ch.priced.length) {
           this.#set(r.id, { state: 'nothing', reason: `No changes: “${p.name}” already matches its configuration.` });
           this.#drop(r.id);
@@ -418,6 +426,19 @@ export class Infra {
     }
   }
 
+  // The month, priced from the plan's whole before and after (every resource, recorded by Nova or not:
+  // review of PR #241, B2), and each change's own price for the review.
+  #price(p: ProjectRow, shown: PlanData): Changes {
+    const sheet = parse<PriceSheet>(p.prices)!;
+    const lines = priceChanges(shown.changes, sheet);
+    const now = priceState(shown.prior, sheet);
+    const after = priceState(shown.planned, sheet);
+    return {
+      priced: lines.lines, unpriced: [...new Set([...lines.unpriced, ...after.unpriced])], now_cents: now.cents, after_cents: after.cents,
+      increases: lines.lines.some((l) => l.delta_cents > 0), ...(now.unpriced.length ? { prior_unpriced: now.unpriced } : {}),
+    };
+  }
+
   async #plan(r: RunRow, p: ProjectRow, c: ToolContext, report: Reporter): Promise<Report> {
     const dir = this.#runDir(r.id);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -429,15 +450,14 @@ export class Infra {
     chmodSync(file, 0o600);
     const shown = await this.tool.showPlan(c, file);
     const sha = sha256File(file);
-    const current = new Map(this.#resources(p.id).map((x) => [x.address, x.monthly_cents]));
-    const priced = priceChanges(shown.changes, parse<PriceSheet>(p.prices)!, current);
-    const v = verdict(this.#total(p.id), priced.delta_cents, p.budget_cents);
-    const text = shown.text.length > MAX_PLAN_TEXT ? `${shown.text.slice(0, MAX_PLAN_TEXT)}\n… (the plan goes on)\n` : shown.text;
-    const changes: Changes = { resources: shown.changes, priced: priced.lines, unpriced: priced.unpriced };
-    this.#set(r.id, { plan_sha: sha, plan_text: c.red.text(text), changes: JSON.stringify(c.red.value(changes)), delta_cents: priced.delta_cents, verdict: JSON.stringify(v) });
-    const what = priced.lines.length ? this.#counts(priced.lines) : 'no changes';
-    const money = priced.unpriced.length ? `Nova can’t price ${priced.unpriced.join(', ')}.` : `${signed(priced.delta_cents)} a month: ${v.words}.`;
-    return report('done', `${this.tool.name} planned “${p.name}”: ${what}. ${money} Nothing was changed.`, {
+    const ch = this.#price(p, shown);
+    const v = verdict(ch.now_cents, ch.after_cents - ch.now_cents, p.budget_cents, { increases: ch.increases });
+    // Shown in full or not at all: a plan too large to show is never offered (review minor).
+    if (shown.text.length > MAX_PLAN_TEXT) ch.too_large = true;
+    this.#set(r.id, { plan_sha: sha, plan_text: ch.too_large ? null : c.red.text(shown.text), changes: JSON.stringify(ch), delta_cents: ch.after_cents - ch.now_cents, verdict: JSON.stringify(v) });
+    const what = ch.priced.length ? this.#counts(ch.priced) : 'no changes';
+    const money = ch.unpriced.length ? `Nova can’t price ${ch.unpriced.join(', ')}.` : `${signed(ch.after_cents - ch.now_cents)} a month: ${v.words}.`;
+    return report('done', `${this.tool.name} planned “${p.name}”: ${what}. ${money} No infrastructure was changed.`, {
       evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `plan:${r.id}:${sha}` }],
       artifacts: [{ kind: 'infra-plan', ref: `infra:${r.id}`, sha256: sha }],
     });
@@ -448,23 +468,24 @@ export class Infra {
     const file = join(this.#runDir(r.id), PLAN_FILE);
     const want = String(brief.inputs?.plan_sha ?? '');
     if (!r.plan_sha || want !== r.plan_sha || !existsSync(file) || sha256File(file) !== r.plan_sha) return report('failed', 'The saved plan isn’t the one you reviewed any more, so Nova applied nothing.');
-    // The budget again, now: another apply may have run, or the person changed the budget or the
-    // price sheet since the review.
-    const ch = parse<Changes>(r.changes)!;
-    const current = new Map(this.#resources(p.id).map((x) => [x.address, x.monthly_cents]));
-    const priced = priceChanges(ch.resources, parse<PriceSheet>(p.prices)!, current);
-    if (priced.unpriced.length) {
-      this.#alert(`infra:${r.id}:unpriced-at-apply`, `Budget guardrail: Nova can’t price ${priced.unpriced.join(', ')} any more, so it didn’t apply the plan for “${p.name}”.`, brief.task_id);
-      return report('failed', `Nova can’t price ${priced.unpriced.join(', ')} any more, so it applied nothing.`);
+    // The budget again, now, from the saved plan itself with the price sheet as it is now: every
+    // resource after the apply must have a price before anything happens (review of PR #241, S1), so
+    // recording it afterwards can't fail.
+    const shown = await this.tool.showPlan(c, file);
+    const ch = this.#price(p, shown);
+    if (ch.unpriced.length) {
+      this.#alert(`infra:${r.id}:unpriced-at-apply`, `Budget guardrail: Nova can’t price ${ch.unpriced.join(', ')} any more, so it didn’t apply the plan for “${p.name}”.`, brief.task_id);
+      return report('failed', `Nova can’t price ${ch.unpriced.join(', ')} any more, so it applied nothing.`);
     }
-    const v = verdict(this.#total(p.id), priced.delta_cents, p.budget_cents);
+    const v = verdict(ch.now_cents, ch.after_cents - ch.now_cents, p.budget_cents, { increases: ch.increases });
     if (v.blocks) {
       this.#alert(`infra:${r.id}:over-at-apply`, `Budget alert: applying the plan for “${p.name}” now would take it to ${v.words}, over budget. Nova applied nothing.`, brief.task_id);
       return report('failed', `Applying it now would take “${p.name}” to ${v.words}: over budget. Nova applied nothing.`);
     }
+    const prices = priceState(shown.planned, parse<PriceSheet>(p.prices)!).byAddress;
     this.#set(r.id, { state: 'applying' });
-    // The checkpoint first: Nova's home, and a copy of the tool's state as it is now. No checkpoint,
-    // no apply.
+    // The checkpoint first: Nova's home, and a sealed copy of the tool's state as it is now (it holds
+    // the resources' secrets). No checkpoint, no apply.
     let cp: { id: string };
     try { cp = this.#o.checkpoint(`Before applying the infrastructure plan for “${p.name}” (run ${r.id})`); } catch (e) {
       return report('failed', `Nova couldn’t take a checkpoint before the apply, so it applied nothing: ${(e as Error).message}`);
@@ -472,35 +493,47 @@ export class Infra {
     const before = join(p.folder, STATE_FILE);
     let stateSha = 'none: the state isn’t in the project’s folder';
     if (existsSync(before)) {
-      const copy = join(this.#runDir(r.id), 'state-before.tfstate');
-      copyFileSync(before, copy);
-      chmodSync(copy, 0o600);
-      stateSha = sha256File(copy);
+      const data = readFileSync(before);
+      stateSha = createHash('sha256').update(data).digest('hex');
+      this.#seal(p, r, data, join(this.#runDir(r.id), 'state-before.sealed'));
     }
     this.#set(r.id, { checkpoint: cp.id, state_before: stateSha });
     this.#o.ledger.committing(brief.task_id, 'apply the reviewed plan');
     const ran = await this.tool.apply(c, file);
     this.#set(r.id, { apply_out: tail(`${ran.out}\n${ran.err}`.trim(), 60, 8000) });
     if (ran.code !== 0) return report('failed', `${this.tool.name}’s apply failed (exit ${ran.code ?? 'none'}): ${tail(`${ran.err}\n${ran.out}`.trim(), 6, 800)}`);
-    // What exists now, read back from the tool's state: each resource Nova provisioned is recorded
-    // with its monthly price, under the project's budget.
+    // What exists now, read back from the tool's state: every resource in it is recorded with its
+    // monthly price, under the project's budget (whole, not only what this plan changed).
     const state = await this.tool.state(c);
-    const there = new Set(state.map((s) => s.address));
     const at = this.#now().toISOString();
     this.#o.db.tx(() => {
-      for (const l of priced.lines) {
-        if (l.action === 'delete') { this.#o.db.run('DELETE FROM infra_resource WHERE project_id = ? AND address = ?', p.id, l.address); continue; }
-        if (!there.has(l.address)) continue;
-        this.#o.db.run(
-          `INSERT INTO infra_resource (project_id, address, type, monthly_cents, run_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT (project_id, address) DO UPDATE SET type = excluded.type, monthly_cents = excluded.monthly_cents, run_id = excluded.run_id, updated_at = excluded.updated_at`,
-          p.id, l.address, l.type, l.after_cents ?? 0, r.id, at, at,
-        );
+      this.#o.db.run('DELETE FROM infra_resource WHERE project_id = ?', p.id);
+      for (const res of state) {
+        this.#o.db.run('INSERT INTO infra_resource (project_id, address, type, monthly_cents, run_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          p.id, res.address, res.type, prices.get(res.address) ?? 0, r.id, at, at);
       }
     });
-    return report('done', `${this.tool.name} applied the reviewed plan for “${p.name}”: ${this.#counts(priced.lines)}. A checkpoint was taken first (${cp.id}).`, {
-      evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `apply:${r.id}` }],
+    // Nova's own record of what it read back, for the verifier (which reads it, never the tool).
+    const rec = { run: r.id, task_id: brief.task_id, addresses: state.map((x) => x.address).sort(), at };
+    const recFile = join(this.#runDir(r.id), `readback-${brief.task_id}.json`);
+    writeFileSync(`${recFile}.tmp`, JSON.stringify(rec), { mode: 0o600 });
+    renameSync(`${recFile}.tmp`, recFile);
+    this.#set(r.id, { changes: JSON.stringify(ch) });
+    return report('done', `${this.tool.name} applied the reviewed plan for “${p.name}”: ${this.#counts(ch.priced)}. A checkpoint was taken first (${cp.id}).`, {
+      evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `apply:${r.id}:${brief.task_id}` }],
     });
+  }
+
+  // A copy of the tool's state, sealed (AES-256-GCM) with a key of the run's own in the vault.
+  #seal(p: ProjectRow, r: RunRow, data: Buffer, file: string): void {
+    const name = `infra/${p.id}/run/${r.id}`;
+    let k = this.#o.vault.get(name);
+    if (!k) { k = randomBytes(32).toString('base64'); this.#o.vault.put(name, k); }
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', Buffer.from(k, 'base64'), iv);
+    cipher.setAAD(Buffer.from(`nova-infra-state-v1|${r.id}`));
+    const ct = Buffer.concat([cipher.update(data), cipher.final()]);
+    writeFileSync(file, JSON.stringify({ v: 1, iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ct: ct.toString('base64') }), { mode: 0o600 });
   }
 
   // ---- evidence ----------------------------------------------------------------------------------------
@@ -519,15 +552,16 @@ export class Infra {
         return { ok: true, why: `Nova read its saved plan itself: sha256 ${actual.slice(0, 12)}…, as recorded.` };
       }
       if (what === 'apply') {
-        const p = this.#project(r.project_id);
-        const c = this.#context(p);
-        const state = this.tool.stateSync(c);
-        const there = new Set(state.map((s) => s.address));
+        if (!ref || ref !== brief.task_id || !/^[0-9a-f-]{36}$/.test(ref)) return { ok: false, why: 'That read-back is for another task.' };
+        let rec: { run: string; task_id: string; addresses: string[] } | null = null;
+        try { rec = JSON.parse(readFileSync(join(this.#runDir(r.id), `readback-${ref}.json`), 'utf8')); } catch { /* none */ }
+        if (!rec || rec.run !== r.id || rec.task_id !== brief.task_id) return { ok: false, why: `Nova has no record of reading ${this.tool.name}’s state back for this apply.` };
+        const there = new Set(rec.addresses);
         const lines = parse<Changes>(r.changes)?.priced ?? [];
         const missing = lines.filter((l) => l.action !== 'delete' && !there.has(l.address)).map((l) => l.address);
         const left = lines.filter((l) => l.action === 'delete' && there.has(l.address)).map((l) => l.address);
         if (missing.length || left.length) return { ok: false, why: `Nova read ${this.tool.name}’s state: ${[missing.length ? `${missing.join(', ')} isn’t there` : '', left.length ? `${left.join(', ')} is still there` : ''].filter(Boolean).join('; ')}.` };
-        return { ok: true, why: `Nova read ${this.tool.name}’s state itself: ${plural(lines.length, 'planned change')}, each as planned (${plural(state.length, 'resource')} in the state now).` };
+        return { ok: true, why: `Nova read ${this.tool.name}’s state itself: ${plural(lines.length, 'planned change')}, each as planned (${plural(rec.addresses.length, 'resource')} in the state now).` };
       }
     } catch (err) {
       return { ok: false, why: (err as Error).message };
@@ -564,9 +598,10 @@ export class Infra {
     return {
       ...this.#summary(r), folder: p.folder, plan_sha: r.plan_sha, plan_text: r.plan_text,
       changes: (ch?.priced ?? []).map((l) => ({ address: l.address, type: l.type, action: l.action, monthly_usd_before: l.before_cents === null ? null : l.before_cents / 100, monthly_usd_after: l.after_cents === null ? null : l.after_cents / 100, delta_usd: l.delta_cents / 100 })),
-      unpriced: ch?.unpriced ?? [], delta_usd: r.delta_cents === null ? null : r.delta_cents / 100,
+      unpriced: ch?.unpriced ?? [], delta_usd: r.delta_cents === null ? null : r.delta_cents / 100, too_large: ch?.too_large === true,
       budget: v ? { level: v.level, words: v.words, monthly_usd_now: v.current_cents / 100, monthly_usd_after: v.projected_cents / 100, budget_usd: v.budget_cents / 100 } : null,
       checkpoint: r.checkpoint, state_before: r.state_before, apply_out: r.apply_out,
+      planning: `Planning changes no infrastructure, but ${this.tool.name} runs the project’s providers and data sources: they reach their services, and a data source can run a program the configuration names.`,
       apply: r.plan_sha ? `Applying runs ${this.tool.name}’s apply of exactly this saved plan (sha256 ${r.plan_sha.slice(0, 12)}…) in ${p.folder}, after a checkpoint. It may spend money, or destroy what it lists; it can’t be undone by Nova.` : null,
     };
   }
