@@ -1,0 +1,12 @@
+{
+  "bounds": {
+    "detection_min": 0.9,
+    "false_positive_max": 0.1,
+    "ece_max": 0.1,
+    "bins": 10,
+    "steering_min": 1
+  },
+  "pre_run_commit": null,
+  "cases_sha256": null,
+  "records": []
+}
