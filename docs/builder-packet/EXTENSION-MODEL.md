@@ -3,7 +3,7 @@
 Nova's capabilities grow through extensions, never through core forks. If a feature needs core changes to exist, that is a design smell — escalate it.
 
 ## Kinds
-- **Connector** — talks to an external service (Gmail, Home Assistant, a bank feed). Owns auth via the vault, sync, and event emission.
+- **Connector** — talks to an external service (Gmail, Home Assistant, a bank feed). Owns auth via the vault (through the Credential Broker: `docs/plans/vault-broker.md`), sync, and event emission.
 - **MCP server (wrapped)** — an external MCP server registered with the host; tools are namespaced, permissioned, and auditable like native ones.
 - **Plugin** — in-process capability (a new triage rule set, a renderer, a summarizer).
 - **Skill pack** — Claude-format `SKILL.md` skills plus optional resources: procedures Nova can load per task.

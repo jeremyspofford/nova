@@ -352,6 +352,7 @@ None of those is needed for Nova to work.
 **What exists:**
 - The vault (`vault.ts`): values by `secret://` name, redacted from logs and receipts.
 - Injection at the moment of use: M10b's logins and redactor (`browser/logins.ts`); M10d's tool adapter handing provider secrets to one process (`infra/tool.ts`, PR #241).
+- The Credential Broker design (`docs/plans/vault-broker.md`): kubeconfigs and deploy keys are `process` targets through the broker's launcher once Phase 1 lands.
 
 **What's new:**
 - **One kubeconfig per cluster,** at `secret://clusters/<id>/kubeconfig`, scoped to Nova's own namespaces where the cluster allows it. Full admin rights are used only for the tier-3 bootstrap.
