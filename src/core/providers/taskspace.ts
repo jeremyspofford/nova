@@ -123,6 +123,35 @@ export function fileRefs(brief: Brief): string[] {
 export const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|(^|\/)[^/]*\.(test|spec)\.[^/]+$|(^|\/)[^/]*_test\.[^/]+$|(^|\/)test_[^/]*\.[^/]+$|(^|\/)conftest\.py$/;
 // Settings that decide what a test run checks.
 const TEST_CONFIG = /(^|\/)(jest|vitest|playwright|karma|cypress|ava)\.config\.[^/]+$|(^|\/)\.mocharc(\.[^/]+)?$|(^|\/)(pytest\.ini|tox\.ini)$/;
+
+// Files that decide how a test command runs, though they are neither tests nor named by the command
+// (the review of PR #239, item 3: a `.npmrc` with `script-shell=/bin/true` makes `npm test` pass
+// without running anything). As a class, by name:
+//  - anything hidden (a part of the path starting with "."): .npmrc, .yarnrc*, .babelrc, .env,
+//    .mocharc, .github, .husky and every other tool's dotfile or dot folder;
+//  - packages' manifests, lockfiles and workspaces, build files and toolchain settings;
+//  - any `*.config.*`, `*.conf.*` or `*.setup.*` file, and test runner names a bare `node --test`,
+//    pytest or go test would pick up (test-*, *-test.*, test.*, *_test.*), and dependency folders.
+const RUNS_TESTS_NAMES = new Set([
+  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'bun.lock', 'bun.lockb', 'bunfig.toml',
+  'deno.json', 'deno.jsonc', 'deno.lock', 'node.config.json', 'jsconfig.json', 'turbo.json', 'nx.json', 'lerna.json', 'angular.json', 'nodemon.json',
+  'makefile', 'gnumakefile', 'justfile', 'taskfile.yml', 'taskfile.yaml', 'rakefile', 'gruntfile.js', 'gulpfile.js', 'cmakelists.txt', 'meson.build', 'build.ninja',
+  'pyproject.toml', 'setup.py', 'setup.cfg', 'tox.ini', 'pytest.ini', 'noxfile.py', 'conftest.py', 'pipfile', 'pipfile.lock', 'poetry.lock', 'uv.lock', 'manage.py',
+  'cargo.toml', 'cargo.lock', 'build.rs', 'go.mod', 'go.sum', 'go.work', 'gemfile', 'gemfile.lock', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts', 'gradlew', 'mvnw',
+  'dockerfile', 'containerfile', 'docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml', 'flake.nix', 'shell.nix', 'default.nix',
+]);
+const RUNS_TESTS_DIRS = new Set(['node_modules', 'vendor', '__pycache__', 'site-packages', 'bower_components', 'jspm_packages']);
+export function runsTests(path: string): boolean {
+  const parts = path.replace(/^workspace:/, '').split('/');
+  const base = (parts.at(-1) ?? '').toLowerCase();
+  if (parts.some((x) => x.startsWith('.') && x !== '.' && x !== '..')) return true;
+  if (parts.slice(0, -1).some((x) => RUNS_TESTS_DIRS.has(x.toLowerCase()))) return true;
+  if (RUNS_TESTS_NAMES.has(base)) return true;
+  if (/^tsconfig.*\.json$/.test(base) || /^requirements.*\.txt$/.test(base) || /^dockerfile\./.test(base)) return true;
+  if (/\.(config|conf|setup)\.[^.]+$/.test(base) || /^(webpack|rollup|esbuild|babel|vite|vitest|jest|karma|playwright|cypress|eslint|prettier|tailwind|postcss)\b/.test(base)) return true;
+  if (/^test([-_.]|$)/.test(base) || /[-_.](test|spec)s?\.[^.]+$/.test(base) || /_test\.go$/.test(base)) return true;
+  return false;
+}
 // A program in the test command, and the files that tell it what to run.
 const RUNNER_FILES: [RegExp, RegExp][] = [
   [/^(npm|npx|pnpm|yarn|bun|node)$/, /(^|\/)package\.json$/],
@@ -193,12 +222,12 @@ export function scopeOf(refs: string[], inputs: Record<string, unknown> | undefi
   const globs = explicit?.map(globRe) ?? null;
   const editable = globs
     ? (p: string) => globs.some((g) => g.test(p))
-    : (p: string) => inRefs(p) && !TEST_FILE.test(p) && !TEST_CONFIG.test(p) && !named.has(p);
+    : (p: string) => inRefs(p) && !TEST_FILE.test(p) && !TEST_CONFIG.test(p) && !runsTests(p) && !named.has(p);
   const list = (xs: string[]) => xs.slice(0, 20).join(', ') + (xs.length > 20 ? `, and ${xs.length - 20} more` : '');
   const kept = [...named].filter((p) => files.includes(p) || (p.includes('/') && !p.startsWith('-')));
   const words_ = explicit
     ? `You may change only these: ${list(explicit)}. Nova refuses the work if anything else changes.`
-    : `You may change the files you were given, but not the tests or their settings${kept.length ? ` (nor ${list(kept)})` : ''}. Nova refuses the work if any of those change.`;
+    : `You may change the files you were given, but not the tests, the test runner’s settings (package.json, lockfiles, any hidden file such as .npmrc, *.config.* files, tsconfig, build files)${kept.length ? `, nor ${list(kept)}` : ''}. Nova refuses the work if any of those change.`;
   return { refs, explicit, named: kept, inRefs, editable, words: words_ };
 }
 

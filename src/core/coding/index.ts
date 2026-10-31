@@ -11,7 +11,7 @@
 // (Providers.workIn); the task folder's rules on what an agent may change (taskspace.ts); the test
 // runner's environment (checks.ts); children.ts for every process.
 import { randomBytes, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
@@ -20,10 +20,10 @@ import { sha256 } from '../workspace.ts';
 import { checkFolder } from '../computer/policy.ts';
 import { runLines, tail } from '../providers/cli.ts';
 import { testEnv } from '../providers/checks.ts';
-import { editableList, outOfScope, scopeOf } from '../providers/taskspace.ts';
+import { TEST_FILE, editableList, outOfScope, runsTests, scopeOf } from '../providers/taskspace.ts';
 import { Git, OID, checkBranch } from './git.ts';
 import { applyChanges, changes as changesOf, copyWalk, digest, refusals, walk, type Change } from './tree.ts';
-import { alive, freePort, startPreview, stopPreview } from './preview.ts';
+import { alive, freePort, procStart, startPreview, stopPreview, stopRecorded } from './preview.ts';
 import type { ChildProcess } from 'node:child_process';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -46,6 +46,14 @@ const TIER: Record<Step, Tier> = { write: 1, update: 1, check: 2, merge: 3 };
 const MAX_DIFF = 512 * 1024;
 const MAX_GOAL = 4000;
 const MAX_COMMAND = 1000;
+// What an agent may change unless the person said otherwise: source code, markup, styles, documents
+// and images, by extension. Configuration formats (JSON, YAML, TOML, INI) and anything without one
+// need the person's list (`editable`). The review of PR #239, item 3: an allow-list, under the
+// test-protection rules, rather than only a list of what can't change.
+const SOURCE = /\.(m?[jt]sx?|c[jt]s|mts|py|pyi|rb|go|rs|java|kt|kts|scala|swift|c|h|cc|cpp|cxx|hpp|hh|cs|fs|php|pl|pm|lua|r|dart|ex|exs|erl|hrl|hs|clj|cljs|elm|ml|mli|vue|svelte|astro|html?|css|scss|sass|less|md|mdx|markdown|txt|rst|adoc|svg|png|jpe?g|gif|webp|ico|avif|csv|tsv)$/i;
+// Said on the check, wherever it asks: what the person's OK to it means. The review of PR #239: the
+// merge's guarantee is only as strong as this decision.
+export const RUNS_AGENT_CODE = 'This runs code the coding agent wrote, as you: it can do anything you can on this computer, Nova’s own files included. Nova’s later promise, to merge only exactly what you reviewed, is only as strong as this OK.';
 
 interface RunRow {
   id: string; title: string; goal: string; repo: string; branch: string; agent: string; test_command: string; preview_command: string | null;
@@ -55,7 +63,7 @@ interface RunRow {
 }
 export interface FileChange { path: string; kind: Change['kind']; added: number | null; removed: number | null }
 export interface TestRecord { id: string; task_id: string; run_id: string; round: number; command: string; commit: string; passed: boolean; exit: number | null; output: string; ms: number; at: string }
-export interface PreviewRecord { run_id: string; round: number; task_id: string; command: string; commit: string; url: string; port: number; pid: number; status: number; loopback: 'yes' | 'unchecked'; started_at: string; stopped_at: string | null; why_stopped: string | null }
+export interface PreviewRecord { run_id: string; round: number; task_id: string; command: string; commit: string; url: string; port: number; pid: number; start?: string | null; status: number; loopback: 'yes' | 'unchecked'; started_at: string; stopped_at: string | null; why_stopped: string | null }
 interface TaskRef { step: Step; round: number; id: string }
 type More = Omit<Partial<Report>, 'usage'> & { usage?: Usage };
 type Reporter = (status: Report['status'], summary: string, more?: More) => Report;
@@ -118,6 +126,11 @@ export class Coding {
       // happened by the time a step stops: neither runs again by itself. A merge marks its point.
       effects: (brief: Brief) => (brief.inputs?.step === 'check' || brief.inputs?.step === 'merge' ? 'external' : 'none'),
       commits: (brief: Brief) => brief.inputs?.step === 'merge',
+      // A merge that passed its commit point goes through: the branch may already have moved, and the
+      // record must say what git did (the review of PR #239, item 1).
+      uncancellable: (t: Task) => (t.brief.inputs?.step === 'merge' && self.#pastCommit(t.id)
+        ? `Nova is already moving ${String(t.brief.inputs?.branch ?? 'the branch')} to the reviewed commit, which can’t be stopped half done. If you don’t want it, revert it in your repository once it is merged.`
+        : null),
       internal: { key: this.#key, why: 'Only Nova’s coding runs make their own tasks. Ask for a change in chat, or start one with POST /coding.' },
       health: () => ({ ok: true }),
       run: (brief: Brief, signal: AbortSignal) => self.#run(brief, signal),
@@ -217,7 +230,7 @@ export class Coding {
     const goals: Record<Step, string> = {
       write: r.goal,
       update: `Merge the newest ${r.branch} of ${r.repo} into Nova’s branch for “${r.title}”, so it can be reviewed again against it.`,
-      check: `Run \`${r.test_command}\` on the change for “${r.title}” (Nova’s commit ${short(r.head)})${r.preview_command ? `, then start its preview with \`${r.preview_command}\`` : ''}, on this computer. This runs code the coding agent wrote, as you.`,
+      check: `Run \`${r.test_command}\` on the change for “${r.title}” (Nova’s commit ${short(r.head)})${r.preview_command ? `, then start its preview with \`${r.preview_command}\`` : ''}, on this computer. ${RUNS_AGENT_CODE}`,
       merge: `Move ${r.branch} in ${r.repo} from ${short(r.base)} to ${short(r.head)}: exactly the reviewed change for “${r.title}”. Nova doesn’t push.`,
     };
     const evidence = step === 'check'
@@ -323,7 +336,7 @@ export class Coding {
       if (step === 'write') return await this.#write(r, brief, signal, report);
       if (step === 'update') return await this.#update(r, report);
       if (step === 'check') return await this.#check(r, brief, signal, report);
-      if (step === 'merge') return await this.#merge(r, brief, report);
+      if (step === 'merge') return await this.#merge(r, brief, signal, report);
       return report('failed', `There is no coding step called “${String(step)}”.`);
     } catch (e) {
       if (signal.aborted) throw e;
@@ -377,7 +390,14 @@ export class Coding {
     rmSync(this.#runDir(r.id), { recursive: true, force: true });
   }
 
-  async #write(r: RunRow, brief: Brief, signal: AbortSignal, report: Reporter): Promise<Report> {
+  // The write holds the run's lock from start to commit, so a cleanup (a cancel, a discard) waits
+  // for it and then removes what it made, instead of racing it (the review of PR #239, item 10).
+  #write(r: RunRow, brief: Brief, signal: AbortSignal, report: Reporter): Promise<Report> {
+    return this.#serial(`run:${r.id}`, () => this.#writeNow(r, brief, signal, report));
+  }
+
+  async #writeNow(r: RunRow, brief: Brief, signal: AbortSignal, report: Reporter): Promise<Report> {
+    const stopped = () => signal.aborted || this.#o.ledger.get(brief.task_id).state !== 'active';
     // A fresh start for each attempt.
     this.#stopPreview(r.id, 'the change is being written again');
     await this.#dropTree(r);
@@ -389,24 +409,24 @@ export class Coding {
     if (before.refused.length) return report('failed', `Nova can’t work on ${r.repo} at ${short(base)}: ${before.refused.slice(0, 3).map((x) => `${x.path} (${x.why})`).join('; ')}.`);
     copyWalk(tree, before.entries, this.#work(r.id));
     const files = [...before.entries].filter(([, e]) => e.kind === 'file').map(([p, e]) => ({ path: p, sha256: e.hash }));
-    const tops = (paths: string[]) => [...new Set(paths.map((p) => p.split('/')[0]!))];
-    const inputs = { ...(r.editable ? { editable: JSON.parse(r.editable) } : {}), test_command: r.test_command };
-    const may = scopeOf(tops(files.map((f) => f.path)), inputs, files.map((f) => f.path)).words;
+    const may = this.#scope(r, files.map((f) => f.path), []).words;
     const out = await this.#o.providers.workIn(r.agent, { brief, cwd: this.#work(r.id), files, may, signal });
     const artifacts = (out.artifacts ?? []) as Report['artifacts'];
+    if (stopped()) return report('failed', 'Stopped. Nothing was committed.');
     if (out.status !== 'done') return report(out.status, out.summary, { ...(out.blockers ? { blockers: out.blockers } : {}), usage: out.usage, artifacts });
 
     // What the agent changed, read by Nova from its folder.
     const after = walk(this.#work(r.id));
     const cs = changesOf(before.entries, after.entries);
-    const refused = refusals(cs, after);
+    const refused = refusals(cs, after, before.entries);
     if (refused) return report('failed', refused, { usage: out.usage, artifacts });
     if (!cs.length) return report('failed', `${out.provider_name} changed nothing. ${clip(out.summary, 300)}`.trim(), { usage: out.usage, artifacts });
-    const scope = scopeOf(tops([...files.map((f) => f.path), ...cs.map((c) => c.path)]), inputs, files.map((f) => f.path));
+    const scope = this.#scope(r, files.map((f) => f.path), cs.map((c) => c.path));
     const bad = outOfScope(cs.map((c) => ({ path: c.path, kind: c.kind, sha256: c.entry?.hash ?? null })), scope);
     if (bad) return report('failed', `Nova refused the work: ${bad}. Nothing was committed.`, { usage: out.usage, artifacts });
 
     // Into the worktree, and committed.
+    if (stopped()) return report('failed', 'Stopped. Nothing was committed.');
     applyChanges(this.#work(r.id), tree, cs);
     await this.#git.run(['-C', tree, 'add', '--all']);
     const message = `${clip(r.title, 72)}\n\n${r.goal.slice(0, 2000)}\n\nWritten by ${out.provider_name} in Nova coding run ${r.id}; reviewed before any merge.`;
@@ -419,6 +439,9 @@ export class Coding {
     const recorded = await this.#record(mirror, base, head);
     const listed = new Set(recorded.changes.map((c) => c.path));
     if (listed.size !== cs.length || cs.some((c) => !listed.has(c.path))) return report('failed', `git lists other changes than the ones Nova took (${[...listed].slice(0, 5).join(', ')}), so Nova stopped. Nothing was merged.`, { usage: out.usage, artifacts });
+    if (recorded.tooLong) return report('failed', this.#tooLong(recorded.bytes), { usage: out.usage, artifacts });
+    // A cancelled run gets no head: the cleanup that waits for this lock removes what was made.
+    if (stopped()) return report('failed', 'Stopped. Nothing was committed.');
     this.#set(r.id, { base, head, tree_digest: digest(committed.entries), changes: JSON.stringify(recorded.changes), diff: recorded.diff });
     rmSync(this.#work(r.id), { recursive: true, force: true });
     const names = cs.slice(0, 5).map((c) => c.path).join(', ') + (cs.length > 5 ? `, and ${cs.length - 5} more` : '');
@@ -429,7 +452,12 @@ export class Coding {
   }
 
   // The reviewed diff and its files, from Nova's own repository.
-  async #record(mirror: string, base: string, head: string): Promise<{ changes: FileChange[]; diff: string }> {
+  // The review of PR #239, item 8: a diff too long to show in full is never offered as reviewed.
+  #tooLong(bytes: number): string {
+    return `The change’s diff is ${Math.ceil(bytes / 1024)} KB, too long to review here (Nova shows at most ${MAX_DIFF / 1024} KB, and never asks you to merge what it can’t show). Nothing was merged; ask for a smaller change.`;
+  }
+
+  async #record(mirror: string, base: string, head: string): Promise<{ changes: FileChange[]; diff: string; tooLong: boolean; bytes: number }> {
     const status = (await this.#git.run(['--git-dir', mirror, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-status', '-z', base, head])).out.split('\0').filter(Boolean);
     const kinds = new Map<string, Change['kind']>();
     for (let i = 0; i + 1 < status.length; i += 2) kinds.set(status[i + 1]!, status[i]!.startsWith('A') ? 'added' : status[i]!.startsWith('D') ? 'deleted' : 'modified');
@@ -439,10 +467,10 @@ export class Coding {
       const [a, d, ...p] = line.split('\t');
       counts.set(p.join('\t'), [a === '-' ? null : Number(a), d === '-' ? null : Number(d)]);
     }
-    let diff = (await this.#git.run(['--git-dir', mirror, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--no-color', base, head], { maxBytes: 256 * 1024 * 1024 })).out;
-    if (diff.length > MAX_DIFF) diff = `${diff.slice(0, MAX_DIFF)}\n… (the diff goes on; ${plural(kinds.size, 'file')} in all)\n`;
+    const diff = (await this.#git.run(['--git-dir', mirror, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--no-color', base, head], { maxBytes: 256 * 1024 * 1024 })).out;
+    const bytes = Buffer.byteLength(diff);
     const changes = [...kinds].map(([path, kind]) => ({ path, kind, added: counts.get(path)?.[0] ?? null, removed: counts.get(path)?.[1] ?? null }));
-    return { changes, diff };
+    return bytes > MAX_DIFF ? { changes, diff: '', tooLong: true, bytes } : { changes, diff, tooLong: false, bytes };
   }
 
   // A new round: the newest tip of the person's branch merged into Nova's, in the worktree.
@@ -463,6 +491,7 @@ export class Coding {
     }
     const head = (await this.#git.run(['-C', tree, 'rev-parse', '--verify', 'HEAD^{commit}'])).out.trim();
     const recorded = await this.#record(mirror, tip, head);
+    if (recorded.tooLong) return report('failed', this.#tooLong(recorded.bytes));
     const committed = walk(tree, { skipTopGit: true });
     this.#set(r.id, { base: tip, head, tree_digest: digest(committed.entries), changes: JSON.stringify(recorded.changes), diff: recorded.diff, test: null, preview: null });
     return report('done', `${r.branch} had moved to ${short(tip)}. Nova merged it into its branch (now ${short(head)}), so the change can be reviewed again against it.`, {
@@ -492,7 +521,7 @@ export class Coding {
     }
     if (signal.aborted) throw signal.reason ?? new Error('stopped');
     const rec: TestRecord = {
-      id: randomUUID(), task_id: brief.task_id, run_id: r.id, round: r.round, command: r.test_command, commit: r.head, passed: ran.code === 0 && !ran.timedOut && !ran.aborted, exit: ran.code,
+      id: `${r.id}-${randomUUID()}`, task_id: brief.task_id, run_id: r.id, round: r.round, command: r.test_command, commit: r.head, passed: ran.code === 0 && !ran.timedOut && !ran.aborted, exit: ran.code,
       output: ran.timedOut ? `${tail(output, 40, 4000)}\n(stopped after ${this.#o.testTimeoutS ?? 600} s)` : tail(output, 40, 4000), ms: Math.round(ran.ms), at: this.#now().toISOString(),
     };
     this.#writeRecord('tests', rec.id, rec);
@@ -516,8 +545,13 @@ export class Coding {
         return report('failed', `${summary} The preview didn’t come up: ${(e as Error).message}`, { evidence });
       }
       this.#previews.set(r.id, started.child);
-      started.child.once('exit', () => { if (this.#previews.get(r.id) === started.child) { this.#previews.delete(r.id); this.#markStopped(r.id, 'it exited'); } });
-      const p: PreviewRecord = { run_id: r.id, round: r.round, task_id: brief.task_id, command: r.preview_command, commit: r.head, url: started.url, port, pid: started.child.pid!, status: started.status, loopback: started.loopback, started_at: this.#now().toISOString(), stopped_at: null, why_stopped: null };
+      // When the command Nova started exits, everything it left in its process group goes too: a
+      // preview is never left running without a record that says so (the review of PR #239, item 2).
+      started.child.once('exit', () => {
+        stopPreview(started.child);
+        if (this.#previews.get(r.id) === started.child) { this.#previews.delete(r.id); this.#markStopped(r.id, 'its command exited'); }
+      });
+      const p: PreviewRecord = { run_id: r.id, round: r.round, task_id: brief.task_id, command: r.preview_command, commit: r.head, url: started.url, port, pid: started.child.pid!, start: started.start, status: started.status, loopback: started.loopback, started_at: this.#now().toISOString(), stopped_at: null, why_stopped: null };
       this.#writeRecord('previews', `${r.id}-${r.round}`, p);
       this.#set(r.id, { preview: JSON.stringify(p) });
       evidence.push({ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `preview:${r.id}:${r.round}` });
@@ -526,7 +560,7 @@ export class Coding {
     return report('done', summary, { evidence });
   }
 
-  async #merge(r: RunRow, brief: Brief, report: Reporter): Promise<Report> {
+  async #merge(r: RunRow, brief: Brief, signal: AbortSignal, report: Reporter): Promise<Report> {
     const head = String(brief.inputs?.head ?? '');
     const base = String(brief.inputs?.base ?? '');
     if (r.state !== 'review' && r.state !== 'merging') return report('failed', `This run isn’t waiting to be merged (it is ${r.state}).`);
@@ -534,38 +568,79 @@ export class Coding {
     const mirror = this.#mirror(r.repo);
     const ours = (await this.#git.run(['--git-dir', mirror, 'rev-parse', '--verify', '--quiet', `refs/heads/${this.#novaBranch(r.id)}^{commit}`], { allow: [1, 128] })).out.trim();
     if (ours !== head) return report('failed', `Nova’s branch nova/${r.id} isn’t at the reviewed commit ${short(head)} any more, so Nova merged nothing.`);
-    // The person's branch, read now. Moved since the review: nothing unreviewed is merged.
-    const now = (await this.#git.run(['-C', r.repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${r.branch}^{commit}`], { allow: [1, 128] })).out.trim();
-    if (now !== base) {
-      this.#set(r.id, { state: 'moved', reason: `${r.branch} moved since the review.` });
-      return report('failed', `${r.branch} moved since you reviewed the change (it is at ${short(now) || 'nothing'} now; the review was against ${short(base)}). Nova merged nothing, and brings the change up to date to ask you again.`);
-    }
+    const merged = (note: string) => report('done', `${r.branch} in ${r.repo} moved from ${short(base)} to ${short(head)}: exactly the reviewed commit. Nothing was pushed.${note}`, {
+      evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `merge:${r.id}:${head}` }],
+      artifacts: [{ kind: 'git-commit', ref: head }],
+    });
+    // The person's branch, read now.
+    const now = await this.#tip(r);
+    // Already the reviewed commit: an earlier attempt moved it, and Nova stopped before it read it
+    // back (the review of PR #239, item 9). Merged; the checkout is brought along if it wasn't.
+    if (now === head) return merged(await this.#bringAlong(r, null, base, head));
+    // Moved since the review: nothing unreviewed is merged.
+    if (now !== base) return this.#moved(r, now, base, report);
     // Checked out somewhere: that working tree must have no changes, and it moves with the branch.
-    const listed = (await this.#git.run(['-C', r.repo, 'worktree', 'list', '--porcelain', '-z'])).out.split('\0');
-    let checkedOut: string | null = null;
-    let current: string | null = null;
-    for (const field of listed) {
-      if (field.startsWith('worktree ')) current = field.slice('worktree '.length);
-      else if (field === `branch refs/heads/${r.branch}`) checkedOut = current;
-    }
+    const checkedOut = await this.#checkedOut(r);
     if (checkedOut) {
       const dirty = (await this.#git.run(['-C', checkedOut, 'status', '--porcelain=v1', '--untracked-files=no', '-z'])).out;
       if (dirty) return report('blocked', `${r.branch} is checked out in ${checkedOut}, which has changes that aren’t committed. Nova doesn’t merge over them. Commit or put them away, then retry; Nova asks you again.`);
     }
+    // The reviewed commit's objects into the person's repository: a pack made in Nova's repository and
+    // unpacked in theirs. No fetch runs there, so nothing in their config (insteadOf, a protocol, a
+    // helper) decides where it comes from, and no ref is made (the review of PR #239, item 6).
+    const pack = await this.#git.run(['--git-dir', mirror, 'pack-objects', '--stdout', '--revs', '--quiet'], { input: `${head}\n^${base}\n`, maxBytes: 512 * 1024 * 1024 });
+    await this.#git.run(['-C', r.repo, 'unpack-objects', '-q'], { input: pack.buf });
+    await this.#git.run(['-C', r.repo, 'cat-file', '-e', `${head}^{commit}`]);
+    // The point after which the merge goes through: nothing has been written to the branch yet, and
+    // from here a cancel is refused (uncancellable), so the record always says what git did (the
+    // review of PR #239, item 1). Checked and marked in one step, with nothing awaited between.
+    if (signal.aborted || this.#o.ledger.get(brief.task_id).state !== 'active') return report('failed', 'Stopped before anything was written to your branch. Nothing was merged.');
     this.#set(r.id, { state: 'merging' });
     this.#o.ledger.committing(brief.task_id, `move ${r.branch} to the reviewed commit`);
-    // The reviewed commit's objects into the person's repository (from Nova's, no refs made), then
-    // the branch: a fast-forward in the working tree that has it, or a compare-and-swap of the ref.
-    await this.#git.run(['-C', r.repo, 'fetch', '--no-tags', '--no-write-fetch-head', '--quiet', mirror, `refs/heads/${this.#novaBranch(r.id)}`]);
-    await this.#git.run(['-C', r.repo, 'cat-file', '-e', `${head}^{commit}`]);
-    if (checkedOut) await this.#git.run(['-C', checkedOut, 'merge', '--ff-only', '--quiet', head]);
-    else await this.#git.run(['-C', r.repo, 'update-ref', '-m', `nova: merge the reviewed change of coding run ${r.id}`, `refs/heads/${r.branch}`, head, base]);
-    const after = (await this.#git.run(['-C', r.repo, 'rev-parse', '--verify', `refs/heads/${r.branch}^{commit}`])).out.trim();
+    // Always a compare-and-swap of the ref, checked out or not (item 5): it moves only if it is still
+    // at the base. Then the checkout, if it still has this branch, is brought along.
+    const cas = await this.#git.run(['-C', r.repo, 'update-ref', '-m', `nova: merge the reviewed change of coding run ${r.id}`, `refs/heads/${r.branch}`, head, base], { allow: [1, 128] });
+    if (cas.code !== 0) {
+      const then = await this.#tip(r);
+      if (then !== head) return this.#moved(r, then, base, report);
+    }
+    const after = await this.#tip(r);
     if (after !== head) return report('failed', `Nova moved ${r.branch}, and reading it back finds ${short(after)}, not the reviewed ${short(head)}.`);
-    return report('done', `${r.branch} in ${r.repo} moved from ${short(base)} to ${short(head)}: exactly the reviewed change. Nothing was pushed.`, {
-      evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `merge:${r.id}:${head}` }],
-      artifacts: [{ kind: 'git-commit', ref: head }],
-    });
+    return merged(await this.#bringAlong(r, checkedOut, base, head));
+  }
+
+  async #tip(r: RunRow): Promise<string> {
+    return (await this.#git.run(['-C', r.repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${r.branch}^{commit}`], { allow: [1, 128] })).out.trim();
+  }
+
+  // The working tree the branch is checked out in, if any.
+  async #checkedOut(r: RunRow): Promise<string | null> {
+    const listed = (await this.#git.run(['-C', r.repo, 'worktree', 'list', '--porcelain', '-z'])).out.split('\0');
+    let current: string | null = null;
+    for (const field of listed) {
+      if (field.startsWith('worktree ')) current = field.slice('worktree '.length);
+      else if (field === `branch refs/heads/${r.branch}`) return current;
+    }
+    return null;
+  }
+
+  // The branch moved under the merge: nothing unreviewed is merged, and a new round starts (#advance).
+  #moved(r: RunRow, now: string, base: string, report: Reporter): Report {
+    this.#set(r.id, { state: 'moved', reason: `${r.branch} moved since the review.` });
+    return report('failed', `${r.branch} moved since you reviewed the change (it is at ${short(now) || 'nothing'} now; the review was against ${short(base)}). Nova merged nothing, and brings the change up to date to ask you again.`);
+  }
+
+  // After the ref moved: the checkout that has this branch (`known`, or found now) is brought from the
+  // base to the reviewed commit, only if it still has this branch and its index is still the base's.
+  // Returns what the person should know, or ''.
+  async #bringAlong(r: RunRow, known: string | null, base: string, head: string): Promise<string> {
+    const at = known ?? await this.#checkedOut(r);
+    if (!at) return '';
+    const sym = (await this.#git.run(['-C', at, 'symbolic-ref', '--quiet', 'HEAD'], { allow: [1, 128] })).out.trim();
+    if (sym !== `refs/heads/${r.branch}`) return ` The checkout at ${at} has another branch now; Nova didn’t touch it.`;
+    if ((await this.#git.run(['-C', at, 'diff-index', '--cached', '--quiet', head], { allow: [1, 128] })).code === 0) return '';
+    const moved = await this.#git.run(['-C', at, 'read-tree', '-m', '-u', base, head], { allow: [1, 128] });
+    return moved.code === 0 ? '' : ` ${r.branch} is merged, but the files in ${at} still show ${short(base)}: Nova couldn’t bring them along (${clip(moved.err.trim().split('\n').at(-1) ?? '', 160)}). Run git reset --keep ${short(head)} there.`;
   }
 
   // ---- records and checks ---------------------------------------------------------------------------
@@ -579,7 +654,7 @@ export class Coding {
   }
 
   #readRecord<T>(kind: 'tests' | 'previews', id: string): T | null {
-    if (!/^[A-Za-z0-9-]{1,80}$/.test(id)) return null;
+    if (!/^[A-Za-z0-9-]{1,120}$/.test(id)) return null;
     try { return JSON.parse(readFileSync(join(this.dir, 'records', kind, `${id}.json`), 'utf8')) as T; } catch { return null; }
   }
 
@@ -649,11 +724,57 @@ export class Coding {
     this.#markStopped(id, why);
   }
 
-  // When a run ends: its preview stops, and its worktree and branch go (they are Nova's own).
+  // When a run ends: its preview stops, and its worktree and branch go (they are Nova's own), after
+  // any step still running for it has let go of the run (a write part way through its commit). Then
+  // its records go, and Nova's copy of the repository too once no open run uses it (the review of
+  // PR #239, item 12).
   #cleanup(id: string, why: string): void {
     this.#stopPreview(id, why);
     const r = this.#o.db.get<RunRow>('SELECT * FROM coding_run WHERE id = ?', id);
-    if (r) void this.#dropTree(r).catch((e) => this.#o.log.warn('coding', 'Nova couldn’t remove a coding run’s worktree.', { run: id, error: (e as Error).message }));
+    if (!r) return;
+    void this.#serial(`run:${id}`, async () => {
+      await this.#dropTree(r);
+      this.#prune(r);
+    }).catch((e) => this.#o.log.warn('coding', 'Nova couldn’t remove a coding run’s worktree.', { run: id, error: (e as Error).message }));
+  }
+
+  // An ended run's records, and Nova's copy of its repository when no open run uses it.
+  #prune(r: RunRow): void {
+    for (const kind of ['tests', 'previews']) {
+      const dir = join(this.dir, 'records', kind);
+      let names: string[] = [];
+      try { names = readdirSync(dir); } catch { /* none */ }
+      for (const n of names) if (n.startsWith(`${r.id}-`)) rmSync(join(dir, n), { force: true });
+    }
+    const mirror = this.#mirror(r.repo);
+    void this.#serial(mirror, async () => {
+      const open = this.#o.db.all<RunRow>(`SELECT * FROM coding_run WHERE repo = ? AND state NOT IN (${ENDED.map(() => '?').join(', ')})`, r.repo, ...ENDED);
+      if (!open.length) rmSync(mirror, { recursive: true, force: true });
+    });
+  }
+
+  // Whether this merge task passed its commit point in its current attempt.
+  #pastCommit(taskId: string): boolean {
+    let seen = false;
+    try {
+      for (const e of this.#o.ledger.events(taskId)) {
+        if (e.kind === 'dispatched') seen = false;
+        else if (e.kind === 'commit_point') seen = true;
+      }
+    } catch { return false; }
+    return seen;
+  }
+
+  // What the agent may change in this run: the person's list when they gave one (only through the
+  // API: chat can't widen it), otherwise source files, documents and images, never the tests or
+  // anything that decides how they run (taskspace.ts runsTests, the review of PR #239, item 3).
+  #scope(r: RunRow, files: string[], changed: string[]) {
+    const editable = r.editable ? JSON.parse(r.editable) as string[] : undefined;
+    const tops = [...new Set([...files, ...changed].map((p) => p.split('/')[0]!))];
+    const s = scopeOf(tops, { ...(editable ? { editable } : {}), test_command: r.test_command }, files);
+    if (editable) return { ...s, words: `You may change only these: ${editable.join(', ')}. Nova refuses the work if anything else changes.`, shown: `You let it change: ${editable.join(', ')}. Nothing else.` };
+    const words = 'You may change source files, documents and images, but not the tests, the test runner’s settings (package.json, lockfiles, any hidden file such as .npmrc, *.config.* files, tsconfig, build files) or anything the test command names. Nova refuses the work if any of those change.';
+    return { ...s, editable: (p: string) => s.editable(p) && SOURCE.test(p) && !TEST_FILE.test(p) && !runsTests(p), words, shown: `Source files, documents and images only: not the tests, the test runner’s settings, or anything “${r.test_command}” names.` };
   }
 
   // ---- what callers see -----------------------------------------------------------------------------
@@ -688,9 +809,10 @@ export class Coding {
     const p = parse<PreviewRecord>(r.preview);
     return {
       ...this.#summary(r), goal: r.goal, privacy_mode: r.privacy_mode, editable: parse<string[]>(r.editable),
+      scope: this.#scope(r, [], []).shown,
       changes: parse<FileChange[]>(r.changes) ?? [], diff: r.diff, test: parse<TestRecord>(r.test),
       preview: p ? { url: p.url, port: p.port, commit: p.commit, status: p.status, loopback: p.loopback, started_at: p.started_at, running: !p.stopped_at && alive(p.pid) && this.#previews.has(r.id), stopped_at: p.stopped_at, why_stopped: p.why_stopped ?? (!alive(p.pid) || !this.#previews.has(r.id) ? 'Nova restarted, or it exited' : null) } : null,
-      merge: r.head && r.base ? `Merging moves ${r.branch} in ${r.repo} from ${short(r.base)} to ${short(r.head)}: exactly this diff. Nova doesn’t push.` : null,
+      merge: r.head && r.base ? `Merging moves ${r.branch} in ${r.repo} from ${short(r.base)} to ${short(r.head)}: exactly this diff${(parse<FileChange[]>(r.changes) ?? []).some((c) => c.added === null) ? ' (its binary files are listed, not shown)' : ''}. Nova doesn’t push.` : null,
     };
   }
 
@@ -707,6 +829,7 @@ export class Coding {
     const merge = (parse<TaskRef[]>(r.tasks) ?? []).filter((x) => x.step === 'merge' && x.round === r.round).at(-1);
     const t = merge ? this.#o.ledger.get(merge.id) : null;
     if (!t || ['done', 'failed', 'cancelled'].includes(t.state)) throw new CoreError('conflict', 'This run isn’t waiting for you to merge it.');
+    if (r.state === 'merging' || this.#pastCommit(t.id)) throw new CoreError('conflict', `Nova is already moving ${r.branch} to the reviewed commit, which can’t be stopped half done. If you don’t want it, revert it in your repository once it is merged.`);
     this.#o.ledger.cancel(t.id, 'You declined the merge.');
     return this.view(id);
   }
@@ -729,11 +852,26 @@ export class Coding {
   // After a restart: previews didn't survive it, and a step that was settled while Nova stopped is
   // followed by its next one now.
   recover(): void {
+    this.#sweepEnded();
     for (const r of this.#o.db.all<RunRow>(`SELECT * FROM coding_run WHERE state NOT IN (${ENDED.map(() => '?').join(', ')})`, ...ENDED)) {
-      if (!this.#previews.has(r.id)) this.#markStopped(r.id, 'Nova restarted');
+      if (!this.#previews.has(r.id)) {
+        // A preview a stopped Nova left behind is stopped, only if it is still the process Nova
+        // started (its pid and start time), or what is left of that process's group.
+        const p = parse<PreviewRecord>(r.preview);
+        if (p && !p.stopped_at) stopRecorded(p.pid, p.start ?? null);
+        this.#markStopped(r.id, 'Nova restarted');
+      }
       const last = (parse<TaskRef[]>(r.tasks) ?? []).filter((x) => x.round === r.round).at(-1);
       if (!last) continue;
       try { this.#advance(this.#o.ledger.get(last.id)); } catch (e) { this.#o.log.warn('coding', 'Nova couldn’t pick a coding run up again after a restart.', { run: r.id, error: (e as Error).message }); }
+    }
+  }
+
+  // Runs that ended while Nova stopped part way through their cleanup.
+  #sweepEnded(): void {
+    for (const r of this.#o.db.all<RunRow>(`SELECT * FROM coding_run WHERE state IN (${ENDED.map(() => '?').join(', ')})`, ...ENDED)) {
+      const left = existsSync(this.#runDir(r.id)) || ['tests', 'previews'].some((k) => { try { return readdirSync(join(this.dir, 'records', k)).some((n) => n.startsWith(`${r.id}-`)); } catch { return false; } });
+      if (left) this.#cleanup(r.id, 'the run had ended');
     }
   }
 

@@ -381,7 +381,8 @@ export function approvalSheet(t, { worker = null, run = null } = {}) {
 // agent changed, and the commands Nova will run on it, which run the agent's code as the person. The
 // merge (tier 3): the reviewed diff, Nova's test result and the preview link, then what merging does,
 // before the confirmation.
-export const RUNS_AGENT_CODE = 'This runs code the coding agent wrote, as you, with access to your files.';
+// The same words as the check step's own goal (coding/index.ts RUNS_AGENT_CODE): what this OK means.
+export const RUNS_AGENT_CODE = 'This runs code the coding agent wrote, as you: it can do anything you can on this computer, Nova’s own files included. Nova’s later promise, to merge only exactly what you reviewed, is only as strong as this OK.';
 export function codingSheet(t, run) {
   const step = t.brief?.inputs?.step;
   const merge = step === 'merge';
@@ -390,7 +391,8 @@ export function codingSheet(t, run) {
   const short = (s) => esc(String(s ?? '').slice(0, 7));
   const files = (run.changes ?? []).map((c) => `<li><p class="card-line"><strong>${esc(c.path)}</strong> · ${esc(KIND[c.kind] ?? c.kind)}${c.added === null ? ' · binary' : ` · +${Number(c.added)} −${Number(c.removed)}`}</p></li>`).join('');
   const diff = run.diff ? `<details class="raw coding-diff"${merge ? ' open' : ''}><summary>The whole diff</summary><pre tabindex="0">${esc(run.diff)}</pre></details>` : '';
-  const changed = `<h3 class="sheet-heading">What ${esc(run.agent_name)} changed</h3><ul class="checks coding-files">${files}</ul>${diff}`;
+  const scope = run.scope ? `<p class="sheet-line coding-scope">What it was allowed to change: ${esc(run.scope)}</p>` : '';
+  const changed = `<h3 class="sheet-heading">What ${esc(run.agent_name)} changed</h3>${scope}<ul class="checks coding-files">${files}</ul>${diff}`;
   const test = run.test;
   const tests = test ? `<h3 class="sheet-heading">Tests</h3>
   <p class="sheet-line coding-test" data-passed="${test.passed}">Nova ran <code>${esc(test.command)}</code> itself on <code>${short(test.commit)}</code>: ${test.passed ? 'it passed' : 'it failed'} (exit ${esc(String(test.exit ?? 'none'))}, ${esc((Number(test.ms) / 1000).toFixed(1))} s).</p>

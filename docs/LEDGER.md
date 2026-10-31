@@ -17,6 +17,52 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10c: the independent review of PR #239).** PR #239 was merged as it stood (22a95930);
+these fixes are on `m10c/review-fixes`. Each item was first a failing test in
+`tests/core/coding-review.test.ts`, on throwaway repositories, and each test was run again with its fix
+reverted (evidence: `docs/evidence/m10c-gate.md`, "The review of PR #239").
+1. **Blocking: a decline during a confirmed merge still merged, and the record said nothing was.**
+   **Choice:** the ledger gained `uncancellable(t)`: a worker can refuse a cancel while a step can't be
+   stopped half done. A merge refuses cancel, decline and discard once it passed its commit point;
+   just before that point (with nothing awaited between) it checks the signal and that its task is
+   still active. **Trade-off:** "Don't merge" pressed during the moment the branch moves is refused
+   with the reason; the person reverts afterwards.
+2. **A preview's group outlived its shell.** When the command Nova started exits, its whole process
+   group goes. After a crash, a recorded group is stopped only if its leader is still the process Nova
+   started (pid and start time) or only the group is left. Linux only.
+3. **Test-runner config wasn't protected** (`.npmrc` with `script-shell=/bin/true`). **Choice:** both:
+   a class of protected names for every provider task (`runsTests`: hidden files, manifests,
+   lockfiles, `*.config.*`, tsconfig, build files, test-runner names), and, for coding runs, an
+   allow-list by extension (source, markup, styles, documents, images). **Trade-off:** an agent can't
+   edit a JSON, YAML or TOML file unless the person lists it, through the API. Chat can't widen the
+   scope (`code_change` refuses `editable`), and both sheets show the rule in force.
+4. **Links were judged by their text.** Now every link is followed through the tree's other links.
+5. **The merge into a checked-out branch acted on whatever was checked out.** Now always a ref
+   compare-and-swap; the checkout is brought along only if it still has that branch; a branch moved
+   in the window starts a new round.
+6. **A repository's `protocol.<name>.allow` outranked `protocol.allow=never`.** Each transport is now
+   refused by name, and the merge no longer fetches inside the person's repository at all: a pack from
+   Nova's repository is unpacked there.
+7. **Huge files were read whole.** Files over 50 MB are listed by size, never read; a walk reads at
+   most 1 GB.
+8. **A cut diff was offered as "exactly this diff".** **Choice:** a diff over 512 KB is never offered
+   for review; the step fails and says why. Binary files are named as listed, not shown.
+9. **A merge that moved the branch before a crash ended "failed, nothing merged".** A branch already
+   at the reviewed commit is now merged.
+10. **A cancel during the write's commit could leak.** Not reproduced with the injection the test uses
+    (the merged code passed it); fixed anyway: the write holds the run's lock to its commit, and the
+    cleanup waits for it; no head is written into a stopped run.
+11. **The loopback check saw only the assigned port, once.** Now every listener of the preview's
+    process group, twice; limits written down.
+12. **Records and Nova's copies of repositories were never removed.** A run's records go with it, and
+    Nova's copy of a repository once no open run uses it; leftovers of runs that ended while Nova was
+    stopped are removed at start.
+- **The tier-2 OK, plainly:** the plan, the evidence and the check sheet now say that the tests and the
+  preview run as the person and can change Nova's own files, and that the merge's guarantee is only as
+  strong as that OK.
+- **Seen in the review's probes, not an item, not changed:** a test command that ignores SIGTERM runs
+  past its timeout (`runLines` sends no SIGKILL then). Written down as a limit.
+
 **2026-10-31 (M10c: coding through chat).** Branch `m10c/coding`. The ADR is `docs/plans/M10.md`
 (M10c), the plan `docs/plans/M10c.md`, the evidence `docs/evidence/m10c-gate.md`.
 1. **A coding run is a chain of internal ledger tasks** (write tier 1, check tier 2, merge tier 3),

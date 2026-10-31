@@ -54,7 +54,8 @@ test('M10c: the check and merge sheets show the diff, the tests and the preview 
     const ask = page.locator(`.coding-sheet[data-task="${check.id}"]`);
     await ask.waitFor();
     const words = (await ask.textContent()) ?? '';
-    assert.match(words, /This runs code the coding agent wrote, as you, with access to your files\./);
+    assert.match(words, /This runs code the coding agent wrote, as you: it can do anything you can on this computer, Nova’s own files included\./);
+    assert.match(words, /What it was allowed to change: Source files, documents and images only/);
     assert.match(words, /Nothing in your repository has changed\./);
     assert.match(words, /app\.mjs · changed · \+1 −1/);
     assert.match(words, /Nova runs node --test and then starts the preview node server\.mjs/);
@@ -74,6 +75,7 @@ test('M10c: the check and merge sheets show the diff, the tests and the preview 
     const sheet = page.locator(`.coding-sheet[data-task="${merge.id}"]`);
     await sheet.waitFor();
     const said = (await sheet.textContent()) ?? '';
+    assert.match(said, /What it was allowed to change: Source files, documents and images only/);
     assert.match(said, /Merging moves main in .* from [0-9a-f]{7} to [0-9a-f]{7}: exactly this diff\. Nova doesn’t push\./);
     assert.match(said, /Nova ran node --test itself on [0-9a-f]{7}: it passed/);
     assert.ok(await sheet.locator('.coding-diff[open] pre').isVisible(), 'the diff is open in front of the person');
