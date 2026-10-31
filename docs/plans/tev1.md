@@ -344,3 +344,24 @@ The loop is in item 3's diff. Two further notes:
 The LEDGER entry (under `## Decisions`) and the CAPABILITY-INVENTORY row are written at the end of this file, under **Records to add**, once the real run's results are in.
 
 **Not needed:** no migration, no `package.json` change (the new tests sit inside the existing globs), and no `src/server.js` change.
+
+### Records to add (after the real run, 2026-10-31)
+
+**`docs/LEDGER.md`, under `## Decisions`:**
+
+> **2026-10-31: Amendment B Part 1, Tev1 as the local decision provider and the injection eval (PR #⟨n⟩, Track 2).**
+> - **The API as found:** `POST /v1/systemone` with named Noul questions (1 to 64), P(true) answers, a 64 KiB cap on text and schema, and context overflow as a 400 that is never truncated.
+>   - The published Tev1 builds require Ollama 0.40.4; the amendment said 0.35, which is when the endpoint arrived. The provider is unavailable below 0.40.4, in plain words (Track 1's decision).
+>   - `num_ctx` is 8192. The chunk budget uses the card's and the amendment's ~2,000 tokens.
+> - **What was built:** `src/core/jev/`: the client, `Tev1Provider` (one request per piece with the whole battery; every piece screened; worst score per question; split and retry on overflow; `tev1:4b` by default, `tev1:0.8b` only where memory requires), and the verdict-driven switch.
+> - **The eval:** 99 cases, 53 attack and 46 benign. The attack half is the merged corpus plus code transforms of its exact payloads; no new attack text was written. The cases, bounds and scoring were fixed in `6d8a8e97` before any run.
+> - **The run:** 2026-10-31 on Ollama 0.40.13, `tev1:4b` `7954dce2…`, `tev1:0.8b` `abc31fdb…`.
+>   - **Both FAIL**, with detection 100%, false positives 100%, and ECE 0.106 (4B) and 0.286 (0.8B).
+>   - The `impersonation` question sits at about 0.25 to 0.45 on benign content, so every case crosses 0.2.
+>   - **Both sizes are ADVISORY:** scores are logged, and the deterministic layer plus quarantine-on-uncertain decide. Not tuned.
+> - **Unchanged:** the deterministic layer and taint tracking (no file under `src/core/ingest/` changed).
+> - **Gate patches proposed for Track 1:** in `docs/plans/tev1.md` NOTES.
+
+**`docs/builder-packet/CAPABILITY-INVENTORY.md`: a new row after the ingest gate's.**
+
+> | Local decision provider for the Jev seat (Tev1 via Ollama) | Capability | **Have (v1, advisory), Amendment B Part 1:** `src/core/jev/`. `Tev1Provider` implements the Jev interface (DecisionProvider) against Ollama's `/v1/systemone`. It is local only; it answers the ingest screen's five Noul questions in one request per piece (≤ 64 questions), screens every piece of long content (2,000-token and 64 KiB caps, 200-character overlap, worst score wins), uses `tev1:4b` (`tev1:0.8b` only where memory requires), and is unavailable in plain words below Ollama 0.40.4, when unreachable, or when not downloaded. Reliance follows the injection eval's recorded verdict per size and digest (`tev1-verdicts.json`, recomputed in CI). The eval (99 cases, bounds fixed in `6d8a8e97`) ran on 2026-10-31: **both sizes failed** (100% false positives; ECE 0.106 and 0.286), so Tev1 is **advisory**: its scores are logged, and the deterministic layer plus quarantine decide. Tested against a loopback stand-in in CI. **Gaps:** the gate wiring, Health and device-record lines are pending (NOTES 1–2); the gate samples past 16 chunks and its chunks don't overlap until NOTES 3–4 land; the cloud Jev seat stays a stub (no account). | Amendment B |
