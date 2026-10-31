@@ -309,7 +309,9 @@ export class Infra {
         }
         this.#set(r.id, { state: 'review', reason: `Ready for you: the plan in full, ${signed(r.delta_cents ?? 0)} a month (${v.words}). Nova applies it only when you confirm.` });
         this.#make(this.#run_(r.id), 'apply');
-        if (v.level === 'warn') this.#alert(`infra:${r.id}:warn`, `Budget alert: applying the plan for “${p.name}” would take it to ${v.words}, past 80 %. Nova still asks before it applies.`, t.id);
+        // Past 80 %: the ask says so, and the person is told; once applied, the project's own level
+        // raises the alert (#level).
+        if (v.level === 'warn') this.#tell(`infra:${r.id}:warn`, `Budget alert: applying the plan for “${p.name}” would take it to ${v.words}, past 80 %. Nova still asks before it applies.`);
         this.#tell(`infra:${r.id}:review`, `The plan for “${p.name}” is ready for you to review: ${this.#counts(ch.priced)}, ${signed(r.delta_cents ?? 0)} a month (${v.words}). Nova applies it only when you confirm, in Tasks.`);
       } else if (step === 'apply') {
         const total = this.#total(p.id);

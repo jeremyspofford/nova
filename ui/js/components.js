@@ -427,6 +427,64 @@ export function codingSheet(t, run) {
 </form>`;
 }
 
+// ---- infrastructure and networking through chat (M10d) --------------------------------------------
+
+const ACTION_WORDS = { create: 'add', update: 'change', replace: 'replace', delete: 'destroy' };
+const money = (n) => `${n < 0 ? '−' : '+'}$${Math.abs(Number(n)).toFixed(2)}`;
+const minutesOf = (s) => (Number(s) % 60 === 0 ? `${Number(s) / 60} minute${Number(s) === 60 ? '' : 's'}` : `${Number(s)} seconds`);
+
+// An infrastructure run's apply (GET /infra/runs/{id}): the plan in full, each change with its price,
+// where the month would stand against the budget, and what applying does, before the confirmation.
+export function infraSheet(t, run) {
+  const lines = (run.changes ?? []).map((c) => `<li><p class="card-line"><strong>${esc(c.address)}</strong> · ${esc(ACTION_WORDS[c.action] ?? c.action)} · ${esc(money(c.delta_usd))} a month</p></li>`).join('');
+  const b = run.budget;
+  const budget = b ? `<p class="sheet-line infra-budget" data-level="${esc(b.level)}">After it: ${esc(b.words)}.${b.level === 'warn' ? ' <strong>That is past 80 % of the budget.</strong>' : ''}</p>` : '';
+  return `<form class="approval-sheet infra-sheet" data-tier="3" data-task="${esc(t.id)}" data-infra="${esc(run.id)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
+  <p class="sheet-line">Nova planned “${esc(run.project?.name ?? '')}” with OpenTofu. Nothing has changed yet.</p>
+  <p class="sheet-line">${esc(run.apply ?? '')}</p>
+  <h3 class="sheet-heading">What it changes</h3>
+  <ul class="checks infra-changes">${lines}</ul>
+  ${budget}
+  <h3 class="sheet-heading">The plan, in full</h3>
+  <details class="raw infra-plan" open><summary>OpenTofu’s plan</summary><pre tabindex="0">${esc(run.plan_text ?? '')}</pre></details>
+  <dl class="facts"><dt>Project</dt><dd>${esc(run.folder ?? '')}</dd><dt>Before it</dt><dd>Nova takes a checkpoint of itself and keeps a copy of OpenTofu’s state.</dd><dt>Why it asks</dt><dd>Applying can spend money, or destroy what it lists, and Nova can’t take it back: it asks every time.</dd></dl>
+  <label class="confirm"><input type="checkbox" name="confirm" required> I’ve read the plan. Apply it to “${esc(run.project?.name ?? '')}”.</label>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Apply</button>
+    <button type="button" class="btn" data-action="decline-change" data-path="/infra/runs/${esc(encodeURIComponent(run.id))}/decline" data-said="Not applied. Nothing changed.">Don’t apply</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+// A network change's apply, or a revert the person asked for (GET /network/changes/{id}): the diff
+// against the snapshot (secret values masked), and the dead-man's switch, before the confirmation.
+export function networkSheet(t, change) {
+  const step = t.brief?.inputs?.step;
+  const name = change.target?.name ?? '';
+  const revert = step === 'revert';
+  const diff = change.diff ? `<h3 class="sheet-heading">The change</h3><details class="raw network-diff" open><summary>The diff against the snapshot</summary><pre tabindex="0">${esc(change.diff)}</pre></details>` : '';
+  const snap = change.snapshot ? `sha256 ${esc(String(change.snapshot.sha256).slice(0, 12))}…${change.snapshot.at ? `, taken ${esc(ago(change.snapshot.at))}` : ''}` : '';
+  return `<form class="approval-sheet network-sheet" data-tier="3" data-task="${esc(t.id)}" data-network="${esc(change.id)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
+  ${revert
+    ? `<p class="sheet-line">Nova puts ${esc(name)} back to the snapshot from before “${esc(change.title)}”.</p>`
+    : `<p class="sheet-line">Nova took a snapshot of ${esc(name)} and worked out this change. Nothing has changed yet.</p>
+  <p class="sheet-line network-switch"><strong>After the change, if Nova can’t hear from one of your devices within ${esc(minutesOf(change.window_s))}, it puts the snapshot back by itself.</strong></p>`}
+  ${revert ? '' : diff}
+  <dl class="facts"><dt>Target</dt><dd>${esc(name)} · ${esc(change.target?.kind ?? '')}</dd>${snap ? `<dt>Snapshot</dt><dd>${snap}</dd>` : ''}<dt>Before it</dt><dd>Nova takes a checkpoint of itself.</dd><dt>Why it asks</dt><dd>A network change can cut your devices off: Nova asks every time.</dd></dl>
+  <label class="confirm"><input type="checkbox" name="confirm" required> ${revert ? `Put ${esc(name)} back.` : `I’ve read the diff. Change ${esc(name)}.`}</label>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>${revert ? 'Put it back' : 'Apply'}</button>
+    ${revert ? `<button type="button" class="btn" data-action="cancel-task" data-task="${esc(t.id)}">Keep the change</button>` : `<button type="button" class="btn" data-action="decline-change" data-path="/network/changes/${esc(encodeURIComponent(change.id))}/decline" data-said="Not applied. ${esc(name)} is as it was.">Don’t apply</button>`}
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
 // ---- browser takeover (M5c) -----------------------------------------------------------------
 
 const TAKE_OVER_ONLY = 'Only the hub’s own screen, or a device you’ve allowed to approve, can take over.';

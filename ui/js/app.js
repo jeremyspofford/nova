@@ -1907,6 +1907,7 @@ async function coreAction(b) {
   if (action === 'open-task' || action === 'evidence') return core.openTask(task);
   if (action === 'retry-task' || action === 'cancel-task') return core.taskAction(action, task);
   if (action === 'decline-merge') return core.declineMerge(b.dataset.run);
+  if (action === 'decline-change') return core.declineChange(b.dataset.path, b.dataset.said);
   if (action === 'close-sheet') return closeSheet();
   if (['pause-rule', 'resume-rule', 'delete-rule'].includes(action)) return core.ruleAction(action, b.closest('[data-rule]').dataset.rule);
   if (action === 'add-device') return core.addDevice();
@@ -1923,7 +1924,7 @@ async function coreAction(b) {
     if (action === 'send-message') { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/approve`); scheduleRefresh(['messages']); toast('Sent.'); }
   } catch (e) { toast(e.message); }
 }
-const CORE_ACTIONS = new Set(['open-task', 'evidence', 'retry-task', 'cancel-task', 'decline-merge', 'close-sheet', 'pause-rule', 'resume-rule', 'delete-rule', 'resolve-problem', 'read-message', 'send-message',
+const CORE_ACTIONS = new Set(['open-task', 'evidence', 'retry-task', 'cancel-task', 'decline-merge', 'decline-change', 'close-sheet', 'pause-rule', 'resume-rule', 'delete-rule', 'resolve-problem', 'read-message', 'send-message',
   'add-device', 'copy-command', 'review-request', 'deny-request', 'revoke-device', 'allow-approve', 'promote', 'backup-now', 'drill-now', 'repair-problem']);
 document.addEventListener('click', (e) => {
   if (e.defaultPrevented || e.target.closest('#setup')) return;

@@ -182,7 +182,7 @@ test('M10d: at 80 % the apply is offered with an alert; the apply checks the bud
     const { run } = await planned(core, p.id);
     assert.equal(core.infra.view(run).state, 'review');
     assert.equal(core.infra.view(run).budget!.level, 'warn');
-    assert.match(problems(core), /past 80 %/);
+    assert.match(messages(core), /Budget alert: applying the plan for “Example .*” would take it to \$10\.00 a month of the \$12\.00 budget \(83 %\), past 80 %/);
     // The person lowers the budget before confirming: the apply refuses, with an alert.
     core.infra.updateProject(p.id, { budget_usd_month: 8 });
     const apply = taskOf(core, run, 'apply')!;
@@ -263,4 +263,26 @@ test('M10d budget: prices by attribute, deltas for create, update, replace and d
   assert.equal(verdict(1500, 600, 2000).blocks, true);
   assert.equal(verdict(3000, -500, 2000).blocks, false, 'a plan that only takes cost away is never blocked');
   assert.equal(verdict(0, 1, 0).blocks, true, 'a zero budget allows nothing that costs');
+});
+
+test('M10d: a project past 80 % once applied raises one alert, not one per heartbeat; over budget raises another', { timeout: 60_000 }, async () => {
+  const { core } = boot();
+  const { p } = project(core, { budget: 6 });
+  try {
+    const { run } = await planned(core, p.id);
+    const apply = taskOf(core, run, 'apply')!;
+    core.ledger.approve(apply.id, { confirm: true });
+    assert.equal((await settle(core, apply.id)).state, 'done');
+    const level = () => core.log.problems({ open: true }).filter((x) => /is past 80 % of its budget|is over its budget/.test(x.message)).map((x) => x.message);
+    assert.deepEqual(level(), ['Budget alert: “' + p.name + '” is past 80 % of its budget: $5.00 a month of the $6.00 budget (83 %).']);
+    core.infra.sweep();
+    core.infra.sweep();
+    assert.equal(level().length, 1, 'the heartbeat doesn’t repeat it');
+    // The person lowers the budget under what it costs: over budget, one more alert.
+    core.infra.updateProject(p.id, { budget_usd_month: 4 });
+    core.infra.sweep();
+    assert.equal(level().length, 2);
+    assert.match(level()[0]!, /is over its budget: \$5\.00 a month of the \$4\.00 budget \(125 %\)\. Nova won’t apply any plan that adds to it\./);
+    assert.equal(core.infra.project(p.id).alert_level, 'over');
+  } finally { await core.close(); }
 });
