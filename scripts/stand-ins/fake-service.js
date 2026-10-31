@@ -23,9 +23,11 @@
 //   --start-once            starts once on its real state; started there again, it exits (code 4),
 //                           as a program would with a stale lock
 //   --slow-stop             ignores SIGTERM: only SIGKILL, after the grace period, stops it
+//   --exclusive-state       one writer: exits at once (code 5) if another copy runs on its real
+//                           state (a live pid in <state>/running.pid); removes the mark as it stops
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const args = process.argv.slice(2);
@@ -50,6 +52,14 @@ if (flag('--refuse-real-state') && !scratch) { console.error('refusing the real 
 if (flag('--start-once') && !scratch) {
   const lock = join(state, `started-${version}`);
   try { readFileSync(lock); console.error('a stale lock: started here before'); process.exit(4); } catch { writeFileSync(lock, String(process.pid)); }
+}
+if (flag('--exclusive-state') && !scratch) {
+  const mark = join(state, 'running.pid');
+  let other = 0;
+  try { other = Number(readFileSync(mark, 'utf8')); } catch { /* none */ }
+  if (other && other !== process.pid) { try { process.kill(other, 0); console.error(`another copy (${other}) runs on this state`); process.exit(5); } catch { /* stale */ } }
+  writeFileSync(mark, String(process.pid));
+  process.on('exit', () => { try { if (Number(readFileSync(mark, 'utf8')) === process.pid) rmSync(mark); } catch { /* gone */ } });
 }
 let sick = false;
 

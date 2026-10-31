@@ -215,6 +215,22 @@ test('B2 (minor): a version that renames its port, same number, can be promoted'
   }
 });
 
+test('minor: shadow is one writer at the switch: the old version stops before the new one runs on the real state', async () => {
+  const h = await supervised('nova-rev-shadow-');
+  const { s } = h;
+  try {
+    const port = await freePort();
+    // Each refuses to start on its real state while another copy runs there.
+    await live(s, standIn({ version: '1.0.0', port, flags: ['--exclusive-state'] }));
+    await deploy(s, standIn({ version: '2.0.0', port, alongside: 'shadow', flags: ['--exclusive-state'] }));
+    const r = await promote(s, '2.0.0');
+    assert.equal(r.ok, true, r.said);
+    assert.equal((await whoami(port))!.version, '2.0.0');
+  } finally {
+    await h.stop();
+  }
+});
+
 // ---- S1: the soak's end can't race a rollback ----------------------------------------------------------------
 
 test('S1: a soak that ends while a rollback is stopping a slow version doesn’t take the kept slot from under it', async () => {
@@ -240,7 +256,8 @@ test('S1: a soak that ends while a rollback is stopping a slow version doesn’t
 // ---- S2: a crash and a deploy don't collide ------------------------------------------------------------------
 
 test('S2: a crash, then a deploy during the restart wait: the restart waits its turn, and the service isn’t held', async () => {
-  const h = await supervised('nova-rev-s2a-', { timings: { backoffMs: 1000, maxBackoffMs: 4000 } });
+  // Checks a second apart: the deploy takes longer than the restart wait, so the two meet.
+  const h = await supervised('nova-rev-s2a-', { timings: { backoffMs: 1000, maxBackoffMs: 4000, probeEveryMs: 1000 } });
   const { s } = h;
   try {
     const port = await freePort();
