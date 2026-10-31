@@ -138,3 +138,22 @@ test('checked twice: a placement on a thin client is refused at proposal, and ag
   assert.ok(!wrong.ok && /needs compute/.test(wrong.reason));
   assert.equal(assignmentAllowed(['compute', 'storage'], { service: 'inference', roles: ['compute'] }).ok, true);
 });
+
+test('review finding 8: a device that lost its role is said so, not “hasn’t answered”; a removed device counts as moved; floating waits out one late heartbeat', () => {
+  // Answering, but no longer compute: it moves, and says why.
+  const lost = resolvePlacement(inference(), [{ ...GPU, purposes: ['storage'] }, SMALL_GPU], { now: NOW, current: 'gpu-box' });
+  assert.ok(lost.ok && lost.moved && lost.devices[0]!.id === 'small-gpu', JSON.stringify(lost));
+  assert.match(lost.why, /gpu-box can no longer take it: gpu-box isn’t compute[\s\S]*moves to small-gpu/);
+  assert.doesNotMatch(lost.why, /hasn’t answered/);
+  // Its device removed from the registry: moved, and said so.
+  const gone = resolvePlacement(inference(), [SMALL_GPU], { now: NOW, current: 'gpu-box' });
+  assert.ok(gone.ok && gone.moved, JSON.stringify(gone));
+  assert.match(gone.why, /gpu-box is no longer one of your devices[\s\S]*moves to small-gpu/);
+  // Floating: the copy's device misses one heartbeat; inside the window it stays, past it it moves.
+  const big = dev({ id: 'big', hardware: { ram_bytes: 64 * GB, gpus: [], disk: null } });
+  const small = dev({ id: 'small' });
+  const late = resolvePlacement(def({ mode: 'floating', replicas: 1 }), [{ ...big, healthy: false, last_seen: ago(30) }, small], { now: NOW, current: ['big'], failoverAfterMs: 60_000 });
+  assert.ok(late.ok && late.devices[0]!.id === 'big' && !late.moved, JSON.stringify(late));
+  const away = resolvePlacement(def({ mode: 'floating', replicas: 1 }), [{ ...big, healthy: false, last_seen: ago(90) }, small], { now: NOW, current: ['big'], failoverAfterMs: 60_000 });
+  assert.ok(away.ok && away.devices[0]!.id === 'small' && away.moved, JSON.stringify(away));
+});

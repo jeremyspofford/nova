@@ -49,8 +49,8 @@ export interface ResolveOptions {
   now?: Date;
   // How long a preferred service's device may be unhealthy before the service moves (default 5 min).
   failoverAfterMs?: number;
-  // Where a preferred service runs now, if anywhere.
-  current?: string | null;
+  // Where it runs now, if anywhere: a preferred service's device, or a floating service's devices.
+  current?: string | readonly string[] | null;
   // The hub's id, so a definition may say `hub` for it.
   hubId?: string | null;
 }
@@ -146,33 +146,48 @@ export function resolvePlacement(def: Def, devices: readonly PlacementDevice[], 
     return { ok: true, mode: 'pinned', devices: [pick(d)], moved: false, considered, why: `Pinned to ${d.name}.` };
   }
 
+  // A device that was answering within the window still counts (one late heartbeat moves nothing).
+  const within = (d: PlacementDevice) => d.healthy || now - (d.last_seen ? Date.parse(d.last_seen) : 0) < window;
+
   if (p.mode === 'preferred') {
-    const cur = o.current ? byId.get(o.current) : undefined;
-    if (cur && okOf(cur.id).eligible) {
-      if (cur.healthy) return { ok: true, mode: 'preferred', devices: [pick(cur)], moved: false, considered, why: `It stays on ${cur.name}, which is answering.` };
-      const since = cur.last_seen ? Date.parse(cur.last_seen) : 0;
-      if (now - since < window) return { ok: true, mode: 'preferred', devices: [pick(cur)], moved: false, considered, why: `It stays on ${cur.name} for now: it hasn’t answered for ${Math.round((now - since) / 1000)} s, less than the ${Math.round(window / 1000)} s Nova waits before moving it.` };
+    const curId = typeof o.current === 'string' ? o.current : null;
+    const cur = curId ? byId.get(curId) : undefined;
+    // Why it leaves where it runs, said as it is: gone, no longer allowed, or silent too long.
+    let left: string | null = null;
+    if (curId) {
+      if (!cur) left = `${curId} is no longer one of your devices`;
+      else if (!okOf(cur.id).eligible) left = `${cur.name} can no longer take it: ${okOf(cur.id).why.replace(/\.$/, '')}`;
+      else if (cur.healthy) return { ok: true, mode: 'preferred', devices: [pick(cur)], moved: false, considered, why: `It stays on ${cur.name}, which is answering.` };
+      else {
+        const since = cur.last_seen ? Date.parse(cur.last_seen) : 0;
+        if (now - since < window) return { ok: true, mode: 'preferred', devices: [pick(cur)], moved: false, considered, why: `It stays on ${cur.name} for now: it hasn’t answered for ${Math.round((now - since) / 1000)} s, less than the ${Math.round(window / 1000)} s Nova waits before moving it.` };
+        left = `${cur.name} hasn’t answered for longer than ${Math.round(window / 1000)} s`;
+      }
     }
-    const target = cur ? failoverTarget(p, healthy.filter((d) => d.id !== cur.id), byId, okOf, resolveId) : healthy[0] ?? null;
+    const target = curId ? failoverTarget(p, healthy.filter((d) => d.id !== curId), byId, okOf, resolveId) : healthy[0] ?? null;
     if (target && 'why' in target) return { ok: false, mode: 'preferred', down: true, considered, why: target.why };
     if (target) {
-      const moved = !!cur && target.id !== cur.id;
+      const moved = !!curId && target.id !== curId;
       return {
         ok: true, mode: 'preferred', devices: [pick(target)], moved, considered,
-        why: moved ? `${cur!.name} hasn’t answered for longer than ${Math.round(window / 1000)} s, so it moves to ${target.name}, its failover.` : `${target.name} is the best device that may run it.`,
+        why: moved ? `${left}, so it moves to ${target.name}, its failover.` : `${target.name} is the best device that may run it.`,
       };
     }
     if (!eligible.length) return noWhere();
     return { ok: false, mode: 'preferred', down: true, considered, why: `The devices that may run it (${eligible.map((d) => d.name).join(', ')}) aren’t answering, so it is down until one is back.` };
   }
 
-  // Floating: as many healthy eligible devices as replicas asks for.
+  // Floating: as many eligible devices as replicas asks for. Where its copies run now, they stay
+  // while their device answered within the window; the rest go to the best healthy devices.
   const want = p.replicas ?? 1;
   if (!eligible.length) return noWhere();
-  if (!healthy.length) return { ok: false, mode: 'floating', down: true, considered, why: `The devices that may run it (${eligible.map((d) => d.name).join(', ')}) aren’t answering.` };
-  const chosen = healthy.slice(0, want);
+  const now_ = new Set(Array.isArray(o.current) ? o.current : typeof o.current === 'string' ? [o.current] : []);
+  const kept = eligible.filter((d) => now_.has(d.id) && within(d)).slice(0, want);
+  const chosen = [...kept, ...healthy.filter((d) => !kept.includes(d))].slice(0, want);
+  if (!chosen.length) return { ok: false, mode: 'floating', down: true, considered, why: `The devices that may run it (${eligible.map((d) => d.name).join(', ')}) aren’t answering.` };
+  const moved = [...now_].some((id) => !chosen.some((d) => d.id === id));
   return {
-    ok: true, mode: 'floating', devices: chosen.map(pick), moved: false, considered,
+    ok: true, mode: 'floating', devices: chosen.map(pick), moved, considered,
     why: chosen.length < want ? `It asks for ${want} copies; only ${chosen.length} device${chosen.length === 1 ? ' is' : 's are'} eligible and answering: ${chosen.map((d) => d.name).join(', ')}.` : `One copy each on ${chosen.map((d) => d.name).join(', ')}.`,
   };
 }
