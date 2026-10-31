@@ -139,6 +139,8 @@ export type { Screened, Source as IngestSource, SourceKind, Taint, Verdict, Cand
 // Grounding: what this Nova is, from its own registries, for the chat agent's briefing and tools.
 export { IMPORT_DIR } from './self.ts';
 export type { Self, Era2State } from './self.ts';
+// The eval harness (Amendment 2026-10-31-B Part 4): graders, suites, the model-swap scorecard.
+export * as evals from './evals/index.ts';
 
 export interface CoreOptions {
   home: string;

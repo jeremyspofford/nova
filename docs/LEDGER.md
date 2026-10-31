@@ -6,6 +6,16 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #255 · One place where Nova asks a decision model its quick questions**
+- What changed: every quick judgment (yes/no, pick one, score, find in an image) now has one home: versioned question sets, three possible models (TypeSafe's Jev in the cloud, Tev1 on your machine, or Nova's fixed rules), and a record of each decision kept without the content that was judged.
+- What you can now do: nothing on screen yet: nothing uses it until the safety screen is moved onto it in a follow-up.
+- Still unfinished: no model has passed a test yet, so nothing Nova can't vouch for gets through. The cloud Jev route has never been called for real. The settings switches are designed, not shown yet.
+
+**2026-10-31 · #249 · A test suite of real past failures, so they can't quietly come back**
+- What changed: 28 test tasks built from Nova's own past mistakes, such as answering from guesses instead of its real settings, or the Screenpipe misdiagnosis. 23 must always pass, and a merge that breaks one is blocked. Each model can also get a scorecard.
+- What you can now do: nothing new on screen yet. The scorecard can be run by hand for a local model (gemma4:12b scored 17 of 23).
+- Still unfinished: the scorecard isn't shown in Settings › Models yet. 18 claims Nova makes can't be proven by the suite yet, and one is wrong as written. That's waiting on your decision.
+
 **2026-10-31 · #248 · Tev1, a local safety screener, built and tested: it failed, so it only advises**
 - What changed: Nova can use Tev1, a small decision model running in your own Ollama, to score outside content for prompt-injection tricks. Its 99-case safety test was fixed before it ran. Both sizes failed: they flagged every harmless case too.
 - What you can now do: nothing changes in how Nova screens. Tev1's scores are only logged; Nova's fixed checks, plus holding back anything unsure, still decide.
@@ -225,6 +235,32 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (DS1: the Decision Service).** ADR `docs/plans/decision-service.md` with the owner's decisions; plan `docs/plans/ds1.md`; PR #255.
+- **Built:** `src/core/decision-service/`.
+  - A registry of versioned templates, checked against the authoring rules.
+  - Policies as fully enumerated truth tables mapped onto the tiers. System One only lowers autonomy.
+  - Three seats: cloud Jev (pinned versioned model, no aliases, a key from the vault, TypeSafe's limits, Box on 1.14), Tev1 (Part 1's code, moved), and the stub. The sorting model sits behind the same interface and is retired per template once a decision seat passes its eval.
+  - Routing by mode and the person's per-feature opt-ins: cloud mode screens with Jev once it is set up; the screening opt-in sends screening to Jev in local modes; Box is opt-in in every mode and never goes to the cloud in local-only.
+  - A decision record per decision, with no content.
+  - State built from declared fields only, never truncated, images checked in code.
+  - Settings with recommendations and notices.
+  - A boundary test: no seat or wire client is reachable outside the service.
+- **Moved:** Part 1's `src/core/jev/` to `src/core/decision-service/`.
+- **Kept:** Part 1's eval and verdicts are unchanged: both Tev1 sizes failed, so on Tev1, ingest-screen v1 is evidence only.
+- **Not built:** no live call to TypeSafe was made. The Jev seat is tested against a loopback stand-in of the documented API.
+- **Pending Track 1:** the gate's consumption, the wiring, receipts' opt-in, Health and Settings, and the decision-record migration (NOTES 1–5).
+
+**2026-10-31 (Amendment B Part 4: the eval harness, PR #249, Track 3).** Plan `docs/plans/evals.md`, evidence `docs/evidence/evals.md`.
+- **The harness:** `src/core/evals/` (graders, suites, scorecards, claims, the injection hook). The golden tasks and their driver are in `tests/evals/`.
+- **The tasks:** 28 golden tasks from failures on record, 23 regression and 5 capability. Each names its source, and all are graded by code.
+- **The regression gate:** it runs in `npm test` with stand-ins through the provider registry's openai-compatible provider, so a drop fails CI. The capability suite reports without gating.
+- **The model-swap scorecard:** `sh scripts/evals.sh` writes it to `workers/evals/`. Showing it in Settings › Models waits for its route and UI.
+- **First local score:** gemma4:12b scored 17 of 23 on regression, with every safety task passed.
+- **The closing rule:** the claims register reports 18 current claims the suite can't back, one false as written ("every shell command waits for approval": with a yes in `permissions.md`, untainted commands don't). They are reported, not removed.
+- **Limits:**
+  - In CI it measures Nova's side; model quality only in opt-in local runs.
+  - The injection suite reads the gate's corpus until it is pointed at Part 1's set (a follow-up).
 
 **2026-10-31: Amendment B Part 1, Tev1 as the local decision provider and the injection eval (PR #248, Track 2).**
 - **The API as found:** `POST /v1/systemone` with named Noul questions (1 to 64), P(true) answers, a 64 KiB cap on text and schema, and context overflow as a 400 that is never truncated.

@@ -1,7 +1,9 @@
 // Runs the eval set through the ACTUAL ingest gate (plan docs/plans/tev1.md "The eval"): the real
 // Ingest.screen with its deterministic checks, its own chunking and fence, the ingest-screen
-// template and the decision stack in local-only, with the given Tev1 provider answering. The
-// provider is unbound (no verdict switch), so this measures Tev1, not the switch.
+// template and the decision stack in local-only, with the Tev1 seat answering the registry's
+// ingest-screen v1 (the same wording and state Part 1 ran). The gate still asks through the old
+// decision stack until Track 1 moves it onto the Decision Service, so the seat is wrapped here, in
+// the test, as an old-style provider. No verdict switch: this measures Tev1, not the switch.
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,8 +14,11 @@ import { Workspace } from '../../../src/core/workspace.ts';
 import { Decisions, RulesProvider, Templates } from '../../../src/core/decide.ts';
 import { Ingest } from '../../../src/core/ingest/screen.ts';
 import { BLOCK_LINE } from '../../../src/core/ingest/screen.ts';
-import { BOUNDS, pct, score, verdictOf, type CaseResult, type Metrics } from '../../../src/core/jev/eval.ts';
-import type { Tev1Provider } from '../../../src/core/jev/tev1.ts';
+import { BOUNDS, pct, score, verdictOf, type CaseResult, type Metrics } from '../../../src/core/decision-service/eval.ts';
+import { buildState } from '../../../src/core/decision-service/state.ts';
+import { INGEST_SCREEN_V1 } from '../../../src/core/decision-service/templates/ingest-screen.ts';
+import type { Tev1Seat } from '../../../src/core/decision-service/seats/tev1.ts';
+import type { Decision, DecisionProvider, Template } from '../../../src/core/decide.ts';
 import { QUESTIONS, type Case } from './cases.ts';
 
 export interface CaseRun extends CaseResult {
@@ -25,7 +30,7 @@ export interface CaseRun extends CaseResult {
   input_tokens: number;
 }
 
-export async function runCases(p: Tev1Provider, cases: Case[]): Promise<CaseRun[]> {
+export async function runCases(seat: Tev1Seat, cases: Case[]): Promise<CaseRun[]> {
   const db = new Db(':memory:');
   db.migrate();
   const log = new Log(db, null);
@@ -35,15 +40,18 @@ export async function runCases(p: Tev1Provider, cases: Case[]): Promise<CaseRun[
   const decisions = new Decisions({ templates, providers: [rules], privacy: () => 'local-only', log });
   // Count every request the gate's chunks cause, across its several decisions per case.
   const tally = { requests: 0, input_tokens: 0 };
-  const counted = {
-    id: p.id, egress: p.egress, questionTypes: p.questionTypes,
-    ready: (t: Parameters<Tev1Provider['ready']>[0]) => p.ready(t),
-    decide: async (t: Parameters<Tev1Provider['decide']>[0], inputs: Record<string, unknown>) => {
-      try { return await p.decide(t, inputs); } finally { tally.requests += p.last?.requests ?? 0; tally.input_tokens += p.last?.input_tokens ?? 0; p.last = null; }
+  const counted: DecisionProvider = {
+    id: seat.id, egress: seat.egress, questionTypes: ['noul'],
+    ready: (t: Template) => t.template_id === INGEST_SCREEN_V1.template_id && seat.status().available,
+    decide: async (t: Template, inputs: Record<string, unknown>): Promise<Decision> => {
+      const a = await seat.ask(INGEST_SCREEN_V1, buildState(INGEST_SCREEN_V1, inputs));
+      tally.requests += a.requests; tally.input_tokens += a.usage.input_tokens;
+      const answers = Object.fromEntries(Object.entries(a.answers).map(([q, x]) => [q, x.type === 'noul' ? x.noul : 0.5]));
+      return { template_id: t.template_id, version: t.version, answers, confidence: 0, provider: seat.id, escalate: false, why: `Tev1 (${a.model_answered}), ${a.requests} requests.` };
     },
   };
   decisions.register(counted, { first: true });
-  const ingest = new Ingest({ db, log, templates, decisions, ready: () => true, providerId: p.id });
+  const ingest = new Ingest({ db, log, templates, decisions, ready: () => true, providerId: seat.id });
   const out: CaseRun[] = [];
   for (const c of cases) {
     tally.requests = 0; tally.input_tokens = 0;
@@ -83,7 +91,7 @@ const ms = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); return s
 export function renderEvidence(e: EvidenceFile, counts: Record<string, number>, totals: { total: number; attacks: number; benign: number }): string {
   const L: string[] = [];
   L.push('# Evidence: the Tev1 injection eval (Amendment 2026-10-31-B Part 1)', '');
-  L.push('Written by `tests/acceptance/tev1-eval-real.test.ts` (opt-in, `NOVA_REAL_TEV1=1`); plan `docs/plans/tev1.md`. The per-case results are in `docs/evidence/tev1-eval.json`; the verdicts the gate follows are in `src/core/jev/tev1-verdicts.json`, and CI recomputes them from the per-case results.', '');
+  L.push('Written by `tests/acceptance/tev1-eval-real.test.ts` (opt-in, `NOVA_REAL_TEV1=1`); plan `docs/plans/tev1.md`. The per-case results are in `docs/evidence/tev1-eval.json`; the verdicts the Decision Service follows are in `src/core/decision-service/tev1-verdicts.json`, and CI recomputes them from the per-case results.', '');
   L.push(`- **Cases, bounds and scoring fixed before any run:** commit \`${e.bounds_commit}\`.`);
   L.push(`- **Eval set:** ${totals.total} cases, ${totals.attacks} attack and ${totals.benign} benign; SHA-256 \`${e.cases_sha256}\` (\`tests/ingest/tev1-eval/manifest.json\`).`);
   L.push(`- **Bounds:** detection ≥ ${pct(BOUNDS.detection_min)} on attacks; false positives ≤ ${pct(BOUNDS.false_positive_max)} on benign controls; ECE ≤ ${BOUNDS.ece_max.toFixed(2)} over every (case, question) pair, ${BOUNDS.bins} equal-width bins; a case counts as caught when its highest question probability is ≥ ${BOUNDS.threshold} (the gate's pass threshold).`, '');

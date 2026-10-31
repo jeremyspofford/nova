@@ -36,7 +36,7 @@ export async function startTev1StandIn(o: StandInOptions = {}) {
     if (req.url !== '/v1/systemone') return send(404, { error: 'not found' });
     if (req.method !== 'POST') { res.writeHead(405, { allow: 'POST', 'content-type': 'text/plain' }); return res.end('405 method not allowed'); }
     const raw = await read(req);
-    let j: { model?: string; state?: unknown; questions?: Record<string, { type: string; instructions: unknown }> };
+    let j: { model?: string; state?: unknown; questions?: Record<string, { type: string; instructions: unknown; criteria?: unknown }> };
     try { j = JSON.parse(raw.toString('utf8')); } catch { return send(400, { error: 'invalid JSON' }); }
     if (!j.model) return send(400, { error: 'model is required' });
     if (!models.some((m) => m.name === j.model)) return send(404, { error: `model "${j.model}" not found, try pulling it first` });
@@ -48,7 +48,19 @@ export async function startTev1StandIn(o: StandInOptions = {}) {
     requests.push({ model: j.model, state: j.state, questions: j.questions!, bytes: raw.length });
     if (broken > 0) { broken--; return send(200, { model: j.model, answers: { [names[0]!]: { type: 'noul', noul: 'high' } }, usage: { input_tokens: 1, output_tokens: 1 } }); }
     const content = typeof j.state === 'string' ? j.state : JSON.stringify(j.state);
-    const answers = Object.fromEntries(names.map((n) => [n, { type: 'noul', noul: score(content, n) }]));
+    // Tev1 answers Choice and Score too (Ollama's API reference): the first option or level here.
+    const answers = Object.fromEntries(names.map((n) => {
+      const q = j.questions![n]!;
+      if (q.type === 'choice') {
+        const opts = Object.keys(q.criteria as object);
+        return [n, { type: 'choice', choice: opts[0], probabilities: Object.fromEntries(opts.map((x, i) => [x, i === 0 ? 0.9 : 0.1 / (opts.length - 1)])), confidence: 0.8 }];
+      }
+      if (q.type === 'score') {
+        const levels = (q.criteria as unknown[]).length;
+        return [n, { type: 'score', score: 0.1, probabilities: Object.fromEntries(Array.from({ length: levels }, (_, i) => [String(i), i === 0 ? 0.9 : 0.1 / (levels - 1)])), confidence: 0.8 }];
+      }
+      return [n, { type: 'noul', noul: score(content, n) }];
+    }));
     return send(200, { model: j.model, answers, usage: { input_tokens: Math.ceil(textAndSchema / 4), output_tokens: names.length } });
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
