@@ -17,6 +17,37 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (owner input: service orchestration; the M10 addendum ADR).** Branch
+`docs/m10-orchestration-adr`. The owner's input was added to the packet unchanged, below a one-line
+header, as `docs/builder-packet/INPUT-2026-10-31-SERVICE-ORCHESTRATION.md` (sha256 of the input
+`0fc710ab…`). It is binding for M10's design. `docs/plans/M10.md` was already merged, so the design
+is an addendum: `docs/plans/M10-orchestration.md`, linked from M10.md and from ROADMAP-AND-GATES
+M10. The repo has no `docs/ROADMAP.md`; the roadmap is `docs/builder-packet/ROADMAP-AND-GATES.md`.
+- **Decision:** a Service Manager with two drivers. The supervisor driver is the default, and Nova is
+  fully functional with it alone. K3s is optional. One JSON service definition drives both and maps
+  to the `nova-service` Helm chart's values. Native workloads use the same definitions, run by the
+  device agent.
+- **Order:** phases M10e–M10k, after M10d (PR #241). The supervisor path and device roles come
+  first, then hub promotion and its drill, then native workloads with the capture pilot, then the
+  map, and K3s and GitOps last. They are phases of M10, not an M11: the input puts the promotion
+  drill in M10's gate evidence, and the roadmap has no M11.
+- **Packet conflicts, written down, not resolved silently** (the ADR's table). These need an owner
+  decision:
+  - ADR-3: the runtime agent can't start processes, so who runs native workloads;
+  - ADR-2: Rust for native capture;
+  - ADR-11 and CONTRACTS §5 against "the hub's fingerprint moves", since keys never leave a device;
+  - pinning every hub candidate's key;
+  - a graph library against "no runtime dependencies";
+  - a services repository separate from the home's own history;
+  - going real at all under M10's hard limits.
+
+  Proposed defaults are given for each. None blocks M10e or M10f.
+- **Nothing built.** Docs only. Not grounded in code, because it doesn't exist yet: a multi-service
+  supervisor, device roles, drain, the stable-name move, binary workload verification, anything
+  Kubernetes.
+- **Build-time limits:** no K3s, Helm, Flux, cloud or network change. Stand-ins only: fake
+  `kubectl`, `helm` and `flux`, a simulated cluster, temp homes.
+
 **2026-10-31 (M10c: the independent review of PR #239).** PR #239 was merged as it stood (22a95930);
 these fixes are on `m10c/review-fixes`. Each item was first a failing test in
 `tests/core/coding-review.test.ts`, on throwaway repositories, and each test was run again with its fix

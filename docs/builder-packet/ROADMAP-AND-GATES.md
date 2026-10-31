@@ -144,6 +144,7 @@ Nova gets its own sandboxed computer and browser. A design doc (ADR) comes first
 - **Chat as the control plane** for coding (Relay workers in worktrees), infrastructure (a plan is shown before any apply, and apply is Tier 3), networking (Tier 3, with a snapshot, a diff and a dead-man's switch), and accounts (Tier 3; passwords never enter model context).
 - **Approval tiers apply throughout,** and everything goes in the Work Ledger.
 - **Gate:** set in the M10 design doc before the build starts; at least, the Part 4 tier rules are each proven by tests, plus the fresh-user test.
+- **Service orchestration (owner input 2026-10-31, binding):** `INPUT-2026-10-31-SERVICE-ORCHESTRATION.md`. Designed in the addendum ADR `docs/plans/M10-orchestration.md`; built after M10d as phases M10e–M10k. Nova stays fully functional with no Kubernetes anywhere. The promotion drill with two test devices is part of M10's gate evidence.
 
 ## Sequencing rules
 - Relay stabilization may run parallel to M1–M2 (it is independent), integration only at M8.
