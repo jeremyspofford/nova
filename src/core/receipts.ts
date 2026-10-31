@@ -27,11 +27,12 @@ export interface ReceiptInput {
   privacy_mode: PrivacyMode;
   egress: string;                // 'local' | 'remote:<name>'
   // The person's explicit opt-in that allows this remote call in a local mode (Decision Service).
-  opt_in?: 'screening' | 'box' | undefined;
+  opt_in?: 'screening' | 'box' | 'capture' | undefined;
   context_items: ContextItem[];
 }
 
-export const OPT_INS = ['screening', 'box'] as const;
+// 'capture': a capture source's own cloud opt-in (decision-service.md §2.1; no such switch yet).
+export const OPT_INS = ['screening', 'box', 'capture'] as const;
 
 export interface Receipt {
   id: string;
@@ -43,7 +44,7 @@ export interface Receipt {
   purpose: string;
   privacy_mode: PrivacyMode;
   egress: string;
-  opt_in: 'screening' | 'box' | null;
+  opt_in: 'screening' | 'box' | 'capture' | null;
   context_items: ContextItem[];
 }
 
@@ -59,9 +60,9 @@ export class Receipts {
 
   // The person's settings as they are right now (the core passes them): a decision-model receipt is
   // checked against these, never only against the mode and opt-in its caller names.
-  #live: { mode: () => PrivacyMode; optIn: (f: 'screening' | 'box') => boolean } | null;
+  #live: { mode: () => PrivacyMode; optIn: (f: 'screening' | 'box' | 'capture') => boolean } | null;
 
-  constructor(o: { db: Db; log: Log; now?: () => Date; live?: { mode: () => PrivacyMode; optIn: (f: 'screening' | 'box') => boolean } }) {
+  constructor(o: { db: Db; log: Log; now?: () => Date; live?: { mode: () => PrivacyMode; optIn: (f: 'screening' | 'box' | 'capture') => boolean } }) {
     this.#db = o.db;
     this.#log = o.log;
     this.#now = o.now ?? (() => new Date());

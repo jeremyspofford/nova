@@ -21,7 +21,7 @@ CREATE INDEX decision_record_template ON decision_record (template_id, version, 
 -- sync triggers carry the new column too: only when it is set, so a standby one release behind
 -- (which has no such column) takes every other receipt as before; a newer standby leaves out a
 -- column it doesn't have (mesh/sync.ts).
-ALTER TABLE receipt ADD COLUMN opt_in TEXT CHECK (opt_in IS NULL OR opt_in IN ('screening', 'box'));
+ALTER TABLE receipt ADD COLUMN opt_in TEXT CHECK (opt_in IS NULL OR opt_in IN ('screening', 'box', 'capture'));
 DROP TRIGGER sync_receipt_insert;
 DROP TRIGGER sync_receipt_update;
 CREATE TRIGGER sync_receipt_insert AFTER INSERT ON "receipt" WHEN (SELECT logging FROM sync_state WHERE id = 1) = 1 BEGIN

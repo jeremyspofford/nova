@@ -43,10 +43,11 @@ export interface ScreenInput {
 }
 
 // Capture-derived text: anything Capture took in, such as screen text (OCR) and meeting or audio
-// transcripts. The Decision Service applies the owner's rule for this class (decision-service.md
-// §2.1): never a cloud seat in local-first or local-only, and in cloud mode only with that source's
-// own opt-in, which doesn't exist yet. So today it is screened by local seats and Nova's own checks
-// only, in every mode.
+// transcripts. The Decision Service applies its one capture rule to it (the same rule as the
+// capture-sensitive template's; decision-service.md §2.1): never a cloud seat in local-first or
+// local-only, and in cloud mode only with that capture source's own opt-in (`captureCloud`), which
+// doesn't exist yet. So today it is screened by local seats and Nova's own checks only, in every
+// mode.
 export const CAPTURE_DERIVED = { from: ['capture'] as readonly string[], kinds: ['ocr', 'transcript'] as readonly SourceKind[] };
 export const captureDerived = (i: Pick<ScreenInput, 'from' | 'source'>): boolean => (!!i.from && CAPTURE_DERIVED.from.includes(i.from)) || CAPTURE_DERIVED.kinds.includes(i.source.kind);
 // What a read leaves on the run that made it (plan §5).
@@ -266,7 +267,9 @@ export class Ingest {
     const noul = await this.#noul(parts, source, {
       ...(input.privacy_mode ? { privacy_mode: input.privacy_mode } : {}),
       ...(input.task_id ? { task_id: input.task_id } : {}),
-      ...(captureDerived({ source, ...(input.from ? { from: input.from } : {}) }) ? { content_class: 'capture-derived' as const, capture_source: source.kind } : {}),
+      // Capture-derived text goes by the service's one capture rule. No capture source id reaches
+      // the gate yet, so its per-source opt-in can't apply: never a cloud seat.
+      ...(captureDerived({ source, ...(input.from ? { from: input.from } : {}) }) ? { content_class: 'capture-derived' as const } : {}),
     });
     const r = this.#settle(input, source, c, noul?.scores ?? null, partial, noul?.model ?? null);
     if (r.verdict === 'quarantine' && noul) {

@@ -24,7 +24,7 @@ import type { LegacySeat } from './seats/legacy.ts';
 import type { DecisionSettings } from './settings.ts';
 import type { DecisionLog } from './log.ts';
 import type { VerdictStore } from './verdicts.ts';
-import type { Answer, Band, BuiltState, Decided, DecisionRecord, Feature, Quality, Seat, SeatAnswer, SeatId, ServiceTemplate, Shadow, Trust } from './types.ts';
+import type { Answer, Band, BuiltState, Decided, DecisionRecord, Feature, Precheck, Quality, Seat, SeatAnswer, SeatId, ServiceTemplate, Shadow, Trust } from './types.ts';
 
 export interface RemoteReceipt { task_id: string | null; provider: 'jev'; model: string; purpose: string; privacy_mode: PrivacyMode; egress: 'remote:typesafe'; opt_in: Feature | null; state_sha256: string }
 
@@ -41,19 +41,20 @@ export interface ServiceOptions {
   receipt?: (r: RemoteReceipt) => void;
   // Asks of a seat that hasn't passed a template's eval (evidence only), per seat per day.
   shadowPerDay?: number;
-  // Capture-derived text's own opt-in, per capture source (owner decision, decision-service.md
-  // §2.1). There is no such switch yet, so it is always off.
-  captureOptIn?: (source: string | null) => boolean;
+  // Whether a capture source's text may go to the cloud seat in cloud mode (the per-source opt-in,
+  // off by default; not built yet, so absent means never).
+  captureCloud?: (source: string) => boolean;
   now?: () => Date;
 }
 
 // `shadow`: false when an untrusted seat may not be asked for evidence on this question (the
-// caller has had its sample). `content_class`: 'capture-derived' for capture-derived text, which
-// is routed by its own rule (cloudAllowed).
+// caller has had its sample). `content_class`: 'capture-derived' for capture-derived text inside a
+// template that isn't itself a capture template (the ingest screen of screen text and transcripts);
+// it is routed by the same capture rule as a capture template (cloudAllowed).
 // `version`: a named template version (else the service picks one, see ask()).
+// `capture_source`: the capture source an item came from, for the per-source cloud opt-in.
 export interface AskOptions { subsystem: string; task_id?: string | null; privacy_mode?: PrivacyMode; version?: number; shadow?: boolean; content_class?: 'capture-derived'; capture_source?: string }
 export interface ContentClass { content_class?: 'capture-derived'; capture_source?: string }
-
 // A seat's evidence-only answers are bounded: at most this many asks per seat per UTC day.
 export const SHADOW_PER_DAY = 200;
 
@@ -94,11 +95,16 @@ export class DecisionService {
 
   // Whether cloud Jev may receive this template's state now.
   cloudAllowed(t: ServiceTemplate, mode: PrivacyMode, s: DecisionSettings = this.#o.settings(), c: ContentClass = {}): { ok: boolean; opt_in: Feature | null; why: string } {
-    // Capture-derived text (owner decision, decision-service.md §2.1): never a cloud seat in
-    // local-first or local-only; in cloud mode only with that source's own opt-in (none exists yet).
-    if (c.content_class === 'capture-derived') {
-      if (mode !== 'cloud-allowed') return { ok: false, opt_in: null, why: 'Capture-derived text (screen text, transcripts) never goes to a cloud seat in local-first or local-only.' };
-      if (!(this.#o.captureOptIn?.(c.capture_source ?? null) ?? false)) return { ok: false, opt_in: null, why: 'Capture-derived text (screen text, transcripts) goes to a cloud seat only in cloud mode with that source’s own opt-in, and there is none.' };
+    // One rule for capture text (owner decision, decision-service.md §2.1), whether the template is a
+    // capture template (capture-sensitive) or the text is capture-derived inside another template
+    // (the ingest screen of screen text and transcripts): never a cloud seat in local-first or
+    // local-only; in cloud mode only with that capture source's own opt-in (`captureCloud`; not built
+    // yet, so absent means never).
+    if (t.feature === 'capture' || c.content_class === 'capture-derived') {
+      const source = c.capture_source;
+      if (mode !== 'cloud-allowed') return { ok: false, opt_in: null, why: 'Capture text never goes to a cloud provider in local-first or local-only.' };
+      if (!source || !this.#o.captureCloud?.(source)) return { ok: false, opt_in: null, why: 'Capture text goes to a cloud provider only with that capture source’s own opt-in, which is off.' };
+      return { ok: true, opt_in: 'capture', why: `Capture source ${source} is opted in.` };
     }
     if (t.feature === 'box') {
       if (!s.opt_in.box) return { ok: false, opt_in: null, why: 'Images go to Jev only with the Box opt-in on.' };
@@ -106,7 +112,7 @@ export class DecisionService {
       return { ok: true, opt_in: 'box', why: 'The Box opt-in is on.' };
     }
     if (mode === 'cloud-allowed') return { ok: true, opt_in: null, why: 'Cloud mode.' };
-    if (s.opt_in[t.feature]) return { ok: true, opt_in: t.feature, why: `The ${t.feature} opt-in is on in ${mode}.` };
+    if (s.opt_in[t.feature as 'screening']) return { ok: true, opt_in: t.feature, why: `The ${t.feature} opt-in is on in ${mode}.` };
     return { ok: false, opt_in: null, why: `${mode} keeps ${t.feature} on this device unless its opt-in is on.` };
   }
 
@@ -162,12 +168,36 @@ export class DecisionService {
       ?? all[0]!;
   }
 
+  // Decided by the template's deterministic checks alone (a known sensitive app): no model is asked,
+  // nothing leaves the device, and the record says so.
+  #deterministic(t: ServiceTemplate, built: BuiltState, pre: Precheck, mode: PrivacyMode, o: AskOptions): Decided {
+    const out = t.policy.outcomes[pre.outcome];
+    if (!out) throw new Error(`${t.template_id}'s precheck gave "${pre.outcome}", which isn't one of its outcomes.`);
+    const result: Decided = {
+      id: `dec-${randomUUID().slice(0, 12)}`,
+      template_id: t.template_id, version: t.version,
+      outcome: pre.outcome, action: out.action, tier: out.tier,
+      autonomy: autonomy(out.tier, 'high', !!out.restrictive, t.policy.low),
+      quality: 'high', trust: 'none', seat: 'stub', model: `rules@${t.template_id}@${t.version}`,
+      answers: null, bands: null, why: pre.why,
+      ...(pre.findings.length ? { findings: pre.findings } : {}),
+    };
+    this.#o.log.write({
+      ...result,
+      at: this.#now().toISOString(), task_id: o.task_id ?? null, subsystem: o.subsystem,
+      model_asked: null, privacy_mode: mode, egress: 'none', opt_in: null,
+      state_sha256: built.sha256, state_fields: built.fields,
+      pieces: 0, requests: 0, usage: { input_tokens: 0, output_tokens: 0 },
+      shadows: [], failures: [], verdict_ref: null,
+    });
+    return result;
+  }
+
   // null when there is no such template (a cache miss: the caller falls back to its own rules).
   async ask(templateId: string, fields: Record<string, unknown>, o: AskOptions): Promise<Decided | null> {
     const reg = this.version(templateId, o.version);
     if (!reg) return null;
     const t = reg.template;
-    const built = buildState(t, fields);
     const cls: ContentClass = { ...(o.content_class ? { content_class: o.content_class } : {}), ...(o.capture_source ? { capture_source: o.capture_source } : {}) };
     // The mode and the opt-ins are read again right before anything goes to a cloud seat (and
     // before every request it makes), so a switch turned off mid-screen stops the send.
@@ -176,6 +206,10 @@ export class DecisionService {
       return { mode: m, cloud: this.cloudAllowed(t, m, this.#o.settings(), cls) };
     };
     const mode = live().mode;
+    // Deterministic checks first: a final one decides with no model call at all.
+    const pre = t.precheck?.(fields) ?? null;
+    if (pre?.final) return this.#deterministic(t, buildState(t, fields), pre, mode, o);
+    const built = buildState(t, pre?.fields ?? fields);
     const { candidates, skipped } = this.plan(t, mode, cls);
     const failures: { seat: SeatId; why: string }[] = [...skipped];
     const shadows: Shadow[] = [];
@@ -246,6 +280,12 @@ export class DecisionService {
       quality = rule ? 'high' : 'low';
       why = rule ? 'Nova’s own rule decided; no model was used.' : `No trusted model answered (${[...failures.map((f) => `${f.seat}: ${f.why}`), ...shadows.map((s) => `${s.seat} answered as evidence only`)].join('; ') || 'none available'}), so Nova used its safe default.`;
     }
+    // A deterministic pre-pass that found something, but left the rest to the model: the stricter
+    // of the two outcomes wins.
+    if (pre) {
+      const order = t.policy.order ?? Object.keys(t.policy.outcomes);
+      if (order.indexOf(pre.outcome) > order.indexOf(outcome)) { outcome = pre.outcome; why = `${pre.why} ${why}`; }
+    }
     const out = t.policy.outcomes[outcome]!;
     const result: Decided = {
       id: `dec-${randomUUID().slice(0, 12)}`,
@@ -255,6 +295,7 @@ export class DecisionService {
       quality, trust: decided?.trust ?? 'none',
       seat: decided?.seat ?? 'stub', model: decided?.model ?? `rules@${t.template_id}@${t.version}`,
       answers: decided?.answers ?? null, bands, why,
+      ...(pre?.findings.length ? { findings: pre.findings } : {}),
     };
     const cloud = asked.has('jev');
     const opt_in = cloud ? sentOptIn : null;

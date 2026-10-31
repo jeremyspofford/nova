@@ -56,11 +56,31 @@ export interface Policy {
   default: string;
   // What a low-quality, non-restrictive outcome does.
   low: 'escalate' | 'stop';
+  // The outcomes from least to most restrictive, when a deterministic pre-pass and the model are
+  // combined (the stricter wins).
+  order?: string[];
 }
 
 // ---- templates ----------------------------------------------------------------------------------
 
-export type Feature = 'screening' | 'box';
+// 'capture': capture-derived text (OCR, transcripts), the most sensitive class Nova holds (owner
+// decision on capture screening, ADR §2.1): never to a cloud seat in local-first or local-only; in
+// cloud mode only with a per-source opt-in, off by default.
+export type Feature = 'screening' | 'box' | 'capture';
+// The person's per-feature switches for cloud Jev in local modes (settings.ts). Capture has none:
+// its cloud opt-in is per capture source (not built yet).
+export type OptIn = 'screening' | 'box';
+// What a deterministic pre-pass found (kinds and positions, never the matched text).
+export interface Finding { kind: string; start: number; end: number; field: string }
+export interface Precheck {
+  outcome: string;
+  why: string;
+  findings: Finding[];
+  // True: decided without any model call (a known sensitive app). False: the model still judges,
+  // on `fields` (the text with what was found redacted), and the stricter outcome wins.
+  final: boolean;
+  fields?: Record<string, unknown>;
+}
 export interface ServiceTemplate {
   template_id: string;
   version: number;
@@ -78,6 +98,9 @@ export interface ServiceTemplate {
   rules?: (fields: Record<string, FieldValue>) => string | null;
   // Whether today's sorting model may answer it until a decision seat passes its eval.
   legacy?: boolean;
+  // Deterministic checks that run BEFORE any model (patterns, known apps): null when they find
+  // nothing.
+  precheck?: (fields: Record<string, unknown>) => Precheck | null;
 }
 
 // ---- seats --------------------------------------------------------------------------------------
@@ -145,6 +168,8 @@ export interface Decided {
   answers: Record<string, Answer> | null;
   bands: Record<string, Band> | null;
   why: string;
+  // What the deterministic pre-pass found, if anything (kinds and positions only).
+  findings?: Finding[];
 }
 
 export interface DecisionRecord extends Decided {

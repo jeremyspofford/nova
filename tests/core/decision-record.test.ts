@@ -29,7 +29,7 @@ test('local-only refuses a remote receipt unless it names the screening opt-in, 
   // Box is never allowed under local-only, opt-in or not; nor another provider naming the opt-in.
   assert.throws(() => receipts.record(jev({ opt_in: 'box' })), /Local-only mode doesn't allow/);
   assert.throws(() => receipts.record(jev({ provider: 'some-cloud', opt_in: 'screening' })), /Local-only mode doesn't allow/);
-  assert.throws(() => receipts.record(jev({ opt_in: 'anything' as never })), /opt_in must be one of screening, box/);
+  assert.throws(() => receipts.record(jev({ opt_in: 'anything' as never })), /opt_in must be one of screening, box, capture/);
   assert.equal(log.problems({ open: true }).length, 3, 'each refusal is a problem');
   // Elsewhere an opt-in is recorded as given, and a receipt without one has none.
   assert.equal(receipts.record(jev({ privacy_mode: 'local-preferred', opt_in: 'box' })).opt_in, 'box');

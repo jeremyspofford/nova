@@ -133,6 +133,17 @@ This is a merge, not a rebase, so the commits the evidence above cites are uncha
 - **A test changed because of the overlap:** `tests/ingest/ingest-v2-eval.test.ts`'s "second-to-last-of-15" placement is 16 overlapping gate chunks now. The payload is still in the second to last, and the cases are unchanged.
 - **v2's recorded eval ran on the gate's chunks before the overlap.** Its verdict (fail) stands. A rerun would use the overlapping chunks.
 
+## Merging main again (#259 diagnostics, #264 DS2 capture-sensitive)
+
+- **One capture rule, not two.** #264 routes the `capture-sensitive` template (feature `capture`) through a per-source opt-in, `captureCloud(source)`. This PR routed capture-derived text in the ingest screen through `captureOptIn`. They said the same thing.
+  - **Kept:** #264's `captureCloud`. The single rule in `DecisionService.cloudAllowed` now applies to a capture template and to capture-derived text alike: never a cloud seat in local-first or local-only; in cloud mode only with that capture source's own opt-in.
+  - **Dropped:** this PR's `captureOptIn`.
+- **The gate sends no capture source id.** Capture doesn't hand the gate one yet, so the per-source opt-in can't apply, and capture-derived text never goes to a cloud seat.
+- **Receipts accept `opt_in: 'capture'`.** The migration's CHECK accepts it too. The live check holds it off, because no such switch exists.
+- **Both sides of the service are kept:**
+  - #264's deterministic precheck runs first;
+  - this PR's live re-read, shadow sample, receipt and pin follow it.
+
 ## Limits, said plainly
 
 - **Part 1's set is not under `src/core/decision-service/`.** It stays where Part 1 fixed it, `tests/ingest/tev1-eval/` (the generator, controls and manifest). Only its scoring (`eval.ts`) and verdicts are in the service. `INJECTION_SET` points there.

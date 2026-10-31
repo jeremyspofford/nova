@@ -149,6 +149,8 @@ export * as evals from './evals/index.ts';
 // Hard caps on autonomy cost (Amendment 2026-10-31-B Part 5): ceilings, the meter, the loop detector.
 export { Caps, Meter, DEFAULT_LIMITS, LOOP, CHARS_PER_TOKEN, SPEND_DIR, signature, weightOf, capsRoutes } from './caps/index.ts';
 export type { Limits, Ceilings, Spend, Stop } from './caps/index.ts';
+// One-click diagnostics, redacted by construction (Amendment 2026-10-31-B Part 6).
+export { buildDiagnostics, diagnosticsRoutes, knownSecrets, Scrubber, formsOf, MARKER as DIAGNOSTICS_MARKER, RULE as DIAGNOSTICS_RULE } from './diagnostics/index.ts';
 
 export interface CoreOptions {
   home: string;
@@ -284,7 +286,8 @@ export function createCore(o: CoreOptions) {
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
   const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)) });
   // A decision model's receipt is checked against the person's settings as they are at the send.
-  const liveDecisionOptIn = (f: 'screening' | 'box'): boolean => { const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {}); return v.ok && v.settings.opt_in[f]; };
+  // A capture source's own opt-in doesn't exist yet, so it is never on here either.
+  const liveDecisionOptIn = (f: 'screening' | 'box' | 'capture'): boolean => { if (f === 'capture') return false; const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {}); return v.ok && v.settings.opt_in[f]; };
   const receipts = new Receipts({ db, log, now, live: { mode: () => profile.privacyDefault(), optIn: liveDecisionOptIn } });
   for (const p of design.ensureBuiltins()) log.problem('design', p);
   // Providers (M5a): each enabled one is a ledger worker. A model on one of the person's own

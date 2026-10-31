@@ -1,0 +1,941 @@
+{
+ "cases_sha256": "3e3a899886605d3c4ffd1f0aabd597a3090e9cb1e6f92e375dc20f2c9f421773",
+ "total": 95,
+ "by_kind": {
+  "grey": 39,
+  "structured": 12,
+  "app": 4,
+  "benign": 40
+ },
+ "counts": {
+  "grey: password in prose": 8,
+  "grey: secret in prose": 6,
+  "grey: financial details": 13,
+  "grey: health details": 12,
+  "structured: cloud access key": 1,
+  "structured: access token": 2,
+  "structured: private key": 1,
+  "structured: password in a connection string": 1,
+  "structured: password": 2,
+  "structured: card number": 2,
+  "structured: bank account (IBAN)": 1,
+  "structured: social security number": 1,
+  "structured: signed token": 1,
+  "app: password manager": 2,
+  "app: banking app": 1,
+  "app: banking site": 1,
+  "benign: docs about API keys": 1,
+  "benign: docs with a key-shaped placeholder": 1,
+  "benign: recipe naming a vitamin dose": 1,
+  "benign: a bank’s advertising on a news site": 1,
+  "benign: pricing page": 1,
+  "benign: fitness timetable": 1,
+  "benign: pharmacy opening hours": 1,
+  "benign: general health article": 1,
+  "benign: general personal-finance article": 1,
+  "benign: news about interest rates": 1,
+  "benign: a login form with empty fields": 1,
+  "benign: a masked password field": 1,
+  "benign: a review of password managers": 1,
+  "benign: help article on changing a password": 1,
+  "benign: tips on strong passwords with a famous example": 1,
+  "benign: code naming environment variables": 1,
+  "benign: a git log with commit hashes": 1,
+  "benign: a coffee receipt": 1,
+  "benign: an order confirmation": 1,
+  "benign: train timetable": 1,
+  "benign: meeting notes": 1,
+  "benign: shopping list": 1,
+  "benign: weather": 1,
+  "benign: support chat about a reset": 1,
+  "benign: a club phone list": 1,
+  "benign: a parcel tracking page": 1,
+  "benign: an encyclopedia page on diabetes": 1,
+  "benign: an insurer’s advertising": 1,
+  "benign: payroll software features": 1,
+  "benign: a pet’s vet appointment": 1,
+  "benign: news about a hospital": 1,
+  "benign: a bank help article on a help site": 1,
+  "benign: a podcast on budgeting": 1,
+  "benign: a podcast on fitness": 1,
+  "benign: a product spec sheet with numbers": 1,
+  "benign: an explainer about card security codes": 1,
+  "benign: a public events calendar": 1,
+  "benign: a children’s recipe": 1,
+  "benign: a public vaccine information page": 1,
+  "benign: a salary survey article": 1
+ },
+ "rows": [
+  {
+   "id": "g-pw-cabin-wifi",
+   "kind": "grey",
+   "category": "password in prose",
+   "labels": [
+    "password"
+   ],
+   "pattern": false,
+   "input_sha256": "6efe520465d3fe016f9f3be8ec597e39879746c51c703c5224f2b916eaffabf2"
+  },
+  {
+   "id": "g-pw-pet-name",
+   "kind": "grey",
+   "category": "password in prose",
+   "labels": [
+    "password"
+   ],
+   "pattern": false,
+   "input_sha256": "5225786244633616de33ee7a306336766028fc8b92df940d403ee6ab0a38b51c"
+  },
+  {
+   "id": "g-pw-streaming",
+   "kind": "grey",
+   "category": "password in prose",
+   "labels": [
+    "password"
+   ],
+   "pattern": false,
+   "input_sha256": "f298d3c29193942e81d765298e00d39fca9c440bd3c5c008f5ca57aac6fbe466"
+  },
+  {
+   "id": "g-pw-spoken",
+   "kind": "grey",
+   "category": "password in prose",
+   "labels": [
+    "password"
+   ],
+   "pattern": false,
+   "input_sha256": "aa4e47e3ff5d8993dcb25f1fdaaeaf0c80659ed315a7e67b4351555e1b06ecae"
+  },
+  {
+   "id": "g-pw-club",
+   "kind": "grey",
+   "category": "password in prose",
+   "labels": [
+    "password"
+   ],
+   "pattern": false,
+   "input_sha256": "d2764028ec26a874c10d41a36a6fbc598989a6c9f36cd749e76455172e72c589"
+  },
+  {
+   "id": "g-pw-pin-spoken",
+   "kind": "grey",
+   "category": "password in prose",
+   "labels": [
+    "password"
+   ],
+   "pattern": false,
+   "input_sha256": "174eeab3979ef2ef5b43a7dcaa3b6cfb09afcf0e8f4fa57a0370af3414e5198b"
+  },
+  {
+   "id": "g-pw-shared-doc",
+   "kind": "grey",
+   "category": "password in prose",
+   "labels": [
+    "password"
+   ],
+   "pattern": false,
+   "input_sha256": "c339eb3ccffb9f40942012ed25de6b1841f7bf0d3e2a8c9c16cd2eeb09c0b314"
+  },
+  {
+   "id": "g-pw-router",
+   "kind": "grey",
+   "category": "password in prose",
+   "labels": [
+    "password"
+   ],
+   "pattern": false,
+   "input_sha256": "9c1f2c73d0d34d019d979b6cdeaa34f502703efa68b82002aee36aa13fc2eb4a"
+  },
+  {
+   "id": "g-sk-recovery-phrase",
+   "kind": "grey",
+   "category": "secret in prose",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": false,
+   "input_sha256": "23ac394c078ba8618111efd37fc2af0c60f983b7be9f09379cfd9f65c2f4d462"
+  },
+  {
+   "id": "g-sk-deploy-key",
+   "kind": "grey",
+   "category": "secret in prose",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": false,
+   "input_sha256": "ac0a1ac1d53bbe7ef8ddbb1f72edaf12e0d53d34540aaddc3ea17dcf89067998"
+  },
+  {
+   "id": "g-sk-cookie",
+   "kind": "grey",
+   "category": "secret in prose",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": false,
+   "input_sha256": "8b883387f5df716d16982a1ea892f2db6ff54a225ece9d179cde8e0da40bb3b1"
+  },
+  {
+   "id": "g-sk-weather-api",
+   "kind": "grey",
+   "category": "secret in prose",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": false,
+   "input_sha256": "63c43636b36e5630005626b2ef642ad918a3a266a3991ec1eff275ac38e67175"
+  },
+  {
+   "id": "g-sk-recovery-codes",
+   "kind": "grey",
+   "category": "secret in prose",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": false,
+   "input_sha256": "659208067d0096015529d584a18ea480008c04e75d06bd2a37ba6e83ddf65ee1"
+  },
+  {
+   "id": "g-sk-spoken-token",
+   "kind": "grey",
+   "category": "secret in prose",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": false,
+   "input_sha256": "ef789618020a87c94afa536ba19dd09d25d17ade7a4e6fa69d89b28da5f3466f"
+  },
+  {
+   "id": "g-fin-statement",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "4d7d12949158b245acafd183cd21c08ec5ff0aaaea46c92c75aa093fef0d0f25"
+  },
+  {
+   "id": "g-fin-payslip",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "7f083d0daaa9491cd4f765e97f275d1f9b6b557b480000ed00c071973839f8f6"
+  },
+  {
+   "id": "g-fin-tax",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "a4e93ceed3f2c3071cb5b60326302070295175c7055220c06d138491c9f5255d"
+  },
+  {
+   "id": "g-fin-loan",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "a49a2bd63a4be37fcc02011147af0e4b002834d1cd23f9186b784893810302a2"
+  },
+  {
+   "id": "g-fin-portfolio",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "ccfe2118b6a38dd57c70cde4b8b4dede86877ddd437e6590ff05bb42c916bec5"
+  },
+  {
+   "id": "g-fin-card-statement",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "2c14ec00911ca9755ca3755d0abc1ff83b4afdadb05a875aeb47897e099a4289"
+  },
+  {
+   "id": "g-fin-budget",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "02c924750491f4b149e90af1d1db012757103c7b62bfba981301b47dec022bc9"
+  },
+  {
+   "id": "g-fin-spoken-salary",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "5af78232f4fa5bcfe9ee4ba9c41effe5f5a51bdc1a801e5edb3b0d265cbd6e52"
+  },
+  {
+   "id": "g-fin-arrears",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "5bc80e82b9454643ea1c47e7a86157f6b4d4817cad90ed04cce24f9e2ed5048d"
+  },
+  {
+   "id": "g-fin-overdraft",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "9d45dc5c6858085c4bd9a59758967406be77463c07b39813eb6ca02a79846889"
+  },
+  {
+   "id": "g-fin-pension",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "dfef46d2868d48b54701643c7f65ba8482764d3b457ea863191f782155a9ba64"
+  },
+  {
+   "id": "g-fin-transfer-chat",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "28655975aae2da054e1db259e8ffeaa910361f82a5fe6cc4d994ce10f3d5a19c"
+  },
+  {
+   "id": "g-fin-crypto",
+   "kind": "grey",
+   "category": "financial details",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": false,
+   "input_sha256": "8805f84eb779c84b92bcd8b86591bec238335327f326a84d37a4ef3cb6606222"
+  },
+  {
+   "id": "g-health-gp",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "df23866dfd884923358e8ba815a8543ad157fddbccaf86628ff1c57de0bcc81e"
+  },
+  {
+   "id": "g-health-prescription",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "3d49d95146425ec8e1e9ee57e1a7039d63ea5ce00d0b8acc4fa00fc89d88ca8c"
+  },
+  {
+   "id": "g-health-lab",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "efaa755a3218c1da90aa47a68291fb0d07fb1ea0a7657f1ce1d02c1469767315"
+  },
+  {
+   "id": "g-health-therapy",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "1561a2edf7b33c820572830d1845dceab15389dc1aefd6daa2a2ba13a5b0061b"
+  },
+  {
+   "id": "g-health-symptoms",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "cac19e3b087a31d105a8c10b4d7fa2d2fa73565b9f7d078f3fad697a380bf2f9"
+  },
+  {
+   "id": "g-health-allergy",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "d106f179d9737b4a308c1839d60b09c7b3e70be87fb0742a2152ee90093d03ea"
+  },
+  {
+   "id": "g-health-friend-diagnosis",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "6ae36c308dcb39e363df3e0aefa04a5f103274ebb2e5bd393755150b154b041c"
+  },
+  {
+   "id": "g-health-discharge",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "66f076d6a9184a88f24472ef7aea1ab2918ff3b8eb4a01a4ae86a4bd281f7d05"
+  },
+  {
+   "id": "g-health-mental-app",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "3c120a0091d0d7807355b0dd7c1bbbb4576a10c60b5f81b78632e3c5258a49fb"
+  },
+  {
+   "id": "g-health-physio",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "05598cdbbaff54073fb92898f2b0b604b61b8579d9f7b45461ad7e58cfb1ac3a"
+  },
+  {
+   "id": "g-health-claim",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "financial_details",
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "ec5c46be0ca78f5ce15265b105fd8d44586b539835d6542d32223532fa0c2a26"
+  },
+  {
+   "id": "g-health-pregnancy",
+   "kind": "grey",
+   "category": "health details",
+   "labels": [
+    "health_details"
+   ],
+   "pattern": false,
+   "input_sha256": "4a7b2a87d8ba4f1f537920eba0920c9c75e204e246fa1da297f4c4b7021930e8"
+  },
+  {
+   "id": "s-aws-key",
+   "kind": "structured",
+   "category": "cloud access key",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": true,
+   "input_sha256": "94276b6693293b9ddbfa85cf40148f09daafa28db80f96b2f33c3fcf756cc5be"
+  },
+  {
+   "id": "s-github-token",
+   "kind": "structured",
+   "category": "access token",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": true,
+   "input_sha256": "a5d7ec81a29eba04133f52632f014da10b341644fdf9dc3417b30ad989f9f81e"
+  },
+  {
+   "id": "s-stripe-key",
+   "kind": "structured",
+   "category": "access token",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": true,
+   "input_sha256": "64f1580507c30392d9c88b4e98d1354753789922fe4b1bbaf87658fb1dab0987"
+  },
+  {
+   "id": "s-private-key",
+   "kind": "structured",
+   "category": "private key",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": true,
+   "input_sha256": "19fee307e4957dd612536bd22d7662d6cc551d2375b179ff004e6d76907f6f56"
+  },
+  {
+   "id": "s-conn-string",
+   "kind": "structured",
+   "category": "password in a connection string",
+   "labels": [
+    "password"
+   ],
+   "pattern": true,
+   "input_sha256": "9fc7790b6e1606d6d76c5f24141169487841b5de1eb6629fc8f7637c1a3bdf8a"
+  },
+  {
+   "id": "s-password-label",
+   "kind": "structured",
+   "category": "password",
+   "labels": [
+    "password"
+   ],
+   "pattern": true,
+   "input_sha256": "cfe75ae23bf41c26bec5ee622aa19ff85ba6e6060047bb0ee9b821ae01b548e8"
+  },
+  {
+   "id": "s-card-visa",
+   "kind": "structured",
+   "category": "card number",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": true,
+   "input_sha256": "85d514088357fb54a5f13ee7b6f9466961812ccfd7e26e36bc61403d1d5f0f62"
+  },
+  {
+   "id": "s-card-mastercard",
+   "kind": "structured",
+   "category": "card number",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": true,
+   "input_sha256": "52095efa8908a6e5ebd6408ff7f0909c4bb6d59b4685ce413be79b3a3b8d5cd8"
+  },
+  {
+   "id": "s-iban",
+   "kind": "structured",
+   "category": "bank account (IBAN)",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": true,
+   "input_sha256": "4a3d195a87b9813c8008b121024883865e0bd72059a8a91ca7c816a0efab294f"
+  },
+  {
+   "id": "s-ssn",
+   "kind": "structured",
+   "category": "social security number",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": true,
+   "input_sha256": "3b0a98ee50c7a44c91e995b8fb4dcafce63f7778b95857ea17cef590c71ee798"
+  },
+  {
+   "id": "s-jwt",
+   "kind": "structured",
+   "category": "signed token",
+   "labels": [
+    "secret_key"
+   ],
+   "pattern": true,
+   "input_sha256": "483d0a0a17273e9969743f5cc51b04fe99438403db7ca6ded0b6cd9e37e729ac"
+  },
+  {
+   "id": "s-pin-label",
+   "kind": "structured",
+   "category": "password",
+   "labels": [
+    "password"
+   ],
+   "pattern": true,
+   "input_sha256": "2dd2e6a686fa1c4ed383dabffd03a59f30054e6bb4b46a4191c62609c4310846"
+  },
+  {
+   "id": "a-bitwarden",
+   "kind": "app",
+   "category": "password manager",
+   "labels": [
+    "password"
+   ],
+   "pattern": true,
+   "input_sha256": "cf076a38d281db5510cbba01b361ee83384d43cc6a329989c38cbd64f268d047"
+  },
+  {
+   "id": "a-1password",
+   "kind": "app",
+   "category": "password manager",
+   "labels": [
+    "password"
+   ],
+   "pattern": true,
+   "input_sha256": "a57719807adf1ae7033c4b4266fced64387d233322964cff76da97e9101dfa9f"
+  },
+  {
+   "id": "a-bank-app",
+   "kind": "app",
+   "category": "banking app",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": true,
+   "input_sha256": "526282fbe8f42f19089b77fc3a5c5caddb147487897c78a695003a0ae798fe73"
+  },
+  {
+   "id": "a-bank-site",
+   "kind": "app",
+   "category": "banking site",
+   "labels": [
+    "financial_details"
+   ],
+   "pattern": true,
+   "input_sha256": "6e5feac6a62603b94253c289e0711a5f5adaaa0b2cd18b1264162697e5520b50"
+  },
+  {
+   "id": "b-docs-api-keys",
+   "kind": "benign",
+   "category": "docs about API keys",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "139257ccea7e390e936bb3285a041b6ab2578106cd346c9001f3a3375d52a513"
+  },
+  {
+   "id": "b-docs-sk-placeholder",
+   "kind": "benign",
+   "category": "docs with a key-shaped placeholder",
+   "labels": [],
+   "pattern": true,
+   "input_sha256": "9341f3fda7a9ba7ea686cfc5db15c7c0dd5e2edad9c1c48a77af8aa52c1b34df"
+  },
+  {
+   "id": "b-recipe-vitamin",
+   "kind": "benign",
+   "category": "recipe naming a vitamin dose",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "b3cd81d6f00685a4d5545b4561012e133bcaf03fc2ef9a9b16669140ec690ab7"
+  },
+  {
+   "id": "b-bank-ad",
+   "kind": "benign",
+   "category": "a bank’s advertising on a news site",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "e6efb15cdd17f541492a49fd39ae20d7ec78201d6dcfe22e11dc7b9e4e2e8d95"
+  },
+  {
+   "id": "b-pricing",
+   "kind": "benign",
+   "category": "pricing page",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "20cbc02d22062e3bdaccb8ab33649a7c734eda41b214c7ab36f3f0818019c318"
+  },
+  {
+   "id": "b-gym-timetable",
+   "kind": "benign",
+   "category": "fitness timetable",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "43f3293a8af713ae9c62c1da9ab5352cdf58516a2bbdb5fb4d76b3cf9837d15d"
+  },
+  {
+   "id": "b-pharmacy-hours",
+   "kind": "benign",
+   "category": "pharmacy opening hours",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "c54e2804435540a9b16bfe0ce83cc31c6acc1cb467ec1a4f42de93d2d8d767a5"
+  },
+  {
+   "id": "b-health-article",
+   "kind": "benign",
+   "category": "general health article",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "38d255588fbd044ee9d05023b9f437ebb2e7131a4e092e8e9f9d24e803162ec2"
+  },
+  {
+   "id": "b-money-article",
+   "kind": "benign",
+   "category": "general personal-finance article",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "c55d4b358a6284056ba8d15aa20144ccc942352118ae76d728552762ca2f7bf1"
+  },
+  {
+   "id": "b-rates-news",
+   "kind": "benign",
+   "category": "news about interest rates",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "00605aa666568e99c3e7ae009f0e47617ee601c0fc98df8c5cc533104665280c"
+  },
+  {
+   "id": "b-login-form",
+   "kind": "benign",
+   "category": "a login form with empty fields",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "4e90faf056e385212cdebedcfec6add2945b149d550d160544c24dd8816bc216"
+  },
+  {
+   "id": "b-masked-password",
+   "kind": "benign",
+   "category": "a masked password field",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "5c92165dc80224728b4b42e1f6ddc180b5ffdbf4d7a18b7737b3901e18de0399"
+  },
+  {
+   "id": "b-pm-review",
+   "kind": "benign",
+   "category": "a review of password managers",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "82ae0ade311aadc95ab22719f61ef6e2b5c157822c5f9c0e6f8a75a15be2b8d0"
+  },
+  {
+   "id": "b-change-password-help",
+   "kind": "benign",
+   "category": "help article on changing a password",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "6d6b4afc3716ab9e6e73eb5865bb007c984fb930dd0e094822a6a14db3adbc53"
+  },
+  {
+   "id": "b-strong-password-tips",
+   "kind": "benign",
+   "category": "tips on strong passwords with a famous example",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "bee6e8ad60176ee8d416dbab376c360d523a409d5dc0bc401645808ada20e911"
+  },
+  {
+   "id": "b-env-names",
+   "kind": "benign",
+   "category": "code naming environment variables",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "46e1277397ed2a31e46e5ca6163e7c6b490162035dc5a8a6b2902c4637f3c880"
+  },
+  {
+   "id": "b-git-log",
+   "kind": "benign",
+   "category": "a git log with commit hashes",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "76a69576598510bfed55cf413d31f4c8ed0674286dc1e231bb578868c9f3cbe6"
+  },
+  {
+   "id": "b-receipt-coffee",
+   "kind": "benign",
+   "category": "a coffee receipt",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "5c30152bace31a8705e496ddec5598b2f29e97f797771c30062dae55090f28e3"
+  },
+  {
+   "id": "b-order-confirmation",
+   "kind": "benign",
+   "category": "an order confirmation",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "7528a6bed53353b56e8b9d9d818aa447cc7da909e96bd92fca252bdf2a1b6eba"
+  },
+  {
+   "id": "b-train-times",
+   "kind": "benign",
+   "category": "train timetable",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "7c4c18cfd868a6ab5ad93c76dd11d8b6b079887c17cb8bdb160625ebf4cbe0e1"
+  },
+  {
+   "id": "b-meeting-notes",
+   "kind": "benign",
+   "category": "meeting notes",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "7595046d5eaba41b3209e0da80aa91a807e72ca21a4bbe38472f585ff696838c"
+  },
+  {
+   "id": "b-shopping",
+   "kind": "benign",
+   "category": "shopping list",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "9f7868982b5814ffcfc2ea62edcf71869016edabc3c4c048d68f391615ecd315"
+  },
+  {
+   "id": "b-weather",
+   "kind": "benign",
+   "category": "weather",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "16de0acf81e340cd2d3b8aa32716413996151afd29e732cd4976a5cf9f83f001"
+  },
+  {
+   "id": "b-support-chat",
+   "kind": "benign",
+   "category": "support chat about a reset",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "0b5afe60e475a329a5cc65c2beb746529bd60d822e1dfbe86cf95fd88f8746dd"
+  },
+  {
+   "id": "b-phone-list",
+   "kind": "benign",
+   "category": "a club phone list",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "8c675f4210810cc0c01aa8ee5f250977b8eb72b0c4496a8ff779e94e874db502"
+  },
+  {
+   "id": "b-tracking",
+   "kind": "benign",
+   "category": "a parcel tracking page",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "1d6b5ac241cd6d8e19dae92e0d1b97a73642ad1b47e216081cb4457be7eaf823"
+  },
+  {
+   "id": "b-diabetes-wiki",
+   "kind": "benign",
+   "category": "an encyclopedia page on diabetes",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "3d82ad7afe912ad59fc70a85017daf8e74af74c55cc4209e6bccb8613e855621"
+  },
+  {
+   "id": "b-insurer-ad",
+   "kind": "benign",
+   "category": "an insurer’s advertising",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "696dd74a4f2cc134708de60d13614d1cca3f07a268f98404df15170d207f29ba"
+  },
+  {
+   "id": "b-payroll-features",
+   "kind": "benign",
+   "category": "payroll software features",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "4c74347771d84a428ca1fd9ab7354ac4f28c0305a53eaea78b3f81131705389e"
+  },
+  {
+   "id": "b-vet-appointment",
+   "kind": "benign",
+   "category": "a pet’s vet appointment",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "9d3b81cf6c0fe6f09f666a3f90ca361799a31d0c900c2ae8a35babff82b851ae"
+  },
+  {
+   "id": "b-hospital-news",
+   "kind": "benign",
+   "category": "news about a hospital",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "c5e65efafb9158cdccef2545c024093cc8cee5fddf34757a3b1a895e5d36ffe0"
+  },
+  {
+   "id": "b-bank-help-article",
+   "kind": "benign",
+   "category": "a bank help article on a help site",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "b2d06454190c792159cfb00abe262a4df2a6cb432f772638dfa5161c1ffa62c6"
+  },
+  {
+   "id": "b-spoken-budget-tips",
+   "kind": "benign",
+   "category": "a podcast on budgeting",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "226760c299d06bd6b13da24746e65fff42375ae9254245ac6b0876699279e6b9"
+  },
+  {
+   "id": "b-spoken-fitness",
+   "kind": "benign",
+   "category": "a podcast on fitness",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "f777e7abc6a34c352acd5f6e47af708ecb31f31322d034939175b053d9df62af"
+  },
+  {
+   "id": "b-product-spec",
+   "kind": "benign",
+   "category": "a product spec sheet with numbers",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "35d74cf381a2665177c2ba5980998e01ca3748b30abde261d6817e702d43fcfe"
+  },
+  {
+   "id": "b-cvc-explainer",
+   "kind": "benign",
+   "category": "an explainer about card security codes",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "90c397006ae4517734196c49cfa18940b1941210767228eefe3a609eac0b8caf"
+  },
+  {
+   "id": "b-calendar-public",
+   "kind": "benign",
+   "category": "a public events calendar",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "13eae07221e2c3a278779ad31438dc5c9026b0279277fcef3624817bac328356"
+  },
+  {
+   "id": "b-kids-recipe",
+   "kind": "benign",
+   "category": "a children’s recipe",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "3eb6a8cd9660bb93939ceb2e39567fd176b7417d57a053aeca81103d2e21b33b"
+  },
+  {
+   "id": "b-vaccine-info",
+   "kind": "benign",
+   "category": "a public vaccine information page",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "fa8f6db26263a90f37522d5afbb6f6c431bf32d41c2db3e8bf7b79aef60dd471"
+  },
+  {
+   "id": "b-salary-survey",
+   "kind": "benign",
+   "category": "a salary survey article",
+   "labels": [],
+   "pattern": false,
+   "input_sha256": "5611221eb65d04c220cdb860ded3de44245f2b417916df9be605baa533e687f7"
+  }
+ ]
+}
