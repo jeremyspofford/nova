@@ -17,6 +17,41 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (owner decisions on the orchestration ADR).** Same branch and PR (#243). The owner's
+decisions were added to the packet unchanged, below a one-line header, as
+`docs/builder-packet/INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md` (sha256 of the decisions
+`3978a592…`). All six proposed resolutions were approved as written, and `docs/plans/M10-orchestration.md`
+now records them as decided. The matching conflict rows (2–7) and open questions are resolved:
+1. **Native workloads:** the boot agent gets a fixed verb set (install a verified artifact, start,
+   stop, switch, probe health on loopback) for hub-signed workloads only. The runtime decides and
+   still can't start processes.
+2. **Hub identity:** the roster's lineage and the stable name transfer; private keys never move. Every
+   hub candidate's key is pinned, each candidacy tier 3. A promotion roll-back is epoch + 2.
+3. **The graph:** hand-drawn SVG, with no new runtime dependency.
+4. **The capture pilot:** Screenpipe first, as a managed native workload under its own code signature.
+5. **No vault-key escrow:** after a cold promotion the sheet states the backup's time, what was lost,
+   and that connectors need signing in again.
+6. **GitOps:** a separate `services.git` in the home, written only by the promote stage. Flux uses a
+   per-cluster read-only deploy key from the vault. Rollback is a pipeline revert, never `helm rollback`.
+
+- **Phase order** M10e–M10k is unchanged. Each phase's gate now names the tests for its decisions: the
+  boot agent refusing unsigned workloads and unknown verbs, no private key leaving its device during
+  promotion, rollback as a revert commit, and no runtime dependency.
+- **Where the decisions pull against something else, written down:**
+  - **A spoke's Screenpipe data has no path to the hub.** The hub pulls Screenpipe at loopback; the
+    runtime has no network; the five verbs carry no data. Now the ADR's one open question. Proposed:
+    the hub pulls over the mesh, with Screenpipe bound to the mesh address and its API key from the
+    vault (tier 3). Until it is answered, the pilot runs on the hub's own device.
+  - **Decision 6 replaces the input's "the same git repo".** This is the owner superseding their own
+    earlier wording, not a conflict.
+  - **The existing standby becomes a hub candidate without a new tier-3 step.** Its key is already
+    pinned by its standby enrollment. Every other candidacy asks.
+  - **Screenpipe as the pilot didn't lift the hard limit.** Installing a real Screenpipe on a real
+    device still needs the owner's OK. Whether two copies can run side by side (for `shadow`) is
+    unverified, so its definition starts with `alongside: none`.
+  - **Conflicts row 10** (no vault secret in a cloud-controlled cluster) wasn't among the six. It
+    stays a proposed default.
+
 **2026-10-31 (owner input: service orchestration; the M10 addendum ADR).** Branch
 `docs/m10-orchestration-adr`. The owner's input was added to the packet unchanged, below a one-line
 header, as `docs/builder-packet/INPUT-2026-10-31-SERVICE-ORCHESTRATION.md` (sha256 of the input
