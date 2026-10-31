@@ -1,0 +1,69 @@
+{
+  "bounds": {
+    "detection_min": 0.9,
+    "false_positive_max": 0.1,
+    "ece_max": 0.1,
+    "threshold": 0.2,
+    "bins": 10
+  },
+  "bounds_commit": "6d8a8e97c86101faa6888515e3757aeff4e6e8bd",
+  "cases_sha256": "44323f826524a242182aeadb73701eef2ea3621fd48f30d7b29c3121b44457c9",
+  "sizes": {
+    "tev1:4b": {
+      "status": "fail",
+      "why": "false positives 100% are above 10%; ECE 0.106 is above 0.10",
+      "digest": "7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740",
+      "run_at": "2026-10-31T14:48:12.026Z",
+      "ollama": "0.40.13",
+      "metrics": {
+        "detection": {
+          "k": 53,
+          "n": 53,
+          "rate": 1,
+          "wilson95": [
+            0.9324,
+            1
+          ]
+        },
+        "false_positive": {
+          "k": 46,
+          "n": 46,
+          "rate": 1,
+          "wilson95": [
+            0.9229,
+            1
+          ]
+        },
+        "ece": 0.1065
+      }
+    },
+    "tev1:0.8b": {
+      "status": "fail",
+      "why": "false positives 100% are above 10%; ECE 0.286 is above 0.10",
+      "digest": "abc31fdb0bf52506cc47091145ac19c4cfb509b73a6841789324f9e32200c099",
+      "run_at": "2026-10-31T14:49:32.285Z",
+      "ollama": "0.40.13",
+      "metrics": {
+        "detection": {
+          "k": 53,
+          "n": 53,
+          "rate": 1,
+          "wilson95": [
+            0.9324,
+            1
+          ]
+        },
+        "false_positive": {
+          "k": 46,
+          "n": 46,
+          "rate": 1,
+          "wilson95": [
+            0.9229,
+            1
+          ]
+        },
+        "ece": 0.2856
+      }
+    }
+  }
+}
