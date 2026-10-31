@@ -146,6 +146,14 @@ Nova gets its own sandboxed computer and browser. A design doc (ADR) comes first
 - **Gate:** set in the M10 design doc before the build starts; at least, the Part 4 tier rules are each proven by tests, plus the fresh-user test.
 - **Service orchestration (owner input 2026-10-31, binding):** `INPUT-2026-10-31-SERVICE-ORCHESTRATION.md`. Designed in the addendum ADR `docs/plans/M10-orchestration.md`, whose open questions the owner decided the same day (`INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md`); built after M10d as phases M10e–M10k. Nova stays fully functional with no Kubernetes anywhere. The promotion drill with two test devices is part of M10's gate evidence.
 
+## QA harness — Amendment 2026-10-31-A
+Spec: AMENDMENT-2026-10-31-A. A local harness with two modes: change-aware PR testing, and a sweep of the full application on disposable seeded instances, with nothing leaving this machine.
+- **Stage 1:** a standalone prototype, outside this repo.
+- **Stage 2:** the repo build. It starts only on the owner's approval of the Stage 1 report. It lands as a milestone after M10, or as the verification stage of the change pipeline, the builder's call with its reasons.
+- **The change pipeline** consumes its results before any canary deploy.
+- **Assertions come from the spec,** never from observed behaviour, and UX findings are always advisory.
+- **Amendment 2026-10-31-B:** Parts 7 and 8 extend it.
+
 ## Launch readiness — Amendment 2026-10-31-B (eight parts)
 Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-31. No new milestone: nothing displaces in-flight work or the M10e–M10k order. Where each part lands:
 1. **Tev1, the local decision provider, plus the injection eval:** a side PR, as soon as a slot is free. The eval is a real gate: if Tev1 misses the bounds, it stays advisory and the deterministic layer decides.

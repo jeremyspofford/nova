@@ -67,3 +67,6 @@ Where it differs from earlier packet text, the amendment wins: for example, the 
 `AMENDMENT-2026-10-31-B.md` is binding spec, and `LAUNCH-READINESS-RESEARCH-2026-10-31.md` is its evidence base. Where they disagree, the amendment governs. Its own sequencing rule holds: nothing in it displaces in-flight work or the M10e–M10k order. Two points are honoured exactly:
 - **Part 1's eval is a real gate.** If Tev1 misses the stated bounds, it stays advisory and the result is reported plainly. Neither the eval nor the bounds are tuned until it passes.
 - **The closing rule.** No capability may be claimed in onboarding, docs or the UI that the Part 4 eval suite can't demonstrate.
+
+## Addendum — Amendment 2026-10-31-A, QA harness (owner, approved)
+`AMENDMENT-2026-10-31-A.md` is binding spec. Flows assert what the spec says, never what the code happens to do. Stage 2 waits on the owner's approval of the Stage 1 report.

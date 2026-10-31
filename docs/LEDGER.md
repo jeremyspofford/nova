@@ -31,7 +31,10 @@ and `e160e581…`).
   8. QA Stage 2 with the Service Manager: the design, applied when Stage 2 is built.
 - **Order:** nothing displaces in-flight work (M10d's review fixes, M10e) or the M10e–M10k order.
 - **Recorded in:** ROADMAP-AND-GATES and OPERATING-RULES, which notes the two exact points (Part 1's eval is a real gate, and the closing rule on claims).
-- **A gap:** Part 7 builds on "Amendment 2026-10-31-A" (the QA harness, Stage 2), which isn't in the repo or in the packet as delivered. It is asked for before Part 7 or Part 8 is built.
+- **Amendment 2026-10-31-A** (the QA harness: change-aware PR testing and a full-application sweep, owner-approved) was added the same day, exactly as given (sha256 `2396e1d2…`). Parts 7 and 8 build on it.
+  - Stage 1 is a standalone prototype built outside this repo.
+  - Stage 2, folding it into the repo, starts only on the owner's approval of the Stage 1 report.
+  - Its rule binds every flow: assertions come from the spec, never from observed behaviour.
 
 **2026-10-31 (CI: change-aware, with one always-run required check).** Owner instruction.
 - **Sorting:** a `changes` job sorts the change's files with `scripts/ci-changes.sh`.
