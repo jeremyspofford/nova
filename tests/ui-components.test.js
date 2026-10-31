@@ -163,12 +163,14 @@ test('the coding sheets: the check says it runs the agent’s code; the merge sh
     changes: [{ path: 'app.mjs', kind: 'modified', added: 1, removed: 1 }, { path: 'logo.png', kind: 'added', added: null, removed: null }],
     diff: 'diff --git a/app.mjs b/app.mjs\n-<old>\n+<new>\n', merge: 'Merging moves main in /srv-placeholder/project from aaaaaaa to bbbbbbb: exactly this diff. Nova doesn’t push.',
     test: { command: 'npm test', commit: 'bbbbbbbcccc', passed: true, exit: 0, ms: 1200, output: 'ok 1' },
-    preview: { url: 'http://127.0.0.1:41000/', running: true },
+    preview: { url: 'http://127.0.0.1:41000/', running: true }, scope: 'Source files only.',
   };
   const task = (step, tier) => ({ id: `t-${step}`, title: `${step} it`, approval_tier: tier, state: 'waiting', brief: { inputs: { step, run_id: run.id } } });
   const check = codingSheet(task('check', 2), run);
   assert.match(check, /data-tier="2"/);
-  assert.match(check, /This runs code the coding agent wrote, as you, with access to your files\./);
+  assert.match(check, /This runs code the coding agent wrote, as you: it can do anything you can on this computer, Nova’s own files included\. Nova’s later promise, to merge only exactly what you reviewed, is only as strong as this OK\./);
+  assert.match(check, /What it was allowed to change: Source files only\./);
+  assert.match(codingSheet(task('merge', 3), run), /What it was allowed to change: Source files only\./);
   assert.match(check, /Nothing in your repository has changed\./);
   assert.match(check, /logo\.png<\/strong> · added · binary/);
   assert.doesNotMatch(check, /name="confirm"/, 'tier 2: no confirmation box');
