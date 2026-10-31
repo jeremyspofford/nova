@@ -221,7 +221,7 @@ Further rules for the log:
 
 Box locates a target in an image as four edges, each a fraction of the image's width or height.
 - **The docs mark Box and images "Dreamer-ready",** not production. They need the images header and, for Box, `jev-1.14.0`.
-- **Tev1 takes no images,** so Box exists only on the cloud seat. In local-only and local-first, a Box template uses cloud Jev only when the person has switched on the Box opt-in (owner decision 4); otherwise it is unavailable and its deterministic default applies. Camera frames stay local in local-only mode even with the opt-in on (the Smart Home ADR's camera rule, owner to confirm). Ollama's Clef models read images and could be a later local image seat; that is not designed here.
+- **Tev1 takes no images,** so Box exists only on the cloud seat. In local-first, a Box template uses cloud Jev only when the person has switched on the Box opt-in (owner decision 4). **In local-only, Box never goes to a cloud provider** (owner decision 4, refined by the Smart Home decisions): only to a local seat that reads images, with the opt-in on. Today no local seat reads images, so in local-only Box is unavailable and its deterministic default applies. Ollama's Clef models read images and could be a later local image seat; that is not designed here.
 
 **How Nova uses Box, when its phase comes:**
 
@@ -232,7 +232,7 @@ Box locates a target in an image as four edges, each a fraction of the image's w
 | **Capture** (screen frames) | Nouls: "is a password field focused in `frame`?", "is a banking app in front?". A Box locates the region to redact. | A "yes" pauses capture or redacts the region. This only ever makes capture **more** private, so it can act at tier 0. |
 
 The rules for every Box use:
-- **Consent:** frames are sent only from sources whose capture consent is on (CONTEXT-AND-CAPTURE), and only with the Box opt-in switched on (owner decision 4).
+- **Consent:** frames are sent only from sources whose capture consent is on (CONTEXT-AND-CAPTURE), and only with the Box opt-in switched on (owner decision 4), and in local-only only to a local seat (never a cloud provider).
 - **Owner approval:** a camera or screen frame leaving the home is a new kind of egress, and needs the owner's explicit yes (open question 4) before the phase starts.
 - **Logging:** the log keeps the frame's hash and the Box coordinates, never the image.
 
@@ -335,6 +335,7 @@ The input's use-case map is phased below as the record. **These are side PRs. Th
    - **A plain notice** says what leaves the machine, images included, and that local-only isn't strictly local for that feature while it is on.
    - **Box stays labelled preview** while TypeSafe labels it so.
    - **The local seat stays the goal:** Tev1 is re-authored and re-evaluated (v2), and each feature returns to local once a local model passes that template's eval.
+   - **Refined the same day (Smart Home ADR, owner decision 5):** in local-only mode, Box frames never go to a cloud provider. "No cloud in local-only", not "no Box in local-only": with the opt-in on, frames may go to a local decision provider (Tev1-class) that reads images. Opt-in, every mode, with that seat restriction. The separate text-screening toggle for local-only (decision 1) is unchanged.
 
 ## NOTES for Track 1
 
