@@ -24,7 +24,7 @@ export const BOUNDS = Object.freeze({
   // Reliability bins.
   bins: 10,
 });
-export type Bounds = typeof BOUNDS;
+export type Bounds = { readonly [K in keyof typeof BOUNDS]: number };
 // Reported, not a bound: the gate's block threshold.
 export const BLOCK_AT = 0.8;
 export const UNANSWERED_P = 0.5;
