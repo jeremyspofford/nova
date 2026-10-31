@@ -10,13 +10,15 @@ sent, no real network was looked at, no real device was paired, and nothing was 
 No Kubernetes, Helm or Flux was installed or run; the no-Kubernetes tripwire was armed for every run.
 
 The branch is `m10f/roles-onboarding`, from main at `c0bae29d` (M10e merged), with main merged in at
-`e343026f` (#259, the diagnostics bundle).
+`e343026f` (#259, the diagnostics bundle) and `4881a2b2` (#264, capture-sensitive; docs and the
+decision service only, no overlap with this phase's code).
 
 ## Suite
 
 `npm run check` passes (token lint, themes, typecheck, the suite under the tripwire): **1341 tests:
 1329 pass, 0 fail, 12 skipped** (the existing opt-in real-service tests), at `ccbb94bf` (main merged
-at `e343026f`). The log ends `no-Kubernetes tripwire: never fired`.
+at `e343026f`); and again after merging main at `4881a2b2` (#264), at `e8042e95`: **1359 tests: 1346
+pass, 0 fail, 13 skipped**. The log ends `no-Kubernetes tripwire: never fired`.
 
 `scripts/ui-test.sh` (the Playwright image, Chromium and WebKit, under the tripwire), at `ccbb94bf`:
 **100 tests: 100 pass, 0 fail**; the log ends `no-Kubernetes tripwire: never fired`. Screenshots in
