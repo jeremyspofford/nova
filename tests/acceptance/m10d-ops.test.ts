@@ -150,7 +150,7 @@ test('M10d gate: infrastructure, a network change and an account step through ch
     assert.equal(cv.state, 'kept', cv.reason);
     assert.equal(cv.contact_device, 'Example phone');
     assert.equal(net.config().dns.records['nas.home.example'], '192.0.2.30');
-    evidence.push(`- Network change (tier 3) applied after the confirmation, with the diff (Wi-Fi key masked):`, '', '```diff', String(cv.diff).trimEnd(), '```', '', `- ${cv.reason}`);
+    evidence.push(`- Network change (tier 3) applied after the confirmation. The diff the person saw (the Wi-Fi key is in no view: secret values are masked):`, '', '```diff', String(cv.diff).trimEnd(), '```', '', `- ${cv.reason}`);
 
     // ---- Accounts ----
     // The person saves a sign-in (outside chat). The chat asks for a password change: a tier-3 task,
@@ -180,7 +180,7 @@ test('M10d gate: infrastructure, a network change and an account step through ch
     assert.ok(!secrets.some((x) => transcripts.join('\n').includes(x)), 'the chat transcripts');
     const records = JSON.stringify([await get('/tasks'), await get('/infra'), await get('/network'), await get('/problems'), await get('/messages')]);
     assert.ok(!secrets.some((x) => records.includes(x)), 'the tasks, runs, changes, problems and messages');
-    evidence.push(`- Secrets: the project’s provider token (printed by the leaky stand-in on every plan and apply), the router’s token, its Wi-Fi key and the saved sign-in’s password are in none of the ${files.length} files under the test machine’s folder that hold them (none), the server’s output, the ${transcripts.length} chat transcripts, or the API’s tasks, runs, changes, problems and messages.`);
+    evidence.push(`- Secrets: the project’s provider token (printed by the leaky stand-in on every plan and apply), the router’s token, its Wi-Fi key and the saved sign-in’s password are in no file under the test machine’s folder (Nova’s home, the user folder, the egress log), the server’s output, the ${transcripts.length} chat transcripts, or the API’s tasks, runs, changes, problems and messages.`);
     assert.equal(readFileSync(m.egress, 'utf8'), '', 'nothing tried to leave this machine');
     evidence.push('- Egress tripwire: nothing tried to leave this machine.');
   } finally {
