@@ -13,8 +13,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # What the change touches (scripts/ci-changes.sh): a docs-only change skips the heavy jobs.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      heavy: ${{ steps.sort.outputs.heavy }}
+      computer: ${{ steps.sort.outputs.computer }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: sort
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          # A pull request is checked out as its merge commit, whose first parent is the base it
+          # merges into, so that diff is exactly its change. A push compares with what main was
+          # before it. A new ref, or a base that can't be found, gives no file list: that counts as code.
+          if [ "$EVENT" = pull_request ]; then from="$(git rev-parse HEAD^1)"; else from="$BEFORE"; fi
+          files=""
+          if [ -n "$from" ] && ! echo "$from" | grep -q '^0*$' && git cat-file -e "$from^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$from" "$SHA")"
+          fi
+          printf '%s\n' "$files" | sed 's/^/  /'
+          printf '%s\n' "$files" | sh scripts/ci-changes.sh | tee -a "$GITHUB_OUTPUT"
+
   checks:
     name: lint · typecheck · themes · tests
+    needs: changes
+    if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     # A hung test fails the job instead of holding a runner for hours.
     timeout-minutes: 30
@@ -36,10 +68,11 @@ jobs:
             node --check "$f"
           done
       - run: npm run check:themes
-      # Nova Computer's one image (M10a), pinned by digest in src/core/computer/policy.ts, pulled once
-      # here so its tests (Docker is on the runner) don't each wait for it. They skip, saying why, only
-      # where Docker isn't available.
+      # Nova Computer's one image (M10a), pinned by digest in src/core/computer/policy.ts, pulled ahead
+      # when Nova Computer's code or tests change. Otherwise its tests pull it themselves on first use
+      # (tests/core/computer-support.ts), and skip, saying why, only where Docker isn't available.
       - name: Nova Computer image
+        if: needs.changes.outputs.computer == 'true'
         run: docker pull "$(node --input-type=module -e "const m = await import('./src/core/computer/policy.ts'); console.log(m.IMAGE)")"
       - run: npm test
       - run: npm audit --audit-level=high
@@ -48,6 +81,8 @@ jobs:
     # The M3 gate in a real browser: live design-system swap, the resize/posture sweep, and setup
     # completed from the PWA alone. In CI it never skips: no browser is a failure.
     name: UI gate (Chromium)
+    needs: changes
+    if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     # It takes about 20 minutes. PR #236's first run hung for 90: a failed test left a server open,
     # so its file never ended (test:ui now force-exits and times tests out). This is the backstop.
@@ -69,3 +104,28 @@ jobs:
           name: ui-gate-screenshots
           path: ${{ runner.temp }}/ui-shots
           if-no-files-found: ignore
+
+  # The one required check. It always runs. It passes when the heavy jobs passed, or were skipped
+  # because the change is docs only, and fails on anything else, so a skipped job never blocks a
+  # merge and a failed or cancelled one always does.
+  gate:
+    name: gate
+    if: always()
+    needs: [changes, checks, ui-gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          HEAVY: ${{ needs.changes.outputs.heavy }}
+          CHECKS: ${{ needs.checks.result }}
+          UI: ${{ needs.ui-gate.result }}
+        run: |
+          echo "changes: $CHANGES · heavy: $HEAVY · checks: $CHECKS · UI gate: $UI"
+          [ "$CHANGES" = success ] || { echo "The change couldn't be sorted."; exit 1; }
+          if [ "$HEAVY" = true ]; then
+            [ "$CHECKS" = success ] && [ "$UI" = success ] || { echo "A required job didn't pass."; exit 1; }
+          else
+            [ "$CHECKS" = skipped ] && [ "$UI" = skipped ] || { echo "Docs only, but the heavy jobs weren't skipped."; exit 1; }
+            echo "Docs only: the heavy jobs were skipped."
+          fi
