@@ -13,7 +13,7 @@
 // calls TypeSafe: Jev is a loopback stand-in.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCore, type Core } from '../../src/core/index.ts';
@@ -50,7 +50,7 @@ async function rig(mode: PrivacyMode, state: State, p = 0.02, o: { optIn?: boole
     core.vault.put('decisions.jev', jev.key);
   }
   await core.decisionService.refresh();
-  return { core, tev1, jev, close: async () => { await core.close(); await tev1?.close(); await jev?.close(); } };
+  return { core, tev1, jev, close: async () => { await core.close(); await tev1?.close(); await jev?.close(); rmSync(home, { recursive: true, force: true }); } };
 }
 
 async function screenAll(core: Core) {

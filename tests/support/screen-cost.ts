@@ -3,7 +3,7 @@
 // loopback stand-ins, counting chunks, requests and estimated input tokens per seat. Run by hand:
 //   node tests/support/screen-cost.ts [characters]
 // Nothing calls TypeSafe or a real Ollama.
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCore } from '../../src/core/index.ts';
@@ -22,8 +22,9 @@ export async function measure(chars: number) {
   for (const seat of ['tev1', 'jev'] as const) {
     const tev1 = await startTev1StandIn({ score: () => 0.02 });
     const jev = await startJevStandIn({ noul: () => 0.02 });
+    const dir = mkdtempSync(join(tmpdir(), 'nova-screen-cost-'));
     const core = createCore({
-      home: mkdtempSync(join(tmpdir(), 'nova-screen-cost-')), version: '0.1.0', trustedOrigin: () => true,
+      home: dir, version: '0.1.0', trustedOrigin: () => true,
       models: { ollamaUrl: tev1.url, hardware: async () => hubHardware() as never, watchMs: 60_000 },
       decisions: { verdicts: memoryVerdicts([seat === 'tev1' ? pass('tev1', 'tev1:4b@aaaa4b') : pass('jev', 'jev-1.14.0')]) },
     });
@@ -37,6 +38,7 @@ export async function measure(chars: number) {
     out[seat] = { chunks: n, requests: rows.reduce((a, x) => a + x.requests, 0), input_tokens: rows.reduce((a, x) => a + (JSON.parse(x.usage) as { input_tokens: number }).input_tokens, 0), ms };
     if (r.model === null) throw new Error(`${seat}: the screen didn't use the trusted seat`);
     await core.close(); await tev1.close(); await jev.close();
+    rmSync(dir, { recursive: true, force: true });
   }
   return out;
 }

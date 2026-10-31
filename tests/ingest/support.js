@@ -3,7 +3,7 @@
 // collector that records every request), the stand-in Google for mail, and optionally the
 // stand-in Ollama as the local sorting model. Neutral placeholders only.
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createNova } from '../../src/server.js';
@@ -179,6 +179,8 @@ export async function startNova({ agent, yes = [], model = null, gmail = false, 
       await web.close();
       await google?.close();
       await ollama?.close();
+      // The temp home this Nova was given goes with it.
+      rmSync(home, { recursive: true, force: true });
     },
   };
   return h;

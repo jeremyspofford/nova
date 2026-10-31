@@ -155,6 +155,7 @@ ${scorecards ? `<ul class="model-list model-cards">${scorecards}</ul>` : '<p cla
   <p class="settings-note">The key is kept in Nova’s vault and never shown again. No call is made to Jev until a route and a key are set.</p>
   <div class="field-row"><label class="field-label">Tev1 size<select class="field" name="tev1">${SIZES.map(([v, w]) => `<option value="${v}"${(s.tev1?.model ?? 'auto') === v ? ' selected' : ''}>${esc(w)}</option>`).join('')}</select></label></div>
   ${toggle('screening', 'Screening: let Jev judge outside content in local modes')}
+  <p class="settings-note">Screening covers pages, mail, files and tool output. Text from Capture (screen text and meeting transcripts) never goes to Jev, in any mode: only your local models and Nova’s own checks screen it.</p>
   ${toggle('box', 'Box (preview): let Jev judge images')}
   ${notices.length ? `<ul class="model-notices">${notices.map((w) => `<li class="settings-note is-unchecked">${esc(w)}</li>`).join('')}</ul>` : ''}
   ${pending ? '<p class="settings-note">This changes where outside content may go or which model judges it. Read the notices above first.</p>' : ''}

@@ -5,7 +5,7 @@
 // real model is touched; nothing calls TypeSafe.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -26,7 +26,7 @@ async function boot() {
     const text = await res.text();
     return { status: res.status, text, body: text ? JSON.parse(text) : null };
   };
-  return { nova, home, call, stop: async () => { nova.server.close(); await nova.core.close(); } };
+  return { nova, home, call, stop: async () => { nova.server.close(); await nova.core.close(); rmSync(home, { recursive: true, force: true }); } };
 }
 
 const KEY = 'ts-test-key-0123456789abcdef';
@@ -92,6 +92,20 @@ test('PUT /models/decisions: 422 with problems; tier 2 needs confirm, with every
     assert.equal((await call('PUT', '/models/decisions', { use: 'rules' })).status, 200);
     assert.equal(nova.core.profile.get('models', 'decisions'), 'rules');
     assert.equal((await call('PUT', '/models/decisions', { use: 'maybe' })).status, 400);
+    // Nothing is dropped in silence (review): {use} with other choices, an unknown field, and an
+    // opt_in that isn't {screening, box} are each refused with their problem.
+    const mixed = await call('PUT', '/models/decisions', { use: 'model', opt_in: { screening: true } });
+    assert.equal(mixed.status, 422);
+    assert.match(mixed.body.problems[0], /on its own; send opt_in separately/);
+    assert.equal(nova.core.profile.get('models', 'decisions'), 'rules', 'nothing of it was applied');
+    const unknown = await call('PUT', '/models/decisions', { jev: null, capture: true });
+    assert.equal(unknown.status, 422);
+    assert.match(unknown.body.problems[0], /doesn’t know capture/);
+    for (const opt_in of [true, 'yes', ['screening'], null, { screening: true, capture: true }]) {
+      const r = await call('PUT', '/models/decisions', { opt_in, confirm: true });
+      assert.equal(r.status, 422, JSON.stringify(opt_in));
+      assert.match(r.body.problems.join(' '), /opt_in must be \{screening, box\}|must be on or off/);
+    }
   } finally { await stop(); }
 });
 

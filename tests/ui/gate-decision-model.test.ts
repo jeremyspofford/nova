@@ -6,7 +6,7 @@
 // TypeSafe. Neutral placeholders only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stop } from '../acceptance/support.ts';
 import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
@@ -55,6 +55,7 @@ test('Settings › Models: scorecards before a switch, and the decision model’
     assert.match(words, /Local-only isn’t strictly local for screening while it is on/);
     assert.match(words, /Box \(preview\)/);
     assert.match(words, /In local-only they never go to a cloud provider/);
+    assert.match(words, /Text from Capture \(screen text and meeting transcripts\) never goes to Jev, in any mode/);
     assert.match((await section.textContent()) ?? '', /Jev: Jev isn’t set up/);
 
     // Turning screening on: the notices come first, and nothing is saved until the person says so.
@@ -78,5 +79,6 @@ test('Settings › Models: scorecards before a switch, and the decision model’
     await stop(nova);
     await ollama.close();
     await b.close();
+    rmSync(m.dir, { recursive: true, force: true });
   }
 });

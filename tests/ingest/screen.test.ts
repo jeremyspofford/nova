@@ -4,7 +4,7 @@
 // probabilities; the deterministic checks are the real ones.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Db } from '../../src/core/db.ts';
@@ -37,11 +37,17 @@ function standIn(score: (content: string) => Scores | 'fail', o: { id?: string; 
 
 // The gate as the core wires it (DS1 NOTE 1): `ask` is the Decision Service for ingest-screen. The
 // stand-in `model` is the sorting model (the service's legacy seat); `seats` are decision seats.
+// Every temp folder a test made goes when the file is done.
+const made: string[] = [];
+test.after(() => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
+
 function setup(o: { model?: DecisionProvider | null; privacy?: PrivacyMode; read?: (t: string) => Promise<string | null>; seats?: { tev1?: Seat; jev?: Seat }; verdicts?: ReturnType<typeof pass>[]; opt_in?: { screening: boolean; box: boolean } } = {}) {
   const db = new Db(':memory:');
   db.migrate();
   const log = new Log(db, null);
-  const verifier = new Verifier(new Workspace(join(mkdtempSync(join(tmpdir(), 'nova-ingest-')), 'workspace')));
+  const dir = mkdtempSync(join(tmpdir(), 'nova-ingest-'));
+  made.push(dir);
+  const verifier = new Verifier(new Workspace(join(dir, 'workspace')));
   const rules = new RulesProvider();
   const templates = new Templates({ db, verifier, rules });
   const blocked: unknown[] = [];
