@@ -62,3 +62,8 @@ Where it lands:
 - **The progress rules:** in DESIGN-SYSTEM §1.
 
 Where it differs from earlier packet text, the amendment wins: for example, the orb shows once per view and is no longer a per-message chat avatar. Standing orders are unchanged. Nothing in it waits on a Jev account or on real-device pairing.
+
+## Addendum — Amendment 2026-10-31-B, Launch Readiness (owner, approved)
+`AMENDMENT-2026-10-31-B.md` is binding spec, and `LAUNCH-READINESS-RESEARCH-2026-10-31.md` is its evidence base. Where they disagree, the amendment governs. Its own sequencing rule holds: nothing in it displaces in-flight work or the M10e–M10k order. Two points are honoured exactly:
+- **Part 1's eval is a real gate.** If Tev1 misses the stated bounds, it stays advisory and the result is reported plainly. Neither the eval nor the bounds are tuned until it passes.
+- **The closing rule.** No capability may be claimed in onboarding, docs or the UI that the Part 4 eval suite can't demonstrate.

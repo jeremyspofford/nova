@@ -17,6 +17,22 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (Amendment 2026-10-31-B, Launch Readiness, owner-approved).** `AMENDMENT-2026-10-31-B.md` and
+`LAUNCH-READINESS-RESEARCH-2026-10-31.md` were added to the packet exactly as given (sha256 `dc88bf73…`
+and `e160e581…`).
+- **Eight parts,** each landing where the amendment says:
+  1. Tev1 and the injection eval: a side PR.
+  2. First-session value: folds into M10f.
+  3. A self-update channel: ADR first.
+  4. The eval harness: a side PR.
+  5. Autonomy cost caps: a small design and build.
+  6. Diagnostics and the integrity scrub: fold into Health.
+  7. The fault matrix and soak: extend the QA harness.
+  8. QA Stage 2 with the Service Manager: the design, applied when Stage 2 is built.
+- **Order:** nothing displaces in-flight work (M10d's review fixes, M10e) or the M10e–M10k order.
+- **Recorded in:** ROADMAP-AND-GATES and OPERATING-RULES, which notes the two exact points (Part 1's eval is a real gate, and the closing rule on claims).
+- **A gap:** Part 7 builds on "Amendment 2026-10-31-A" (the QA harness, Stage 2), which isn't in the repo or in the packet as delivered. It is asked for before Part 7 or Part 8 is built.
+
 **2026-10-31 (CI: change-aware, with one always-run required check).** Owner instruction.
 - **Sorting:** a `changes` job sorts the change's files with `scripts/ci-changes.sh`.
   - **Docs only** skips the heavy jobs entirely: lint, typecheck, themes, tests and the UI gate.
@@ -27,6 +43,7 @@ built-ins only.
 - **One deliberate difference from the instruction's list:** markdown under the folders Nova loads at run time counts as code, not docs: `system/` (the system prompt), `templates/`, `skills/`, `schedules/`, `connectors/` and `design-systems/`. A change there can break a test.
 - **The default:** any file the script doesn't know counts as code.
 
+||||||| parent of df775f41 (docs(packet): Amendment 2026-10-31-B, Launch Readiness, and its research, as given)
 **2026-10-31 (owner decisions on the orchestration ADR).** Same branch and PR (#243). The owner's
 decisions were added to the packet unchanged, below a one-line header, as
 `docs/builder-packet/INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md` (sha256 of the decisions

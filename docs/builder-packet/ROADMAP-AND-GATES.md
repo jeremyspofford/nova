@@ -146,6 +146,18 @@ Nova gets its own sandboxed computer and browser. A design doc (ADR) comes first
 - **Gate:** set in the M10 design doc before the build starts; at least, the Part 4 tier rules are each proven by tests, plus the fresh-user test.
 - **Service orchestration (owner input 2026-10-31, binding):** `INPUT-2026-10-31-SERVICE-ORCHESTRATION.md`. Designed in the addendum ADR `docs/plans/M10-orchestration.md`, whose open questions the owner decided the same day (`INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md`); built after M10d as phases M10e–M10k. Nova stays fully functional with no Kubernetes anywhere. The promotion drill with two test devices is part of M10's gate evidence.
 
+## Launch readiness — Amendment 2026-10-31-B (eight parts)
+Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-31. No new milestone: nothing displaces in-flight work or the M10e–M10k order. Where each part lands:
+1. **Tev1, the local decision provider, plus the injection eval:** a side PR, as soon as a slot is free. The eval is a real gate: if Tev1 misses the bounds, it stays advisory and the deterministic layer decides.
+2. **First-session value:** folds into M10f onboarding (discovery, an import offer, a populated first view, a timed first win of under 15 minutes in the fresh-user test).
+3. **A self-update channel for Nova itself:** design doc (ADR) first, when scheduled.
+4. **The eval harness (golden tasks, capability and regression suites, a model-swap scorecard):** a side PR, when a slot is free.
+5. **Hard caps on autonomy cost:** a small design and build.
+6. **A diagnostics bundle and an integrity scrub:** fold into Health work.
+7. **A fault matrix and a soak run:** extend the QA harness under Amendment 2026-10-31-A.
+8. **QA Stage 2 integration with the Service Manager:** the recorded design, applied when Stage 2 is built, so the harness isn't built for the supervisor alone.
+- **Closing rule:** no capability is claimed in onboarding, docs or the UI that the Part 4 eval suite can't demonstrate.
+
 ## Sequencing rules
 - Relay stabilization may run parallel to M1–M2 (it is independent), integration only at M8.
 - Nothing in CAPABILITY-INVENTORY marked "Later" enters an earlier milestone without a packet amendment.
