@@ -3,30 +3,52 @@
 // comes from the brief's inputs, chosen by a provider or written by hand; nothing a page says ever
 // changes it. Pure, so it is unit-tested without a browser.
 import { CoreError } from '../errors.ts';
+import { CARD_FIELD, PAY_PATH, PAY_TOKENS, PAY_WORDS, looksLikeCard, parseMoney } from './copilot.ts';
 import type { Egress } from '../workers.ts';
 
 // `commits`: this is the step that makes the task's outside effect happen (sends the form, places
 // the order). Nova writes it down before the step runs, so after a failure it knows whether that
 // point was ever passed (ledger.ts, `commit_point`).
+//
+// Nova Browser (M10b) adds:
+// - `target`: an element found by the accessibility tree, by its role and accessible name, beside
+//   a CSS `selector` (DOM). One or the other.
+// - `intent`: what the step means to do, in plain words; Nova checks the element against it.
+// - `expect`: where the page must be after an acting step (a URL part, a selector that shows).
+// - `login`: a sign-in from the vault, typed by the worker into the named fields at the moment of
+//   use. The step names fields, never values.
+// - `checkout`: reads the itemised lines and the total, checks them, and is where Nova stops: it
+//   names the pay control so that nothing may ever click it.
+export interface Target { role: string; name: string }
+export interface Expect { url?: string; shows?: string }
+interface Acting { selector?: string; target?: Target; intent?: string; expect?: Expect; label?: string; timeout_ms?: number; commits?: boolean }
 export type Step =
   | { do: 'navigate'; url: string; label?: string; commits?: boolean }
-  | { do: 'fill'; selector: string; value: string; label?: string; timeout_ms?: number; commits?: boolean }
-  | { do: 'click'; selector: string; label?: string; timeout_ms?: number; commits?: boolean }
-  | { do: 'select'; selector: string; value: string; label?: string; timeout_ms?: number; commits?: boolean }
+  | ({ do: 'fill'; value: string } & Acting)
+  | ({ do: 'click' } & Acting)
+  | ({ do: 'select'; value: string } & Acting)
   | { do: 'wait'; selector: string; label?: string; timeout_ms?: number }
   | { do: 'read'; selector: string; expect?: string; label?: string; timeout_ms?: number }
   // A step only a person may do (a sign-in, a challenge): the worker asks for a takeover and
   // waits. `done_when`: a selector that shows on the page once the step is done.
-  | { do: 'person'; why: string; done_when?: string; label?: string };
+  | { do: 'person'; why: string; done_when?: string; label?: string }
+  | { do: 'login'; username: string; password: string; submit: string; done_when?: string; label?: string; timeout_ms?: number }
+  | { do: 'checkout'; lines: string; total: string; pay: string; quoted?: string; label?: string; timeout_ms?: number };
 
-export const STEP_KINDS = ['navigate', 'fill', 'click', 'select', 'wait', 'read', 'person'] as const;
+export const STEP_KINDS = ['navigate', 'fill', 'click', 'select', 'wait', 'read', 'person', 'login', 'checkout'] as const;
 
+// `profile`: Nova's own persistent profile (the default), or a throwaway one for this task alone.
+// `learn`: the name a flow that ends verified is kept under, as a site template (flows.ts).
+// `flow`: the learnt site template whose steps this plan is (expanded by the worker).
 export interface Plan {
   allowed_hosts: string[];
   steps: Step[];
   // What the final page must show, checked by Nova itself (`url` evidence). `url`: the page to
   // fetch again, inside the allowed hosts; by default, the page the plan ended on.
   verify?: { url?: string; expect: string[] };
+  profile?: 'nova' | 'fresh';
+  learn?: string;
+  flow?: { name: string; version: number; site: string };
 }
 
 const MAX_STEPS = 100;
@@ -132,18 +154,46 @@ export function hostEgress(raw: string): Egress {
   return 'remote';
 }
 
-// Steps that can change something outside: typing into a page, choosing, clicking, and a step
-// the person does by hand. A plan with any of them may have sent something by the time it fails.
-const ACTING: readonly Step['do'][] = ['fill', 'select', 'click', 'person'];
+// Steps that can change something outside: typing into a page, choosing, clicking, signing in,
+// and a step the person does by hand. A plan with any of them may have sent something by the time
+// it fails.
+const ACTING: readonly Step['do'][] = ['fill', 'select', 'click', 'person', 'login'];
 export const hasEffects = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => ACTING.includes(s.do));
-// Steps that send something on Nova's own initiative (typing, choosing, clicking): sending or
-// sharing data outside asks first (NOVA-SPEC §6, tier 2). A person's own step is theirs to do.
-export const sends = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => s.do === 'fill' || s.do === 'select' || s.do === 'click');
+// Steps that send something on Nova's own initiative (typing, choosing, clicking, signing in):
+// sending or sharing data outside asks first (NOVA-SPEC §6, tier 2). A person's own step is theirs.
+export const sends = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => s.do === 'fill' || s.do === 'select' || s.do === 'click' || s.do === 'login');
 // Whether the plan marks the step where its outside effect happens.
 export const marksCommit = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => 'commits' in s && s.commits === true);
+export const hasCheckout = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => s.do === 'checkout');
+// The least tier a plan runs at: checkout (and so payment) is tier 3, always; sending is tier 2.
+export const minTierOf = (p: Pick<Plan, 'steps'>): 0 | 2 | 3 => (hasCheckout(p) ? 3 : sends(p) ? 2 : 0);
 
 export function planEgress(p: Plan): Egress {
   return p.allowed_hosts.some((h) => hostEgress(h) === 'remote') ? 'remote' : 'local';
+}
+
+export const PAY_REFUSAL = 'Paying is tier 3 and always yours: Nova fills the cart, shows the itemised total and stops. It never presses pay.';
+export const FLOW_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function payPath(url: string): boolean {
+  try { return PAY_PATH.test(new URL(url).pathname); } catch { return false; }
+}
+
+// A fill, select or click names its element by a CSS selector or by an accessibility target
+// (role and accessible name), and may say what it means to do and where the page must be after.
+function acting(s: Record<string, unknown>, at: string, need: (ok: boolean, msg: string) => boolean): void {
+  const hasSel = s.selector !== undefined;
+  const hasTarget = s.target !== undefined;
+  if (!need(hasSel !== hasTarget, `${at} needs a selector or a target (role and name), one of them`)) return;
+  if (hasSel) need(isStr(s.selector, 500), `${at}.selector must be a CSS selector`);
+  if (hasTarget) need(isObj(s.target) && isStr(s.target.role, 40) && isStr(s.target.name, 200) && Object.keys(s.target).length === 2, `${at}.target must be {role, name}: the element’s accessibility role and accessible name`);
+  if (s.intent !== undefined) need(isStr(s.intent, 200), `${at}.intent must say, in a few words, what the step means to do`);
+  if (s.expect !== undefined) {
+    const e = isObj(s.expect) ? s.expect : null;
+    need(!!e && (e.url !== undefined || e.shows !== undefined) && (e.url === undefined || isStr(e.url, 500)) && (e.shows === undefined || isStr(e.shows, 500)) && Object.keys(e).every((k) => k === 'url' || k === 'shows'),
+      `${at}.expect is {url?, shows?}: part of the address the page must be at after the step, and a selector that must show`);
+  }
 }
 
 // The plan in a brief's inputs, checked; every problem is listed.
@@ -168,26 +218,45 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
   }
   const steps = o.steps;
   if (need(Array.isArray(steps) && steps.length > 0 && steps.length <= MAX_STEPS, `inputs.steps must be a list of 1 to ${MAX_STEPS} steps`)) {
-    (steps as unknown[]).forEach((raw, i) => {
+    const list = steps as unknown[];
+    const checkouts = list.map((raw, i) => ((raw as Record<string, unknown>)?.do === 'checkout' ? i : -1)).filter((i) => i >= 0);
+    need(checkouts.length <= 1, 'inputs.steps may have one checkout step at most: it is where Nova stops');
+    const at0 = checkouts[0] ?? -1;
+    const paySel = at0 >= 0 ? (list[at0] as Record<string, unknown>).pay : undefined;
+    list.forEach((raw, i) => {
       const s = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
       const at = `inputs.steps[${i}]`;
       if (!need(STEP_KINDS.includes(s.do as never), `${at}.do must be one of ${STEP_KINDS.join(', ')}`)) return;
       if (s.label !== undefined) need(isStr(s.label, 200), `${at}.label must be a short text`);
       if (s.commits !== undefined) need(typeof s.commits === 'boolean' && ['navigate', 'fill', 'select', 'click'].includes(s.do as string), `${at}.commits is true or false, on a navigate, fill, select or click step`);
       if (s.timeout_ms !== undefined) need(Number.isInteger(s.timeout_ms) && (s.timeout_ms as number) >= 100 && (s.timeout_ms as number) <= 600_000, `${at}.timeout_ms must be 100 to 600000`);
+      // Nothing after the checkout but a read or a wait: it is where Nova stops.
+      if (at0 >= 0 && i > at0) need(s.do === 'read' || s.do === 'wait', `${at} comes after the checkout step, where Nova stops: only a read or a wait may follow it`);
       switch (s.do) {
         case 'navigate':
           if (need(isStr(s.url), `${at}.url is required`)) {
             need(target(s.url as string)?.scheme === 'http' || target(s.url as string)?.scheme === 'https', `${at}.url must be an http(s) address`);
             if (Array.isArray(hosts)) need(allowed(s.url as string, hosts.filter((h): h is string => typeof h === 'string')), `${at}.url is outside the allowed hosts (${hostOf(s.url as string)})`);
             need(!reachesHub(s.url as string, hub), `${at}.url is ${HUB_REFUSAL}`);
+            need(!payPath(s.url as string), `${at}.url is a pay address. ${PAY_REFUSAL}`);
           }
           break;
-        case 'fill': case 'select':
-          need(isStr(s.selector, 500), `${at}.selector is required`);
-          need(typeof s.value === 'string' && s.value.length <= 10_000, `${at}.value must be text`);
+        case 'fill': case 'select': case 'click': {
+          acting(s, at, need);
+          if (s.do !== 'click') need(typeof s.value === 'string' && s.value.length <= 10_000, `${at}.value must be text`);
+          const sel = typeof s.selector === 'string' ? s.selector : '';
+          const name = isObj(s.target) && typeof s.target.name === 'string' ? s.target.name : '';
+          if (s.do === 'click') {
+            const words = [name, typeof s.label === 'string' ? s.label : '', typeof s.intent === 'string' ? s.intent : ''];
+            need(!(sel && paySel !== undefined && sel.trim() === String(paySel).trim()), `${at} clicks the checkout’s pay control (${sel}). ${PAY_REFUSAL}`);
+            need(!PAY_TOKENS.test(sel) && !words.some((w) => PAY_WORDS.test(w)), `${at} would pay or place an order. ${PAY_REFUSAL}`);
+          } else {
+            need(!CARD_FIELD.test(sel) && !CARD_FIELD.test(name), `${at} would type card details. Nova never types card details; paying is yours.`);
+            need(!(typeof s.value === 'string' && looksLikeCard(s.value)), `${at}.value looks like a card number. Nova never types card details; paying is yours.`);
+          }
           break;
-        case 'click': case 'wait':
+        }
+        case 'wait':
           need(isStr(s.selector, 500), `${at}.selector is required`);
           break;
         case 'read':
@@ -198,9 +267,21 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
           need(isStr(s.why, 500), `${at}.why must say, in plain words, what the person needs to do`);
           if (s.done_when !== undefined) need(isStr(s.done_when, 500), `${at}.done_when must be a selector`);
           break;
+        case 'login':
+          for (const k of ['username', 'password', 'submit'] as const) need(isStr(s[k], 500), `${at}.${k} must be the selector of the ${k === 'submit' ? 'sign-in button' : `${k} field`}`);
+          need(!['value', 'values', 'username_value', 'password_value', 'secret', 'credentials'].some((k) => k in s), `${at} names the fields, never a value: the sign-in comes from the vault at the moment of use (save it in Settings › Connections, never in a plan or a chat)`);
+          if (s.done_when !== undefined) need(isStr(s.done_when, 500), `${at}.done_when must be a selector`);
+          break;
+        case 'checkout':
+          for (const k of ['lines', 'total'] as const) need(isStr(s[k], 500), `${at}.${k} must be the selector of the ${k === 'lines' ? 'itemised lines' : 'total'}`);
+          need(isStr(s.pay, 500), `${at}.pay must be the selector of the pay control, so that nothing may click it`);
+          if (s.quoted !== undefined) need((typeof s.quoted === 'string' || typeof s.quoted === 'number') && parseMoney(String(s.quoted)) !== null, `${at}.quoted must be the price quoted, like "12.50"`);
+          break;
       }
     });
   }
+  if (o.profile !== undefined) need(o.profile === 'nova' || o.profile === 'fresh', 'inputs.profile is "nova" (Nova’s own browser profile, the default) or "fresh" (a throwaway one)');
+  if (o.learn !== undefined) need(typeof o.learn === 'string' && FLOW_NAME.test(o.learn), 'inputs.learn must be a short name for the flow: lowercase letters, digits and dashes');
   if (o.verify !== undefined) {
     const v = (typeof o.verify === 'object' && o.verify !== null ? o.verify : {}) as Record<string, unknown>;
     need(Array.isArray(v.expect) && v.expect.length > 0 && v.expect.length <= 20 && v.expect.every((x) => isStr(x, 2000)), 'inputs.verify.expect must list the text the final page must show');
@@ -210,7 +291,13 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
     }
   }
   if (errors.length) throw new CoreError('validation', 'This browser plan can’t run.', errors);
-  return { allowed_hosts: (hosts as string[]).map(normalizeHost), steps: steps as Step[], ...(o.verify ? { verify: o.verify as Plan['verify'] } : {}) };
+  const list2 = (steps as Step[]).map((x) => ('quoted' in x && typeof x.quoted === 'number' ? { ...x, quoted: String(x.quoted) } : x)) as Step[];
+  return {
+    allowed_hosts: (hosts as string[]).map(normalizeHost), steps: list2, ...(o.verify ? { verify: o.verify as Plan['verify'] } : {}),
+    profile: o.profile === 'fresh' ? 'fresh' : 'nova',
+    ...(typeof o.learn === 'string' ? { learn: o.learn } : {}),
+    ...(isObj(o.flow) ? { flow: o.flow as Plan['flow'] } : {}),
+  };
 }
 
 // Whether what the brief asks for can prove the plan done. A `url` requirement is proven by
@@ -241,11 +328,20 @@ export function describe(s: Step): string {
   if (s.label) return s.label;
   switch (s.do) {
     case 'navigate': { const t = target(s.url); return `Open ${t ? `${t.host}${new URL(s.url).pathname}` : s.url}`; }
-    case 'fill': return `Fill in ${s.selector}`;
-    case 'select': return `Choose “${s.value}” in ${s.selector}`;
-    case 'click': return `Click ${s.selector}`;
+    case 'fill': return `Fill in ${whereOf(s)}`;
+    case 'select': return `Choose “${s.value}” in ${whereOf(s)}`;
+    case 'click': return `Click ${whereOf(s)}`;
     case 'wait': return `Wait for ${s.selector}`;
     case 'read': return `Read ${s.selector}`;
     case 'person': return s.why;
+    case 'login': return 'Sign in with the saved sign-in for this site';
+    case 'checkout': return 'Read the itemised total, and stop before paying';
   }
+}
+
+// Where an acting step's element is, in words.
+export function whereOf(s: Step): string {
+  if ('target' in s && s.target) return `the ${s.target.role} “${s.target.name}”`;
+  if ('selector' in s && typeof s.selector === 'string') return s.selector;
+  return '';
 }

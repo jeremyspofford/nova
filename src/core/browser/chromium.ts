@@ -9,6 +9,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import { Cdp, pipeTransport } from './cdp.ts';
+import { afterClose, prepareProfile } from './profile.ts';
 
 const KNOWN = [
   '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/lib/chromium/chromium', '/snap/bin/chromium',
@@ -68,6 +69,9 @@ export interface LaunchOptions {
   height?: number;
   // Chromium's own sandbox. Off only when asked (a container without user namespaces, root).
   sandbox?: boolean;
+  // Nova's own persistent profile (profile.ts), kept when the browser closes. Without it, a fresh
+  // throwaway profile in the temp folder, removed when the browser closes (M5c).
+  profile?: string;
 }
 
 export interface Launched { cdp: Cdp; proc: ChildProcess; profile: string; stderr: () => string; close: () => Promise<void> }
@@ -118,8 +122,9 @@ export function resolverRules(hosts: readonly string[]): string {
 }
 
 export async function launch(o: LaunchOptions): Promise<Launched> {
-  const profile = mkdtempSync(join(tmpdir(), PROFILE_PREFIX));
-  writeFileSync(join(profile, OWNER), String(process.pid));
+  const kept = typeof o.profile === 'string' && o.profile.length > 0;
+  const profile = kept ? o.profile! : mkdtempSync(join(tmpdir(), PROFILE_PREFIX));
+  if (kept) prepareProfile(profile); else writeFileSync(join(profile, OWNER), String(process.pid));
   const width = o.width ?? 1280;
   const height = o.height ?? 800;
   const args = [
@@ -158,7 +163,9 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
       await Promise.race([new Promise((r) => proc.once('exit', r)), new Promise((r) => setTimeout(r, 3000))]);
       if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
     }
-    // Chromium's helper processes may still be writing as it goes: removing retries a few times.
+    // Nova's own profile stays, without its session-restore files. A throwaway one goes; Chromium's
+    // helper processes may still be writing as it goes, so removing retries a few times.
+    if (kept) { afterClose(profile); return; }
     try { rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* best effort: it is in the temp folder */ }
   };
   try {

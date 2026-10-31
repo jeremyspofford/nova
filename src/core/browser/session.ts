@@ -13,8 +13,11 @@ import { lookup } from 'node:dns/promises';
 import { BROWSER_TASK_HEADER } from '../mesh/access.ts';
 import { HUB_REFUSAL, NO_HUB, allowed, hostOf, reachesHub, target, thisMachine, type Hub } from './plan.ts';
 import type { Cdp } from './cdp.ts';
+import type { Target } from './plan.ts';
+import { PAY_PATH } from './copilot.ts';
 
-export type Mode = 'starting' | 'working' | 'needs_person' | 'taken_over' | 'finishing' | 'closed';
+// `paused`: the person paused the worker (M10b); it waits at its next gate, with nobody driving.
+export type Mode = 'starting' | 'working' | 'paused' | 'needs_person' | 'taken_over' | 'finishing' | 'closed';
 
 // Who holds the browser: `key` is the console or `device:<id>`; `label` is what the person reads.
 export interface Holder { key: string; label: string }
@@ -69,7 +72,16 @@ export interface SessionOptions {
   hub?: () => Hub;
   // How the browser is started: Chromium, or a stand-in in tests.
   launch?: (o: LaunchOptions) => Promise<Launched>;
+  // Nova's own persistent profile (profile.ts); without it, a throwaway one (M5c).
+  profile?: string;
 }
+
+// Where an element is: a CSS selector (the DOM), or an accessibility target (role and name).
+export interface Locator { selector?: string; target?: Target }
+// A dialog a page opened with alert, confirm or prompt (dismissed at once, as in M5c).
+export interface JsDialog { type: string; message: string; url: string }
+
+export const PAY_GUARD = 'A request that would pay: Nova never pays. Paying is yours (tier 3).';
 
 export class Session extends EventEmitter {
   readonly taskId: string;
@@ -100,6 +112,11 @@ export class Session extends EventEmitter {
   #casting = false;
   #handedBack: (() => void)[] = [];
   #closedWhy: string | null = null;
+  #dialogs: JsDialog[] = [];
+  #pausedBy: (Holder & { since: number }) | null = null;
+  // Where a pay form sends (origin and path), found by the worker on the pages it reads: a request
+  // there that isn't a GET is refused unless the person holds the browser.
+  readonly payTargets = new Set<string>();
 
   constructor(o: SessionOptions) {
     super();
@@ -130,7 +147,7 @@ export class Session extends EventEmitter {
     const width = this.#o.width ?? 1280;
     const height = this.#o.height ?? 800;
     this.#meta = { width, height };
-    this.#browser = await (this.#o.launch ?? launch)({ path: this.#o.chromium, bypass: this.hosts, refuser: `http://127.0.0.1:${port}`, sandbox: this.#o.sandbox, width, height });
+    this.#browser = await (this.#o.launch ?? launch)({ path: this.#o.chromium, bypass: this.hosts, refuser: `http://127.0.0.1:${port}`, sandbox: this.#o.sandbox, width, height, ...(this.#o.profile ? { profile: this.#o.profile } : {}) });
     const cdp = this.#browser.cdp;
     this.#cdp = cdp;
     cdp.on('close', (why: string) => { if (this.mode !== 'closed') this.#closeNow(`the browser stopped (${why})`); });
@@ -147,8 +164,13 @@ export class Session extends EventEmitter {
     });
     cdp.on('Page.frameStartedLoading', (p: { frameId: string }, sid?: string) => { if (sid === this.#page && (!this.#mainFrame || p.frameId === this.#mainFrame)) this.#loading++; });
     cdp.on('Page.frameStoppedLoading', (p: { frameId: string }, sid?: string) => { if (sid === this.#page && (!this.#mainFrame || p.frameId === this.#mainFrame)) this.#loading = Math.max(0, this.#loading - 1); this.emit('loaded'); });
-    // A page's alert or confirm would stop it; nobody can answer it from a picture.
-    cdp.on('Page.javascriptDialogOpening', (_p: unknown, sid?: string) => { void cdp.send('Page.handleJavaScriptDialog', { accept: false }, sid).catch(() => {}); });
+    // A page's alert or confirm would stop it; nobody can answer it from a picture. What it said is
+    // kept for the worker, which screens it (M10b: a dialog may be an injection), and never followed.
+    cdp.on('Page.javascriptDialogOpening', (p: { type?: string; message?: string; url?: string }, sid?: string) => {
+      if (this.#dialogs.length < 20) this.#dialogs.push({ type: String(p?.type ?? 'alert'), message: String(p?.message ?? '').slice(0, 4000), url: String(p?.url ?? this.url) });
+      this.emit('dialog');
+      void cdp.send('Page.handleJavaScriptDialog', { accept: false }, sid).catch(() => {});
+    });
     await cdp.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => {});
     await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     // The first page may already exist; attach to it if auto-attach didn't.
@@ -198,7 +220,7 @@ export class Session extends EventEmitter {
   // task's mark (BROWSER_TASK_HEADER), set here, beneath the page: a page can't remove it, and
   // Nova treats anything carrying it as nobody in particular (mesh/access.ts), so a page that
   // got to Nova anyway would get no more than a stranger would.
-  async #paused(p: { requestId: string; request: { url: string; headers?: Record<string, string> }; resourceType?: string }, sid?: string): Promise<void> {
+  async #paused(p: { requestId: string; request: { url: string; method?: string; headers?: Record<string, string> }; resourceType?: string }, sid?: string): Promise<void> {
     const cdp = this.#cdp;
     if (!cdp) return;
     const url = p.request.url;
@@ -209,6 +231,14 @@ export class Session extends EventEmitter {
     const by = this.mode === 'taken_over' ? 'person' : 'page';
     const kind = (p.resourceType ?? 'request').toLowerCase();
     const nova = await this.#reachesHub(url);
+    // The pay guard (M10b): what a pay form would send never leaves while Nova drives, whatever
+    // started it (a click, a page's own script). The person holding the browser may pay.
+    if (!nova && this.mode !== 'taken_over' && (p.request.method ?? 'GET').toUpperCase() !== 'GET' && this.#paysAt(url)) {
+      this.#block(hostOf(url), by, 'fetch', kind, PAY_GUARD);
+      this.emit('pay_refused', { host: hostOf(url) });
+      await cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }, sid).catch(() => {});
+      return;
+    }
     if (!nova && allowed(url, this.hosts)) {
       const headers = Object.entries(p.request.headers ?? {}).filter(([k]) => k.toLowerCase() !== BROWSER_TASK_HEADER).map(([name, value]) => ({ name, value }));
       headers.push({ name: BROWSER_TASK_HEADER, value: this.taskId });
@@ -217,6 +247,17 @@ export class Session extends EventEmitter {
     }
     this.#block(hostOf(url), by, 'fetch', kind, nova ? HUB_REFUSAL : undefined);
     await cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }, sid).catch(() => {});
+  }
+
+  #paysAt(url: string): boolean {
+    try {
+      const u = new URL(url);
+      return this.payTargets.has(`${u.origin}${u.pathname}`) || PAY_PATH.test(u.pathname);
+    } catch { return false; }
+  }
+
+  addPayTarget(url: string): void {
+    try { const u = new URL(url); if (this.payTargets.size < 50) this.payTargets.add(`${u.origin}${u.pathname}`); } catch { /* not an address */ }
   }
 
   // Whether a URL would reach Nova itself: by its address or this machine's names, or by a name
@@ -302,7 +343,7 @@ export class Session extends EventEmitter {
   // time the person had it.
   async gate(): Promise<number> {
     const started = Date.now();
-    while (this.mode === 'taken_over' || this.mode === 'needs_person') {
+    while (this.mode === 'taken_over' || this.mode === 'needs_person' || this.mode === 'paused') {
       await new Promise<void>((r) => this.#handedBack.push(r));
     }
     if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
@@ -324,7 +365,32 @@ export class Session extends EventEmitter {
 
   // ---- takeover ---------------------------------------------------------------------------
 
+  // ---- pause (M10b) -------------------------------------------------------------------------
+
+  // The person pauses the worker: it stops at its next gate and waits, with nobody driving.
+  pause(h: Holder): SessionView {
+    if (this.mode === 'closed' || this.mode === 'finishing' || this.mode === 'starting') throw new CoreError('conflict', this.mode === 'starting' ? 'The browser is still starting. Try again in a moment.' : 'This task’s browser work is over; there’s nothing to pause.');
+    if (this.mode === 'paused' || this.mode === 'taken_over' || this.mode === 'needs_person') return this.view();
+    this.#pausedBy = { ...h, since: Date.now() };
+    this.mode = 'paused';
+    this.emit('paused', { holder: h });
+    this.emit('change');
+    return this.view();
+  }
+
+  resume(h: Holder): SessionView {
+    if (this.mode !== 'paused') throw new CoreError('conflict', 'This task isn’t paused.');
+    const by = this.#pausedBy;
+    this.#pausedBy = null;
+    this.mode = 'working';
+    this.emit('resumed', { holder: h, duration_ms: by ? Date.now() - by.since : 0 });
+    this.emit('change');
+    for (const fn of this.#handedBack.splice(0)) fn();
+    return this.view();
+  }
+
   takeOver(h: Holder): SessionView {
+    if (this.mode === 'paused' && !this.holder) this.#pausedBy = null;
     if (this.mode === 'closed' || this.mode === 'finishing' || this.mode === 'starting') throw new CoreError('conflict', this.mode === 'starting' ? 'The browser is still starting. Try again in a moment.' : 'This task’s browser work is over; there’s nothing to take over.');
     if (this.holder && this.holder.key !== h.key) throw new CoreError('conflict', `${this.holder.label} has already taken over.`);
     if (this.holder) return this.view();
@@ -362,6 +428,9 @@ export class Session extends EventEmitter {
     this.emit('change');
     for (const fn of this.#handedBack.splice(0)) fn();
   }
+
+  // The dialogs pages opened since the last call, for the worker to screen.
+  takeDialogs(): JsDialog[] { return this.#dialogs.splice(0); }
 
   // The person's pointer and keys, only from whoever holds the browser.
   async input(h: Holder, e: Input): Promise<void> {
@@ -462,6 +531,9 @@ export class Session extends EventEmitter {
     }
   }
 
+  // Gives the page a moment and returns what is pending; for tests and the worker's own waits.
+  get dialogsPending(): number { return this.#dialogs.length; }
+
   async #world(): Promise<number> {
     const tree = await this.#send<{ frameTree: { frame: { id: string } } }>('Page.getFrameTree');
     const world = await this.#send<{ executionContextId: number }>('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'nova' });
@@ -474,6 +546,65 @@ export class Session extends EventEmitter {
     });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] ?? r.exceptionDetails.text ?? 'The page threw an error.');
     return r.result.value as T;
+  }
+
+  // ---- elements, by the DOM or the accessibility tree (M10b) ----------------------------------
+
+  // The element in Nova's world, or null. A selector is asked of the DOM; a target of the
+  // accessibility tree (CDP Accessibility.queryAXTree, by role and accessible name), first match
+  // that isn't ignored.
+  async #resolve(world: number, loc: Locator): Promise<string | null> {
+    if (loc.selector) {
+      const r = await this.#send<{ result: { objectId?: string; subtype?: string } ; exceptionDetails?: { exception?: { description?: string }; text?: string } }>('Runtime.evaluate', { expression: `document.querySelector(${JSON.stringify(loc.selector)})`, contextId: world, returnByValue: false });
+      if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] ?? r.exceptionDetails.text ?? 'The selector failed.');
+      return r.result.subtype === 'null' ? null : r.result.objectId ?? null;
+    }
+    if (loc.target) {
+      const doc = await this.#send<{ result: { objectId?: string } }>('Runtime.evaluate', { expression: 'document', contextId: world, returnByValue: false });
+      if (!doc.result.objectId) return null;
+      const q = await this.#send<{ nodes: { backendDOMNodeId?: number; ignored?: boolean; role?: { value?: string }; name?: { value?: string } }[] }>('Accessibility.queryAXTree', { objectId: doc.result.objectId, accessibleName: loc.target.name, role: loc.target.role });
+      const node = q.nodes.find((n) => !n.ignored && typeof n.backendDOMNodeId === 'number');
+      if (!node) return null;
+      const o = await this.#send<{ object: { objectId?: string } }>('DOM.resolveNode', { backendNodeId: node.backendDOMNodeId, executionContextId: world });
+      return o.object.objectId ?? null;
+    }
+    return null;
+  }
+
+  async #callOn<T>(objectId: string, fn: string, args: unknown[] = []): Promise<T> {
+    const r = await this.#send<{ result: { value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } }>('Runtime.callFunctionOn', {
+      objectId, functionDeclaration: fn, arguments: args.map((value) => ({ value })), returnByValue: true, awaitPromise: true,
+    });
+    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] ?? r.exceptionDetails.text ?? 'The page threw an error.');
+    return r.result.value as T;
+  }
+
+  // Whether the element is on the page now.
+  async exists(loc: Locator): Promise<boolean> {
+    const world = await this.#world();
+    return (await this.#resolve(world, loc)) !== null;
+  }
+
+  // Runs `fn` (a function's source; `this` is the element) on the element, read-only.
+  async inspect<T>(loc: Locator, fn: string, args: unknown[] = []): Promise<T | null> {
+    const world = await this.#world();
+    const id = await this.#resolve(world, loc);
+    return id ? this.#callOn<T>(id, fn, args) : null;
+  }
+
+  // Runs `fn` on the element to act on it, never while someone holds the browser: as act(), the
+  // hold is checked after the last wait and before the call that acts goes out. `args` reach the
+  // function as values, never as source (a sign-in's value goes this way).
+  async actOn<T>(loc: Locator, fn: string, args: unknown[] = []): Promise<T | 'missing'> {
+    for (;;) {
+      await this.gate();
+      const world = await this.#world();
+      const id = await this.#resolve(world, loc);
+      if (this.mode === 'taken_over' || this.mode === 'needs_person' || this.mode === 'paused') continue;
+      if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
+      if (!id) return 'missing';
+      return this.#callOn<T>(id, fn, args);
+    }
   }
 
   async navigate(url: string, timeoutMs = 30_000): Promise<void> {
@@ -498,6 +629,35 @@ export class Session extends EventEmitter {
       if (state === 'complete') return;
       await new Promise((r) => setTimeout(r, 100));
     }
+  }
+
+  // A click at a point of the page (the vision fallback), never while someone holds the browser.
+  async clickAt(x: number, y: number): Promise<void> {
+    for (;;) {
+      await this.gate();
+      if (this.mode === 'taken_over' || this.mode === 'needs_person' || this.mode === 'paused') continue;
+      if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
+      const p = { x: Math.round(x), y: Math.round(y) };
+      void this.#send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...p });
+      void this.#send('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'left', buttons: 1, clickCount: 1 });
+      await this.#send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button: 'left', buttons: 0, clickCount: 1 });
+      return;
+    }
+  }
+
+  // Forget a site in this profile (M10b): its cookies (the host name's, and its parent domains'),
+  // and every kind of storage for its origins. Returns how many cookies went.
+  async clearSite(host: string): Promise<number> {
+    const cdp = this.#cdp;
+    if (!cdp) throw new Error('The browser isn’t open.');
+    const name = host.replace(/:\d{1,5}$/, '');
+    const { cookies } = await cdp.send<{ cookies: { name: string; domain: string; path: string }[] }>('Storage.getCookies', {});
+    const mine = cookies.filter((c) => { const d = c.domain.replace(/^\./, ''); return d === name || name.endsWith(`.${d}`); });
+    for (const c of mine) await this.#send('Network.deleteCookies', { name: c.name, domain: c.domain, path: c.path });
+    for (const origin of new Set([`http://${host}`, `https://${host}`, `http://${name}`, `https://${name}`])) {
+      await cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' }).catch(() => {});
+    }
+    return mine.length;
   }
 
   async screenshot(): Promise<Buffer> {

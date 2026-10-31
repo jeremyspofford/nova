@@ -9,8 +9,38 @@ import { SCREENSHOT, taskDir } from './evidence.ts';
 import type { Browser } from './worker.ts';
 import type { Holder } from './session.ts';
 
-export function browserRoutes(b: Browser, o: { home: string; holder: (w: Who) => Holder }): Route[] {
+export function browserRoutes(b: Browser, o: { home: string; holder: (w: Who) => Holder; stop: (id: string, why: string) => unknown }): Route[] {
   return [
+    // ---- Nova Browser (M10b) ----
+    {
+      method: 'POST', path: '/browser/tasks/{id}/pause', access: 'approver', summary: 'Pause the browser: the worker stops at its next step and waits, with nobody driving. Records paused with who.',
+      handle: ({ params, who }) => b.pause(params.id!, o.holder(who)),
+    },
+    {
+      method: 'POST', path: '/browser/tasks/{id}/resume', access: 'approver', summary: 'Let a paused browser carry on. Records resumed with who and how long.',
+      handle: ({ params, who }) => b.resume(params.id!, o.holder(who)),
+    },
+    {
+      method: 'POST', path: '/browser/tasks/{id}/stop', access: 'approver', summary: 'Stop a browser task now: it is cancelled and its browser closes.',
+      handle: ({ params, who }) => o.stop(params.id!, `Stopped by ${o.holder(who).label}.`),
+    },
+    {
+      method: 'GET', path: '/browser/sites', summary: 'The sites Nova’s own browser keeps something for: a saved sign-in, or cookies and storage in its profile. Never a value.',
+      handle: () => ({ sites: b.sites(), kept: 'Sign-ins are kept per site between tasks, and each can be forgotten here (the owner’s open question 3 has the proposed default).' }),
+    },
+    {
+      method: 'PUT', path: '/browser/logins/{host}', access: 'approver', summary: 'Save a sign-in for a site (host or host:port), in the vault. Nova types it only into a page on that host, at the moment of use; it is never shown again, never in chat.',
+      body: '{username, password}', handle: ({ params, body }) => b.saveLogin(params.host!, body),
+    },
+    {
+      method: 'DELETE', path: '/browser/logins/{host}', access: 'approver', summary: 'Delete a saved sign-in (tier 3: needs {confirm: true}, every time).',
+      body: '{confirm: true}', handle: ({ params, body }) => b.deleteLogin(params.host!, body?.confirm === true),
+    },
+    {
+      method: 'POST', path: '/browser/sites/{host}/forget', access: 'approver', summary: 'Forget a site: its cookies and storage leave Nova’s browser profile, and with login: true its saved sign-in too (tier 3: needs {confirm: true}, every time).',
+      body: '{confirm: true, login?}', handle: ({ params, body }) => b.forgetSite(params.host!, body ?? {}),
+    },
+    { method: 'GET', path: '/browser/flows', summary: 'The site templates Nova learnt from flows that succeeded: id, version, state, how many steps and uses.', handle: () => ({ flows: b.flows() }) },
     {
       method: 'GET', path: '/browser', summary: 'Whether browser work is available (which Chromium, or why there is none), and the browser tasks running now.',
       handle: () => {

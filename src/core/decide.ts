@@ -190,12 +190,23 @@ export class RulesProvider implements DecisionProvider {
     this.#rules.set(templateId, rule);
   }
 
+  // One rule for a family of templates whose ids share a prefix (a site template per site, M10b).
+  #prefixed: [string, Rule][] = [];
+  addPrefix(prefix: string, rule: Rule): void {
+    if (!prefix || this.#prefixed.some(([p]) => p === prefix)) throw new Error(`There is already a rule for ${prefix}*.`);
+    this.#prefixed.push([prefix, rule]);
+  }
+
+  #rule(templateId: string): Rule | undefined {
+    return this.#rules.get(templateId) ?? this.#prefixed.find(([p]) => templateId.startsWith(p))?.[1];
+  }
+
   has(templateId: string): boolean {
-    return this.#rules.has(templateId);
+    return this.#rule(templateId) !== undefined;
   }
 
   evaluate(t: TemplateDef, inputs: Inputs): Decision {
-    const rule = this.#rules.get(t.template_id);
+    const rule = this.#rule(t.template_id);
     if (!rule) return settle(t, this.id, { answers: {}, confidence: 0, why: `No local rule for ${t.template_id}.` });
     try {
       return settle(t, this.id, rule(inputs));
