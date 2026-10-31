@@ -170,7 +170,7 @@ test('CSS: every token as a variable, light and dark honoured, auto follows the 
   const dark = generateCss(pkg, { mode: 'dark' });
   assert.match(dark, /--bg-base: #15181c;/);
   assert.match(dark, /color-scheme: dark;/);
-  assert.match(dark, /--type-h1: 28px;/, 'tokens a mode doesn’t change come from the default set');
+  assert.match(dark, /--type-h1: 1.75rem;/, 'tokens a mode doesn’t change come from the default set (type in rem, M9: 28px is 1.75rem)');
   const auto = generateCss(pkg, { mode: 'auto' });
   assert.match(auto, /--bg-base: #f4f5f7;/);
   assert.match(auto, /@media \(prefers-color-scheme: dark\) \{\s*:root \{[^}]*--bg-base: #15181c;/);

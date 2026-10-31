@@ -13,6 +13,7 @@ import { escapeHtml as esc } from './markdown.js';
 import { status } from './components.js';
 import { openSheet, toast } from './shell.js';
 import { forgetHere } from './forget-here.js';
+import { waitingLine } from './wait.js';
 
 let preview = null;
 let failed = '';
@@ -38,7 +39,7 @@ export function renderReset() {
 <h2 class="memory-heading" id="set-danger">Danger zone</h2>
 <p class="memory-lede">Erasing Nova returns it to how it was the first time, on this machine: no memories, conversations, settings, saved passwords, paired devices, checkpoints or backups. Nova offers to export everything first.</p>`;
   if (hubOnly) return `${head}<p class="settings-note">This can be done on the hub’s own screen only, not from a paired phone or browser.</p></section>`;
-  if (!preview) return `${head}<p class="settings-note">${esc(failed || 'Loading…')}</p>${failed ? '<button type="button" class="btn set-retry" data-action="reset-retry">Try again</button>' : ''}</section>`;
+  if (!preview) return `${head}${failed ? `<p class="settings-note">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="reset-retry">Try again</button>` : waitingLine('Loading what a reset would erase', { key: 'reset' })}</section>`;
   if (preview.staged) return `${head}<p class="settings-note reset-staged" role="status">${esc(preview.staged_said ?? 'Nova is erasing itself and starting over.')}</p></section>`;
   return `${head}<div class="sheet-actions"><button type="button" class="btn primary danger" data-action="reset-start">Erase Nova and start over…</button></div></section>`;
 }
@@ -171,9 +172,9 @@ function waitForFirstRun(id) {
         show();
       }
     } catch { /* not back yet */ }
-    setTimeout(look, 1000);
+    setTimeout(look, 1000); // wait: poll: is Nova back on its new home?
   };
-  setTimeout(look, 1000);
+  setTimeout(look, 1000); // wait: poll: is Nova back on its new home?
 }
 
 // Wires the part into Settings: `render` redraws it when the data changes.

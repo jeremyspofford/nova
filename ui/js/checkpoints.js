@@ -9,6 +9,7 @@
 import { api } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { toast } from './shell.js';
+import { over, waitingLine } from './wait.js';
 
 let data = null;
 let failed = '';
@@ -23,6 +24,7 @@ export async function loadCheckpoints() {
   try {
     data = await api('GET', '/resilience/checkpoints');
     failed = '';
+    over('checkpoints');
   } catch (e) {
     failed = e.message || 'Nova’s server didn’t answer.';
   }
@@ -34,7 +36,7 @@ const plain = (text) => String(text ?? '').replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d
 
 function confirmPanel(c) {
   if (!asking || asking.id !== c.id) return '';
-  if (!asking.preview) return '<div class="change-confirm cp-confirm"><p class="settings-note">Loading what restoring would do…</p></div>';
+  if (!asking.preview) return `<div class="change-confirm cp-confirm">${waitingLine('Working out what restoring would do', { key: 'restore-preview' })}</div>`;
   return `<div class="change-confirm cp-confirm" role="group" aria-label="Restore ${esc(c.label)}">
   <ul class="change-asks">${asking.preview.said.map((s) => `<li>${esc(plain(s))}</li>`).join('')}</ul>
   <label class="confirm"><input type="checkbox" name="confirm" data-action="cp-restore-confirm"> I understand everything since ${esc(time(c.at))} is undone, and I want to go back.</label>
@@ -65,7 +67,7 @@ function row(c) {
 
 export function renderCheckpoints() {
   const head = '<section class="memory-section" id="checkpoints" aria-labelledby="set-checkpoints"><h2 class="memory-heading" id="set-checkpoints">Backups</h2><p class="conn-sub">Checkpoints</p>';
-  if (!data) return `${head}<p class="memory-lede">${esc(failed || 'Loading…')}</p>${failed ? '<button type="button" class="btn set-retry" data-action="cp-retry">Try again</button>' : ''}</section>`;
+  if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="cp-retry">Try again</button>` : waitingLine('Loading checkpoints', { key: 'checkpoints' })}</section>`;
   const pending = restoring ?? (data.restoring ? `Restoring “${data.restoring.checkpoint.label}”. Nova restarts by itself and finishes it as it starts.` : null);
   // The one standout: a restore or a delete being confirmed, else taking a checkpoint.
   const takeClass = asking || deleting ? 'btn' : 'btn primary';
@@ -83,7 +85,7 @@ ${data.checkpoints.length ? `<ul class="change-list cp-list">${data.checkpoints.
 // Waits for Nova to come back after a restore, then shows what it has now.
 async function backAgain(label) {
   for (let i = 0; i < 240; i++) {
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 500)); // wait: poll: is Nova back after the restore?
     try {
       const v = await api('GET', '/resilience/checkpoints');
       if (!v.restoring) {

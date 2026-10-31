@@ -23,8 +23,10 @@
 }
 /* Long threads: the browser skips laying out and painting turns that are off
    screen. The newest turns always render, so a conversation opens exactly at
-   its end; `auto` remembers each turn's real height once it has been seen. */
-.block:not(:nth-last-child(-n + 3)) > .turn {
+   its end; `auto` remembers each turn's real height once it has been seen. The newest ten
+   blocks always render: more than a tall screen shows, so nothing on screen at the end of a
+   conversation is laid out from an estimate and then moved (M9: a 0.09 layout shift). */
+.block:not(:nth-last-child(-n + 10)) > .turn {
   content-visibility: auto;
   contain-intrinsic-size: auto 480px;
 }
@@ -52,7 +54,10 @@
 
 .msg-nova { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; width: 100%; }
 .msg-nova > .prose:not(.handoff-body) { max-width: 70ch; }
-.msg-nova > * { animation: fade-in var(--motion-duration-fast) var(--motion-ease) both; }
+/* Prose keeps a readable measure everywhere (M9: 45–75ch); the extra width of a wide screen goes to a
+   second pane, never to longer lines. */
+:where(#main) :where(p, li, blockquote) { max-width: 70ch; }
+.msg-nova > *:not(.waiting) { animation: fade-in var(--motion-duration-fast) var(--motion-ease) both; }
 
 /* A message's time. The first of a group shows it; the exact time, to the second, shows on
    hover, on a tap or long press (.show-time), and on keyboard focus. text/secondary passes
@@ -133,7 +138,6 @@
   background: none;
   font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body);
   color: var(--text-secondary);
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), color var(--motion-duration-fast) var(--motion-ease);
 }
 .act svg { width: 16px; height: 16px; }
 .act:hover { background: var(--surface-card-hover); color: var(--text-primary); }
@@ -178,7 +182,6 @@
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
   text-underline-offset: 3px;
-  transition: text-decoration-color var(--motion-duration-fast) var(--motion-ease);
 }
 .prose a:hover { text-decoration-color: var(--accent-primary); }
 .prose strong { font-weight: 600; }
@@ -230,14 +233,15 @@
 .margin-note { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--accent-primary); }
 
 a.margin-link { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
-.margin-note.is-quiet { color: var(--text-faint); }
+.margin-note.is-quiet { color: var(--text-secondary); }
 
-/* A turn or memory a link pointed at: a wash that fades. */
-.is-found { animation: found calc(var(--motion-duration-slow) * 4) var(--motion-ease) both; border-radius: var(--radius-card); }
+/* A turn or memory a link pointed at: a quiet wash for a moment (app.js flash takes it off). Only
+   transform and opacity may animate (M9), so it comes and goes without motion. */
+.is-found { background-color: color-mix(in srgb, var(--accent-primary) 14%, transparent); border-radius: var(--radius-card); }
 
 /* ---- the front page: reports from scheduled work ---------------------------- */
 
-.today-line { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--text-faint); padding-bottom: var(--space-6); }
+.today-line { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--text-secondary); padding-bottom: var(--space-6); }
 .handoff { gap: var(--space-3); scroll-margin-top: var(--space-7); }
 .handoff-kicker {
   font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body);
@@ -275,7 +279,6 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   margin: 0 calc(-1 * var(--space-3));
   border-radius: var(--radius-card);
   outline-offset: -2px;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease);
 }
 .act-entry:hover, .act-entry:focus-within { background: var(--surface-card-hover); }
 .act-entry + .act-entry { margin-top: 1px; }
@@ -315,7 +318,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 }
 .act-steps[open] > summary::after { rotate: 90deg; }
 .act-steps > summary:hover { color: var(--text-primary); }
-.act-steps[open] > summary { color: var(--text-faint); }
+.act-steps[open] > summary { color: var(--text-secondary); }
 .act-entry.is-missed .act-title, .act-entry.is-stopped .act-title { color: var(--text-secondary); }
 .act-day + .act-day { margin-top: var(--space-6); }
 .act-now .act-list { margin-top: var(--space-2); }
@@ -366,7 +369,6 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   height: 24px;
   border-radius: var(--radius-pill);
   background: var(--text-faint);
-  transition: background var(--motion-duration-fast) var(--motion-ease);
 }
 .switch-knob {
   position: absolute;
@@ -388,7 +390,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 
 .schedule .skill-head { justify-content: flex-start; }
 .schedule-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-left: auto; }
-.schedule.is-paused .skill-name, .schedule.is-paused .schedule-when { color: var(--text-faint); }
+.schedule.is-paused .skill-name, .schedule.is-paused .schedule-when { color: var(--text-secondary); }
 .schedule-when { margin-top: var(--space-1); color: var(--text-secondary); }
 .schedule-next { color: var(--text-secondary); }
 .schedule-last { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-1); margin-top: var(--space-2); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
@@ -424,7 +426,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   border-bottom: 1px solid var(--border-subtle);
 }
 .memory-kind { margin-top: var(--space-2); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--text-secondary); }
-.memory-none { margin-top: var(--space-3); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-faint); }
+.memory-none { margin-top: var(--space-3); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 .memory-day { margin-top: var(--space-5); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--text-secondary); }
 .memory-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
 .memory-item {
@@ -433,7 +435,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   margin: 0 calc(-1 * var(--space-3));
   border-radius: var(--radius-card);
   outline-offset: -2px;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), opacity var(--motion-transition) var(--motion-ease);
+  transition: opacity var(--motion-transition) var(--motion-ease);
 }
 .memory-item:hover, .memory-item:focus-within { background: var(--surface-card-hover); }
 .memory-item + .memory-item { margin-top: 1px; }
@@ -459,7 +461,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   box-sizing: border-box;
   width: calc(100% + 2 * var(--space-3));
   padding: var(--space-1) var(--space-3);
-  margin: calc(-1 * var(--space-1) - 1px) calc(-1 * var(--space-3));
+  margin: calc(-1 * var(--space-1) - 1px) calc(-1 * var(--space-3)) 0;
   border: 1px solid var(--accent-primary);
   border-radius: var(--radius-input);
   background: var(--surface-card);
@@ -479,7 +481,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   margin: 0 calc(-1 * var(--space-3));
   border-radius: var(--radius-card);
   outline-offset: -2px;
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), opacity var(--motion-transition) var(--motion-ease);
+  transition: opacity var(--motion-transition) var(--motion-ease);
 }
 .skill:hover, .skill:focus-within { background: var(--surface-card-hover); }
 .skill + .skill { margin-top: 1px; }
@@ -527,7 +529,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   border-radius: var(--radius-pill);
   background: var(--surface-card-hover);
   font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   white-space: nowrap;
 }
 .pill.is-on::before, .pill.is-warn::before {
@@ -547,7 +549,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   background: var(--bg-raised);
 }
 .connection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-top: var(--space-4); }
-.connection-note { margin-top: var(--space-3); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-faint); }
+.connection-note { margin-top: var(--space-3); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 .connection-actions .connection-note { margin-top: 0; flex: 1 1 260px; }
 .connection-note a, .connection .skill-about a { color: var(--accent-primary); text-underline-offset: 3px; }
 .steps { margin: var(--space-3) 0 0; padding-left: var(--space-5); color: var(--text-secondary); }
@@ -567,7 +569,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-mono);
   resize: vertical;
 }
-.field::placeholder { color: var(--text-faint); }
+.field::placeholder { color: var(--text-secondary); }
 .field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3); margin-top: var(--space-4); }
 .field-label { display: block; font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 .field-label .field { margin-top: var(--space-1); font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body); }
@@ -576,7 +578,6 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
   padding: var(--space-4);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--radius-card);
-  transition: background-color var(--motion-duration-fast) var(--motion-ease), border-color var(--motion-duration-fast) var(--motion-ease);
 }
 .dropzone.is-over { border-color: var(--accent-primary); background: var(--bg-raised); }
 .dropzone .skill-about { margin-top: 0; }
@@ -813,7 +814,7 @@ kbd {
 .settings-head { gap: var(--space-3); }
 .settings-back { align-self: flex-start; gap: var(--space-1); padding-left: var(--space-2); }
 .settings-back svg { width: var(--space-4); height: var(--space-4); }
-.settings-search-input { width: 100%; min-height: 44px; font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body); }
+.settings-search-input { width: 100%; min-height: var(--hit); font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body); }
 .settings-results {
   list-style: none;
   margin: 0;

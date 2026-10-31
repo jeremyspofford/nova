@@ -4,6 +4,7 @@
 import { escapeHtml as esc, renderMarkdown } from './markdown.js';
 import { status } from './components.js';
 import { activityStatus, toolTier } from './status.js';
+import { since, waitState, waitingLine } from './wait.js';
 
 export const icons = {
   send: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.5V4.5M5 9.5l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -234,7 +235,11 @@ function renderTool(tool, turnOpen) {
   const label = state === 'skipped' ? `Never ran ${tool.name === 'exec' ? `<code>${esc(String(tool.args?.command ?? '').split('\n')[0])}</code>` : 'that step'}` : toolLabel(tool, state);
   const cls = `record is-${state}" data-tool="${esc(tool.id)}`;
   const output = tool.result?.output;
-  if (state === 'running') return `<div class="${cls}" role="status"><span class="pulse" aria-hidden="true"></span>${label}…</div>`;
+  if (state === 'running') {
+    // Timed by this page's clock from when it first saw the step, never by the hub's timestamps.
+    const w = waitState(`step-${tool.name}`, since(`step-${tool.id}`));
+    return `<div class="record is-running${w.cls}" data-tool="${esc(tool.id)}"${w.attrs} role="status"><span class="wait-dot" aria-hidden="true"><span class="pulse"></span></span>${label}…${w.more}</div>`;
+  }
   const inside = tool.result?.link?.startsWith('/');
   const link = state === 'done' && tool.result?.link ? ` <a class="record-link" href="${esc(tool.result.link)}"${inside ? '' : ' target="_blank" rel="noopener"'}>${inside ? 'Follow it in Activity' : 'Open in Gmail'}</a>` : '';
   if (!output) return `<div class="${cls}">${stamp}<span class="record-label">${label}</span>${link}${when}</div>`;
@@ -306,7 +311,10 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
     }
   }
   if (running && live.text) nova += `<div class="prose is-live" data-live>${renderMarkdown(live.text)}<span class="caret" aria-hidden="true"></span></div>`;
-  else if (running && live.phase === 'thinking') nova += '<div class="thinking" role="status"><span class="pulse" aria-hidden="true"></span><span class="sr-only">Nova is thinking</span></div>';
+  else if (running && live.phase === 'thinking') {
+    const steps = turn.items.filter((it) => it.kind === 'tool' && it.result).length;
+    nova += waitingLine('Thinking', { key: 'reply', since: since(`reply-${turn.id}`), done: steps || null, noun: 'step', tag: 'div' });
+  }
   if (turn.state === 'stopped') nova += '<p class="notice">Stopped.</p>';
   if (open && !live) nova += '<p class="notice">This reply was interrupted.</p>';
 
@@ -318,7 +326,7 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
   // orb: the orb is in the view once (DESIGN-SYSTEM §1).
   const started = novaStart(turn);
   return `<section class="turn" id="t-${esc(turn.id)}" data-turn="${esc(turn.id)}">
-  ${turn.followup ? '' : `<div class="msg-user msg" data-author="person">${turn.ts ? msgTime(turn.ts, times.person) : ''}<div class="bubble">${esc(turn.text)}</div>
+  ${turn.followup ? '' : `<div class="msg-user msg" data-author="person">${turn.ts ? msgTime(turn.ts, times.person) : ''}<div class="bubble">${esc(turn.text)}</div>${turn.sending ? waitingLine('Sending', { key: 'send' }) : ''}
     <div class="actions"><button type="button" class="act" data-action="copy-user" data-turn="${esc(turn.id)}" aria-label="Copy message">${icons.copy}<span>Copy</span></button></div></div>`}
   <div class="msg-nova msg" data-author="nova">${started ? msgTime(started, times.nova) : ''}${nova}${actions.length ? `<div class="actions">${actions.join('')}</div>` : ''}</div>
 </section>`;
@@ -625,7 +633,10 @@ export function relWhen(iso, now = new Date(), timeZone = undefined) {
 // report's headline with a way to read it.
 function scheduleLast(s, now, tz) {
   if (s.running?.waiting) return `<p class="schedule-last is-warn" role="status">Waiting for your OK. <a href="/c/${esc(s.running.run)}">See what it's asking</a></p>`;
-  if (s.running) return '<p class="schedule-last is-running" role="status"><span class="pulse" aria-hidden="true"></span>Running now…</p>';
+  if (s.running) {
+    const w = waitState('schedule', since(`schedule-${s.id}`));
+    return `<p class="schedule-last is-running${w.cls}"${w.attrs} role="status"><span class="wait-dot" aria-hidden="true"><span class="pulse"></span></span>Running now…${w.more}</p>`;
+  }
   if (s.queued) return '<p class="schedule-last">Waiting for another schedule to finish.</p>';
   const r = s.last;
   if (!r) return '';

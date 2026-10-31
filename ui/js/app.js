@@ -21,6 +21,8 @@ import { bindCheckpoints, loadCheckpoints, renderCheckpoints } from './checkpoin
 import { bindReset, loadReset, renderReset } from './reset.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
+import { begin, over, remember, waitingLine } from './wait.js';
+import { blocksOf, doneWaiting, keepShape, showWaiting } from './skeleton.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -236,8 +238,8 @@ function setReachable(ok) {
       loadList();
       refreshCore();
       if (state.id && (!stream || stream.readyState === EventSource.CLOSED)) open(state.id, { quiet: true });
-    }).catch(() => { healthTimer = setTimeout(check, 2000); });
-    healthTimer = setTimeout(check, 2000);
+    }).catch(() => { healthTimer = setTimeout(check, 2000); }); // wait: retry: is the server back?
+    healthTimer = setTimeout(check, 2000); // wait: retry: is the server back?
   }
 }
 
@@ -295,6 +297,13 @@ function showCore(view) {
   if (target) target.focus({ preventScroll: true });
 }
 
+// After a real render, once the view's entrance has settled: its layout, for the next skeleton.
+function rememberShape(view, node, id = '') {
+  doneWaiting(view);
+  const moving = node.getAnimations({ subtree: true }).filter((a) => a.effect?.getComputedTiming().iterations !== Infinity);
+  Promise.all(moving.map((a) => a.finished.catch(() => {}))).then(() => { if (state.view === (view === 'chat' ? 'chat' : view) && node.isConnected) keepShape(view, node, blocksOf(view, node), id); });
+}
+
 function enter(node) {
   node.classList.remove('view-enter');
   void node.offsetWidth;
@@ -304,8 +313,10 @@ function enter(node) {
 // Draw whatever of the core's surfaces is on screen, keeping the reader's place and focus.
 function renderCore({ enter: entering = false } = {}) {
   const keep = (node, draw) => {
+    const waited = !!node.querySelector('[data-skeleton], .view-waiting');
     const focusKey = document.activeElement && node.contains(document.activeElement) ? (document.activeElement.dataset.task ?? document.activeElement.dataset.action ?? null) : null;
     draw(node);
+    if (core.store.loaded && !node.querySelector('[data-skeleton], .view-waiting') && (entering || waited)) rememberShape(state.view, node);
     if (focusKey) node.querySelector(`[data-task="${CSS.escape(focusKey)}"], [data-action="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
     if (entering) enter(node);
   };
@@ -321,7 +332,8 @@ function renderCore({ enter: entering = false } = {}) {
 let refreshing = null;
 function refreshCore(parts) {
   // The chrome too: the "saved earlier" banner depends on whether these answers were live.
-  refreshing = core.load(parts).then(({ any, live }) => { if (any) setReachable(live); renderChrome(); renderCore(); renderVoice(); });
+  // No part answered at all, not even from the offline cache: Nova is out of reach, and the page says so.
+  refreshing = core.load(parts).then(({ any, live }) => { setReachable(any && live); renderChrome(); renderCore(); renderVoice(); });
   return refreshing;
 }
 
@@ -343,7 +355,8 @@ function startNew() {
 function open(id, { quiet = false } = {}) {
   stream?.close();
   setView('chat');
-  if (!quiet || state.id !== id) Object.assign(state, { id, live: null, pending: state.pending?.sessionId === id ? state.pending : null, stick: true });
+  if (!quiet || state.id !== id) Object.assign(state, { id, live: null, pending: state.pending?.sessionId === id ? state.pending : null, stick: true, snapshot: false });
+  if (!state.snapshot && !state.pending) { rendered = new Map(); showWaiting('chat', el.thread, 'Loading the conversation', { end: true, id }); }
   restoreDraft();
   if (id === 'main') markMainSeen();
   const es = new EventSource(`/api/sessions/${id}/events`);
@@ -353,11 +366,15 @@ function open(id, { quiet = false } = {}) {
     const snap = JSON.parse(e.data);
     state.session = snap.session;
     state.live = snap.live;
+    state.snapshot = true;
     if (state.pending && state.session.turns.some((t) => !t.kind && t.text === state.pending.text && t.ts >= state.pending.since)) state.pending = null;
     renderAll({ enter: first && !quiet });
+    if (first && state.session.turns.length) rememberShape('chat', el.thread, id);
     first = false;
   });
   es.addEventListener('event', (e) => onEvent(JSON.parse(e.data)));
+  // The server sends a phase (with the text so far) before the pieces that follow it, so the page
+  // just takes it (src/runner.js; tests/m9-stream-order.test.js).
   es.addEventListener('live', (e) => { state.live = JSON.parse(e.data); renderThread(); renderChrome(); showSignals(); });
   es.addEventListener('delta', (e) => {
     const d = JSON.parse(e.data);
@@ -368,14 +385,22 @@ function open(id, { quiet = false } = {}) {
   });
   es.addEventListener('open', () => setReachable(true));
   es.addEventListener('error', () => {
-    if (es.readyState === EventSource.CLOSED) { setReachable(false); return; }
-    setTimeout(() => { if (es === stream && es.readyState !== EventSource.OPEN) setReachable(false); }, 1500);
+    if (es.readyState === EventSource.CLOSED) {
+      // A stream refused before any snapshot (no such conversation): the wait is over, never left
+      // waiting for good.
+      if (es === stream && !state.snapshot) { state.snapshot = true; state.session = emptySession(id); renderThread(); }
+      setReachable(false);
+      return;
+    }
+    setTimeout(() => { if (es === stream && es.readyState !== EventSource.OPEN) setReachable(false); }, 1500); // wait: debounce: a stream that reconnects at once is not a drop
   });
 }
 
 function onEvent(ev) {
   applyEvent(state.session, ev);
-  if (ev.type === 'user') state.pending = null;
+  // The person's message is in: its send is over, and Nova's turn is timed from when they sent it.
+  if (ev.type === 'user') { if (state.pending) begin(`reply-${ev.turn}`, state.pending.at); state.pending = null; over('send'); }
+  if (ev.type === 'done') { const t = state.session.turns.find((x) => x.id === ev.turn); if (t?.ts && ev.ts) remember('reply', Date.parse(ev.ts) - Date.parse(t.ts)); }
   if (ev.type === 'assistant' && state.live?.turn === ev.turn) state.live.text = '';
   if (ev.type === 'session' || ev.type === 'title') loadList();
   renderThread();
@@ -386,7 +411,7 @@ function onEvent(ev) {
 
 function viewSession() {
   if (!state.pending) return state.session;
-  const turn = { id: 'pending', text: state.pending.text, ts: state.pending.since, attempt: 0, items: [], state: 'open' };
+  const turn = { id: 'pending', text: state.pending.text, ts: state.pending.since, attempt: 0, items: [], state: 'open', sending: !state.pending.sent };
   return { ...state.session, turns: [...state.session.turns, turn] };
 }
 
@@ -416,14 +441,19 @@ function renderAll({ enter = false } = {}) {
   } else scrollToEnd(true);
 }
 
-// Briefly mark what a link pointed at.
+// Briefly mark what a link pointed at: the mark stays for a moment, long enough to see where it
+// is, then goes (wait: expiry).
+const FOUND_MS = 1600;
+let found = null;
 function flash(node) {
-  node.classList.remove('is-found');
-  void node.offsetWidth;
+  if (found) { clearTimeout(found.timer); found.node.classList.remove('is-found'); }
   node.classList.add('is-found');
+  found = { node, timer: setTimeout(() => { node.classList.remove('is-found'); found = null; }, FOUND_MS) }; // wait: expiry: the mark
 }
 
 function renderThread() {
+  // A conversation whose snapshot isn't in yet is waiting (open): nothing of another one shows.
+  if (state.view === 'chat' && state.id && state.snapshot === false && !state.pending) return;
   const session = viewSession();
   const wasNear = nearBottom();
   if (!session.turns.length) {
@@ -611,7 +641,33 @@ function scrollToEnd(force = false) {
 el.scroller.addEventListener('scroll', () => {
   state.stick = nearBottom();
   if (state.stick) el.jump.hidden = true;
+  notePlace();
 }, { passive: true });
+
+// The reader's place survives a resize, a fold or an unfold (M9; UX-RESEARCH §7: "losing scroll
+// position on unfold is the signature failure"): what was at the top of the screen stays there, at
+// the same distance, however the text reflows. A conversation read at its end stays at its end.
+let place = null;
+let placeSize = '';
+const sizeOf = () => `${el.scroller.clientWidth}x${el.scroller.clientHeight}`;
+const BLOCK = '.turn, .dateline, .gap-divider, .card, .memory-item, .settings-row, .settings-cat, .task-row, .act-entry, .skill, section, li, header';
+function notePlace() {
+  // A scroll the browser makes while it resizes isn't the reader's: the place from before stands.
+  if (sizeOf() !== placeSize) return;
+  const box = el.scroller.getBoundingClientRect();
+  if (state.view === 'chat' && state.stick) { place = { end: true }; return; }
+  const hit = document.elementFromPoint(box.left + box.width / 2, box.top + 8);
+  const node = hit && el.scroller.contains(hit) && hit !== el.scroller ? hit.closest(BLOCK) ?? hit : null;
+  place = node ? { node, off: node.getBoundingClientRect().top - box.top } : null;
+}
+const placeWatch = new ResizeObserver(() => {
+  placeSize = sizeOf();
+  if (place?.end) { if (state.view === 'chat') scrollToEnd(); return; }
+  if (!place?.node?.isConnected) return;
+  const box = el.scroller.getBoundingClientRect();
+  el.scroller.scrollTop += place.node.getBoundingClientRect().top - box.top - place.off;
+});
+for (const n of [el.scroller, el.thread]) placeWatch.observe(n);
 el.jump.addEventListener('click', () => { el.scroller.scrollTo({ top: el.scroller.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); state.stick = true; el.jump.hidden = true; el.input.focus(); });
 
 // ---- composer ------------------------------------------------------------
@@ -626,7 +682,7 @@ function saveDraft() {
   clearTimeout(draftTimer);
   const key = draftKey();
   const value = el.input.value;
-  draftTimer = setTimeout(() => { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch {} }, 250);
+  draftTimer = setTimeout(() => { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch {} }, 250); // wait: debounce: saving the draft
 }
 
 function autosize() {
@@ -638,14 +694,16 @@ function say(notice, ms = 4000) {
   state.notice = notice;
   renderChrome();
   clearTimeout(say.t);
-  say.t = setTimeout(() => { state.notice = ''; renderChrome(); }, ms);
+  say.t = setTimeout(() => { state.notice = ''; renderChrome(); }, ms); // wait: expiry: the notice
 }
 
 async function send() {
   const text = el.input.value.trim();
   if (!text || running() || !state.reachable) return;
   const sessionId = state.id;
-  state.pending = { text, since: new Date().toISOString(), sessionId };
+  // A new wait begins now, on this page's clock: the send, and Nova's turn after it.
+  state.pending = { text, since: new Date().toISOString(), at: begin('send'), sessionId };
+  begin('reply-pending', state.pending.at);
   el.input.value = '';
   autosize();
   clearTimeout(draftTimer); // a pending save would bring the sent text back as a draft
@@ -657,11 +715,14 @@ async function send() {
     if (!sessionId) {
       const { id } = await post('/api/sessions', { text });
       state.pending.sessionId = id;
+      state.pending.sent = true;
+      over('send');
       history.pushState(null, '', `/c/${id}`);
       open(id);
       loadList();
     } else {
       await post(`/api/sessions/${sessionId}/messages`, { text });
+      if (state.pending) { state.pending.sent = true; over('send'); renderThread(); }
     }
   } catch (e) {
     state.pending = null;
@@ -701,7 +762,7 @@ el.thread.addEventListener('change', (e) => {
 });
 el.input.addEventListener('input', () => { autosize(); saveDraft(); renderChrome(); });
 el.input.addEventListener('focus', renderChrome);
-el.input.addEventListener('blur', () => setTimeout(renderChrome, 0));
+el.input.addEventListener('blur', () => setTimeout(renderChrome, 0)); // wait: after the event: focus has moved
 el.input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!running()) send(); }
 });
@@ -714,7 +775,7 @@ async function copy(text, button) {
   const before = label.textContent;
   button.classList.add('is-done');
   label.textContent = 'Copied';
-  setTimeout(() => { button.classList.remove('is-done'); label.textContent = before; }, 1600);
+  setTimeout(() => { button.classList.remove('is-done'); label.textContent = before; }, 1600); // wait: expiry: “Copied”
 }
 
 // Links to Nova's own places stay inside the app (the style reference and Google don't).
@@ -781,7 +842,7 @@ el.thread.addEventListener('pointerdown', (e) => {
   const msg = e.target.closest(SHOWS_TIME);
   pressed = false;
   pressAt = { x: e.clientX, y: e.clientY };
-  if (e.pointerType === 'touch' && msg && !operating(e, msg)) pressTimer = setTimeout(() => { pressed = true; showTime(msg, true); }, 450);
+  if (e.pointerType === 'touch' && msg && !operating(e, msg)) pressTimer = setTimeout(() => { pressed = true; showTime(msg, true); }, 450); // wait: long press
 });
 for (const ev of ['pointerup', 'pointercancel']) el.thread.addEventListener(ev, () => clearTimeout(pressTimer));
 el.thread.addEventListener('pointermove', (e) => {
@@ -817,12 +878,14 @@ function showMemory() {
 let memoryDeferred = false;
 function renderMemoryView({ enter = false } = {}) {
   if (el.memory.querySelector('.is-editing')) { memoryDeferred = true; return; }
+  const waited = !!el.memory.querySelector('[data-skeleton], .view-waiting');
   memoryDeferred = false;
   const focused = document.activeElement?.closest?.('.memory-item')?.dataset.id;
   const at = focused ? [...el.memory.querySelectorAll('.memory-item')].findIndex((x) => x.dataset.id === focused) : -1;
   if (state.memory) el.memory.innerHTML = renderMemory(state.memory);
   else if (state.memoryError) el.memory.innerHTML = `<div class="empty"><p class="empty-line">Memory couldn't be read.</p><p class="memory-lede">${state.memoryError}</p><button type="button" class="btn" data-action="retry-memory">Try again</button></div>`;
-  else el.memory.innerHTML = '';
+  else if (!el.memory.querySelector('[data-skeleton], .view-waiting')) showWaiting('memory', el.memory, 'Loading Memory');
+  if (state.memory && (enter || waited)) rememberShape('memory', el.memory);
   // An edit gives the memory a new id; focus stays where it was in the list.
   if (focused) (document.getElementById(`m-${focused}`) ?? el.memory.querySelectorAll('.memory-item')[at])?.focus({ preventScroll: true });
   if (enter) {
@@ -837,13 +900,14 @@ function autosizeField(field) {
   field.style.height = `${field.scrollHeight + field.offsetHeight - field.clientHeight}px`;
 }
 
-function editMemory(item) {
+// `draft`: words the person typed before, when a save failed and they edit again.
+function editMemory(item, draft = null) {
   if (item.classList.contains('is-editing')) return;
   const text = item.querySelector('.memory-text');
   const field = document.createElement('textarea');
   field.className = 'memory-edit';
   field.rows = 1;
-  field.value = text.textContent;
+  field.value = draft ?? text.textContent;
   field.setAttribute('aria-label', 'Edit this memory');
   item.classList.add('is-editing');
   text.hidden = true;
@@ -862,9 +926,17 @@ function editMemory(item) {
     item.classList.remove('is-editing');
     item.focus({ preventScroll: true });
     if (save && next && next !== before) {
+      // The honest split (DESIGN-SYSTEM §1.6): the new words at once; "Saving" if the server takes
+      // a second; "Saved" only when it has them. A failure puts back what is really saved, says
+      // why, and keeps what was typed one tap away.
       text.textContent = next;
+      text.insertAdjacentHTML('afterend', waitingLine('Saving', { key: 'memory-save' }));
+      const saving = text.nextElementSibling;
       try { await post(`/api/memory/${item.dataset.id}`, { text: next }); toast('Saved. Nova will use it from the next message.'); }
-      catch (e) { text.textContent = before; toast(e.message); }
+      catch (e) {
+        text.textContent = before;
+        notify(`${e.message} Your change wasn’t saved.`, { action: { label: 'Edit again', run: () => { const now = document.getElementById(item.id) ?? item; editMemory(now, next); } } });
+      } finally { saving?.remove(); over('memory-save'); }
     }
     if (memoryDeferred) renderMemoryView();
   };
@@ -1244,7 +1316,7 @@ function renderSchedulesView({ enter = false } = {}) {
   }
 }
 // "Next: tomorrow at 7:00 AM" stays true as the clock moves.
-setInterval(() => { if (state.view === 'automations' && !document.hidden) renderSchedulesView(); }, 60_000);
+setInterval(() => { if (state.view === 'automations' && !document.hidden) renderSchedulesView(); }, 60_000); // wait: clock: “Next: …” stays true
 
 const scheduleName = (id) => state.schedules?.set.find((s) => s.id === id)?.name ?? 'The schedule';
 
@@ -1372,7 +1444,7 @@ function renderActivityView({ enter = false } = {}) {
   }
 }
 // "Working for 2 min" and the days stay true as the clock moves.
-setInterval(() => { if (state.view === 'activity' && !document.hidden) renderActivityView(); }, 60_000);
+setInterval(() => { if (state.view === 'activity' && !document.hidden) renderActivityView(); }, 60_000); // wait: clock: “Working for …” stays true
 
 async function earlier(button) {
   button.disabled = true;
@@ -1689,7 +1761,8 @@ el.settings.addEventListener('change', (e) => {
   else if (t.name === 'ds-scope') lookAction('scope', t);
   else if (t.dataset.action === 'set-profile') core.saveProfile(t.dataset.section, t.dataset.key, t.value);
 });
-el.settings.addEventListener('input', (e) => { if (e.target.id === 'settings-search') { settingsUi.touched = true; renderSettingsResults(e.target.value); } });
+// Anything the person types in Settings is theirs: data arriving late leaves their focus alone (M9).
+el.settings.addEventListener('input', (e) => { settingsUi.touched = true; if (e.target.id === 'settings-search') renderSettingsResults(e.target.value); });
 el.settings.addEventListener('keydown', (e) => {
   if (e.target.id === 'settings-search' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); moveSettingsResult(e.key === 'ArrowDown' ? 1 : -1); return; }
   if (e.target.id === 'settings-search' && e.key === 'Enter') {
@@ -1758,7 +1831,7 @@ let pendingTimer = 0;
 function scheduleRefresh(parts) {
   for (const p of parts) pending.add(p);
   clearTimeout(pendingTimer);
-  pendingTimer = setTimeout(() => { const list = [...pending]; pending = new Set(); refreshCore(list); }, 120);
+  pendingTimer = setTimeout(() => { const list = [...pending]; pending = new Set(); refreshCore(list); }, 120); // wait: debounce: many events at once
 }
 onCore('task', () => scheduleRefresh(['tasks']));
 onCore('problem', (p) => {
@@ -1951,12 +2024,13 @@ function keepSession() {
     if (!(await renew())) location.assign('/pair');
   };
   check();
-  setInterval(check, 10 * 60_000);
+  setInterval(check, 10 * 60_000); // wait: clock: the session’s renewal
   document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
 }
 
 // ---- start -----------------------------------------------------------------
 
+window.addEventListener('nova:unreachable', () => setReachable(false));
 window.addEventListener('online', () => { state.online = true; renderChrome(); showSignals(); refreshCore(); });
 window.addEventListener('offline', () => { state.online = false; renderChrome(); showSignals(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !setupShowing()) { loadList(); refreshCore(); } });
@@ -1987,7 +2061,10 @@ function boot() {
   refreshCore();
   loadCapture();
   route();
+  // The page shows once its layout and first view are set: nothing moves into place (M9, CLS).
+  document.body.dataset.shown = '';
 }
 // A blank profile opens the setup conversation, full screen, before anything else.
 if (!(await startSetup({ done: () => { boot(); navigate('/'); } }))) boot();
+document.body.dataset.shown = '';
 document.documentElement.dataset.ready = 'true';

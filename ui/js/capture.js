@@ -6,6 +6,7 @@
 import { api, on as onCore } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, openSheet, toast } from './shell.js';
+import { waitingLine } from './wait.js';
 
 let data = null;      // GET /capture: { status, sources, settings, posture }
 let view = null;      // the Capture view: { recent, unclassified, proposals }
@@ -40,7 +41,7 @@ export async function loadCapture() {
 // The wait lets a page that is only being left go quietly.
 let dropped = 0;
 onCore('open', () => { clearTimeout(dropped); loadCapture(); });
-onCore('error', () => { clearTimeout(dropped); dropped = setTimeout(loadCapture, 2000); });
+onCore('error', () => { clearTimeout(dropped); dropped = setTimeout(loadCapture, 2000); }); // wait: retry: ask again after the connection drops
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => loadCapture());
   window.addEventListener('offline', () => { unreachable = 'You’re offline.'; renderIndicator(); });
@@ -65,7 +66,7 @@ export async function loadCaptureView() {
 let soon = 0;
 export function captureChanged(viewShowing) {
   clearTimeout(soon);
-  soon = setTimeout(() => { loadCapture(); if (viewShowing()) loadCaptureView(); }, 300);
+  soon = setTimeout(() => { loadCapture(); if (viewShowing()) loadCaptureView(); }, 300); // wait: debounce: many events at once
 }
 
 // ---- the indicator ---------------------------------------------------------------------------
@@ -169,7 +170,7 @@ const listOf = (items, text, action, line = text) => (items.length
 
 export function renderCaptureSettings() {
   const head = '<section class="memory-section" id="capture" aria-labelledby="set-capture"><h2 class="memory-heading" id="set-capture">Capture</h2>';
-  if (!data) return `${head}<p class="memory-lede">${esc(failed || 'Loading…')}</p>${failed ? '<button type="button" class="btn set-retry" data-action="retry-capture">Try again</button>' : ''}</section>`;
+  if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="retry-capture">Try again</button>` : waitingLine('Loading capture', { key: 'capture' })}</section>`;
   const { status, sources, settings, posture } = data;
   const screenpipe = sources.find((s) => s.adapter === 'screenpipe');
   const lede = 'What Nova may see on your devices, for context. Nothing is captured until you turn a source on, and the top bar shows whenever anything is. Capture stays on your own devices.';
@@ -227,7 +228,7 @@ function eventItem(e) {
 
 export function renderCaptureView() {
   const head = '<header class="view-head"><h2 class="view-title">Capture</h2>';
-  if (!data || !view) return `${head}<p class="memory-lede">${esc(failed || 'Loading…')}</p></header>${failed ? '<button type="button" class="btn set-retry" data-action="retry-capture">Try again</button>' : ''}`;
+  if (!data || !view) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p></header><button type="button" class="btn set-retry" data-action="retry-capture">Try again</button>` : `${waitingLine('Loading capture', { key: 'capture-view' })}</header>`}`;
   const s = data.status;
   const line = s.active ? `Capturing from ${s.capturing.map((c) => c.name).join(', ')}. ${plural(s.today, 'item')} in the last day.` : s.paused ? 'Capture is paused.' : 'Capture is off.';
   const out = [`${head}<p class="memory-lede">${esc(line)}${s.problem ? ` ${esc(s.problem)}` : ''} <a href="/settings#capture">Capture settings</a></p></header>`];

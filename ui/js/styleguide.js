@@ -117,7 +117,7 @@ function render() {
   const space = tokensOf((t) => t.name.startsWith('space/')).map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><div class="sg-bar" style="width: var(${n})"></div></div>`).join('');
   const shape = tokensOf((t) => t.name.startsWith('radius/')).map((n) => `<div class="sg-swatch"><div class="sg-box" style="border-radius: var(${n})">${value(n)}</div><span class="sg-name">${n}</span></div>`).join('') +
     tokensOf((t) => t.name.startsWith('shadow/')).map((n) => `<div class="sg-swatch"><div class="sg-box" style="border-radius: var(--radius-card); box-shadow: var(${n})">elevation</div><span class="sg-name">${n}</span></div>`).join('');
-  const motion = tokensOf((t) => t.syntax === 'duration').map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><div class="sg-track"><span class="sg-dot" style="transition: left var(${n}) var(--motion-ease)"></span></div></div>`).join('');
+  const motion = tokensOf((t) => t.syntax === 'duration').map((n) => `<div class="sg-row"><span class="sg-name">${n} · ${value(n)}</span><div class="sg-track"><span class="sg-dot" style="transition: translate var(${n}) var(--motion-ease)"></span></div></div>`).join('');
 
   const sched = (id, name, when, more = {}) => ({ id, name, when, cron: '0 7 * * *', deliver: 'main', prompt: 'Write the morning digest.', next: at(20), last: null, ...more });
   const scheduleSample = {
