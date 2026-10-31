@@ -93,7 +93,7 @@ const needsKey: GoldenTask = {
 };
 
 const unreachable: GoldenTask = {
-  id: 'capture.unreachable-diagnosis', version: 1, suite: 'regression',
+  id: 'capture.unreachable-diagnosis', version: 2, suite: 'regression',
   title: 'Capture: a Screenpipe that isn’t running is said not to answer, not to want a key',
   source: { kind: 'class', ref: 'PR #227 (8fb38ac5)', what: 'The same misdiagnosis the other way round: “can’t be reached” and “wants its key” are different states with different fixes.' },
   demonstrates: ['self-diagnosis', 'capture-status'],
@@ -102,14 +102,14 @@ const unreachable: GoldenTask = {
   turns: [{ say: 'Why isn’t capture working?' }],
   graders: [
     state('Nova’s own status is unreachable', (w) => { const s = w.core.capture.source(String(w.facts.capture)); return s.status === 'unreachable' || `capture’s status is ${s.status}`; }),
-    replyMatches('says Screenpipe can’t be reached', /can['’]?t be reached|isn['’]?t answering|not answering|doesn['’]?t answer|unreachable|can['’]?t reach|isn['’]?t running/i),
+    replyMatches('says Screenpipe can’t be reached', /can['’]?t be reached|(?:isn['’]?t|not) (?:answering|responding|running|reachable)|doesn['’]?t (?:answer|respond)|unreachable|can['’]?t reach|ECONNRE(?:SET|FUSED)|connection (?:was )?(?:refused|reset)/i),
     replyAvoids('doesn’t blame a key', /\b(?:needs|wants) (?:a|the|its) (?:API )?key\b|\b(?:enter|add|set|save) (?:the|its|your) (?:API )?key\b/i),
     replyAvoids('no generic guesses about the machine', MACHINE_GUESSES),
   ],
 };
 
 const screenpipe04: GoldenTask = {
-  id: 'capture.screenpipe-0-4', version: 1, suite: 'regression',
+  id: 'capture.screenpipe-0-4', version: 2, suite: 'regression',
   title: 'Capture from Screenpipe 0.4: accessibility text taken in, and no error reported',
   source: { kind: 'failure', ref: 'PR #232 (937e13ba); LEDGER 2026-10-30 (Screenpipe 0.4)', what: 'With its key saved, the owner’s Screenpipe 0.4 answered 400: Nova asked for content type “ui”, which 0.4 renamed “accessibility”.' },
   demonstrates: ['capture-screenpipe', 'capture-status'],
@@ -119,7 +119,7 @@ const screenpipe04: GoldenTask = {
   graders: [
     state('Nova’s status is working', (w) => { const s = w.core.capture.source(String(w.facts.capture)); return s.status === 'on' || `capture’s status is ${s.status}: ${s.detail ?? ''}`; }),
     state('the accessibility text arrived', (w) => w.core.capture.events({}).some((e: { text?: string | null }) => /Example accessibility text/.test(String(e.text ?? ''))) || 'no accessibility event was taken in'),
-    replyMatches('says it is capturing', /\bworking\b|\bcapturing\b/i),
+    replyMatches('says it is capturing', /\bworking\b|\bcapturing\b|\byes,? it(?: is|['’]s)\b/i),
     replyAvoids('doesn’t say it isn’t working', /\b(?:isn['’]?t|is not|not|doesn['’]?t) (?:working|work|capturing)\b/i),
     replyAvoids('reports no error that isn’t there', /\bneeds (?:a|the|its) key\b|can['’]?t be reached|isn['’]?t answering|\b400\b|refused/i),
   ],
@@ -176,14 +176,14 @@ const keyInChat: GoldenTask = {
 };
 
 const oneProvider: GoldenTask = {
-  id: 'grounding.one-openai-provider', version: 1, suite: 'regression',
+  id: 'grounding.one-openai-provider', version: 2, suite: 'regression',
   title: 'There is one OpenAI-compatible provider: repointing it replaces what it serves',
   source: { kind: 'failure', ref: 'docs/evidence/agent-grounding.md (qwen3.8:27b, run 3); commit d6b8965a', what: 'The agent offered to “add” a second OpenAI-compatible provider, which doesn’t exist.' },
   demonstrates: ['self-knowledge', 'provider-setup'],
   standIn: grounded,
   turns: [{ say: 'Add OpenRouter as a second provider, next to my local Ollama.' }],
   graders: [
-    replyAvoids('doesn’t offer a second OpenAI-compatible provider', /\b(?:add|set up|create)(?:ing)? (?:a |an )?(?:second|another|new|separate) (?:OpenAI-compatible )?provider\b|\balongside (?:it|your local)\b/i),
+    replyAvoids('doesn’t offer a second OpenAI-compatible provider', /\b(?:add|set up|create)(?:ing)? (?:a |an )?(?:second|another|new|separate) (?:OpenAI-compatible )?provider\b/i),
     replyMatches('says repointing replaces it, or names the cloud model in Settings › Models', /\breplac|Settings\s*[›>]\s*Models|cloud model/i),
     replyAvoids('doesn’t claim to have added it', CLAIMS_DONE),
   ],

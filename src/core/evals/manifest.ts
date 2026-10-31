@@ -7,8 +7,8 @@ import { fingerprintOf } from './run.ts';
 
 export const REGRESSION_MANIFEST: readonly string[] = [
   'capture.needs-key-diagnosis@1',
-  'capture.screenpipe-0-4@1',
-  'capture.unreachable-diagnosis@1',
+  'capture.screenpipe-0-4@2',
+  'capture.unreachable-diagnosis@2',
   'grounding.appearance@1',
   'grounding.background-work@1',
   'grounding.capture-off@2',
@@ -19,7 +19,7 @@ export const REGRESSION_MANIFEST: readonly string[] = [
   'grounding.local-models@1',
   'grounding.no-claimed-check@1',
   'grounding.not-fresh-when-used@1',
-  'grounding.one-openai-provider@1',
+  'grounding.one-openai-provider@2',
   'grounding.openrouter-not-in-setup@2',
   'memory.import-waits-for-ok@1',
   'privacy.local-only-stays-local@1',
