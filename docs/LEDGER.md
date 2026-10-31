@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #266 · Pairing a phone no longer fails now and then for no reason**
+- What changed: the browser engine behind every iPhone (WebKit) sometimes refuses a security key it has just made. Nova's pairing page took that as "this browser can't pair". Now it quietly makes another key of the same strength and carries on. A browser that really can't make these keys is still told so plainly.
+- What you can now do: pair a phone without the occasional unexplained failure. It was also the cause of a pairing test that failed every so often.
+- Still unfinished: whether a real iPhone ever does this is unknown; Apple's WebKit uses a different crypto engine from the test browser.
+
 **2026-10-31 · #258 · The safety screen now asks Nova's decision service, and checks every part of a long page**
 - What changed: Nova's screen for outside content (pages, mail, files, tool output) now asks the new decision service. It checks every part of a long document, not a sample, and the parts overlap, so a trick split across a boundary is still seen. Every decision is recorded, without the content.
 - What you can now do: in Settings › Models › Decision model, you can choose Jev (TypeSafe's cloud model) or a Tev1 size, and see each model's test results before you switch. Two separate switches let Jev screen outside content (Screening) or images (Box, a preview) even in local modes. Both are off, and each says plainly what leaves your machine. Health shows how outside content is being screened.
