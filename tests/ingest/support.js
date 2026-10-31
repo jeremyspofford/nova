@@ -92,8 +92,11 @@ export function scripted(plan) {
 export const call = (name, args) => `<tool_call name="${name}">${JSON.stringify(args)}</tool_call>`;
 
 // A Nova with the scripted model. `yes`: permissions set to yes in permissions.md. `model`: a
-// stand-in Ollama `reply` for a local sorting model (none when absent).
-export async function startNova({ agent, yes = [], model = null, gmail = false, linkCaps = null } = {}) {
+// stand-in Ollama `reply` for a local sorting model (none when absent). For the Decision Service's
+// seats (the gate's fallback matrix): `hub`, the hub's Ollama address when there is no sorting
+// model (a Tev1 stand-in, or a closed port); `decision`, the person's decision-model choices and
+// the Jev key; `decisions`, a verdict store in place of the committed one; `privacy`, the mode.
+export async function startNova({ agent, yes = [], model = null, gmail = false, linkCaps = null, hub = null, decision = null, decisions = null, privacy = 'cloud-allowed' } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'nova-gate-'));
   ensureMark(home);
   const web = await startWeb();
@@ -110,10 +113,16 @@ export async function startNova({ agent, yes = [], model = null, gmail = false, 
     // The stand-in web is on this machine; a test may let the agent reach it, the model never can.
     fetchAllow: (address) => address === '127.0.0.1',
     ...(linkCaps ? { linkCaps } : {}),
-    ...(ollama ? { models: { ollamaUrl: ollama.url, hardware: async () => hubHardware(), watchMs: 100 } } : {}),
+    ...(ollama || hub ? { models: { ollamaUrl: ollama?.url ?? hub, hardware: async () => hubHardware(), watchMs: 100 } } : {}),
+    ...(decisions ? { decisions } : {}),
   });
   // The web and Gmail tools are offered only when the privacy setting allows the network.
-  nova.core.profile.set('privacy', 'default', 'cloud-allowed', 'settings');
+  nova.core.profile.set('privacy', 'default', privacy, 'settings');
+  if (decision) {
+    nova.core.profile.set('models', 'decision', decision.settings, 'settings');
+    if (decision.key) nova.core.vault.put('decisions.jev', decision.key);
+  }
+  if (hub || decision) await nova.core.decisionService.refresh();
   if (yes.length) writeFileSync(join(home, 'permissions.md'), yes.map((id) => `- ${id}: yes`).join('\n') + '\n');
   if (ollama) await nova.core.models.assign('triage-text', { model: 'example-small:3b' });
   await new Promise((r) => nova.server.listen(0, '127.0.0.1', r));
