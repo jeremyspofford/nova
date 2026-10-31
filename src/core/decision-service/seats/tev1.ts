@@ -7,7 +7,7 @@
 import { modelMemory, privateAddress, gb, type Hardware } from '../../models/hardware.ts';
 import { HEADROOM } from '../../models/recommend.ts';
 import { askChunked, estimateTokens, PLAN_LIMITS, type PlanLimits } from '../chunk.ts';
-import { body, ENDPOINT_SINCE, MAX_BODY_BYTES, MAX_QUESTIONS, older, SystemOne, TEV1_REQUIRES, Unavailable, utf8, wireQuestions } from '../wire.ts';
+import { body, ENDPOINT_SINCE, MAX_BODY_BYTES, MAX_QUESTIONS, older, SystemOne, TEV1_REQUIRES, SeatFailure, Unavailable, utf8, wireQuestions } from '../wire.ts';
 import type { BuiltState, Seat, SeatAnswer, SeatLimits, SeatStatus, ServiceTemplate } from '../types.ts';
 import type { Egress } from '../../workers.ts';
 
@@ -139,19 +139,26 @@ export class Tev1Seat implements Seat {
     return (this.#detail = { available: true, model: size.model, digest: have.digest.replace(/^sha256:/, ''), ollama: version, size_why: size.why, why: size.why, checked_at: at });
   }
 
-  async ask(t: ServiceTemplate, built: BuiltState): Promise<SeatAnswer> {
+  async ask(t: ServiceTemplate, built: BuiltState, o: { beforeSend?: () => void } = {}): Promise<SeatAnswer> {
     const d = this.#detail;
     if (!d.available || !d.model) throw new Unavailable(d.why);
     const ids = Object.keys(t.questions);
-    if (ids.length > MAX_QUESTIONS) throw new Error(`${t.template_id} has ${ids.length} questions; one Tev1 request takes at most ${MAX_QUESTIONS}.`);
-    if (Object.keys(built.images).length || Object.values(t.questions).some((q) => q.type === 'box')) throw new Error('Tev1 reads no images.');
+    if (ids.length > MAX_QUESTIONS) throw new SeatFailure(`${t.template_id} has ${ids.length} questions; one Tev1 request takes at most ${MAX_QUESTIONS}.`);
+    if (Object.keys(built.images).length || Object.values(t.questions).some((q) => q.type === 'box')) throw new SeatFailure('Tev1 reads no images.');
     const model = d.model;
     const wq = wireQuestions(t.questions);
     const client = this.client;
-    return askChunked({
+    const a = await askChunked({
       t, built, limits: this.tev1Limits,
       fits: (state) => fits(model, state, wq, this.tev1Limits),
-      ask: (state) => client.ask(model, state, t.questions),
+      ask: (state) => { o.beforeSend?.(); return client.ask(model, state, t.questions); },
     });
+    // Which build answered: Ollama names only the tag, so the digest is read again AFTER the answer.
+    // A build swapped since the last check answers as tag@new-digest, which the service's pin
+    // (tag@digest asked) refuses; the seat's own record moves to the new build at once.
+    let now: string | null = null;
+    try { now = (await client.installed()).find((m) => m.name === model)?.digest.replace(/^sha256:/, '') ?? null; } catch { now = null; }
+    if (now && now !== this.#detail.digest && this.#detail.model === model) this.#detail = { ...this.#detail, digest: now, checked_at: this.#now().toISOString() };
+    return { ...a, model_answered: now ? modelId(model, now) : `${model}@unconfirmed` };
   }
 }

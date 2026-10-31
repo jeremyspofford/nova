@@ -6,6 +6,26 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #267 · The layout no longer crushes columns on a folding phone, tablet or narrow window**
+- What changed: on a folding phone's inner screen, a tablet held upright, or any window between a phone and a laptop, Nova no longer squeezes three columns in. Each column has a smallest width, and the side column with your tasks, devices and health only appears when all three fit; until then those cards are on Home. No text is squeezed to a few letters a line, the Online/Offline labels no longer sit on top of device names, and the side column scrolls instead of running off the screen. On an installed app, nothing sits under the camera cutout or the home bar any more.
+- What you can now do: use Nova on the fold's inner screen in either direction, in any of the six designs, and read every card.
+- Still unfinished: checking it on your real phone (the tests use the iPhone's engine, but not as an installed app). Whether the app should draw behind the iPhone's status bar, which would remove the empty band at the top but makes the time and battery white on the light designs, is your call.
+
+**2026-10-31 · #266 · Pairing a phone no longer fails now and then for no reason**
+- What changed: the browser engine behind every iPhone (WebKit) sometimes refuses a security key it has just made. Nova's pairing page took that as "this browser can't pair". Now it quietly makes another key of the same strength and carries on. A browser that really can't make these keys is still told so plainly.
+- What you can now do: pair a phone without the occasional unexplained failure. It was also the cause of a pairing test that failed every so often.
+- Still unfinished: whether a real iPhone ever does this is unknown; Apple's WebKit uses a different crypto engine from the test browser.
+
+**2026-10-31 · #258 · The safety screen now asks Nova's decision service, and checks every part of a long page**
+- What changed: Nova's screen for outside content (pages, mail, files, tool output) now asks the new decision service. It checks every part of a long document, not a sample, and the parts overlap, so a trick split across a boundary is still seen. Every decision is recorded, without the content.
+- What you can now do: in Settings › Models › Decision model, you can choose Jev (TypeSafe's cloud model) or a Tev1 size, and see each model's test results before you switch. Two separate switches let Jev screen outside content (Screening) or images (Box, a preview) even in local modes. Both are off, and each says plainly what leaves your machine. Health shows how outside content is being screened.
+- Still unfinished: text from Capture (screen text, meeting transcripts) is screened only on your devices; a switch to let Jev screen it in cloud mode is for later. No decision model has passed Nova's screening test yet, so anything Nova can't vouch for is still held back as unsure. Jev has never been called for real (no account). A very long document screened by Tev1 takes minutes.
+
+**2026-10-31 · #264 · A check for passwords and private details in captured screen text, the first to pass its test**
+- What changed: Nova can check text it captured from your screen or recordings for passwords, keys, and money or health details before keeping it. Fixed rules run first: password managers and banking apps are never kept, and key-like or card-like text is blanked out. On this computer's larger local model, the check caught 38 of 39 sensitive test notes and wrongly held only 1 of 40 harmless ones, so it passed. Its smaller model failed.
+- What you can now do: nothing yet: the check isn't switched on in capture. Nothing it reads leaves your machine.
+- Still unfinished: hooking it into capture and showing its verdict on the capture timeline. A second, independently written test set would make the pass stronger.
+
 **2026-10-31 · #259 · A diagnostics file for getting help, with secrets and your content left out**
 - What changed: Nova can make one file with its versions, the state of each of its parts, its settings and recent log lines, to give to whoever is helping you. Every password, key and token is replaced with REDACTED, and your memories, conversations and captured screen text are never in it, only how many there are. Nova never sends it anywhere.
 - What you can now do: nothing yet on screen: the "Download diagnostics" button in Health comes with the follow-up that wires it in.
@@ -276,6 +296,37 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
+- **The bands are derived, not round numbers:**
+  - each region has a minimum, computed from the design system's own tokens: the main column is 45ch plus its padding and scrollbar gutters; a card is 20ch plus its padding; the right column is one card plus its padding and scrollbar; the rail is `layout/rail-width`;
+  - the three-column band (rail, centre, right column) starts at their sum, and the two-column band at `max(600px, rail + main)`;
+  - they are `ui/`-declared custom properties in `layout.css`, not schema tokens, so no package changes. `shell.js` measures them at run time and again on a live swap or a text-size change.
+  - In the container, Orb Teal and Companion Light enter three columns at 851.6 px, Paper at 832.1, Aurora at 770.2, Nova at 752.2–793.1 and Obsidian at 734.1–773.6.
+- **Under the three-column band,** a flat tablet is the rail and one column, with the right column's cards on Home. Half-open postures keep their second pane: side by side where both fit or on a real hinge, stacked otherwise.
+- **M9's second-pane rule** ("every expanded width gives its extra room to a second pane") now applies from the three-column band, and Settings keeps its sidebar from 840 px. Between 840 px and the band, the centre keeps `layout/content-max`, so it never stretches.
+- **Cards** stack below the card minimum, never squeeze. A device row moves its pill under the words rather than over them.
+- **Safe area:** the shell keeps each inset clear once (`viewport-fit=cover`). No excess padding was found: the empty band at the top of the owner's screenshot is the iOS status bar above Nova's top bar.
+  - Drawing under the status bar (`black-translucent`) is left to the owner, because it turns the status text white over the light designs.
+- **The gate:**
+  - `tests/ui/fold-postures.test.ts` runs in the UI gate, in Chromium and WebKit: the review's 10 postures × 9 views, every design system at 560–1440 px, 20 screenshot baselines (2% tolerance) and the safe area.
+  - The posture sweep and M9 foldable 2 follow the derived bands.
+
+**2026-10-31 (capture screening, job 1: capture-sensitive).** Owner decision `INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`; plan `docs/plans/ds2-capture-sensitive.md`; evidence `docs/evidence/capture-sensitive-eval.md`; PR #264.
+- **The template:** `capture-sensitive` v1.
+  - **Deterministic first:** known password-manager and banking apps and sites are excluded with no model call; pattern detectors (keys, tokens, private keys, passwords, Luhn cards, mod-97 IBANs, SSNs, high-entropy secrets) redact before the model sees the text.
+  - **Four Nouls for the grey area:** password, secret_key, financial_details, health_details.
+  - **The rule** (0.7/0.3, not tuned, for a privacy screen): a password or secret excludes; finances or health hold; unsure holds; all no indexes.
+  - **Routing:** never to a cloud seat in local-first or local-only; in cloud mode only with a per-source opt-in (not built: never).
+  - The template and rule were fixed at `727b7509`, before any case.
+- **The eval,** fixed at `9cb2ca0a` before the run: 95 synthetic cases (39 grey, 12 structured, 4 app, 40 harmless look-alikes).
+- **Bounds:** detection ≥ 95%, false holds ≤ 20%, ECE ≤ 0.10; the deterministic layer 100%, with no caught value reaching a model.
+- **Result, on Ollama 0.40.13:**
+  - tev1:4b `7954dce2…`: 97.4%, 2.5%, 0.032, deterministic 16/16. **Pass**: trusted on that build.
+  - tev1:0.8b: detection 79.5%. **Fail**, evidence only.
+
+  **Caveats:** 39 grey cases (interval 86.8–99.6%); 11 of the 40 labelled judgments caught via "unsure → hold"; one author for the questions and the cases.
+- **Pending Track 1:** the consumers (indexing and archiving, timeline, intake drop of sensitive apps, migration).
+
 **2026-10-31 (owner decision: the unproven claims, split by audience).** Plan and the full list in `docs/plans/honest-claims.md`, branch `copy/honest-claims`.
 - **What a person can see is softened now:** UI copy, onboarding, the system prompt, briefing and tool docs the model repeats, the README, and the connector and skill files. Each claim says only what the evidence supports. The Amendment B closing rule is not deferred.
 - **The false claim is fixed.** "Every shell command waits for the person's approval" now reads: a command asks unless permissions.md lets commands run, and a command after outside content asks even then. Its cousin in the briefing ("anything that can't be undone always asks") is fixed too.
@@ -297,6 +348,34 @@ built-ins only.
   - the route, Era 2's counts, and the Health "Download diagnostics" link (NOTES §1–3, a Track 1 follow-up);
   - the integrity scrub, which is Track 1's Health work.
 - **Limits:** a raw secret Nova never stored and not shaped like one can't be recognised. Hostnames and names the person gave stay in the bundle.
+
+**2026-10-31 (the flaky WebKit pairing test, M4a).** Branch `fix/webkit-pairing-flake`. The UI
+gate's "M4a in WebKit" test timed out waiting for the join screen three times in a day (main run
+41205581247; both runs of PR #257), after 40 clean runs.
+- **Root cause, an app defect:** WebKit sometimes turns down a key it has just made.
+  `crypto.subtle.generateKey` throws `OperationError` for about one Ed25519 key in 150 and one
+  X25519 key in 500 in Playwright's WebKit; the rate was the same at full speed and on half a CPU,
+  so it is per key, not timing. `/pair`'s check that the browser can pair took any error as "This
+  browser can't pair" and stopped there, with no form, so the test waited for `#join` until it
+  timed out. A test run makes six keys, so roughly one run in 20 to 35 failed. When the device's
+  own key was the one refused, the page said "That didn't work" instead. The failure comes before
+  any signed time, so the logged pairing-clock defect is not involved. Whether a real iPhone's
+  WebKit does this too is not known.
+- **Fix:** `ui/js/device-key.js` makes each key through one helper that tries again on
+  `OperationError`, up to five times. Each try is a new key of the same kind, never a weaker one.
+  Any other error, such as `NotSupportedError`, is final, so a browser with no Ed25519 is still
+  told plainly.
+- **A second, smaller race in the same test:** it chose the mesh port from the ephemeral range,
+  where the hub's own port-0 listener can be handed the same port first (`EADDRINUSE`, 1 run in
+  100). It now uses the shared `freePort`, which picks below that range.
+- **Gate:** two new tests in `tests/ui/m4a-webkit-pair.test.ts`. In one, a browser fails every
+  first try at a key and still pairs to Home; it failed first, with CI's timeout. In the other, a
+  browser with no Ed25519 still sees "This browser can't pair".
+- **Evidence:**
+  - The real test file, run 100 times (four in parallel): 3 failures before (two `#join`
+    timeouts matching CI, and one `EADDRINUSE`), none after.
+  - The same flow 150 times in one container on one CPU: 8 failures before, every one a refused
+    key, and none after.
 
 **2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
 - **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
@@ -397,6 +476,37 @@ M10e phase.
   The simulated firewall now checks each packet as it arrives, through a gate in front of the mesh
   listener. Reproduced on one busy CPU (main's file failed 2 of 3); fixed, 4 of 4 pass. The network
   module is unchanged.
+
+**2026-10-31 (the ingest gate on the Decision Service, Track 1).** Plan `docs/plans/gate-decision-service.md`; PR #258. It applies DS1's NOTES 1–5, Tev1's NOTES 3–4 and the eval harness's NOTES 1, 2 and 5, under the owner's decisions in `docs/plans/decision-service.md`.
+- **The gate asks the service:** `ingest-screen`, one fenced chunk at a time. An answer counts only when the service trusts it (`verdict` or `legacy`) and all five probabilities are in [0, 1]. Otherwise the deterministic layer plus quarantine decide, as before.
+  - The forced local-only is gone. Cloud mode screens with Jev once it is set up.
+  - Local modes use Jev only with the screening opt-in. It is off by default, and its receipt names it.
+  - Box never goes to the cloud in local-only.
+- **Every chunk is screened:** no sampling; a pool of 2; 200-character overlap; surrogate pairs kept whole. Once a chunk has no trusted answer, nothing more is sent.
+  - Cost, measured against the stand-ins: a 2,000,000-character document is 715 chunks. That is about 2,100 Tev1 requests (minutes) or 715 Jev requests.
+- **Wiring:**
+  - the sorting model is the transitional seat, and the Jev key is in the vault as `decisions.jev`;
+  - records go to `decision_record` (migration 0019, with `receipt.opt_in` and the receipt sync triggers recreated);
+  - Health has one line per seat, and the hub's device record names the decision model;
+  - `GET`/`PUT /models/decisions`: 422 with problems; any change is tier 2, with every notice first; the key goes to the vault only; `{use}` is kept;
+  - the eval scorecard routes.
+- **Settings › Models:**
+  - the Decision model section, with two separate switches (Screening; Box, a preview) and their plain words;
+  - each model's scorecard before a switch, or a plain none.
+- **Evals:** the injection suite runs Part 1's 99 cases (`tests/ingest/tev1-eval/cases.ts`, mapped from its shape; the set was not moved into `src/core/decision-service/`).
+- **Safety evidence:**
+  - the deterministic layer and taint tracking are unchanged (an empty diff of `checks.ts`, `outbound.ts`, `context.js` and `tools.js`; `runner.js` changes only in passing the run's mode and task to the screen);
+  - the corpus and canary suites run in every mode with the seats unavailable, untrusted and a trusted stand-in. With no trusted seat, nothing is looser than checks plus quarantine;
+  - the fresh-user test and the eval regression suite pass.
+- **After the adversarial review:** each finding has a test that fails with its fix undone.
+  - A run's, a helper's or a ledger task's own mode now holds the screen.
+  - The mode and the opt-ins are re-read before every cloud send, and the receipt is held to the live setting.
+  - Records keep a status and a fixed reason, never a seat's words.
+  - The pin includes Tev1's digest, read again after every answer.
+  - Untrusted seats are a sample: 2 chunks per piece of content, 200 asks per seat per day. A screen has a 180 s limit.
+  - Capture-derived text never goes to a cloud seat (the owner's §2.1 rule; its per-source opt-in doesn't exist yet).
+  - Also: the receipt's task and state hash; sync with a standby a release behind; 422s for input that was dropped; a verdict pinned to its template's wording.
+- **Not done:** nothing calls TypeSafe. No ingest-screen eval has passed, so without a sorting model outside content is still held back as unsure. Sensitive-content detection at indexing and injection screening at recall, for capture-derived text, are follow-ups.
 
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:

@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { check } from '../../src/core/ingest/checks.ts';
-import { CHUNK, chunks } from '../../src/core/ingest/screen.ts';
+import { CHUNK, OVERLAP, chunks } from '../../src/core/ingest/screen.ts';
 import { BOUNDS_V2, combined, scoreV2, verdictV2, type V2CaseResult } from '../../src/core/decision-service/eval-v2.ts';
 import { readRecords, recordsOf } from '../../src/core/decision-service/verdicts.ts';
 import { Tev1Seat } from '../../src/core/decision-service/seats/tev1.ts';
@@ -82,7 +82,9 @@ test('the placements land where they say, in the gate’s own chunks, and nothin
     if (c.transform === 'mid-chunk-3') assert.ok(at >= 2 * CHUNK && at + p.length <= 3 * CHUNK, `${c.id} at ${at}`);
     if (c.transform === 'after-boundary-3') assert.equal(at, 3 * CHUNK);
     if (c.transform === 'split-boundary-2') assert.ok(at < 2 * CHUNK && at + p.length > 2 * CHUNK, `${c.id} straddles ${2 * CHUNK}`);
-    if (c.transform === 'second-to-last-of-15') { assert.equal(parts.length, 15); assert.ok(parts[13]!.includes(p), c.id); }
+    // Since the gate's chunks overlap by 200 (Tev1 NOTE 4, #258), this document is 16 of them, not
+    // 15; the payload is still in the second to last, and the cases are unchanged.
+    if (c.transform === 'second-to-last-of-15') { assert.equal(parts.length, Math.ceil((visible.length - OVERLAP) / (CHUNK - OVERLAP))); assert.ok(parts.at(-2)!.includes(p), c.id); }
   }
 });
 

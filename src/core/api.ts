@@ -35,13 +35,16 @@ export class Raw {
   }
 }
 
-// A handler returns Reply to set headers (a session cookie) along with its JSON.
+// A handler returns Reply to set headers (a session cookie) along with its JSON, or a status of its
+// own (422 with the problems a choice has).
 export class Reply {
   readonly body: unknown;
   readonly headers: Record<string, string>;
-  constructor(body: unknown, headers: Record<string, string>) {
+  readonly status: number | null;
+  constructor(body: unknown, headers: Record<string, string>, status: number | null = null) {
     this.body = body;
     this.headers = headers;
+    this.status = status;
   }
 }
 
@@ -176,7 +179,7 @@ export function createApi(o: {
           () => { finish(); res.end(); },
         );
       } else if (out instanceof Reply) {
-        res.writeHead(route.status ?? 200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...out.headers });
+        res.writeHead(out.status ?? route.status ?? 200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...out.headers });
         res.end(JSON.stringify(out.body));
       } else if (out instanceof Raw) {
         res.writeHead(route.status ?? 200, { 'content-type': out.type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });

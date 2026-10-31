@@ -16,4 +16,11 @@
 .model-form .sheet-actions { margin-top: 0; }
 .model-more { margin-top: var(--space-5); }
 .model-more .model-form { margin-top: var(--space-4); }
+/* Scorecards before a switch (Amendment B Part 4), and the decision model's notices (DS1). */
+.model-score { color: var(--text-secondary); }
+.model-score.is-unchecked, .model-notices .is-unchecked { color: var(--status-attention); }
+.model-optin { display: grid; gap: var(--space-1); }
+.model-optin .settings-note { margin: 0; }
+.model-notices { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.model-cards .settings-label { margin: 0; }
 @media (prefers-reduced-motion: reduce) { .model-progress { transition: none; } }
