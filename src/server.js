@@ -104,6 +104,9 @@ export function createNova(config = loadConfig(), deps = {}) {
   runner.memory.readOnly = () => !!core.mesh.role.replica();
   runner.memory.sync();
   runner.chatProvider = chatProvider;
+  // Coding through chat (M10c): the chat agent's code_change and code_status tools start and read the
+  // core's coding runs.
+  runner.coding = core.coding;
   // Grounding (core self.ts): the agent's briefing and status tools, with Era 2's schedules and approvals.
   runner.self = core.self.attach({
     schedules: () => { const last = runner.schedules.latest(); return runner.schedules.list().map((s) => { const next = runner.schedules.next(s); return { ...s, next: next ? formatWhen(next, config.timezone) : null, last: last.get(s.id) ?? null }; }); },

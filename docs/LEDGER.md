@@ -17,6 +17,45 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10c: coding through chat).** Branch `m10c/coding`. The ADR is `docs/plans/M10.md`
+(M10c), the plan `docs/plans/M10c.md`, the evidence `docs/evidence/m10c-gate.md`.
+1. **A coding run is a chain of internal ledger tasks** (write tier 1, check tier 2, merge tier 3),
+   each made only when the one before is verified, as the change pipeline does with Check and Ship.
+   **Why:** each step then has its own tier, evidence, recovery and record, and a failing test can
+   never reach the merge ask: the merge task doesn't exist until the check is verified done.
+   **Trade-off:** there is no single "plan" task; the run's record (`coding_run`) and the write
+   task, which every later step names as its parent, carry the plan.
+2. **The tests and the preview ask first (tier 2), on this computer.** They run code the agent
+   wrote, as the person: M5's rule (Nova always asks before running what a provider changed) holds.
+   **Rejected:** running them in an M10a workspace without asking: a workspace has no network and no
+   published port, so its preview couldn't be opened. **Cost:** two asks per change (test, then
+   merge), not one.
+3. **The agent never sees a `.git`.** It works in a plain copy of Nova's worktree, and Nova takes
+   the change into the worktree itself (M8's rule: never a `.git` in a task's folder). **Why:** a
+   `.git` the agent could write is config and hooks that Nova's git would then run. **Trade-off:**
+   the agent can't read history with git.
+4. **Not through the provider task flow.** A provider's own task copies files from `workspace/` and
+   back into it; a worktree there would be writable by the chat agent's `write_file` (including its
+   `.git` file, which says which repository git works on). `Providers.workIn` reuses the registry's
+   gates, receipt and adapters instead; `#run` and `workIn` share them (`#prelude`, `#notDone`).
+5. **Nothing is written to the person's repository before the merge,** not even objects: Nova fetches
+   from it into its own bare repository (a read), and fetches the reviewed commit back only once the
+   merge is confirmed. **The merge is a fast-forward to the reviewed commit only**: a compare-and-swap
+   of the ref, or `merge --ff-only` in a clean checkout of the branch. A branch that moved starts a
+   new round (Nova merges the new tip into its branch and asks again), never a merge of something
+   unreviewed. Hooks are off for the merge too, the person's own included.
+6. **Nova never pushes, and deploy isn't built.** The ADR names "merge or deploy per tier"; there is
+   no deploy target yet, and pushing would be tier 3 to a remote the owner names.
+7. **The preview listens on loopback or it is stopped.** Nova sets `HOST=127.0.0.1` and `PORT`, and on
+   Linux reads `/proc/net/tcp{,6}` once it answers: anything listening on that port on another address
+   fails the check. Unreviewed code isn't shown to the network.
+- **Found while building, by a test:** the update step, on a conflict, set the run's state to
+  `conflict` before failing, and the listener then took the run for already ended and skipped its
+  cleanup and message. Fixed: a conflict is settled like a failure.
+- **A test that didn't prove its point:** two runs on one repository at once passed with and
+  without the per-repository lock (three tries each); the lock stays, for refs two fetches could race
+  for, and the evidence says the test doesn't show it.
+
 **2026-10-31 (M10b: the second review of PR #238).** Same branch and PR. The review read the code;
 each item was first written as a live Chromium test on stand-in variants and run against the code
 as it was (evidence: "The second review of PR #238").

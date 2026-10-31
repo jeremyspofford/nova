@@ -2,7 +2,7 @@
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
-import { ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
+import { ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
@@ -172,6 +172,9 @@ export async function openTask(id) {
     [t, events] = await Promise.all([api('GET', `/tasks/${encodeURIComponent(id)}`), api('GET', `/tasks/${encodeURIComponent(id)}/events`).catch(() => [])]);
   } catch (e) { toast(e.message); return; }
   if (needsApproval(t)) {
+    // A coding run's check or merge (M10c): what was changed, tested and previewed, before the OK.
+    const run = t.owner === 'coding' && t.brief?.inputs?.run_id ? await api('GET', `/coding/runs/${encodeURIComponent(t.brief.inputs.run_id)}`).catch(() => null) : null;
+    if (run) { openSheet(codingSheet(t, run), { label: 'Needs your OK' }); return; }
     const worker = store.workers.find((w) => w.id === t.owner) ?? null;
     openSheet(approvalSheet(t, { worker }), { label: 'Needs your OK' });
     return;
@@ -249,6 +252,16 @@ async function approveTestRun(id) {
     await api('POST', `/providers/tasks/${encodeURIComponent(id)}/test-run`, {});
     closeSheet();
     toast('Approved. Nova runs the test.');
+    await load(['tasks']);
+  } catch (e) { toast(e.message); }
+}
+
+// Don't merge (M10c): the merge step is cancelled; the person's branch stays as it is.
+export async function declineMerge(run) {
+  try {
+    await api('POST', `/coding/runs/${encodeURIComponent(run)}/decline`, {});
+    closeSheet();
+    toast('Not merged. Your branch is as it was.');
     await load(['tasks']);
   } catch (e) { toast(e.message); }
 }
