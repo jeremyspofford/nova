@@ -110,6 +110,7 @@ test('M10d gate: a network change applies, the stand-in loses contact, and Nova 
     assert.match(String(v.diff), /-\s+"mesh",/);
     assert.ok(!String(v.diff).includes(INITIAL.wifi.psk), 'the Wi-Fi key is never in the diff');
     assert.deepEqual(v.changed, ['firewall.allow']);
+    assert.deepEqual(filesHolding(s.h.home, [INITIAL.wifi.psk]), [], 'the snapshot, which holds the Wi-Fi key, is sealed on disk');
     // 3. The apply: tier 3, every time.
     assert.equal(apply.state, 'waiting');
     assert.equal(apply.approval_tier, 3);
@@ -143,7 +144,7 @@ test('M10d gate: a network change applies, the stand-in loses contact, and Nova 
     const records = JSON.stringify([core.network.list(), core.network.view(id), ...['prepare', 'apply', 'revert'].map((x) => core.ledger.get(changeTask(core, id, x)!.id)), core.ledger.events(apply.id), core.log.problems()]);
     assert.ok(!records.includes(s.token));
     assert.ok(!records.includes(INITIAL.wifi.psk));
-    assert.deepEqual(filesHolding(s.h.home, [s.token]), [], 'the token is in no file (the vault keeps it encrypted)');
+    assert.deepEqual(filesHolding(s.h.home, [s.token, INITIAL.wifi.psk]), [], 'the token and the Wi-Fi key are in no file (the vault keeps the token, and the key that seals the snapshot, encrypted)');
   } finally { await s.stop(); }
 });
 

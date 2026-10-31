@@ -11,8 +11,8 @@
 // "Contact confirmed" is built on the device mesh: a request on the mesh listener, under a trusted
 // device's session (the access policy's own check, `Devices.touch`, which emits `heard`), started
 // after the switch was armed, from a phone, browser or computer that was trusted at the apply.
-import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { ENVELOPE_VERSION, PRIVACY_MODES, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
@@ -289,6 +289,8 @@ export class Network {
         const by = t.brief.inputs?.by;
         this.#set(c.id, { state: 'reverted', reason: by === 'switch' ? `Nova heard from none of your devices within ${minutes(c.window_s)} of the change, so it put ${target.name} back to the snapshot.` : `Put back as you asked: ${target.name} is at the snapshot from before the change.` });
         this.#tell(`network:${c.id}:reverted`, `${target.name} is back to how it was before “${c.title}”: Nova read it back and it is the snapshot.`);
+        // Done with: the sealed snapshot and its key go.
+        this.#dropFiles(c.id);
       } else if (t.state === 'failed' || (t.state === 'waiting' && /May already have happened/.test(t.reason ?? ''))) {
         this.#set(c.id, { state: 'revert_failed', reason: t.reason });
         this.#o.log.problem('network', `Nova couldn’t put ${target.name} back to the snapshot after “${c.title}”: ${clip(t.reason ?? 'it failed', 400)} Check ${target.name} yourself.`, { taskId: t.id });
@@ -371,8 +373,45 @@ export class Network {
     try { return JSON.parse(readFileSync(file, 'utf8')) as T; } catch { return null; }
   }
 
+  // The snapshot and the new configuration hold the target's own secrets (a Wi-Fi key, a VPN key), and
+  // Nova needs them as they are to put the snapshot back. So they are sealed (AES-256-GCM) with a key
+  // of the change's own, kept in the vault; the files never hold them in clear.
+  #keyName(c: Pick<ChangeRow, 'id' | 'target_id'>): string { return `network/${c.target_id}/change/${c.id}`; }
+
+  #sealKey(c: Pick<ChangeRow, 'id' | 'target_id'>, make: boolean): Buffer | null {
+    let k = this.#o.vault.get(this.#keyName(c));
+    if (!k && make) {
+      k = randomBytes(32).toString('base64');
+      this.#o.vault.put(this.#keyName(c), k);
+    }
+    return k ? Buffer.from(k, 'base64') : null;
+  }
+
+  #writeSealed(c: Pick<ChangeRow, 'id' | 'target_id'>, name: string, v: unknown): void {
+    const key = this.#sealKey(c, true)!;
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    cipher.setAAD(Buffer.from(`nova-network-v1|${c.id}|${name}`));
+    const ct = Buffer.concat([cipher.update(JSON.stringify(v), 'utf8'), cipher.final()]);
+    this.#writeJson(join(this.#changeDir(c.id), name), { v: 1, iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ct: ct.toString('base64') });
+  }
+
+  #readSealed<T>(c: Pick<ChangeRow, 'id' | 'target_id'>, name: string): T | null {
+    const box = this.#readJson<{ v: number; iv: string; tag: string; ct: string }>(join(this.#changeDir(c.id), name));
+    const key = box ? this.#sealKey(c, false) : null;
+    if (!box || !key) return null;
+    try {
+      const d = createDecipheriv('aes-256-gcm', key, Buffer.from(box.iv, 'base64'));
+      d.setAAD(Buffer.from(`nova-network-v1|${c.id}|${name}`));
+      d.setAuthTag(Buffer.from(box.tag, 'base64'));
+      return JSON.parse(Buffer.concat([d.update(Buffer.from(box.ct, 'base64')), d.final()]).toString('utf8')) as T;
+    } catch { return null; }
+  }
+
   #dropFiles(id: string): void {
     try { rmSync(this.#changeDir(id), { recursive: true, force: true }); } catch { /* best effort */ }
+    const c = this.#o.db.get<ChangeRow>('SELECT * FROM network_change WHERE id = ?', id);
+    if (c) try { this.#o.vault.delete(this.#keyName(c)); } catch { /* best effort */ }
   }
 
   async #run(brief: Brief, signal: AbortSignal): Promise<Report> {
@@ -401,10 +440,10 @@ export class Network {
     if (c.state !== 'preparing') return report('failed', `This change isn’t being prepared (it is ${c.state}).`);
     const now = await a.read(signal);
     const sha = digest(now.config);
-    this.#writeJson(join(this.#changeDir(c.id), 'snapshot.json'), { version: now.version, sha, config: now.config, at: this.#now().toISOString() });
+    this.#writeSealed(c, 'snapshot.json', { version: now.version, sha, config: now.config, at: this.#now().toISOString() });
     const proposed = mergePatch(now.config, parse<Config>(c.patch)!) as Config;
     const psha = digest(proposed);
-    this.#writeJson(join(this.#changeDir(c.id), 'proposed.json'), { sha: psha, config: proposed });
+    this.#writeSealed(c, 'proposed.json', { sha: psha, config: proposed });
     const keys = changedPaths(now.config, proposed);
     const diff = unifiedDiff(t.name, pretty(mask(now.config)), pretty(mask(proposed)));
     this.#set(c.id, { snapshot_sha: sha, snapshot_version: now.version, proposed_sha: psha, diff, changed_keys: JSON.stringify(keys) });
@@ -416,8 +455,8 @@ export class Network {
   async #apply(c: ChangeRow, t: TargetRow, a: NetworkTarget, brief: Brief, signal: AbortSignal, report: Reporter): Promise<Report> {
     if (c.state !== 'review' && c.state !== 'applying') return report('failed', `This change isn’t waiting to be applied (it is ${c.state}).`);
     if (brief.inputs?.snapshot_sha !== c.snapshot_sha || brief.inputs?.proposed_sha !== c.proposed_sha) return report('failed', 'The change isn’t the one you reviewed any more, so Nova applied nothing.');
-    const snap = this.#readJson<{ version: string; sha: string; config: Config }>(join(this.#changeDir(c.id), 'snapshot.json'));
-    const prop = this.#readJson<{ sha: string; config: Config }>(join(this.#changeDir(c.id), 'proposed.json'));
+    const snap = this.#readSealed<{ version: string; sha: string; config: Config }>(c, 'snapshot.json');
+    const prop = this.#readSealed<{ sha: string; config: Config }>(c, 'proposed.json');
     if (!snap || !prop || snap.sha !== c.snapshot_sha || digest(snap.config) !== c.snapshot_sha || prop.sha !== c.proposed_sha || digest(prop.config) !== c.proposed_sha) return report('failed', 'Nova’s snapshot or the reviewed configuration isn’t as recorded, so it applied nothing.');
     // The target must still be the snapshot: nothing changed it since the review.
     const now = await a.read(signal);
@@ -457,7 +496,7 @@ export class Network {
 
   async #revert(c: ChangeRow, t: TargetRow, a: NetworkTarget, brief: Brief, signal: AbortSignal, report: Reporter): Promise<Report> {
     if (c.state !== 'reverting') return report('failed', `This change isn’t being put back (it is ${c.state}).`);
-    const snap = this.#readJson<{ version: string; sha: string; config: Config }>(join(this.#changeDir(c.id), 'snapshot.json'));
+    const snap = this.#readSealed<{ version: string; sha: string; config: Config }>(c, 'snapshot.json');
     if (!snap || digest(snap.config) !== c.snapshot_sha) return report('failed', 'Nova’s snapshot isn’t as recorded, so it wrote nothing.');
     const now = await a.read(signal);
     const sha = digest(now.config);
@@ -486,7 +525,7 @@ export class Network {
     const c = this.#o.db.get<ChangeRow>('SELECT * FROM network_change WHERE id = ?', id ?? '');
     if (!c || id !== brief.inputs?.change_id) return { ok: false, why: 'That confirmation is for another network change.' };
     if (what === 'snapshot') {
-      const snap = this.#readJson<{ sha: string; config: Json }>(join(this.#changeDir(c.id), 'snapshot.json'));
+      const snap = this.#readSealed<{ sha: string; config: Json }>(c, 'snapshot.json');
       if (!snap || ref !== c.snapshot_sha) return { ok: false, why: 'Nova has no snapshot by that hash for this change.' };
       const actual = digest(snap.config);
       if (actual !== ref) return { ok: false, why: `The snapshot’s sha256 is ${actual.slice(0, 12)}…, not the ${String(ref).slice(0, 12)}… recorded.` };
@@ -531,7 +570,7 @@ export class Network {
   // can't hold one.
   view(id: string) {
     const c = this.#change(id);
-    const snap = this.#readJson<{ at: string }>(join(this.#changeDir(c.id), 'snapshot.json'));
+    const snap = this.#readSealed<{ at: string }>(c, 'snapshot.json');
     return {
       ...this.#summary(c), patch: mask(parse<Json>(c.patch)), diff: c.diff, snapshot: c.snapshot_sha ? { sha256: c.snapshot_sha, version: c.snapshot_version, at: snap?.at ?? null } : null,
       checkpoint: c.checkpoint,
@@ -578,6 +617,4 @@ export class Network {
     this.#timers.clear();
   }
 
-  // Whether a change's files are there (tests and the view).
-  hasSnapshot(id: string): boolean { return existsSync(join(this.#changeDir(id), 'snapshot.json')); }
 }

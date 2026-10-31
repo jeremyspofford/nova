@@ -13,7 +13,7 @@ export interface Running { proc: ChildProcess; out: string[]; port: number; mesh
 
 export async function start(env: Record<string, string>): Promise<Running> {
   const out: string[] = [];
-  const proc = spawn(process.execPath, ['--import', join(ROOT, 'tests/acceptance/egress-guard.ts'), 'src/server.js'], { cwd: ROOT, env: { ...env, PATH: process.env.PATH ?? '' } });
+  const proc = spawn(process.execPath, ['--import', join(ROOT, 'tests/acceptance/egress-guard.ts'), 'src/server.js'], { cwd: ROOT, env: { ...env, PATH: env.PATH ?? process.env.PATH ?? '' } });
   proc.stdout!.on('data', (d) => out.push(String(d)));
   proc.stderr!.on('data', (d) => out.push(String(d)));
   for (let i = 0; i < 200 && !out.join('').includes('Nova is ready'); i++) {
