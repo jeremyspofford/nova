@@ -3,6 +3,11 @@
 // dependency. Discovery (discover.ts) sends one query and reads what comes back; the tests' fake
 // responders use `encodeResponse` to answer on 127.0.0.1, so no test sends multicast.
 export const TYPE = Object.freeze({ A: 1, PTR: 12, TXT: 16, AAAA: 28, SRV: 33 } as const);
+// Bounds on what a reply can make Nova do (review finding 5): answers read from one reply, and
+// service instances kept from one discovery. A name is at most 255 bytes, as DNS says.
+export const MAX_ANSWERS = 256;
+export const MAX_INSTANCES = 64;
+const MAX_NAME = 255;
 
 export interface Question { name: string; type: number }
 export type Answer =
@@ -42,7 +47,8 @@ function readName(buf: Buffer, at: number, depth = 0): { name: string; next: num
   const labels: string[] = [];
   let i = at;
   let next = -1;
-  for (let hops = 0; hops < 64; hops++) {
+  let size = 0;
+  for (let hops = 0; hops < 128; hops++) {
     if (i >= buf.length) throw new Error('A name runs past the end of the message.');
     const len = buf[i]!;
     if (len === 0) { i += 1; break; }
@@ -54,6 +60,8 @@ function readName(buf: Buffer, at: number, depth = 0): { name: string; next: num
       continue;
     }
     if (i + 1 + len > buf.length) throw new Error('A label runs past the end of the message.');
+    size += len + 1;
+    if (size > MAX_NAME) throw new Error('A name is too long for DNS (over 255 bytes).');
     labels.push(buf.subarray(i + 1, i + 1 + len).toString('utf8'));
     i += 1 + len;
   }
@@ -61,9 +69,11 @@ function readName(buf: Buffer, at: number, depth = 0): { name: string; next: num
 }
 
 function readTxt(data: Buffer): Record<string, string> {
-  const out: Record<string, string> = {};
+  // No prototype: a key like __proto__ is just a key.
+  const out = Object.create(null) as Record<string, string>;
   for (let i = 0; i < data.length;) {
     const len = data[i]!;
+    if (i + 1 + len > data.length) throw new Error('A TXT string runs past its record.');
     const s = data.subarray(i + 1, i + 1 + len).toString('utf8');
     i += 1 + len;
     const eq = s.indexOf('=');
@@ -84,11 +94,12 @@ export function decodeMessage(buf: Buffer): Message {
   const questions: Question[] = [];
   for (let q = 0; q < qd; q++) {
     const n = readName(buf, at);
+    if (n.next + 4 > buf.length) throw new Error('A question runs past the end of the message.');
     questions.push({ name: n.name, type: buf.readUInt16BE(n.next) });
     at = n.next + 4;
   }
   const answers: Answer[] = [];
-  for (let r = 0; r < total && at < buf.length; r++) {
+  for (let r = 0; r < Math.min(total, MAX_ANSWERS) && at < buf.length; r++) {
     const n = readName(buf, at);
     at = n.next;
     if (at + 10 > buf.length) throw new Error('A record runs past the end of the message.');
@@ -135,18 +146,33 @@ export interface Instance { service: string; name: string; host: string | null; 
 
 // The service instances in a set of replies: each PTR for an asked-for service type, with its SRV,
 // TXT and addresses wherever in the replies they came.
+// Answers are indexed by name once, so the work grows with the replies, not with their square.
 export function instances(messages: readonly Message[], services: readonly string[]): Instance[] {
-  const all = messages.flatMap((m) => (m.response ? m.answers : []));
   const lower = (s: string) => s.toLowerCase();
+  const wanted = new Set(services.map(lower));
+  const srvs = new Map<string, Extract<Answer, { type: 33 }>>();
+  const txts = new Map<string, Extract<Answer, { type: 16 }>>();
+  const addrs = new Map<string, Set<string>>();
+  const ptrs: Extract<Answer, { type: 12 }>[] = [];
+  for (const m of messages) {
+    if (!m.response) continue;
+    for (const a of m.answers) {
+      const key = lower(a.name);
+      if (a.type === 12) { if (wanted.has(key) && ptrs.length < MAX_INSTANCES * 4) ptrs.push(a); }
+      else if (a.type === 33) { if (!srvs.has(key)) srvs.set(key, a); }
+      else if (a.type === 16) { if (!txts.has(key)) txts.set(key, a); }
+      else { const s = addrs.get(key) ?? new Set<string>(); if (s.size < 8) s.add(a.address); addrs.set(key, s); }
+    }
+  }
   const out = new Map<string, Instance>();
-  for (const a of all) {
-    if (a.type !== 12 || !services.map(lower).includes(lower(a.name))) continue;
-    const srv = all.find((x): x is Extract<Answer, { type: 33 }> => x.type === 33 && lower(x.name) === lower(a.target));
-    const txt = all.find((x): x is Extract<Answer, { type: 16 }> => x.type === 16 && lower(x.name) === lower(a.target));
+  for (const a of ptrs) {
+    if (out.size >= MAX_INSTANCES) break;
+    const srv = srvs.get(lower(a.target));
+    const txt = txts.get(lower(a.target));
     const host = srv?.target ?? null;
-    const addresses = host ? [...new Set(all.filter((x): x is Extract<Answer, { type: 1 | 28 }> => (x.type === 1 || x.type === 28) && lower(x.name) === lower(host)).map((x) => x.address))] : [];
+    const addresses = host ? [...(addrs.get(lower(host)) ?? [])] : [];
     const name = a.target.endsWith(`.${a.name}`) ? a.target.slice(0, -(a.name.length + 1)) : a.target;
-    out.set(lower(a.target), { service: a.name, name, host, port: srv?.port ?? null, addresses, txt: txt?.txt ?? {} });
+    out.set(lower(a.target), { service: a.name, name, host, port: srv?.port ?? null, addresses, txt: txt?.txt ?? Object.create(null) });
   }
   return [...out.values()];
 }

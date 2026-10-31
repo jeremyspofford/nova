@@ -56,7 +56,8 @@ test('the mDNS codec: a query, an answer with compressed names, and garbage refu
   assert.deepEqual([q.id, q.response, q.questions], [7, false, [{ name: '_home-assistant._tcp.local', type: 12 }]]);
   const r = decodeMdns(encodeMdnsResponse(HOME_ANSWERS, 7));
   assert.equal(r.answers.length, HOME_ANSWERS.length);
-  assert.deepEqual(r.answers.find((a) => a.type === 16), HOME_ANSWERS.find((a) => a.type === 16));
+  const txt = r.answers.find((a) => a.type === 16) as { txt: Record<string, string> };
+  assert.deepEqual({ ...txt, txt: { ...txt.txt } }, HOME_ANSWERS.find((a) => a.type === 16));
   // A compressed name: the second record's name points back into the first.
   const name = Buffer.from([4, ...Buffer.from('desk'), 5, ...Buffer.from('local'), 0]);
   const rec = (n: Buffer, type: number, data: Buffer) => { const m = Buffer.alloc(10); m.writeUInt16BE(type, 0); m.writeUInt16BE(1, 2); m.writeUInt32BE(60, 4); m.writeUInt16BE(data.length, 8); return Buffer.concat([n, m, data]); };
@@ -190,4 +191,48 @@ test('the closing rule: every first action is backed by regression tasks, and ev
     if (c.needs.length) for (const t of c.needs) assert.ok(shown.has(t), `${c.id}: ${t} is demonstrated`);
     else assert.match(c.note ?? '', /tests\/|docs\/evidence\//, `${c.id}: an unbacked claim names the evidence it is worded to`);
   }
+});
+
+test('hostile mDNS replies: bounded work (answers per reply, instances per discovery), no prototype pollution, names within DNS’s limit (review finding 5)', async () => {
+  const { decodeMessage, instances, MAX_ANSWERS, MAX_INSTANCES } = await import('../../src/core/onboard/mdns.ts');
+  const SVC = '_home-assistant._tcp.local';
+  // The reviewer's probe: replies packed with PTR answers for the asked-for service, every name compressed.
+  const packed = (per: number, salt: number) => {
+    const head = Buffer.alloc(12); head.writeUInt16BE(0x8400, 2); head.writeUInt16BE(1, 4); head.writeUInt16BE(per, 6);
+    const parts = [head];
+    for (const l of SVC.split('.')) parts.push(Buffer.from([l.length]), Buffer.from(l));
+    parts.push(Buffer.from([0, 0, 12, 0, 1]));
+    for (let i = 0; i < per; i++) {
+      const tag = (salt * 65536 + i).toString(36).padStart(4, '0').slice(-4);
+      const rdata = Buffer.concat([Buffer.from([4]), Buffer.from(tag), Buffer.from([0xc0, 12])]);
+      const meta = Buffer.alloc(10); meta.writeUInt16BE(12, 0); meta.writeUInt16BE(1, 2); meta.writeUInt32BE(120, 4); meta.writeUInt16BE(rdata.length, 8);
+      parts.push(Buffer.from([0xc0, 12]), meta, rdata);
+    }
+    return Buffer.concat(parts);
+  };
+  const t0 = performance.now();
+  const decoded = Array.from({ length: 16 }, (_, k) => decodeMessage(packed(3600, k)));
+  assert.ok(decoded.every((m) => m.answers.length <= MAX_ANSWERS), 'answers per reply are capped');
+  const list = instances(decoded, [SVC]);
+  const ms = performance.now() - t0;
+  assert.ok(list.length <= MAX_INSTANCES, `instances capped: ${list.length}`);
+  assert.ok(ms < 1000, `16 hostile replies took ${ms.toFixed(0)} ms`);
+  // TXT: a length past its data is refused; a __proto__ key pollutes nothing.
+  const txtReply = (txt: Buffer) => {
+    const meta = Buffer.alloc(10); meta.writeUInt16BE(16, 0); meta.writeUInt16BE(1, 2); meta.writeUInt16BE(txt.length, 8);
+    const head = Buffer.alloc(12); head.writeUInt16BE(0x8400, 2); head.writeUInt16BE(1, 6);
+    return Buffer.concat([head, Buffer.from([0]), meta, txt]);
+  };
+  assert.throws(() => decodeMessage(txtReply(Buffer.concat([Buffer.from([20]), Buffer.from('__proto__=x')]))), /TXT/);
+  const ok = decodeMessage(txtReply(Buffer.concat([Buffer.from([11]), Buffer.from('__proto__=x'), Buffer.from([5]), Buffer.from('a=b=c')]))).answers[0] as { txt: Record<string, string> };
+  assert.equal(Object.getPrototypeOf(ok.txt), null);
+  assert.equal(({} as Record<string, unknown>).x, undefined);
+  assert.equal(ok.txt.a, 'b=c');
+  // A name longer than DNS allows (255 bytes) is refused; so is a question cut short.
+  const parts: Buffer[] = [Buffer.alloc(12)]; parts[0]!.writeUInt16BE(1, 4);
+  for (let i = 0; i < 70; i++) parts.push(Buffer.from([63]), Buffer.alloc(63, 0x61));
+  parts.push(Buffer.from([0, 0, 12, 0, 1]));
+  assert.throws(() => decodeMessage(Buffer.concat(parts)), /too long/);
+  const q = encodeMdnsQuery([SVC]);
+  assert.throws(() => decodeMessage(q.subarray(0, q.length - 3)), /question runs past the end/);
 });
