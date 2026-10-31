@@ -519,6 +519,12 @@ Evidence goes in `docs/evidence/vault-broker-p1-gate.md`, with an adversarial re
     - a network target, and OpenTofu through `fake-tofu`;
     - browser sign-ins and account steps, on `shop-site.js` and `account-site.js`.
 11. **The fresh-user test,** and a claims check under Amendment B's closing rule: every user-facing sentence about the vault matches "The claim, worded exactly".
+12. **A second-model review packet** (owner pattern, 2026-10-31; OPERATING-RULES). The broker code is the first named case. The builder prepares one self-contained document the owner can hand to another model (ChatGPT, Gemini) for review:
+    - the broker's code;
+    - the claims it must uphold;
+    - this threat model.
+
+    Findings come back as owner input and are triaged like any review, before Phase 1 merges.
 
 ## 11. Phase 2: the 1Password connector
 
