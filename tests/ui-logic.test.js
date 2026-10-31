@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { LAYOUTS, POSTURES, asideOf, layoutOf, postureOf, resolve } from '../ui/js/layout.js';
 import { DESTINATIONS, placement, reachable, routeOf } from '../ui/js/nav.js';
-import { STATUS, activityStatus, greeting, label, needsApproval, orbState, statusOf, toolTier } from '../ui/js/status.js';
+import { ORB_STATES, STATUS, activityStatus, greeting, label, needsApproval, orbState, problemTone, statusOf, stoppingProblems, toolTier } from '../ui/js/status.js';
 
 // ---- layout ----------------------------------------------------------------------------
 
@@ -123,10 +123,28 @@ test('the orb takes its state from real signals, most urgent first', () => {
   assert.equal(orbState({}), 'idle');
   assert.equal(orbState({ working: 2 }), 'working');
   assert.equal(orbState({ working: 1, speaking: true }), 'speaking');
-  assert.equal(orbState({ working: 1, needsYou: 1 }), 'attention');
-  assert.equal(orbState({ needsYou: 1, problems: 1 }), 'alert');
-  assert.equal(orbState({ problems: 1, listening: true }), 'listening');
-  assert.equal(orbState({ reachable: false, listening: true, problems: 3 }), 'offline');
+  assert.equal(orbState({ working: 1, needsYou: 1 }), 'needs-you');
+  assert.equal(orbState({ needsYou: 1, stopped: 1 }), 'stopped');
+  assert.equal(orbState({ stopped: 1, listening: true }), 'listening');
+  assert.equal(orbState({ reachable: false, listening: true, stopped: 3 }), 'offline');
+});
+
+// DESIGN-SYSTEM §1 (owner decision 2026-10-31): red only for what stops Nova; every other open
+// problem needs the person while Nova keeps running (amber), like an OK that is waiting.
+test('a problem turns the orb red only when it stops Nova; any other is amber', () => {
+  const health = { id: 1, source: 'sync', message: 'A file is too large for the standby’s copy.', stops: 0 };
+  const failed = { id: 2, source: 'ledger', message: 'A task failed: Backup now.', stops: 1 };
+  assert.deepEqual(stoppingProblems([health, failed]), [failed]);
+  assert.equal(problemTone([]), null);
+  assert.equal(problemTone([health]), 'attention');
+  assert.equal(problemTone([health, failed]), 'alert');
+  // As app.js signals it: stopping problems are `stopped`, the rest count as needing the person.
+  const signals = (ps) => ({ stopped: stoppingProblems(ps).length, needsYou: ps.length - stoppingProblems(ps).length });
+  assert.equal(orbState(signals([health])), 'needs-you');
+  assert.equal(orbState(signals([health, failed])), 'stopped');
+  // A problem from before the classification (no `stops`) is amber.
+  assert.equal(orbState(signals([{ id: 3, source: 'mesh', message: 'x' }])), 'needs-you');
+  assert.deepEqual([...ORB_STATES], ['idle', 'listening', 'working', 'speaking', 'needs-you', 'stopped', 'offline']);
 });
 
 test('the greeting follows the hour', () => {
