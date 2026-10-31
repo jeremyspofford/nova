@@ -168,7 +168,7 @@ export interface CoreOptions {
   // stand-in's), whose home folder a project may never be, and the tool's timeout.
   infra?: Pick<InfraOptions, 'path' | 'userHome' | 'timeoutS'>;
   // Networking through chat (M10d), for tests: the dead-man's switch's window in milliseconds.
-  network?: Pick<NetworkOptions, 'windowMs'>;
+  network?: Pick<NetworkOptions, 'windowMs' | 'target'>;
   // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
   hubPorts?: () => number[];
   // How the browser worker starts a browser: Chromium, or a stand-in in tests.

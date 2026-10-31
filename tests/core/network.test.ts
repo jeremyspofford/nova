@@ -13,7 +13,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCore, type Core } from '../../src/core/index.ts';
-import { mask, mergePatch, secretPaths } from '../../src/core/network/targets.ts';
+import { httpConfig, mask, mergePatch, secretPaths, type Config } from '../../src/core/network/targets.ts';
 import { startNetconfig } from '../../scripts/stand-ins/fake-netconfig.js';
 import { call, enroll, hub } from './mesh-support.ts';
 import { fakeToken, filesHolding } from '../support/infra.ts';
@@ -286,6 +286,42 @@ test('M10d: after a restart, a change past its deadline with no contact reverts'
     const v = await until(() => core2!.network.view(id), (x) => x.state === 'reverted', 15_000);
     assert.equal(v.state, 'reverted', String(v.reason));
     assert.deepEqual(net.config(), INITIAL);
+  } finally {
+    await core2?.close();
+    await net.close();
+  }
+});
+
+test('M10d: Nova stopped mid-write still has a switch: after the restart, without contact, the change reverts', { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nova-net-'));
+  const token = fakeToken();
+  const net = await startNetconfig({ file: join(dir, 'router.json'), token, initial: INITIAL });
+  // The write lands on the target, and Nova stops before it hears back (as a power cut would).
+  const landed = { yes: false };
+  const hanging = (t: { url: string; token: () => string | null }) => {
+    const real = httpConfig({ url: t.url, token: t.token });
+    return { read: real.read, write: async (config: Config, v: string) => { await real.write(config, v); landed.yes = true; return new Promise<never>(() => {}); } };
+  };
+  const h = await hub({ core: { network: { windowMs: 3_600_000, target: hanging } } });
+  let core2: Core | null = null;
+  try {
+    await enroll(h, { name: 'Example phone', kind: 'phone' });
+    const t = h.core.network.createTarget({ name: 'Example router', kind: 'router', url: net.url });
+    h.core.network.setToken(t.id, token);
+    const { id, apply } = await toReview(h.core, t.id, { firewall: { allow: ['web'] } });
+    h.core.ledger.approve(apply.id, { confirm: true });
+    await until(() => landed.yes, (x) => x, 10_000);
+    assert.deepEqual(net.config().firewall.allow, ['web'], 'the change landed');
+    assert.equal(h.core.network.view(id).state, 'applying');
+    assert.ok(h.core.network.view(id).deadline, 'the deadline was written before the write');
+    const clock = h.clock.t;
+    await h.stop();
+    core2 = createCore({ home: h.home, version: '0.1.0', trustedOrigin: () => true, now: () => new Date(clock + 2 * 3600_000), mesh: { publicUrl: 'http://hub.example:4320', transport: 'network' } });
+    core2.start();
+    const v = await until(() => core2!.network.view(id), (x) => x.state === 'reverted', 15_000);
+    assert.equal(v.state, 'reverted', String(v.reason));
+    assert.deepEqual(net.config(), INITIAL, 'the snapshot is back');
+    assert.equal(core2.ledger.get(apply.id).state, 'cancelled', 'the held apply was settled by the switch');
   } finally {
     await core2?.close();
     await net.close();
