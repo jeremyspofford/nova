@@ -330,8 +330,10 @@ export class Infra {
       return;
     }
     if (t.state === 'cancelled') {
-      const declined = step === 'apply';
-      this.#set(r.id, { state: declined ? 'declined' : 'cancelled', reason: declined ? `You didn’t apply it. Nothing in “${p.name}” changed.` : `Cancelled: ${t.reason ?? ''}`.trim() });
+      // An apply cancelled after it started may have changed things: it isn't "declined".
+      const started = step === 'apply' && r.state === 'applying';
+      const declined = step === 'apply' && !started;
+      this.#set(r.id, { state: declined ? 'declined' : 'cancelled', reason: declined ? `You didn’t apply it. Nothing in “${p.name}” changed.` : started ? `Cancelled after the apply had started: check what OpenTofu’s state says for “${p.name}”.` : `Cancelled: ${t.reason ?? ''}`.trim() });
       this.#drop(r.id);
     }
   }

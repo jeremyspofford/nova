@@ -77,6 +77,9 @@ export class Network {
   #now: () => Date;
   #key = Symbol('network');
   #timers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Changes whose write is in flight in this process. One left `applying` with a deadline and not in
+  // here was stopped mid-write (Nova restarted): the switch covers it.
+  #applying = new Set<string>();
 
   constructor(o: NetworkOptions) {
     this.#o = o;
@@ -336,9 +339,17 @@ export class Network {
   // The window ran out with no contact: Nova puts the snapshot back by itself, and says so.
   #fire(id: string): void {
     const c = this.#o.db.get<ChangeRow>('SELECT * FROM network_change WHERE id = ?', id);
-    if (!c || c.state !== 'watching' || c.contact_at) return;
+    const stopped = !!c && c.state === 'applying' && !!c.deadline && !this.#applying.has(c.id);
+    if (!c || (c.state !== 'watching' && !stopped) || c.contact_at) return;
+    // An apply that stopped mid-write waits for the person ("may already have happened"); the switch
+    // settles it instead.
     const target = this.#target(c.target_id);
     this.#set(c.id, { state: 'reverting', reason: `Nova heard from none of your devices within ${minutes(c.window_s)} of the change: it is putting ${target.name} back to the snapshot.` });
+    // (Its state is `reverting` first, so cancelling it doesn't count as a decline.)
+    if (stopped) {
+      const apply = (parse<TaskRef[]>(c.tasks) ?? []).filter((x) => x.step === 'apply').at(-1);
+      try { if (apply && !['done', 'failed', 'cancelled'].includes(this.#o.ledger.get(apply.id).state)) this.#o.ledger.cancel(apply.id, 'Nova stopped part-way through the change; the dead-man’s switch puts the snapshot back.'); } catch { /* gone */ }
+    }
     this.#o.log.problem('network', `Nova lost contact with your devices after “${c.title}” on ${target.name}, so it is putting the snapshot back by itself.`);
     this.#tell(`network:${c.id}:lost`, `Nova heard from none of your devices within ${minutes(c.window_s)} of the change “${c.title}” to ${target.name}, so it is putting the snapshot back by itself.`);
     try { this.#make(this.#change(c.id), 'revert', 'switch'); } catch (e) {
@@ -351,7 +362,8 @@ export class Network {
   // waits for the rest of its window.
   sweep(): void {
     const now = this.#now().getTime();
-    for (const c of this.#o.db.all<ChangeRow>(`SELECT * FROM network_change WHERE state = 'watching'`)) {
+    for (const c of this.#o.db.all<ChangeRow>(`SELECT * FROM network_change WHERE state = 'watching' OR (state = 'applying' AND deadline IS NOT NULL)`)) {
+      if (c.state === 'applying' && this.#applying.has(c.id)) continue;
       if (c.contact_at) { this.#set(c.id, { state: 'kept' }); continue; }
       const left = Date.parse(c.deadline ?? '') - now;
       if (!(left > 0)) this.#fire(c.id);
@@ -468,7 +480,19 @@ export class Network {
     try { cp = this.#o.checkpoint(`Before changing ${t.name}: “${c.title}” (network change ${c.id})`); } catch (e) {
       return report('failed', `Nova couldn’t take a checkpoint before the change, so it applied nothing: ${(e as Error).message}`);
     }
-    this.#set(c.id, { checkpoint: cp.id });
+    // The switch's deadline and devices are written before the write, so that if Nova stops part-way
+    // the next start still watches (and, without contact, reverts). Contact counts only once armed,
+    // after the write: a request during it says nothing about the new configuration.
+    this.#set(c.id, { checkpoint: cp.id, deadline: new Date(this.#now().getTime() + this.#windowMs(c)).toISOString(), devices: JSON.stringify(devices) });
+    this.#applying.add(c.id);
+    try {
+      return await this.#write(c, t, a, brief, signal, report, snap, prop, devices, cp);
+    } finally {
+      this.#applying.delete(c.id);
+    }
+  }
+
+  async #write(c: ChangeRow, t: TargetRow, a: NetworkTarget, brief: Brief, signal: AbortSignal, report: Reporter, snap: { version: string; sha: string; config: Config }, prop: { sha: string; config: Config }, devices: string[], cp: { id: string }): Promise<Report> {
     this.#o.ledger.committing(brief.task_id, `write the new configuration to ${t.name}`);
     // The switch is armed once the write may have landed: a write that failed is checked by reading
     // the target, and only one that certainly changed nothing leaves it unarmed.
@@ -478,7 +502,10 @@ export class Network {
     } catch (e) {
       let landed = true;
       try { landed = digest((await a.read()).config) !== snap.sha; } catch { /* unknown: as if it landed */ }
-      if (!landed) return report('failed', `Nova couldn’t change ${t.name}: ${(e as Error).message} Reading it again, it is still the snapshot: nothing changed.`);
+      if (!landed) {
+        this.#set(c.id, { deadline: null, devices: null });
+        return report('failed', `Nova couldn’t change ${t.name}: ${(e as Error).message} Reading it again, it is still the snapshot: nothing changed.`);
+      }
       this.#arm(this.#change(c.id), devices);
       return report('failed', `The change to ${t.name} may have landed (${(e as Error).message}). The dead-man’s switch is armed: without contact from your devices within ${minutes(c.window_s)}, Nova puts the snapshot back.`);
     }
@@ -498,6 +525,11 @@ export class Network {
     if (c.state !== 'reverting') return report('failed', `This change isn’t being put back (it is ${c.state}).`);
     const snap = this.#readSealed<{ version: string; sha: string; config: Config }>(c, 'snapshot.json');
     if (!snap || digest(snap.config) !== c.snapshot_sha) return report('failed', 'Nova’s snapshot isn’t as recorded, so it wrote nothing.');
+    if (brief.inputs?.by === 'person') {
+      try { this.#o.checkpoint(`Before putting ${t.name} back: “${c.title}” (network change ${c.id})`); } catch (e) {
+        return report('failed', `Nova couldn’t take a checkpoint first, so it changed nothing: ${(e as Error).message}`);
+      }
+    }
     const now = await a.read(signal);
     const sha = digest(now.config);
     if (sha !== c.snapshot_sha) {
