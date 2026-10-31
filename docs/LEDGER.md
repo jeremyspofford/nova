@@ -6,7 +6,7 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
-**2026-10-31 · #⟨n⟩ · Your three replies and the UX review filed; second-model reviews become a standing step**
+**2026-10-31 · #262 · Your three replies and the UX review filed; second-model reviews become a standing step**
 - What changed: your replies on the orb, the claims, the vault and capture screening are filed (they match what was already applied). So is your first UX review. Security-critical work, starting with the vault broker, will now come with a self-contained "review packet" you can hand to ChatGPT or Gemini.
 - What you can now do: Nothing in the app changed: paperwork only.
 - Still unfinished: the folding-screen fixes from your iPhone Duo (F8/F9) are being built. The orb and claims changes are in progress.
