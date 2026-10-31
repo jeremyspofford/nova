@@ -310,7 +310,9 @@ export class Setup extends EventEmitter {
         if (NO.test(text) || /^(none|nothing)\b/i.test(text)) picked = [];
         else if (YES.test(text) || /^(all|everything)\b/i.test(text)) picked = sources;
         else {
-          picked = sources.filter((src) => SOURCE_HINTS[src.kind].test(text) || (!!src.app && text.toLowerCase().includes(src.app.toLowerCase())));
+          // By name first (what a screen sends), then by the words people use.
+          const named = sources.filter((src) => text.toLowerCase().includes(src.label.toLowerCase()));
+          picked = named.length ? named : sources.filter((src) => SOURCE_HINTS[src.kind].test(text) || (!!src.app && text.toLowerCase().includes(src.app.toLowerCase())));
           if (!picked.length) return { reply: `Which of these, if any: ${sources.map((x) => x.label).join('; ')}? (Say which, “all”, or “none”.)`, next: step };
         }
         if (!picked.length) { on.imported = []; return then(`Nothing brought in, then. ${IMPORT_FOLDER}`, 'first_task'); }

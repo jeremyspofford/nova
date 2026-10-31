@@ -191,19 +191,88 @@ export function deviceDetail(d, now = new Date()) {
   return `${what} · ${d.last_seen ? `last seen ${ago(d.last_seen, now)}` : 'not seen yet'}`;
 }
 
-export function deviceRow(d, { now = new Date(), actions = '' } = {}) {
+// Device roles (M10f): what a device is for, beside its mesh role. The words are the hub's
+// (src/core/mesh/purposes.ts PURPOSE_WORDS); a test keeps them the same.
+export const ROLE_WORDS = Object.freeze({
+  'thin-client': { label: 'Thin client', note: 'A screen onto Nova. It never runs anything for Nova.' },
+  'hub-candidate': { label: 'Hub candidate', note: 'It could become the hub one day. Its key is pinned for that, so this is confirmed every time.' },
+  compute: { label: 'Compute', note: 'Runs models and other heavy work.' },
+  storage: { label: 'Storage', note: 'Keeps models and data.' },
+  'capture-source': { label: 'Capture source', note: 'May run capture. Capture itself stays off until you turn it on.' },
+  'general-server': { label: 'General server', note: 'Runs other services Nova manages.' },
+});
+export const rolesWords = (list = []) => (list.length ? list.map((p) => ROLE_WORDS[p]?.label ?? p).join(', ') : 'No roles yet');
+
+export function deviceRow(d, { now = new Date(), actions = '', roles = false } = {}) {
   const current = d.current ?? d.this ?? false;
   const online = d.online ?? true;
   const detail = deviceDetail(d, now);
   const pill = d.trust === 'revoked' ? '<span class="pill">Revoked</span>' : `<span class="pill${online ? ' is-on' : ' is-warn'}">${online ? 'Online' : 'Offline'}</span>`;
-  return `<li class="device-row"${d.id ? ` data-device="${esc(d.id)}"` : ''}>${ICONS.device}<div class="device-text"><p class="device-name">${esc(d.name)}${current ? ' <span class="device-tag">· this device</span>' : ''}</p>${detail ? `<p class="device-detail">${esc(detail)}</p>` : ''}</div>${pill}${actions ? `<span class="row-actions">${actions}</span>` : ''}</li>`;
+  const shown = roles && Array.isArray(d.purposes) ? `<p class="device-detail device-roles">Roles: ${esc(rolesWords(d.purposes))}</p>` : '';
+  return `<li class="device-row"${d.id ? ` data-device="${esc(d.id)}"` : ''}>${ICONS.device}<div class="device-text"><p class="device-name">${esc(d.name)}${current ? ' <span class="device-tag">· this device</span>' : ''}</p>${detail ? `<p class="device-detail">${esc(detail)}</p>` : ''}${shown}</div>${pill}${actions ? `<span class="row-actions">${actions}</span>` : ''}</li>`;
+}
+
+// The roles a device may hold, as checkboxes: what it holds (or asked for) ticked; what its kind must
+// hold ticked and fixed. A kind with only one possible role says it instead of asking.
+function rolesField({ allowed = [], chosen = [], fixed = [], legend = 'Roles' }) {
+  if (allowed.length === 1) {
+    const only = allowed[0];
+    return `<dl class="facts"><dt>${esc(legend)}</dt><dd>${esc(ROLE_WORDS[only]?.label ?? only)}. ${esc(ROLE_WORDS[only]?.note ?? '')}</dd></dl><input type="hidden" name="purpose" value="${esc(only)}">`;
+  }
+  const box = (p) => {
+    const lock = fixed.includes(p);
+    const on = lock || chosen.includes(p);
+    return `<label class="confirm role-choice"><input type="checkbox" name="purpose" value="${esc(p)}"${on ? ' checked' : ''}${lock ? ' disabled data-fixed="1"' : ''}> <span><strong>${esc(ROLE_WORDS[p]?.label ?? p)}</strong>${lock ? ' (always)' : ''}: ${esc(ROLE_WORDS[p]?.note ?? '')}</span></label>`;
+  };
+  return `<fieldset class="roles-field"><legend class="sheet-heading">${esc(legend)}</legend>${allowed.map(box).join('')}</fieldset>`;
+}
+
+// What the roles picked in a form are: the ticked boxes, the fixed ones and a single hidden one.
+export function pickedRoles(form) {
+  return [...form.querySelectorAll('input[name="purpose"]')].filter((i) => i.type === 'hidden' || i.checked).map((i) => i.value);
+}
+
+// Changing a device's roles (M10f), from Settings › Devices: step one, the choice.
+export function rolesSheet(d, { allowed = [], fixed = [] } = {}) {
+  return `<form class="roles-sheet" data-roles="${esc(d.id)}" method="dialog">
+  <h2 class="sheet-title" id="sheet-title">What is “${esc(d.name)}” for?</h2>
+  <p class="sheet-line">Roles decide what Nova may run there. Adding one asks for your explicit confirmation; taking one away asks first.</p>
+  ${rolesField({ allowed, chosen: d.purposes ?? [], fixed })}
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" value="review">Review</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+// Step two, at its tier: widening is tier 3; narrowing tier 2, saying what it would stop. A new hub
+// candidacy is confirmed on its own (Decision 2).
+export function rolesReviewSheet(d, next, change) {
+  const tier = change.added.length ? 3 : 2;
+  const what = [
+    ...(change.added.length ? [`<dt>Adding</dt><dd>${esc(rolesWords(change.added))}. That changes what may run there.</dd>`] : []),
+    ...(change.removed.length ? [`<dt>Taking away</dt><dd>${esc(rolesWords(change.removed))}. Nothing runs there that needs it, so nothing stops.</dd>`] : []),
+  ].join('');
+  const candidate = change.added.includes('hub-candidate') && d.kind === 'computer'
+    ? '<label class="confirm"><input type="checkbox" name="confirm_candidate"> I want this computer to be able to become the hub. Its key is pinned for that.</label>' : '';
+  return `<form class="approval-sheet" data-tier="${tier}" data-roles-confirm="${esc(d.id)}" data-next="${esc(next.join(','))}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">Change what “${esc(d.name)}” is for?</h2>
+  <dl class="facts">${what}<dt>Roles after</dt><dd>${esc(rolesWords(next))}</dd><dt>Why it asks</dt><dd>${esc(TIER_WORDS[tier])}</dd></dl>
+  ${candidate}
+  ${tier === 3 ? '<label class="confirm"><input type="checkbox" name="confirm" required> I want to change its roles.</label>' : ''}
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve"${tier === 3 ? ' disabled' : ''}>Change roles</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
 }
 
 // The trusted devices, at most three rows. "Only this device for now" only while that is true.
 export function deviceMeshCard({ devices = [], now = new Date() } = {}) {
   const trusted = devices.filter((d) => d.trust !== 'revoked');
   const alone = trusted.length <= 1;
-  const body = `<ul class="device-list">${trusted.slice(0, 3).map((d) => deviceRow(d, { now })).join('')}</ul>${trusted.length > 3 ? `<p class="card-line">and ${trusted.length - 3} more</p>` : ''}${alone ? '<p class="card-line is-faint">Only this device for now.</p>' : ''}`;
+  const body = `<ul class="device-list">${trusted.slice(0, 3).map((d) => deviceRow(d, { now })).join('')}</ul>${trusted.length > 3 ? `<p class="card-line">and ${trusted.length - 3} more</p>` : ''}${alone ? '<p class="card-line is-faint">Only this device for now. Pair your phone to reach Nova from it.</p>' : ''}`;
   return card({ kind: 'device-mesh-card', title: 'Devices', icon: 'device', body, action: '<a class="link" href="/settings#devices" data-nav="settings">Devices</a>' });
 }
 
@@ -220,12 +289,19 @@ const digitsHtml = (d) => `<p class="digits" aria-label="${esc(String(d).split('
 // A device asking to join (tier 3): the digits to compare first, then who it is and what it may do.
 export function joinRequestSheet(r) {
   const caps = r.capabilities?.length ? r.capabilities.join(', ') : 'Nothing beyond its kind.';
+  // What it asked to be for, to confirm or change here (M10f). A computer as hub candidate is
+  // confirmed on its own (Decision 2); a standby's approval is its candidacy.
+  const allowed = r.allowed ?? [];
+  const roles = allowed.length ? rolesField({ allowed, chosen: r.purposes ?? [], fixed: r.fixed ?? [], legend: 'What it is for' }) : '';
+  const candidate = r.kind === 'computer' && allowed.includes('hub-candidate')
+    ? '<label class="confirm candidate-confirm"><input type="checkbox" name="confirm_candidate"> If it is a hub candidate: I want it to be able to become the hub. Its key is pinned for that.</label>' : '';
   return `<form class="approval-sheet" data-tier="3" data-request="${esc(r.id)}" method="dialog">
   <p class="sheet-kicker">${status('needs-you')}</p>
   <h2 class="sheet-title" id="sheet-title">Add “${esc(r.name)}”?</h2>
   <p class="sheet-line">A ${esc((KIND_WORDS[r.kind] ?? r.kind).toLowerCase())} is asking to join Nova. Approve it only if it shows these same six digits.</p>
   ${digitsHtml(r.confirmation)}
   <dl class="facts"><dt>Kind</dt><dd>${esc(KIND_WORDS[r.kind] ?? r.kind)}. ${esc(KIND_ACCESS[r.kind] ?? '')}</dd><dt>Platform</dt><dd>${esc(r.platform || 'Not said')}</dd><dt>Asks for</dt><dd>${esc(caps)}</dd><dt>Key</dt><dd class="fingerprint">${esc(r.fingerprint)}</dd><dt>Why it asks</dt><dd>${esc(TIER_WORDS[3])}</dd></dl>
+  ${roles}${candidate}
   <label class="confirm"><input type="checkbox" name="confirm" required> The digits match, and I want to add this device.</label>
   <div class="sheet-actions">
     <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Add this device</button>

@@ -2,7 +2,7 @@
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
-import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
+import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
@@ -161,7 +161,7 @@ export function renderTasks(el, now = new Date()) {
 </section>`).join('');
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Tasks</h2>
 <p class="view-lede">Everything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.</p></header>
-${groups || emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.' })}`;
+${groups || emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.', action: '<a class="btn" href="/chat" data-nav="chat">Ask Nova to do something</a>' })}`;
 }
 
 // One task in the sheet: the approval when it waits for one, else its evidence and history.
@@ -235,6 +235,7 @@ async function afterBrowser(id) {
 
 export async function approve(form) {
   if (form.dataset.request) return approveJoin(form);
+  if (form.dataset.rolesConfirm) return confirmRoles(form);
   if (form.dataset.revoke) return confirmRevoke(form);
   if (form.dataset.allow) return confirmAllow(form);
   if (form.dataset.promote) return confirmPromote(form);
@@ -645,11 +646,14 @@ export function renderDevices() {
   const all = meshDevices();
   const trusted = all.filter((d) => d.trust !== 'revoked');
   const revoked = all.filter((d) => d.trust === 'revoked');
+  // What it is for (M10f): an approver can change it, the hub's own included.
+  const rolesButton = (d) => (approver && !copy && d.id && d.trust !== 'revoked' && allowedRoles(d).length > 1 ? `<button type="button" class="btn small quiet" data-action="edit-roles" data-device="${esc(d.id)}">Roles</button>` : '');
   const actions = (d) => {
-    if (copy || !d.id || d.role === 'hub' || d.trust === 'revoked') return '';
+    if (copy || !d.id || d.trust === 'revoked') return '';
+    if (d.role === 'hub') return rolesButton(d);
     const allow = approver && (d.kind === 'phone' || d.kind === 'browser') && !d.this
       ? `<button type="button" class="btn small quiet" data-action="allow-approve" data-device="${esc(d.id)}" data-value="${d.can_approve ? 'false' : 'true'}">${d.can_approve ? 'Stop it approving' : 'Let it approve'}</button>` : '';
-    return `${allow}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
+    return `${rolesButton(d)}${allow}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
   };
   const waiting = store.requests.map((r) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(r.name)} is asking to join</p><p class="settings-note">${esc(KIND_WORDS[r.kind] ?? r.kind)} · compare the six digits it shows.</p></div><div class="settings-control"><button type="button" class="btn small primary" data-action="review-request" data-request="${esc(r.id)}">Review</button></div></li>`).join('');
   const lede = !m
@@ -669,7 +673,7 @@ export function renderDevices() {
   return `<section class="memory-section" id="devices" aria-labelledby="set-devices"><h2 class="memory-heading" id="set-devices">Devices</h2>
 <p class="memory-lede">${esc(lede)}</p>
 ${waiting ? `<ul class="settings-list">${waiting}</ul>` : ''}
-<ul class="device-list device-registry">${trusted.map((d) => deviceRow(d, { actions: actions(d) })).join('')}</ul>
+<ul class="device-list device-registry">${trusted.map((d) => deviceRow(d, { actions: actions(d), roles: true })).join('')}</ul>
 ${add}
 ${revoked.length ? `<details class="raw"><summary>Revoked (${revoked.length})</summary><ul class="device-list device-registry">${revoked.map((d) => deviceRow(d)).join('')}</ul></details>` : ''}
 <ul class="settings-list">${installRow}
@@ -735,8 +739,12 @@ export async function openRequest(id) {
 async function approveJoin(form) {
   const confirm = form.querySelector('input[name="confirm"]');
   if (!confirm?.checked) { confirm?.focus(); return; }
+  // The roles as the person left them (M10f); a hub candidacy is confirmed on its own.
+  const purposes = form.querySelector('input[name="purpose"]') ? pickedRoles(form) : undefined;
+  const candidate = form.querySelector('input[name="confirm_candidate"]');
+  if (purposes?.includes('hub-candidate') && candidate && !candidate.checked) { toast('Making it a hub candidate is confirmed on its own: tick that box too, or untick Hub candidate.'); candidate.focus(); return; }
   try {
-    const { device } = await api('POST', `/mesh/requests/${encodeURIComponent(form.dataset.request)}/approve`, { confirm: true });
+    const { device } = await api('POST', `/mesh/requests/${encodeURIComponent(form.dataset.request)}/approve`, { confirm: true, ...(purposes ? { purposes } : {}), confirm_candidate: !!candidate?.checked });
     closeSheet();
     toast(`${device.name} is paired.`);
   } catch (e) { toast(e.message); }
@@ -782,6 +790,55 @@ async function confirmAllow(form) {
     const d = await api('PATCH', `/mesh/devices/${encodeURIComponent(form.dataset.allow)}`, { can_approve: yes, confirm: true });
     closeSheet();
     toast(yes ? `${d.name} can approve new devices.` : `${d.name} can no longer approve new devices.`);
+  } catch (e) { toast(e.message); }
+  await load(['devices']);
+}
+
+// ---- device roles (M10f) ---------------------------------------------------------------------
+
+// What each kind may hold and must hold: the hub's rules (src/core/mesh/purposes.ts), for the sheet.
+const ALL_ROLES = ['thin-client', 'hub-candidate', 'compute', 'storage', 'capture-source', 'general-server'];
+export function allowedRoles(d) {
+  if (d.role === 'hub' || d.kind === 'standby') return ALL_ROLES.filter((p) => p !== 'thin-client');
+  if (d.kind === 'phone' || d.kind === 'browser') return ['thin-client'];
+  return ALL_ROLES;
+}
+export function fixedRoles(d) {
+  if (d.role === 'hub') return ['hub-candidate', 'general-server'];
+  if (d.kind === 'phone' || d.kind === 'browser') return ['thin-client'];
+  if (d.kind === 'standby') return ['hub-candidate'];
+  return [];
+}
+export function roleChange(before, after) {
+  return { added: after.filter((p) => !before.includes(p)), removed: before.filter((p) => !after.includes(p)) };
+}
+
+export function editRoles(id) {
+  const d = store.devices.find((x) => x.id === id);
+  if (d) openSheet(rolesSheet(d, { allowed: allowedRoles(d), fixed: fixedRoles(d) }), { label: `What ${d.name} is for` });
+}
+
+// Step one done: the review at its tier, or nothing when nothing changed.
+export function reviewRoles(form) {
+  const d = store.devices.find((x) => x.id === form.dataset.roles);
+  if (!d) return;
+  const next = ALL_ROLES.filter((p) => pickedRoles(form).includes(p) || fixedRoles(d).includes(p));
+  const change = roleChange(d.purposes ?? [], next);
+  if (!change.added.length && !change.removed.length) { closeSheet(); toast('Nothing changed.'); return; }
+  openSheet(rolesReviewSheet(d, next, change), { label: `Change what ${d.name} is for` });
+}
+
+async function confirmRoles(form) {
+  const tier = Number(form.dataset.tier);
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (tier === 3 && !confirm?.checked) { confirm?.focus(); return; }
+  const candidate = form.querySelector('input[name="confirm_candidate"]');
+  if (candidate && !candidate.checked) { candidate.focus(); toast('Making it a hub candidate is confirmed on its own: tick that box too.'); return; }
+  const purposes = form.dataset.next ? form.dataset.next.split(',') : [];
+  try {
+    const d = await api('PATCH', `/mesh/devices/${encodeURIComponent(form.dataset.rolesConfirm)}`, { purposes, ...(tier === 3 ? { confirm: true } : { approved: true }), confirm_candidate: !!candidate?.checked });
+    closeSheet();
+    toast(`${d.name} is for: ${d.purposes.length ? d.purposes.join(', ').replace(/-/g, ' ') : 'nothing yet'}.`);
   } catch (e) { toast(e.message); }
   await load(['devices']);
 }
