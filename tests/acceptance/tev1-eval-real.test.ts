@@ -4,16 +4,16 @@
 // NOVA_REAL_OLLAMA_URL (default http://127.0.0.1:11434), then writes, from the results alone:
 //   docs/evidence/tev1-eval.json   per-case results per size;
 //   docs/evidence/tev1-eval.md     the evidence page;
-//   src/core/jev/tev1-verdicts.json the verdicts the gate follows (CI recomputes them).
+//   src/core/decision-service/tev1-verdicts.json the verdicts the service follows (CI recomputes them).
 // The cases, bounds and scoring were committed before any run (bounds_commit). Nothing is tuned
 // after seeing results: a size that misses a bound is advisory, and that is the recorded outcome.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BOUNDS } from '../../src/core/jev/eval.ts';
-import { SIZES, Tev1Provider, type Size } from '../../src/core/jev/tev1.ts';
-import { VERDICTS_FILE, readVerdicts, type VerdictFile } from '../../src/core/jev/verdict.ts';
+import { BOUNDS } from '../../src/core/decision-service/eval.ts';
+import { SIZES, Tev1Seat, type Size } from '../../src/core/decision-service/seats/tev1.ts';
+import { VERDICTS_FILE, readVerdicts, type VerdictFile } from '../../src/core/decision-service/verdicts.ts';
 import { buildCases, manifest } from '../ingest/tev1-eval/cases.ts';
 import { judge, renderEvidence, runCases, type EvidenceFile, type SizeRun } from '../ingest/tev1-eval/harness.ts';
 
@@ -35,8 +35,9 @@ test('Tev1 injection eval on the real model, per size, through the actual gate',
     runs[size] = { status: prev.status, why: prev.why, digest: prev.digest, run_at: prev.run_at, ollama: prev.ollama, metrics: null, cases: [] };
   }
   for (const size of sizes) {
-    const p = new Tev1Provider({ url, model: size, timeoutMs: 300_000 });
-    const st = await p.refresh();
+    const p = new Tev1Seat({ url, model: size, timeoutMs: 300_000 });
+    await p.refresh();
+    const st = p.detail();
     const at = new Date().toISOString();
     if (!st.available) {
       runs[size] = { status: 'not-run', why: `not yet run: ${st.why}`, digest: null, run_at: null, ollama: st.ollama, metrics: null, cases: [] };
