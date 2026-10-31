@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #⟨n⟩ · How Nova will check what it captures from your screen**
+- What changed: your decision is recorded. Captured screen text and transcripts get checked twice: for secrets or sensitive details before they're stored, and for hidden instructions before Nova uses them in an answer. It's checked on your machine, unless you're in cloud mode and turn it on per capture source.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: the two checks aren't built yet. Until then, captured text is never sent to a cloud model for checking.
+
 **2026-10-31 · #251 · Nova Vault and a credential guard: the design, with your decisions**
 - What changed: the plan for Nova's own password vault, and for a separate small "broker" program that alone can read saved passwords and keys, is filed with your decisions. Nova asks the broker to use a credential for a specific site; it never hands the value to Nova's main program or any model.
 - What you can now do: Nothing in the app changed: paperwork only.
@@ -250,6 +255,17 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
+- **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:
+  1. sensitive-content detection before indexing or archiving;
+  2. injection screening when it is recalled into a model's context.
+- **When:** at use time, and at indexing for job 1, never continuously. The content-hash cache applies.
+- **Providers:**
+  - local-first and local-only use local seats only;
+  - cloud mode uses cloud Jev only with a per-source opt-in, off by default, worded plainly.
+- **Ordering and visibility:** deterministic rules (sensitive apps and windows) come first. Verdicts carry provenance and show in the capture timeline, never as a silent deletion.
+- **Building it:** the gate fix in #258 applies the provider rule now. With no per-source opt-in built yet, capture text goes to no cloud seat in any mode. The two jobs are a follow-up build.
 
 **2026-10-31 (owner input: Nova Vault and the Credential Broker; the ADR, with the owner's decisions).** The owner-approved design `nova-vault-broker-design-2026-10-31.md` (sha256 `b0b70e64…`), the owner's instruction and their decisions were added to the packet exactly as given (`INPUT-2026-10-31-VAULT-BROKER-INSTRUCTION.md`, `INPUT-2026-10-31-VAULT-BROKER-DECISIONS.md`). Design: `docs/plans/vault-broker.md`.
 - **The broker:**

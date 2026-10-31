@@ -185,6 +185,29 @@ Further routing rules:
 - **Questions are bundled:** one request carries every question of a battery about one state, up to a seat's question limit. Tev1 is split at 64, so every chunk carries every question; cloud Jev has no limit to split at. That is the docs' "speculative fan-out": code reads only the answers it needs.
 - **The existing `LocalModelProvider`** is a chat model answering templates as JSON. It is not one of the three seats. It stays behind the interface as a transitional local answerer only for templates that have no Tev1 eval verdict yet. It is removed from a template once that template's Tev1 or Jev verdict passes. Open question 3 asks the owner whether it should go entirely.
 
+### 2.1 Screened content classes (the ingest gate)
+
+What the ingest gate's battery (`ingest-screen`) screens, and which seat may see each class. The routing rules above apply, and so does the stricter of the global and per-task privacy modes.
+
+| Class | When it is screened | Cloud Jev allowed |
+|---|---|---|
+| Web pages, mail, files, tool output | when they arrive, before a model acts on them | cloud mode; in local modes, only with the person's screening opt-in (owner decision 1) |
+| **Capture-derived text (OCR and transcripts)** | see below | **only in cloud mode, and only with a per-source opt-in that is off by default.** Never in local-first or local-only |
+
+**Capture-derived text: the owner's decision of 2026-10-31,** verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`. It has two jobs, and neither justifies streaming capture text to a cloud provider by default.
+1. **Sensitive-content detection, at indexing time.** It flags secrets, credentials, and financial or health content in captured text before it is indexed into memory or archived. Flagged content can then be redacted, excluded, or held under the capture retention rules. This protects the archive and every later recall.
+2. **Injection screening on the recall path.** Captured screen content is outside content. When it is about to enter a model's context (recall, briefs, "what was I looking at"), it passes the Part 3 battery like any other ingested content. Capture is not an unscreened side door.
+
+**The conditions:**
+- **When it is screened:** at recall or use time, and at indexing time for job 1, never continuously over the raw capture stream. Part 3's volume argument and content-hash cache apply: most captured text is never used.
+- **Which provider, by mode:**
+  - cloud mode may use cloud Jev;
+  - local-first uses the local provider for capture content, the most sensitive class Nova holds;
+  - local-only is local only.
+- **The cloud opt-in:** in cloud mode, sending capture text to the cloud is a per-source opt-in, off by default. Its setting says what it does in plain words: "screen text from this capture source may be sent to the decision provider for safety checks".
+- **Deterministic checks first:** known sensitive apps and windows (password managers, banking) pause or exclude capture without any model call, per the capture design. Jev handles the grey area the rules can't see, such as secrets inside ordinary documents and pages. It does not replace the structural rules.
+- **Provenance and visibility:** verdicts are logged with the capture item's provenance (template version, provider, scores), like every Decision Service call. A "sensitive" verdict on a frame is visible in the capture timeline. Nothing is ever deleted silently.
+
 ## 3. The decision log
 
 **Every decision is one record in the Work Ledger:** for a decision made inside a task, its timeline; otherwise the ledger's System One log. The record holds:
@@ -336,6 +359,8 @@ The input's use-case map is phased below as the record. **These are side PRs. Th
    - **Box stays labelled preview** while TypeSafe labels it so.
    - **The local seat stays the goal:** Tev1 is re-authored and re-evaluated (v2), and each feature returns to local once a local model passes that template's eval.
    - **Refined the same day (Smart Home ADR, owner decision 5):** in local-only mode, Box frames never go to a cloud provider. "No cloud in local-only", not "no Box in local-only": with the opt-in on, frames may go to a local decision provider (Tev1-class) that reads images. Opt-in, every mode, with that seat restriction. The separate text-screening toggle for local-only (decision 1) is unchanged.
+
+5. **Capture-derived text: decided (2026-10-31), yes, with conditions.** It is a screened class with two jobs: sensitive-content detection at indexing, and injection screening at recall. It never goes to cloud Jev in local-first or local-only. In cloud mode, cloud screening needs a per-source opt-in, off by default. Deterministic rules come first, and verdicts are visible in the capture timeline. See §2.1.
 
 ## NOTES for Track 1
 
