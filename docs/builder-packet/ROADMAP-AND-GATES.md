@@ -173,7 +173,7 @@ Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-3
 1. **Tev1, the local decision provider, plus the injection eval:** a side PR, as soon as a slot is free. The eval is a real gate: if Tev1 misses the bounds, it stays advisory and the deterministic layer decides.
 2. **First-session value:** folds into M10f onboarding (discovery, an import offer, a populated first view, a timed first win of under 15 minutes in the fresh-user test).
 3. **A self-update channel for Nova itself:** design doc (ADR) first, when scheduled.
-4. **The eval harness (golden tasks, capability and regression suites, a model-swap scorecard):** a side PR, when a slot is free.
+4. **The eval harness (golden tasks, capability and regression suites, a model-swap scorecard):** a side PR, when a slot is free. **Delivered 2026-10-31 (#249):** 28 tasks from failures on record. The regression suite runs at 100% with stand-ins in `npm test`, so a drop fails CI. The scorecard is written to `workers/evals/`, and Settings › Models shows it once its route and UI land. Part 5 (cost caps) follows.
 5. **Hard caps on autonomy cost:** a small design and build.
 6. **A diagnostics bundle and an integrity scrub:** fold into Health work.
 7. **A fault matrix and a soak run:** extend the QA harness under Amendment 2026-10-31-A.
