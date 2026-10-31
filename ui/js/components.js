@@ -335,7 +335,9 @@ export function healthCard({ health = null, problems = [], reachable = true } = 
     const lines = problems.length ? [problemsSummary(problems), 'What happened, and what you can do, is in Health.']
       : bad.length ? [`Needs a look: ${listWords(bad.map(([k]) => CHECK_NAMES[k] ?? 'another check'))}.`, 'The detail is in Health.']
         : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
-    body = `<p class="card-lead" data-status="${problems.length || bad.length ? 'failed' : 'verified'}">${esc(lead)}</p>${lines.map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}`;
+    // Failed (red) only when a problem stops Nova; any other open problem needs you (amber).
+    const tone = problems.some((p) => p?.stops) || (!problems.length && bad.length) ? 'failed' : problems.length ? 'needs-you' : 'verified';
+    body = `<p class="card-lead" data-status="${tone}">${esc(lead)}</p>${lines.map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}`;
   }
   return card({ kind: 'health-card', title: 'System health', icon: 'health', body, action: '<a class="link" href="/health" data-nav="health">Health</a>' });
 }
