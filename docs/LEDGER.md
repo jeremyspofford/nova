@@ -256,6 +256,46 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10e: the Service Manager and the supervisor driver).** Branch `m10e/service-manager`.
+Plan `docs/plans/M10e.md`, evidence `docs/evidence/m10e-gate.md`, built from the orchestration ADR's
+M10e phase.
+- **One supervisor, generalised.** The supervisor runs N services from definitions; the console is
+  one of them (`nova-console`), started from its definition, its deploy path (`Supervisor.deploy`,
+  `rollback`) unchanged. Reused: `ServerProcess` (now given a command and, for services, a process
+  group) and the crash rule (factored out as `CrashWindow`, used by both). The existing supervisor
+  tests are unchanged and green.
+- **The definition format** is the ADR's, with two additions the code needed: `artifact.release`
+  `{tag, command}` (the console's artifact is a git tag, which neither `image` nor `program`
+  describes; only `nova-console` may use it, and only it may say port 0), and `contract_tests` as
+  `http:/<path>` (the ADR's `probe:<name>` has no probe registry, so it is refused by name).
+- **The Service Manager** lives in `src/core/services/` with the registry of definitions (one file per
+  version, registered once) and drives any `ServiceDriver`. Promotion is typed every time
+  (`<service>@<version>`): tier 3 for the console and anything with secrets or OS permissions, tier 2
+  otherwise. Only a version that passed its contract tests and health is offered, checked by the
+  manager and again by the driver.
+- **The supervisor driver** for plain programs: slots per version from a `file:` artifact pinned by
+  SHA-256; `full`, `shadow`, `copy`, `none`; a stable port forwarded on 127.0.0.1; canary with
+  automatic rollback; the old slot kept for `soak_s` (absent: until the next promotion) and removed
+  after; services get none of the supervisor's environment, run in their own process group, and are
+  ended whole. A supervisor killed outright leaves them running; the next one ends them, found by
+  their working folder in `/proc` (Linux only).
+- **The no-Kubernetes tripwire** (`scripts/tripwire.sh`) wraps `npm test`, `npm run test:ui` and
+  `scripts/ui-test.sh`: stand-in `kubectl`, `helm`, `flux`, `k3s` first on PATH, `KUBECONFIG` unset, any
+  call fails the run. This machine has a real `kubectl`; the tripwire shadows it.
+- **Where the ADR didn't fit, written down:**
+  - The ADR's Order puts the `service` change kind in M10e, but its artifact is the definition plus
+    rendered Helm values and its gate is GitOps; the brief for this phase excluded Helm. Not built:
+    deferred to M10j/M10k, to be confirmed by the owner.
+  - M10e was to start after M10d (PR #241) merged; it was built on main as instructed. Shared files
+    with #241: `src/core/index.ts`, `src/core/README.md`, this LEDGER, the inventory.
+  - "Both drivers' tests" and "one definition rendered by both drivers": only one driver exists. The
+    contract suite (`tests/support/service-driver-contract.ts`) is ready for M10j.
+  - The supervisor driver doesn't run image-only services (the ADR's "Docker where present" needs image
+    pulls the hard limits forbid), hand out secrets, download `https:` artifacts or place on other
+    devices. Each is refused in plain words.
+  - `scripts/preview.sh` doesn't use the supervisor at all, so the preview is unaffected.
+- **Not proven by its test:** the forwarder closing both sides together (see the evidence).
+
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:
   1. sensitive-content detection before indexing or archiving;
