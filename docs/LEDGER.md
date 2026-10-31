@@ -17,6 +17,16 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (CI: change-aware, with one always-run required check).** Owner instruction.
+- **Sorting:** a `changes` job sorts the change's files with `scripts/ci-changes.sh`.
+  - **Docs only** skips the heavy jobs entirely: lint, typecheck, themes, tests and the UI gate.
+  - **Code or workflow changes** run the full suite. There are no selective test runs in CI.
+- **Docker image:** it is pulled ahead only when Nova Computer's code or tests change. Otherwise its tests pull it on first use, as they already could.
+- **The required check:** an always-run `gate` job needs every other job. It passes when they passed, or were skipped for a docs-only change, and fails on anything else. `gate` is main's required status check.
+- **Unchanged:** the concurrency group.
+- **One deliberate difference from the instruction's list:** markdown under the folders Nova loads at run time counts as code, not docs: `system/` (the system prompt), `templates/`, `skills/`, `schedules/`, `connectors/` and `design-systems/`. A change there can break a test.
+- **The default:** any file the script doesn't know counts as code.
+
 **2026-10-31 (owner decisions on the orchestration ADR).** Same branch and PR (#243). The owner's
 decisions were added to the packet unchanged, below a one-line header, as
 `docs/builder-packet/INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md` (sha256 of the decisions
