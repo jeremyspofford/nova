@@ -128,7 +128,8 @@ export interface Seat {
   limits(): SeatLimits;
   status(): SeatStatus;
   refresh?(): Promise<SeatStatus>;
-  ask(t: ServiceTemplate, state: BuiltState): Promise<SeatAnswer>;
+  // `beforeSend` (a cloud seat): called before every request; it throws when sending is no longer allowed.
+  ask(t: ServiceTemplate, state: BuiltState, o?: { beforeSend?: () => void }): Promise<SeatAnswer>;
 }
 
 export interface BuiltState {

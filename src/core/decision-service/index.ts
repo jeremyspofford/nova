@@ -20,7 +20,7 @@ import type { PrivacyMode } from '../envelope.ts';
 import type { SeatStatus, ServiceTemplate } from './types.ts';
 
 export { DecisionService, Registry, INGEST_SCREEN_V1, INGEST_SCREEN_V2, CAPTURE_SENSITIVE_V1, DEFAULT_SETTINGS, OPT_IN_WORDS, notices, recommend, validateSettings };
-export { MemoryLog, FileLog, type DecisionLog } from './log.ts';
+export { MemoryLog, FileLog, DbLog, type DecisionLog, type RecordDb } from './log.ts';
 export { validate } from './registry.ts';
 export { memoryVerdicts, type VerdictStore, type VerdictRecord } from './verdicts.ts';
 export type { AskOptions, RemoteReceipt } from './service.ts';
@@ -47,6 +47,10 @@ export interface ServiceSetup {
   now?: () => Date;
 }
 
+// How one template stands now, without asking anything (Health; DS1 NOTE 4): whether an answer
+// would be relied on and by whom, and one plain line per seat.
+export interface Standing { relied: boolean; who: string | null; lines: string[] }
+
 export interface SeatsView {
   tev1: Tev1Detail;
   jev: SeatStatus;
@@ -57,7 +61,7 @@ export interface SeatsView {
 }
 
 // The service, with its seats built here and nowhere else.
-export function createDecisionService(o: ServiceSetup): { service: DecisionService; refresh: () => Promise<void>; view: () => Promise<SeatsView> } {
+export function createDecisionService(o: ServiceSetup): { service: DecisionService; refresh: () => Promise<void>; view: () => Promise<SeatsView>; standing: (templateId: string) => Standing; tev1: () => Tev1Detail; noticesFor: (s: DecisionSettings) => Promise<Notice[]> } {
   const registry = new Registry();
   for (const t of o.templates ?? BUILT_INS) registry.add(t);
   const verdicts = o.verdicts ?? fileVerdicts();
@@ -93,5 +97,33 @@ export function createDecisionService(o: ServiceSetup): { service: DecisionServi
       scorecards: cards,
     };
   };
-  return { service, refresh, view };
+  const standing = (templateId: string): Standing => {
+    // The version that would answer now (DS2's choice: passed, else the sorting model's, else newest).
+    const reg = service.version(templateId);
+    if (!reg) return { relied: false, who: null, lines: [] };
+    const t = reg.template;
+    const { candidates } = service.plan(t, o.privacy());
+    const trusted = candidates.find((c) => c.trusted) ?? null;
+    const lg = service.legacyAllowed(t);
+    const d = tev1.detail();
+    const j = jev.status();
+    const retired = t.legacy && verdicts.passed(t.template_id, t.version);
+    const who = trusted ? `${trusted.seat.id === 'jev' ? 'Jev' : 'Tev1'} (${trusted.model})` : lg.ok ? 'your local sorting model' : null;
+    const lines = [
+      `Tev1: ${d.available && d.model ? `${d.model} is in use. ${d.size_why}` : d.why}`,
+      `Jev: ${j.why}`,
+      `Sorting model: ${!t.legacy ? 'never used for this.' : retired ? `retired for ${t.template_id} v${t.version}, since a decision model passed its eval.` : lg.ok ? 'still used, until a decision model passes this screen’s eval.' : lg.why}`,
+      who
+        ? `Screening answers are relied on: ${who}${trusted ? ' passed this screen’s eval.' : ' answers until a decision model passes its eval.'}`
+        : 'Screening answers aren’t relied on yet: no model that answers here has passed this screen’s eval, so outside content Nova can’t vouch for is held back as unsure.',
+    ];
+    return { relied: !!who, who, lines };
+  };
+  // The notices a set of choices would carry, before they are saved (shown before the person
+  // confirms; owner decision 2).
+  const noticesFor = async (s: DecisionSettings): Promise<Notice[]> => {
+    const hw = (await Promise.resolve(o.hardware?.()).catch(() => null)) ?? null;
+    return notices(s, { hardware: hw, verdicts, templates: registry.list().map((r) => r.template), tev1Digest: tev1.detail().digest });
+  };
+  return { service, refresh, view, standing, tev1: () => tev1.detail(), noticesFor };
 }

@@ -2,6 +2,7 @@
 // an owner and a state; every state change is an appended event. A task never just disappears:
 // it ends done, failed or cancelled, with a reason. "Done" is reachable only through verification.
 import { EventEmitter } from 'node:events';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { CoreError } from './errors.ts';
 import { ENVELOPE_VERSION, validateBrief, validateReport, type Brief, type ContextRef, type EvidenceRequirement, type PrivacyMode, type Report, type Tier } from './envelope.ts';
@@ -9,6 +10,10 @@ import { effectsOf, egressOf, permits, type Worker } from './workers.ts';
 import type { Db } from './db.ts';
 import type { Log } from './log.ts';
 import type { Verification, Verifier } from './verify.ts';
+
+// The task a piece of work runs for, and its privacy mode, for whatever it calls while it runs
+// (the ingest gate's screen reads it: a task's own mode tightens the screen, never loosens it).
+export const TASK_CONTEXT = new AsyncLocalStorage<{ task_id: string; privacy_mode: PrivacyMode }>();
 
 export const STATES = ['queued', 'active', 'waiting', 'verifying', 'done', 'failed', 'cancelled'] as const;
 export type State = (typeof STATES)[number];
@@ -475,7 +480,7 @@ export class Ledger extends EventEmitter {
     });
     let raw: unknown;
     try {
-      raw = await Promise.race([worker.run(t.brief, signal), stopped]);
+      raw = await Promise.race([TASK_CONTEXT.run({ task_id: t.id, privacy_mode: t.brief.privacy_mode }, () => worker.run(t.brief, signal)), stopped]);
     } catch (e) {
       this.#running.delete(t.id);
       if (this.#halted) return;
