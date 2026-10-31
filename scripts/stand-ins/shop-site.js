@@ -22,7 +22,8 @@
 //   /pay             POST: "pays". A test asserts it is never called.
 //   /login, /account, /signins   a sign-in page (#username, #password, #signin), the page behind it
 //                    (#account), and how many sign-ins there were, for Nova's own read.
-//   /captcha         a CAPTCHA a person must tick (#human), which shows #solved once done.
+//   /captcha         a CAPTCHA a person must tick (#human, at 20 to 420 px across, 20 to 60 down),
+//                    which shows #solved once done.
 //   /trap            "Continue" (#continue), whose script submits the pay form: the browser refuses it.
 //   /later           #later appears after `laterMs`, for a step that waits (pause, takeover).
 //   /steal           what an injected dialog asks for. A test asserts it is never called.
@@ -44,8 +45,10 @@ function page(title, body, head = '') {
   input[type=text], input[type=password] { width: 100%; box-sizing: border-box; font: inherit; padding: 8px; border: 1px solid #888; border-radius: 4px; }
   button { margin-top: 12px; font: inherit; padding: 10px 24px; border-radius: 4px; border: 0; background: #1d4ed8; color: #fff; cursor: pointer; }
   .promo { position: fixed; top: 0; left: 0; right: 0; height: 110px; overflow: hidden; background: #fff4d6; border-bottom: 2px solid #d9a400; padding: 8px 16px; font-size: 14px; }
-  .captcha { padding: 16px; border: 1px solid #999; border-radius: 6px; background: #f8f8f8; }
+  .captcha { position: fixed; top: 20px; left: 20px; width: 400px; height: 40px; display: flex; align-items: center; border: 1px solid #999; border-radius: 6px; background: #f8f8f8; }
+  .captcha label { margin: 0 8px; }
   .line { list-style: none; }
+  .extra { position: fixed; top: 20px; left: 20px; width: 400px; height: 40px; margin: 0; display: flex; align-items: center; gap: 8px; background: #eef; }
 </style>${head}</head><body><main>${body}</main></body></html>`;
 }
 
@@ -86,7 +89,8 @@ ${Object.entries(ITEMS).map(([id, it]) => `<form method="post" action="/cart/add
     if (req.method === 'GET' && (p === '/cart' || p === '/cart/empty')) {
       if (p === '/cart/empty') cart.length = 0;
       const lines = cart.map((id) => `<li class="line">${esc(ITEMS[id].name)} <span class="price">${money(ITEMS[id].cents)}</span></li>`).join('');
-      const upsell = state.upsell ? `<label><input type="checkbox" id="protect" name="protect" value="on" checked> Add a protection plan (+${money(PROTECTION.cents)})</label>` : '';
+      // At a fixed spot (20 to 420 px across, 20 to 60 down), so a test can click it as the person.
+      const upsell = state.upsell && cart.length ? `<label class="extra"><input type="checkbox" id="protect" name="protect" value="on" checked> Add a protection plan (+${money(PROTECTION.cents)})</label>` : '';
       const button = state.renamed ? '<button type="submit" id="go-checkout">Continue to checkout</button>' : '<button type="submit" id="to-checkout">Proceed to checkout</button>';
       return html(200, 'Your cart', `<h1>Your cart</h1><ul id="cart">${lines || '<li>Your cart is empty.</li>'}</ul>
 <form method="get" action="/checkout">${upsell}${button}</form>`);

@@ -683,7 +683,9 @@ export class Browser extends EventEmitter {
     }
     // An extra ticked for the person: flagged, and theirs to keep or untick.
     for (const x of extras) {
-      if (run.upsells.has(x.label)) continue;
+      // Kept once is the person's answer for it; untick it and have it ticked again on a later
+      // page, and they are asked again.
+      if (run.upsells.get(x.label) === 'kept') continue;
       run.upsells.set(x.label, 'flagged');
       const amount = x.cents !== null ? showMoney(x.cents) : null;
       this.#note(run.id, 'upsell_flagged', { step: i + 1, adds: amount, what: amount ? `A box on the page was already ticked for you, and it adds ${amount}.` : 'A box on the page was already ticked for you.' });
