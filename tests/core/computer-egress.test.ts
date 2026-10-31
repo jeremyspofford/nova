@@ -33,6 +33,13 @@ test('the decision: declared and public, or refused with the reason', async () =
   await no('127.0.0.1:443', /private address/);
   await no('registry.example.test', /host:port/);
   await no('registry.example.test:99999', /not a host:port|not declared/);
+  // IPv6 literals are judged by the address, however they are written (the second review's probe).
+  const v6 = { ...o, hosts: () => ['[64:ff9b:0:0:0:0:7f00:1]:443', '[0064:ff9b::a00:1]:443', '[::ffff:0:7f00:1]:443', '[64:ff9b::7f00:1]:443'] };
+  for (const lit of ['[64:ff9b:0:0:0:0:7f00:1]', '[0064:ff9b::a00:1]', '[::ffff:0:7f00:1]', '[64:ff9b::7f00:1]']) {
+    const d = await decide(`${lit}:443`, v6);
+    assert.equal(d.ok, false, lit);
+    assert.ok(['private-address', 'not-declared'].includes((d as { code: string }).code), `${lit}: ${(d as { code: string }).code}`);
+  }
 });
 
 

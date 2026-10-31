@@ -5,15 +5,45 @@
 // containers carry the test's label and are removed at the end.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runUser } from '../../src/core/computer/policy.ts';
-import { TEST_LABELS, docker, dockerSkip, processes, removeTestContainers, settled, tlsStandIn } from './computer-support.ts';
+import { DockerComputer } from '../../src/core/computer/docker.ts';
+import type { Machine } from '../../src/core/computer/computer.ts';
+import { IMAGE, runUser } from '../../src/core/computer/policy.ts';
+import { TEST_LABELS, docker, dockerSkip, folderIdOf, processes, removeTestContainers, settled, tlsStandIn } from './computer-support.ts';
 import { open } from './resilience-support.ts';
 import type { Core } from '../../src/core/index.ts';
 
 const skip = await dockerSkip();
+
+// When Nova can't see what runs in the machine (`docker top` fails), it doesn't take that as "nothing
+// runs": it restarts the machine, and if it still can't see, it runs nothing. The failure is made
+// with a wrapper around the docker CLI that fails `top` once a flag file exists.
+test('when Nova can’t list the machine’s processes it restarts it, and runs nothing it can’t check', { skip: skip ?? false, timeout: 120_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'nova-top-fails-'));
+  const flag = join(root, 'fail-top');
+  const wrapper = join(root, 'docker-wrapper.sh');
+  writeFileSync(wrapper, `#!/bin/sh\nif [ "$3" = top ] && [ -e "${flag}" ]; then echo "top refused for the test" >&2; exit 1; fi\nexec docker "$@"\n`, { mode: 0o755 });
+  const folder = join(root, 'project');
+  mkdirSync(folder);
+  const c = new DockerComputer({ home: join(root, 'home'), labels: TEST_LABELS, program: wrapper });
+  const m: Machine = { id: `k${Date.now().toString(36).slice(-6)}`, folder, folderId: folderIdOf(folder), egress: { mode: 'none', hosts: [] }, container: null, image: IMAGE };
+  try {
+    await c.create(m);
+    assert.equal((await c.exec(m, { argv: ['true'], timeoutS: 30 })).exit, 0, 'the control runs');
+    const started = JSON.parse((await docker(['container', 'inspect', m.container!])).out)[0].State.StartedAt;
+    writeFileSync(flag, '');
+    await assert.rejects(c.exec(m, { argv: ['sh', '-c', 'echo ran > ran.txt'], timeoutS: 30 }), /couldn’t see what runs in the workspace/);
+    assert.equal(existsSync(join(folder, 'ran.txt')), false, 'the command never ran');
+    assert.notEqual(JSON.parse((await docker(['container', 'inspect', m.container!])).out)[0].State.StartedAt, started, 'the machine was restarted');
+  } finally {
+    rmSync(flag, { force: true });
+    await c.destroy(m, []).catch(() => {});
+    await removeTestContainers();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const containerOf = (core: Core, ws: string) => `nova-computer-${(core.computer.computer as unknown as { tag: string }).tag}-${ws}`;
 

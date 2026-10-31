@@ -13,17 +13,22 @@
 //    digest;
 //  - the project's .git is read-only inside unless the person chose otherwise.
 import { spawn, type ChildProcess } from 'node:child_process';
-import { lstatSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { trackChild } from '../children.ts';
 import { CoreError } from '../errors.ts';
-import { FOLDER_COPY, checkFolderId, copyTree, replaceContents, treeDigest, type Computer, type ExecRequest, type ExecResult, type Machine, type Saved, type Tunnelled } from './computer.ts';
+import { FOLDER_COPY, checkFolderId, copyTree, findPaths, removeTree, replaceContents, treeDigest, type Computer, type ExecRequest, type ExecResult, type Machine, type Saved, type Tunnelled } from './computer.ts';
 import { IMAGE, containerName, createArgs, execArgs, homeTag, imageRef, runUser } from './policy.ts';
 import { RELAY_USER } from './egress.ts';
 
 const DEFAULT_SOCKET = 'unix:///var/run/docker.sock';
 const MAX_BYTES = 1_000_000;
 const RELAY_UID = RELAY_USER.split(':')[0]!;
+// The most .git folders and files of a project mounted read-only (see #gitReadOnly).
+export const MAX_GIT_MOUNTS = 64;
+
+// What the docker CLI said, as it may be shown: one line, printable, no paths (a path in an error
+// can name something a command inside made), at most 200 characters.
+export const dockerWords = (s: string) => (s.trim().split('\n').filter(Boolean).at(-1) ?? 'no reason given').replace(/[^\x20-\x7e]/g, '').replace(/\/[^\s"']*/g, '…').slice(0, 200);
 
 // Where the local daemon is: DOCKER_HOST when it is a unix socket, else the default one. A DOCKER_HOST
 // pointing anywhere else is refused, not followed.
@@ -135,7 +140,7 @@ export class DockerComputer implements Computer {
 
   async #must(args: string[], what: string, timeoutMs = 120_000): Promise<string> {
     const r = await this.run(args, { timeoutMs });
-    if (r.code !== 0) throw new CoreError('conflict', `Docker couldn’t ${what}: ${(r.stderr || r.stdout).trim().split('\n').slice(-3).join(' ')}`);
+    if (r.code !== 0) throw new CoreError('conflict', `Docker couldn’t ${what}: ${dockerWords(r.stderr || r.stdout)}`);
     return r.stdout.trim();
   }
 
@@ -169,15 +174,17 @@ export class DockerComputer implements Computer {
     return this.#quota;
   }
 
-  // The project's .git, to be mounted read-only over itself: only a real folder or file (a link
-  // would be followed by Docker to wherever it points, so a link is never mounted).
-  #gitReadOnly(m: Machine): string | null {
-    if (m.gitWritable) return null;
-    const p = `${m.folder}/.git`;
-    try {
-      const st = lstatSync(p);
-      return st.isDirectory() || st.isFile() ? p : null;
-    } catch { return null; }
+  // Every .git in the project, the top one and any nested (a nested repository's folder, or the
+  // .git file of a submodule or worktree, which names its git folder), each to be mounted
+  // read-only over itself. Only a real folder or file: a link would be followed by Docker to
+  // wherever it points, so a link is never mounted. A path Docker's --mount can't carry, or more
+  // than MAX_GIT_MOUNTS of them, and the machine isn't made (failing closed).
+  #gitReadOnly(m: Machine): string[] {
+    if (m.gitWritable) return [];
+    const found = findPaths(m.folder, ['.git']).filter((x) => x.kind === 'dir' || x.kind === 'file');
+    if (found.length > MAX_GIT_MOUNTS) throw new CoreError('conflict', `The project holds ${found.length} git repositories (.git), more than the ${MAX_GIT_MOUNTS} Nova keeps read-only inside, so the machine wasn’t made. Make the workspace with git_writable, or on a smaller folder.`);
+    if (found.some((x) => /[,"\n\r]/.test(x.rel))) throw new CoreError('conflict', 'A .git in the project sits under a folder whose name has a comma, a quote or a line break, which Docker can’t mount read-only, so the machine wasn’t made. Rename that folder.');
+    return found.map((x) => `${m.folder}/${x.rel}`);
   }
 
   // Makes the machine from `image` and starts it; one left over under the same name goes first.
@@ -234,11 +241,17 @@ export class DockerComputer implements Computer {
   // Nothing but the machine's own processes (its init and the `sleep` it keeps running) and, while
   // Nova holds one open, its egress relay (which runs as `nobody`, a user no process of the
   // workspace's can become). Anything else is stopped by restarting the machine, and the machine is
-  // checked again. Returns how many processes were stopped.
+  // checked again. Returns how many processes were stopped. When Nova can't see what runs (`docker
+  // top` fails on a running machine) that isn't "nothing": it counts as something left running,
+  // and if it still can't see after the restart, nothing runs.
   async #settle(container: string): Promise<number> {
+    const UNSEEN = { pid: '?', ppid: '?', uid: '?', args: '(unseen)' };
     const extra = async () => {
       const ps = await this.#processes(container);
-      if (ps === null) return [];
+      if (ps === null) {
+        const s = await this.run(['container', 'inspect', '--format', '{{.State.Running}}', container], { timeoutMs: 15_000 });
+        return s.code === 0 && s.stdout.trim() === 'false' ? [] : [UNSEEN];
+      }
       const init = ps.find((p) => p.args.startsWith('/sbin/docker-init') || p.args.startsWith('/dev/init'));
       const keep = ps.find((p) => init && p.ppid === init.pid && p.args === 'sleep infinity');
       const relays = this.#relays(container);
@@ -248,6 +261,7 @@ export class DockerComputer implements Computer {
     if (!left.length) return 0;
     await this.#must(['restart', '--time', '0', container], 'stop what the command left running');
     const still = await extra();
+    if (still.includes(UNSEEN)) throw new CoreError('conflict', 'Nova couldn’t see what runs in the workspace (Docker didn’t list its processes), even after restarting it, so it runs nothing in it.');
     if (still.length) throw new CoreError('conflict', `The workspace still runs ${still.length} process${still.length === 1 ? '' : 'es'} after a restart, so Nova won’t run anything in it.`);
     return left.length;
   }
@@ -270,7 +284,11 @@ export class DockerComputer implements Computer {
         watch = setInterval(() => {
           if (busy || stopped) return;
           busy = true;
-          r.watch!.check().then((why) => { if (why && !stopped) { stopped = why; stop.abort(); } }).catch(() => {}).finally(() => { busy = false; });
+          // A check that fails is never taken as "within the caps": it stops the command too.
+          r.watch!.check()
+            .catch((e: Error) => `Nova couldn’t check the workspace’s disk (${e.message})`)
+            .then((why) => { if (why && !stopped) { stopped = why; stop.abort(); } })
+            .finally(() => { busy = false; });
         }, r.watch.everyMs);
       }
       res = await this.run(execArgs({ container, user: this.user, argv: r.argv, timeoutS: r.timeoutS, egress: m.egress.mode !== 'none' }), {
@@ -313,7 +331,7 @@ export class DockerComputer implements Computer {
     } catch (e) {
       if (committed) await this.run(['rmi', '-f', image], { timeoutMs: 60_000 });
       // A copy that stopped part way isn't a checkpoint, and would hold disk no cap counts.
-      rmSync(cp.dir, { recursive: true, force: true });
+      removeTree(cp.dir);
       throw e;
     } finally {
       if (paused) await this.run(['unpause', container], { timeoutMs: 60_000 });

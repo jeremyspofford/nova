@@ -6,7 +6,9 @@ import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, futimesSync, lstatSync, lutimesSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, rmSync, symlinkSync, utimesSync, writeSync, fchmodSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
-import type { Stats } from 'node:fs';
+import type { BigIntStats, Stats } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { platform } from 'node:os';
 import { CoreError } from '../errors.ts';
 import type { EgressDecl } from './policy.ts';
 
@@ -88,7 +90,7 @@ export function checkFolderId(folder: string, id: FolderId | null | undefined): 
   if (!st.isDirectory()) throw notThatFolder(folder, 'it isn’t a folder now');
   let real: string;
   try { real = realpathSync(folder); } catch { throw notThatFolder(folder, 'its path doesn’t resolve'); }
-  if (real !== folder) throw notThatFolder(folder, `its path leads to ${real} now`);
+  if (real !== folder) throw notThatFolder(folder, 'its path leads somewhere else now');
   if (String(st.dev) !== id.dev || String(st.ino) !== id.ino || String(st.birthtimeNs) !== id.born) throw notThatFolder(folder, 'a different folder is at that path now');
 }
 
@@ -97,43 +99,65 @@ export interface Digest { digest: string; files: number; bytes: number }
 const NOFOLLOW = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const CHUNK = 1 << 20;
 
+// The longest path Nova reads or writes in a folder by its full name. A command inside can make a
+// tree whose names are fine there (made with relative mkdir and chdir) but whose full path here,
+// under a longer folder path, passes the system's limit (PATH_MAX, 4096 bytes on Linux; 1024 on
+// macOS). Such a path can't be read by name, so every walk stops at one, saying so, rather than
+// skip it or fail in a way a caller might take for "nothing there".
+export const PATH_LIMIT = platform() === 'linux' ? 4000 : 1000;
+export const TOO_LONG = 'The project folder holds a path too long for this computer to read (past the system’s limit on a path’s length), so Nova stopped there. Reset the workspace to remove it.';
+const tooLong = () => new CoreError('conflict', TOO_LONG);
+const checkLength = (p: string) => { if (Buffer.byteLength(p) > PATH_LIMIT) throw tooLong(); };
+// A walk's errors in Nova's own words: what failed and why, never a name in the folder (those are
+// the command's choice, and an error becomes the task's summary).
+function walkError(e: unknown, what: string): CoreError {
+  if (e instanceof CoreError) return e;
+  const code = (e as NodeJS.ErrnoException).code;
+  if (code === 'ENAMETOOLONG') return tooLong();
+  return new CoreError('conflict', `Nova couldn’t ${what} in the project folder (${code ?? 'an error'}).`);
+}
+
 // One walk for the digest, the copy and the size: entries in name order, never following a link,
 // and never opening anything but a regular file (a FIFO, a socket or a device is noted and left
 // alone; opening a FIFO would wait for a writer). A file is opened without following a link and
 // checked to be the file that was listed, so one swapped for a link between the two is refused,
-// not read through. `file` gets the open descriptor.
+// not read through. `file` gets the open descriptor. A path past PATH_LIMIT stops it.
 type Visit = {
   dir?: (rel: string, mode: number, st: Stats) => void;
   dirDone?: (rel: string, st: Stats) => void;
   file?: (rel: string, mode: number, fd: number, size: number, st: Stats) => void;
   link?: (rel: string, mode: number, target: string, st: Stats) => void;
-  other?: (rel: string, mode: number, kind: string) => void;
-  stop?: () => boolean;
+  other?: (rel: string, mode: number, kind: 'fifo' | 'socket' | 'char-device' | 'block-device') => void;
 };
 function walk(root: string, v: Visit): void {
   const go = (rel: string) => {
-    for (const n of readdirSync(rel ? join(root, rel) : root).sort()) {
-      if (v.stop?.()) return;
+    let names: string[];
+    try { names = readdirSync(rel ? join(root, rel) : root).sort(); } catch (e) { throw walkError(e, 'list a folder'); }
+    for (const n of names) {
       const r = rel ? `${rel}/${n}` : n;
       const p = join(root, r);
-      const st = lstatSync(p);
+      checkLength(p);
+      let st: Stats;
+      try { st = lstatSync(p); } catch (e) { throw walkError(e, 'look at an entry'); }
       const mode = st.mode & 0o7777;
-      if (st.isSymbolicLink()) v.link?.(r, mode, readlinkSync(p), st);
-      else if (st.isDirectory()) { v.dir?.(r, mode, st); go(r); v.dirDone?.(r, st); }
+      if (st.isSymbolicLink()) {
+        let target: string;
+        try { target = readlinkSync(p); } catch (e) { throw walkError(e, 'read a link'); }
+        v.link?.(r, mode, target, st);
+      } else if (st.isDirectory()) { v.dir?.(r, mode, st); go(r); v.dirDone?.(r, st); }
       else if (st.isFile()) {
         if (!v.file) continue;
         let fd: number;
         try { fd = openSync(p, NOFOLLOW); } catch (e) {
-          const code = (e as NodeJS.ErrnoException).code;
-          if (code === 'ELOOP') throw new CoreError('conflict', `${r} changed into a link while Nova read the folder; nothing was read through it.`);
-          throw new CoreError('conflict', `Nova couldn’t read ${r} in the project folder (${code ?? (e as Error).message}).`);
+          if ((e as NodeJS.ErrnoException).code === 'ELOOP') throw new CoreError('conflict', 'A file in the project folder changed into a link while Nova read the folder; nothing was read through it.');
+          throw walkError(e, 'read a file');
         }
         try {
           const now = fstatSync(fd);
-          if (!now.isFile() || now.ino !== st.ino || now.dev !== st.dev) throw new CoreError('conflict', `${r} changed while Nova read the folder; nothing was read through it.`);
+          if (!now.isFile() || now.ino !== st.ino || now.dev !== st.dev) throw new CoreError('conflict', 'A file in the project folder changed while Nova read the folder; nothing was read through it.');
           v.file(r, mode, fd, now.size, st);
         } finally { closeSync(fd); }
-      } else v.other?.(r, mode, st.isFIFO() ? 'fifo' : st.isSocket() ? 'socket' : 'device');
+      } else v.other?.(r, mode, st.isFIFO() ? 'fifo' : st.isSocket() ? 'socket' : st.isBlockDevice() ? 'block-device' : 'char-device');
     }
   };
   go('');
@@ -151,8 +175,11 @@ const hashFd = (fd: number): string => {
   return h.digest('hex');
 };
 
+const KIND_MARK = { fifo: 'p', socket: 's', 'char-device': 'c', 'block-device': 'b' } as const;
+
 // A folder's digest: every entry's path, type and permission bits, a file's bytes, a link's target
-// (never what it points at), and a FIFO, socket or device by its kind alone (never opened).
+// (never what it points at), and a FIFO, a socket or a device by its kind alone (never opened; each
+// kind its own mark, so one put in another's place changes the digest).
 export function treeDigest(dir: string): Digest {
   const h = createHash('sha256');
   let files = 0;
@@ -161,9 +188,28 @@ export function treeDigest(dir: string): Digest {
     link: (r, mode, target) => h.update(`l ${mode.toString(8)} ${r} -> ${target}\n`),
     dir: (r, mode) => h.update(`d ${mode.toString(8)} ${r}\n`),
     file: (r, mode, fd, size) => { files++; bytes += size; h.update(`f ${mode.toString(8)} ${r} ${size} ${hashFd(fd)}\n`); },
-    other: (r, mode) => h.update(`o ${mode.toString(8)} ${r}\n`),
+    other: (r, mode, kind) => h.update(`${KIND_MARK[kind]} ${mode.toString(8)} ${r}\n`),
   });
   return { digest: h.digest('hex'), files, bytes };
+}
+
+// A metadata-only walk (lstat, nothing opened or followed) that stops at a path past PATH_LIMIT.
+// `enter` says whether to go into a folder.
+function lwalk(root: string, visit: (rel: string, st: BigIntStats) => void, enter: (rel: string, st: BigIntStats) => boolean = () => true): void {
+  const go = (rel: string) => {
+    let names: string[];
+    try { names = readdirSync(rel ? join(root, rel) : root).sort(); } catch (e) { throw walkError(e, 'list a folder'); }
+    for (const n of names) {
+      const r = rel ? `${rel}/${n}` : n;
+      const p = join(root, r);
+      checkLength(p);
+      let st: BigIntStats;
+      try { st = lstatSync(p, { bigint: true }); } catch (e) { throw walkError(e, 'look at an entry'); }
+      visit(r, st);
+      if (st.isDirectory() && enter(r, st)) go(r);
+    }
+  };
+  go('');
 }
 
 // A stamp of a file or folder that changes whenever anything in it changes, from metadata alone
@@ -172,35 +218,54 @@ export function treeDigest(dir: string): Digest {
 // it is cheap enough for a large .git.
 export function treeStamp(path: string): string {
   const h = createHash('sha256');
-  const line = (r: string, st: import('node:fs').BigIntStats) => h.update(`${r} ${st.mode.toString(8)} ${st.size} ${st.mtimeNs} ${st.ctimeNs}\n`);
-  const top = lstatSync(path, { bigint: true });
+  const line = (r: string, st: BigIntStats) => h.update(`${r} ${st.mode.toString(8)} ${st.size} ${st.mtimeNs} ${st.ctimeNs}\n`);
+  checkLength(path);
+  let top: BigIntStats;
+  try { top = lstatSync(path, { bigint: true }); } catch (e) { throw walkError(e, 'look at an entry'); }
   line('.', top);
-  const go = (rel: string) => {
-    for (const n of readdirSync(join(path, rel)).sort()) {
-      const r = rel ? `${rel}/${n}` : n;
-      const st = lstatSync(join(path, r), { bigint: true });
-      line(r, st);
-      if (st.isDirectory()) go(r);
-    }
-  };
-  if (top.isDirectory()) go('');
+  if (top.isDirectory()) lwalk(path, line);
   return h.digest('hex');
 }
 
+// Every entry anywhere in a folder whose name is one of `names`, with its stamp (treeStamp). Not
+// gone into: what it finds (a .git is stamped whole). Metadata only.
+export function findNamed(folder: string, names: readonly string[]): Map<string, string> {
+  const want = new Set(names);
+  const out = new Map<string, string>();
+  const base = (r: string) => r.slice(r.lastIndexOf('/') + 1);
+  lwalk(folder, (r) => { if (want.has(base(r))) out.set(r, treeStamp(join(folder, r))); }, (r) => !want.has(base(r)));
+  return out;
+}
+
+// Every entry anywhere in a folder whose name is one of `names`, by its path in the folder and kind;
+// not gone into. Metadata only.
+export function findPaths(folder: string, names: readonly string[]): { rel: string; kind: 'dir' | 'file' | 'link' | 'other' }[] {
+  const want = new Set(names);
+  const out: { rel: string; kind: 'dir' | 'file' | 'link' | 'other' }[] = [];
+  const base = (r: string) => r.slice(r.lastIndexOf('/') + 1);
+  lwalk(folder, (r, st) => { if (want.has(base(r))) out.push({ rel: r, kind: st.isSymbolicLink() ? 'link' : st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other' }); }, (r) => !want.has(base(r)));
+  return out;
+}
+
 // The bytes of the regular files under a folder, stopping once past `limit` (lstat only, nothing
-// opened or followed).
+// opened or followed). A path past PATH_LIMIT is an error, never a smaller size.
 export function treeSize(dir: string, limit = Number.POSITIVE_INFINITY): number {
   let bytes = 0;
-  const go = (d: string) => {
-    for (const e of readdirSync(d, { withFileTypes: true })) {
-      if (bytes > limit) return;
-      const p = join(d, e.name);
-      if (e.isDirectory()) go(p);
-      else if (e.isFile()) bytes += lstatSync(p).size;
-    }
-  };
-  go(dir);
+  const over = new Error('over');
+  try {
+    lwalk(dir, (_r, st) => { if (st.isFile()) bytes += Number(st.size); if (bytes > limit) throw over; });
+  } catch (e) { if (e !== over) throw e; }
   return bytes;
+}
+
+// Removes a folder and all in it, at any depth (Node's rmSync works below PATH_MAX by itself; if it
+// leaves anything, rm -rf, which walks relatively, finishes). Never follows a link, never crosses
+// into another filesystem.
+export function removeTree(path: string): void {
+  try { rmSync(path, { recursive: true, force: true }); } catch { /* finished below */ }
+  if (!(() => { try { lstatSync(path); return true; } catch { return false; } })()) return;
+  const r = spawnSync('rm', ['-rf', '--one-file-system', '--', path], { stdio: 'ignore', timeout: 300_000 });
+  if (r.status !== 0 || (() => { try { lstatSync(path); return true; } catch { return false; } })()) throw new CoreError('conflict', 'Nova couldn’t remove everything in the project folder.');
 }
 
 // Copies what is inside `from` into the folder `to`, from the walk above: nothing outside `from` is
@@ -210,12 +275,13 @@ function copyEntries(from: string, to: string): string[] {
   const skipped: string[] = [];
   const buf = Buffer.allocUnsafe(CHUNK);
   const times = (st: Stats) => [st.atime, st.mtime] as const;
+  const dst = (r: string) => { const p = join(to, r); checkLength(p); return p; };
   walk(from, {
-    dir: (r) => mkdirSync(join(to, r), { mode: 0o700 }),
+    dir: (r) => mkdirSync(dst(r), { mode: 0o700 }),
     // A folder's own bits and times go on after what is in it, so a read-only one can be filled.
     dirDone: (r, st) => { chmodSync(join(to, r), st.mode & 0o7777); utimesSync(join(to, r), ...times(st)); },
     file: (r, mode, fd, _size, st) => {
-      const out = openSync(join(to, r), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      const out = openSync(dst(r), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
       try {
         for (let pos = 0; ;) {
           const n = readSync(fd, buf, 0, CHUNK, pos);
@@ -227,7 +293,7 @@ function copyEntries(from: string, to: string): string[] {
         futimesSync(out, ...times(st));
       } finally { closeSync(out); }
     },
-    link: (r, _mode, target, st) => { symlinkSync(target, join(to, r)); lutimesSync(join(to, r), ...times(st)); },
+    link: (r, _mode, target, st) => { symlinkSync(target, dst(r)); lutimesSync(dst(r), ...times(st)); },
     other: (r, _mode, kind) => skipped.push(`${r} (${kind})`),
   });
   return skipped;
@@ -248,6 +314,6 @@ export function copyTree(from: string, to: string): string[] {
 // it is what is mounted). The caller has checked the folder is the workspace's own (checkFolderId);
 // removing never follows a link.
 export function replaceContents(folder: string, copy: string): void {
-  for (const n of readdirSync(folder)) rmSync(join(folder, n), { recursive: true, force: true });
+  for (const n of readdirSync(folder)) removeTree(join(folder, n));
   copyEntries(copy, folder);
 }

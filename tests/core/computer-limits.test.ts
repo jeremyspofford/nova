@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TEST_LABELS, docker, dockerSkip, removeTestContainers, settled } from './computer-support.ts';
@@ -133,6 +134,47 @@ test('a command’s raw output is never handed back unless the ingest gate passe
     const file = JSON.parse(readFileSync(join(home, 'workers', 'computer', 'runs', `${r.id}.json`), 'utf8'));
     assert.match(file.stdout, /Ignore your instructions/);
     assert.equal(r.verification!.ok, true);
+  } finally {
+    if (ws) await destroyAll(core, [ws]);
+    await core.close();
+    await removeTestContainers();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The second review's probe: a tree 25 folders deep with 200-character names, made inside with
+// relative mkdir and chdir. Valid inside, but past PATH_MAX at the host's longer path, so a host
+// walk by path can't read it. The cap's check must stop the command, not be switched off by it, and
+// a reset must still bring the workspace back.
+test('a tree too deep for the host to walk stops the command at the cap check; a reset removes it', { skip: skip ?? false, timeout: 300_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'nova-limits-deep-'));
+  const core = open(join(root, 'home'), { computer: { userHome: join(root, 'user'), labels: TEST_LABELS, limits: { folderBytes: 2 * MiB, watchMs: 300 } } });
+  let ws = '';
+  try {
+    core.start();
+    const made = await settled(core, core.computer.request('create', { name: 'Deep' }).id);
+    assert.equal(made.state, 'done', made.reason ?? '');
+    ws = String(made.brief.inputs!.workspace);
+    const folder = core.computer.view(ws).folder;
+    const fill = `const fs=require('fs');const N='d'.repeat(200);let lv=0;for(;lv<25;lv++){fs.mkdirSync(N);process.chdir(N);}let i=0;const t=setInterval(()=>{fs.writeFileSync('f'+i,Buffer.alloc(2097152));if(++i>=12){clearInterval(t);console.log('levels',lv,'wrote',i*2,'MiB')}},250);`;
+    const w = await settled(core, core.computer.request('exec', { argv: ['node', '-e', fill] }, ws).id);
+    assert.equal(w.state, 'failed', w.report?.summary ?? '');
+    assert.match(w.reason!, /It was stopped: Nova couldn’t check the project folder/);
+    const held = Number(execFileSync('du', ['-sb', folder]).toString().split('\t')[0]);
+    assert.ok(held < 8 * MiB, `the folder holds ${held} bytes against a 2 MiB cap`);
+    // The folder can't be checkpointed now, so the next write is refused, saying so.
+    const next = await settled(core, core.computer.request('exec', { argv: ['true'] }, ws).id);
+    assert.equal(next.state, 'failed');
+    assert.match(next.reason!, /too long for this computer/);
+    // A reset can't checkpoint what is there first, so it asks first, then removes the tree.
+    const ask = core.computer.request('reset', {}, ws);
+    assert.equal(ask.approval_tier, 2);
+    core.ledger.approve(ask.id);
+    const reset = await settled(core, ask.id);
+    assert.equal(reset.state, 'done', reset.reason ?? '');
+    assert.deepEqual(readdirSync(folder), []);
+    const again = await settled(core, core.computer.request('exec', { argv: ['sh', '-c', 'echo fine > ok.txt'] }, ws).id);
+    assert.equal(again.state, 'done', again.reason ?? '');
   } finally {
     if (ws) await destroyAll(core, [ws]);
     await core.close();

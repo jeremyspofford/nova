@@ -98,13 +98,14 @@ export const REASONS = {
   'sni-mismatch': 'its TLS names another host than the one it asked for',
   'local-only': 'your Nova is local-only now',
   'not-approved': 'its task isn’t running with your OK any more',
+  ech: 'it hides the name it asks for (Encrypted ClientHello), so Nova can’t check it',
 } as const;
 export type Code = keyof typeof REASONS;
 // Short words for a summary: "3 not declared, 1 plain HTTP".
 export const CODE_WORDS: Record<Code, string> = {
   allowed: 'allowed', 'bad-request': 'not host:port', 'head-too-large': 'too large', 'plain-http': 'plain HTTP', 'not-declared': 'not declared',
   'private-address': 'a private address', 'private-name': 'a private name', unresolved: 'didn’t resolve', 'resolves-private': 'resolves privately',
-  unreachable: 'unreachable', 'no-answer': 'no answer', 'not-tls': 'not TLS', 'sni-mismatch': 'TLS for another host', 'local-only': 'local-only', 'not-approved': 'no OK',
+  unreachable: 'unreachable', 'no-answer': 'no answer', 'not-tls': 'not TLS', 'sni-mismatch': 'TLS for another host', 'local-only': 'local-only', 'not-approved': 'no OK', ech: 'Encrypted ClientHello',
 };
 
 export interface Attempt { at: string; host: string; port: number | null; allowed: boolean; code: Code; why: string; address?: string }
@@ -149,8 +150,11 @@ export async function decide(authority: string, o: Pick<ProxyOptions, 'hosts' | 
 }
 
 // The SNI of a TLS ClientHello at the start of `b`, without a handshake. `tls: false` when the bytes
-// aren't a TLS handshake at all; `complete: false` when more are needed to tell.
-export function clientHelloSni(b: Buffer): { tls: boolean; complete: boolean; sni: string | null } {
+// aren't a TLS handshake at all; `complete: false` when more are needed to tell. `ech: true` when
+// it carries Encrypted ClientHello (extension 0xfe0d): then the SNI here is only the outer name,
+// and the name the client really asks for is encrypted where Nova can't check it.
+export const ECH_EXTENSION = 0xfe0d;
+export function clientHelloSni(b: Buffer): { tls: boolean; complete: boolean; sni: string | null; ech?: true } {
   const more = { tls: true, complete: false, sni: null };
   const notTls = { tls: false, complete: true, sni: null };
   if (!b.length) return more;
@@ -187,21 +191,24 @@ export function clientHelloSni(b: Buffer): { tls: boolean; complete: boolean; sn
     const end = p + 2 + h.readUInt16BE(p);
     if (end > h.length) return notTls;
     p += 2;
+    // Every extension is read (not only up to the SNI), so an ECH one after it is seen too.
+    let sni: string | null = null;
+    let ech = false;
     while (p + 4 <= end) {
       const type = h.readUInt16BE(p);
       const len = h.readUInt16BE(p + 2);
       const data = h.subarray(p + 4, p + 4 + len);
       if (data.length !== len) return notTls;
       if (type === 0) {
-        if (data.length < 5 || data[2] !== 0) return notTls;
+        if (sni !== null || data.length < 5 || data[2] !== 0) return notTls;
         const n = data.readUInt16BE(3);
         const name = data.subarray(5, 5 + n).toString('latin1');
         if (name.length !== n || !/^[\x21-\x7e]+$/.test(name)) return notTls;
-        return { tls: true, complete: true, sni: name.toLowerCase().replace(/\.$/, '') };
-      }
+        sni = name.toLowerCase().replace(/\.$/, '');
+      } else if (type === ECH_EXTENSION) ech = true;
       p += 4 + len;
     }
-    return { tls: true, complete: true, sni: null };
+    return { tls: true, complete: true, sni, ...(ech ? { ech: true as const } : {}) };
   } catch { return notTls; }
 }
 
@@ -265,6 +272,7 @@ export function proxyConnection(client: Duplex, o: ProxyOptions): void {
           const s = clientHelloSni(hello);
           if (!s.complete) { if (hello.length > MAX_HELLO) drop('not-tls'); return; }
           if (!s.tls) { drop('not-tls'); return; }
+          if (s.ech) { drop('ech'); return; }
           if (s.sni !== wantSni) { drop('sni-mismatch'); return; }
           clearTimeout(helloTimer);
           client.off('data', onHello);

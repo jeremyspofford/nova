@@ -200,6 +200,25 @@ test('the SNI is read from a real ClientHello, without a handshake', async () =>
   assert.deepEqual(clientHelloSni(h.subarray(0, 20)), { tls: true, complete: false, sni: null });
 });
 
+// Encrypted ClientHello: the SNI the proxy can read is only the outer one, and the name the client
+// really asks for is encrypted inside. A hello carrying ECH is seen as such (and the proxy refuses
+// it), whatever its outer name is, the declared one included.
+test('a ClientHello carrying Encrypted ClientHello is seen as such, whatever its outer name', () => {
+  const hello = (name: string, ext: Buffer) => {
+    const n = Buffer.from(name);
+    const list = Buffer.concat([Buffer.from([0, n.length >> 8, n.length & 255]), n]);
+    const sni = Buffer.concat([Buffer.from([0, 0, (list.length + 2) >> 8, (list.length + 2) & 255, list.length >> 8, list.length & 255]), list]);
+    const exts = Buffer.concat([sni, ext]);
+    const body = Buffer.concat([Buffer.from([3, 3]), Buffer.alloc(32, 7), Buffer.from([0]), Buffer.from([0, 2, 0x13, 0x01]), Buffer.from([1, 0]), Buffer.from([exts.length >> 8, exts.length & 255]), exts]);
+    const hs = Buffer.concat([Buffer.from([1, 0, body.length >> 8, body.length & 255]), body]);
+    return Buffer.concat([Buffer.from([0x16, 3, 1, hs.length >> 8, hs.length & 255]), hs]);
+  };
+  const ech = Buffer.from([0xfe, 0x0d, 0, 4, 0, 0, 1, 0]);
+  assert.deepEqual(clientHelloSni(hello('declared.test', Buffer.alloc(0))), { tls: true, complete: true, sni: 'declared.test' });
+  assert.deepEqual(clientHelloSni(hello('declared.test', ech)), { tls: true, complete: true, sni: 'declared.test', ech: true });
+  assert.deepEqual(clientHelloSni(hello('cloudflare-ech.example', ech)), { tls: true, complete: true, sni: 'cloudflare-ech.example', ech: true });
+});
+
 test('what a command asks the proxy for stays out of summaries: declared names and fixed reasons only, attempts capped', { skip: skip ?? false, timeout: 240_000 }, async (t) => {
   const host = await tlsStandIn('hello from the declared host\n');
   if (!host) { t.skip('openssl isn’t here to make the stand-in host’s certificate'); return; }

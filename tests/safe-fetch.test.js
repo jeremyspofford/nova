@@ -31,6 +31,15 @@ test('IPv6 addresses that carry an IPv4 address, or tunnel to one, are never the
     '::127.0.0.1', '::7f00:1', '::10.0.0.1', '0:0:0:0:0:ffff:7f00:1', '64:ff9b:1::1', '2001:10::1', '2001:20::1', '2001:2::1']) {
     assert.equal(publicAddress(a), false, a);
   }
+  // The same addresses in other spellings are judged by the address, not by how it is written: an
+  // IPv4-translated address, and NAT64 written long or with leading zeros.
+  for (const a of ['::ffff:0:7f00:1', '0:0:0:0:ffff:0:7f00:1', '::ffff:0:10.0.0.1', '64:ff9b:0:0:0:0:7f00:1', '0064:ff9b::7f00:1', '64:ff9b::a00:1',
+    '0064:ff9b:0000:0000:0000:0000:0a00:0001', '0:0:0:0:0:ffff:7f00:1', '::ffff:7f00:0001', '64:ff9b:1:0::1', 'fe80::1%eth0']) {
+    assert.equal(publicAddress(a), false, a);
+  }
+  // NAT64 and mapped forms of a public IPv4 address stay public (NAT64 is how an IPv6-only network
+  // reaches the IPv4 web).
+  for (const a of ['64:ff9b::808:808', '0064:ff9b:0:0:0:0:808:808', '::ffff:8.8.8.8', '::ffff:0:808:808']) assert.equal(publicAddress(a), true, a);
   // Other 2001: space is the public web (2001:4860:: is a public resolver's).
   for (const a of ['2001:4860:4860::8888', '2606:4700::1111', '2a00:1450:4001::1']) assert.equal(publicAddress(a), true, a);
 });

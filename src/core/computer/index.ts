@@ -7,7 +7,7 @@
 //  - egress goes through the proxy in egress.ts, which applies safe-fetch's rules, for the length of
 //    one command, asking again on every connection whether the task may still reach outside.
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
@@ -19,7 +19,7 @@ import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Checker, Verifier } from '../verify.ts';
-import { FOLDER_COPY, checkFolderId, copyTree, folderIdentity, treeDigest, treeSize, treeStamp, type Computer, type ExecResult, type FolderId, type Machine } from './computer.ts';
+import { FOLDER_COPY, checkFolderId, copyTree, findNamed, folderIdentity, removeTree, treeDigest, treeSize, type Computer, type ExecResult, type FolderId, type Machine } from './computer.ts';
 import { DockerComputer } from './docker.ts';
 import { CODE_WORDS, RELAY_ARGV, RELAY_USER, Tunnel, proxyConnection, type Attempt, type Code } from './egress.ts';
 import { DEFAULT_TIMEOUT_S, DISK, HOST_RUN, IMAGE, IMAGE_ABOUT, MAX_TIMEOUT_S, OPS, checkFolder, declaredHosts, egressOf, sizeWords, tierFor, validateArgv, validateEgress, type DiskLimits, type EgressDecl, type Op } from './policy.ts';
@@ -62,7 +62,7 @@ export interface Inputs {
   op: Op; workspace: string;
   name?: string; folder?: string; folder_dev?: string; folder_ino?: string; folder_born?: string; git_writable?: boolean; egress?: EgressDecl;
   argv?: string[]; access?: 'read' | 'write'; timeout_s?: number;
-  checkpoint?: string; label?: string; undo_of?: string; discard?: boolean;
+  checkpoint?: string; label?: string; undo_of?: string; discard?: 'over' | 'unreadable';
 }
 
 const newId = (p: string) => `${p}${randomBytes(5).toString('hex')}`;
@@ -176,8 +176,8 @@ export class NovaComputer {
     const file = this.#runFile(taskId);
     let kept = x.op === 'exec' && existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown> : null;
     if (kept && x.verdict !== 'pass') {
-      const { stdout: _o, stderr: _e, egress: _g, ...rest } = kept;
-      kept = { ...rest, withheld: `The output (and what it asked to reach) is held back: the ingest gate’s verdict was ${x.verdict ?? 'none'}. The extract is what it let through.` };
+      const { stdout: _o, stderr: _e, egress: _g, changed: _c, host_run_changed: _h, ...rest } = kept;
+      kept = { ...rest, withheld: `The output, what it asked to reach and the paths it changed are held back: the ingest gate’s verdict was ${x.verdict ?? 'none'}. The extract is what it let through.` };
     }
     return { ...this.#runView(x), sha256: x.sha256, bytes: x.bytes, screen_id: x.screen_id, record: kept };
   }
@@ -193,9 +193,10 @@ export class NovaComputer {
     if (n >= this.limits.workspaces) throw new CoreError('conflict', `Nova keeps at most ${this.limits.workspaces} workspaces, and there are ${n}. Delete one to make another.`);
   }
 
-  #overFolder(folder: string): number | null {
-    const n = treeSize(folder, this.limits.folderBytes);
-    return n > this.limits.folderBytes ? n : null;
+  // Whether a folder can be kept as a checkpoint: within its cap, and readable to the end (a path
+  // too long for this computer, or anything else that stops the walk, can't be copied).
+  #folderState(folder: string): 'ok' | 'over' | 'unreadable' {
+    try { return treeSize(folder, this.limits.folderBytes) > this.limits.folderBytes ? 'over' : 'ok'; } catch { return 'unreadable'; }
   }
 
   // ---- asking for work (each a ledger task) ------------------------------------------------------
@@ -213,8 +214,9 @@ export class NovaComputer {
       if (inputs.folder !== undefined) {
         const real = checkFolder(inputs.folder, { home: this.#o.home, userHome: this.#o.userHome ?? homedir(), others: this.#folders() });
         const id = folderIdentity(real);
-        const over = this.#overFolder(real);
-        if (over !== null) throw new CoreError('validation', `${real} is larger than the ${sizeWords(this.limits.folderBytes)} a workspace’s folder may hold.`);
+        const state = this.#folderState(real);
+        if (state === 'over') throw new CoreError('validation', `${real} is larger than the ${sizeWords(this.limits.folderBytes)} a workspace’s folder may hold.`);
+        if (state === 'unreadable') throw new CoreError('validation', `Nova can’t read all of ${real} (a path in it is too long for this computer, or it can’t be listed), so it can’t be a workspace’s folder.`);
         Object.assign(inputs, { folder: real, folder_dev: id.dev, folder_ino: id.ino, folder_born: id.born });
       }
     }
@@ -223,7 +225,8 @@ export class NovaComputer {
       // can't be, so the reset says so and asks first.
       const r = this.#row(String(inputs.workspace));
       checkFolderId(r.folder, this.#idOf(r));
-      if (this.#overFolder(r.folder) !== null) inputs.discard = true;
+      const state = this.#folderState(r.folder);
+      if (state !== 'ok') inputs.discard = state;
     }
     const i = this.#inputs(inputs);
     const ws = op === 'create' ? null : this.#row(i.workspace);
@@ -231,7 +234,7 @@ export class NovaComputer {
     const title = op === 'create' ? `Make the workspace “${name}”${i.folder ? ` on ${i.folder}` : ''}${i.git_writable ? ', with its .git writable inside' : ''}`
       : op === 'exec' ? `Run ${clip(words(i.argv!), 80)} in “${name}”`
         : op === 'checkpoint' ? `Checkpoint “${name}”${i.label ? `: ${i.label}` : ''}`
-          : op === 'reset' ? `${i.undo_of ? `Undo task ${i.undo_of.slice(0, 8)} in “${name}”` : `Reset “${name}” to ${i.checkpoint ? `checkpoint ${i.checkpoint}` : 'its clean state'}`}${i.discard ? ` (what is there now is over the cap and won’t be kept)` : ''}`
+          : op === 'reset' ? `${i.undo_of ? `Undo task ${i.undo_of.slice(0, 8)} in “${name}”` : `Reset “${name}” to ${i.checkpoint ? `checkpoint ${i.checkpoint}` : 'its clean state'}`}${i.discard === 'unreadable' ? ' (what is there now can’t be read to keep, and won’t be kept)' : i.discard ? ' (what is there now is over the cap and won’t be kept)' : ''}`
             : `Delete the workspace “${name}” and its checkpoints`;
     const goal = op === 'exec' ? `Run ${words(i.argv!)} in the workspace “${name}” and keep its output as evidence.`
       : op === 'create' && i.folder ? `${title}: the folder ${i.folder} (device ${i.folder_dev}, inode ${i.folder_ino}, made ${i.folder_born}) and nothing else of yours is mounted.${i.git_writable ? ' Commands inside may change its .git, which git on this computer then runs.' : ''}`
@@ -290,7 +293,7 @@ export class NovaComputer {
         out.checkpoint = v.checkpoint;
       }
       if (typeof v.undo_of === 'string') out.undo_of = v.undo_of;
-      if (v.discard === true) out.discard = true;
+      if (v.discard === true || v.discard === 'over' || v.discard === 'unreadable') out.discard = v.discard === 'unreadable' ? 'unreadable' : 'over';
     }
     return out;
   }
@@ -401,7 +404,8 @@ export class NovaComputer {
       if (real !== i.folder || !now || now.dev !== approved.dev || now.ino !== approved.ino || now.born !== approved.born) {
         throw new CoreError('conflict', `${i.folder} isn’t the folder you approved (a different folder is at that path now, or it leads elsewhere), so the workspace wasn’t made. Ask again to approve the folder as it is.`);
       }
-      if (this.#overFolder(real) !== null) throw new CoreError('conflict', `${real} is larger than the ${sizeWords(this.limits.folderBytes)} a workspace’s folder may hold, so the workspace wasn’t made.`);
+      const state = this.#folderState(real);
+      if (state !== 'ok') throw new CoreError('conflict', state === 'over' ? `${real} is larger than the ${sizeWords(this.limits.folderBytes)} a workspace’s folder may hold, so the workspace wasn’t made.` : `Nova can’t read all of ${real}, so the workspace wasn’t made.`);
       folder = real;
       id = approved;
     }
@@ -442,7 +446,7 @@ export class NovaComputer {
 
   async #dropCp(r: WsRow, c: CpRow): Promise<void> {
     await this.computer.drop(this.#machine(r), [c.image]).catch(() => {});
-    rmSync(this.#cpDir(r.id, c.id), { recursive: true, force: true });
+    removeTree(this.#cpDir(r.id, c.id));
     this.#o.db.run('DELETE FROM computer_checkpoint WHERE id = ?', c.id);
   }
 
@@ -515,29 +519,30 @@ export class NovaComputer {
     };
   }
 
-  // What tools on this computer run by themselves, as it is now: one stamp per entry that is there.
-  #hostRun(folder: string): Map<string, string> {
-    const out = new Map<string, string>();
-    for (const n of HOST_RUN) {
-      const p = join(folder, n);
-      try { lstatSync(p); } catch { continue; }
-      try { out.set(n, treeStamp(p)); } catch { out.set(n, 'unreadable'); }
-    }
-    return out;
-  }
+  // What tools on this computer run by themselves, anywhere in the folder, as it is now: a stamp
+  // (metadata only) per entry named as one of HOST_RUN, at any depth, by its path in the folder.
+  #hostRun(folder: string): Map<string, string> { return findNamed(folder, HOST_RUN); }
 
-  // While a command runs: the folder and the machine's own disk within their caps.
+  // While a command runs: the folder and the machine's own disk within their caps. Each is checked
+  // on its own, and a check that can't be made is a reason to stop, never taken as "within".
   #watch(m: Machine): { everyMs: number; check: () => Promise<string | null> } {
     const enforced = this.computer.layerQuota ? this.computer.layerQuota() : Promise.resolve(false);
+    const words = (e: unknown) => String((e as Error)?.message ?? e).replace(/\.$/, '');
     return {
       everyMs: this.limits.watchMs,
       check: async () => {
-        if (treeSize(m.folder, this.limits.folderBytes) > this.limits.folderBytes) return `the project folder grew past the ${sizeWords(this.limits.folderBytes)} a workspace’s folder may hold`;
-        if (!(await enforced)) {
-          const n = await this.computer.layerBytes(m);
-          if (n !== null && n > this.limits.layerBytes) return `the machine’s own disk grew past the ${sizeWords(this.limits.layerBytes)} a workspace’s machine may hold`;
-        }
-        return null;
+        const why: string[] = [];
+        try {
+          if (treeSize(m.folder, this.limits.folderBytes) > this.limits.folderBytes) why.push(`the project folder grew past the ${sizeWords(this.limits.folderBytes)} a workspace’s folder may hold`);
+        } catch (e) { why.push(`Nova couldn’t check the project folder’s size: ${words(e)}`); }
+        try {
+          if (!(await enforced)) {
+            const n = await this.computer.layerBytes(m);
+            if (n === null) why.push('Nova couldn’t check the size of the machine’s own disk');
+            else if (n > this.limits.layerBytes) why.push(`the machine’s own disk grew past the ${sizeWords(this.limits.layerBytes)} a workspace’s machine may hold`);
+          }
+        } catch (e) { why.push(`Nova couldn’t check the size of the machine’s own disk: ${words(e)}`); }
+        return why.length ? why.join('; ') : null;
       },
     };
   }
@@ -577,23 +582,33 @@ export class NovaComputer {
     }, signal);
     this.#save(m2);
     checkFolderId(m2.folder, m2.folderId);
-    let changed: string[] = [];
+    // What the command changed is its own text (paths it chose): kept in the record, screened with
+    // the output, withheld with it, and never in a summary, which says only how many.
+    let folderChanged = false;
+    let machinePaths: string[] = [];
+    let unreadable: string | null = null;
     if (before) {
       const machineNow = await this.computer.changes(m2);
       const was = new Set(before.machine);
-      changed = machineNow.filter((l) => !was.has(l)).map((l) => `in the machine: ${l.split('\t')[0]}`);
+      machinePaths = machineNow.filter((l) => !was.has(l)).map((l) => l.split('\t')[0]!);
       const now = new Set(machineNow);
-      changed.push(...before.machine.filter((l) => !now.has(l) && !machineNow.some((x) => x.split('\t')[0] === l.split('\t')[0])).map((l) => `in the machine: ${l.split('\t')[0]} (undone)`));
-      if (treeDigest(m2.folder).digest !== before.folder) changed.unshift('in the project folder');
+      machinePaths.push(...before.machine.filter((l) => !now.has(l) && !machineNow.some((x) => x.split('\t')[0] === l.split('\t')[0])).map((l) => `${l.split('\t')[0]} (undone)`));
+      try { folderChanged = treeDigest(m2.folder).digest !== before.folder; } catch (e) { folderChanged = true; unreadable = (e as Error).message; }
     }
-    const hostRunNow = this.#hostRun(m2.folder);
-    const hostRun = HOST_RUN.filter((n) => hostRunBefore.get(n) !== hostRunNow.get(n));
+    let hostRun: string[] = [];
+    try {
+      const hostRunNow = this.#hostRun(m2.folder);
+      hostRun = [...new Set([...hostRunBefore.keys(), ...hostRunNow.keys()])].filter((k) => hostRunBefore.get(k) !== hostRunNow.get(k)).sort();
+    } catch (e) { unreadable ??= (e as Error).message; }
+    const changed = [...(folderChanged ? ['in the project folder'] : []), ...machinePaths.map((p) => `in the machine: ${p}`)];
+    const kinds = HOST_RUN.map((n) => [n, hostRun.filter((r) => r === n || r.endsWith(`/${n}`)).length] as const).filter(([, k]) => k > 0);
     const refused = [...reach.codes].filter(([c]) => c !== 'allowed');
     const refusedN = refused.reduce((n, [, k]) => n + k, 0);
     // The output, and the egress attempts as the command asked for them, are outside content to any
     // model that reads them: screened first, as tool output.
     const asked = reach.attempts.map((a) => `${a.host}${a.port !== null ? `:${a.port}` : ''} ${a.code}`).join('\n');
-    const text = `$ ${words(i.argv!)}\n${res.stdout}${res.stderr ? `\n[stderr]\n${res.stderr}` : ''}\n[exit ${res.exit}]${asked ? `\n[egress]\n${asked}${reach.dropped ? `\n(${reach.dropped} more)` : ''}` : ''}`;
+    const paths = [...changed, ...hostRun.map((h) => `host-run: ${h}`)].join('\n');
+    const text = `$ ${words(i.argv!)}\n${res.stdout}${res.stderr ? `\n[stderr]\n${res.stderr}` : ''}\n[exit ${res.exit}]${asked ? `\n[egress]\n${asked}${reach.dropped ? `\n(${reach.dropped} more)` : ''}` : ''}${paths ? `\n[changed]\n${paths}` : ''}`;
     let screen: { id: string | null; verdict: string; extract?: string; error?: string };
     try {
       screen = this.#o.screen ? await this.#o.screen({ text, origin: `computer:${r.name}`, ref: brief.task_id }) : { id: null, verdict: 'block', error: 'Nova couldn’t screen this output.' };
@@ -613,16 +628,19 @@ export class NovaComputer {
     mkdirSync(join(this.#dir, 'runs'), { recursive: true });
     const bytes = Buffer.from(JSON.stringify(record, null, 2));
     writeFileSync(file, bytes);
-    const ok = res.exit === 0 && !res.timed_out && !res.stopped && changed.length === 0;
-    const outcome = ok ? 'done' : res.stopped ? 'stopped at a cap' : res.timed_out ? 'timed out' : changed.length ? 'a read changed the workspace' : `exit ${res.exit}`;
+    const ok = res.exit === 0 && !res.timed_out && !res.stopped && changed.length === 0 && !unreadable;
+    const outcome = ok ? 'done' : res.stopped ? 'stopped at a cap' : unreadable ? 'the folder couldn’t be read back' : res.timed_out ? 'timed out' : changed.length ? 'a read changed the workspace' : `exit ${res.exit}`;
     this.#record(brief.task_id, i, { exit_code: res.exit, sha256: sha256(bytes), bytes: bytes.length, screen_id: screen.id, verdict: screen.verdict, checkpoint_id: cp?.id ?? null, outcome });
     const lines = res.stdout ? res.stdout.split('\n').length - (res.stdout.endsWith('\n') ? 1 : 0) : 0;
-    // Only Nova's own words, declared names and fixed reason codes: nothing the command chose.
+    // Only Nova's own words, counts, declared names and fixed reason codes: nothing the command
+    // chose (the argv is the person's own, as they asked for it).
+    const where = [...(folderChanged ? ['the project folder'] : []), ...(machinePaths.length ? [`${plural(machinePaths.length, 'path')} in the machine`] : [])].join(' and ');
     const said = [
-      res.stopped ? `It was stopped: ${res.stopped}.` : res.timed_out ? `It ran out of time after ${i.timeout_s} s and was stopped.` : `It exited with ${res.exit}, ${plural(lines, 'line')} of output${res.truncated ? ' (cut at 1 MB)' : ''}.`,
+      res.stopped ? `It was stopped: ${res.stopped.replace(/\.$/, '')}.` : res.timed_out ? `It ran out of time after ${i.timeout_s} s and was stopped.` : `It exited with ${res.exit}, ${plural(lines, 'line')} of output${res.truncated ? ' (cut at 1 MB)' : ''}.`,
       res.stray ? `It left ${plural(res.stray, 'process', 'processes')} running; Nova stopped ${res.stray === 1 ? 'it' : 'them'} when it ended.` : '',
-      changed.length ? `It was run as a read but it changed the workspace (${changed.slice(0, 5).join('; ')}). The checkpoint before the last change is where to go back to.` : '',
-      hostRun.length ? `It changed what tools on this computer may run by themselves: ${hostRun.join(', ')}. Look at ${hostRun.length === 1 ? 'it' : 'them'} before you run git or open the folder in an editor here.` : '',
+      changed.length ? `It was run as a read but it changed the workspace: ${where}. The checkpoint before the last change is where to go back to.` : '',
+      unreadable ? `Nova couldn’t read the folder back after it: ${unreadable.replace(/\.$/, '')}.` : '',
+      kinds.length ? `It changed what tools on this computer may run by themselves: ${kinds.map(([n, k]) => (k > 1 ? `${n} (${k})` : n)).join(', ')}. Look at ${hostRun.length === 1 ? 'it' : 'them'} before you run git or open the folder in an editor here.` : '',
       `Output screened: ${screen.verdict}.`,
       reach.codes.size ? `Reached outside: ${[...reach.reached].map(([h, n]) => `${h} (${n})`).join(', ') || 'nothing'}. ${refusedN ? `Refused ${refusedN}: ${refused.map(([c, n]) => `${n} ${CODE_WORDS[c]}`).join(', ')}.` : 'Nothing refused.'}` : '',
       cp ? `Undo: reset to checkpoint ${cp.id}, taken just before.` : '',
@@ -642,8 +660,9 @@ export class NovaComputer {
     // A reset is undone the same way: the state it leaves is checkpointed first. Past the disk cap
     // that can't be done, and only a reset the person OK'd as such goes ahead without it.
     let before: CpRow | null = null;
-    if (this.#overFolder(r.folder) === null) before = await this.#checkpoint(i.workspace, 'auto', `Before a reset to ${to.id}`, brief.task_id);
-    else if (!i.discard) return report('failed', `The project folder is larger than the ${sizeWords(this.limits.folderBytes)} a workspace’s folder may hold, so what is there can’t be checkpointed first. Ask for the reset again: it will say so, and ask first.`);
+    const state = this.#folderState(r.folder);
+    if (state === 'ok') before = await this.#checkpoint(i.workspace, 'auto', `Before a reset to ${to.id}`, brief.task_id);
+    else if (!i.discard) return report('failed', `${state === 'over' ? `The project folder is larger than the ${sizeWords(this.limits.folderBytes)} a workspace’s folder may hold` : 'Nova can’t read all of the project folder'}, so what is there can’t be checkpointed first. Ask for the reset again: it will say so, and ask first.`);
     this.#tunnels.get(i.workspace)?.close();
     const m = this.#machine(this.#row(i.workspace));
     await this.computer.reset(m, { image: to.image, dir: this.#cpDir(i.workspace, to.id) });
@@ -666,7 +685,7 @@ export class NovaComputer {
     const images = this.#o.db.all<{ image: string }>('SELECT image FROM computer_checkpoint WHERE workspace_id = ?', i.workspace).map((x) => x.image);
     await this.computer.destroy(this.#machine(r), images);
     // Nova's own copies (and its own project folder) go; a folder of the person's stays as it is.
-    rmSync(join(this.#dir, i.workspace), { recursive: true, force: true });
+    removeTree(join(this.#dir, i.workspace));
     this.#o.db.run('DELETE FROM computer_checkpoint WHERE workspace_id = ?', i.workspace);
     this.#o.db.run(`UPDATE computer_workspace SET state = 'destroyed', container = NULL, updated_at = ? WHERE id = ?`, this.#now().toISOString(), i.workspace);
     this.#record(brief.task_id, i, { outcome: 'done' });

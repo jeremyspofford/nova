@@ -114,9 +114,10 @@ export interface CreateArgs {
   name: string; image: string; folder: string; tag: string; ws: string; user: string;
   // Labels beyond Nova's own (tests mark their containers with one).
   labels?: Record<string, string>;
-  // The project's .git, mounted again read-only over itself (null when there is none, or it is a
-  // link, or the person chose to let commands change it).
-  gitReadOnly?: string | null;
+  // The project's .git folders and files (the top one and nested ones), each mounted again
+  // read-only over itself (none when there are none, or the person chose to let commands change
+  // them; a link never).
+  gitReadOnly?: string[];
   // Docker's --storage-opt size, where the storage driver enforces it.
   layerBytes?: number | null;
 }
@@ -135,11 +136,11 @@ export function createArgs(o: CreateArgs): string[] {
     if (!LABEL.test(k) || k === 'nova.computer' || k === 'nova.computer.home' || k === 'nova.computer.workspace' || !LABEL_VALUE.test(v)) throw bad(`Not a label Nova adds: ${k}.`);
     return ['--label', `${k}=${v}`];
   });
-  let dotgit: string[] = [];
-  if (o.gitReadOnly) {
-    if (o.gitReadOnly !== `${o.folder}/.git`) throw bad('Only the project’s own .git is mounted read-only.');
-    dotgit = ['--mount', `type=bind,source=${o.gitReadOnly},target=${WORKDIR}/.git,readonly`];
-  }
+  const dotgit = (o.gitReadOnly ?? []).flatMap((g) => {
+    const rel = g.startsWith(`${o.folder}/`) ? g.slice(o.folder.length + 1) : '';
+    if (!rel || (rel !== '.git' && !rel.endsWith('/.git')) || rel.split('/').some((x) => x === '..' || x === '.' || x === '') || /[,"\n\r\u0000]/.test(rel)) throw bad('Only a .git inside the project is mounted read-only.');
+    return ['--mount', `type=bind,source=${g},target=${WORKDIR}/${rel},readonly`];
+  });
   const storage = o.layerBytes ? ['--storage-opt', `size=${Math.max(1, Math.floor(o.layerBytes / 1024 ** 2))}M`] : [];
   return [
     'create', '--name', o.name, '--hostname', 'nova-computer',

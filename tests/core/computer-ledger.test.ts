@@ -108,9 +108,11 @@ test('the computer through the ledger: tiers, evidence, screening, undo, a read 
     // A "read" that writes is caught, and fails saying what it changed.
     const sly = await settled(core, core.computer.request('exec', { argv: ['sh', '-c', 'echo sly > sly.txt'], access: 'read' }, pws).id);
     assert.equal(sly.state, 'failed');
-    assert.match(sly.reason!, /run as a read but it changed the workspace \(in the project folder/);
+    assert.match(sly.reason!, /run as a read but it changed the workspace: the project folder\./);
     const sly2 = await settled(core, core.computer.request('exec', { argv: ['sh', '-c', 'echo sly > /tmp/sly'], access: 'read' }, pws).id);
-    assert.match(sly2.reason!, /in the machine: A \/tmp\/sly/);
+    // The new file, and /tmp itself (its times changed): two paths, counted, never named.
+    assert.match(sly2.reason!, /changed the workspace: 2 paths in the machine\./);
+    assert.doesNotMatch(sly2.reason!.slice(sly2.reason!.indexOf('It exited')), /\/tmp/, 'the paths aren’t named (the command, as asked for, is)');
     // A failing command is kept as evidence too, and fails plainly.
     const bad = await settled(core, core.computer.request('exec', { argv: ['sh', '-c', 'exit 7'], access: 'read' }, pws).id);
     assert.equal(bad.state, 'failed');
