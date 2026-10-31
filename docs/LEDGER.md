@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #247 · Nova can run more than one service, with safe upgrades and rollback**
+- What changed: Nova's supervisor, which used to run only Nova itself, now runs several services from one simple description each. A new version starts alongside the old one with no traffic, goes live only after its checks pass and you type a confirmation, and rolls back by itself if it fails. Nova's own console is now one of these services. Nothing uses Kubernetes.
+- What you can now do: nothing new on screen. Services are managed from the supervisor's command line (`service deploy`, `promote`, `rollback`, `recover`).
+- Still unfinished: there's no screen for services yet. A service must be a single program run by Nova's own Node. Adding services through the change pipeline is deferred.
+
 **2026-10-31 · #257 · The safety screen's questions rewritten: much better, still not trusted**
 - What changed: Nova's questions to the small local model (Tev1) about outside content were rewritten to the model maker's guidelines and tested on fresh cases written before the test ran. It caught 43 of 44 attacks, but flagged 18 of 75 harmless documents against a 10% bar, so it isn't trusted yet.
 - What you can now do: nothing changes. Nova still screens with its own checks and holds back anything unsure.
