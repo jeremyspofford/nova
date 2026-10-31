@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #250 · Design: one Decision Service for every quick judgment Nova makes**
+- What changed: the plan for a single "Decision Service" is filed with your decisions. Every quick yes/no, pick-one, score or find-in-image judgment goes through named, versioned question sets. Each decision is logged with the exact model that answered. Screening content goes to Jev in cloud mode, with an off-by-default switch for local-only; Box in local-only stays on your machine.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: nothing is built. The local model (Tev1) failed its first safety test and stays advisory until a rewritten version passes. Choosing providers and models in Settings is designed, not built.
+
 **2026-10-31 · #253 · Smart Home and cameras: the design, with your decisions**
 - What changed: the plan for a Smart Home page (lights, locks, climate, cameras by room) is filed with your eight decisions. Tapping a tile acts at once, with one quick confirm for unlocking and similar. Anything Nova starts itself asks as before.
 - What you can now do: Nothing in the app changed: paperwork only.
