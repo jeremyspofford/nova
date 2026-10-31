@@ -22,7 +22,7 @@ Build in this order. A milestone is complete only when its gate passes with evid
 
 ## M3 — Design system and PWA
 - Token pipeline + lint (no raw values in components), component library per DESIGN-SYSTEM, two starter packages (Orb Teal, Companion Light), hot swap with preview/rollback.
-- PWA layouts: desktop/laptop, tablet, phone, foldable postures; orb component with state model.
+- PWA layouts: desktop/laptop, tablet, phone, foldable postures; orb component with state model (the fixed semantic set of DESIGN-SYSTEM §1, owner decision 2026-10-31: red stops, amber needs you; delivered in `docs/plans/orb-states.md`).
 - Agent errors surface in the UI (fix the known defect class: nothing important lives only in logs).
 - Gate: swap design system live with no restart; resize/posture sweep passes; blank-profile setup completable from the PWA alone.
 

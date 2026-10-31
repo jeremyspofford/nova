@@ -256,6 +256,17 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (owner decision: the orb's fixed semantic states; red stops, amber needs you).** Recorded in DESIGN-SYSTEM §1 ("The orb's semantic states"); plan and evidence `docs/plans/orb-states.md`, branch `ui/orb-states`.
+- **The set is fixed:** idle, listening, working, speaking, needs-you (amber), stopped (red), offline. Themes may not add, remove or re-mean a state. `attention` is now `needs-you` and `alert` is `stopped`.
+- **Red is reserved for problems that stop Nova** (the Failed class: work can't proceed, a dead-man's switch fired, a security refusal). Amber is for whatever needs the person while Nova keeps running: approvals waiting, Health items, degraded capture. This maps 1:1 onto the status vocabulary (Failed, Needs you).
+- **Classified where raised:** a problem now carries `stops` (migration 0019). It is set at 11 raise sites and by 3 supervisor playbooks; the list is in the plan. Every other problem defaults to amber. This settles UX review 1's open question (`docs/plans/ux-review-1.md`): the review's standby-copy problems are amber.
+- **Visual rules in every theme,** enforced by `check:themes` and a UI test across every installed design system, light and dark, with and without reduced motion:
+  - states differ by motion and brightness pattern as well as hue;
+  - stopped is unmistakable;
+  - every state has a reduced-motion equivalent.
+- **Each package expresses the states in its own visual language** through `orb_states{}`. The values and motion are the theme's; the meanings are the system's.
+- **The F3 fix (#254's lit sphere) stays.**
+
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:
   1. sensitive-content detection before indexing or archiving;
