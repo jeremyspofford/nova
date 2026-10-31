@@ -173,7 +173,7 @@ export function renderCaptureSettings() {
   if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="retry-capture">Try again</button>` : waitingLine('Loading capture', { key: 'capture' })}</section>`;
   const { status, sources, settings, posture } = data;
   const screenpipe = sources.find((s) => s.adapter === 'screenpipe');
-  const lede = 'What Nova may see on your devices, for context. Nothing is captured until you turn a source on, and the top bar shows whenever anything is. Capture stays on your own devices.';
+  const lede = 'What Nova may see on your devices, for context. Each source starts turned off, and the top bar shows when capture is on. What is captured is kept on your own devices.';
   const now = status.active
     ? `Capturing from ${status.capturing.map((c) => c.name).join(', ')}. ${plural(status.today, 'item')} in the last day.`
     : status.paused ? `Paused (${plural(status.paused, 'source')}): Nova takes nothing in. Screenpipe keeps recording on its computer until you pause it there too.` : 'Off.';
@@ -282,7 +282,7 @@ function rememberSheet(e, proposal = null) {
 function forgetSheet(e) {
   return `<form class="capture-forget" data-event="${esc(e.id)}" method="dialog">
   <h2 class="sheet-title" id="sheet-title">Forget this for good?</h2>
-  <p class="sheet-line">It is deleted here, from backups and from the standby, and Nova won’t take it in again.${e.promoted?.length ? ' The memory you made from it goes too.' : ''}</p>
+  <p class="sheet-line">Nova deletes it here and passes the forget on to its backups and the standby, so it isn’t taken in again.${e.promoted?.length ? ' The memory you made from it goes too.' : ''}</p>
   <div class="sheet-actions"><button type="submit" class="btn primary">Forget</button><button type="button" class="btn quiet" data-action="close-sheet">Keep it</button></div>
 </form>`;
 }

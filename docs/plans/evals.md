@@ -176,6 +176,7 @@ No capability may be claimed in onboarding, docs or the UI that this suite can't
   - a claim mapped to a tag no task has.
 
   Turning "an unbacked claim fails CI" on is Track 1's call, in NOTES.
+  *Turned on 2026-10-31 for user-facing copy, by the owner's decision (`docs/plans/honest-claims.md`): unbacked claims were softened, and the test now fails on any unbacked claim in user-facing text.*
 
 ## The golden tasks
 
@@ -363,6 +364,8 @@ not remove them. To make "no unbacked claim" binding, change its
 each claim listed in `docs/evidence/evals.md`, whether to add a task or change the copy. New UI or
 onboarding copy that claims a capability then needs a register entry. Reviewers hold that; the
 register can't find new claims by itself.
+
+*Done 2026-10-31 (`docs/plans/honest-claims.md`). The owner decided: soften every user-visible claim now, and keep each claim's strong words and its eval case in the register. The assertion is `assert.deepEqual(report.unbacked…, [])`. A second test keeps every softened claim's strong words out of all user-facing files.*
 
 ### 5. Pointing the injection hook at Part 1's set (`src/core/evals/injection.ts`)
 

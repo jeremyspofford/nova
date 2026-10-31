@@ -358,7 +358,7 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
       can: [
         'See the state of your lights, sensors, locks and other devices.',
         'Notice when something changes, for the rules you set up.',
-        'Turn things on and off, after asking you first, every time.',
+        'Turn things on and off, after asking you first.',
       ],
       never: ['Change anything without your OK.', 'Unlock or disarm without an explicit confirmation.'],
       setup: {

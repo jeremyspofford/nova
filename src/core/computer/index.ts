@@ -555,7 +555,7 @@ export class NovaComputer {
     // Local-only reaches nothing outside: the ledger refuses such a task, and the computer refuses
     // too if the person's default became local-only after it was approved.
     if (outside && stricter(brief.privacy_mode, this.#o.privacy()) === 'local-only') {
-      return report('failed', `This workspace may reach ${declaredHosts(m.egress).join(', ')}, and your Nova is local-only: nothing leaves this machine, so the command didn’t run.`);
+      return report('failed', `This workspace may reach ${declaredHosts(m.egress).join(', ')}, and your Nova is local-only, so the command didn’t run.`);
     }
     checkFolderId(m.folder, m.folderId);
     // A machine whose own disk is already past its cap runs nothing more until it is reset.

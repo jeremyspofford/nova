@@ -163,7 +163,7 @@ test('the computer through the ledger: tiers, evidence, screening, undo, a read 
     core.ledger.approve(sneaky.id, { confirm: true });
     const refused = await settled(core, sneaky.id);
     assert.equal(refused.state, 'failed');
-    assert.match(refused.reason!, /your Nova is local-only: nothing leaves this machine/);
+    assert.match(refused.reason!, /your Nova is local-only, so the command didn’t run/);
 
     // Destroying a workspace deletes its checkpoints: tier 3, every time.
     const del = core.computer.request('destroy', {}, ws);

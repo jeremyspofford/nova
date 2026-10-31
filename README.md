@@ -42,7 +42,7 @@ it came from. The Memory view (`/memory`) shows all of it: edit an entry by
 clicking it, forget it with one click (or Delete), and undo for a few seconds
 after. Forgetting a memory also forgets the day notes that say the same thing.
 Memory files are kept out of the folder's git history, so a forgotten memory
-leaves no copy behind.
+leaves no copy in that history.
 
 **Skills.** A skill is a markdown playbook (`SKILL.md`) for one kind of work.
 Nova ships two, Email summary and Shopping research, and the Skills view
@@ -55,17 +55,18 @@ Add your own under **Add your own** in Skills: a folder or a .zip with a
 (`name` and `description` in the front matter, then the steps), so skills
 written for Claude work as they are. Other files in the folder come along,
 and Nova reads them when the steps point to them. A skill is instructions
-Nova follows, so add ones you trust; anything it would run still asks first.
+Nova follows, so add ones you trust; anything it would run follows the same switches in
+Settings as everything else.
 
-**Gmail.** Email summary reads your mail, saves drafts and organizes it
-(archive, labels, read or unread). It never sends or deletes, and every draft
-and change waits for your OK on a card that shows exactly what will happen.
+**Gmail.** Email summary has tools to read your mail, save drafts and organize
+it (archive, labels, read or unread). It has no tool to send or delete, and
+each draft and change asks for your OK on a card that shows exactly what will
+happen, unless you switch that on in Settings.
 To connect, open **App passwords** in your Google account
 (<https://myaccount.google.com/apppasswords>; it needs 2-Step Verification),
 create one called "Nova", and paste it into Skills with your Gmail address.
-Nova talks to Gmail over IMAP. The password is stored in
-`~/Nova/connectors/gmail/`, readable only by you; Disconnect deletes it, and
-you can remove it at Google any time.
+Nova talks to Gmail over IMAP. The password is kept in Nova's vault;
+Disconnect deletes it, and you can remove it at Google any time.
 
 Work and school accounts often can't make app passwords. Under **Advanced**,
 connect with a Google OAuth client of your own instead: in Google Cloud, turn
@@ -91,18 +92,18 @@ missed. Every run is logged in `schedules/runs.jsonl`.
 
 **Settings and permissions.** Settings (`/settings`) has one switch per
 permission: each kind of step that changes something outside the
-conversation (running commands, going online after reading mail, Gmail
-drafts and tidying, schedules). All start at Ask first; switched on, Nova
-does that without asking, anywhere, and Activity shows each time. The list
+conversation (running commands, Gmail drafts and tidying, schedules). All
+start at Ask first; switched on, Nova does that without asking, and Activity
+shows each time. A command that follows outside content still asks. The list
 comes from Nova's tools, so a new tool's permission appears on its own. The
 switches are kept in `~/Nova/permissions.md`.
 
-**Helpers and Activity.** Nova can hand a long piece of work (research,
-comparing options, going through files) to a helper with the `delegate` tool,
-so the conversation stays with you. A helper starts fresh: it sees only Nova's
+**Helpers and Activity.** Nova has a `delegate` tool for handing a long piece
+of work (research, comparing options, going through files) to a helper, so
+the conversation stays with you. A helper starts fresh: it sees only Nova's
 brief, who you are, and up to five files Nova passes. It doesn't see the
-conversation or your memory, keeps nothing in memory, and waits for you on
-any step that needs your OK. When its report arrives, Nova adds a short take
+conversation or your memory, keeps nothing in memory, and takes only the
+steps Settings lets it take without asking. When its report arrives, Nova adds a short take
 on what it means. Up to
 three run at once; more wait their turn. The report comes back to the
 conversation that asked. The Activity view (`/activity`) shows what Nova is
@@ -111,13 +112,13 @@ its steps (what it read, searched, ran and kept), what it asked you and what
 you said. Stop or retry a helper there. Activity is read from the session
 logs; it keeps no data of its own.
 
-**Changes.** Nova never edits itself live. A change (a rule pack, a design
+**Changes.** Changes to Nova don't go straight into the running copy. A change (a rule pack, a design
 system, a setting, a decision template, an extension), whether you propose it
 or Nova's foundry writes it for something you asked for, is tried on a sandbox
 copy of Nova first, tested, released as a version in your home's history, and
 then watched live in a canary before it stays; if a probe fails, the previous
-version comes back by itself. Anything Nova writes for itself waits for your
-confirmed OK, every time. Settings › Changes shows each one with its evidence.
+version comes back by itself. Anything Nova writes for itself is set to wait
+for your confirmed OK. Settings › Changes shows each one with its evidence.
 
 ## Configure
 
@@ -186,8 +187,8 @@ folder: the reply shows its **recovery key once**. Keep it somewhere other
 than this computer: with it the copy opens anywhere; without it the copy can't
 be opened if this computer is lost. `POST /api/v1/backups/recovery-key
 {"confirm": true}` shows it again, from this screen only. `"keep"` is how many
-to keep (7). Forgetting something removes it from every backup too; a backup
-drive that is unplugged at the time gets the forget as soon as it is back.
+to keep (7). Forgetting something is carried into Nova's backups too; a backup
+drive that is unplugged at the time gets the forget when it is back.
 Health shows the last backup and the last drill; a failed drill is a problem
 with steps.
 

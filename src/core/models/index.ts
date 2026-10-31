@@ -1172,7 +1172,7 @@ export class Models extends EventEmitter {
       cloud: {
         configured: !!cloud, name: cloud?.name ?? null, model: cloud?.model ?? null, priced: !!cloud && cloud.usd_per_mtok_in !== undefined && cloud.usd_per_mtok_out !== undefined,
         budget: b, spent_period: spentPeriod,
-        words: !cloud ? 'No cloud model is set, so everything runs on your devices.'
+        words: !cloud ? 'No cloud model is set here.'
           : this.#privacy() === 'local-only' ? `${cloud.name} is set, but your privacy setting is local-only, so it is never used.`
           : `${cloud.name} (${cloud.model}) helps ${this.#privacy() === 'local-preferred' ? 'only when your local models can’t' : 'when Nova chooses it'}. This ${b.period}: ${usd(spentPeriod)}${typeof b.per_period_usd === 'number' ? ` of ${usd(b.per_period_usd)}` : ''}.`,
       },

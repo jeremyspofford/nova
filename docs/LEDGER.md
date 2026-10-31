@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #265 · Nova's words now promise only what its tests show**
+- What changed: Nova's screens, setup questions and help text were reworded to promise only what its own tests can show. For example, Settings now says model calls stay on your devices under local-only, rather than "nothing leaves this machine". Two sentences were simply wrong and are fixed: Nova told itself every command waits for your OK, and that anything that can't be undone always asks. In fact a command runs without asking if you've switched that on; a command that comes after Nova reads something from outside still asks.
+- What you can now do: trust that what Nova tells you about itself has evidence behind it. Nothing works differently; only the words changed.
+- Still unfinished: each stronger promise is written down with the test that would prove it, and comes back when that test passes. A check now blocks any new unproven promise in what you read.
+
 **2026-10-31 · #267 · The layout no longer crushes columns on a folding phone, tablet or narrow window**
 - What changed: on a folding phone's inner screen, a tablet held upright, or any window between a phone and a laptop, Nova no longer squeezes three columns in. Each column has a smallest width, and the side column with your tasks, devices and health only appears when all three fit; until then those cards are on Home. No text is squeezed to a few letters a line, the Online/Offline labels no longer sit on top of device names, and the side column scrolls instead of running off the screen. On an installed app, nothing sits under the camera cutout or the home bar any more.
 - What you can now do: use Nova on the fold's inner screen in either direction, in any of the six designs, and read every card.
@@ -326,6 +331,14 @@ built-ins only.
 
   **Caveats:** 39 grey cases (interval 86.8–99.6%); 11 of the 40 labelled judgments caught via "unsure → hold"; one author for the questions and the cases.
 - **Pending Track 1:** the consumers (indexing and archiving, timeline, intake drop of sensitive apps, migration).
+
+**2026-10-31 (owner decision: the unproven claims, split by audience).** Plan and the full list in `docs/plans/honest-claims.md`, branch `copy/honest-claims`.
+- **What a person can see is softened now:** UI copy, onboarding, the system prompt, briefing and tool docs the model repeats, the README, and the connector and skill files. Each claim says only what the evidence supports. The Amendment B closing rule is not deferred.
+- **The false claim is fixed.** "Every shell command waits for the person's approval" now reads: a command asks unless permissions.md lets commands run, and a command after outside content asks even then. Its cousin in the briefing ("anything that can't be undone always asks") is fixed too.
+- **Every softened claim stays in the register** (`tests/evals/claims.ts`) with three things: its old strong words, a named eval case (`claim.<slug>`, 35 cases for Track 3's backlog) and a priority. When an eval passes, the strong words may return, citing it.
+- **The register now holds 71 claims:** 16 backed, 54 softened, 1 instruction to the model kept as it is, and 0 unbacked. That includes 42 other places found saying the same things in other words.
+- **The closing rule is on for user-facing copy.** CI fails on an unbacked claim in user-facing text, and on a softened claim's strong words in any user-facing file.
+- **Internal design docs keep their claims,** marked **UNPROVEN** inline (13 marks in the inventory and the M5, M7 and vault-broker plans). The owner's verbatim inputs are untouched.
 
 **2026-10-31 (Amendment B Part 6: the diagnostics bundle, PR #259, Track 3).** Plan `docs/plans/diagnostics.md`.
 - **The builder:** `src/core/diagnostics/`.
