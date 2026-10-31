@@ -17,6 +17,36 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10a hardening, round two: the second review of PR #236).** Same branch and PR. The
+review ran probes against Docker and found three things to fix before merge, plus five follow-ups;
+all are fixed, each with a test seen failing on `bf488fe4` (10 of 10 failed there). Evidence:
+`docs/evidence/m10a-gate.md`, "Second review".
+- **The disk-cap poll could be switched off.** A tree 25 deep with 200-character names (made inside
+  with relative `mkdir`/`chdir`) is past PATH_MAX at the host's longer path; the size walk threw
+  ENAMETOOLONG, `.catch(() => {})` swallowed it, and the machine-disk check behind it never ran: 24
+  MiB past a 2 MiB cap. **Fix:** a check that fails stops the command; the folder and machine checks
+  are separate; every walk stops at PATH_LIMIT with a plain reason; such a folder can't be
+  checkpointed (writes refused), and a reset asks first (tier 2) and removes it at any depth.
+  **Choice:** a length limit, not a file-descriptor walk: portable, and a project rarely needs a
+  path that long.
+- **Command text in summaries.** `docker diff` paths reached the summary (a read touched
+  `/tmp/SYSTEM NOTE: …`). **Fix:** counts only; paths in the run file, screened, withheld by the API
+  with the output. Audited the rest: walk errors no longer name entries, docker CLI errors are one
+  line without paths, the folder check no longer names where a path leads.
+- **Host-run files only at the top level.** **Fix:** found at any depth (metadata only), reported by
+  kind. **Choice:** every `.git` (nested repositories, submodule and worktree `.git` files) is
+  read-only inside like the top one, up to 64; past that, the machine isn't made.
+- **Follow-ups:**
+  - IPv6 is parsed, so `::ffff:0:7f00:1`, `64:ff9b:0:0:0:0:7f00:1` and `0064:ff9b::7f00:1` are judged
+    by the IPv4 inside. **Deviation:** the review suggested blocking these prefixes whole; the
+    embedded address is judged instead, so NAT64 still reaches the public IPv4 web. No spelling
+    changes the answer.
+  - `docker top` failing restarts the machine, and if it still fails nothing runs.
+  - Migration 0015 marks rows without an identity broken, saying why.
+  - The digest tells FIFOs, sockets and devices apart.
+  - ECH is refused (the old claim, "ECH is refused", was wrong: the parser stopped at the SNI).
+- The suite: 1024 tests, 1015 pass, 9 skipped (the existing opt-in ones).
+
 **2026-10-30 (M10a hardening: the PR #236 review).** Same branch, `m10a/computer` (PR #236). The
 evidence is in `docs/evidence/m10a-gate.md`, "Hardening"; the plan `docs/plans/M10a.md` says what is
 built now. All fifteen items were answered, each with a test against real Docker in throwaway
@@ -75,7 +105,7 @@ tests, 1008 pass, 9 skipped (the existing opt-in ones).
 - **Evidence (15).** "Byte for byte" and "every command is a ledger task" now say what they cover.
 - **Known limits:** domain fronting through a declared CDN host; publishing in registries mode;
   caps checked by polling where not enforced; a `.git` a command creates is writable until the
-  machine is next made (reported); ECH refused.
+  machine is next made (reported); ECH (see round two, above).
 - **Decisions the owner may want to revisit:**
   - the cap defaults (no source in the packet);
   - TLS-only tunnels, which refuse SSH or `git://` through a declared host;
