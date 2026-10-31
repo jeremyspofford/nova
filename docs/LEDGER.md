@@ -17,6 +17,72 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (owner decisions on the orchestration ADR).** Same branch and PR (#243). The owner's
+decisions were added to the packet unchanged, below a one-line header, as
+`docs/builder-packet/INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md` (sha256 of the decisions
+`3978a592…`). All six proposed resolutions were approved as written, and `docs/plans/M10-orchestration.md`
+now records them as decided. The matching conflict rows (2–7) and open questions are resolved:
+1. **Native workloads:** the boot agent gets a fixed verb set (install a verified artifact, start,
+   stop, switch, probe health on loopback) for hub-signed workloads only. The runtime decides and
+   still can't start processes.
+2. **Hub identity:** the roster's lineage and the stable name transfer; private keys never move. Every
+   hub candidate's key is pinned, each candidacy tier 3. A promotion roll-back is epoch + 2.
+3. **The graph:** hand-drawn SVG, with no new runtime dependency.
+4. **The capture pilot:** Screenpipe first, as a managed native workload under its own code signature.
+5. **No vault-key escrow:** after a cold promotion the sheet states the backup's time, what was lost,
+   and that connectors need signing in again.
+6. **GitOps:** a separate `services.git` in the home, written only by the promote stage. Flux uses a
+   per-cluster read-only deploy key from the vault. Rollback is a pipeline revert, never `helm rollback`.
+
+- **Phase order** M10e–M10k is unchanged. Each phase's gate now names the tests for its decisions: the
+  boot agent refusing unsigned workloads and unknown verbs, no private key leaving its device during
+  promotion, rollback as a revert commit, and no runtime dependency.
+- **Where the decisions pull against something else, written down:**
+  - **A spoke's Screenpipe data has no path to the hub.** The hub pulls Screenpipe at loopback; the
+    runtime has no network; the five verbs carry no data. Now the ADR's one open question. Proposed:
+    the hub pulls over the mesh, with Screenpipe bound to the mesh address and its API key from the
+    vault (tier 3). Until it is answered, the pilot runs on the hub's own device.
+  - **Decision 6 replaces the input's "the same git repo".** This is the owner superseding their own
+    earlier wording, not a conflict.
+  - **The existing standby becomes a hub candidate without a new tier-3 step.** Its key is already
+    pinned by its standby enrollment. Every other candidacy asks.
+  - **Screenpipe as the pilot didn't lift the hard limit.** Installing a real Screenpipe on a real
+    device still needs the owner's OK. Whether two copies can run side by side (for `shadow`) is
+    unverified, so its definition starts with `alongside: none`.
+  - **Conflicts row 10** (no vault secret in a cloud-controlled cluster) wasn't among the six. It
+    stays a proposed default.
+
+**2026-10-31 (owner input: service orchestration; the M10 addendum ADR).** Branch
+`docs/m10-orchestration-adr`. The owner's input was added to the packet unchanged, below a one-line
+header, as `docs/builder-packet/INPUT-2026-10-31-SERVICE-ORCHESTRATION.md` (sha256 of the input
+`0fc710ab…`). It is binding for M10's design. `docs/plans/M10.md` was already merged, so the design
+is an addendum: `docs/plans/M10-orchestration.md`, linked from M10.md and from ROADMAP-AND-GATES
+M10. The repo has no `docs/ROADMAP.md`; the roadmap is `docs/builder-packet/ROADMAP-AND-GATES.md`.
+- **Decision:** a Service Manager with two drivers. The supervisor driver is the default, and Nova is
+  fully functional with it alone. K3s is optional. One JSON service definition drives both and maps
+  to the `nova-service` Helm chart's values. Native workloads use the same definitions, run by the
+  device agent.
+- **Order:** phases M10e–M10k, after M10d (PR #241). The supervisor path and device roles come
+  first, then hub promotion and its drill, then native workloads with the capture pilot, then the
+  map, and K3s and GitOps last. They are phases of M10, not an M11: the input puts the promotion
+  drill in M10's gate evidence, and the roadmap has no M11.
+- **Packet conflicts, written down, not resolved silently** (the ADR's table). These need an owner
+  decision:
+  - ADR-3: the runtime agent can't start processes, so who runs native workloads;
+  - ADR-2: Rust for native capture;
+  - ADR-11 and CONTRACTS §5 against "the hub's fingerprint moves", since keys never leave a device;
+  - pinning every hub candidate's key;
+  - a graph library against "no runtime dependencies";
+  - a services repository separate from the home's own history;
+  - going real at all under M10's hard limits.
+
+  Proposed defaults are given for each. None blocks M10e or M10f.
+- **Nothing built.** Docs only. Not grounded in code, because it doesn't exist yet: a multi-service
+  supervisor, device roles, drain, the stable-name move, binary workload verification, anything
+  Kubernetes.
+- **Build-time limits:** no K3s, Helm, Flux, cloud or network change. Stand-ins only: fake
+  `kubectl`, `helm` and `flux`, a simulated cluster, temp homes.
+
 **2026-10-31 (sync: a file too big to carry is told once, across restarts).** The preview filed the
 same "larger than 8 MB, so the standby doesn't get a copy" problem again on every restart, because
 "already told" lived only in memory (`src/core/mesh/sync.ts`). It now comes from the open problems
