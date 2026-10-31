@@ -121,7 +121,7 @@ test('Settings › Devices: widening is tier 3, narrowing tier 2 saying what sto
 test('devices paired before roles: phones and browsers are thin clients, the standby a hub candidate, computers what they already do, the hub its own', () => {
   const db = new Db(':memory:');
   const all = loadMigrations();
-  db.migrate({ migrations: all.filter((m) => m.version < 19) });
+  db.migrate({ migrations: all.filter((m) => m.version < 20) });
   const at = '2026-10-01T00:00:00.000Z';
   const row = (id: string, kind: string, role: string) => db.run(
     `INSERT INTO device (id, name, platform, kind, role, public_key, x25519_public_key, fingerprint, capabilities, trust, can_approve, created_at) VALUES (?, ?, 'test', ?, ?, ?, ?, ?, '[]', 'trusted', 0, ?)`,

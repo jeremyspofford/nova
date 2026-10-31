@@ -49,7 +49,8 @@ test('the wire format: one POST /v1/systemone with every question as a named nou
     for (const q of Object.values(r.questions)) { assert.equal(q.type, 'noul'); assert.equal(typeof q.instructions, 'string'); }
     assert.deepEqual(r.state, { source: 'web from www.example.org', content: contentOf(r.state) }, 'Part 1’s exact state shape');
     assert.match(contentOf(r.state), /^BEGIN OUTSIDE DATA [0-9a-f]+\nPlant peas early\.\nEND OUTSIDE DATA [0-9a-f]+$/);
-    assert.equal(a.model_answered, 'tev1:4b');
+    // Review item 4 of #258: the seat answers as the build it re-read after the answer (tag@digest).
+    assert.equal(a.model_answered, 'tev1:4b@aaaa4b');
     for (const q of QUESTIONS) assert.equal(noul(a.answers, q), 0.03);
     assert.deepEqual(r.questions, wireQuestions(T.questions), 'the registry’s v1 wording, unchanged from Part 1');
   } finally { await s.close(); }

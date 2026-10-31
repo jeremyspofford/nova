@@ -218,7 +218,7 @@ export class MeshRole extends EventEmitter {
     } catch { /* closing */ }
   }
 
-  async #serve(device: Device, afterRaw: string | null, waitRaw: string | null): Promise<unknown> {
+  async #serve(device: Device, afterRaw: string | null, waitRaw: string | null, schemaRaw: string | null = null): Promise<unknown> {
     const s = this.#o.devices.state();
     if (s.role !== 'hub') throw new CoreError('conflict', this.replica()!.reason);
     if (device.id !== s.standby_id) throw new CoreError('forbidden', 'This device isn’t the standby.');
@@ -230,7 +230,7 @@ export class MeshRole extends EventEmitter {
     while (!this.#closed && !this.resetNotice && Date.now() < until && this.#o.sync.head() <= after) await new Promise((r) => setTimeout(r, 150));
     if (this.#closed) throw new CoreError('conflict', 'Nova is stopping.');
     const reset = this.resetNotice;
-    const payload: SyncPayload = { v: 1, hub_id: this.#o.identity.id, standby_id: device.id, epoch: this.#o.devices.state().epoch, after, ...(reset ? { rows: [], upto: after, more: false, head: this.#o.sync.head(), reset } : this.#o.sync.batch(after)) };
+    const payload: SyncPayload = { v: 1, hub_id: this.#o.identity.id, standby_id: device.id, epoch: this.#o.devices.state().epoch, after, ...(reset ? { rows: [], upto: after, more: false, head: this.#o.sync.head(), reset } : this.#o.sync.batch(after, { peerSchema: schemaRaw && /^\d{1,4}$/.test(schemaRaw) ? Number(schemaRaw) : null })) };
     const sealed = this.#o.identity.seal(device.x25519_public_key, Buffer.from(JSON.stringify(payload), 'utf8'), SYNC_AAD(device.id, after));
     return { hub_id: payload.hub_id, epoch: payload.epoch, sealed: sealed.toString('base64url') };
   }
@@ -474,10 +474,10 @@ export class MeshRole extends EventEmitter {
     return [
       {
         method: 'GET', path: '/mesh/sync', access: 'sync',
-        summary: 'The standby pulls the hub’s sync log after ?after=<seq>: a long poll (?wait= seconds, up to 25), sealed to the standby’s X25519 key.',
+        summary: 'The standby pulls the hub’s sync log after ?after=<seq>: a long poll (?wait= seconds, up to 25), sealed to the standby’s X25519 key. ?schema= is the standby’s schema version: columns it doesn’t have are left out.',
         handle: ({ query, who }) => {
           if (who.principal.kind !== 'device') throw new CoreError('forbidden', 'Only the standby pulls the sync log.');
-          return this.#serve(who.principal.device, query.get('after'), query.get('wait'));
+          return this.#serve(who.principal.device, query.get('after'), query.get('wait'), query.get('schema'));
         },
       },
       {

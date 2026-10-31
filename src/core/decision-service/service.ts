@@ -15,6 +15,9 @@ import { randomUUID } from 'node:crypto';
 import { stricter } from '../workers.ts';
 import { autonomy, bands as bandsOf, qualityOf } from './policy.ts';
 import { buildState } from './state.ts';
+import { wordingOf } from './registry.ts';
+import { SeatFailure, TooLong, Unavailable } from './wire.ts';
+import { CoreError } from '../errors.ts';
 import type { PrivacyMode } from '../envelope.ts';
 import type { Registered, Registry } from './registry.ts';
 import type { LegacySeat } from './seats/legacy.ts';
@@ -36,39 +39,69 @@ export interface ServiceOptions {
   // throwing (Receipts refuses a remote call under local-only unless the opt-in is named); then
   // nothing is sent and the refusal is recorded.
   receipt?: (r: RemoteReceipt) => void;
+  // Asks of a seat that hasn't passed a template's eval (evidence only), per seat per day.
+  shadowPerDay?: number;
   // Whether a capture source's text may go to the cloud seat in cloud mode (the per-source opt-in,
   // off by default; not built yet, so absent means never).
   captureCloud?: (source: string) => boolean;
   now?: () => Date;
 }
 
-export interface AskOptions {
-  subsystem: string;
-  task_id?: string | null;
-  privacy_mode?: PrivacyMode;
-  version?: number;
-  // The capture source an item came from, for the per-source cloud opt-in ("capture" templates).
-  capture_source?: string;
+// `shadow`: false when an untrusted seat may not be asked for evidence on this question (the
+// caller has had its sample). `content_class`: 'capture-derived' for capture-derived text inside a
+// template that isn't itself a capture template (the ingest screen of screen text and transcripts);
+// it is routed by the same capture rule as a capture template (cloudAllowed).
+// `version`: a named template version (else the service picks one, see ask()).
+// `capture_source`: the capture source an item came from, for the per-source cloud opt-in.
+export interface AskOptions { subsystem: string; task_id?: string | null; privacy_mode?: PrivacyMode; version?: number; shadow?: boolean; content_class?: 'capture-derived'; capture_source?: string }
+export interface ContentClass { content_class?: 'capture-derived'; capture_source?: string }
+// A seat's evidence-only answers are bounded: at most this many asks per seat per UTC day.
+export const SHADOW_PER_DAY = 200;
+
+// What goes in a record when a seat fails: its words only when Nova wrote them (the wire's own
+// errors carry a status and a fixed reason, never what the other side sent back).
+export function failureWords(e: unknown): string {
+  if (e instanceof Unavailable || e instanceof TooLong || e instanceof SeatFailure || e instanceof CoreError) return e.message;
+  return 'It failed in a way Nova didn’t expect; what it said isn’t kept, so nothing it echoed reaches this record.';
 }
 
 interface Candidate { seat: Seat; model: string | null; trusted: boolean; why: string; ref: string | null }
 
 const tag = (model: string | null) => (model ?? '').split('@')[0]!;
+// The pin: a model asked by tag and build (tag@digest) must answer as exactly that build; one asked
+// by a version id (Jev) must answer as that id.
+const pinned = (asked: string | null, answered: string) => ((asked ?? '').includes('@') ? answered === asked : tag(answered) === tag(asked));
 
 export class DecisionService {
   #o: ServiceOptions;
   #now: () => Date;
+
+  #shadow = { day: '', used: new Map<SeatId, number>() };
 
   constructor(o: ServiceOptions) {
     this.#o = o;
     this.#now = o.now ?? (() => new Date());
   }
 
+  // Whether an untrusted seat may still be asked for evidence today, and spending one ask.
+  #shadowLeft(seat: SeatId): number {
+    const day = this.#now().toISOString().slice(0, 10);
+    if (this.#shadow.day !== day) this.#shadow = { day, used: new Map() };
+    return (this.#o.shadowPerDay ?? SHADOW_PER_DAY) - (this.#shadow.used.get(seat) ?? 0);
+  }
+  #spendShadow(seat: SeatId): void { this.#shadowLeft(seat); this.#shadow.used.set(seat, (this.#shadow.used.get(seat) ?? 0) + 1); }
+
   get registry(): Registry { return this.#o.registry; }
 
   // Whether cloud Jev may receive this template's state now.
-  cloudAllowed(t: ServiceTemplate, mode: PrivacyMode, s: DecisionSettings = this.#o.settings(), source?: string): { ok: boolean; opt_in: Feature | null; why: string } {
-    if (t.feature === 'capture') {
+  cloudAllowed(t: ServiceTemplate, mode: PrivacyMode, s: DecisionSettings = this.#o.settings(), c: ContentClass = {}): { ok: boolean; opt_in: Feature | null; why: string } {
+    // One rule for capture text (owner decision, decision-service.md §2.1), whether the template is a
+    // capture template (capture-sensitive) or the text is capture-derived inside another template
+    // (the ingest screen of screen text and transcripts): never a cloud seat in local-first or
+    // local-only; in cloud mode only with that capture source's own opt-in (`captureCloud`; not built
+    // yet, so absent means never).
+    if (t.feature === 'capture' || c.content_class === 'capture-derived') {
+      const source = c.capture_source;
       if (mode !== 'cloud-allowed') return { ok: false, opt_in: null, why: 'Capture text never goes to a cloud provider in local-first or local-only.' };
       if (!source || !this.#o.captureCloud?.(source)) return { ok: false, opt_in: null, why: 'Capture text goes to a cloud provider only with that capture source’s own opt-in, which is off.' };
       return { ok: true, opt_in: 'capture', why: `Capture source ${source} is opted in.` };
@@ -85,10 +118,10 @@ export class DecisionService {
 
   // The decision seats this template may use now, in order: trusted first, then the mode's order.
   // Every seat left out is listed with why.
-  plan(t: ServiceTemplate, mode: PrivacyMode, source?: string): { candidates: Candidate[]; skipped: { seat: SeatId; why: string }[] } {
+  plan(t: ServiceTemplate, mode: PrivacyMode, c: ContentClass = {}): { candidates: Candidate[]; skipped: { seat: SeatId; why: string }[] } {
     const s = this.#o.settings();
     const skipped: { seat: SeatId; why: string }[] = [];
-    const cloud = this.cloudAllowed(t, mode, s, source);
+    const cloud = this.cloudAllowed(t, mode, s, c);
     const order: ('jev' | 'tev1')[] = mode === 'cloud-allowed' ? ['jev', 'tev1'] : ['tev1', 'jev'];
     const candidates: Candidate[] = [];
     for (const id of order) {
@@ -105,7 +138,9 @@ export class DecisionService {
       const st = seat.status();
       if (!st.available) { skipped.push({ seat: id, why: st.why }); continue; }
       const v = this.#o.verdicts.lookup(t.template_id, t.version, id, st.model);
-      candidates.push({ seat, model: st.model, trusted: v.trusted, why: v.why, ref: v.ref });
+      // A verdict is tied to the wording it was measured on: an edit without a version bump drops it.
+      const reworded = v.trusted && !!v.wording && v.wording !== wordingOf(t);
+      candidates.push({ seat, model: st.model, trusted: v.trusted && !reworded, why: reworded ? `${t.template_id} v${t.version}’s wording changed since its eval passed on ${st.model}; its answers are evidence only until the eval runs on the new version.` : v.why, ref: v.ref });
     }
     return { candidates: [...candidates.filter((c) => c.trusted), ...candidates.filter((c) => !c.trusted)], skipped };
   }
@@ -163,12 +198,19 @@ export class DecisionService {
     const reg = this.version(templateId, o.version);
     if (!reg) return null;
     const t = reg.template;
-    const mode = o.privacy_mode ? stricter(o.privacy_mode, this.#o.privacy()) : this.#o.privacy();
+    const cls: ContentClass = { ...(o.content_class ? { content_class: o.content_class } : {}), ...(o.capture_source ? { capture_source: o.capture_source } : {}) };
+    // The mode and the opt-ins are read again right before anything goes to a cloud seat (and
+    // before every request it makes), so a switch turned off mid-screen stops the send.
+    const live = () => {
+      const m = o.privacy_mode ? stricter(o.privacy_mode, this.#o.privacy()) : this.#o.privacy();
+      return { mode: m, cloud: this.cloudAllowed(t, m, this.#o.settings(), cls) };
+    };
+    const mode = live().mode;
     // Deterministic checks first: a final one decides with no model call at all.
     const pre = t.precheck?.(fields) ?? null;
     if (pre?.final) return this.#deterministic(t, buildState(t, fields), pre, mode, o);
     const built = buildState(t, pre?.fields ?? fields);
-    const { candidates, skipped } = this.plan(t, mode, o.capture_source);
+    const { candidates, skipped } = this.plan(t, mode, cls);
     const failures: { seat: SeatId; why: string }[] = [...skipped];
     const shadows: Shadow[] = [];
     const asked = new Set<SeatId>();
@@ -177,20 +219,34 @@ export class DecisionService {
     let decided: { seat: SeatId; model: string | null; answers: Record<string, Answer>; trust: Trust; ref: string | null; why: string } | null = null;
 
     let receipted = false;
+    let sentOptIn: Feature | null = null;
     for (const c of candidates) {
-      if (c.seat.egress === 'remote' && !receipted) {
-        try {
-          this.#o.receipt?.({ task_id: o.task_id ?? null, provider: 'jev', model: c.model ?? '', purpose: `decision: ${t.template_id}@${t.version}`, privacy_mode: mode, egress: 'remote:typesafe', opt_in: this.cloudAllowed(t, mode, undefined, o.capture_source).opt_in, state_sha256: built.sha256 });
-          receipted = true;
-        } catch (e) { failures.push({ seat: c.seat.id, why: `The receipt was refused, so nothing was sent: ${(e as Error).message}` }); continue; }
+      // Evidence-only asks are bounded: the caller's sample, and a daily budget per seat.
+      if (!c.trusted && (o.shadow === false || this.#shadowLeft(c.seat.id) <= 0)) {
+        failures.push({ seat: c.seat.id, why: o.shadow === false ? `Not asked: ${c.seat.id} hasn’t passed this template’s eval, and its evidence-only answers are taken for the first chunks of a piece of content only.` : `Not asked: ${c.seat.id}’s evidence-only answers for today are used up (${this.#o.shadowPerDay ?? SHADOW_PER_DAY} a day).` });
+        continue;
       }
+      let beforeSend: (() => void) | undefined;
+      if (c.seat.egress === 'remote') {
+        const now = live();
+        if (!now.cloud.ok) { failures.push({ seat: c.seat.id, why: `Not sent: ${now.cloud.why}` }); continue; }
+        if (!receipted) {
+          try {
+            this.#o.receipt?.({ task_id: o.task_id ?? null, provider: 'jev', model: c.model ?? '', purpose: `decision: ${t.template_id}@${t.version}`, privacy_mode: now.mode, egress: 'remote:typesafe', opt_in: now.cloud.opt_in, state_sha256: built.sha256 });
+            receipted = true;
+            sentOptIn = now.cloud.opt_in;
+          } catch (e) { failures.push({ seat: c.seat.id, why: `The receipt was refused, so nothing was sent: ${failureWords(e)}` }); continue; }
+        }
+        beforeSend = () => { const n = live(); if (!n.cloud.ok) throw new Unavailable(`Not sent: the setting changed while Nova was screening (${n.cloud.why})`); };
+      }
+      if (!c.trusted) this.#spendShadow(c.seat.id);
       asked.add(c.seat.id);
       let a: SeatAnswer;
-      try { a = await c.seat.ask(t, built); } catch (e) { failures.push({ seat: c.seat.id, why: (e as Error).message }); continue; }
+      try { a = await c.seat.ask(t, built, beforeSend ? { beforeSend } : {}); } catch (e) { failures.push({ seat: c.seat.id, why: failureWords(e) }); continue; }
       count(a);
-      // The pin: an answer from another model version is not used.
-      if (tag(a.model_answered) !== tag(c.model)) {
-        failures.push({ seat: c.seat.id, why: `${tag(c.model)} was asked but ${a.model_answered || 'an unnamed model'} answered; the answer isn’t used.` });
+      // The pin: an answer from another model version (or another build of it) is not used.
+      if (!pinned(c.model, a.model_answered)) {
+        failures.push({ seat: c.seat.id, why: `${c.model ?? 'a model'} was asked but ${a.model_answered || 'an unnamed model'} answered; the answer isn’t used.` });
         shadows.push({ seat: c.seat.id, model: a.model_answered || null, answers: a.answers, why: 'pin mismatch' });
         continue;
       }
@@ -205,7 +261,7 @@ export class DecisionService {
           const a = await this.#o.seats.legacy!.ask(t, built);
           count(a);
           decided = { seat: 'legacy', model: a.model_answered, answers: a.answers, trust: 'legacy', ref: null, why: lg.why };
-        } catch (e) { failures.push({ seat: 'legacy', why: (e as Error).message }); }
+        } catch (e) { failures.push({ seat: 'legacy', why: failureWords(e) }); }
       } else if (t.legacy) failures.push({ seat: 'legacy', why: lg.why });
     }
 
@@ -242,7 +298,7 @@ export class DecisionService {
       ...(pre?.findings.length ? { findings: pre.findings } : {}),
     };
     const cloud = asked.has('jev');
-    const opt_in = cloud ? this.cloudAllowed(t, mode, undefined, o.capture_source).opt_in : null;
+    const opt_in = cloud ? sentOptIn : null;
     const record: DecisionRecord = {
       ...result,
       at: this.#now().toISOString(), task_id: o.task_id ?? null, subsystem: o.subsystem,

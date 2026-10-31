@@ -38,7 +38,8 @@ export class LegacySeat implements Seat {
     const old = this.#old(t.template_id);
     if (!old) throw new Unavailable(`The sorting model has no form of ${t.template_id}.`);
     const d = await this.#provider.decide(old, built.values);
-    if (d.escalate) throw new Unavailable(`The sorting model didn’t settle ${t.template_id}: ${d.why}`);
+    // Its own words (why) can carry what the model wrote: only that it didn't settle is kept.
+    if (d.escalate) throw new Unavailable(`The sorting model didn’t settle ${t.template_id} (an unsure or out-of-schema answer).`);
     const answers: Record<string, Answer> = {};
     for (const [id, q] of Object.entries(t.questions)) {
       const a = d.answers[id];

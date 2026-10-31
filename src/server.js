@@ -79,6 +79,8 @@ export function createNova(config = loadConfig(), deps = {}) {
     secrets: deps.secrets ?? ((name) => process.env[`NOVA_SECRET_${name}`] ?? null),
     // deps.models: tests only (a stand-in Ollama and fixed hardware without touching the environment).
     models: { ...modelOptions(process.env), ...(deps.models ?? {}) },
+    // deps.decisions: tests only (a verdict store in place of the committed eval verdicts).
+    ...(deps.decisions ? { decisions: deps.decisions } : {}),
     // Started by the supervisor (src/supervisor), it can ask for a deploy or rollback (M7b).
     supervisor: deps.supervisor ?? ipcLink(process),
     // A sandbox copy started by the change pipeline (M7a): no outside work, no changes taken.

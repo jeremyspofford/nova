@@ -8,7 +8,10 @@
 -- enrollment; computers get no workload role until the person picks one, except what they already
 -- do (a model role: compute; a capture source: capture source), so nothing that runs there stops; the hub holds hub-candidate and general-server, as it runs Nova and its services.
 --
--- The device table is replicated (0006), so its triggers are made again with the new column.
+-- The device table is replicated (0006), so its triggers are made again with the new column. A standby
+-- a release behind gets rows without it: the hub leaves out what the standby's schema doesn't have
+-- (mesh/sync.ts ADDED_COLUMNS, review finding 3). The receipt triggers 0019 made leave opt_in out when
+-- it is unset; they are made again to carry it always, so one mechanism covers both.
 ALTER TABLE device ADD COLUMN purposes TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE join_request ADD COLUMN purposes TEXT NOT NULL DEFAULT '[]';
 
@@ -38,3 +41,16 @@ UPDATE device SET purposes = json_insert(purposes, '$[#]', 'capture-source') WHE
   AND EXISTS (SELECT 1 FROM capture_source c WHERE c.device_id = device.id AND c.adapter = 'device');
 UPDATE device SET purposes = '["hub-candidate"]' WHERE kind = 'standby';
 UPDATE device SET purposes = '["hub-candidate","general-server"]' WHERE role = 'hub';
+
+
+DROP TRIGGER sync_receipt_insert;
+DROP TRIGGER sync_receipt_update;
+CREATE TRIGGER sync_receipt_insert AFTER INSERT ON "receipt" WHEN (SELECT logging FROM sync_state WHERE id = 1) = 1 BEGIN
+  DELETE FROM sync_log WHERE tbl = 'receipt' AND pk = CAST(NEW."id" AS TEXT);
+  INSERT INTO sync_log (tbl, pk, op, row, hlc) VALUES ('receipt', CAST(NEW."id" AS TEXT), 'put', json_object('id', NEW."id", 'at', NEW."at", 'task_id', NEW."task_id", 'session_id', NEW."session_id", 'provider', NEW."provider", 'model', NEW."model", 'purpose', NEW."purpose", 'privacy_mode', NEW."privacy_mode", 'egress', NEW."egress", 'opt_in', NEW."opt_in", 'context_items', NEW."context_items"), printf('%015d-%04x-%s', CAST(unixepoch('subsec') * 1000 AS INTEGER), (IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'sync_log'), 0) + 1) % 65536, IFNULL((SELECT hub_id FROM mesh_state WHERE id = 1), 'node')));
+END;
+CREATE TRIGGER sync_receipt_update AFTER UPDATE ON "receipt" WHEN (SELECT logging FROM sync_state WHERE id = 1) = 1 BEGIN
+  DELETE FROM sync_log WHERE tbl = 'receipt' AND pk IN (CAST(OLD."id" AS TEXT), CAST(NEW."id" AS TEXT));
+  INSERT INTO sync_log (tbl, pk, op, row, hlc) SELECT 'receipt', CAST(OLD."id" AS TEXT), 'delete', NULL, printf('%015d-%04x-%s', CAST(unixepoch('subsec') * 1000 AS INTEGER), (IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'sync_log'), 0) + 1) % 65536, IFNULL((SELECT hub_id FROM mesh_state WHERE id = 1), 'node')) WHERE CAST(OLD."id" AS TEXT) IS NOT CAST(NEW."id" AS TEXT);
+  INSERT INTO sync_log (tbl, pk, op, row, hlc) VALUES ('receipt', CAST(NEW."id" AS TEXT), 'put', json_object('id', NEW."id", 'at', NEW."at", 'task_id', NEW."task_id", 'session_id', NEW."session_id", 'provider', NEW."provider", 'model', NEW."model", 'purpose', NEW."purpose", 'privacy_mode', NEW."privacy_mode", 'egress', NEW."egress", 'opt_in', NEW."opt_in", 'context_items', NEW."context_items"), printf('%015d-%04x-%s', CAST(unixepoch('subsec') * 1000 AS INTEGER), (IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'sync_log'), 0) + 1) % 65536, IFNULL((SELECT hub_id FROM mesh_state WHERE id = 1), 'node')));
+END;

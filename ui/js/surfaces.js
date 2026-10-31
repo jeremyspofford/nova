@@ -22,6 +22,8 @@ export const store = {
   devices: [], mesh: null, requests: [],
   // Settings › Providers: GET /providers, loaded when Settings opens (M5a).
   providers: null,
+  // The recommended chat model’s eval scorecard status, shown before a switch (Amendment B Part 4).
+  chatCard: null,
   // Keeping Nova running (M7b): the supervisor, releases, backups, the last drill, playbooks.
   resilience: null,
 };
@@ -301,6 +303,8 @@ function checkLine(key, c) {
   if (key === 'ledger') return Object.entries(c.counts ?? {}).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ') || 'No tasks yet.';
   if (key === 'design') return `Showing ${appearance().list.find((d) => d.id === c.active)?.name ?? c.active}.`;
   if (key === 'problems') return c.open ? `${c.open} open.` : 'None open.';
+  // Outside content: how it is screened, then one plain line per decision seat (DS1 NOTE 4).
+  if (key === 'ingest') return [c.detail, ...(c.lines ?? [])].filter(Boolean).join(' ');
   if (key === 'mesh') return `${c.counts.trusted} paired${c.counts.revoked ? `, ${c.counts.revoked} revoked` : ''}. ${c.listening ? 'Other devices can reach Nova.' : 'Other devices can’t reach Nova: no mesh address.'} ${meshRoleLine(c)}`;
   if (c.counts) return Object.entries(c.counts).filter(([, n]) => typeof n === 'number' && n).map(([s, n]) => `${n} ${s.replace(/_/g, ' ').replace(/s$/, n === 1 ? '' : 's')}`).join(', ') || 'Nothing yet.';
   return c.detail ?? (c.ok ? 'Fine.' : 'Not fine.');
@@ -883,9 +887,12 @@ export function renderProviders() {
     const rec = c.recommended;
     const better = rec.id && rec.id !== c.current;
     const title = what === 'chat' ? `Chat uses ${name(c.current)}` : c.current ? `Coding tasks go to ${name(c.current)}` : 'Coding tasks';
+    // Before the person switches: the recommended model's scorecard, or that it has none
+    // (Amendment B Part 4).
+    const card = better && what === 'chat' ? store.chatCard : null;
     return settingsRow({
       title,
-      note: better ? `Nova recommends ${name(rec.id)}. ${rec.why}` : rec.why,
+      note: better ? `Nova recommends ${name(rec.id)}. ${rec.why}${card ? ` ${card.words}` : ''}` : rec.why,
       control: better ? `<button type="button" class="btn small${standout ? ' primary' : ''}" data-action="provider-choose" data-for="${what}" data-provider="${esc(rec.id)}">Use ${esc(name(rec.id))}</button>` : '',
     });
   };
@@ -911,6 +918,9 @@ export function renderProviders() {
 export async function loadProviders() {
   try {
     store.providers = await api('GET', '/providers');
+    const rec = store.providers?.chat?.recommended?.id;
+    const target = rec && rec !== store.providers.chat.current ? providerById(rec) : null;
+    store.chatCard = target?.model ? await api('GET', `/evals/scorecards/status?provider=${encodeURIComponent(target.id)}&model=${encodeURIComponent(target.model)}`).catch(() => null) : null;
   } catch { /* the part keeps what it had; the next event tries again */ }
   window.dispatchEvent(new CustomEvent('nova:providers'));
 }
