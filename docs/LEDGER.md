@@ -57,7 +57,7 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 **2026-10-31 · #236 · Nova Computer: sealed-off workspaces on this machine**
 - What changed: Nova can make one sealed-off workspace per project (a Docker container), run commands in it, keep the output as checked evidence, and snapshot and restore it exactly. It can't reach Nova, your other files, or any internet host you didn't declare.
 - What you can now do: nothing from a screen or chat yet: it is reachable only through Nova's programming interface, by design for this step.
-- Still unfinished: no chat tool drives it yet (coding through chat doesn't use it); no disk limit; internet access was tested only against pretend sites on this computer; it needs Docker.
+- Still unfinished: no chat tool drives it yet (coding through chat doesn't use it); where Docker can't cap a workspace's disk, Nova checks it every 5 seconds instead; internet access was tested only against pretend sites on this computer; it needs Docker.
 
 **2026-10-31 · #235 · A flaky device-software test fixed**
 - What changed: a test sometimes read a file while its helper was halfway through writing it. Test-only fix.
