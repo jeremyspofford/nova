@@ -36,6 +36,7 @@ export const GUARDED = {
   gmail_organize: 'change your mail',
   schedule_set: 'change a schedule',
   schedule_remove: 'change a schedule',
+  code_change: 'change code in a repository',
 };
 // The person's own files: never screened when read (their writes are guarded instead).
 const STANDING_EXACT = new Set([...WRITABLE, 'MEMORY.md']);
@@ -99,6 +100,7 @@ export class Runner extends EventEmitter {
     this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone, vault });
     this.permissions = new Permissions(config.home, () => TOOLS);
     this.helpers = null; // set by the server: where delegate hands work
+    this.coding = null; // set by the server: coding runs (the core's, M10c)
   }
 
   record(sessionId, ev) {
@@ -311,7 +313,7 @@ export class Runner extends EventEmitter {
       const installed = this.skills.installed().filter((x) => !this.skillHeld(x.id));
       // Helpers and scheduled runs can't hand work to helpers of their own,
       // and a helper doesn't touch schedules.
-      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: this.skills.installed().length, delegate: !run.alone && !!this.helpers, self: !!this.self }), mode)
+      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: this.skills.installed().length, delegate: !run.alone && !!this.helpers, self: !!this.self, coding: !run.alone && !run.helper && !!this.coding }), mode)
         .filter((n) => !(run.helper && n.startsWith('schedule_')));
       const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
       const schedules = run.helper ? '' : schedulesSection(this.schedules.list(), this.config.timezone);
@@ -374,7 +376,7 @@ export class Runner extends EventEmitter {
       const ctx = {
         home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
         gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
-        schedules: this.schedules, sessionId, self: this.self,
+        schedules: this.schedules, sessionId, self: this.self, coding: this.coding,
         // A helper started from a run that read outside content starts with that taint.
         delegate: (args) => this.helpers.spawn({ ...args, parent: sessionId, turn, taint: run.taint }),
         seen: (p) => { page = p; },
@@ -638,6 +640,8 @@ export class Runner extends EventEmitter {
     if (call.name === 'web_search') return String(a.query ?? '');
     if (call.name === 'gmail_draft') return [preview?.to ?? a.to, preview?.cc ?? a.cc, preview?.subject ?? a.subject, preview?.body ?? a.body].filter(Boolean).join('\n');
     if (call.name === 'exec') return String(a.command ?? '');
+    // A coding run hands its goal and commands to a coding agent, which may be off the devices.
+    if (call.name === 'code_change') return [a.goal, a.test_command, a.preview_command].filter((x) => typeof x === 'string').join('\n');
     return null;
   }
 

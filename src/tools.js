@@ -263,6 +263,38 @@ export const TOOLS = {
       return { output: `Removed ${s.name}. It won't run again.`, summary: s.name };
     },
   },
+  // Coding through chat (M10c): the chat is the control plane. Starting is tier 1 (everything it
+  // writes is Nova's own worktree); the person is asked before the tests and the preview run (tier
+  // 2) and every time before a merge (tier 3), in Tasks. In a run that read outside content it asks
+  // first, as the ingest gate's guarded steps do (runner.js GUARDED).
+  code_change: {
+    signature: '{"repo": "/full/path/to/the/repository", "goal": "What the change should do, in plain words", "test_command": "npm test", "preview_command": "npm start", "branch": "main"}',
+    doc: 'Have a coding agent make a change in one of the person’s git repositories. Nova makes it on a branch of its own copy, so nothing in their repository changes; then it asks the person before it runs test_command and the optional preview_command (which gets HOST and PORT) on it, and asks again, every time, before it merges into the branch (the checked-out one unless you name one). Nothing is ever pushed. Give "agent" only if the person named one. Tell the person what you started and that they follow it in Tasks; don\'t wait for it.',
+    needsApproval: false,
+    available: (ctx) => ctx.coding,
+    async run(args, { coding, sessionId }) {
+      const { run } = await coding.start(args ?? {}, { session: sessionId, origin: { kind: 'user', ref: `session:${sessionId}` } });
+      return {
+        output: `Started coding run ${run.id}: ${run.agent_name} writes “${run.title}” on Nova’s branch ${run.nova_branch}, from ${run.branch} in ${run.repo}. Nothing in the repository changes until the person confirms the merge. Nova asks them before it runs \`${run.test_command}\`${run.preview_command ? ' and the preview' : ''}, and again before it merges; they follow it in Tasks.`,
+        summary: run.title,
+        link: '/tasks',
+      };
+    },
+  },
+  code_status: {
+    signature: '{}',
+    doc: 'The coding runs started from chat or Tasks, newest first, and where each stands (writing, waiting for the person’s OK to test, ready to merge, merged, declined, failed), with the reason.',
+    needsApproval: false,
+    available: (ctx) => ctx.coding,
+    run(_args, { coding }) {
+      const runs = coding.list().slice(0, 20);
+      if (!runs.length) return { output: 'No coding runs yet.', summary: 'no runs' };
+      return {
+        output: runs.map((r) => `${r.id} · ${r.title} · ${r.state} · ${r.branch} in ${r.repo}${r.reason ? `\n  ${r.reason}` : ''}`).join('\n'),
+        summary: `${runs.length} ${runs.length === 1 ? 'run' : 'runs'}`,
+      };
+    },
+  },
   // Nova's own state, read in process from its registries (src/core/self.ts). Read-only; names and
   // states only, never a secret.
   nova_instance: {
@@ -334,8 +366,8 @@ export const TOOLS = {
 
 // The tools on offer right now: Gmail's only while it's connected, use_skill
 // only when a skill is installed, delegate only in a conversation with the person.
-export function availableTools({ gmail = false, skills = 0, delegate = false, self = false } = {}) {
-  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate, self }));
+export function availableTools({ gmail = false, skills = 0, delegate = false, self = false, coding = false } = {}) {
+  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate, self, coding }));
 }
 
 // Local-only means nothing leaves the person's devices, so tools that reach the internet (the

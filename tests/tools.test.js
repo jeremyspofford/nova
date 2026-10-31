@@ -72,7 +72,7 @@ test('htmlToText keeps the words and drops the markup', () => {
 });
 
 test('the protocol lists every tool on offer', () => {
-  const p = toolProtocol(availableTools({ gmail: true, skills: 1, delegate: true, self: true }));
+  const p = toolProtocol(availableTools({ gmail: true, skills: 1, delegate: true, self: true, coding: true }));
   for (const name of Object.keys(TOOLS)) assert.ok(p.includes(name));
 });
 
