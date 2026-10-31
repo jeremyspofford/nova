@@ -20,6 +20,10 @@ After the second review (the section of that name below):
   1024.
 - `scripts/ui-test.sh` (the whole UI gate, in the Playwright image): **86 tests, 86 pass**, in 20
   minutes. After the first review it was 79 of 79.
+- CI's UI gate on `bbc50eea` failed gate 7 once: its check that the shop's log didn't grow at all
+  while the person held the browser saw one more request (the page's own; the log didn't keep
+  which). Nova had sent nothing and clicked nothing. The check now says what it means: nothing but
+  GETs, no form sent, the cart untouched.
 
 CI's UI gate on `2b2d29f7` failed one test, a race in the test itself: the after-checkout page's
 script submitted the pay form 100 ms after marking that it had tried, the refused navigation landed

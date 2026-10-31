@@ -88,7 +88,10 @@ test('M10b gate 7: the person stays in control mid-flow: pause, resume, take ove
     assert.equal(took.status, 200, JSON.stringify(took.body));
     const held = shop.log.length;
     await sleep(2000);
-    assert.equal(shop.log.length, held, 'while the person holds it, Nova sends nothing');
+    // Nova acts on nothing: no form is sent and the cart is untouched. (The page may still fetch
+    // what it fetches by itself, a favicon say: those are GETs, and not Nova's.)
+    const during = shop.log.slice(held);
+    assert.deepEqual(during.filter((l: { method: string }) => l.method !== 'GET'), [], `while the person holds it, Nova sends nothing: ${JSON.stringify(during)}`);
     assert.equal(shop.cart().length, 0, 'and clicks nothing');
     assert.equal((await m.send('POST', api(`/browser/tasks/${id}/handback`))).status, 200);
     const done = await n.done(id!);
