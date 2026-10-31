@@ -125,7 +125,7 @@ test('the computer through the ledger: tiers, evidence, screening, undo, a read 
     assert.throws(() => core.computer.request('create', { name: 'Out', egress: { mode: 'registries' } }), /local-only/);
 
     // With the person's OK to use the cloud: a workspace that may reach outside asks every time.
-    core.profile.set('privacy', 'default', 'cloud-allowed', 'person');
+    core.profile.set('privacy', 'default', 'cloud-allowed', 'settings');
     const out = core.computer.request('create', { name: 'Out', egress: hosts });
     assert.equal(out.approval_tier, 3);
     assert.equal(out.state, 'waiting');
@@ -149,7 +149,7 @@ test('the computer through the ledger: tiers, evidence, screening, undo, a read 
 
     // Back to local-only: a command there is refused by the ledger, and by the computer for one
     // already approved.
-    core.profile.set('privacy', 'default', 'local-only', 'person');
+    core.profile.set('privacy', 'default', 'local-only', 'settings');
     assert.throws(() => core.computer.request('exec', { argv: ['true'] }, ows), /local-only/);
     const sneaky = core.ledger.create({ title: 'cloud-allowed by its brief', owner: 'computer', goal: 'Run true.', origin: { kind: 'user' }, privacy_mode: 'cloud-allowed', evidence_required: [{ kind: 'confirmation' }], inputs: { op: 'exec', workspace: ows, argv: ['true'] } });
     assert.equal(sneaky.approval_tier, 3);
@@ -165,11 +165,11 @@ test('the computer through the ledger: tiers, evidence, screening, undo, a read 
     const gone = await settled(core, del.id);
     assert.equal(gone.state, 'done', gone.reason ?? '');
     assert.throws(() => core.computer.view(ws), /no workspace/);
-    assert.notEqual((await docker(['container', 'inspect', `nova-computer-${core.computer.computer instanceof Object ? (core.computer.computer as { tag: string }).tag : ''}-${ws}`])).code, 0);
+    assert.notEqual((await docker(['container', 'inspect', `nova-computer-${(core.computer.computer as unknown as { tag: string }).tag}-${ws}`])).code, 0);
     ids.shift();
   } finally {
     for (const id of ids) {
-      core.profile.set('privacy', 'default', 'cloud-allowed', 'person');
+      core.profile.set('privacy', 'default', 'cloud-allowed', 'settings');
       try {
         const d = core.computer.request('destroy', {}, id);
         core.ledger.approve(d.id, { confirm: true });
