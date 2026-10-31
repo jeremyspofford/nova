@@ -132,6 +132,8 @@ export type { CheckpointView, CheckpointManifest } from './resilience/checkpoint
 export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.ts';
 // Every process Nova starts, so none outlives an in-place restart (Era 2's commands register too).
 export { trackChild } from './children.ts';
+// Services (M10e): the definition, the driver interface, the Service Manager.
+export * from './services/index.ts';
 // The ingest gate (Amendment 2026-10-30-C Part 3): what Era 2's agent loop screens with, escapes
 // with, and says when something is blocked.
 export { Ingest, BLOCK_LINE, DEFAULT_LINK_CAPS, PROTOCOL_NAMES, KIND_WORDS, cleanOrigin, escapeProtocol, fold, wrapData } from './ingest/index.ts';
@@ -144,6 +146,8 @@ export * as evals from './evals/index.ts';
 // Hard caps on autonomy cost (Amendment 2026-10-31-B Part 5): ceilings, the meter, the loop detector.
 export { Caps, Meter, DEFAULT_LIMITS, LOOP, CHARS_PER_TOKEN, SPEND_DIR, signature, weightOf, capsRoutes } from './caps/index.ts';
 export type { Limits, Ceilings, Spend, Stop } from './caps/index.ts';
+// One-click diagnostics, redacted by construction (Amendment 2026-10-31-B Part 6).
+export { buildDiagnostics, diagnosticsRoutes, knownSecrets, Scrubber, formsOf, MARKER as DIAGNOSTICS_MARKER, RULE as DIAGNOSTICS_RULE } from './diagnostics/index.ts';
 
 export interface CoreOptions {
   home: string;
