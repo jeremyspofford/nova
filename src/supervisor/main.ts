@@ -7,12 +7,20 @@
 //   node src/supervisor/main.ts deploy <version> [--confirm <version>]
 //   node src/supervisor/main.ts rollback  [--confirm rollback]
 //   node src/supervisor/main.ts recover   leave safe mode and start Nova again
+//   node src/supervisor/main.ts services  [--json]          the services it runs (M10e)
+//   node src/supervisor/main.ts service plan|deploy <definition.json>
+//   node src/supervisor/main.ts service promote <service> <version> [--confirm <service>@<version>]
+//   node src/supervisor/main.ts service rollback <service> [--confirm rollback]
 //
 // `run` keeps the Nova server running (restarts, safe mode, health checks) and takes deploys.
 // Deploying is tier 3: it asks you to type the version, every time, unless --confirm repeats it.
 // --dir holds the supervisor's state, its control socket and the release slots
 // (default ~/.nova-supervisor, or NOVA_SUPERVISOR_DIR). --repo is the git repository whose tags
 // are releases (default: this checkout).
+//
+// A service's version is deployed alongside the live one with no traffic (tier 1), then promoted on
+// the person's word: they type <service>@<version>, every time (tier 2, or 3 for the console and
+// anything with secrets or OS permissions). Going back asks for the word rollback (tier 2).
 import { connect } from 'node:net';
 import { createInterface } from 'node:readline/promises';
 import { readFileSync } from 'node:fs';
@@ -149,6 +157,40 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     process.stdout.write(`${r.said}\n`);
     return r.ok ? 0 : 1;
   }
+  if (a.cmd === 'services') {
+    const s = readState(dir);
+    if (!s) { process.stdout.write(`No supervisor state in ${dir}.\n`); return 1; }
+    const list = s.services ?? [];
+    if (a.flags.json) { process.stdout.write(`${JSON.stringify(list, null, 2)}\n`); return 0; }
+    const lines = [`nova-console: ${s.releases.current ?? BASE}, ${s.mode.replace('_', ' ')}.`, ...list.map((x) => `${x.service}: ${x.held ? `held (${x.held.reason})` : x.live ? `${x.live} live${x.health.ok === false ? `, health failing: ${x.health.said}` : ''}` : 'not running'}${x.previous ? `; ${x.previous} kept${x.soak_until ? ` until ${x.soak_until}` : ''}` : ''}.${x.versions.filter((v) => v.status === 'ready').map((v) => ` ${v.version} is ready to promote.`).join('')}`)];
+    process.stdout.write(`${lines.join('\n')}\n`);
+    return 0;
+  }
+  if (a.cmd === 'service') {
+    const [sub, x, y] = a.pos;
+    if ((sub === 'plan' || sub === 'deploy') && x) {
+      let definition: unknown;
+      try { definition = JSON.parse(readFileSync(resolve(x), 'utf8')); } catch (e) { process.stderr.write(`${x} isn’t a JSON file that can be read: ${(e as Error).message}\n`); return 2; }
+      const r = await ask(dir, { cmd: `service-${sub}`, definition });
+      process.stdout.write(`${sub === 'plan' && r.said.startsWith('{') ? JSON.stringify(JSON.parse(r.said), null, 2) : r.said}\n`);
+      return r.ok ? 0 : 1;
+    }
+    if (sub === 'promote' && x && y) {
+      const want = `${x}@${y}`;
+      const ok = str(a.flags.confirm) === want || await confirm(`Promoting ${x} ${y} moves its traffic, and asks you every time. Type ${want} to go ahead: `, want);
+      if (!ok) { process.stderr.write(`Not promoted: it needs your confirmation (type ${want}, or pass --confirm ${want}).\n`); return 2; }
+      const r = await ask(dir, { cmd: 'service-promote', service: x, version: y, confirm: want });
+      process.stdout.write(`${r.said}\n`);
+      return r.ok ? 0 : 1;
+    }
+    if (sub === 'rollback' && x) {
+      const ok = str(a.flags.confirm) === 'rollback' || await confirm(`Go back to ${x}’s previous version? Type rollback to go ahead: `, 'rollback');
+      if (!ok) { process.stderr.write('Not rolled back: it needs your confirmation (type rollback, or pass --confirm rollback).\n'); return 2; }
+      const r = await ask(dir, { cmd: 'service-rollback', service: x, confirm: 'rollback' });
+      process.stdout.write(`${r.said}\n`);
+      return r.ok ? 0 : 1;
+    }
+  }
   if (a.cmd === 'recover' || a.cmd === 'restart') {
     const r = await ask(dir, { cmd: a.cmd });
     process.stdout.write(`${r.said}\n`);
@@ -160,6 +202,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   node src/supervisor/main.ts deploy <version> [--confirm <version>]
   node src/supervisor/main.ts rollback [--confirm rollback]
   node src/supervisor/main.ts recover | restart
+  node src/supervisor/main.ts services [--json]
+  node src/supervisor/main.ts service plan | deploy <definition.json>
+  node src/supervisor/main.ts service promote <service> <version> [--confirm <service>@<version>]
+  node src/supervisor/main.ts service rollback <service> [--confirm rollback]
 `);
   return a.cmd === 'help' ? 0 : 2;
 }
