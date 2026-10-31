@@ -14,12 +14,21 @@ export const STAND_IN = join(ROOT, 'scripts', 'stand-ins', 'fake-service.js');
 
 export const sha256 = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
-export function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once('error', reject);
-    s.listen(0, '127.0.0.1', () => { const p = (s.address() as { port: number }).port; s.close(() => resolve(p)); });
-  });
+const bindable = (port: number) => new Promise<boolean>((resolve) => {
+  const s = createServer();
+  s.once('error', () => resolve(false));
+  s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)));
+});
+
+// A free port for a service's stable port. Chosen below the system's ephemeral range (32768 and up
+// on Linux), where every `listen(0)` in other tests running at the same time picks its ports, so
+// none of them takes it between now and the promotion that binds it.
+export async function freePort(): Promise<number> {
+  for (let i = 0; i < 200; i++) {
+    const port = 20_000 + Math.floor(Math.random() * 12_000);
+    if (await bindable(port)) return port;
+  }
+  throw new Error('No free port between 20000 and 32000 on 127.0.0.1.');
 }
 
 // A copy of the stand-in in `dir`, so a test can remove it (nothing to download any more).
