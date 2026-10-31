@@ -12,8 +12,69 @@ built-ins only.
 | `jsqr` 1.4.0 | dev | Test-only: decodes the QR codes Nova draws (`tests/qr.test.js`, the M4 UI tests), so the encoder is checked by an independent decoder. Never loaded by Nova itself. |
 | `playwright-core` 1.56.1 | dev | Drives Chromium for `npm run shots` (golden screens, keyboard path, budgets); no bundled browser download. Never used by Nova at run time: the browser worker speaks CDP itself (M5c). |
 | `claude` CLI | external | The default `agent_cmd`. Swappable by config; nothing in Nova depends on it. |
+| `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-30 (M10a, Nova Computer: Amendment 2026-10-30-C Part 4).** Branch `m10a/computer`. The
+ADR is `docs/plans/M10.md`, the plan `docs/plans/M10a.md` and the evidence `docs/evidence/m10a-gate.md`.
+- **One Nova.**
+  - Behind a `Computer` interface (`src/core/computer/`) with a Docker adapter.
+  - Every action is a Work Ledger task for the `computer` worker, gated by the ledger's own tiers
+    (`minTier`) and privacy gate (`egressFor` + `permits`).
+  - A command's output is screened by the ingest gate (source `tool`), and Nova verifies it itself
+    through a `confirmation` from `nova-computer`.
+  - The egress proxy applies `src/safe-fetch.js`'s rules (`publicAddress`, and its private-name rule,
+    now exported as `privateName`).
+  - Declared hosts use the browser's host syntax (`HOST`, now exported).
+  - Docker CLI processes are tracked with `trackChild`.
+- **Isolation is `--network none`, always:**
+  - only the project folder is mounted;
+  - Nova's own uid, never root;
+  - `--cap-drop ALL` and no-new-privileges;
+  - memory, CPU, pid and open-file limits;
+  - no Docker socket.
+
+  **Found while testing:** under Docker Desktop (this machine), a container on the default bridge
+  reaches this machine's loopback, and so Nova's console, through `host.docker.internal`. The
+  isolation test's positive control shows this, and with bridge networking the test fails on
+  exactly that.
+- **Egress was built, not deferred.** A relay inside the workspace runs as `nobody` and carries
+  connections over its `docker exec` stdio to a CONNECT-only proxy in Nova:
+  - the host and port must be declared;
+  - every resolved address must be public;
+  - names that only mean something on a private network are refused;
+  - the connection goes to exactly the checked address;
+  - every attempt is recorded.
+
+  No Docker network is created and nothing else is mounted, so the host's network configuration
+  doesn't change. Plain HTTP is refused (HTTPS only).
+- **Deviation, the tier numbers.** The ADR calls a reversible write "tier 2 (do, notify, undo)". In
+  this ledger (and NOVA-SPEC §6), tier 2 means *ask first*. The amendment's behaviour, "reversible
+  write = do + notify + undo", is NOVA-SPEC's tier 1, so it is recorded as tier 1:
+  - a write: a checkpoint first, then it runs, shows as handling and can be undone;
+  - a reset: the same;
+  - a read: tier 0;
+  - egress and delete: tier 3;
+  - a folder of the person's: tier 2.
+- **A read is checked, not trusted.** The folder's metadata digest and the container's `docker diff`
+  are taken before and after; a read that changed anything fails and says what changed.
+- **Tests:**
+  - `tests/core/computer-{policy,docker,egress,ledger}.test.ts`;
+  - `tests/acceptance/m10a-{isolation,computer}.test.ts`.
+
+  They skip with the reason where Docker isn't available. CI pulls the pinned image first.
+  - **Seen failing first:** the policy test, before `policy.ts` existed.
+  - **Mutation runs:** each fix was removed in turn and the test failed. The fixes removed were the
+    folder restore, `--network none` (bridge instead), the computer's local-only check, and the read
+    check.
+- **Gaps:**
+  - no disk quota (overlay2 on ext4 can't set one);
+  - the read check misses a change to a container file that had already changed;
+  - checkpoint copies are full copies;
+  - no agent tool drives the computer yet (M10c);
+  - no UI (the ADR asks for none in M10a);
+  - after a factory reset, its containers are swept the next time a workspace is made.
 
 **2026-10-30 (test fix: a device-agent test read a half-written file).**
 - **What happened:** CI on #233, which is docs only, failed `the boot agent makes only the runtime’s own hub calls for it` with `Unexpected end of JSON input`.
