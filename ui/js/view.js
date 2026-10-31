@@ -243,7 +243,9 @@ function renderTool(tool, turnOpen) {
   const inside = tool.result?.link?.startsWith('/');
   const link = state === 'done' && tool.result?.link ? ` <a class="record-link" href="${esc(tool.result.link)}"${inside ? '' : ' target="_blank" rel="noopener"'}>${inside ? (tool.result.link === '/tasks' ? 'Follow it in Tasks' : 'Follow it in Activity') : 'Open in Gmail'}</a>` : '';
   if (!output) return `<div class="${cls}">${stamp}<span class="record-label">${label}</span>${link}${when}</div>`;
-  return `<details class="${cls}"><summary>${stamp}<span class="record-label">${label}</span>${link}${when}</summary><pre class="record-output" tabindex="0">${esc(output)}</pre></details>`;
+  const details = `<details class="${cls}"><summary>${stamp}<span class="record-label">${label}</span>${when}</summary><pre class="record-output" tabindex="0">${esc(output)}</pre></details>`;
+  // A link never goes inside <summary> (a control inside a control, UX review 1 F5): it sits beside it.
+  return link ? `<div class="record-row">${details}${link}</div>` : details;
 }
 
 const fromDay = (day) => {

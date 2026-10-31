@@ -98,6 +98,15 @@ jobs:
       - run: npm run test:ui
         env:
           NOVA_UI_SHOTS: ${{ runner.temp }}/ui-shots
+      # The accessibility advisory (UX review 1, F5): axe-core's default rules (pinned in package.json)
+      # over every view at ten postures, per rule and per view in the job summary, so regrowth shows
+      # on the PR. Advisory only: the script always exits 0, and continue-on-error keeps even a crash
+      # from failing this job or the gate.
+      - name: accessibility (advisory, never fails)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 15
+        run: npm run ui:axe
       - uses: actions/upload-artifact@v7
         if: always()
         with:

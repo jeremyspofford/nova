@@ -46,9 +46,18 @@ test('fenced code, including an unclosed fence while streaming', () => {
   assert.match(open, /print\(1\)/);
 });
 
+// UX review 1, F5 (axe): an empty header cell is a plain cell, and the scroll box is a named group,
+// not a landmark (many tables in one conversation would be landmarks with one name).
+test('a table with a row-label column has no empty header; its box is a group named by its columns', () => {
+  const html = renderMarkdown('| | **Monday** | Tuesday |\n|---|---|---|\n| Morning | Seeds | Water |');
+  assert.match(html, /<thead><tr><td><\/td><th><strong>Monday<\/strong><\/th><th>Tuesday<\/th><\/tr><\/thead>/);
+  assert.match(html, /role="group" aria-label="Table: Monday, Tuesday"/);
+  assert.doesNotMatch(html, /role="region"|<th><\/th>/);
+});
+
 test('tables with alignment, wrapped for scrolling', () => {
   const html = renderMarkdown('| a | b |\n|:-|-:|\n| 1 | **2** |');
-  assert.match(html, /<div class="table-wrap" tabindex="0" role="region" aria-label="Table"><table>/);
+  assert.match(html, /<div class="table-wrap" tabindex="0" role="group" aria-label="Table: a, b"><table>/);
   assert.match(html, /<th style="text-align:right">b<\/th>/);
   assert.match(html, /<td style="text-align:right"><strong>2<\/strong><\/td>/);
 });

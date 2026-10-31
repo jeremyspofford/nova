@@ -583,14 +583,16 @@ function running() {
 // A helper's or a scheduled run's own log: there to read, not to reply to.
 const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state.session.kind);
 
-const TITLES = { home: '', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture' };
+// Every view's heading names it, Home's too (UX review 1, F5: never an empty heading); beside a
+// rail, and on a phone's Home, it is there for screen readers only (layout.css).
+const TITLES = { home: 'Home', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture' };
 function renderChrome() {
   const title = state.view === 'chat' ? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
   el.dock.hidden = state.view !== 'chat' || readOnly();
   if (onMain()) el.mainLink.setAttribute('aria-current', 'page');
   else el.mainLink.removeAttribute('aria-current');
   el.title.textContent = title;
-  document.title = title && title !== 'Nova' ? `${title} · Nova` : 'Nova';
+  document.title = title && title !== 'Nova' && state.view !== 'home' ? `${title} · Nova` : 'Nova';
 
   const run = running();
   const hasText = !!el.input.value.trim();
@@ -1664,6 +1666,8 @@ const PARTS = {
   danger: () => renderReset(),
 };
 
+// A category's pane is a plain section, not a named region: its parts are named regions of their own,
+// and a pane named like its part (You and Nova) would be a second landmark with that name (UX review 1, F5).
 function settingsShell() {
   const groups = GROUPS.map((g) => `<section class="settings-group"><h3 class="settings-group-title">${escapeHtml(g.title)}</h3><ul class="settings-cats">${g.cats.map((id) => {
     const c = categoryOf(id);
@@ -1678,7 +1682,7 @@ function settingsShell() {
 </header>
 <div class="settings-layout">
   <nav class="settings-nav" id="settings-nav" aria-label="Settings">${groups}</nav>
-  <div class="settings-detail">${CATEGORIES.map((c) => `<section class="settings-pane" data-cat="${c.id}" aria-label="${escapeHtml(c.label)}" hidden>${c.parts.map((k) => `<div class="settings-part" id="settings-${k}"></div>`).join('')}</section>`).join('')}</div>
+  <div class="settings-detail">${CATEGORIES.map((c) => `<section class="settings-pane" data-cat="${c.id}" hidden>${c.parts.map((k) => `<div class="settings-part" id="settings-${k}"></div>`).join('')}</section>`).join('')}</div>
 </div>`;
 }
 
