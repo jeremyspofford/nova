@@ -25,7 +25,7 @@ import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
 import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
 import { Enrollment } from './mesh/enroll.ts';
-import { APPROVER_ONLY, Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
+import { APPROVER_ONLY, Access, allows, loopbackAddress, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
 import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
 import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
@@ -47,6 +47,10 @@ import { NovaComputer, type ComputerOptions } from './computer/index.ts';
 import { computerRoutes } from './computer/routes.ts';
 import { Coding, type CodingOptions } from './coding/index.ts';
 import { codingRoutes } from './coding/routes.ts';
+import { Infra, type InfraOptions } from './infra/index.ts';
+import { infraRoutes } from './infra/routes.ts';
+import { Network, type NetworkOptions } from './network/index.ts';
+import { networkRoutes } from './network/routes.ts';
 import { secretName } from './providers/types.ts';
 import { Resilience } from './resilience/index.ts';
 import { FactoryReset } from './resilience/reset.ts';
@@ -160,6 +164,11 @@ export interface CoreOptions {
   // Coding through chat (M10c), for tests: whose home folder a repository may never be, and shorter
   // timeouts for the test run and the preview.
   coding?: Pick<CodingOptions, 'userHome' | 'testTimeoutS' | 'previewTimeoutS'>;
+  // Infrastructure through chat (M10d), for tests: the PATH the plan/apply tool is found on (the
+  // stand-in's), whose home folder a project may never be, and the tool's timeout.
+  infra?: Pick<InfraOptions, 'path' | 'userHome' | 'timeoutS'>;
+  // Networking through chat (M10d), for tests: the dead-man's switch's window in milliseconds.
+  network?: Pick<NetworkOptions, 'windowMs' | 'target' | 'retryMs'>;
   // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
   hubPorts?: () => number[];
   // How the browser worker starts a browser: Chromium, or a stand-in in tests.
@@ -393,6 +402,27 @@ export function createCore(o: CoreOptions) {
     ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}),
   });
   ledger.workers.set(checkpoints.worker.id, checkpoints.worker);
+  // Infrastructure through chat (M10d): plan (tier 1), then apply (tier 3) of exactly the reviewed
+  // plan, inside the project's budget, after a checkpoint. Alerts are problems and messages.
+  const infra = new Infra({
+    db, log, home: o.home, ledger, verifier, vault, now, privacy: () => profile.privacyDefault(),
+    checkpoint: (reason) => checkpoints.auto(reason),
+    ...(o.infra ?? {}),
+    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'infra', name: 'Infrastructure', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('infra', 'Nova couldn’t tell you about an infrastructure run.', { error: (e as Error).message })); },
+  });
+  ledger.workers.set(infra.worker.id, infra.worker);
+  // Networking through chat (M10d): snapshot and diff (tier 1), apply (tier 3) after a checkpoint,
+  // then the dead-man's switch on the device mesh: no contact from the person's devices within the
+  // window (mesh.contact_window_s), and Nova puts the snapshot back by itself.
+  const network = new Network({
+    db, log, home: o.home, ledger, verifier, vault, devices, now, privacy: () => profile.privacyDefault(),
+    checkpoint: (reason) => checkpoints.auto(reason),
+    windowS: () => { const v = profile.get<number>('mesh', 'contact_window_s'); return typeof v === 'number' ? v : 300; },
+    contactKinds: () => profile.get<unknown>('mesh', 'contact_kinds'),
+    ...(o.network ?? {}),
+    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'network', name: 'Network', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('network', 'Nova couldn’t tell you about a network change.', { error: (e as Error).message })); },
+  });
+  ledger.workers.set(network.worker.id, network.worker);
   // Every forget reaches each checkpoint (and a restore that is staged).
   backups.also((table, ids, words) => checkpoints.forget(table, ids, words));
   // The change pipeline and the foundry (M7a): changes to Nova go through gates, never live edits.
@@ -1013,6 +1043,10 @@ export function createCore(o: CoreOptions) {
     ...computerRoutes(computer),
     // ---- coding through chat (M10c) ----
     ...codingRoutes(coding),
+    // ---- infrastructure through chat (M10d) ----
+    ...infraRoutes(infra),
+    // ---- networking through chat (M10d) ----
+    ...networkRoutes(network),
     // ---- browser work with takeover (M5 plan §3) ----
     ...browserRoutes(browser, {
       home: o.home,
@@ -1045,12 +1079,18 @@ export function createCore(o: CoreOptions) {
     ticking = triggers.tick().catch((e) => log.problem('triggers', 'The heartbeat couldn’t check the schedules.', { detail: (e as Error)?.stack ?? String(e) }));
     // The clock watch, and Nova's own retries of repairs that haven't worked yet.
     void keep.sweep().catch((e) => log.warn('resilience', 'The repair sweep stumbled.', { error: (e as Error).message }));
+    // Every infrastructure project against its budget (M10d).
+    try { infra.sweep(); } catch (e) { log.warn('infra', 'The budget sweep stumbled.', { error: (e as Error).message }); }
+    // The dead-man's switch, on the clock as well as its timers (M10d).
+    try { network.sweep(); } catch (e) { log.warn('network', 'The dead-man’s switch sweep stumbled.', { error: (e as Error).message }); }
   };
   // The hub's own work: the ledger, recovered, and the heartbeat. A standby runs neither.
   function startHub() {
     const recovered = ledger.recover();
     providers.recover();
     coding.recover();
+    infra.recover();
+    network.recover();
     // A sandbox copy reaches nothing outside itself and keeps no clock of its own: the pipeline
     // drives it.
     if (o.sandbox) return recovered;
@@ -1069,6 +1109,7 @@ export function createCore(o: CoreOptions) {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
     changes.stop();
+    network.close();
     models!.stop();
     providers.stop();
     connectors.stop().catch(() => {});
@@ -1111,7 +1152,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     self,
-    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network,
     ingest, vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
@@ -1142,8 +1183,21 @@ export function createCore(o: CoreOptions) {
     },
     // The core's routes, for the principal the gate found.
     // Also the device agent's installer and archive (public; mesh/access.ts PUBLIC_PATHS).
-    handle: async (req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal, listener: Listener) =>
-      agentDownload(req, res, url) || api.handle(req, res, url, { principal, listener, address: access.address(req, listener) }),
+    handle: async (req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal, listener: Listener) => {
+      const address = access.address(req, listener);
+      // Contact for the dead-man's switch (M10d): a trusted device's request on the mesh listener,
+      // once its answer went out successfully, and only from off the hub's own machine.
+      if (principal.kind === 'device' && listener === 'mesh') {
+        const id = principal.device.id;
+        res.once('finish', () => {
+          if (res.statusCode >= 400) return;
+          const bare = address.replace(/^\[|\]$/g, '').replace(/^::ffff:/, '');
+          const onHub = loopbackAddress(bare) || hubAddress().hosts.some((h) => h.replace(/^\[|\]$/g, '') === bare);
+          try { network.contact(id, { onHub }); } catch (e) { log.warn('network', 'Nova couldn’t record contact with a device.', { error: (e as Error).message }); }
+        });
+      }
+      return agentDownload(req, res, url) || api.handle(req, res, url, { principal, listener, address });
+    },
     // A hub recovers the ledger, then starts the heartbeat: once now (to catch up), then every
     // 30 s. A standby starts copying the hub instead, and runs nothing else.
     start() {
@@ -1174,6 +1228,7 @@ export function createCore(o: CoreOptions) {
       await browser.close();
       computer.close();
       coding.close();
+      network.close();
       await capture.stop();
       await Promise.race([ticking.then(() => ledger.idle()), new Promise((r) => setTimeout(r, 2000).unref())]);
       db.close();

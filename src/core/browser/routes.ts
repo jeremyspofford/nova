@@ -37,6 +37,14 @@ export function browserRoutes(b: Browser, o: { home: string; holder: (w: Who) =>
       body: '{confirm: true}', handle: ({ params, body }) => b.deleteLogin(params.host!, body?.confirm === true),
     },
     {
+      method: 'POST', path: '/browser/logins/{host}/pending', access: 'approver', summary: 'A new password an account step sent but couldn’t see take (M10d): keep: true makes it the site’s password, keep: false drops it (tier 3: needs {confirm: true}, every time). Never shown.',
+      body: '{keep, confirm: true}', handle: ({ params, body }) => b.settlePending(params.host!, body ?? {}),
+    },
+    {
+      method: 'POST', path: '/browser/accounts', status: 201, summary: 'An account change in Nova’s browser (M10d): change a password, create an account, or change two-step sign-in, as a step plan on one site. Tier 3, every time, and it runs only while you’re there; Nova types saved sign-ins and the new password it makes itself, and you type any code. A plan never holds a password.',
+      body: '{change: password | create | mfa, site, steps, verify: {url, expect}, allowed_hosts?, title?}', handle: ({ body }) => b.account(body ?? {}),
+    },
+    {
       method: 'POST', path: '/browser/sites/{host}/forget', access: 'approver', summary: 'Forget a site: its cookies and storage leave Nova’s browser profile, and with login: true its saved sign-in too (tier 3: needs {confirm: true}, every time).',
       body: '{confirm: true, login?}', handle: ({ params, body }) => b.forgetSite(params.host!, body ?? {}),
     },
