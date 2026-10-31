@@ -183,7 +183,7 @@ that say the same show once. Different lines, or the same line apart, all stay.
 
 ## NOTES for Track 1
 
-**What changed (2026-10-31, PR #⟨n⟩, UX review 1):**
+**What changed (2026-10-31, PR #254, UX review 1):**
 - Typing a long message no longer turns the chat box into a big oval that hides your text: it stays a
   rounded box, never taller than about a quarter of the screen, and scrolls inside.
 - The System health card says what's wrong in plain words ("About the standby’s copy of your
