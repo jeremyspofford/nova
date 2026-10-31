@@ -21,7 +21,7 @@ import type { Decisions, RulesProvider, Template, Templates } from '../decide.ts
 import { findChromium, sweepProfiles, type Found } from './chromium.ts';
 import { FINAL_READ, SCREENSHOT, refOf, refetch, squash, taskDir, type FinalRead, type Read } from './evidence.ts';
 import {
-  NO_HUB, PAY_REFUSAL, allowed, describe, hasEffects, hostEgress, hostOf, marksCommit, minTierOf, planEgress, validateBrowserBrief, validatePlan, whereOf,
+  NO_HUB, PAY_REFUSAL, allowed, describe, hasCheckout, hasEffects, hostEgress, hostOf, marksCommit, minTierOf, planEgress, validateBrowserBrief, validatePlan, whereOf,
   type Hub, type Plan, type Step,
 } from './plan.ts';
 import { INPUT_KEYS, Session, type Holder, type Input, type Locator, type SessionOptions, type SessionView } from './session.ts';
@@ -490,10 +490,18 @@ export class Browser extends EventEmitter {
           }
         }
         const fn = step.do === 'fill' ? FILL : step.do === 'select' ? SELECT : CLICK;
-        const r = await this.#act(s, loc, fn, step.do === 'click' ? [] : [step.value]);
-        if (r === 'covered') throw new Stop(`Something on the page covers ${whereOf(step)}; Nova won’t click through it.${run.blocked ? ' A dialog Nova blocked is open.' : ''}`);
-        if (r !== 'ok') throw new Error(stepProblem(step, r));
-        if (step.do === 'click') await s.settle();
+        // What this step may send: where it says, and (outside a checkout flow) the form its own
+        // submit button sends. Nothing else leaves while it acts (session.ts).
+        const to = this.#sendsOf(s, step, step.do === 'click' && !hasCheckout(plan) ? el : null);
+        s.allowSends(i + 1, to);
+        try {
+          const r = await this.#act(s, loc, fn, step.do === 'click' ? [] : [step.value]);
+          if (r === 'covered') throw new Stop(`Something on the page covers ${whereOf(step)}; Nova won’t click through it.${run.blocked ? ' A dialog Nova blocked is open.' : ''}`);
+          if (r !== 'ok') throw new Error(stepProblem(step, r));
+          if (step.do === 'click' || to.length) await s.settle();
+        } finally {
+          s.allowSends(null);
+        }
         return;
       }
       case 'wait':
@@ -552,10 +560,16 @@ export class Browser extends EventEmitter {
     const submit = await this.#element(s, { selector: step.submit });
     const why = submit ? isPayControl(submit) : null;
     if (why) throw new Stop(`The sign-in button is a pay control (${why}). ${PAY_REFUSAL}`);
-    const r = await this.#act(s, { selector: step.submit }, CLICK, []);
-    if (r === 'covered') throw new Stop(`Something on the page covers ${step.submit}; Nova won’t click through it.`);
-    if (r !== 'ok') throw new Error(stepProblem({ do: 'click', selector: step.submit }, r));
-    await s.settle();
+    // A sign-in sends to its own form, and where the step says.
+    s.allowSends(i + 1, this.#sendsOf(s, step, submit));
+    try {
+      const r = await this.#act(s, { selector: step.submit }, CLICK, []);
+      if (r === 'covered') throw new Stop(`Something on the page covers ${step.submit}; Nova won’t click through it.`);
+      if (r !== 'ok') throw new Error(stepProblem({ do: 'click', selector: step.submit }, r));
+      await s.settle();
+    } finally {
+      s.allowSends(null);
+    }
     if (step.done_when) await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000, null).catch(() => { throw new Stop(`The sign-in didn’t go through: ${step.done_when} isn’t on the page.`); });
   }
 
@@ -571,6 +585,8 @@ export class Browser extends EventEmitter {
     await this.#before(run, i, step, null);
     const read = await s.evaluate<{ lines: string[]; total: string } | null>(`(${CHECKOUT_READ}).call(null, ${sel(step.lines)}, ${sel(step.total)})`).catch(() => null);
     if (!read || !Array.isArray(read.lines)) throw new Stop('Nova couldn’t read the checkout.');
+    // The stop: from here nothing that isn't a GET leaves this browser while Nova drives it.
+    s.lockSends();
     const t = checkTotals({ lines: read.lines.map((l) => red.text(l)), total: red.text(read.total), quoted: step.quoted ?? null });
     run.checkout = { ...t, lines: t.lines.map((l) => ({ text: clip(l.text, 200), cents: l.cents })), url: s.url };
     if (!t.ok) {
@@ -779,6 +795,17 @@ export class Browser extends EventEmitter {
     if (d.answers.next !== 'continue') throw new Stop(`The site no longer matches the flow “${run.plan.flow!.name}” v${t.version} Nova learnt: ${d.why} It stopped.`);
   }
 
+  // Where a step may send: its `sends` (paths on the page's own site), and the form the element
+  // submits, when it is a submit button and one is given.
+  #sendsOf(s: Session, step: Step, el: ElementFacts | null): string[] {
+    const out: string[] = [];
+    const declared = 'sends' in step && step.sends ? (Array.isArray(step.sends) ? step.sends : [step.sends]) : [];
+    for (const x of declared) { try { out.push(new URL(x, s.url).href); } catch { /* checked by the validator */ } }
+    const submits = !!el && !!el.formAction && ((el.tag === 'button' && (el.type || 'submit').toLowerCase() === 'submit') || (el.tag === 'input' && /^(submit|image)$/i.test(el.type)));
+    if (submits) out.push(el!.formAction);
+    return out;
+  }
+
   // Where each form on the page sends, when it pays: the browser refuses it while Nova drives.
   #payForms(s: Session, facts: PageFacts): void {
     for (const f of facts.pay ?? []) {
@@ -836,8 +863,13 @@ export class Browser extends EventEmitter {
     const why = el && typeof el === 'object' ? isPayControl(el) : null;
     if (why) throw new Stop(`Nova stopped: what the picture pointed at is a pay control (${why}). ${PAY_REFUSAL}`);
     this.#note(run.id, 'vision_fallback', { step: i + 1, why: 'Neither the page’s structure nor its accessibility tree had the element; it was found by picture.' });
-    await s.clickAt(at.x, at.y);
-    await s.settle();
+    s.allowSends(i + 1, this.#sendsOf(s, step, null));
+    try {
+      await s.clickAt(at.x, at.y);
+      await s.settle();
+    } finally {
+      s.allowSends(null);
+    }
   }
 
   // ---- learning a flow --------------------------------------------------------------------------
@@ -894,7 +926,8 @@ export class Browser extends EventEmitter {
     s.on('paused', (e: { holder: Holder }) => this.#note(id, 'paused', { ...by(e.holder), step: s.step?.n ?? null }));
     s.on('resumed', (e: { holder: Holder; duration_ms: number }) => this.#note(id, 'resumed', { ...by(e.holder), duration_ms: e.duration_ms }));
     s.on('blocked', (b: { host: string; by: string; via: string; kind: string }) => this.#note(id, 'blocked_request', b));
-    s.on('pay_refused', (b: { host: string }) => this.#note(id, 'pay_refused', { host: b.host, why: 'A request that would pay was refused in the browser.' }));
+    s.on('pay_refused', (b: { host: string; method: string; kind: string }) => this.#note(id, 'pay_refused', { host: b.host, method: b.method, kind: b.kind, why: 'A request that would pay was refused in the browser.' }));
+    s.on('send_refused', (b: { host: string; method: string; kind: string; why: string }) => this.#note(id, 'send_refused', { host: b.host, method: b.method, kind: b.kind, step: s.step?.n ?? null, why: b.why }));
     s.on('popup', () => this.#note(id, 'popup_closed', { reason: 'A page opened a second window; Nova closed it.' }));
     s.on('change', () => this.emit('change', s.view()));
   }

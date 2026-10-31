@@ -90,8 +90,13 @@ export function checkTotals(r: TotalsInput): Totals {
 export const PAY_WORDS = /\b(pay|pay\s*now|payment\s+now|place\s+(?:your\s+|the\s+|my\s+)?order|buy\s*(?:it\s+)?now|complete\s+(?:your\s+|the\s+|my\s+)?(?:purchase|order|payment)|confirm\s+(?:and\s+pay|(?:your\s+|the\s+)?(?:purchase|order|payment))|submit\s+(?:your\s+|the\s+)?(?:order|payment)|purchase|order\s+now|start\s+(?:my\s+|your\s+)?(?:subscription|paid))\b/i;
 // The same idea in ids, classes, names and selectors: pay, purchase, place-order, buy-now.
 export const PAY_TOKENS = /(^|[^a-z])(pay|payment-submit|purchase|place-?order|buy-?now|complete-?(order|purchase|payment)|confirm-?(order|purchase|payment)|submit-?(order|payment))([^a-z]|$)/i;
-// Where a pay form goes.
-export const PAY_PATH = /(^|\/)(pay|payment|payments|purchase|place-?order|checkout\/(complete|confirm|pay|submit|place))(\/|$|\?|#|\.)/i;
+// Where a pay form goes. An extra signal only: the guard itself is structural (session.ts, what may
+// send), since a hostile page names its paths as it likes.
+export const PAY_PATH = /(^|\/)(pay|payment|payments|purchase|purchases|charge|charges|place-?order|orders?\/(submit|create|place|confirm|complete)|checkout\/(complete|confirm|pay|submit|place))(\/|$|\?|#|\.)/i;
+// Sending to an orders collection (POST /api/orders) creates an order: for requests that aren't GETs.
+export const ORDER_PATH = /(^|\/)orders?(\/|$|\?|#)/i;
+// Pay words beyond English (an extra signal, never the guard).
+export const PAY_WORDS_INTL = /\b(pagar|pague|pago|payer|payez|paiement|bezahlen|zahlen|zahlungspflichtig|kaufen|acheter|commander|comprar|compra|acquista|pagare|paga|betalen|bestellen|betala|köp|kup|zapłać|оплат\w*|купить|заказать)\b|支付|付款|购买|購入|決済|결제|구매/i;
 // Card fields, by selector or name.
 export const CARD_FIELD = /(card|cc-?(number|num|exp|csc|cvc)|cvv|cvc|iban|security-?code)/i;
 
@@ -109,7 +114,7 @@ export interface ElementFacts {
 // Why this element pays (or places an order), or null. Every way counts: its name, its id or class,
 // where its form goes, card fields in its form.
 export function isPayControl(e: ElementFacts): string | null {
-  if (PAY_WORDS.test(e.name ?? '')) return `it says “${clip(e.name, 40)}”`;
+  if (PAY_WORDS.test(e.name ?? '') || PAY_WORDS_INTL.test(e.name ?? '')) return `it says “${clip(e.name, 40)}”`;
   if (PAY_TOKENS.test(`${e.id ?? ''} ${e.classes ?? ''}`)) return 'its id or class says it pays';
   const submits = e.tag === 'button' ? (e.type ?? 'submit') === 'submit' : e.tag === 'input' && /^(submit|image)$/i.test(e.type ?? '');
   if (submits && e.formAction) {

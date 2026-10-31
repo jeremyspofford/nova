@@ -14,7 +14,7 @@ import { BROWSER_TASK_HEADER } from '../mesh/access.ts';
 import { HUB_REFUSAL, NO_HUB, allowed, hostOf, reachesHub, target, thisMachine, type Hub } from './plan.ts';
 import type { Cdp } from './cdp.ts';
 import type { Target } from './plan.ts';
-import { PAY_PATH } from './copilot.ts';
+import { ORDER_PATH, PAY_PATH } from './copilot.ts';
 
 // `paused`: the person paused the worker (M10b); it waits at its next gate, with nobody driving.
 export type Mode = 'starting' | 'working' | 'paused' | 'needs_person' | 'taken_over' | 'finishing' | 'closed';
@@ -82,6 +82,11 @@ export interface Locator { selector?: string; target?: Target }
 export interface JsDialog { type: string; message: string; url: string }
 
 export const PAY_GUARD = 'A request that would pay: Nova never pays. Paying is yours (tier 3).';
+export const SENDS_UNASKED = 'The page tried to send something no step of the plan sends (a script, a beacon, a form sending itself): refused.';
+export const SENDS_ELSEWHERE = 'The step sends only where the plan says it does; this went somewhere else: refused.';
+export const SENDS_LOCKED = 'Nova stopped at the checkout: nothing more is sent from this page.';
+// Where a request goes, for the send guard: origin and path.
+export const sendKey = (url: string): string => { try { const u = new URL(url); return `${u.origin}${u.pathname}`; } catch { return ''; } };
 
 export class Session extends EventEmitter {
   readonly taskId: string;
@@ -117,6 +122,13 @@ export class Session extends EventEmitter {
   // Where a pay form sends (origin and path), found by the worker on the pages it reads: a request
   // there that isn't a GET is refused unless the person holds the browser.
   readonly payTargets = new Set<string>();
+  // What may send (review of PR #238, 2). While Nova drives, every request that isn't a GET is a
+  // potential commit: it goes out only while a declared step is acting, and only to where that step
+  // accounts for (`allowSends`); after the checkout stop, none at all (`lockSends`). Pay addresses
+  // are refused whatever the method. The person holding the browser may send anything.
+  #sends: { step: number; to: Set<string> } | null = null;
+  #locked = false;
+  #refusals = 0;
 
   constructor(o: SessionOptions) {
     super();
@@ -230,12 +242,16 @@ export class Session extends EventEmitter {
     }
     const by = this.mode === 'taken_over' ? 'person' : 'page';
     const kind = (p.resourceType ?? 'request').toLowerCase();
+    // Stopped: nothing lands afterwards.
+    if (this.mode === 'closed') {
+      await cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'Aborted' }, sid).catch(() => {});
+      return;
+    }
     const nova = await this.#reachesHub(url);
-    // The pay guard (M10b): what a pay form would send never leaves while Nova drives, whatever
-    // started it (a click, a page's own script). The person holding the browser may pay.
-    if (!nova && this.mode !== 'taken_over' && (p.request.method ?? 'GET').toUpperCase() !== 'GET' && this.#paysAt(url)) {
-      this.#block(hostOf(url), by, 'fetch', kind, PAY_GUARD);
-      this.emit('pay_refused', { host: hostOf(url) });
+    const why = !nova && this.mode !== 'taken_over' ? this.#sendRefusal(url, (p.request.method ?? 'GET').toUpperCase()) : null;
+    if (why) {
+      this.#block(hostOf(url), by, 'fetch', kind, why.why);
+      if (this.#refusals++ < 50) this.emit(why.pay ? 'pay_refused' : 'send_refused', { host: hostOf(url), method: (p.request.method ?? 'GET').toUpperCase(), kind, why: why.why });
       await cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }, sid).catch(() => {});
       return;
     }
@@ -248,6 +264,26 @@ export class Session extends EventEmitter {
     this.#block(hostOf(url), by, 'fetch', kind, nova ? HUB_REFUSAL : undefined);
     await cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }, sid).catch(() => {});
   }
+
+  // Why a request may not go out while Nova drives, or null.
+  #sendRefusal(url: string, method: string): { why: string; pay: boolean } | null {
+    if (this.#paysAt(url)) return { why: PAY_GUARD, pay: true };
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return null;
+    try { if (ORDER_PATH.test(new URL(url).pathname)) return { why: PAY_GUARD, pay: true }; } catch { /* not an address */ }
+    if (this.#locked) return { why: SENDS_LOCKED, pay: true };
+    if (!this.#sends) return { why: SENDS_UNASKED, pay: false };
+    if (!this.#sends.to.has(sendKey(url))) return { why: SENDS_ELSEWHERE, pay: false };
+    return null;
+  }
+
+  // The step now acting, and where it may send (absolute addresses; the query doesn't count), or
+  // null once it is done.
+  allowSends(step: number | null, to: string[] = []): void {
+    this.#sends = step === null ? null : { step, to: new Set(to.map(sendKey).filter(Boolean)) };
+  }
+
+  // The checkout stop: from now on nothing that isn't a GET leaves this browser while Nova drives.
+  lockSends(): void { this.#locked = true; this.#sends = null; }
 
   #paysAt(url: string): boolean {
     try {
@@ -525,10 +561,17 @@ export class Session extends EventEmitter {
     for (;;) {
       await this.gate();
       const world = await this.#world();
-      if (this.mode === 'taken_over' || this.mode === 'needs_person') continue;
-      if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
+      if (this.#mustWait()) continue;
       return this.#run<T>(world, expression);
     }
+  }
+
+  // The one check every action makes after its last wait and right before the call that acts goes
+  // out, with nothing awaited in between (review of PR #238, 1): someone holds the browser, the
+  // worker is waiting for them, or it is paused, so it waits and looks again; or it was stopped.
+  #mustWait(): boolean {
+    if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
+    return this.mode === 'taken_over' || this.mode === 'needs_person' || this.mode === 'paused';
   }
 
   // Gives the page a moment and returns what is pending; for tests and the worker's own waits.
@@ -600,8 +643,7 @@ export class Session extends EventEmitter {
       await this.gate();
       const world = await this.#world();
       const id = await this.#resolve(world, loc);
-      if (this.mode === 'taken_over' || this.mode === 'needs_person' || this.mode === 'paused') continue;
-      if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
+      if (this.#mustWait()) continue;
       if (!id) return 'missing';
       return this.#callOn<T>(id, fn, args);
     }
@@ -635,8 +677,7 @@ export class Session extends EventEmitter {
   async clickAt(x: number, y: number): Promise<void> {
     for (;;) {
       await this.gate();
-      if (this.mode === 'taken_over' || this.mode === 'needs_person' || this.mode === 'paused') continue;
-      if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
+      if (this.#mustWait()) continue;
       const p = { x: Math.round(x), y: Math.round(y) };
       void this.#send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...p });
       void this.#send('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'left', buttons: 1, clickCount: 1 });

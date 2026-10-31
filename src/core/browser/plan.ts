@@ -21,7 +21,9 @@ import type { Egress } from '../workers.ts';
 //   names the pay control so that nothing may ever click it.
 export interface Target { role: string; name: string }
 export interface Expect { url?: string; shows?: string }
-interface Acting { selector?: string; target?: Target; intent?: string; expect?: Expect; label?: string; timeout_ms?: number; commits?: boolean }
+// `sends`: where the step may send something that isn't a GET (a path on the page's own site, or an
+// address in the declared hosts). While Nova drives, nothing else leaves (review of PR #238, 2).
+interface Acting { selector?: string; target?: Target; intent?: string; expect?: Expect; label?: string; timeout_ms?: number; commits?: boolean; sends?: string | string[] }
 export type Step =
   | { do: 'navigate'; url: string; label?: string; commits?: boolean }
   | ({ do: 'fill'; value: string } & Acting)
@@ -32,7 +34,7 @@ export type Step =
   // A step only a person may do (a sign-in, a challenge): the worker asks for a takeover and
   // waits. `done_when`: a selector that shows on the page once the step is done.
   | { do: 'person'; why: string; done_when?: string; label?: string }
-  | { do: 'login'; username: string; password: string; submit: string; done_when?: string; label?: string; timeout_ms?: number }
+  | { do: 'login'; username: string; password: string; submit: string; done_when?: string; label?: string; timeout_ms?: number; sends?: string | string[] }
   | { do: 'checkout'; lines: string; total: string; pay: string; quoted?: string; label?: string; timeout_ms?: number };
 
 export const STEP_KINDS = ['navigate', 'fill', 'click', 'select', 'wait', 'read', 'person', 'login', 'checkout'] as const;
@@ -196,6 +198,19 @@ function acting(s: Record<string, unknown>, at: string, need: (ok: boolean, msg:
   }
 }
 
+// Where a step says it sends: a path on the page's own site, or an address inside the declared hosts;
+// never a pay address.
+function sendsOk(s: Record<string, unknown>, at: string, need: (ok: boolean, msg: string) => boolean, hosts: string[]): void {
+  if (s.sends === undefined) return;
+  const list = Array.isArray(s.sends) ? s.sends : [s.sends];
+  if (!need(list.length >= 1 && list.length <= 10 && list.every((x) => isStr(x, 500)), `${at}.sends is where the step sends: a path like "/cart/add", or a list of up to 10`)) return;
+  for (const x of list as string[]) {
+    if (x.startsWith('/')) { need(!x.startsWith('//') && !PAY_PATH.test(x.split(/[?#]/)[0]!), `${at}.sends “${x}” is a pay address. ${PAY_REFUSAL}`); continue; }
+    if (!need(/^https?:\/\//.test(x) && allowed(x, hosts), `${at}.sends “${x}” must be a path, or an address inside the allowed hosts`)) continue;
+    need(!payPath(x), `${at}.sends “${x}” is a pay address. ${PAY_REFUSAL}`);
+  }
+}
+
 // The plan in a brief's inputs, checked; every problem is listed.
 export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
   const errors: string[] = [];
@@ -243,6 +258,7 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
           break;
         case 'fill': case 'select': case 'click': {
           acting(s, at, need);
+          sendsOk(s, at, need, Array.isArray(hosts) ? hosts.filter((h): h is string => typeof h === 'string') : []);
           if (s.do !== 'click') need(typeof s.value === 'string' && s.value.length <= 10_000, `${at}.value must be text`);
           const sel = typeof s.selector === 'string' ? s.selector : '';
           const name = isObj(s.target) && typeof s.target.name === 'string' ? s.target.name : '';
@@ -271,6 +287,7 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
           for (const k of ['username', 'password', 'submit'] as const) need(isStr(s[k], 500), `${at}.${k} must be the selector of the ${k === 'submit' ? 'sign-in button' : `${k} field`}`);
           need(!['value', 'values', 'username_value', 'password_value', 'secret', 'credentials'].some((k) => k in s), `${at} names the fields, never a value: the sign-in comes from the vault at the moment of use (save it in Settings › Connections, never in a plan or a chat)`);
           if (s.done_when !== undefined) need(isStr(s.done_when, 500), `${at}.done_when must be a selector`);
+          sendsOk(s, at, need, Array.isArray(hosts) ? hosts.filter((h): h is string => typeof h === 'string') : []);
           break;
         case 'checkout':
           for (const k of ['lines', 'total'] as const) need(isStr(s[k], 500), `${at}.${k} must be the selector of the ${k === 'lines' ? 'itemised lines' : 'total'}`);

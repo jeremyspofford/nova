@@ -170,3 +170,22 @@ test('sign-ins live in the vault under the host they were saved for', () => {
   assert.equal(loginHost('browser/login/127.0.0.1_5000/password'), '127.0.0.1:5000');
   assert.throws(() => loginName('not a host', 'password'));
 });
+
+// ---- review of PR #238, 2: where a step sends, and the lists as an extra signal -------------------
+
+test('review 2: a step names where it sends; a pay address there is refused; the lists know more ways to pay', async () => {
+  const { PAY_PATH } = await import('../../src/core/browser/copilot.ts');
+  const h = ['127.0.0.1:5000'];
+  const ok = validatePlan({ allowed_hosts: h, steps: [{ do: 'click', selector: '#add', sends: '/cart/add' }, { do: 'click', selector: '#x', sends: ['/a', 'http://127.0.0.1:5000/b'] }] });
+  assert.deepEqual((ok.steps[0] as any).sends, '/cart/add');
+  const refused = (sends: unknown, why: RegExp) => assert.throws(() => validatePlan({ allowed_hosts: h, steps: [{ do: 'click', selector: '#x', sends }] }), (e: any) => why.test(e.details.join(' ')), JSON.stringify(sends));
+  refused('/charge', /pay address/);
+  refused('/api/order/submit', /pay address/);
+  refused('http://elsewhere.example.test/x', /inside the allowed hosts/);
+  refused('//elsewhere.example.test/x', /pay address|inside the allowed hosts/);
+  refused([], /sends/);
+  for (const p of ['/charge', '/api/v2/charges', '/api/order/submit', '/orders/create', '/purchases']) assert.ok(PAY_PATH.test(p), p);
+  for (const p of ['/checkout', '/cart/add', '/orders', '/account']) assert.ok(!PAY_PATH.test(p), p);
+  const b = (name: string) => isPayControl({ tag: 'button', type: 'submit', name });
+  for (const name of ['Pagar ahora', 'Jetzt bezahlen', 'Payer', '立即支付', 'Comprar']) assert.ok(b(name), name);
+});

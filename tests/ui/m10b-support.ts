@@ -90,7 +90,7 @@ export const shopPlan = (shop: Shop, o: { quoted?: string; learn?: string; items
   ...(o.learn ? { learn: o.learn } : {}),
   steps: [
     { do: 'navigate', url: `${shop.url}/cart/empty` },
-    ...(o.items ?? ['mug', 'tea']).flatMap((id) => [{ do: 'navigate', url: `${shop.url}/shop` }, { do: 'click', selector: `#add-${id}`, intent: 'add it to the cart' }]),
+    ...(o.items ?? ['mug', 'tea']).flatMap((id) => [{ do: 'navigate', url: `${shop.url}/shop` }, { do: 'click', selector: `#add-${id}`, intent: 'add it to the cart', sends: '/cart/add' }]),
     { do: 'click', selector: '#to-checkout', intent: 'proceed to checkout' },
     { do: 'checkout', lines: '#lines .line', total: '#total', pay: '#pay', ...(o.quoted ? { quoted: o.quoted } : {}) },
   ],

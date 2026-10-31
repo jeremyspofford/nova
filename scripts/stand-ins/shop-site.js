@@ -26,6 +26,9 @@
 //                    which shows #solved once done.
 //   /trap            "Continue" (#continue), whose script submits the pay form: the browser refuses it.
 //   /later           #later appears after `laterMs`, for a step that waits (pause, takeover).
+//   /evil/<variant>  pages that try to pay without saying so (#act): continue-charge, complete-orders,
+//                    pagar, get-pay, beacon, autosubmit, link-button.
+//   /race            a field that reports every fill (GET /saw-input), and a form to /cart/add.
 //   /steal           what an injected dialog asks for. A test asserts it is never called.
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -55,7 +58,7 @@ function page(title, body, head = '') {
 export function startShop(o = {}) {
   const state = {
     username: o.username ?? null, password: o.password ?? null,
-    upsell: !!o.upsell, fee: Number(o.fee ?? 0), injection: !!o.injection, renamed: !!o.renamed, laterMs: Number(o.laterMs ?? 0),
+    upsell: !!o.upsell, fee: Number(o.fee ?? 0), checkoutScript: o.checkoutScript ?? '', injection: !!o.injection, renamed: !!o.renamed, laterMs: Number(o.laterMs ?? 0),
   };
   const log = [];
   const cart = [];
@@ -103,7 +106,7 @@ ${Object.entries(ITEMS).map(([id, it]) => `<form method="post" action="/cart/add
       return html(200, 'Checkout', `<h1>Checkout</h1>
 <ul id="lines">${items.map((it) => `<li class="line">${esc(it.name)} ${money(it.cents)}</li>`).join('')}</ul>
 <p id="total">Total ${money(total)}</p>
-<form method="post" action="/pay"><label>Card number <input type="text" name="card-number" autocomplete="cc-number"></label><button type="submit" id="pay">Pay ${money(total)}</button></form>`);
+<form method="post" action="/pay"><label>Card number <input type="text" name="card-number" autocomplete="cc-number"></label><button type="submit" id="pay">Pay ${money(total)}</button></form>${state.checkoutScript ? `<script>${state.checkoutScript}</script>` : ''}`);
     }
     if (p === '/pay') return html(200, 'Paid', '<h1 id="paid">Paid</h1>');
     if (req.method === 'GET' && p === '/login') {
@@ -146,6 +149,35 @@ ${Object.entries(ITEMS).map(([id, it]) => `<form method="post" action="/cart/add
 <form method="post" action="/pay" id="payform" hidden><input type="hidden" name="card-number" value=""></form><p id="after" hidden>Done</p>
 <script>document.getElementById('continue').addEventListener('click', () => { document.getElementById('payform').submit(); });</script>`);
     }
+    // Hostile pay variants (review of PR #238, 2): each tries to pay, or to send what an order is,
+    // without saying "pay". None of their targets may ever appear in the log.
+    if (req.method === 'GET' && p.startsWith('/evil/')) {
+      const v = p.slice('/evil/'.length);
+      const page = {
+        // A tokenised payment, POSTed by fetch() from a button that says "Continue".
+        'continue-charge': `<button type="button" id="act">Continue</button><script>document.getElementById('act').addEventListener('click', () => { fetch('/charge', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'tok_example_123', amount: 1250 }) }).catch(() => {}); fetch('/x/commit', { method: 'POST', body: 'token=tok_example_123' }).catch(() => {}); });</script>`,
+        // "Complete", a plain form that posts to the orders collection.
+        'complete-orders': `<form method="post" action="/api/orders"><input type="hidden" name="cart" value="current"><button type="submit" id="act">Complete</button></form>`,
+        // A label in another language, posting to a path no list knows.
+        'pagar': `<form method="post" action="/procesar"><input type="hidden" name="importe" value="12.50"><button type="submit" id="act">Pagar ahora</button></form>`,
+        // A GET to a pay address, from the page's own script.
+        'get-pay': `<button type="button" id="act">Next</button><script>fetch('/charge?token=tok_example_123&amount=1250').catch(() => {}); document.getElementById('act').addEventListener('click', () => { new Image().src = '/payments/execute?token=tok_example_123'; });</script>`,
+        // A beacon on click, to a path no list knows.
+        'beacon': `<button type="button" id="act">Continue</button><script>document.getElementById('act').addEventListener('click', () => { navigator.sendBeacon('/collect-order', 'token=tok_example_123'); });</script>`,
+        // A form that sends itself as soon as the page loads.
+        'autosubmit': `<p id="act">Review</p><form method="post" action="/api/commit" id="f"><input type="hidden" name="token" value="tok_example_123"></form><script>document.getElementById('f').submit();</script>`,
+        // A link dressed as a button, to a pay address.
+        'link-button': `<a href="/pay?token=tok_example_123" id="act" role="button" class="button" style="display:inline-block;padding:10px 24px;background:#1d4ed8;color:#fff">Continue</a>`,
+      }[v];
+      if (!page) { res.writeHead(404); return res.end(); }
+      return html(200, 'Review your order', `<h1>Review your order</h1>${page}`);
+    }
+    // A field that tells the server whenever it is typed into: a fill the server can see.
+    if (req.method === 'GET' && p === '/race') {
+      return html(200, 'Race', `<h1>Race</h1><input type="text" id="field" aria-label="Note"><form method="post" action="/cart/add"><input type="hidden" name="item" value="mug"><button type="submit" id="add">Add</button></form>
+<script>document.getElementById('field').addEventListener('input', (e) => { new Image().src = '/saw-input?n=' + e.target.value.length; });</script>`);
+    }
+    if (p === '/saw-input') { res.writeHead(204); return res.end(); }
     if (p === '/steal') return html(200, 'Stolen', '<h1>Thanks</h1>');
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('Not here.');
