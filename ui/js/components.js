@@ -375,6 +375,56 @@ export function approvalSheet(t, { worker = null, run = null } = {}) {
 </form>`;
 }
 
+// ---- coding through chat (M10c) ----------------------------------------------------------------
+
+// A coding run's step that waits for the person (GET /coding/runs/{id}). The check (tier 2): what the
+// agent changed, and the commands Nova will run on it, which run the agent's code as the person. The
+// merge (tier 3): the reviewed diff, Nova's test result and the preview link, then what merging does,
+// before the confirmation.
+export const RUNS_AGENT_CODE = 'This runs code the coding agent wrote, as you, with access to your files.';
+export function codingSheet(t, run) {
+  const step = t.brief?.inputs?.step;
+  const merge = step === 'merge';
+  const tier = merge ? 3 : 2;
+  const KIND = { added: 'added', modified: 'changed', deleted: 'deleted' };
+  const short = (s) => esc(String(s ?? '').slice(0, 7));
+  const files = (run.changes ?? []).map((c) => `<li><p class="card-line"><strong>${esc(c.path)}</strong> · ${esc(KIND[c.kind] ?? c.kind)}${c.added === null ? ' · binary' : ` · +${Number(c.added)} −${Number(c.removed)}`}</p></li>`).join('');
+  const diff = run.diff ? `<details class="raw coding-diff"${merge ? ' open' : ''}><summary>The whole diff</summary><pre tabindex="0">${esc(run.diff)}</pre></details>` : '';
+  const changed = `<h3 class="sheet-heading">What ${esc(run.agent_name)} changed</h3><ul class="checks coding-files">${files}</ul>${diff}`;
+  const test = run.test;
+  const tests = test ? `<h3 class="sheet-heading">Tests</h3>
+  <p class="sheet-line coding-test" data-passed="${test.passed}">Nova ran <code>${esc(test.command)}</code> itself on <code>${short(test.commit)}</code>: ${test.passed ? 'it passed' : 'it failed'} (exit ${esc(String(test.exit ?? 'none'))}, ${esc((Number(test.ms) / 1000).toFixed(1))} s).</p>
+  ${test.output?.trim() ? `<details class="raw"><summary>Its output</summary><pre tabindex="0">${esc(test.output)}</pre></details>` : ''}` : '';
+  const p = run.preview;
+  const preview = !merge ? '' : p
+    ? `<h3 class="sheet-heading">Preview</h3><p class="sheet-line coding-preview">${p.running ? `<a class="link" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a> · on this computer only` : `Stopped (${esc(p.why_stopped ?? 'it isn’t running')}). It was at ${esc(p.url)}.`}</p>`
+    : run.preview_command ? '' : '<h3 class="sheet-heading">Preview</h3><p class="sheet-line">No preview: none was asked for.</p>';
+  const lead = merge
+    ? `<p class="sheet-line">Reviewed and tested. ${esc(run.merge ?? '')}</p>`
+    : `<p class="sheet-line">${esc(run.agent_name)} wrote this on Nova’s branch <code>${esc(run.nova_branch)}</code>, from ${esc(run.branch)} in ${esc(run.repo)}. Nothing in your repository has changed.</p>
+  <p class="sheet-line">To check it, Nova runs <code>${esc(run.test_command)}</code>${run.preview_command ? ` and then starts the preview <code>${esc(run.preview_command)}</code>` : ''} in its worktree, on this computer.</p>
+  <p class="sheet-line"><strong>${esc(RUNS_AGENT_CODE)}</strong></p>`;
+  const actions = merge
+    ? `<button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Merge</button>
+    <button type="button" class="btn" data-action="decline-merge" data-run="${esc(run.id)}">Don’t merge</button>`
+    : `<button type="submit" class="btn primary" data-action="approve" value="approve">Run the tests</button>
+    <button type="button" class="btn" data-action="cancel-task" data-task="${esc(t.id)}">Cancel the task</button>`;
+  return `<form class="approval-sheet coding-sheet" data-tier="${tier}" data-task="${esc(t.id)}" data-coding="${esc(step)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
+  ${lead}
+  ${changed}
+  ${tests}
+  ${preview}
+  <dl class="facts"><dt>Repository</dt><dd>${esc(run.repo)} · ${esc(run.branch)}</dd><dt>Why it asks</dt><dd>${esc(merge ? `Merging changes ${run.branch}, a branch others may build on, and Nova can’t take it back: it asks every time.` : 'It runs code Nova didn’t write, on this computer: Nova asks first.')}</dd></dl>
+  ${merge ? `<label class="confirm"><input type="checkbox" name="confirm" required> I’ve reviewed this. Merge it into ${esc(run.branch)}.</label>` : ''}
+  <div class="sheet-actions">
+    ${actions}
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
 // ---- browser takeover (M5c) -----------------------------------------------------------------
 
 const TAKE_OVER_ONLY = 'Only the hub’s own screen, or a device you’ve allowed to approve, can take over.';

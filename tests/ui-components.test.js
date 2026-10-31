@@ -154,3 +154,35 @@ test('a chat bubble already on screen does not animate again', () => {
   const css = readFileSync(new URL('../ui/styles/components.css', import.meta.url), 'utf8');
   assert.match(css, /\.chat-bubble\.is-still \.bubble-body \{ animation: none; \}/);
 });
+
+// M10c: a coding run's check and merge sheets.
+test('the coding sheets: the check says it runs the agent’s code; the merge shows diff, tests and preview, Merge waits for the box', async () => {
+  const { codingSheet } = await import('../ui/js/components.js');
+  const run = {
+    id: 'r0123456789', agent_name: 'Example Agent', repo: '/srv-placeholder/project', branch: 'main', nova_branch: 'nova/r0123456789', test_command: 'npm test', preview_command: 'npm start',
+    changes: [{ path: 'app.mjs', kind: 'modified', added: 1, removed: 1 }, { path: 'logo.png', kind: 'added', added: null, removed: null }],
+    diff: 'diff --git a/app.mjs b/app.mjs\n-<old>\n+<new>\n', merge: 'Merging moves main in /srv-placeholder/project from aaaaaaa to bbbbbbb: exactly this diff. Nova doesn’t push.',
+    test: { command: 'npm test', commit: 'bbbbbbbcccc', passed: true, exit: 0, ms: 1200, output: 'ok 1' },
+    preview: { url: 'http://127.0.0.1:41000/', running: true },
+  };
+  const task = (step, tier) => ({ id: `t-${step}`, title: `${step} it`, approval_tier: tier, state: 'waiting', brief: { inputs: { step, run_id: run.id } } });
+  const check = codingSheet(task('check', 2), run);
+  assert.match(check, /data-tier="2"/);
+  assert.match(check, /This runs code the coding agent wrote, as you, with access to your files\./);
+  assert.match(check, /Nothing in your repository has changed\./);
+  assert.match(check, /logo\.png<\/strong> · added · binary/);
+  assert.doesNotMatch(check, /name="confirm"/, 'tier 2: no confirmation box');
+  assert.match(check, /&lt;new&gt;/, 'the diff is escaped');
+  const merge = codingSheet(task('merge', 3), run);
+  assert.match(merge, /data-tier="3"/);
+  assert.match(merge, /<details class="raw coding-diff" open>/);
+  assert.match(merge, /Nova ran <code>npm test<\/code> itself on <code>bbbbbbb<\/code>: it passed \(exit 0, 1\.2 s\)/);
+  assert.match(merge, /<a class="link" href="http:\/\/127\.0\.0\.1:41000\/" target="_blank" rel="noopener">/);
+  assert.match(merge, /exactly this diff\. Nova doesn’t push\./);
+  assert.match(merge, /<button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Merge<\/button>/);
+  assert.match(merge, /name="confirm" required/);
+  assert.match(merge, /data-action="decline-merge" data-run="r0123456789"/);
+  const stopped = codingSheet(task('merge', 3), { ...run, preview: { url: 'http://127.0.0.1:41000/', running: false, why_stopped: 'Nova restarted' } });
+  assert.match(stopped, /Stopped \(Nova restarted\)/);
+  assert.doesNotMatch(stopped, /<a class="link" href="http:\/\/127/);
+});
