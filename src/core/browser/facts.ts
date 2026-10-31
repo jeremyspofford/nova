@@ -82,16 +82,21 @@ export const SELECT = `function (want) {
 
 // A sign-in's value into its field, only on the page of the host it was saved for, only into a field
 // of that page's own document, and masked on the page at once (frames and screenshots show discs).
-export const SECRET = `function (value, host, part) {
+export const SECRET = `function (value, host, part, selector) {
   const el = this;
   if (location.host !== host) return 'wrong-host';
   if (el.ownerDocument !== document || !(el instanceof HTMLInputElement)) return 'not-a-field';
+  // The field must still be the one the plan names, before and after it takes focus (a page can
+  // swap it in a focus handler): otherwise nothing is set.
+  const same = () => el.isConnected && document.querySelector(selector) === el && el.getClientRects().length > 0 && location.host === host;
+  if (!same()) return 'swapped';
   const type = (el.getAttribute('type') || 'text').toLowerCase();
   if (part === 'password' ? type !== 'password' : !['text', 'email', 'tel', ''].includes(type)) return 'not-a-field';
   if (el.disabled || el.readOnly) return 'disabled';
   el.style.setProperty('-webkit-text-security', 'disc', 'important');
   el.setAttribute('data-nova-secret', '1');
   el.focus();
+  if (!same()) return 'swapped';
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, value);
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));

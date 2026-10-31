@@ -558,8 +558,9 @@ export class Browser extends EventEmitter {
     for (const f of [step.username, step.password, step.submit]) await this.#find(s, { selector: f }, step.timeout_ms, null);
     await this.#before(run, i, step, await this.#element(s, { selector: step.submit }));
     for (const [field, value, part] of [[step.username, user, 'username'], [step.password, pass, 'password']] as const) {
-      const r = await s.actOn<string>({ selector: field }, SECRET, [value, url.host, part]);
+      const r = await s.actOn<string>({ selector: field }, SECRET, [value, url.host, part, field]);
       if (r === 'wrong-host') throw new Stop('The page moved to another site before Nova signed in; it typed nothing.');
+      if (r === 'swapped') throw new Stop(`The page swapped ${field} as Nova was about to type into it, so Nova typed nothing more and sent nothing.`);
       if (r !== 'ok') throw new Stop(`${field} isn’t a ${part} field Nova will type a saved sign-in into (${r}).`);
     }
     this.#note(run.id, 'signed_in_with', { step: i + 1, site, fields: 2 });

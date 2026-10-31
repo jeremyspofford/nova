@@ -213,6 +213,9 @@ export class Session extends EventEmitter {
         await cdp.send('Page.enable', {}, sid);
         await cdp.send('Page.setLifecycleEventsEnabled', { enabled: true }, sid).catch(() => {});
         await cdp.send('Emulation.setDeviceMetricsOverride', { width: this.#meta.width, height: this.#meta.height, deviceScaleFactor: 1, mobile: false }, sid);
+        // The page behaves as a focused window does (focus events fire), as in a real browser: a
+        // page that reacts to focus does so in front of Nova's checks, not only for a person.
+        await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }, sid).catch(() => {});
       } else if (type === 'page') {
         // A second window (a popup): the task has one page, so it is closed. Its requests were
         // already held to the declared hosts.

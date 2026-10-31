@@ -244,7 +244,7 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
   const canon: string[] = [];
   if (need(Array.isArray(hosts) && hosts.length > 0 && hosts.length <= MAX_HOSTS, `inputs.allowed_hosts must list the hosts this task may reach (1 to ${MAX_HOSTS})`)) {
     (hosts as unknown[]).forEach((h, i) => {
-      const n = typeof h === 'string' && HOST.test(normalizeHost(h)) ? canonicalHost(h) : null;
+      const n = typeof h === 'string' ? canonicalHost(h) : null;
       if (!need(n !== null && HOST.test(n), `inputs.allowed_hosts[${i}] must be a host name, host:port or *.host`)) return;
       canon.push(n!);
       const m = (n!.startsWith('[') || n!.startsWith('*.[') ? /^(.*\])(?::(\d{1,5}))?$/ : /^([^:]+)(?::(\d{1,5}))?$/).exec(n!);
