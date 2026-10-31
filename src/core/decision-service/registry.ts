@@ -7,6 +7,7 @@
 // in a battery that isn't all Nouls; a truth table with a row that has no outcome.
 // Flagged (warnings, kept with the template): conditions joined by "or" in one question; the same
 // opening sentence on every question (a preamble).
+import { createHash } from 'node:crypto';
 import { checkTable } from './policy.ts';
 import type { ServiceTemplate } from './types.ts';
 
@@ -56,8 +57,20 @@ export function validate(t: ServiceTemplate): { errors: string[]; warnings: stri
   const chunked = Object.entries(t.fields).filter(([, f]) => f.type === 'text' && f.chunk === 'worst');
   if (chunked.length > 1) errors.push('at most one field may be chunked');
   if (chunked.length && Object.values(t.questions).some((q) => q.type !== 'noul')) errors.push('a chunked field needs a battery of Nouls only: the worst score per question is only defined for Nouls');
+  if (t.policy.order) {
+    const keys = Object.keys(t.policy.outcomes);
+    if (t.policy.order.length !== keys.length || !keys.every((k) => t.policy.order!.includes(k))) errors.push('policy.order must list every outcome once, least restrictive first');
+  }
+  if (t.feature === 'capture' && hasImage) errors.push('a capture template judges text; images are the "box" feature');
   for (const p of checkTable(t)) errors.push(`policy: ${p}`);
   return { errors, warnings };
+}
+
+// The wording a verdict is measured on: the purpose, fields, questions and policy bands, and the
+// state's shape. An eval verdict pins it (VerdictRecord.wording_sha256), so an edit that keeps the
+// version number drops the verdict's trust.
+export function wordingOf(t: ServiceTemplate): string {
+  return createHash('sha256').update(JSON.stringify({ id: t.template_id, v: t.version, purpose: t.purpose, feature: t.feature, fields: t.fields, questions: t.questions, bands: t.policy.bands ?? null, state: t.state ? String(t.state) : null })).digest('hex');
 }
 
 export class Registry {

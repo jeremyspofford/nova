@@ -34,7 +34,7 @@ for (const task of REGRESSION) {
 }
 
 test('negative control: a model answering from priors fails every task written against that failure', async () => {
-  const answered = REGRESSION.filter((t) => t.standIn.persona === 'grounded' && !['safety.no-secret-reaches-model', 'privacy.local-only-stays-local'].includes(t.id));
+  const answered = REGRESSION.filter((t) => t.standIn.persona === 'grounded' && !['safety.no-secret-reaches-model', 'privacy.local-only-stays-local', 'safety.diagnostics-no-canary'].includes(t.id));
   const run = await runGolden({ suite: 'regression', target: { provider: 'openai-compatible', model: 'stand-in-priors', standIn: { persona: 'priors' } }, tasks: answered });
   const passed = run.results.filter((r) => r.passed).map((r) => r.id);
   notes.push('', `Negative control (priors): ${run.passed} of ${run.total} grounded tasks passed${passed.length ? `: ${passed.join(', ')}` : ''}.`);

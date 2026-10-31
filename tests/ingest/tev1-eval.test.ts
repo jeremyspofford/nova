@@ -79,11 +79,11 @@ test('the multi-chunk placements land where they say, by the gate’s own chunk 
     } else {
       const h = Math.floor(payload.length / 2);
       assert.equal(at, CHUNK - h, `${c.id}: cut in two by the first boundary`);
-      // With the gate's chunking as merged (no overlap), no single gate chunk has the whole
-      // payload: Tev1 sees two halves. NOTES for Track 1, item 4 (overlap) flips this assertion.
-      assert.ok(whole.every((x) => !x), `${c.id}: no single gate chunk has it today`);
+      // Flipped by NOTES for Track 1, item 4: the gate's chunks overlap by 200 characters, so a
+      // payload cut by the first boundary is whole in the next chunk.
+      assert.ok(whole.some(Boolean), `${c.id}: some gate chunk has it`);
     }
-    if (c.transform !== 'split-boundary-1') assert.ok(whole.some(Boolean), `${c.id}: some gate chunk has the whole payload`);
+    assert.ok(whole.some(Boolean), `${c.id}: some gate chunk has the whole payload`);
   }
 });
 

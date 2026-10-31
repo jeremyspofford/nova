@@ -39,6 +39,14 @@ export class Unavailable extends Error {
 export class TooLong extends Error {
   constructor(message: string) { super(message); this.name = 'TooLong'; }
 }
+// A request that failed, in Nova's own words: a status and a fixed reason. Never what the other
+// side sent back, which may echo the state (content) it was given.
+export class SeatFailure extends Error {
+  constructor(message: string) { super(message); this.name = 'SeatFailure'; }
+}
+// A model name as an answer gives it, kept only when it looks like one (it goes into records).
+const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/;
+export const modelName = (v: unknown): string => (typeof v === 'string' && MODEL_NAME.test(v) ? v : '');
 
 export const utf8 = (s: string): number => Buffer.byteLength(s, 'utf8');
 
@@ -140,9 +148,9 @@ export class SystemOne {
   // be valid; each answer is read against its question, and anything that doesn't fit fails it.
   async ask(model: string, state: State, questions: Record<string, Question>, o: { keepAlive?: string; images?: Record<string, WireImage> } = {}): Promise<Asked> {
     const names = Object.keys(questions);
-    if (!names.length) throw new Error('A decision request needs at least one question.');
+    if (!names.length) throw new SeatFailure('A decision request needs at least one question.');
     const max = this.#o.maxQuestions === undefined ? MAX_QUESTIONS : this.#o.maxQuestions;
-    if (max !== null && names.length > max) throw new Error(`A decision request here takes at most ${max} questions; this one has ${names.length}.`);
+    if (max !== null && names.length > max) throw new SeatFailure(`A decision request here takes at most ${max} questions; this one has ${names.length}.`);
     const images = o.images ?? {};
     const assets = Object.keys(images).length ? Object.fromEntries(Object.entries(images).map(([ref, im]) => [ref, { type: 'image', format: im.format, data_base64: Buffer.from(im.data).toString('base64') }])) : undefined;
     const text = body(model, state, wireQuestions(questions), { ...(o.keepAlive ? { keepAlive: o.keepAlive } : {}), ...(assets ? { assets } : {}) });
@@ -158,25 +166,27 @@ export class SystemOne {
     const raw = await res.text().catch(() => '');
     let j: unknown;
     try { j = JSON.parse(raw); } catch { j = null; }
+    // What the other side said is read only to classify the failure, and never kept: it may echo
+    // the state it was sent.
     const said = (isObj(j) && typeof j.error === 'string' ? j.error : isObj(j) && typeof j.detail === 'string' ? j.detail : raw.trim()).slice(0, 300);
     if (res.status === 401 || res.status === 403) throw new Unavailable(`${this.host} refused Nova’s key (${res.status}).`);
-    if (res.status === 404) throw new Unavailable(`${this.host} doesn’t have ${model}${said ? ` (${said})` : ''}.`);
+    if (res.status === 404) throw new Unavailable(`${this.host} doesn’t have ${model} (404).`);
     if (res.status === 405) throw new Unavailable(`${this.host} has no decision-model endpoint.`);
     if (res.status === 429 || res.status === 529) throw new Unavailable(`${this.host} is busy (${res.status}); Nova will ask again later.`);
-    if (res.status === 413 || (res.status === 400 && /context|max_tokens_exceeded|too long|exceed|token/i.test(said))) throw new TooLong(`${this.host} said the request is too long: ${said}`);
-    if (!res.ok) throw new Error(`${this.host} answered ${res.status}${said ? `: ${said}` : ''}.`);
-    if (!isObj(j) || !isObj(j.answers)) throw new Error(`${this.host} sent a decision without answers.`);
+    if (res.status === 413 || (res.status === 400 && /context|max_tokens_exceeded|too long|exceed|token/i.test(said))) throw new TooLong(`${this.host} said the request is too long (${res.status}).`);
+    if (!res.ok) throw new SeatFailure(`${this.host} answered ${res.status}: ${res.status === 422 ? 'it refused the request as invalid' : res.status >= 500 ? 'it failed on its side' : 'it refused the request'}.`);
+    if (!isObj(j) || !isObj(j.answers)) throw new SeatFailure(`${this.host} sent a decision without answers.`);
     const answers: Record<string, Answer> = {};
     const problems: string[] = [];
     for (const n of names) {
       const a = readAnswer(questions[n]!, j.answers[n]);
       if (a) answers[n] = a; else problems.push(n);
     }
-    if (problems.length) throw new Error(`${this.host} didn’t answer ${problems.join(', ')} in the question’s own type.`);
+    if (problems.length) throw new SeatFailure(`${this.host} didn’t answer ${problems.length} of the questions in the question’s own type.`);
     const u = isObj(j.usage) ? j.usage : {};
     return {
       answers,
-      model: typeof j.model === 'string' ? j.model : '',
+      model: modelName(j.model),
       usage: { input_tokens: typeof u.input_tokens === 'number' ? u.input_tokens : null, output_tokens: typeof u.output_tokens === 'number' ? u.output_tokens : null },
       ms: performance.now() - started,
       bytes,
