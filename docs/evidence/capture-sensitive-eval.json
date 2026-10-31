@@ -1,0 +1,5062 @@
+{
+ "template": "capture-sensitive",
+ "version": 1,
+ "template_commit": "727b750982090f65b941f981bbede3799156da74",
+ "pre_run_commit": "9cb2ca0af0d61cfbf6a9858385b3082f686a7f5b",
+ "cases_sha256": "3e3a899886605d3c4ffd1f0aabd597a3090e9cb1e6f92e375dc20f2c9f421773",
+ "sizes": {
+  "tev1:4b": {
+   "status": "pass",
+   "why": "all three model bounds met",
+   "deterministic_ok": true,
+   "digest": "7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740",
+   "ollama": "0.40.13",
+   "run_at": "2026-10-31T19:48:32.317Z",
+   "metrics": {
+    "grey": 39,
+    "benign": 40,
+    "structured": 12,
+    "app": 4,
+    "unanswered": [],
+    "detection": {
+     "k": 38,
+     "n": 39,
+     "rate": 0.9744,
+     "wilson95": [
+      0.8682,
+      0.9955
+     ]
+    },
+    "false_hold": {
+     "k": 1,
+     "n": 40,
+     "rate": 0.025,
+     "wilson95": [
+      0.0044,
+      0.1288
+     ]
+    },
+    "deterministic": {
+     "k": 16,
+     "n": 16,
+     "rate": 1,
+     "wilson95": [
+      0.8064,
+      1
+     ]
+    },
+    "missed": [
+     "g-health-prescription"
+    ],
+    "false_holds": [
+     "b-vet-appointment"
+    ],
+    "deterministic_missed": [],
+    "leaks": [],
+    "pipeline_false_hold": {
+     "k": 2,
+     "n": 40,
+     "rate": 0.05,
+     "wilson95": [
+      0.0138,
+      0.165
+     ]
+    },
+    "ece": 0.0318,
+    "bins": [
+     {
+      "lo": 0,
+      "hi": 0.1,
+      "n": 250,
+      "mean_p": 0.0135,
+      "mean_label": 0.004
+     },
+     {
+      "lo": 0.1,
+      "hi": 0.2,
+      "n": 9,
+      "mean_p": 0.1462,
+      "mean_label": 0.1111
+     },
+     {
+      "lo": 0.2,
+      "hi": 0.3,
+      "n": 6,
+      "mean_p": 0.2418,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.3,
+      "hi": 0.4,
+      "n": 6,
+      "mean_p": 0.3257,
+      "mean_label": 0.5
+     },
+     {
+      "lo": 0.4,
+      "hi": 0.5,
+      "n": 2,
+      "mean_p": 0.4681,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.5,
+      "hi": 0.6,
+      "n": 2,
+      "mean_p": 0.5655,
+      "mean_label": 0.5
+     },
+     {
+      "lo": 0.6,
+      "hi": 0.7,
+      "n": 7,
+      "mean_p": 0.6618,
+      "mean_label": 0.7143
+     },
+     {
+      "lo": 0.7,
+      "hi": 0.8,
+      "n": 4,
+      "mean_p": 0.7375,
+      "mean_label": 0.75
+     },
+     {
+      "lo": 0.8,
+      "hi": 0.9,
+      "n": 11,
+      "mean_p": 0.8515,
+      "mean_label": 0.6364
+     },
+     {
+      "lo": 0.9,
+      "hi": 1,
+      "n": 19,
+      "mean_p": 0.9476,
+      "mean_label": 1
+     }
+    ],
+    "ece_by_question": {
+     "password": 0.0761,
+     "secret_key": 0.0795,
+     "financial_details": 0.0544,
+     "health_details": 0.0174
+    }
+   },
+   "cases": [
+    {
+     "id": "g-pw-cabin-wifi",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.934146147908071,
+      "secret_key": 0.8173046397008091,
+      "financial_details": 0.008104705159259488,
+      "health_details": 0.005366143224541525
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 3687,
+     "error": null
+    },
+    {
+     "id": "g-pw-pet-name",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.6918618105679588,
+      "secret_key": 0.7286559202874705,
+      "financial_details": 0.01777965725893765,
+      "health_details": 0.005858291460206655
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 146,
+     "error": null
+    },
+    {
+     "id": "g-pw-streaming",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.6210301985396743,
+      "secret_key": 0.692626552879852,
+      "financial_details": 0.04089064919131617,
+      "health_details": 0.007452512508089845
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 148,
+     "error": null
+    },
+    {
+     "id": "g-pw-spoken",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.6893125609748432,
+      "secret_key": 0.3507175370527819,
+      "financial_details": 0.10804255473380034,
+      "health_details": 0.0055282683940210235
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 153,
+     "error": null
+    },
+    {
+     "id": "g-pw-club",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.9611230430838387,
+      "secret_key": 0.8885122784591907,
+      "financial_details": 0.005776342729381042,
+      "health_details": 0.005916967095437426
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 150,
+     "error": null
+    },
+    {
+     "id": "g-pw-pin-spoken",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.9257025406709927,
+      "secret_key": 0.4363382091231682,
+      "financial_details": 0.8543955712786699,
+      "health_details": 0.01174784407797382
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "g-pw-shared-doc",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.7735716980481996,
+      "secret_key": 0.6086585759220651,
+      "financial_details": 0.011176481547456624,
+      "health_details": 0.005075488860719446
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 152,
+     "error": null
+    },
+    {
+     "id": "g-pw-router",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.3248387390232441,
+      "secret_key": 0.31957453182425755,
+      "financial_details": 0.005884855662809039,
+      "health_details": 0.0038625305669137224
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 150,
+     "error": null
+    },
+    {
+     "id": "g-sk-recovery-phrase",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.5644009615167249,
+      "secret_key": 0.8510435467858858,
+      "financial_details": 0.09915577585267306,
+      "health_details": 0.00974168711289434
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 151,
+     "error": null
+    },
+    {
+     "id": "g-sk-deploy-key",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.19216244702320381,
+      "secret_key": 0.8040960306383873,
+      "financial_details": 0.01123964196191503,
+      "health_details": 0.004010769439798321
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 147,
+     "error": null
+    },
+    {
+     "id": "g-sk-cookie",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.01938404014341439,
+      "secret_key": 0.6770333426675962,
+      "financial_details": 0.020198898967331364,
+      "health_details": 0.0064503391436518285
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 147,
+     "error": null
+    },
+    {
+     "id": "g-sk-weather-api",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.89997055979264,
+      "secret_key": 0.8166058422809699,
+      "financial_details": 0.015512798961970987,
+      "health_details": 0.015260483550101836
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 148,
+     "error": null
+    },
+    {
+     "id": "g-sk-recovery-codes",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.207063419362056,
+      "secret_key": 0.5665394608363066,
+      "financial_details": 0.08475219595523922,
+      "health_details": 0.006875349258845193
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 151,
+     "error": null
+    },
+    {
+     "id": "g-sk-spoken-token",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.4998559951822044,
+      "secret_key": 0.8693926494088717,
+      "financial_details": 0.020935095523232635,
+      "health_details": 0.0032999307735824875
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 147,
+     "error": null
+    },
+    {
+     "id": "g-fin-statement",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.01658888337914678,
+      "secret_key": 0.012398513049741468,
+      "financial_details": 0.9049515171369487,
+      "health_details": 0.00589980446706399
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 151,
+     "error": null
+    },
+    {
+     "id": "g-fin-payslip",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.007198414235471269,
+      "secret_key": 0.007928311846573702,
+      "financial_details": 0.8513807724360497,
+      "health_details": 0.016410419698098522
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 153,
+     "error": null
+    },
+    {
+     "id": "g-fin-tax",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.009502681394462422,
+      "secret_key": 0.008204438045723943,
+      "financial_details": 0.9406401882815612,
+      "health_details": 0.01432070567244252
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 151,
+     "error": null
+    },
+    {
+     "id": "g-fin-loan",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0102150500982239,
+      "secret_key": 0.01320320025170338,
+      "financial_details": 0.9591404577524038,
+      "health_details": 0.008615946987184278
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 151,
+     "error": null
+    },
+    {
+     "id": "g-fin-portfolio",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.006197370357868757,
+      "secret_key": 0.009568975263012773,
+      "financial_details": 0.875014114245318,
+      "health_details": 0.011578879723297573
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 145,
+     "error": null
+    },
+    {
+     "id": "g-fin-card-statement",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.010643187729197527,
+      "secret_key": 0.020709583317600554,
+      "financial_details": 0.9145367200344853,
+      "health_details": 0.01021055775611495
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 150,
+     "error": null
+    },
+    {
+     "id": "g-fin-budget",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.009218528975727962,
+      "secret_key": 0.01274371241862901,
+      "financial_details": 0.30161027864769085,
+      "health_details": 0.007284552095395129
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 153,
+     "error": null
+    },
+    {
+     "id": "g-fin-spoken-salary",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.011874804332659946,
+      "secret_key": 0.01131091665636631,
+      "financial_details": 0.9631380767165129,
+      "health_details": 0.012409705119744416
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 150,
+     "error": null
+    },
+    {
+     "id": "g-fin-arrears",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.007938534851803104,
+      "secret_key": 0.012579427803804166,
+      "financial_details": 0.9638617509943546,
+      "health_details": 0.012911791737882565
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 151,
+     "error": null
+    },
+    {
+     "id": "g-fin-overdraft",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004871132702315903,
+      "secret_key": 0.011772205255217848,
+      "financial_details": 0.7112816935441116,
+      "health_details": 0.008030661272204443
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "g-fin-pension",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.013356279047307636,
+      "secret_key": 0.01494834948563028,
+      "financial_details": 0.9451225657041211,
+      "health_details": 0.01531210516233666
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 147,
+     "error": null
+    },
+    {
+     "id": "g-fin-transfer-chat",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.047342016424650635,
+      "secret_key": 0.09180312794042572,
+      "financial_details": 0.9454940316687104,
+      "health_details": 0.013645612247505242
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 151,
+     "error": null
+    },
+    {
+     "id": "g-fin-crypto",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.008456687228256642,
+      "secret_key": 0.020354324554441673,
+      "financial_details": 0.6519493341101977,
+      "health_details": 0.015285784831915011
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 150,
+     "error": null
+    },
+    {
+     "id": "g-health-gp",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.0072676613857928255,
+      "secret_key": 0.011954585622911918,
+      "financial_details": 0.005400160200964765,
+      "health_details": 0.8389745032887042
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 148,
+     "error": null
+    },
+    {
+     "id": "g-health-prescription",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.007619021370421954,
+      "secret_key": 0.01030787697681628,
+      "financial_details": 0.012768933814218964,
+      "health_details": 0.085603217984227
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 147,
+     "error": null
+    },
+    {
+     "id": "g-health-lab",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.010242605990210258,
+      "secret_key": 0.012176110949610082,
+      "financial_details": 0.006870141807537724,
+      "health_details": 0.9651185993845856
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "g-health-therapy",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.003255929669611054,
+      "secret_key": 0.004148457295663497,
+      "financial_details": 0.002234460222356493,
+      "health_details": 0.9588987851788435
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "g-health-symptoms",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.003713401021880008,
+      "secret_key": 0.004245586757449671,
+      "financial_details": 0.002043165315278959,
+      "health_details": 0.9158975551089668
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 145,
+     "error": null
+    },
+    {
+     "id": "g-health-allergy",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.00564230442765198,
+      "secret_key": 0.008360236494409506,
+      "financial_details": 0.002595834126219875,
+      "health_details": 0.9492984910392867
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "g-health-friend-diagnosis",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.005097989577029514,
+      "secret_key": 0.006892953363262928,
+      "financial_details": 0.006985906795035894,
+      "health_details": 0.9871303654565354
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 145,
+     "error": null
+    },
+    {
+     "id": "g-health-discharge",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.010311204835675557,
+      "secret_key": 0.005568300749658205,
+      "financial_details": 0.003241095140838809,
+      "health_details": 0.9250204159718654
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "g-health-mental-app",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.004217497986685319,
+      "secret_key": 0.005048993970558874,
+      "financial_details": 0.0032181373670436657,
+      "health_details": 0.7364950038855635
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 145,
+     "error": null
+    },
+    {
+     "id": "g-health-physio",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.004376398731897846,
+      "secret_key": 0.003897776283348224,
+      "financial_details": 0.0038915902298640287,
+      "health_details": 0.978784495000826
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 147,
+     "error": null
+    },
+    {
+     "id": "g-health-claim",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.009296990463421782,
+      "secret_key": 0.04044003357055581,
+      "financial_details": 0.1600669390464105,
+      "health_details": 0.3202787674117746
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 154,
+     "error": null
+    },
+    {
+     "id": "g-health-pregnancy",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.013058807712263682,
+      "secret_key": 0.020693536227559213,
+      "financial_details": 0.005305768970861086,
+      "health_details": 0.9666523562827125
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 143,
+     "error": null
+    },
+    {
+     "id": "s-aws-key",
+     "kind": "structured",
+     "category": "cloud access key",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.037732541945316014,
+      "secret_key": 0.5846968772793478,
+      "financial_details": 0.11729201966475693,
+      "health_details": 0.005956046987152599
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "cloud access key"
+     ],
+     "requests": 1,
+     "ms": 145,
+     "error": null
+    },
+    {
+     "id": "s-github-token",
+     "kind": "structured",
+     "category": "access token",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.11911243449822595,
+      "secret_key": 0.752400439792368,
+      "financial_details": 0.009555066205649838,
+      "health_details": 0.0029991371584406966
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "access token"
+     ],
+     "requests": 1,
+     "ms": 140,
+     "error": null
+    },
+    {
+     "id": "s-stripe-key",
+     "kind": "structured",
+     "category": "access token",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.060453294321693565,
+      "secret_key": 0.5532733592898587,
+      "financial_details": 0.127472620733295,
+      "health_details": 0.010024297208722794
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "access token"
+     ],
+     "requests": 1,
+     "ms": 140,
+     "error": null
+    },
+    {
+     "id": "s-private-key",
+     "kind": "structured",
+     "category": "private key",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.01147376608099907,
+      "secret_key": 0.12409976353651525,
+      "financial_details": 0.005014560188882366,
+      "health_details": 0.003684112479057815
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "private key"
+     ],
+     "requests": 1,
+     "ms": 154,
+     "error": null
+    },
+    {
+     "id": "s-conn-string",
+     "kind": "structured",
+     "category": "password in a connection string",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.168541853229082,
+      "secret_key": 0.7036099288389049,
+      "financial_details": 0.13790234068406854,
+      "health_details": 0.009420738199268199
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "password in a connection string"
+     ],
+     "requests": 1,
+     "ms": 152,
+     "error": null
+    },
+    {
+     "id": "s-password-label",
+     "kind": "structured",
+     "category": "password",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.04028319398496408,
+      "secret_key": 0.20612113230346418,
+      "financial_details": 0.27439010511003464,
+      "health_details": 0.005459137438800335
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "password"
+     ],
+     "requests": 1,
+     "ms": 152,
+     "error": null
+    },
+    {
+     "id": "s-card-visa",
+     "kind": "structured",
+     "category": "card number",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.009432314819110747,
+      "secret_key": 0.02858850659617904,
+      "financial_details": 0.7834281625854155,
+      "health_details": 0.006793219070750362
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "card number"
+     ],
+     "requests": 1,
+     "ms": 155,
+     "error": null
+    },
+    {
+     "id": "s-card-mastercard",
+     "kind": "structured",
+     "category": "card number",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.012527436491095464,
+      "secret_key": 0.08057706555419825,
+      "financial_details": 0.8717307922632925,
+      "health_details": 0.009752346358630206
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "card number"
+     ],
+     "requests": 1,
+     "ms": 145,
+     "error": null
+    },
+    {
+     "id": "s-iban",
+     "kind": "structured",
+     "category": "bank account (IBAN)",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.008412786635335047,
+      "secret_key": 0.026753620988242195,
+      "financial_details": 0.648868432879977,
+      "health_details": 0.006313215880678303
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "bank account (IBAN)"
+     ],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "s-ssn",
+     "kind": "structured",
+     "category": "social security number",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.00933335568960864,
+      "secret_key": 0.01719558794699345,
+      "financial_details": 0.077704719872827,
+      "health_details": 0.009745662269369824
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "social security number"
+     ],
+     "requests": 1,
+     "ms": 147,
+     "error": null
+    },
+    {
+     "id": "s-jwt",
+     "kind": "structured",
+     "category": "signed token",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.040093230420416064,
+      "secret_key": 0.6254416803769032,
+      "financial_details": 0.02802164737694592,
+      "health_details": 0.0086009712423654
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "signed token"
+     ],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "s-pin-label",
+     "kind": "structured",
+     "category": "password",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.12255561591836966,
+      "secret_key": 0.09263485960440859,
+      "financial_details": 0.0217986124596733,
+      "health_details": 0.0039910686830367924
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "password"
+     ],
+     "requests": 1,
+     "ms": 147,
+     "error": null
+    },
+    {
+     "id": "a-bitwarden",
+     "kind": "app",
+     "category": "password manager",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": null,
+     "model_outcome": null,
+     "pipeline": "exclude",
+     "asked": false,
+     "leaked": false,
+     "findings": [],
+     "requests": 0,
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "a-1password",
+     "kind": "app",
+     "category": "password manager",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": null,
+     "model_outcome": null,
+     "pipeline": "exclude",
+     "asked": false,
+     "leaked": false,
+     "findings": [],
+     "requests": 0,
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "a-bank-app",
+     "kind": "app",
+     "category": "banking app",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": null,
+     "model_outcome": null,
+     "pipeline": "exclude",
+     "asked": false,
+     "leaked": false,
+     "findings": [],
+     "requests": 0,
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "a-bank-site",
+     "kind": "app",
+     "category": "banking site",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": null,
+     "model_outcome": null,
+     "pipeline": "exclude",
+     "asked": false,
+     "leaked": false,
+     "findings": [],
+     "requests": 0,
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "b-docs-api-keys",
+     "kind": "benign",
+     "category": "docs about API keys",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.07491796053914758,
+      "secret_key": 0.019711829252297374,
+      "financial_details": 0.007300403517450244,
+      "health_details": 0.008630883299970664
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 156,
+     "error": null
+    },
+    {
+     "id": "b-docs-sk-placeholder",
+     "kind": "benign",
+     "category": "docs with a key-shaped placeholder",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.10682409764893318,
+      "secret_key": 0.1831232350525925,
+      "financial_details": 0.02857304360101082,
+      "health_details": 0.009168509249807659
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "access token"
+     ],
+     "requests": 1,
+     "ms": 151,
+     "error": null
+    },
+    {
+     "id": "b-recipe-vitamin",
+     "kind": "benign",
+     "category": "recipe naming a vitamin dose",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.007586828359510139,
+      "secret_key": 0.010694887797203364,
+      "financial_details": 0.004067363023020128,
+      "health_details": 0.010323279674849252
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 152,
+     "error": null
+    },
+    {
+     "id": "b-bank-ad",
+     "kind": "benign",
+     "category": "a bank’s advertising on a news site",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.006986568399924481,
+      "secret_key": 0.009317391184979994,
+      "financial_details": 0.008102482145993841,
+      "health_details": 0.008780802006016282
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 152,
+     "error": null
+    },
+    {
+     "id": "b-pricing",
+     "kind": "benign",
+     "category": "pricing page",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004775099965017318,
+      "secret_key": 0.008232702185598512,
+      "financial_details": 0.007572308893337231,
+      "health_details": 0.010751825727532477
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 152,
+     "error": null
+    },
+    {
+     "id": "b-gym-timetable",
+     "kind": "benign",
+     "category": "fitness timetable",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.002778952691773777,
+      "secret_key": 0.006557722430447051,
+      "financial_details": 0.0028201282509226775,
+      "health_details": 0.018876035470468677
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "b-pharmacy-hours",
+     "kind": "benign",
+     "category": "pharmacy opening hours",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004181938134784391,
+      "secret_key": 0.005275675541736154,
+      "financial_details": 0.004937031809016909,
+      "health_details": 0.005053451356541834
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 150,
+     "error": null
+    },
+    {
+     "id": "b-health-article",
+     "kind": "benign",
+     "category": "general health article",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0038523870464977636,
+      "secret_key": 0.004451438483808785,
+      "financial_details": 0.002123986654593667,
+      "health_details": 0.005790929641538022
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 141,
+     "error": null
+    },
+    {
+     "id": "b-money-article",
+     "kind": "benign",
+     "category": "general personal-finance article",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004016983921559543,
+      "secret_key": 0.005868987382746451,
+      "financial_details": 0.004322241303118277,
+      "health_details": 0.019804181126913168
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 142,
+     "error": null
+    },
+    {
+     "id": "b-rates-news",
+     "kind": "benign",
+     "category": "news about interest rates",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0058866189552497835,
+      "secret_key": 0.007245690229501271,
+      "financial_details": 0.006414063177220953,
+      "health_details": 0.010016123541096171
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 139,
+     "error": null
+    },
+    {
+     "id": "b-login-form",
+     "kind": "benign",
+     "category": "a login form with empty fields",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.20185501075514092,
+      "secret_key": 0.243052774234361,
+      "financial_details": 0.026432647584393804,
+      "health_details": 0.007951162740068756
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 143,
+     "error": null
+    },
+    {
+     "id": "b-masked-password",
+     "kind": "benign",
+     "category": "a masked password field",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.04035101473412534,
+      "secret_key": 0.04782356138068631,
+      "financial_details": 0.053128433722131205,
+      "health_details": 0.00784217196188109
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 142,
+     "error": null
+    },
+    {
+     "id": "b-pm-review",
+     "kind": "benign",
+     "category": "a review of password managers",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.06722006440833894,
+      "secret_key": 0.023776353899705494,
+      "financial_details": 0.01320242990501757,
+      "health_details": 0.014343635569392695
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 156,
+     "error": null
+    },
+    {
+     "id": "b-change-password-help",
+     "kind": "benign",
+     "category": "help article on changing a password",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.07764678167170415,
+      "secret_key": 0.17873543877109874,
+      "financial_details": 0.012631988964351807,
+      "health_details": 0.011318619320617266
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 156,
+     "error": null
+    },
+    {
+     "id": "b-strong-password-tips",
+     "kind": "benign",
+     "category": "tips on strong passwords with a famous example",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.2907070613524786,
+      "secret_key": 0.14961289808544914,
+      "financial_details": 0.007369926794406399,
+      "health_details": 0.013619605527085285
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 155,
+     "error": null
+    },
+    {
+     "id": "b-env-names",
+     "kind": "benign",
+     "category": "code naming environment variables",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.11073683406114777,
+      "secret_key": 0.271072265860192,
+      "financial_details": 0.010942141363797292,
+      "health_details": 0.010846386544458067
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 155,
+     "error": null
+    },
+    {
+     "id": "b-git-log",
+     "kind": "benign",
+     "category": "a git log with commit hashes",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.009047548514204777,
+      "secret_key": 0.02658079170496804,
+      "financial_details": 0.0048764796297297314,
+      "health_details": 0.0474394895217201
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 158,
+     "error": null
+    },
+    {
+     "id": "b-receipt-coffee",
+     "kind": "benign",
+     "category": "a coffee receipt",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.00549860937715254,
+      "secret_key": 0.007455066599965162,
+      "financial_details": 0.04719178944249843,
+      "health_details": 0.0055689556041468614
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 155,
+     "error": null
+    },
+    {
+     "id": "b-order-confirmation",
+     "kind": "benign",
+     "category": "an order confirmation",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005593971172393813,
+      "secret_key": 0.026466929572995068,
+      "financial_details": 0.06253210745969011,
+      "health_details": 0.007433827783148004
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 156,
+     "error": null
+    },
+    {
+     "id": "b-train-times",
+     "kind": "benign",
+     "category": "train timetable",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.003992547441523827,
+      "secret_key": 0.011801887165110629,
+      "financial_details": 0.004344015122159422,
+      "health_details": 0.008872210546971019
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 157,
+     "error": null
+    },
+    {
+     "id": "b-meeting-notes",
+     "kind": "benign",
+     "category": "meeting notes",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.003555085779150288,
+      "secret_key": 0.004425446350576494,
+      "financial_details": 0.006685627107032303,
+      "health_details": 0.0042087997211067135
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 154,
+     "error": null
+    },
+    {
+     "id": "b-shopping",
+     "kind": "benign",
+     "category": "shopping list",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.006001149118527041,
+      "secret_key": 0.010275762421238899,
+      "financial_details": 0.00921614262399685,
+      "health_details": 0.011479457053068727
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 151,
+     "error": null
+    },
+    {
+     "id": "b-weather",
+     "kind": "benign",
+     "category": "weather",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.002917943864340338,
+      "secret_key": 0.005940415873385556,
+      "financial_details": 0.0024983909497102432,
+      "health_details": 0.009175720176644482
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 153,
+     "error": null
+    },
+    {
+     "id": "b-support-chat",
+     "kind": "benign",
+     "category": "support chat about a reset",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.08462223698369041,
+      "secret_key": 0.04493901006655879,
+      "financial_details": 0.012974880149387896,
+      "health_details": 0.015046487192319727
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 153,
+     "error": null
+    },
+    {
+     "id": "b-phone-list",
+     "kind": "benign",
+     "category": "a club phone list",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.014866141948277251,
+      "secret_key": 0.01673780389239383,
+      "financial_details": 0.03312939006300673,
+      "health_details": 0.0033133389016352737
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 154,
+     "error": null
+    },
+    {
+     "id": "b-tracking",
+     "kind": "benign",
+     "category": "a parcel tracking page",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.011829992926688456,
+      "secret_key": 0.04997617995414728,
+      "financial_details": 0.02229341815975641,
+      "health_details": 0.006381000396715156
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 152,
+     "error": null
+    },
+    {
+     "id": "b-diabetes-wiki",
+     "kind": "benign",
+     "category": "an encyclopedia page on diabetes",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005379281450986723,
+      "secret_key": 0.004212230479352665,
+      "financial_details": 0.0031337854883067466,
+      "health_details": 0.00483282134069438
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 153,
+     "error": null
+    },
+    {
+     "id": "b-insurer-ad",
+     "kind": "benign",
+     "category": "an insurer’s advertising",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.003982805277182688,
+      "secret_key": 0.009254362820262882,
+      "financial_details": 0.011413371921345897,
+      "health_details": 0.008888511233234867
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 138,
+     "error": null
+    },
+    {
+     "id": "b-payroll-features",
+     "kind": "benign",
+     "category": "payroll software features",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004944608670058062,
+      "secret_key": 0.010255956515353307,
+      "financial_details": 0.028367872275970183,
+      "health_details": 0.009629631494976419
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 142,
+     "error": null
+    },
+    {
+     "id": "b-vet-appointment",
+     "kind": "benign",
+     "category": "a pet’s vet appointment",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.006215652390817687,
+      "secret_key": 0.006070964359067137,
+      "financial_details": 0.005831713764378202,
+      "health_details": 0.33694354738169774
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 144,
+     "error": null
+    },
+    {
+     "id": "b-hospital-news",
+     "kind": "benign",
+     "category": "news about a hospital",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.002784306959285228,
+      "secret_key": 0.004647083578683803,
+      "financial_details": 0.004968153574515803,
+      "health_details": 0.0076351469947374875
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 143,
+     "error": null
+    },
+    {
+     "id": "b-bank-help-article",
+     "kind": "benign",
+     "category": "a bank help article on a help site",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0036124398925548554,
+      "secret_key": 0.006345172021104511,
+      "financial_details": 0.02459866814333912,
+      "health_details": 0.007855599123867543
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 141,
+     "error": null
+    },
+    {
+     "id": "b-spoken-budget-tips",
+     "kind": "benign",
+     "category": "a podcast on budgeting",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.008112513492302641,
+      "secret_key": 0.010636802845734391,
+      "financial_details": 0.016090964784265385,
+      "health_details": 0.008354198254276196
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 147,
+     "error": null
+    },
+    {
+     "id": "b-spoken-fitness",
+     "kind": "benign",
+     "category": "a podcast on fitness",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005255046219028967,
+      "secret_key": 0.004146094047411725,
+      "financial_details": 0.0033818797488870205,
+      "health_details": 0.01058446169134583
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 148,
+     "error": null
+    },
+    {
+     "id": "b-product-spec",
+     "kind": "benign",
+     "category": "a product spec sheet with numbers",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005462897821790791,
+      "secret_key": 0.01921739122166835,
+      "financial_details": 0.007125462288089919,
+      "health_details": 0.011916054956051827
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "b-cvc-explainer",
+     "kind": "benign",
+     "category": "an explainer about card security codes",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.08306661239799536,
+      "secret_key": 0.12640051008593897,
+      "financial_details": 0.23680843073699148,
+      "health_details": 0.013220681637372897
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 150,
+     "error": null
+    },
+    {
+     "id": "b-calendar-public",
+     "kind": "benign",
+     "category": "a public events calendar",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.003194661344336657,
+      "secret_key": 0.005260792368631796,
+      "financial_details": 0.0021727444454951905,
+      "health_details": 0.0104931899286498
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    },
+    {
+     "id": "b-kids-recipe",
+     "kind": "benign",
+     "category": "a children’s recipe",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004006124376249234,
+      "secret_key": 0.006503594945588088,
+      "financial_details": 0.002742651156812283,
+      "health_details": 0.009200098562005701
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 150,
+     "error": null
+    },
+    {
+     "id": "b-vaccine-info",
+     "kind": "benign",
+     "category": "a public vaccine information page",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0035135328238493583,
+      "secret_key": 0.00462810992498685,
+      "financial_details": 0.005914757374150755,
+      "health_details": 0.009335560423911867
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 144,
+     "error": null
+    },
+    {
+     "id": "b-salary-survey",
+     "kind": "benign",
+     "category": "a salary survey article",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.002742964185301301,
+      "secret_key": 0.004599125896556439,
+      "financial_details": 0.03258824144387092,
+      "health_details": 0.008765625115541095
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 149,
+     "error": null
+    }
+   ]
+  },
+  "tev1:0.8b": {
+   "status": "fail",
+   "why": "detection 79.5% is below 95%",
+   "deterministic_ok": true,
+   "digest": "abc31fdb0bf52506cc47091145ac19c4cfb509b73a6841789324f9e32200c099",
+   "ollama": "0.40.13",
+   "run_at": "2026-10-31T19:48:49.455Z",
+   "metrics": {
+    "grey": 39,
+    "benign": 40,
+    "structured": 12,
+    "app": 4,
+    "unanswered": [],
+    "detection": {
+     "k": 31,
+     "n": 39,
+     "rate": 0.7949,
+     "wilson95": [
+      0.6447,
+      0.8922
+     ]
+    },
+    "false_hold": {
+     "k": 5,
+     "n": 40,
+     "rate": 0.125,
+     "wilson95": [
+      0.0546,
+      0.2611
+     ]
+    },
+    "deterministic": {
+     "k": 16,
+     "n": 16,
+     "rate": 1,
+     "wilson95": [
+      0.8064,
+      1
+     ]
+    },
+    "missed": [
+     "g-pw-cabin-wifi",
+     "g-pw-pet-name",
+     "g-pw-streaming",
+     "g-pw-spoken",
+     "g-pw-router",
+     "g-sk-recovery-phrase",
+     "g-sk-cookie",
+     "g-sk-spoken-token"
+    ],
+    "false_holds": [
+     "b-docs-api-keys",
+     "b-docs-sk-placeholder",
+     "b-change-password-help",
+     "b-env-names",
+     "b-vet-appointment"
+    ],
+    "deterministic_missed": [],
+    "leaks": [],
+    "pipeline_false_hold": {
+     "k": 5,
+     "n": 40,
+     "rate": 0.125,
+     "wilson95": [
+      0.0546,
+      0.2611
+     ]
+    },
+    "ece": 0.0231,
+    "bins": [
+     {
+      "lo": 0,
+      "hi": 0.1,
+      "n": 255,
+      "mean_p": 0.0198,
+      "mean_label": 0.0235
+     },
+     {
+      "lo": 0.1,
+      "hi": 0.2,
+      "n": 15,
+      "mean_p": 0.1404,
+      "mean_label": 0.2
+     },
+     {
+      "lo": 0.2,
+      "hi": 0.3,
+      "n": 6,
+      "mean_p": 0.2409,
+      "mean_label": 0.1667
+     },
+     {
+      "lo": 0.3,
+      "hi": 0.4,
+      "n": 3,
+      "mean_p": 0.3685,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.4,
+      "hi": 0.5,
+      "n": 5,
+      "mean_p": 0.4552,
+      "mean_label": 0.6
+     },
+     {
+      "lo": 0.5,
+      "hi": 0.6,
+      "n": 3,
+      "mean_p": 0.5626,
+      "mean_label": 0.6667
+     },
+     {
+      "lo": 0.6,
+      "hi": 0.7,
+      "n": 6,
+      "mean_p": 0.665,
+      "mean_label": 0.5
+     },
+     {
+      "lo": 0.7,
+      "hi": 0.8,
+      "n": 2,
+      "mean_p": 0.7334,
+      "mean_label": 1
+     },
+     {
+      "lo": 0.8,
+      "hi": 0.9,
+      "n": 2,
+      "mean_p": 0.8671,
+      "mean_label": 0.5
+     },
+     {
+      "lo": 0.9,
+      "hi": 1,
+      "n": 19,
+      "mean_p": 0.9669,
+      "mean_label": 1
+     }
+    ],
+    "ece_by_question": {
+     "password": 0.0848,
+     "secret_key": 0.0878,
+     "financial_details": 0.029,
+     "health_details": 0.0415
+    }
+   },
+   "cases": [
+    {
+     "id": "g-pw-cabin-wifi",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.04933103838953056,
+      "secret_key": 0.26536665548375454,
+      "financial_details": 0.006312856926326505,
+      "health_details": 0.007410025180635889
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 1670,
+     "error": null
+    },
+    {
+     "id": "g-pw-pet-name",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.021721146668303368,
+      "secret_key": 0.13015407379062127,
+      "financial_details": 0.008816916160973833,
+      "health_details": 0.04055112640740427
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 63,
+     "error": null
+    },
+    {
+     "id": "g-pw-streaming",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.026920896756932513,
+      "secret_key": 0.1915892789183484,
+      "financial_details": 0.018481163754271,
+      "health_details": 0.02243374232321898
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 64,
+     "error": null
+    },
+    {
+     "id": "g-pw-spoken",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.07493144496208405,
+      "secret_key": 0.16219100552151527,
+      "financial_details": 0.015835905456000873,
+      "health_details": 0.0215765627849155
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 68,
+     "error": null
+    },
+    {
+     "id": "g-pw-club",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.47400341345803243,
+      "secret_key": 0.3363353103796627,
+      "financial_details": 0.00881894996988074,
+      "health_details": 0.017901241969544235
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 70,
+     "error": null
+    },
+    {
+     "id": "g-pw-pin-spoken",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.9443996172113006,
+      "secret_key": 0.14793921357618073,
+      "financial_details": 0.2513396391983993,
+      "health_details": 0.015258391301473296
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 69,
+     "error": null
+    },
+    {
+     "id": "g-pw-shared-doc",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.12582161112421542,
+      "secret_key": 0.424594645241362,
+      "financial_details": 0.006427557584105919,
+      "health_details": 0.0035486861912482877
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 68,
+     "error": null
+    },
+    {
+     "id": "g-pw-router",
+     "kind": "grey",
+     "category": "password in prose",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.013769309386544892,
+      "secret_key": 0.09797493309728907,
+      "financial_details": 0.0038780683644304937,
+      "health_details": 0.003948683728041831
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-sk-recovery-phrase",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.019899821139918783,
+      "secret_key": 0.20021874748657967,
+      "financial_details": 0.12899694119489177,
+      "health_details": 0.009738026236888929
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 68,
+     "error": null
+    },
+    {
+     "id": "g-sk-deploy-key",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.010431560914591268,
+      "secret_key": 0.7542594237818078,
+      "financial_details": 0.007632170520931464,
+      "health_details": 0.018216255100834314
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 64,
+     "error": null
+    },
+    {
+     "id": "g-sk-cookie",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005931862017221788,
+      "secret_key": 0.14633177436126876,
+      "financial_details": 0.007390466679673744,
+      "health_details": 0.00867765107402541
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 69,
+     "error": null
+    },
+    {
+     "id": "g-sk-weather-api",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.38536743159229664,
+      "secret_key": 0.712628810440629,
+      "financial_details": 0.007471102406411686,
+      "health_details": 0.04390289531473018
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-sk-recovery-codes",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.551400116060275,
+      "secret_key": 0.4756329123636657,
+      "financial_details": 0.03531255166732068,
+      "health_details": 0.008030448555317133
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 69,
+     "error": null
+    },
+    {
+     "id": "g-sk-spoken-token",
+     "kind": "grey",
+     "category": "secret in prose",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.020356378415299158,
+      "secret_key": 0.10711033356667259,
+      "financial_details": 0.021534042580719105,
+      "health_details": 0.0235094961941139
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "g-fin-statement",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.009056701972190042,
+      "secret_key": 0.04103061102181355,
+      "financial_details": 0.9870543015381334,
+      "health_details": 0.03614894693374236
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 65,
+     "error": null
+    },
+    {
+     "id": "g-fin-payslip",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004993174414162613,
+      "secret_key": 0.022599815700501943,
+      "financial_details": 0.9706025542521455,
+      "health_details": 0.016057359634946918
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "g-fin-tax",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005107798789120902,
+      "secret_key": 0.016108216493287326,
+      "financial_details": 0.9931961299681413,
+      "health_details": 0.01820329713081973
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-fin-loan",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.007453006325519752,
+      "secret_key": 0.036900337963623665,
+      "financial_details": 0.9440488462214196,
+      "health_details": 0.08531714876900731
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 68,
+     "error": null
+    },
+    {
+     "id": "g-fin-portfolio",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.006795716115750858,
+      "secret_key": 0.03326161128437961,
+      "financial_details": 0.9126711655159644,
+      "health_details": 0.008530252628245421
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-fin-card-statement",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004830152636112802,
+      "secret_key": 0.039346684558918446,
+      "financial_details": 0.9937099309588424,
+      "health_details": 0.04400813658767237
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-fin-budget",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004575948922746149,
+      "secret_key": 0.01005024304946369,
+      "financial_details": 0.4174217537848197,
+      "health_details": 0.005476323573656721
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 69,
+     "error": null
+    },
+    {
+     "id": "g-fin-spoken-salary",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.015157155886750283,
+      "secret_key": 0.04271190209049412,
+      "financial_details": 0.982489556702615,
+      "health_details": 0.05706503372113933
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-fin-arrears",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.011053984427158192,
+      "secret_key": 0.04780732231672496,
+      "financial_details": 0.9758584869062356,
+      "health_details": 0.14734682159021797
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "g-fin-overdraft",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005993019617786018,
+      "secret_key": 0.03402336263194306,
+      "financial_details": 0.9522232311262356,
+      "health_details": 0.05839888837200406
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-fin-pension",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.00442416919988683,
+      "secret_key": 0.017798520005382318,
+      "financial_details": 0.9841952175496814,
+      "health_details": 0.08737384302877771
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "g-fin-transfer-chat",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.016008463325195926,
+      "secret_key": 0.045505267571392886,
+      "financial_details": 0.9943475311167984,
+      "health_details": 0.08017652996690318
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-fin-crypto",
+     "kind": "grey",
+     "category": "financial details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.003986537224366152,
+      "secret_key": 0.015011588996647977,
+      "financial_details": 0.5666734161892674,
+      "health_details": 0.016810785746013388
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "g-health-gp",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.009160524852952358,
+      "secret_key": 0.022486759013948296,
+      "financial_details": 0.007646080238331264,
+      "health_details": 0.6945317557405329
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-health-prescription",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.00634752948609451,
+      "secret_key": 0.03222889976663095,
+      "financial_details": 0.011900546979977961,
+      "health_details": 0.5698063652887498
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-health-lab",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.006796514332643347,
+      "secret_key": 0.024331774835945896,
+      "financial_details": 0.09474393442249265,
+      "health_details": 0.9518102404536356
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-health-therapy",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.004512987800307556,
+      "secret_key": 0.035605125462468516,
+      "financial_details": 0.002027150876937999,
+      "health_details": 0.8499439323723388
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "g-health-symptoms",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.006257226276968873,
+      "secret_key": 0.04615550815921862,
+      "financial_details": 0.0014472082239219486,
+      "health_details": 0.9567665453607733
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 65,
+     "error": null
+    },
+    {
+     "id": "g-health-allergy",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.013495634969678656,
+      "secret_key": 0.04802851830497025,
+      "financial_details": 0.003294947216095807,
+      "health_details": 0.6824621439428595
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 68,
+     "error": null
+    },
+    {
+     "id": "g-health-friend-diagnosis",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.008214843207967264,
+      "secret_key": 0.03923925977373165,
+      "financial_details": 0.025049114592222522,
+      "health_details": 0.9935112877648423
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 65,
+     "error": null
+    },
+    {
+     "id": "g-health-discharge",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.004583383160048551,
+      "secret_key": 0.017266064045860407,
+      "financial_details": 0.004936066777364179,
+      "health_details": 0.9972063567567119
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "g-health-mental-app",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.011397006187626573,
+      "secret_key": 0.053904017828315894,
+      "financial_details": 0.0030767034281703326,
+      "health_details": 0.9056976483730855
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "g-health-physio",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.00775428926837688,
+      "secret_key": 0.029614769324331526,
+      "financial_details": 0.0034135136118591657,
+      "health_details": 0.9370077782158444
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "g-health-claim",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.012243904703159999,
+      "secret_key": 0.032454653929984485,
+      "financial_details": 0.0612849770228152,
+      "health_details": 0.6895559621832759
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 63,
+     "error": null
+    },
+    {
+     "id": "g-health-pregnancy",
+     "kind": "grey",
+     "category": "health details",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": true
+     },
+     "scores": {
+      "password": 0.008850332752531578,
+      "secret_key": 0.05580916904499791,
+      "financial_details": 0.009474751832229214,
+      "health_details": 0.9934339718879023
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 59,
+     "error": null
+    },
+    {
+     "id": "s-aws-key",
+     "kind": "structured",
+     "category": "cloud access key",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.015406024670389104,
+      "secret_key": 0.22092033813943993,
+      "financial_details": 0.021174155292505326,
+      "health_details": 0.022856120678913842
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "cloud access key"
+     ],
+     "requests": 1,
+     "ms": 63,
+     "error": null
+    },
+    {
+     "id": "s-github-token",
+     "kind": "structured",
+     "category": "access token",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.00709116205774505,
+      "secret_key": 0.3281104958878606,
+      "financial_details": 0.003332396657558195,
+      "health_details": 0.006301213886025249
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "access token"
+     ],
+     "requests": 1,
+     "ms": 65,
+     "error": null
+    },
+    {
+     "id": "s-stripe-key",
+     "kind": "structured",
+     "category": "access token",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0038339493041304753,
+      "secret_key": 0.3280499492476346,
+      "financial_details": 0.09189174372700605,
+      "health_details": 0.015465883338682297
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "access token"
+     ],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "s-private-key",
+     "kind": "structured",
+     "category": "private key",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004146629599486334,
+      "secret_key": 0.024769486107303645,
+      "financial_details": 0.009473284109533417,
+      "health_details": 0.020970975304470355
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "private key"
+     ],
+     "requests": 1,
+     "ms": 65,
+     "error": null
+    },
+    {
+     "id": "s-conn-string",
+     "kind": "structured",
+     "category": "password in a connection string",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.014181616208964219,
+      "secret_key": 0.2525035476998068,
+      "financial_details": 0.019900341954730887,
+      "health_details": 0.006825506182996469
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "password in a connection string"
+     ],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "s-password-label",
+     "kind": "structured",
+     "category": "password",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.002608899004465652,
+      "secret_key": 0.1327581204605311,
+      "financial_details": 0.14090095807788852,
+      "health_details": 0.021762078997747042
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "password"
+     ],
+     "requests": 1,
+     "ms": 62,
+     "error": null
+    },
+    {
+     "id": "s-card-visa",
+     "kind": "structured",
+     "category": "card number",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004966588618647028,
+      "secret_key": 0.032130350843380666,
+      "financial_details": 0.687620982487643,
+      "health_details": 0.012273928694909756
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "card number"
+     ],
+     "requests": 1,
+     "ms": 63,
+     "error": null
+    },
+    {
+     "id": "s-card-mastercard",
+     "kind": "structured",
+     "category": "card number",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.001604694187306019,
+      "secret_key": 0.00639561340498284,
+      "financial_details": 0.10631923223040232,
+      "health_details": 0.004267202989470248
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "card number"
+     ],
+     "requests": 1,
+     "ms": 61,
+     "error": null
+    },
+    {
+     "id": "s-iban",
+     "kind": "structured",
+     "category": "bank account (IBAN)",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004896299223737789,
+      "secret_key": 0.04158403312014622,
+      "financial_details": 0.20390963855632832,
+      "health_details": 0.008092279381708483
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "bank account (IBAN)"
+     ],
+     "requests": 1,
+     "ms": 64,
+     "error": null
+    },
+    {
+     "id": "s-ssn",
+     "kind": "structured",
+     "category": "social security number",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0033865308178226347,
+      "secret_key": 0.01755782349417393,
+      "financial_details": 0.055155286269488915,
+      "health_details": 0.017836371291014654
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "social security number"
+     ],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "s-jwt",
+     "kind": "structured",
+     "category": "signed token",
+     "labels": {
+      "password": false,
+      "secret_key": true,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.003980256232579228,
+      "secret_key": 0.24464627795314015,
+      "financial_details": 0.020853115311435022,
+      "health_details": 0.00896207143804814
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "signed token"
+     ],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "s-pin-label",
+     "kind": "structured",
+     "category": "password",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.03585437823264079,
+      "secret_key": 0.06274208379303131,
+      "financial_details": 0.010572044715750704,
+      "health_details": 0.008562106388682619
+     },
+     "model_outcome": "index",
+     "pipeline": "redact",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "password"
+     ],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "a-bitwarden",
+     "kind": "app",
+     "category": "password manager",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": null,
+     "model_outcome": null,
+     "pipeline": "exclude",
+     "asked": false,
+     "leaked": false,
+     "findings": [],
+     "requests": 0,
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "a-1password",
+     "kind": "app",
+     "category": "password manager",
+     "labels": {
+      "password": true,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": null,
+     "model_outcome": null,
+     "pipeline": "exclude",
+     "asked": false,
+     "leaked": false,
+     "findings": [],
+     "requests": 0,
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "a-bank-app",
+     "kind": "app",
+     "category": "banking app",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": null,
+     "model_outcome": null,
+     "pipeline": "exclude",
+     "asked": false,
+     "leaked": false,
+     "findings": [],
+     "requests": 0,
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "a-bank-site",
+     "kind": "app",
+     "category": "banking site",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": true,
+      "health_details": false
+     },
+     "scores": null,
+     "model_outcome": null,
+     "pipeline": "exclude",
+     "asked": false,
+     "leaked": false,
+     "findings": [],
+     "requests": 0,
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "b-docs-api-keys",
+     "kind": "benign",
+     "category": "docs about API keys",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.01976419626683552,
+      "secret_key": 0.6809855300968081,
+      "financial_details": 0.01621119685108195,
+      "health_details": 0.0069787786431859886
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "b-docs-sk-placeholder",
+     "kind": "benign",
+     "category": "docs with a key-shaped placeholder",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.009411753771442386,
+      "secret_key": 0.6303645496459531,
+      "financial_details": 0.014812354512218273,
+      "health_details": 0.005879245638928557
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [
+      "access token"
+     ],
+     "requests": 1,
+     "ms": 63,
+     "error": null
+    },
+    {
+     "id": "b-recipe-vitamin",
+     "kind": "benign",
+     "category": "recipe naming a vitamin dose",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004447171932181836,
+      "secret_key": 0.014493686851347371,
+      "financial_details": 0.0017974799214265607,
+      "health_details": 0.03147465987377028
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "b-bank-ad",
+     "kind": "benign",
+     "category": "a bank’s advertising on a news site",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.006172808284365937,
+      "secret_key": 0.0354840304710889,
+      "financial_details": 0.007365909296552179,
+      "health_details": 0.004723468592153025
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 64,
+     "error": null
+    },
+    {
+     "id": "b-pricing",
+     "kind": "benign",
+     "category": "pricing page",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0038046749630277397,
+      "secret_key": 0.03701615307531617,
+      "financial_details": 0.08927548066033858,
+      "health_details": 0.006485995399715818
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "b-gym-timetable",
+     "kind": "benign",
+     "category": "fitness timetable",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005073139293422369,
+      "secret_key": 0.014236920181675683,
+      "financial_details": 0.0014066375760166151,
+      "health_details": 0.0064004028412497065
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 65,
+     "error": null
+    },
+    {
+     "id": "b-pharmacy-hours",
+     "kind": "benign",
+     "category": "pharmacy opening hours",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.007757474489077502,
+      "secret_key": 0.04194991338886729,
+      "financial_details": 0.007532365545144655,
+      "health_details": 0.059245215906684974
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "b-health-article",
+     "kind": "benign",
+     "category": "general health article",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0032935318764907074,
+      "secret_key": 0.014326333755615237,
+      "financial_details": 0.0007950799942626673,
+      "health_details": 0.25233582298400165
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 65,
+     "error": null
+    },
+    {
+     "id": "b-money-article",
+     "kind": "benign",
+     "category": "general personal-finance article",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.006318039800688184,
+      "secret_key": 0.016587389882106108,
+      "financial_details": 0.00617990315179082,
+      "health_details": 0.001507295715207442
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "b-rates-news",
+     "kind": "benign",
+     "category": "news about interest rates",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.002839790238420061,
+      "secret_key": 0.016188610913407814,
+      "financial_details": 0.007417070946671218,
+      "health_details": 0.005237855140453361
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "b-login-form",
+     "kind": "benign",
+     "category": "a login form with empty fields",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0225106270643439,
+      "secret_key": 0.057818882795727194,
+      "financial_details": 0.021842865935786816,
+      "health_details": 0.005192327966059929
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "b-masked-password",
+     "kind": "benign",
+     "category": "a masked password field",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.010882728326661761,
+      "secret_key": 0.03268808704917909,
+      "financial_details": 0.03660330896273617,
+      "health_details": 0.011342143417742489
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "b-pm-review",
+     "kind": "benign",
+     "category": "a review of password managers",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.12094202194854119,
+      "secret_key": 0.0565008361134573,
+      "financial_details": 0.02808863581266481,
+      "health_details": 0.0046414318319090994
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "b-change-password-help",
+     "kind": "benign",
+     "category": "help article on changing a password",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.38389119280952927,
+      "secret_key": 0.4842424140156458,
+      "financial_details": 0.013002804850535668,
+      "health_details": 0.0071419031672556
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 64,
+     "error": null
+    },
+    {
+     "id": "b-strong-password-tips",
+     "kind": "benign",
+     "category": "tips on strong passwords with a famous example",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.05011400809849058,
+      "secret_key": 0.08999594322155391,
+      "financial_details": 0.005894895583687429,
+      "health_details": 0.004866706019155648
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 69,
+     "error": null
+    },
+    {
+     "id": "b-env-names",
+     "kind": "benign",
+     "category": "code naming environment variables",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.1067937099094975,
+      "secret_key": 0.8843283520025668,
+      "financial_details": 0.01630350267609828,
+      "health_details": 0.028673698353528097
+     },
+     "model_outcome": "exclude",
+     "pipeline": "exclude",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "b-git-log",
+     "kind": "benign",
+     "category": "a git log with commit hashes",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.00697455013346203,
+      "secret_key": 0.02495565784545645,
+      "financial_details": 0.01009390708000149,
+      "health_details": 0.02355744641491074
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 64,
+     "error": null
+    },
+    {
+     "id": "b-receipt-coffee",
+     "kind": "benign",
+     "category": "a coffee receipt",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004068583964866478,
+      "secret_key": 0.026768176180071893,
+      "financial_details": 0.03761995888474888,
+      "health_details": 0.010991461749484486
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "b-order-confirmation",
+     "kind": "benign",
+     "category": "an order confirmation",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0032418038322165944,
+      "secret_key": 0.01180595862965737,
+      "financial_details": 0.03297820645174951,
+      "health_details": 0.02085447842113912
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 70,
+     "error": null
+    },
+    {
+     "id": "b-train-times",
+     "kind": "benign",
+     "category": "train timetable",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0065141280620803,
+      "secret_key": 0.01612146218245199,
+      "financial_details": 0.002213244220614098,
+      "health_details": 0.0070350206550859095
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "b-meeting-notes",
+     "kind": "benign",
+     "category": "meeting notes",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.011010719675208433,
+      "secret_key": 0.018091824802397793,
+      "financial_details": 0.008190109679070893,
+      "health_details": 0.009094765493542423
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 66,
+     "error": null
+    },
+    {
+     "id": "b-shopping",
+     "kind": "benign",
+     "category": "shopping list",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005329032339443525,
+      "secret_key": 0.022622746618326136,
+      "financial_details": 0.006416421752830567,
+      "health_details": 0.01341802487176483
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 65,
+     "error": null
+    },
+    {
+     "id": "b-weather",
+     "kind": "benign",
+     "category": "weather",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.004848717154015083,
+      "secret_key": 0.011008580566393837,
+      "financial_details": 0.000550347704634886,
+      "health_details": 0.005190338209698307
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 65,
+     "error": null
+    },
+    {
+     "id": "b-support-chat",
+     "kind": "benign",
+     "category": "support chat about a reset",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.053837036917354836,
+      "secret_key": 0.039701765627079916,
+      "financial_details": 0.012038321330759496,
+      "health_details": 0.01621807301225706
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 69,
+     "error": null
+    },
+    {
+     "id": "b-phone-list",
+     "kind": "benign",
+     "category": "a club phone list",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.006320087781515418,
+      "secret_key": 0.05399299331656294,
+      "financial_details": 0.025202728697730777,
+      "health_details": 0.009279105996588153
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "b-tracking",
+     "kind": "benign",
+     "category": "a parcel tracking page",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.010498914875194432,
+      "secret_key": 0.038410640131441756,
+      "financial_details": 0.03476024642349888,
+      "health_details": 0.0455807988207165
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 70,
+     "error": null
+    },
+    {
+     "id": "b-diabetes-wiki",
+     "kind": "benign",
+     "category": "an encyclopedia page on diabetes",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005576809256344124,
+      "secret_key": 0.028257416448760158,
+      "financial_details": 0.0016860546489221473,
+      "health_details": 0.2597724534371152
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 68,
+     "error": null
+    },
+    {
+     "id": "b-insurer-ad",
+     "kind": "benign",
+     "category": "an insurer’s advertising",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.009250953293393637,
+      "secret_key": 0.03643653496926064,
+      "financial_details": 0.015409728399345068,
+      "health_details": 0.08803204339719314
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 69,
+     "error": null
+    },
+    {
+     "id": "b-payroll-features",
+     "kind": "benign",
+     "category": "payroll software features",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.008576269004833782,
+      "secret_key": 0.02922552362902054,
+      "financial_details": 0.21632469619164502,
+      "health_details": 0.00400326385913545
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "b-vet-appointment",
+     "kind": "benign",
+     "category": "a pet’s vet appointment",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.007604066530785134,
+      "secret_key": 0.022852244564887825,
+      "financial_details": 0.005853982998181101,
+      "health_details": 0.6118998260218141
+     },
+     "model_outcome": "hold",
+     "pipeline": "hold",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 67,
+     "error": null
+    },
+    {
+     "id": "b-hospital-news",
+     "kind": "benign",
+     "category": "news about a hospital",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.00327287830269759,
+      "secret_key": 0.00781383309346968,
+      "financial_details": 0.0018882189459898165,
+      "health_details": 0.014697038007144395
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 64,
+     "error": null
+    },
+    {
+     "id": "b-bank-help-article",
+     "kind": "benign",
+     "category": "a bank help article on a help site",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.019182084340906992,
+      "secret_key": 0.03620194990755464,
+      "financial_details": 0.17888835788229626,
+      "health_details": 0.01134877563004651
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 58,
+     "error": null
+    },
+    {
+     "id": "b-spoken-budget-tips",
+     "kind": "benign",
+     "category": "a podcast on budgeting",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.013959542968241145,
+      "secret_key": 0.028472731824674025,
+      "financial_details": 0.0189621699054896,
+      "health_details": 0.0108570736704727
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 59,
+     "error": null
+    },
+    {
+     "id": "b-spoken-fitness",
+     "kind": "benign",
+     "category": "a podcast on fitness",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0047605828501153975,
+      "secret_key": 0.01892551665895089,
+      "financial_details": 0.001395095019335215,
+      "health_details": 0.026002050574503287
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 58,
+     "error": null
+    },
+    {
+     "id": "b-product-spec",
+     "kind": "benign",
+     "category": "a product spec sheet with numbers",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.003331547893883861,
+      "secret_key": 0.010393550938341148,
+      "financial_details": 0.0021966938096595625,
+      "health_details": 0.007447406929426066
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 60,
+     "error": null
+    },
+    {
+     "id": "b-cvc-explainer",
+     "kind": "benign",
+     "category": "an explainer about card security codes",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0399653332478793,
+      "secret_key": 0.11332482473345606,
+      "financial_details": 0.06906796841265916,
+      "health_details": 0.009354630825217963
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 60,
+     "error": null
+    },
+    {
+     "id": "b-calendar-public",
+     "kind": "benign",
+     "category": "a public events calendar",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.005055264187112243,
+      "secret_key": 0.01993362736804179,
+      "financial_details": 0.0024618966658181774,
+      "health_details": 0.0027671694162443496
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 59,
+     "error": null
+    },
+    {
+     "id": "b-kids-recipe",
+     "kind": "benign",
+     "category": "a children’s recipe",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.007907890035266254,
+      "secret_key": 0.03877154474138295,
+      "financial_details": 0.001903975024554131,
+      "health_details": 0.008185617799601655
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 60,
+     "error": null
+    },
+    {
+     "id": "b-vaccine-info",
+     "kind": "benign",
+     "category": "a public vaccine information page",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.009496543538225499,
+      "secret_key": 0.026859657269008855,
+      "financial_details": 0.008907703731620519,
+      "health_details": 0.1554026418870003
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 57,
+     "error": null
+    },
+    {
+     "id": "b-salary-survey",
+     "kind": "benign",
+     "category": "a salary survey article",
+     "labels": {
+      "password": false,
+      "secret_key": false,
+      "financial_details": false,
+      "health_details": false
+     },
+     "scores": {
+      "password": 0.0052694133160112455,
+      "secret_key": 0.021615413436432845,
+      "financial_details": 0.14383241567223107,
+      "health_details": 0.006709914630846691
+     },
+     "model_outcome": "index",
+     "pipeline": "index",
+     "asked": true,
+     "leaked": false,
+     "findings": [],
+     "requests": 1,
+     "ms": 61,
+     "error": null
+    }
+   ]
+  }
+ }
+}

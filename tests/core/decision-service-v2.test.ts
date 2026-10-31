@@ -34,7 +34,7 @@ test('v2 passes the authoring rules with no warnings: no shared preamble, no "or
   }
   assert.deepEqual(Object.keys(INGEST_SCREEN_V2.questions), [...V2_QUESTIONS]);
   assert.equal(INGEST_SCREEN_V2.legacy, false, 'the sorting model knows only v1');
-  assert.deepEqual(BUILT_INS.map((t) => `${t.template_id}@${t.version}`), ['ingest-screen@1', 'ingest-screen@2']);
+  assert.deepEqual(BUILT_INS.map((t) => `${t.template_id}@${t.version}`), ['ingest-screen@1', 'ingest-screen@2', 'capture-sensitive@1']);
 });
 
 test('the v2 rule: a full truth table; one decisive sign blocks; the supporting signs count together; no "worst question wins"', () => {

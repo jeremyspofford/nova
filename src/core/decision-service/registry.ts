@@ -56,6 +56,11 @@ export function validate(t: ServiceTemplate): { errors: string[]; warnings: stri
   const chunked = Object.entries(t.fields).filter(([, f]) => f.type === 'text' && f.chunk === 'worst');
   if (chunked.length > 1) errors.push('at most one field may be chunked');
   if (chunked.length && Object.values(t.questions).some((q) => q.type !== 'noul')) errors.push('a chunked field needs a battery of Nouls only: the worst score per question is only defined for Nouls');
+  if (t.policy.order) {
+    const keys = Object.keys(t.policy.outcomes);
+    if (t.policy.order.length !== keys.length || !keys.every((k) => t.policy.order!.includes(k))) errors.push('policy.order must list every outcome once, least restrictive first');
+  }
+  if (t.feature === 'capture' && hasImage) errors.push('a capture template judges text; images are the "box" feature');
   for (const p of checkTable(t)) errors.push(`policy: ${p}`);
   return { errors, warnings };
 }
