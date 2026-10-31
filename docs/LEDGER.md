@@ -15,6 +15,12 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-30 (test fix: a device-agent test read a half-written file).**
+- **What happened:** CI on #233, which is docs only, failed `the boot agent makes only the runtime’s own hub calls for it` with `Unexpected end of JSON input`.
+- **Why:** the test's stand-in runtime rewrote `state/answers.json` in place while the test was polling it. `writeFileSync` empties the file before writing, so a poll could read it empty.
+- **Fix:** the stand-in now writes a temporary file and renames it into place. Nothing in the product changes.
+- **Evidence:** 10 of 10 runs pass, and the whole file passes, 16 of 16.
+
 **2026-10-30 (M9, Feel & Polish: Amendment 2026-10-30-C Part 2).** Branch `m9/feel-polish`. Plan
 `docs/plans/M9.md`, evidence `docs/evidence/m9-gate.md`. Every gate item is a test that was seen
 failing first; the numbers are in the evidence.
