@@ -6,7 +6,7 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
-**2026-10-31 · #⟨n⟩ · How Nova will check what it captures from your screen**
+**2026-10-31 · #260 · How Nova will check what it captures from your screen**
 - What changed: your decision is recorded. Captured screen text and transcripts get checked twice: for secrets or sensitive details before they're stored, and for hidden instructions before Nova uses them in an answer. It's checked on your machine, unless you're in cloud mode and turn it on per capture source.
 - What you can now do: Nothing in the app changed: paperwork only.
 - Still unfinished: the two checks aren't built yet. Until then, captured text is never sent to a cloud model for checking.
