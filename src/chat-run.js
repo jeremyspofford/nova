@@ -120,7 +120,7 @@ export class ChatRun {
     } else if (!live) {
       // It was going when Nova stopped. Its steps may have changed things, so it isn't run again.
       const out = this.outcome(inputs.run);
-      const h = await this.settle(brief.task_id, inputs, out);
+      const h = await this.settle(brief.task_id, inputs, out, brief.privacy_mode);
       this.offerResume(brief, inputs, title);
       return finish(h);
     }
@@ -136,7 +136,7 @@ export class ChatRun {
       signal.removeEventListener('abort', stop);
     }
     const out = this.outcome(inputs.run);
-    const h = await this.settle(brief.task_id, inputs, out);
+    const h = await this.settle(brief.task_id, inputs, out, brief.privacy_mode);
     this.offerResume(brief, inputs, title);
     // The person stopped the run: the task is cancelled, not failed. (When the ledger stopped it,
     // by cancelling or on its time limit, the ledger has already settled the task.)
@@ -175,7 +175,7 @@ export class ChatRun {
       .then(() => this.settled(id))
       .then((t) => {
         if (t.state === 'waiting') this.ledger.retry(id, 'The run finished after waiting for you; handing over its report.');
-        else if (t.state === 'cancelled') return this.settle(id, inputs, this.outcome(inputs.run));
+        else if (t.state === 'cancelled') return this.settle(id, inputs, this.outcome(inputs.run), t.privacy_mode ?? null);
       })
       .catch((e) => this.problem?.(`Nova couldn't pick up a task again after it waited for you.`, { detail: e?.stack ?? String(e), taskId: id }));
   }
@@ -231,7 +231,7 @@ export class ChatRun {
   }
 
   // Hands the report to its conversation, once.
-  settle(task, inputs, outcome) {
+  settle(task, inputs, outcome, privacy = null) {
     const busy = this.settling.get(inputs.run);
     if (busy) return busy;
     const p = (async () => {
@@ -241,7 +241,7 @@ export class ChatRun {
       const { target, handoff } = kind.handoff(inputs, outcome);
       // A run that read outside content hands over its taint, and a screened form of its report
       // for the conversation's model (the ingest gate); the person still reads the report as written.
-      const gate = await this.runner.screenReport?.(inputs.run, handoff) ?? {};
+      const gate = await this.runner.screenReport?.(inputs.run, handoff, { privacy, task_id: task }) ?? {};
       const h = { type: 'handoff', id: randomUUID().slice(0, 8), ...handoff, ...gate, task };
       await this.runner.deliver(target, h);
       if (this.store.exists(inputs.run)) this.runner.record(inputs.run, { type: 'delivered', to: target, handoff: h.id, ok: h.ok, task });
