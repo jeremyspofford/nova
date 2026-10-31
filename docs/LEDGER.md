@@ -48,7 +48,9 @@ a loopback account site; nothing real was installed, provisioned, changed or pai
    the safe way to fail.
 6. **The window is the ADR's proposed 5 minutes as a setting** (`mesh.contact_window_s`, 60 to 3600 s),
    while the owner's open question 2 stays open. The deadline and any contact are in the database, so a
-   restart past the deadline reverts at start (and the heartbeat sweeps too).
+   restart past the deadline reverts at start (and the heartbeat sweeps too). The deadline is written **before** the write
+   and contact counts only after it, so a Nova stopped mid-write still has its switch (found in review
+   of my own build: the first version armed it only after the write returned).
 7. **The switch's revert runs by itself at tier 1:** it was confirmed with the change, and it puts back
    what was there. A revert the person asks for later is a network change of its own: tier 3.
 8. **Secrets in a configuration are masked in every view, and a patch that sets one is refused** (keys
