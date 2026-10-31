@@ -15,7 +15,7 @@ existing opt-in real-service tests. Before M10e, main's suite was 1083 tests (10
 2 failing in `tests/core/computer-egress-bounds.test.ts` under the full run's load on this machine;
 that file passes alone, 8 of 8, and is untouched here).
 
-`scripts/ui-test.sh` (Chromium in the Playwright container, under the tripwire): **@@UI@@**.
+`scripts/ui-test.sh` (Chromium in the Playwright container, under the tripwire): **87 tests: 87 pass, 0 fail**. CI on PR #247: both jobs green, and both logs show the tripwire armed and never fired (`checks`: 1114 tests, 1105 pass, 9 skipped; `UI gate`: 87 of 87).
 
 The run's log, start and end (`npm test` and the UI gate both say it):
 
