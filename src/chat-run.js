@@ -15,6 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import { ENVELOPE_VERSION, TERMINAL, permits } from './core/index.ts';
 import { reduce } from '../ui/js/reduce.js';
+import { lastRunTurn } from './runner.js';
 
 export const WORKER = 'chat-run';
 export const SYSTEM = 'nova-sessions';
@@ -85,11 +86,27 @@ export class ChatRun {
       : report('failed', h.text));
 
     // Already handed off (Nova stopped between delivering it and reporting): the same report again.
-    const delivered = this.delivered(inputs.run);
+    const delivered = this.delivered(inputs.run, brief.task_id);
     if (delivered) return finish(delivered);
 
     const live = this.runner.active.has(inputs.run);
-    if (!begun(this.store, inputs.run)) {
+    // Cost caps: the runner meters this run against this task's ceilings.
+    this.runner.runTasks?.set(inputs.run, brief.task_id);
+    // A resume (offered after a cost ceiling, run once the person said yes): a new turn in the
+    // same conversation, started once, through the kind's own begin.
+    const resuming = !!inputs.resume && !live && begun(this.store, inputs.run) && !this.store.read(inputs.run).some((e) => e.type === 'resumed' && e.task === brief.task_id);
+    if (resuming) {
+      const mode = stricter(brief.privacy_mode, this.privacy());
+      if (!permits(mode, this.egress)) {
+        return report('blocked', `${title} is waiting on local capacity.`, { blockers: [`Waiting on local capacity: ${this.name} would send this off your devices, and your privacy setting is ${mode}.`] });
+      }
+      this.runner.record(inputs.run, { type: 'resumed', task: brief.task_id, of: inputs.resume });
+      const why = kind.begin(inputs, brief, mode);
+      if (why) {
+        this.ledger.cancel(brief.task_id, why);
+        return report('failed', why);
+      }
+    } else if (!begun(this.store, inputs.run)) {
       // The task's privacy mode, and never looser than the person's setting right now.
       const mode = stricter(brief.privacy_mode, this.privacy());
       if (!permits(mode, this.egress)) {
@@ -103,7 +120,9 @@ export class ChatRun {
     } else if (!live) {
       // It was going when Nova stopped. Its steps may have changed things, so it isn't run again.
       const out = this.outcome(inputs.run);
-      return finish(await this.settle(brief.task_id, inputs, out));
+      const h = await this.settle(brief.task_id, inputs, out);
+      this.offerResume(brief, inputs, title);
+      return finish(h);
     }
 
     const stop = () => this.runner.stop(inputs.run);
@@ -118,6 +137,7 @@ export class ChatRun {
     }
     const out = this.outcome(inputs.run);
     const h = await this.settle(brief.task_id, inputs, out);
+    this.offerResume(brief, inputs, title);
     // The person stopped the run: the task is cancelled, not failed. (When the ledger stopped it,
     // by cancelling or on its time limit, the ledger has already settled the task.)
     if (out.stopped && !signal.aborted && !TERMINAL.includes(this.ledger.get(brief.task_id).state)) this.ledger.cancel(brief.task_id, h.text);
@@ -173,16 +193,38 @@ export class ChatRun {
     });
   }
 
+  // A run stopped at a cost ceiling (Amendment 2026-10-31-B Part 5): the resume is offered as a new
+  // task that waits for the person's OK (tier 2). Approved, it continues the same conversation
+  // with a fresh allowance; cancelled, nothing runs. Offered once per stopped task.
+  offerResume(brief, inputs, title) {
+    const turn = this.store.exists(inputs.run) ? lastRunTurn(reduce(this.store.read(inputs.run))) : null;
+    const stop = turn?.items.find((i) => i.kind === 'error' && String(i.detail ?? '').startsWith('cost_ceiling:'));
+    if (!stop) return null;
+    const t = this.ledger.get(brief.task_id);
+    try {
+      return this.ledger.create({
+        title: `Resume: ${title}`, owner: WORKER, origin: t.origin, approval_tier: 2, privacy_mode: brief.privacy_mode,
+        goal: `Resume "${title}" where it stopped at its cost ceiling, with a fresh allowance. ${stop.message}`,
+        evidence_required: brief.evidence_required, context_refs: brief.context_refs ?? [],
+        inputs: { ...inputs, resume: brief.task_id }, idempotency_key: `resume:${brief.task_id}`, parent_id: brief.task_id,
+      });
+    } catch (e) {
+      this.problem?.(`Nova couldn't offer to resume ${title} after its cost ceiling.`, { detail: e?.stack ?? String(e), taskId: brief.task_id });
+      return null;
+    }
+  }
+
   // What the run came to, from its log: { ok, text, failure, stopped, interrupted }.
   outcome(run) {
-    const turn = this.store.exists(run) ? reduce(this.store.read(run)).turns[0] : null;
+    const turn = this.store.exists(run) ? lastRunTurn(reduce(this.store.read(run))) : null;
     if (turn?.state === 'open' && !this.runner.active.has(run)) return { ok: false, text: '', failure: 'Nova stopped before it was done.', stopped: false, interrupted: true };
     return this.runner.report(run);
   }
 
-  delivered(run) {
+  // The report this task handed off (a resumed run's conversation also holds the stopped one's).
+  delivered(run, task = null) {
     if (!this.store.exists(run)) return null;
-    const d = this.store.read(run).findLast((e) => e.type === 'delivered');
+    const d = this.store.read(run).findLast((e) => e.type === 'delivered' && (!task || !e.task || e.task === task));
     if (!d) return null;
     const h = this.store.exists(d.to) ? this.store.read(d.to).find((e) => e.type === 'handoff' && e.id === d.handoff) : null;
     return { id: d.handoff, to: d.to, ok: d.ok ?? h?.ok ?? false, text: h?.text ?? '' };
@@ -193,7 +235,7 @@ export class ChatRun {
     const busy = this.settling.get(inputs.run);
     if (busy) return busy;
     const p = (async () => {
-      const done = this.delivered(inputs.run);
+      const done = this.delivered(inputs.run, task);
       if (done) return done;
       const kind = this.kinds[inputs.kind];
       const { target, handoff } = kind.handoff(inputs, outcome);
