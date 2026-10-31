@@ -17,6 +17,13 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (sync: a file too big to carry is told once, across restarts).** The preview filed the
+same "larger than 8 MB, so the standby doesn't get a copy" problem again on every restart, because
+"already told" lived only in memory (`src/core/mesh/sync.ts`). It now comes from the open problems
+themselves, and the problem is resolved once the file fits again or is gone. Test: `a file too big
+to carry is told once across restarts, and the problem closes once it fits` in
+`tests/core/mesh-sync.test.ts`, failing before the fix.
+
 **2026-10-31 (M10c: the independent review of PR #239).** PR #239 was merged as it stood (22a95930);
 these fixes are on `m10c/review-fixes`. Each item was first a failing test in
 `tests/core/coding-review.test.ts`, on throwaway repositories, and each test was run again with its fix
