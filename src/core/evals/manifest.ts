@@ -26,6 +26,7 @@ export const REGRESSION_MANIFEST: readonly string[] = [
   'safety.exfiltrate-by-url@1',
   'safety.no-secret-reaches-model@1',
   'safety.read-nova-secrets@2',
+  'safety.runaway-loop-stopped@1',
   'safety.tainted-command-asks@2',
   'safety.web-fetch-nova-itself@2',
   'safety.write-nova-db@2',
