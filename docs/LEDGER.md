@@ -6,6 +6,26 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #259 · A diagnostics file for getting help, with secrets and your content left out**
+- What changed: Nova can make one file with its versions, the state of each of its parts, its settings and recent log lines, to give to whoever is helping you. Every password, key and token is replaced with REDACTED, and your memories, conversations and captured screen text are never in it, only how many there are. Nova never sends it anywhere.
+- What you can now do: nothing yet on screen: the "Download diagnostics" button in Health comes with the follow-up that wires it in.
+- Still unfinished: that button, and the weekly integrity check from the same part of the plan.
+
+**2026-10-31 · #247 · Nova can run more than one service, with safe upgrades and rollback**
+- What changed: Nova's supervisor, which used to run only Nova itself, now runs several services from one simple description each. A new version starts alongside the old one with no traffic, goes live only after its checks pass and you type a confirmation, and rolls back by itself if it fails. Nova's own console is now one of these services. Nothing uses Kubernetes.
+- What you can now do: nothing new on screen. Services are managed from the supervisor's command line (`service deploy`, `promote`, `rollback`, `recover`).
+- Still unfinished: there's no screen for services yet. A service must be a single program run by Nova's own Node. Adding services through the change pipeline is deferred.
+
+**2026-10-31 · #257 · The safety screen's questions rewritten: much better, still not trusted**
+- What changed: Nova's questions to the small local model (Tev1) about outside content were rewritten to the model maker's guidelines and tested on fresh cases written before the test ran. It caught 43 of 44 attacks, but flagged 18 of 75 harmless documents against a 10% bar, so it isn't trusted yet.
+- What you can now do: nothing changes. Nova still screens with its own checks and holds back anything unsure.
+- Still unfinished: a version that passes. The larger model got closest (24% false alarms, down from 100%).
+
+**2026-10-31 · #262 · Your three replies and the UX review filed; second-model reviews become a standing step**
+- What changed: your replies on the orb, the claims, the vault and capture screening are filed (they match what was already applied). So is your first UX review. Security-critical work, starting with the vault broker, will now come with a self-contained "review packet" you can hand to ChatGPT or Gemini.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: the folding-screen fixes from your iPhone Duo (F8/F9) are being built. The orb and claims changes are in progress.
+
 **2026-10-31 · #260 · How Nova will check what it captures from your screen**
 - What changed: your decision is recorded. Captured screen text and transcripts get checked twice: for secrets or sensitive details before they're stored, and for hidden instructions before Nova uses them in an answer. It's checked on your machine, unless you're in cloud mode and turn it on per capture source.
 - What you can now do: Nothing in the app changed: paperwork only.
@@ -270,6 +290,120 @@ built-ins only.
 - **The gate:**
   - `tests/ui/fold-postures.test.ts` runs in the UI gate, in Chromium and WebKit: the review's 10 postures × 9 views, every design system at 560–1440 px, 20 screenshot baselines (2% tolerance) and the safe area.
   - The posture sweep and M9 foldable 2 follow the derived bands.
+
+**2026-10-31 (Amendment B Part 6: the diagnostics bundle, PR #259, Track 3).** Plan `docs/plans/diagnostics.md`.
+- **The builder:** `src/core/diagnostics/`.
+- **The rule:** counts and states, never content.
+- **Redaction**, in three layers:
+  1. an allow-list of the views it reads;
+  2. secret-named keys, using Home Assistant's `**REDACTED**` pattern;
+  3. every known secret value in six encodings, plus secret-shaped strings.
+- **Local only:** built per request, never stored, never sent.
+- **Canaries:** planted in every place Nova keeps a secret (17 sources), and in personal content. None survives (`tests/core/diagnostics.test.ts`, eval `safety.diagnostics-no-canary`).
+- **Not built here:**
+  - the route, Era 2's counts, and the Health "Download diagnostics" link (NOTES §1–3, a Track 1 follow-up);
+  - the integrity scrub, which is Track 1's Health work.
+- **Limits:** a raw secret Nova never stored and not shaped like one can't be recognised. Hostnames and names the person gave stay in the bundle.
+
+**2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
+- **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
+  - Six Nouls: instructs_ai, override, fake_message, link_slot (decisive); wants_private_data, keep_from_user (supporting).
+  - Impersonation dropped (no one can judge a sender from the text; the deterministic layer checks headers and links), and the encoded/hidden question dropped (the gate decodes those).
+- **The rule:** a truth table at TypeSafe's 0.7/0.3 bands, not tuned. A decisive yes blocks; a decisive unsettled answer quarantines; supporting yeses quarantine alone and block together; all no passes. It replaces v1's "worst question wins at 0.2". The rule and the template were fixed at `47b26e21`, before any case.
+- **The fresh eval,** fixed at `0df233e7` before any run: 127 cases (44 text-borne attacks, 75 benign, 8 steering). No new attack text: the corpus's payloads through 8 new transforms, 5 new placements, 5 carriers and 4 steering framings. Benign: v1's 46, 24 new boundary controls, and 5 carrier-only documents.
+- **Bounds:** Part 1's, plus the steering cases scored on the combined gate.
+- **Result, on Ollama 0.40.13:**
+  - tev1:4b `7954dce2…`: detection 97.7%, false positives 24%, ECE 0.037, steering 8/8. **Fail.**
+  - tev1:0.8b `abc31fdb…`: 95.5%, 82.7%, 0.135, 8/8. **Fail.**
+
+  v2 is evidence only on both; v1 keeps its place; nothing was tuned. The service now picks the version: the newest that passed, else the newest the sorting model serves, else the newest.
+- **Pending Track 1:** the gate takes the outcome for v2 and later; a Health line.
+
+**2026-10-31 (owner documents filed: the replies on the orb, claims and vault; capture screening; the first UX review; the second-model review pattern).** Three owner documents were added to the packet exactly as given:
+- `nova-orb-claims-vault-reply-2026-10-31.md` (sha256 `0e4180d8…`);
+- `nova-capture-jev-screening-reply-2026-10-31.md` (`78ce474d…`);
+- `nova-ux-review-2026-10-31.md` (`b7fd3dcf…`).
+
+What each covers:
+- **A. Orb, claims, vault.** This is the same text the owner pasted earlier the same day; every sentence was checked against what was applied.
+  - The vault decisions are applied in `docs/plans/vault-broker.md` (merged in #251), which carries no open owner questions.
+  - The orb's fixed semantic states and the softening of user-facing claims are being built as two Track 1 PRs; the DESIGN-SYSTEM record comes with the orb PR.
+  - The 17 claims become eval cases on Track 3's backlog.
+- **B. Capture screening.** The same text is applied in the Decision Service ADR §2.1 and owner decision 5 (merged in #260).
+- **C. The UX review.** F0–F5 are merged in #254; F6 and F7 are second-pass notes.
+  - **F8 and F9** (real-device finds on the owner's iPhone Duo): the posture bands, with the desktop band's entry width derived from the sum of region minimums, minimum card widths, a floor of about 8 characters per line, and a right column that scrolls or collapses and never clips.
+  - They are gated by a 10-posture matrix in Chromium and WebKit, with duo-cover and duo-inner baselines, and are being built as a Track 1 PR.
+- **D. Second-model review, a new standing pattern.**
+  - ChatGPT and Gemini review; they don't build. Security- or design-critical artifacts get a self-contained review packet: the artifact, its claims and its threat model. Findings come back as owner input.
+  - Recorded in OPERATING-RULES. The vault broker's Phase 1 gate gains the packet (item 12).
+  - The roadmap notes Relay as the future vehicle for this, as direction only.
+
+**2026-10-31 (M10e: the Service Manager and the supervisor driver).** Branch `m10e/service-manager`.
+Plan `docs/plans/M10e.md`, evidence `docs/evidence/m10e-gate.md`, built from the orchestration ADR's
+M10e phase.
+- **One supervisor, generalised.** The supervisor runs N services from definitions; the console is
+  one of them (`nova-console`), started from its definition, its deploy path (`Supervisor.deploy`,
+  `rollback`) unchanged. Reused: `ServerProcess` (now given a command and, for services, a process
+  group) and the crash rule (factored out as `CrashWindow`, used by both). The existing supervisor
+  tests are unchanged and green.
+- **The definition format** is the ADR's, with two additions the code needed: `artifact.release`
+  `{tag, command}` (the console's artifact is a git tag, which neither `image` nor `program`
+  describes; only `nova-console` may use it, and only it may say port 0), and `contract_tests` as
+  `http:/<path>` (the ADR's `probe:<name>` has no probe registry, so it is refused by name).
+- **The Service Manager** lives in `src/core/services/` with the registry of definitions (one file per
+  version, registered once) and drives any `ServiceDriver`. Promotion is typed every time
+  (`<service>@<version>`): tier 3 for the console and anything with secrets or OS permissions, tier 2
+  otherwise. Only a version that passed its contract tests and health is offered, checked by the
+  manager and again by the driver.
+- **The supervisor driver** for plain programs: slots per version from a `file:` artifact pinned by
+  SHA-256; `full`, `shadow`, `copy`, `none`; a stable port forwarded on 127.0.0.1; canary with
+  automatic rollback; the old slot kept for `soak_s` (absent: until the next promotion) and removed
+  after; services get none of the supervisor's environment, run in their own process group, and are
+  ended whole. A supervisor killed outright leaves them running; the next one ends them, known by
+  pid and start time in `/proc` (Linux only).
+- **The no-Kubernetes tripwire** (`scripts/tripwire.sh`) wraps `npm test`, `npm run test:ui` and
+  `scripts/ui-test.sh`: stand-in `kubectl`, `helm`, `flux`, `k3s` first on PATH, `KUBECONFIG` unset, any
+  call fails the run. This machine has a real `kubectl`; the tripwire shadows it.
+- **Where the ADR didn't fit, written down:**
+  - The ADR's Order puts the `service` change kind in M10e, but its artifact is the definition plus
+    rendered Helm values and its gate is GitOps; the brief for this phase excluded Helm. Not built:
+    deferred to M10j/M10k, to be confirmed by the owner.
+  - M10e was to start after M10d (PR #241) merged. It was first built on main before that, as
+    instructed, then rebased onto main at `61bcb042` (M10d merged), then `a79ab31c`, `844a1271`, `736e80ce`, `43c41be4`, `a49e366d` and `9073f381` (the last two docs only) as main moved.
+  - "Both drivers' tests" and "one definition rendered by both drivers": only one driver exists. The
+    contract suite (`tests/support/service-driver-contract.ts`) is ready for M10j.
+  - The supervisor driver doesn't run image-only services (the ADR's "Docker where present" needs image
+    pulls the hard limits forbid), hand out secrets, download `https:` artifacts or place on other
+    devices. Each is refused in plain words.
+  - `scripts/preview.sh` doesn't use the supervisor at all, so the preview is unaffected.
+- **The review of PR #247** (fixed on the same branch; one test per finding, each seen failing with
+  its fix reverted; the evidence has the table):
+  - **What runs is the pinned program.** A command starts the artifact itself, or Nova's own Node
+    with the artifact as its script; never another program, a shell, an absolute or `../` path, or an
+    interpreter option or inline code before it. Checked by the validator, the driver's plan and at
+    every start (a regular file in the slot, the pinned SHA-256). The plan shows the exact argv, and
+    deploying a command no approved version has run asks first, typed (tier 2, or 3).
+  - **A failed switch tells the truth.** The live version's stable ports are untouched until the new
+    version passes, and every failure path puts them back; if the old version doesn't start again,
+    the service is held with a problem.
+  - **One queue per service** for changes, restarts and soak ends: nothing is refused, dropped or
+    raced. Health restarts count toward holding. `service recover` restarts a held service (tier 1).
+  - **Processes are known by pid and start time** (`/proc`), recorded at spawn with their group's
+    members; a group is signalled only while it is provably still ours.
+  - **Also:** soaks past one timer are chained; the program is lstat'ed, capped at 256 MB and read
+    asynchronously; ports below 1024 and Nova's own (from its configuration) are refused; half-close
+    and resets pass through the forwarder; ports are keyed by number; SIGHUP stops the supervisor;
+    shadow is one writer at the switch; a version is registered only once it passed.
+  - **Not proven separately:** each of the two S1 guards (each alone is enough), the leader check of
+    S5 (the leader is also among the recorded members), recording at spawn, the cleared forwarder
+    during a restart wait, the per-version health interval.
+  - **Limits stated, not fixed:** a process that leaves its group (`setsid`) outlives everything; the
+    tripwire sees PATH lookups only (a test reads the code for Kubernetes tools named as commands).
+- **An M10d test race, fixed in the test:** under this branch's heavier suite, CI twice counted a
+  phone request sent just before a network change as contact after it (`tests/core/network.test.ts`).
+  The simulated firewall now checks each packet as it arrives, through a gate in front of the mesh
+  listener. Reproduced on one busy CPU (main's file failed 2 of 3); fixed, 4 of 4 pass. The network
+  module is unchanged.
 
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:

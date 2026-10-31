@@ -16,7 +16,7 @@ import { stricter } from '../workers.ts';
 import { autonomy, bands as bandsOf, qualityOf } from './policy.ts';
 import { buildState } from './state.ts';
 import type { PrivacyMode } from '../envelope.ts';
-import type { Registry } from './registry.ts';
+import type { Registered, Registry } from './registry.ts';
 import type { LegacySeat } from './seats/legacy.ts';
 import type { DecisionSettings } from './settings.ts';
 import type { DecisionLog } from './log.ts';
@@ -39,7 +39,7 @@ export interface ServiceOptions {
   now?: () => Date;
 }
 
-export interface AskOptions { subsystem: string; task_id?: string | null; privacy_mode?: PrivacyMode }
+export interface AskOptions { subsystem: string; task_id?: string | null; privacy_mode?: PrivacyMode; version?: number }
 
 interface Candidate { seat: Seat; model: string | null; trusted: boolean; why: string; ref: string | null }
 
@@ -106,9 +106,21 @@ export class DecisionService {
     return { ok: true, why: 'The sorting model answers until a decision model passes this template’s eval.' };
   }
 
+  // Which version answers (DS2): the newest version with a passing eval on a decision seat; else
+  // the newest one today's sorting model can still answer (so a new, untrusted version never takes
+  // away today's behaviour); else the newest. A caller may name a version.
+  version(templateId: string, version?: number): Registered | null {
+    if (version !== undefined) return this.#o.registry.get(templateId, version);
+    const all = this.#o.registry.versions(templateId);
+    if (!all.length) return null;
+    return all.find((r) => this.#o.verdicts.passed(templateId, r.template.version))
+      ?? all.find((r) => this.legacyAllowed(r.template).ok)
+      ?? all[0]!;
+  }
+
   // null when there is no such template (a cache miss: the caller falls back to its own rules).
   async ask(templateId: string, fields: Record<string, unknown>, o: AskOptions): Promise<Decided | null> {
-    const reg = this.#o.registry.get(templateId);
+    const reg = this.version(templateId, o.version);
     if (!reg) return null;
     const t = reg.template;
     const built = buildState(t, fields);
