@@ -530,7 +530,15 @@ export class SupervisorDriver implements ServiceDriver {
 
   // ---- instances ---------------------------------------------------------------------------------------
 
+  // A port found free can be taken by another program before the service binds it: a start that
+  // ends at once is tried again on new ports, twice at most.
   async #startInstance(def: ServiceDefinition, state: string): Promise<{ ok: true; inst: Instance } | { ok: false; said: string }> {
+    let r = await this.#startOnce(def, state);
+    for (let i = 0; i < 2 && !r.ok && r.early; i++) r = await this.#startOnce(def, state);
+    return r.ok ? r : { ok: false, said: r.said };
+  }
+
+  async #startOnce(def: ServiceDefinition, state: string): Promise<{ ok: true; inst: Instance } | { ok: false; said: string; early?: boolean }> {
     const prog = def.artifact.program?.[this.o.platform ?? platformKey()];
     if (!prog) return { ok: false, said: 'It has no program for this computer.' };
     const slot = this.#slot(def.service, def.version);
@@ -553,7 +561,7 @@ export class SupervisorDriver implements ServiceDriver {
     const inst: Instance = { version: def.version, proc, ports, state };
     const end = Date.now() + this.o.timings.readyMs;
     while (Date.now() < end) {
-      if (!proc.alive) { await proc.stop(0); return { ok: false, said: `It stopped as it started${proc.proc.exitCode !== null ? ` (code ${proc.proc.exitCode})` : ''}: ${proc.tail(5) || 'no last words'}` }; }
+      if (!proc.alive) { await proc.stop(0); return { ok: false, early: true, said: `It stopped as it started${proc.proc.exitCode !== null ? ` (code ${proc.proc.exitCode})` : ''}: ${proc.tail(5) || 'no last words'}` }; }
       if ((await this.#health(def, inst)).ok) { proc.markReady(first ? ports[first.name]! : 0); return { ok: true, inst }; }
       await sleep(100);
     }
