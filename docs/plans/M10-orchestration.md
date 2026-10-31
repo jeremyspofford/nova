@@ -10,7 +10,7 @@
 
 **Status:** this is the design. Nothing here is built. The build starts only after this ADR and M10d (PR #241) are merged, in the phases under Order. Each phase lands as its own PR with its own gate.
 
-**Decided (2026-10-31):** the owner approved all six proposed resolutions as written. They are recorded below as decisions. One question the decisions open is left: how a spoke's capture data reaches the hub (open question 1).
+**Decided (2026-10-31):** the owner approved all six proposed resolutions as written. They are recorded below as decisions. The one question the decisions opened, how a spoke's capture data reaches the hub, was resolved the same day by the owner-approved design `docs/builder-packet/nova-capture-data-path-design-2026-10-31.md` (see Resolved: the capture data path).
 
 **Tier numbers** follow NOVA-SPEC §6, as in M10.md: 0 silent, 1 act and report with undo, 2 ask first, 3 explicit confirmation every time.
 
@@ -296,7 +296,7 @@ None of those is needed for Nova to work.
 - Deploying capture to a device never turns capture on. Consent stays off by default, per source and per device (CONTEXT-AND-CAPTURE, `capture/capture.ts`).
 - Screenpipe's `alongside` is `shadow` only once two copies are shown to run side by side on that OS. Until then it is `none`. In shadow, the new version's output is discarded on the device and never stored or sent.
 - **On the hub,** Screenpipe is pulled at loopback by the existing adapter, as today, so the pilot starts there.
-- **On a spoke,** how its data reaches the hub isn't covered by the decisions: open question 1.
+- **On a spoke,** its data reaches the hub by the capture data path (resolved; see Resolved: the capture data path).
 - iPhones and iPads get no capture workload: the platform allows no passive capture.
 
 **Tiers:** promoting capture is tier 3, since it touches OS permissions and the most private data.
@@ -545,7 +545,7 @@ The order is unchanged by the decisions. Each phase's gate includes the tests th
 | **M10e** | Service Manager, the supervisor driver, the definition format and validator, the `service` change kind; the console as a definition; the no-Kubernetes suite and tripwire | — | M10d merged |
 | **M10f** | Device roles at pairing and in Settings › Devices, the placement resolver; onboarding's order and per-OS summaries (supervisor only) | 2: a hub candidacy asks at tier 3 and pins the key | M10e |
 | **M10g** | Hub promotion, planned and emergency, and the promotion drill | 2: no private key leaves its device; roll-back at epoch + 2; a cold promotion with no new pairing. 5: the sheet states the backup's time, what was lost, and that connectors need signing in again | M10f |
-| **M10h** | Native workloads on devices (6(a), 6(b)), with the capture pilot on a stand-in for Screenpipe | 1: the boot agent refuses an unsigned workload, any verb outside the five, and any command not in the manifest; the runtime still can't start a process. 4: Screenpipe's definition, not re-signed | M10f; spokes' capture data path needs open question 1 (the hub's own capture doesn't) |
+| **M10h** | Native workloads on devices (6(a), 6(b)), with the capture pilot on a stand-in for Screenpipe | 1: the boot agent refuses an unsigned workload, any verb outside the five, and any command not in the manifest; the runtime still can't start a process. 4: Screenpipe's definition, not re-signed | M10f. Spokes' capture follows the capture data path design, whose gate list is adopted here |
 | **M10i** | The map: merged health, drill-in, actions, the Mermaid export | 3: hand-drawn SVG, no runtime dependency, no third-party script | M10e–M10h |
 | **M10j** | The K3s driver: the `nova-service` chart, the fakes, the simulated cluster, per-cluster credentials, control-plane loss | — | M10e; M10d's dead-man's switch |
 | **M10k** | GitOps (`services.git`, Flux), the cold second site, switching backend in Settings › Services, K3s in onboarding on Linux | 6: only the promote stage writes `services.git`; the deploy key is read-only and per cluster; rollback is a revert commit; no `helm rollback` | M10j |
@@ -566,12 +566,35 @@ All six questions this ADR asked were decided by the owner, approving the propos
 5. **Secrets after an emergency promotion:** no vault-key escrow. The sheet states the backup's time, what was lost, and that connectors need signing in again. See Point 10.
 6. **The GitOps repository** (row 7): a separate `services.git`, written only by the promote stage. Flux uses a per-cluster read-only deploy key from the vault. Rollback is a pipeline git revert, never a manual `helm rollback`. See Point 3.
 
+## Resolved: the capture data path
+
+Open question 1 (how a spoke's capture data reaches the hub) was **resolved by the owner on 2026-10-31**. The design is `docs/builder-packet/nova-capture-data-path-design-2026-10-31.md` (v3, owner-approved), applied when M10h is designed and built. In brief:
+- **Derived data** (OCR text, transcripts, activity events) syncs continuously, store-and-forward over the mesh channel.
+  - It is ordered by device sequence, idempotent by event ID, and acknowledged by the hub.
+  - Each device's capture lag shows in Health and on the map.
+  - A full queue pauses and says so; it never drops.
+- **Raw media** archives on opportunistic windows to one storage target configured on the hub, behind a storage adapter (hub disk, storage server, NAS, or cloud object storage).
+  - A spoke prunes archived raw only once the archive copy is **verified**: checksum, manifest commit, and readable by the scrub.
+  - A spoke always keeps a local window (48 hours by default).
+- **Cloud targets** are encrypted on the hub before upload. Local-only mode forbids them.
+  - Captures unreferenced for 90 days (by default) move to a cold tier.
+  - A cold fetch is a background task with a plain status.
+  - Forget and delete tombstones reach the archive and cold tiers, and are reported per holder.
+- **The design target is Nova's native capture service.** Screenpipe is a transitional adapter feeding the same pipeline, retired per device at parity. The pilot order of Decision 4 is unchanged: Screenpipe first.
+- **Provenance is mandatory.** Every item and every transfer batch carries:
+  - origin device, capture source, sequence range and checksums;
+  - in manifests signed with the device's mesh key, verified against the enrolled device record.
+
+  Provenance survives archive and tier moves. Data from an unknown or revoked device is refused and logged.
+- **M10h's gate takes this list as input:**
+  - sync and dedupe;
+  - offline resume without loss or duplication;
+  - a tombstone's acknowledgement in the report;
+  - a raw fetch recorded in the ledger with its reason;
+  - local-only with a cloud hub queues instead of sending;
+  - a manifest from an unknown or revoked device, or with a bad signature, is refused.
+- **For M10h's plan to settle, consistent with Decision 1:** which part of the device agent holds the mesh key, signs manifests and carries the sync. Today the runtime agent has no network, and the boot agent's five verbs are about execution. Moving data is not an execution verb, so a data channel doesn't widen Decision 1's fixed set. It still has to be designed and tested as its own path, with the runtime's no-network rule kept or explicitly amended.
+
 ## Open questions for the owner
 
-One question is left, raised by the decisions themselves. It has a proposed default and blocks nothing before M10h's spokes.
-1. **How a spoke's Screenpipe data reaches the hub.** Today the hub pulls a Screenpipe at loopback (`capture/screenpipe.ts`), which works for the hub's own device.
-   - On a spoke, Screenpipe listens on that device's loopback.
-   - The runtime agent has no network, and the boot agent's five verbs (Decision 1) carry no data, so neither can relay it.
-   - Proposed: the hub's adapter pulls each spoke's Screenpipe over the mesh. Screenpipe would be bound only to the device's mesh address, with its API key set from the vault, and the deploy that opens that port would be tier 3.
-   - The alternative is a sixth, data-carrying verb, which Decision 1's "fixed" set rules out.
-   - Until this is answered, the capture pilot runs on the hub's own device only.
+None left from this ADR. Conflicts row 10 (no vault secret stored in a cloud-controlled cluster) stays a proposed default until the owner says otherwise.
