@@ -22,6 +22,7 @@ export function networkRoutes(n: Network): Route[] {
     },
     { method: 'GET', path: '/network/changes/{id}', summary: 'One change: the diff against the snapshot (secret values masked), the switch’s deadline, whether contact was confirmed, and its tasks.', handle: ({ params }) => n.view(params.id!) },
     { method: 'POST', path: '/network/changes/{id}/decline', summary: 'Don’t apply: the apply task is cancelled, and nothing changes.', handle: ({ params }) => n.decline(params.id!) },
+    { method: 'POST', path: '/network/changes/{id}/settle', summary: 'Settle a change Nova couldn’t put back (its revert found someone else’s change, or failed): you checked the target yourself and it is as you want it (tier 3: needs {confirm: true}). The target takes new changes again, and the problem closes.', body: '{confirm: true}', handle: ({ params, body }) => n.settle(params.id!, body ?? {}) },
     { method: 'POST', path: '/network/changes/{id}/revert', status: 201, summary: 'Put a kept change back to its snapshot: a network change of its own, so it asks at tier 3.', handle: ({ params }) => n.revert(params.id!) },
   ];
 }

@@ -13,12 +13,15 @@ import type { Egress } from '../workers.ts';
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 export type Config = { [k: string]: Json };
-export interface Read { config: Config; version: string }
+// `text`: the configuration's own bytes, as the target sent them: a revert writes exactly these back
+// (review of PR #241, S7).
+export interface Read { config: Config; version: string; text: string }
 
 export interface NetworkTarget {
   read(signal?: AbortSignal): Promise<Read>;
-  // Writes only if the target is still at `ifVersion`; returns the new version.
-  write(config: Config, ifVersion: string, signal?: AbortSignal): Promise<{ version: string }>;
+  // Writes `body` (JSON text) only if the target is still at `ifVersion`; returns the new version, or
+  // '' when the target gives none with its answer.
+  write(body: string, ifVersion: string, signal?: AbortSignal): Promise<{ version: string }>;
 }
 
 export const KINDS = ['router', 'dns', 'firewall', 'tailnet'] as const;
@@ -26,8 +29,14 @@ export type Kind = (typeof KINDS)[number];
 export const ADAPTERS = ['http-config'] as const;
 const MAX_BYTES = 1024 * 1024;
 
-// A key whose value is a secret: never shown, never set from chat.
-export const SECRET_KEY = /(pass(word|wd|phrase)?|secret|psk|pre[_-]?shared|private[_-]?key|api[_-]?key|token|auth[_-]?key|credential|wpa[_-]?key)/i;
+// A key whose value is a secret: never shown, never set from chat. It fails closed (review of PR #241,
+// S2): anything that names a password, a key, a token, a community string, a certificate, a hash or a
+// seed counts, so a public key is masked too.
+export const SECRET_KEY = /pass|pwd|secret|psk|pre[_-]?shared|priv|token|credential|community|cert|salt|hash|seed|cookie|session|otp|\bpin\b|auth|key$|^key|_key|key_|keys?\b/i;
+// A value that looks like a secret whatever its key: a PEM block, a long base64 or hex string, a
+// crypt(3) hash.
+const SECRET_VALUE = /^-----BEGIN |^[A-Za-z0-9+/_-]{32,}={0,2}$|^[0-9a-f]{32,}$|^\$(1|2[abxy]?|5|6|y|argon2(id?|d))\$/i;
+export const secretValue = (v: unknown): boolean => typeof v === 'string' && SECRET_VALUE.test(v.trim());
 export const MASK = '[secret]';
 
 const isObj = (v: unknown): v is Config => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -47,21 +56,105 @@ export function mergePatch(target: Json, patch: Json): Json {
   return out;
 }
 
-// Every value under a secret-looking key, masked (whatever it holds: a string, an object, a list).
+// Every value under a secret-looking key, and every secret-looking value, masked (whatever it holds: a
+// string, an object, a list). Deeper than 40 levels, everything is masked.
 export function mask(c: Json, depth = 0): Json {
-  if (depth > 40) return c;
+  if (depth > 40) return MASK;
   if (Array.isArray(c)) return c.map((v) => mask(v, depth + 1));
+  if (secretValue(c)) return MASK;
   if (!isObj(c)) return c;
   return Object.fromEntries(Object.entries(c).map(([k, v]) => [k, SECRET_KEY.test(k) && v !== null && v !== '' ? MASK : mask(v, depth + 1)]));
 }
 
-// The paths in a patch that would set or delete a secret; a patch with any is refused.
+const join = (at: string, k: string | number) => (typeof k === 'number' ? `${at}[${k}]` : at ? `${at}.${k}` : k);
+
+// The paths in a patch that would set or delete a secret, inside lists too (review of PR #241, B1),
+// or set a secret-looking value under any key; a patch with any is refused.
 export function secretPaths(patch: Json, at = '', depth = 0): string[] {
-  if (!isObj(patch) || depth > 40) return [];
-  return Object.entries(patch).flatMap(([k, v]) => {
-    const p = at ? `${at}.${k}` : k;
-    return SECRET_KEY.test(k) ? [p] : secretPaths(v, p, depth + 1);
-  });
+  if (depth > 40) return [at || '(the patch)'];
+  if (Array.isArray(patch)) return patch.flatMap((v, i) => secretPaths(v, join(at, i), depth + 1));
+  if (secretValue(patch)) return [at || '(the patch)'];
+  if (!isObj(patch)) return [];
+  return Object.entries(patch).flatMap(([k, v]) => (SECRET_KEY.test(k) ? [join(at, k)] : secretPaths(v, join(at, k), depth + 1)));
+}
+
+// Where a secret value differs between two configurations: under a secret-looking key, or a
+// secret-looking value on either side, at any depth, lists included. A change with any is never
+// offered, since the diff can't show it (review of PR #241, B1).
+export function secretChanges(a: Json | undefined, b: Json | undefined, at = '', depth = 0, secret = false, out: string[] = []): string[] {
+  if (out.length >= 20) return out;
+  const same = JSON.stringify(a) === JSON.stringify(b);
+  if (secret || secretValue(a) || secretValue(b) || depth > 40) { if (!same) out.push(at || '(the whole configuration)'); return out; }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const x = Array.isArray(a) ? a : [];
+    const y = Array.isArray(b) ? b : [];
+    for (let i = 0; i < Math.max(x.length, y.length); i++) secretChanges(x[i], y[i], join(at, i), depth + 1, false, out);
+    return out;
+  }
+  if (isObj(a) || isObj(b)) {
+    const x = isObj(a) ? a : {};
+    const y = isObj(b) ? b : {};
+    for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) secretChanges(x[k], y[k], join(at, k), depth + 1, SECRET_KEY.test(k), out);
+  }
+  return out;
+}
+
+// The patch's shape, for the record: its keys, every value replaced. The patch itself is sealed in
+// Nova's own folder (review of PR #241, B1).
+export function shape(c: Json, depth = 0): Json {
+  if (depth > 40) return '…';
+  if (Array.isArray(c)) return c.map((v) => shape(v, depth + 1));
+  if (isObj(c)) return Object.fromEntries(Object.entries(c).map(([k, v]) => [k, shape(v, depth + 1)]));
+  return c === null ? null : '…';
+}
+
+// A path's segments, and the value there (undefined when absent).
+type Seg = string | number;
+export function leafPaths(a: Json | undefined, b: Json | undefined, at: Seg[] = [], out: Seg[][] = []): Seg[][] {
+  if (JSON.stringify(a) === JSON.stringify(b)) return out;
+  if (isObj(a) && isObj(b)) {
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) leafPaths(a[k], b[k], [...at, k], out);
+    return out;
+  }
+  out.push(at);
+  return out;
+}
+export const showPath = (p: Seg[]) => p.reduce<string>((s, k) => join(s, k), '') || '(the whole configuration)';
+export function valueAt(c: Json | undefined, p: Seg[]): Json | undefined {
+  let v: Json | undefined = c;
+  for (const k of p) {
+    if (typeof k === 'number' ? !Array.isArray(v) : !isObj(v)) return undefined;
+    v = (v as Record<string | number, Json>)[k as never];
+  }
+  return v;
+}
+// A configuration with some paths taken out: the fields the target sets itself on each write.
+export function without(c: Json, paths: Seg[][]): Json {
+  const copy = JSON.parse(JSON.stringify(c)) as Json;
+  for (const p of paths) {
+    if (!p.length) continue;
+    const parent = valueAt(copy, p.slice(0, -1));
+    const k = p[p.length - 1]!;
+    if (isObj(parent) && typeof k === 'string') delete parent[k];
+  }
+  return copy;
+}
+
+// Numbers JSON can't carry exactly through a parse and a write (integers past 2^53, 1500.0, 1e3,
+// -0): Nova refuses to change such a configuration rather than rewrite them (review of PR #241, S7).
+export function inexactNumbers(text: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < text.length && out.length < 5; i++) {
+    const ch = text[i]!;
+    if (ch === '"') { for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++; continue; }
+    if (ch === '-' || (ch >= '0' && ch <= '9')) {
+      const m = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(text.slice(i));
+      if (!m) continue;
+      if (JSON.stringify(JSON.parse(m[0])) !== m[0]) out.push(m[0]);
+      i += m[0].length - 1;
+    }
+  }
+  return out;
 }
 
 // The leaf paths whose values differ, for a sentence ("firewall.rules, dns.upstream").
@@ -124,10 +217,10 @@ export function httpConfig(o: { url: string; token: () => string | null; timeout
       if (!isObj(config)) throw new CoreError('conflict', `${u.host}’s configuration isn’t a JSON object.`);
       const version = etag(res);
       if (!version) throw new CoreError('conflict', `${u.host} gives no version (ETag) with its configuration, so Nova can’t change it safely.`);
-      return { config, version };
+      return { config, version, text };
     },
-    async write(config, ifVersion, signal) {
-      const { res } = await call({ method: 'PUT', body: JSON.stringify(config), headers: { 'content-type': 'application/json', 'if-match': `"${ifVersion}"` } }, signal);
+    async write(body, ifVersion, signal) {
+      const { res } = await call({ method: 'PUT', body, headers: { 'content-type': 'application/json', 'if-match': `"${ifVersion}"` } }, signal);
       if (res.status === 412) throw new CoreError('conflict', `${u.host}’s configuration changed since Nova read it, so Nova wrote nothing.`);
       if (!res.ok) throw new CoreError('conflict', `${u.host} answered ${res.status} to the change.`);
       return { version: etag(res) };

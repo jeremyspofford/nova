@@ -25,7 +25,7 @@ import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
 import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
 import { Enrollment } from './mesh/enroll.ts';
-import { APPROVER_ONLY, Access, allows, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
+import { APPROVER_ONLY, Access, allows, loopbackAddress, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
 import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
 import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
@@ -168,7 +168,7 @@ export interface CoreOptions {
   // stand-in's), whose home folder a project may never be, and the tool's timeout.
   infra?: Pick<InfraOptions, 'path' | 'userHome' | 'timeoutS'>;
   // Networking through chat (M10d), for tests: the dead-man's switch's window in milliseconds.
-  network?: Pick<NetworkOptions, 'windowMs' | 'target'>;
+  network?: Pick<NetworkOptions, 'windowMs' | 'target' | 'retryMs'>;
   // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
   hubPorts?: () => number[];
   // How the browser worker starts a browser: Chromium, or a stand-in in tests.
@@ -418,6 +418,7 @@ export function createCore(o: CoreOptions) {
     db, log, home: o.home, ledger, verifier, vault, devices, now, privacy: () => profile.privacyDefault(),
     checkpoint: (reason) => checkpoints.auto(reason),
     windowS: () => { const v = profile.get<number>('mesh', 'contact_window_s'); return typeof v === 'number' ? v : 300; },
+    contactKinds: () => profile.get<unknown>('mesh', 'contact_kinds'),
     ...(o.network ?? {}),
     notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'network', name: 'Network', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('network', 'Nova couldn’t tell you about a network change.', { error: (e as Error).message })); },
   });
@@ -1182,8 +1183,21 @@ export function createCore(o: CoreOptions) {
     },
     // The core's routes, for the principal the gate found.
     // Also the device agent's installer and archive (public; mesh/access.ts PUBLIC_PATHS).
-    handle: async (req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal, listener: Listener) =>
-      agentDownload(req, res, url) || api.handle(req, res, url, { principal, listener, address: access.address(req, listener) }),
+    handle: async (req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal, listener: Listener) => {
+      const address = access.address(req, listener);
+      // Contact for the dead-man's switch (M10d): a trusted device's request on the mesh listener,
+      // once its answer went out successfully, and only from off the hub's own machine.
+      if (principal.kind === 'device' && listener === 'mesh') {
+        const id = principal.device.id;
+        res.once('finish', () => {
+          if (res.statusCode >= 400) return;
+          const bare = address.replace(/^\[|\]$/g, '').replace(/^::ffff:/, '');
+          const onHub = loopbackAddress(bare) || hubAddress().hosts.some((h) => h.replace(/^\[|\]$/g, '') === bare);
+          try { network.contact(id, { onHub }); } catch (e) { log.warn('network', 'Nova couldn’t record contact with a device.', { error: (e as Error).message }); }
+        });
+      }
+      return agentDownload(req, res, url) || api.handle(req, res, url, { principal, listener, address });
+    },
     // A hub recovers the ledger, then starts the heartbeat: once now (to catch up), then every
     // 30 s. A standby starts copying the hub instead, and runs nothing else.
     start() {
