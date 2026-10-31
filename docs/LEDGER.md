@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #258 · The safety screen now asks Nova's decision service, and checks every part of a long page**
+- What changed: Nova's screen for outside content (pages, mail, files, tool output) now asks the new decision service. It checks every part of a long document, not a sample, and the parts overlap, so a trick split across a boundary is still seen. Every decision is recorded, without the content.
+- What you can now do: in Settings › Models › Decision model, you can choose Jev (TypeSafe's cloud model) or a Tev1 size, and see each model's test results before you switch. Two separate switches let Jev screen outside content (Screening) or images (Box, a preview) even in local modes. Both are off, and each says plainly what leaves your machine. Health shows how outside content is being screened.
+- Still unfinished: text from Capture (screen text, meeting transcripts) is screened only on your devices; a switch to let Jev screen it in cloud mode is for later. No decision model has passed Nova's screening test yet, so anything Nova can't vouch for is still held back as unsure. Jev has never been called for real (no account). A very long document screened by Tev1 takes minutes.
+
 **2026-10-31 · #264 · A check for passwords and private details in captured screen text, the first to pass its test**
 - What changed: Nova can check text it captured from your screen or recordings for passwords, keys, and money or health details before keeping it. Fixed rules run first: password managers and banking apps are never kept, and key-like or card-like text is blanked out. On this computer's larger local model, the check caught 38 of 39 sensitive test notes and wrongly held only 1 of 40 harmless ones, so it passed. Its smaller model failed.
 - What you can now do: nothing yet: the check isn't switched on in capture. Nothing it reads leaves your machine.
