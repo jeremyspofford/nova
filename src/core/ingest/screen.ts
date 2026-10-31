@@ -357,7 +357,7 @@ export class Ingest {
     if (verdict === 'block') {
       const why = whyBlocked(c.flags, scores, t);
       try { this.#o.blocked?.({ id, kind: source.kind, origin: source.origin, flags: c.flags.filter((f) => f.level !== 'note').map((f) => f.kind), max, why }); } catch (e) {
-        this.#o.log?.problem('ingest', 'Nova blocked some outside content but couldn’t open its ledger entry.', { detail: (e as Error)?.stack ?? String(e) });
+        this.#o.log?.problem('ingest', 'Nova blocked some outside content but couldn’t open its ledger entry.', { detail: (e as Error)?.stack ?? String(e), stops: true });
       }
     }
     return r;

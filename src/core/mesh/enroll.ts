@@ -124,7 +124,7 @@ export class Enrollment extends EventEmitter {
       this.#reported.set(key, now);
       this.#log.problem('mesh', key === 'hub'
         ? `Nova turned away ${what}. Someone may be guessing codes; no device can join with a wrong code for a few minutes.`
-        : `Nova turned away a device at ${key} that ${what}. If that wasn’t you adding a device, someone else may be trying to.`);
+        : `Nova turned away a device at ${key} that ${what}. If that wasn’t you adding a device, someone else may be trying to.`, { stops: true });
     }
     throw new CoreError('too_many', answer);
   }
@@ -222,7 +222,7 @@ export class Enrollment extends EventEmitter {
     const at = this.#now().toISOString();
     if (!sameDigest(pairingCommitment(r.public_key, nonce), r.commitment)) {
       this.#decide(r, 'denied', 'The device’s nonce didn’t match what it committed to.', 'hub');
-      this.#log.problem('mesh', `A request to join from “${r.name}” was refused because its check didn’t match. If you weren’t adding a device just now, someone else may have tried.`);
+      this.#log.problem('mesh', `A request to join from “${r.name}” was refused because its check didn’t match. If you weren’t adding a device just now, someone else may have tried.`, { stops: true });
       throw new CoreError('validation', 'The confirmation check failed. Start again with a new code.');
     }
     const held = this.#codes.get(r.id);

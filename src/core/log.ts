@@ -16,6 +16,10 @@ export interface Problem {
   detail: string | null;
   task_id: string | null;
   resolved_at: string | null;
+  // 1 when the problem stops Nova (work can't proceed, a dead-man's switch fired, a security
+  // refusal): the orb shows it red. 0, the default, is a problem that needs the person while Nova
+  // keeps running: amber (DESIGN-SYSTEM §1; owner decision 2026-10-31).
+  stops: number;
 }
 
 export const UNSAVED_FROM = -1_000_000_000;
@@ -80,21 +84,24 @@ export class Log extends EventEmitter {
   warn(source: string, msg: string, data?: Record<string, unknown>): void { this.write('warn', source, msg, data); }
 
   // Record something the person needs to know about. The message is in plain words; the detail
-  // (a stack, an exit code) is one tap away.
-  problem(source: string, said: string, opts: { detail?: string; taskId?: string } = {}): Problem {
+  // (a stack, an exit code) is one tap away. `stops`: only where what went wrong stops Nova (the
+  // Failed class: work can't proceed, a dead-man's switch fired, a security refusal); everything
+  // else needs the person while Nova keeps running.
+  problem(source: string, said: string, opts: { detail?: string; taskId?: string; stops?: boolean } = {}): Problem {
     const at = this.#now().toISOString();
     // Problems are stored, shown and copied to the standby: no secret value gets that far.
     const message = redactText(said);
     if (opts.detail) opts = { ...opts, detail: redactText(opts.detail) };
+    const stops = opts.stops ? 1 : 0;
     let row: Problem;
     try {
-      if (this.local()) this.#db.run('INSERT INTO problem (id, at, source, message, detail, task_id) VALUES ((SELECT MIN(0, IFNULL(MIN(id), 0)) - 1 FROM problem), ?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
-      else this.#db.run('INSERT INTO problem (at, source, message, detail, task_id) VALUES (?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null);
+      if (this.local()) this.#db.run('INSERT INTO problem (id, at, source, message, detail, task_id, stops) VALUES ((SELECT MIN(0, IFNULL(MIN(id), 0)) - 1 FROM problem), ?, ?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null, stops);
+      else this.#db.run('INSERT INTO problem (at, source, message, detail, task_id, stops) VALUES (?, ?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null, stops);
       row = this.#db.get<Problem>('SELECT * FROM problem WHERE id = last_insert_rowid()')!;
     } catch (e) {
       // The database can't take it (the disk is full, M7b's chaos pass): the problem is still
       // shown and listed, kept in memory until Nova restarts, and written to the log file.
-      row = { id: --this.#unsavedId, at, source, message, detail: `${opts.detail ? `${opts.detail}\n` : ''}(Not saved: ${(e as Error).message})`, task_id: opts.taskId ?? null, resolved_at: null };
+      row = { id: --this.#unsavedId, at, source, message, detail: `${opts.detail ? `${opts.detail}\n` : ''}(Not saved: ${(e as Error).message})`, task_id: opts.taskId ?? null, resolved_at: null, stops };
       this.#unsaved = [row, ...this.#unsaved].slice(0, 50);
     }
     this.write('error', source, message, { detail: opts.detail, task: opts.taskId });
