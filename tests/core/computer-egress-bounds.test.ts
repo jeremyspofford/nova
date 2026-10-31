@@ -86,9 +86,11 @@ function sampler(conns: Duplex[], child: () => ChildProcess | null) {
 }
 
 async function relayRss(container: string): Promise<number> {
-  const top = await docker(['top', container, '-o', 'uid,rss,args']);
-  const line = top.out.split('\n').find((l) => /^\s*65534\s/.test(l));
-  return line ? Number(line.trim().split(/\s+/)[1]) * 1024 : 0;
+  // docker top needs the pid column; the relay is the one process running as nobody.
+  const top = await docker(['top', container, '-o', 'pid,uid,rss,args']);
+  const m = top.out.split('\n').map((l) => /^\s*\d+\s+65534\s+(\d+)\s/.exec(l)).find(Boolean);
+  assert.ok(m, `the relay is running:\n${top.out}`);
+  return Number(m![1]) * 1024;
 }
 
 test('the proxy’s memory stays bounded: streaming after a refusal, uploading to a host that never reads, a download nobody reads', { skip: skip ?? false, timeout: 300_000 }, async (t) => {
@@ -108,27 +110,30 @@ test('the proxy’s memory stays bounded: streaming after a refusal, uploading t
     await tunnel.ready;
     const inside = async (...args: string[]) => JSON.parse((await c.exec(m, { argv: ['node', '-e', CLIENT, ...args], timeoutS: 60 })).stdout || '{}');
 
-    await t.test('streaming 128 MiB after a refusal', async () => {
+    await t.test('streaming 128 MiB after a refusal', async (st) => {
       const s = sampler(conns, () => child);
       const r = await inside('refused', 'undeclared.example.test', '443', '128');
       const peak = s.stop();
       assert.match(r.head, /403/);
+      st.diagnostic(`Nova held at most ${peak} bytes; the command sent ${r.sent}`);
       assert.ok(peak < 2 * MiB, `Nova held at most ${peak} bytes for it (the command sent ${r.sent})`);
     });
-    await t.test('uploading 128 MiB to a declared host that never reads', async () => {
+    await t.test('uploading 128 MiB to a declared host that never reads', async (st) => {
       const s = sampler(conns, () => child);
       const r = await inside('upload', '127.0.0.1', String(sink.port), '128');
       const peak = s.stop();
       assert.match(r.head, / 200 /);
+      st.diagnostic(`Nova held at most ${peak} bytes; the command sent ${r.sent}`);
       assert.ok(peak < 2 * MiB, `Nova held at most ${peak} bytes for it (the command sent ${r.sent})`);
     });
-    await t.test('a declared host sending 256 MiB to a command that never reads', async () => {
+    await t.test('a declared host sending 256 MiB to a command that never reads', async (st) => {
       const s = sampler(conns, () => child);
       const base = await relayRss(m.container!);
       const r = await inside('download', '127.0.0.1', String(flood.port));
       const peak = s.stop();
       const rss = await relayRss(m.container!);
       assert.match(r.head, / 200 /);
+      st.diagnostic(`Nova held at most ${peak} bytes; the relay inside grew by ${rss - base} bytes (from ${base})`);
       assert.ok(peak < 2 * MiB, `Nova held at most ${peak} bytes for it`);
       assert.ok(rss - base < 64 * MiB, `the relay inside grew by ${rss - base} bytes (from ${base})`);
     });

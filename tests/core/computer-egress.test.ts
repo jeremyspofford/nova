@@ -1,7 +1,7 @@
 // A workspace's egress (M10a gate: egress outside the declaration is refused). The workspace has no
 // network; a relay inside carries connections to Nova's proxy, which applies the safe-fetch rules.
 // Tested on the decision alone, then end to end from inside a real workspace with real clients
-// (Node and curl), against stand-in hosts on this machine.
+// (Node and curl), against TLS stand-in hosts on this machine.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

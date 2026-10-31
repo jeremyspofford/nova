@@ -12,8 +12,8 @@ export function computerRoutes(c: NovaComputer): Route[] {
     },
     {
       method: 'POST', path: '/computer/workspaces', status: 201,
-      summary: 'Make a workspace: a machine of Nova’s own with one project folder. No folder: a new empty one (tier 1). A folder of yours: asks first (tier 2). Egress other than none: asks every time (tier 3), and never while Nova is local-only. Returns the ledger task.',
-      body: '{name, folder?, egress?: {mode: none | registries | hosts, hosts?}}',
+      summary: 'Make a workspace: a machine of Nova’s own with one project folder. No folder: a new empty one (tier 1). A folder of yours: asks first (tier 2). Egress other than none: asks every time (tier 3), and never while Nova is local-only. A folder is resolved once, and the task names its real path, device and inode: only that folder is ever used. Its .git is read-only inside unless git_writable (asks first). Returns the ledger task.',
+      body: '{name, folder?, egress?: {mode: none | registries | hosts, hosts?}, git_writable?}',
       handle: ({ body }) => c.request('create', body),
     },
     { method: 'GET', path: '/computer/workspaces/{id}', summary: 'One workspace: its state, folder, egress, checkpoints and recent commands.', handle: ({ params }) => c.view(params.id!) },
@@ -30,7 +30,7 @@ export function computerRoutes(c: NovaComputer): Route[] {
       body: '{checkpoint?}', handle: ({ params, body }) => c.request('reset', body, params.id!),
     },
     { method: 'POST', path: '/computer/workspaces/{id}/destroy', status: 201, summary: 'Delete the workspace, its machine and its checkpoints (tier 3). A folder of yours stays as it is.', handle: ({ params }) => c.request('destroy', {}, params.id!) },
-    { method: 'GET', path: '/computer/runs/{task}', summary: 'A computer task’s record; for a command, its output as kept, the screen it passed and what it reached outside.', handle: ({ params }) => c.run(params.task!) },
+    { method: 'GET', path: '/computer/runs/{task}', summary: 'A computer task’s record; for a command, the screen it passed and what it reached outside, and its raw output only if the ingest gate passed it (otherwise the gate’s extract).', handle: ({ params }) => c.run(params.task!) },
     { method: 'POST', path: '/computer/runs/{task}/undo', status: 201, summary: 'Undo a command: reset its workspace to the checkpoint taken just before it.', handle: ({ params }) => c.undo(params.task!) },
   ];
 }
