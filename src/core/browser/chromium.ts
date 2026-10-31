@@ -157,6 +157,9 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
   const cdp = new Cdp(pipeTransport(proc.stdio[3] as Writable, proc.stdio[4] as Readable));
   const close = async () => {
     try { if (!cdp.closed) await Promise.race([cdp.send('Browser.close', {}, undefined, { timeoutMs: 2000 }), new Promise((r) => setTimeout(r, 2000))]); } catch { /* it may be gone already */ }
+    // Nova's own profile: Chromium writes its cookies out as it shuts down, so it is given time to
+    // finish by itself before anything stops it.
+    if (kept && proc.exitCode === null && proc.signalCode === null) await Promise.race([new Promise((r) => proc.once('exit', r)), new Promise((r) => setTimeout(r, 8000))]);
     cdp.close();
     if (proc.exitCode === null && proc.signalCode === null) {
       proc.kill('SIGTERM');
