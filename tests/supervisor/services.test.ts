@@ -20,6 +20,7 @@ const promote = (s: Supervisor, v: string, service = 'stand-in') => s.manager.pr
 test('deployed alongside with no traffic, promoted on the typed word, soaked, and the old slot removed after the soak', async () => {
   const h = await supervised('nova-svc-life-');
   const { s } = h;
+  let child = 0;
   try {
     const port = await freePort();
     const r1 = await s.manager.deploy(standIn({ version: '1.0.0', port, soak_s: 2, flags: ['--child'] }));
@@ -53,7 +54,7 @@ test('deployed alongside with no traffic, promoted on the typed word, soaked, an
     assert.equal(versionOf(s, '1.0.0').pid, null, 'the kept version is stopped');
     await until(() => !alive(one.pid), 'the old version to stop');
     // Its whole process group went with it: the child it started too.
-    const child = Number(readFileSync(join(h.dir, 'sup', 'services', 'stand-in', 'state', 'default', 'child-1.0.0.pid'), 'utf8'));
+    child = Number(readFileSync(join(h.dir, 'sup', 'services', 'stand-in', 'state', 'default', 'child-1.0.0.pid'), 'utf8'));
     await until(() => !alive(child), 'the old version’s child process to stop');
     assert.ok(existsSync(join(h.dir, 'sup', 'services', 'stand-in', 'state', 'default', 'child-1.0.0.sigterm')), 'the group was asked to stop (SIGTERM) before it was made to');
     assert.ok(s.services.slots('stand-in').includes('1.0.0'), 'its slot is kept for the soak');
@@ -69,6 +70,8 @@ test('deployed alongside with no traffic, promoted on the typed word, soaked, an
     assert.equal(JSON.parse(readFileSync(join(h.dir, 'sup', 'state.json'), 'utf8')).services[0].live, '2.0.0');
   } finally {
     await h.stop();
+    // Seen failing or not, the child this test made is never left behind.
+    if (child && alive(child)) try { process.kill(child, 'SIGKILL'); } catch { /* gone */ }
   }
 });
 

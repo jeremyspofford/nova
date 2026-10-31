@@ -84,6 +84,9 @@ test('a supervisor killed outright leaves its service running; the next one ends
     await until(async () => { const w = await whoami(port); return !!w && w.pid !== leftover; }, 'its own instance to serve');
   } finally {
     await again.stop();
+    // Whatever the outcome, the orphaned group this test made is not left behind.
+    if (leftover && alive(leftover)) try { process.kill(-leftover, 'SIGKILL'); } catch { /* gone */ }
+    if (child && alive(child)) try { process.kill(child, 'SIGKILL'); } catch { /* gone */ }
   }
   await until(() => !alive(leftover) && !alive(child), 'nothing left', 5000);
 });
