@@ -79,6 +79,9 @@ export function keep(home: string, target: evals.Target, run: evals.SuiteRun, en
   const store = new evals.Scorecards(home);
   const before = store.get(target.provider, target.model)?.suites[run.suite] ?? null;
   const card = store.record(target, run, { nova: novaBuild(), endpoint });
-  const verdict = run.suite === 'regression' ? evals.regressionVerdict(run, before) : null;
+  // A drop is judged only against a card from the same tasks: another fingerprint isn't comparable.
+  const comparable = before && before.fingerprint === run.fingerprint ? before : null;
+  const verdict = run.suite === 'regression' ? evals.regressionVerdict(run, comparable) : null;
+  if (verdict && before && !comparable) verdict.words += ' The previous card was for other tasks (the suite changed since), so no drop is judged.';
   return { card, before, verdict };
 }
