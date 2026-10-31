@@ -374,8 +374,8 @@ test('M10c: two runs on one repository at once each get their own worktree and b
   try {
     const [a, b] = await Promise.all([1, 2].map((n) => core.coding.start({ repo: repos.person, goal: `Fix greet(), take ${n}.`, test_command: 'node --test' })));
     const [ta, tb] = await Promise.all([settle(core, a!.task.id), settle(core, b!.task.id)]);
-    assert.equal(ta.state, 'done', ta.reason);
-    assert.equal(tb.state, 'done', tb.reason);
+    assert.equal(ta.state, 'done', String(ta.reason));
+    assert.equal(tb.state, 'done', String(tb.reason));
     const [va, vb] = [core.coding.view(a!.run.id), core.coding.view(b!.run.id)];
     assert.notEqual(va.nova_branch, vb.nova_branch);
     assert.equal(va.base, vb.base);
