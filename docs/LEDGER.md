@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #267 · The layout no longer crushes columns on a folding phone, tablet or narrow window**
+- What changed: on a folding phone's inner screen, a tablet held upright, or any window between a phone and a laptop, Nova no longer squeezes three columns in. Each column has a smallest width, and the side column with your tasks, devices and health only appears when all three fit; until then those cards are on Home. No text is squeezed to a few letters a line, the Online/Offline labels no longer sit on top of device names, and the side column scrolls instead of running off the screen. On an installed app, nothing sits under the camera cutout or the home bar any more.
+- What you can now do: use Nova on the fold's inner screen in either direction, in any of the six designs, and read every card.
+- Still unfinished: checking it on your real phone (the tests use the iPhone's engine, but not as an installed app). Whether the app should draw behind the iPhone's status bar, which would remove the empty band at the top but makes the time and battery white on the light designs, is your call.
+
 **2026-10-31 · #266 · Pairing a phone no longer fails now and then for no reason**
 - What changed: the browser engine behind every iPhone (WebKit) sometimes refuses a security key it has just made. Nova's pairing page took that as "this browser can't pair". Now it quietly makes another key of the same strength and carries on. A browser that really can't make these keys is still told so plainly.
 - What you can now do: pair a phone without the occasional unexplained failure. It was also the cause of a pairing test that failed every so often.
@@ -290,6 +295,21 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
+- **The bands are derived, not round numbers:**
+  - each region has a minimum, computed from the design system's own tokens: the main column is 45ch plus its padding and scrollbar gutters; a card is 20ch plus its padding; the right column is one card plus its padding and scrollbar; the rail is `layout/rail-width`;
+  - the three-column band (rail, centre, right column) starts at their sum, and the two-column band at `max(600px, rail + main)`;
+  - they are `ui/`-declared custom properties in `layout.css`, not schema tokens, so no package changes. `shell.js` measures them at run time and again on a live swap or a text-size change.
+  - In the container, Orb Teal and Companion Light enter three columns at 851.6 px, Paper at 832.1, Aurora at 770.2, Nova at 752.2–793.1 and Obsidian at 734.1–773.6.
+- **Under the three-column band,** a flat tablet is the rail and one column, with the right column's cards on Home. Half-open postures keep their second pane: side by side where both fit or on a real hinge, stacked otherwise.
+- **M9's second-pane rule** ("every expanded width gives its extra room to a second pane") now applies from the three-column band, and Settings keeps its sidebar from 840 px. Between 840 px and the band, the centre keeps `layout/content-max`, so it never stretches.
+- **Cards** stack below the card minimum, never squeeze. A device row moves its pill under the words rather than over them.
+- **Safe area:** the shell keeps each inset clear once (`viewport-fit=cover`). No excess padding was found: the empty band at the top of the owner's screenshot is the iOS status bar above Nova's top bar.
+  - Drawing under the status bar (`black-translucent`) is left to the owner, because it turns the status text white over the light designs.
+- **The gate:**
+  - `tests/ui/fold-postures.test.ts` runs in the UI gate, in Chromium and WebKit: the review's 10 postures × 9 views, every design system at 560–1440 px, 20 screenshot baselines (2% tolerance) and the safe area.
+  - The posture sweep and M9 foldable 2 follow the derived bands.
 
 **2026-10-31 (capture screening, job 1: capture-sensitive).** Owner decision `INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`; plan `docs/plans/ds2-capture-sensitive.md`; evidence `docs/evidence/capture-sensitive-eval.md`; PR #264.
 - **The template:** `capture-sensitive` v1.
