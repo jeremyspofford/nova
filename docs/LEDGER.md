@@ -6,6 +6,14 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #241 · Infrastructure, network changes and account steps through chat**
+- What changed:
+  - Nova can plan cloud infrastructure with a monthly budget, and applies a plan only with your confirmation. Over-budget and unpriced plans are never offered.
+  - It can change a router or similar device's settings: you see the diff first, and the change undoes itself if your phone or browser doesn't reach Nova within 5 minutes.
+  - Account steps (a new password, a new account, a one-time code) always ask, and you type any code yourself.
+- What you can now do: through chat, ask for a plan, a network change or an account step. Each ends at a confirmation that shows exactly what will happen; secret values are never shown or stored in the open.
+- Still unfinished: tested only against stand-ins (a fake infrastructure tool, a simulated router, a pretend site): nothing real, by design. Projects and network targets are set up through Nova's programming interface; there's no Settings page yet. Your choices on a provider and the 5-minute window are still open.
+
 **2026-10-31 · #252 · The decision log now says what changed, in plain language**
 - What changed: this section, with one entry for every merge since 30 October and a short summary of each earlier milestone.
 - What you can now do: Nothing in the app changed: paperwork only. From now on every merge gets an entry here, in the same pull request.
