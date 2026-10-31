@@ -15,23 +15,23 @@ stand-ins only, in folders made under the system's temp folder:
 - **The account site** is `scripts/stand-ins/account-site.js` on loopback. No account is created, no
   password or MFA is changed anywhere real, and nothing is paid.
 - **The phone** is a device enrolled the way the plan says (join, reveal, approval at the console,
-  a signed session) over the real mesh listener, on loopback.
+  a signed session) over the real mesh listener, on loopback, behind the mesh's `proxy` transport:
+  its requests carry the address a TLS proxy would report (192.0.2.50, documentation space), since a
+  device on the hub's own machine never counts as contact.
 - Tokens and passwords are made per test with `randomBytes`. The running preview (ports 4318 and 4320,
   `~/Nova-preview`) and every other checkout were not touched.
 
 ## Suite
 
-`npm run check` passes: the token lint, themes, typecheck, and **1109 tests: 1100 pass, 0 fail, 9
-skipped**, on `main` at f4618a66 (with the M10c review fixes) plus this branch. The 9 skips are the existing opt-in real-service tests (real Ollama, real Claude, real
-Relay). M10d adds 27 tests to it. One earlier full run had one
+`npm run check` passes: the token lint, themes, typecheck, and **1128 tests: 1119 pass, 0 fail, 9
+skipped**, on `main` at ccc58b5e plus this branch, after the adversarial review's fixes. The 9 skips are the existing opt-in real-service tests (real Ollama, real Claude, real
+Relay). M10d adds 46 tests to it (27, and 19 for the review: 18 in `m10d-review.test.ts` and one in the sheets' unit test). One earlier full run had one
 failure in an untouched test, the Screenpipe cursor test in `tests/core/capture.test.ts` (a pull
 answered without `kept` under the full suite's load); it passed three times alone and in the next full
 run. It is written down here as a flake, not fixed.
 
-`scripts/ui-test.sh` (Chromium in the Playwright container): **89 tests: 89 pass, 0 fail** (the whole
-UI gate with the two new M10d tests, before rebasing onto f4618a66). After the last change to
-`src/core/network/` and the rebase, the two M10d UI tests, the M10c sheets test and the approvals test
-were run again: 4 pass.
+`scripts/ui-test.sh` (Chromium in the Playwright container), after the review's fixes: **89 tests: 89 pass, 0
+fail** (the whole UI gate, the two M10d tests included).
 
 The new tests:
 
@@ -218,6 +218,58 @@ own words are kept as “stand-in provider: authenticated with token [redacted]�
 
 `tests/acceptance/fresh-user.test.ts` passes unchanged; the M10d acceptance test itself starts from a
 blank profile set up by conversation.
+
+## The adversarial review of PR #241
+
+The review read the PR at 0503c1e8 and reproduced most items live with its own probes (saved outside
+the repository). The branch was rebased onto main at ccc58b5e first. Each item became a test in
+`tests/core/m10d-review.test.ts` (18 tests), written before its fix and seen failing against the
+code the review read: all 18 failed. Each fix was then reverted on its own, by a script that restored
+the file afterwards, and its test run against the code without it:
+
+| Item | Reproduced | Fix | Test | With the fix reverted |
+|---|---|---|---|---|
+| **B1** a secret set inside a list | yes (P-N1, P-N2) | `secretPaths` walks lists and refuses secret-looking values | review B1: a patch that sets a secret anywhere | fails |
+| **B1** an empty diff for a secret change | yes (P-N2) | a change that alters a secret value anywhere is never offered, naming where; an empty diff for a real change never is | review B1: a change that alters a secret value | fails |
+| **B1** the patch in clear in `network_change.patch` | yes (P-N2) | the row keeps the patch's shape; the patch is sealed beside the snapshot | same test | fails |
+| **B2** an unrecorded resource beats the budget | yes (P-I1) | the month is priced from the plan's whole before and after; ending over budget is blocked unless every change only takes cost away | review B2 | fails |
+| **S1** `"constructor"` prices as NaN | yes (P-I2, P-I2b) | own properties, finite amounts; everything after the apply priced before it runs | review S1 | fails |
+| **S2** `key`, `pwd`, `privkey`, `community` unmasked | yes (P-N1, P-N3) | the mask fails closed on keys and on values (PEM, long base64 or hex, crypt hashes); the diff itself is sealed, not in the database | review S2 | fails |
+| **S3** one failed revert, never retried | yes (P-N5) | retried (15 s, doubling, at most 10 minutes) while contact is lost; the problem stays open until it lands or the person settles | review S3 | fails |
+| **S4** a target that stamps a revision | yes (P-N6) | the fields the target set on Nova's write are learnt from the read-back and left out of the comparisons; a stand-in variant (`stamp`, `etagOnPut: false`) | review S4 | fails |
+| **S5** a 403 from a computer keeps a change | yes (P-N7) | contact is a successful request (below 400), off the hub's machine, from phones and browsers by default; the sheet names the devices | review S5 | fails, for each of the three rules on its own |
+| **S6** sensitive values in `infra_run.changes` and the checkpoint | yes (P-I3) | the run keeps no resource values; sensitive markers honoured; the state copy sealed | review S6 | fails for the record (after the test also checked a non-sensitive value, see below) and for the sealed state |
+| **S7** numbers rewritten; byte-for-byte only by the stand-in's luck | yes (P-N4) | inexact numbers refused; a revert writes the snapshot's own bytes; the stand-in keeps a PUT's bytes | review S7 | fails, for each |
+| a plan over 1 MB offered | — | never offered (`too_large`) | review minor: a plan too large | fails |
+| `revert_failed` lets a new change start | — | blocked until settled (`POST /network/changes/{id}/settle`, tier 3) | review minor: a target whose revert failed | fails |
+| kept snapshots kept forever | — | let go after 30 days, with their vault key | review minor: a kept change | fails |
+| clock skew | — | a clock that went backwards counts as past the switch's deadline and the account step's 10 minutes (the switch's own timer is monotonic) | review minor: a clock that went backwards (both) | fails, each |
+| code-like fields; reads on MFA pages | yes (P-A1, P-A2) | account plans fill no field that names a code and read nothing; in the page a one-time-code field (and, in an account plan, a short numeric or code-named one) refuses a plan's value; the final page's text isn't kept | review minor: an account plan neither fills…; `tests/ui/m10d-account.test.ts` (a neutral selector into the code field, refused in Chromium) | fails (validator); the in-page check wasn't reverted in Chromium |
+| exact-match redaction | — | base64, base64url, hex and URL-encoded forms of values of 8 characters or more | review minor: the redactor | fails |
+| the verifier ran `tofu show` synchronously | — | the apply records what it read back; the verifier reads that record | (no separate test: the infra gate's verification goes through the record) | — |
+| "plan changes nothing" | — | the plan step, the sheet and the plan say it runs providers and data sources | review minor: the plan says plainly | fails |
+
+**Not caught at first, written down:**
+- S6's "keep nothing of a resource's values" passed with the fix reverted, because the sensitive mask
+  alone kept the password out. The test now also checks that a non-sensitive value (a region) isn't
+  in the record; with the fix reverted it fails.
+- The account plans' code-field rule passed with it reverted: every case in the test was also caught
+  by the general password-and-code rule. The test now also fills `input[name=code]`, which only the
+  account rule refuses; with it reverted it fails.
+
+**The review's probes, run again against the fixes:** P-I1 no apply offered (`over_budget`, $40 now
+and after against $10); P-I2b `unpriced`; P-I3 the password in neither `infra_run.changes` nor any file
+under Nova's home; P-A1 `input[name=otp]` and `[autocomplete=one-time-code]` refused, `#f2` accepted by
+the validator (the page refuses it at the moment of use); P-A2 refused; P-N1 all five patches refused;
+P-N2 refused at start; P-N3 neither secret in the diff, the API or any file; P-N4 refused at prepare
+(its assertion then fails on the missing apply task); P-N5 retried, still waiting for its 15 s retry
+when the probe stops sweeping; P-N6 the apply verified ("Probe router set revision itself") and the
+switch reverted; P-N7 the computer's 403 didn't keep the change, which reverted.
+
+**Existing tests changed:** the network tests, the acceptance test and the sheets' test run the mesh
+listener behind the `proxy` transport and send `x-forwarded-for: 192.0.2.50` for the phone (a device on
+the hub's machine no longer counts); messages that now say more were matched again. No assertion was
+weakened.
 
 ## Tiers, as built
 

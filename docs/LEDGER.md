@@ -17,6 +17,52 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10d: the adversarial review of PR #241).** Same branch and PR, rebased onto main at
+ccc58b5e. The review's probes were read and re-run; each item became a failing test first in
+`tests/core/m10d-review.test.ts` (evidence: "The adversarial review of PR #241", with what failed when
+each fix was reverted).
+1. **B1, secrets in a network change (reproduced).** A secret set inside a list got through, and the
+   diff, taken over masked text on both sides, came out empty. **Choice:** a patch that sets a secret at
+   any depth, or a secret-looking value, is refused; a change that alters a secret value anywhere is
+   never offered, and says where; a change whose diff would show nothing is never offered. The patch,
+   the snapshot, the new configuration and the diff are sealed; the database keeps the patch's shape.
+2. **B2, the budget beaten by an unrecorded resource (reproduced).** **Choice:** the month is priced
+   from the plan's whole before and after (OpenTofu's prior state and planned values), not as a
+   delta on Nova's records; a plan ending over budget is blocked unless every change only takes cost
+   away. Nova's records after an apply are the whole state, priced.
+3. **S1 (reproduced):** prices are own properties and finite; everything after the apply is priced
+   before it runs, from the saved plan, so recording can't fail after the effect.
+4. **S2 (reproduced):** the mask fails closed (keys naming a password, key, token, community, cert,
+   hash, seed; values that look like PEM, long base64 or hex, crypt hashes). **Trade-off:** public keys
+   and some ordinary names are masked and can't be patched from chat. What still escapes it is visible
+   only in the sealed diff the person reviews.
+5. **S3 (reproduced):** the switch retries a failed revert (15 s, doubling, at most 10 minutes) while
+   contact is lost; contact meanwhile keeps the change. The problem stays open until the snapshot is
+   back, or the person settles the change (tier 3, `POST /network/changes/{id}/settle`); until then
+   the target takes no new change.
+6. **S4 (reproduced):** fields the target sets itself on a write are learnt from the read-back (a path
+   Nova didn't change that differs) and left out of every comparison of that change. **Rejected:**
+   declaring them per target (the probe's router had no declaration, and the person wouldn't know).
+7. **S5 (reproduced):** contact is a successful request (below 400), from off the hub's machine, from a
+   device of a kind the person counts: phones and browsers by default (`mesh.contact_kinds` may add
+   computers). This replaces decision 5 of the M10d entry (`Devices.touch` no longer emits anything;
+   the core reports finished requests). **Not built:** requiring the very device the person approved
+   from (the ledger doesn't record which device approved).
+8. **S6 (reproduced):** a run keeps no resource values; sensitive markers are honoured where values
+   are read; the state copy is sealed. **Limit:** the saved plan file holds what OpenTofu puts in it
+   until the run ends.
+9. **S7 (reproduced):** a revert writes the snapshot's own bytes; a configuration with numbers JSON
+   can't carry exactly is never changed. The stand-in target now keeps a PUT's bytes, so the
+   byte-for-byte test means what it says.
+10. **Minor:** a plan too large to show is never offered; a kept change's snapshot goes after 30 days;
+    a clock that went backwards counts as past the switch's deadline and the 10-minute account window;
+    the redactor masks base64, hex and URL-encoded forms (values of 8 characters and more); account
+    plans fill no code-like field and read nothing, and a one-time-code field refuses a plan's value in
+    the page; the verifier reads Nova's own read-back record instead of running `tofu show` for up to
+    60 s; planning's wording says it runs providers and data sources.
+- **Did not reproduce as stated:** none. P-N5's router coming back is retried on the default 15 s wait,
+  longer than the probe's 1.5 s of sweeps; with a short wait (the test) the revert lands.
+
 **2026-10-31 (M10d: infrastructure, networking and accounts through chat).** Branch `m10d/infra`.
 The ADR is `docs/plans/M10.md` (M10d), the plan `docs/plans/M10d.md`, the evidence
 `docs/evidence/m10d-gate.md`. Stand-ins only: a stand-in `tofu`, a loopback network target over a file,
