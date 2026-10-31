@@ -276,4 +276,133 @@ QA flow catalogue. A pairing task here could only assert what the code does.
 
 ## NOTES for Track 1
 
-Written when the build is done; see below.
+Everything below touches a shared file, so it is proposed here and not applied. Nothing in this PR
+depends on it to be correct. The regression gate already runs in CI through the existing `npm test`
+globs (`tests/acceptance/*.test.ts`, `tests/core/*.test.ts`), so no `package.json` or workflow change
+is needed for "a drop blocks merge".
+
+**What this branch did touch outside its own folders, and why:**
+- `src/core/index.ts`: one additive export line, `export * as evals from './evals/index.ts';`. The
+  boundary rule (code outside `src/core` imports only `index.ts`) needs it. No wiring and no routes.
+- `src/core/README.md`: one row in the module table, for `evals/`.
+
+### 1. The scorecard route (`src/core/index.ts`, in `createCore`)
+
+The scorecards are files under `<home>/workers/evals/`, so this needs **no migration and no
+schema change**.
+- `workers/` is already one of Nova's own entries (`resilience/entries.ts`).
+- The agent's `write_file` can't reach it.
+
+```ts
+// imports
+import { Scorecards, scorecardRoutes, targetsFrom, REGRESSION_FINGERPRINT } from './evals/index.ts';
+// after `providers` and `models` exist
+const scorecards = new Scorecards(o.home);
+// in the route table, after ...models.routes()
+...scorecardRoutes({
+  store: scorecards,
+  fingerprint: REGRESSION_FINGERPRINT,
+  targets: async () => targetsFrom(providers.list(), (await models.view()).installed),
+}),
+```
+
+This adds `GET /api/v1/evals/scorecards` and `GET /api/v1/evals/scorecards/status?provider=&model=[&digest=]`.
+Both are read-only, with the default `person` access. `tests/core/evals.test.ts` already calls the
+handlers directly. Once wired, add an API test in `tests/core/api.test.ts`'s style.
+
+`models.view()` reads hardware and runtimes. If it is too heavy per call, pass the hub inventory's
+installed list instead; any `{name, digest}[]` will do.
+
+### 2. Settings › Models shows the scorecard before a switch (`ui/js/models.js`, `ui/js/surfaces.js`)
+
+The amendment: each configured model's latest regression pass rate and date, before the person
+switches to it. A model with no current scorecard can still be chosen, and the page says so.
+- `loadModels()` also fetches the scorecards and tolerates their absence:
+  ```js
+  let cards = null;
+  // in loadModels(), beside the /models call:
+  try { cards = await api('GET', '/evals/scorecards'); } catch { cards = null; }
+  const cardFor = (model) => cards?.configured?.find((c) => c.target.model === model)
+    ?? (cards ? { state: 'none', words: 'No scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.' } : null);
+  const scoreLine = (model) => { const c = cardFor(model); return c ? `<p class="settings-note model-score${c.state === 'current' ? '' : ' is-unchecked'}">${esc(c.words)}</p>` : ''; };
+  ```
+  A model that the route doesn't list as configured but that is installed should show its card
+  from `cards.cards` (`provider === 'openai-compatible'`, the same `model`), with `status()` worked
+  out the same way. The simplest way is a second call to
+  `/evals/scorecards/status?provider=openai-compatible&model=<name>&digest=<digest>` per installed
+  model, or extending `targets` with the installed models.
+- `roleRow(r)`: under `model-where`, add `scoreLine(r.assigned.model)` when assigned, and
+  `scoreLine(p.model)` beside "Nova recommends …" before its download or Use button.
+- `installedList(models)`: add `scoreLine(m.name)` under each model's note.
+- `renderProviders()` → `advice('chat', …)` in `surfaces.js`: when `better` (a switch is offered),
+  append the target's status words to `note`. That is the line "before the user switches to it".
+- **Tokens only.** `model-score` uses `text/secondary`, and `.is-unchecked` uses
+  `status/attention` (no raw colours, for `lint:tokens`).
+- **A UI test**, in `tests/ui/`'s style:
+  - with a card in a temp home's `workers/evals/scorecards/`, the line shows its rate and date;
+  - with none, it says so, and the Use/switch control stays enabled.
+
+### 3. The production-bug rule, enforced at the PR (`.github/workflows/ci.yml`, optional)
+
+The procedure is in "Every production bug report becomes a task" above. To enforce it, add a job
+that fails a PR whose body says `Fixes #<n>` / `Closes #<n>` or carries the `bug` label without an
+`Eval task:` line naming a task id that exists in `tests/evals/tasks/`. This is a small Node
+script over `gh pr view --json body,labels`. Until then, Track 1's merge checklist holds it.
+
+### 4. Turning the closing rule on (optional, Track 1's call)
+
+`tests/core/evals.test.ts` fails on **drift** in the claims register (a quoted claim gone from its
+file, an unknown tag), not on **unbacked** claims, because this track was told to report them,
+not remove them. To make "no unbacked claim" binding, change its
+`assert.ok(report.backed.length > 0 && report.unbacked.length > 0)` to
+`assert.deepEqual(report.unbacked.map((u) => u.claim.id), [])`, once the owner has decided, for
+each claim listed in `docs/evidence/evals.md`, whether to add a task or change the copy. New UI or
+onboarding copy that claims a capability then needs a register entry. Reviewers hold that; the
+register can't find new claims by itself.
+
+### 5. Pointing the injection hook at Part 1's set (`src/core/evals/injection.ts`)
+
+When Track 2's set (branch `tev1/decision-provider`) merges, set `INJECTION_SET` to its path(s),
+in the same shape:
+- an array of cases, or `{cases: [...]}`;
+- each case `{id, category, expect?: 'quarantine'|'block', source, text|html, headers?, attachments?}`.
+
+Then update the one assertion in `tests/core/evals.test.ts` that pins the default paths. If Track 2
+uses another shape, its cases need a mapping in `loadInjectionSet`. That is a few lines, and the
+loader's validation will name what doesn't fit. Part 1's bounds (≥90% detection, ≤10% false
+positives, ECE ≤ 0.1) stay in Track 2's own tests. This suite records the verdicts per run.
+
+### 6. LEDGER entry (proposed text)
+
+> **2026-10-31 (Amendment B Part 4: the eval harness).** Branch `evals/harness`, plan
+> `docs/plans/evals.md`, evidence `docs/evidence/evals.md`.
+> - **The harness:** `src/core/evals/` (graders, suites, scorecards, claims, the injection hook).
+>   The golden tasks and their driver are in `tests/evals/`.
+> - **The tasks:** 28 golden tasks from failures on record, 23 REGRESSION and 5 CAPABILITY. Each
+>   names its source.
+> - **The regression gate:** it runs in `npm test` with stand-ins through the provider registry's
+>   openai-compatible provider. Every task must pass, so a drop fails CI.
+> - **The model-swap scorecard:** `sh scripts/evals.sh --model <local model> --home <Nova home>`
+>   writes it to `workers/evals/`. Settings › Models shows it once the route and UI in NOTES §1–2
+>   land.
+> - **The production-bug rule:** a production bug becomes a task before its fix merges, and the
+>   fix PR names it.
+> - **The closing rule:** the claims register reports 18 current claims the suite can't back (see
+>   the evidence). They are reported, not removed.
+> - **Limits, said plainly:**
+>   - In CI, the regression suite measures Nova's side: its briefing, tools, guards and gate.
+>     Stand-ins play the model. Model quality is measured only by opt-in local scorecards.
+>   - The injection suite runs the gate's existing corpus until Part 1's set lands.
+
+### 7. CAPABILITY-INVENTORY (proposed rows)
+
+| Capability | Where | Verified by |
+|---|---|---|
+| Golden-task eval harness: regression gate in CI, capability suite, injection suite hook | `src/core/evals/`, `tests/evals/` | `tests/acceptance/evals-regression.test.ts`, `tests/core/evals.test.ts` |
+| Model-swap scorecard per provider/model (file store, current/stale/none) | `src/core/evals/scorecards.ts` | `tests/core/evals.test.ts`; local runs in `docs/evidence/evals.md` |
+| Claims register against suite coverage | `tests/evals/claims.ts` | `tests/core/evals.test.ts` |
+
+### 8. ROADMAP-AND-GATES
+
+Mark Amendment B Part 4 delivered, with the gate as wired: "the regression suite at 100% with
+stand-ins in `npm test`". Part 5 (cost caps) starts after this merges, as the track order says.
