@@ -8,7 +8,7 @@ the console under the in-process supervisor is the stand-in server of `tests/sup
 Kubernetes, Helm or Flux was installed or run. This machine has a real `kubectl` at
 `/usr/local/bin/kubectl`; the tripwire shadows it for the whole suite, and it was never called.
 
-The branch was rebased onto main at `61bcb042` (M10d merged) before the review's fixes, then onto `a79ab31c` (#248 and #250 merged) after them, onto `844a1271` (#249, the eval harness), onto `736e80ce` (#254 and #255), and onto `43c41be4` (#256) last.
+The branch was rebased onto main at `61bcb042` (M10d merged) before the review's fixes, then onto `a79ab31c` (#248 and #250 merged) after them, onto `844a1271` (#249, the eval harness), onto `736e80ce` (#254 and #255), onto `43c41be4` (#256), and onto `a49e366d` (#251, docs only) last.
 
 **Deferred, said plainly: the `service` change kind is not built.** The ADR's Order lists it in
 M10e, but its artifact is "the definition plus the rendered values" and its gate is GitOps
