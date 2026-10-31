@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #259 · A diagnostics file for getting help, with secrets and your content left out**
+- What changed: Nova can make one file with its versions, the state of each of its parts, its settings and recent log lines, to give to whoever is helping you. Every password, key and token is replaced with REDACTED, and your memories, conversations and captured screen text are never in it, only how many there are. Nova never sends it anywhere.
+- What you can now do: nothing yet on screen: the "Download diagnostics" button in Health comes with the follow-up that wires it in.
+- Still unfinished: that button, and the weekly integrity check from the same part of the plan.
+
 **2026-10-31 · #247 · Nova can run more than one service, with safe upgrades and rollback**
 - What changed: Nova's supervisor, which used to run only Nova itself, now runs several services from one simple description each. A new version starts alongside the old one with no traffic, goes live only after its checks pass and you type a confirmation, and rolls back by itself if it fails. Nova's own console is now one of these services. Nothing uses Kubernetes.
 - What you can now do: nothing new on screen. Services are managed from the supervisor's command line (`service deploy`, `promote`, `rollback`, `recover`).
@@ -270,6 +275,20 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (Amendment B Part 6: the diagnostics bundle, PR #259, Track 3).** Plan `docs/plans/diagnostics.md`.
+- **The builder:** `src/core/diagnostics/`.
+- **The rule:** counts and states, never content.
+- **Redaction**, in three layers:
+  1. an allow-list of the views it reads;
+  2. secret-named keys, using Home Assistant's `**REDACTED**` pattern;
+  3. every known secret value in six encodings, plus secret-shaped strings.
+- **Local only:** built per request, never stored, never sent.
+- **Canaries:** planted in every place Nova keeps a secret (17 sources), and in personal content. None survives (`tests/core/diagnostics.test.ts`, eval `safety.diagnostics-no-canary`).
+- **Not built here:**
+  - the route, Era 2's counts, and the Health "Download diagnostics" link (NOTES §1–3, a Track 1 follow-up);
+  - the integrity scrub, which is Track 1's Health work.
+- **Limits:** a raw secret Nova never stored and not shaped like one can't be recognised. Hostnames and names the person gave stay in the bundle.
 
 **2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
 - **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
