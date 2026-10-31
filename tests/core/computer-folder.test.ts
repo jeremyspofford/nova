@@ -10,7 +10,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DockerComputer } from '../../src/core/computer/docker.ts';
-import { treeDigest, type Machine } from '../../src/core/computer/computer.ts';
+import { checkFolderId, folderIdentity, treeDigest, type Machine } from '../../src/core/computer/computer.ts';
 import { IMAGE, checkFolder, tierFor } from '../../src/core/computer/policy.ts';
 import { TEST_LABELS, docker, dockerSkip, folderIdOf, removeTestContainers, settled } from './computer-support.ts';
 import { open } from './resilience-support.ts';
@@ -35,6 +35,20 @@ test('a project folder never overlaps another workspace’s folder, either way',
     assert.throws(() => checkFolder(outer, o([outer])), /another workspace/, 'the same folder');
     assert.throws(() => checkFolder(join(userHome, 'code', 'to-inner'), o([outer])), /another workspace/, 'through a link');
     assert.equal(checkFolder(sibling, o([outer])), sibling);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// A filesystem may give a new folder a freed inode number again (ext4 does, as GitHub's runners
+// showed): the birth time still tells the two apart. Simulated here, since whether an inode number
+// comes back can't be made to happen.
+test('a folder made in another’s place is told apart even when it is given the same inode number', () => {
+  const root = mkdtempSync(join(tmpdir(), 'nova-folder-born-'));
+  try {
+    const id = folderIdentity(root);
+    assert.doesNotThrow(() => checkFolderId(root, id));
+    assert.throws(() => checkFolderId(root, { ...id, born: String(BigInt(id.born) + 1n) }), /a different folder is at that path now/);
+    assert.throws(() => checkFolderId(root, { ...id, ino: String(BigInt(id.ino) + 1n) }), /a different folder is at that path now/);
+    assert.throws(() => checkFolderId(root, null), /no record of which folder/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -106,7 +120,7 @@ test('the approval binds the folder as it was resolved when asked: its real path
     // What the person is asked about is the real folder, not the link they typed.
     assert.equal(t.brief.inputs!.folder, a);
     assert.match(`${t.title} ${t.brief.goal}`, new RegExp(a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.deepEqual({ dev: t.brief.inputs!.folder_dev, ino: t.brief.inputs!.folder_ino }, folderIdOf(a));
+    assert.deepEqual({ dev: t.brief.inputs!.folder_dev, ino: t.brief.inputs!.folder_ino, born: t.brief.inputs!.folder_born }, folderIdOf(a));
 
     // Before the OK, the link is pointed somewhere else. The approval still means folder a.
     unlinkSync(join(code, 'link'));

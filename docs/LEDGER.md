@@ -23,13 +23,17 @@ built now. All fifteen items were answered, each with a test against real Docker
 `mkdtemp` folders with canaries, every container labelled for its test and removed at the end. 27 of
 the 31 new tests failed on the unfixed code (3 passed and stay as guards; 1 tested a parser that
 didn't exist yet); all pass now. One more, for a gap found reviewing the fixes (a checkpoint copy
-that stopped part way stayed on disk), was seen failing with its fix removed. The suite: 1016 tests,
-1007 pass, 9 skipped (the existing opt-in ones).
+that stopped part way stayed on disk), was seen failing with its fix removed. Another, for inode reuse (below). The suite: 1017
+tests, 1008 pass, 9 skipped (the existing opt-in ones).
 - **Folder identity (1, 2).** No two workspaces' folders overlap (nor one and Nova's home). A folder
-  of the person's is resolved when asked: the task stores its real path, device and inode, the
+  of the person's is resolved when asked: the task stores its real path, device, inode and birth time, the
   approval shows them, and only that folder is used. Before every mount, start, copy, digest and
-  reset the folder must still be it (not a link, its real path its path, the same device and inode).
+  reset the folder must still be it (not a link, its real path its path, the same device, inode and birth time).
   Migration 0015 adds the columns.
+  - **Found on CI:** GitHub's ext4 gave a folder made in another's place the old one's inode number
+    again, so the device and inode alone passed it (two tests failed there, not here). The folder's
+    birth time (statx) is part of its identity now; where a filesystem records no births, only the
+    device and inode tell.
   - **Found:** on the unfixed code, an outer workspace turning an inner one's folder into a link
     made the inner one's reset delete a canary folder's file and copy into it.
   - A workspace made on this branch before the migration has no identity on record, and Nova won't

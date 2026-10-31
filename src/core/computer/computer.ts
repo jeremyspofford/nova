@@ -10,10 +10,13 @@ import type { Stats } from 'node:fs';
 import { CoreError } from '../errors.ts';
 import type { EgressDecl } from './policy.ts';
 
-// Which folder a workspace was made with, beyond its path: the device and inode it had when the
-// person approved it. A path can be pointed somewhere else (a link, a folder put in its place); this
-// can't, so every mount, copy, digest and reset checks it first.
-export interface FolderId { dev: string; ino: string }
+// Which folder a workspace was made with, beyond its path: the device, inode and birth time it had
+// when the person approved it. A path can be pointed somewhere else (a link, a folder put in its
+// place); these can't, so every mount, copy, digest and reset checks them first. The birth time is
+// there because a filesystem may give a new folder a freed inode number again (ext4 does): a folder
+// made in another's place then has the same inode but not the same birth (where the filesystem
+// records births; elsewhere it is 0, and only the device and inode are compared).
+export interface FolderId { dev: string; ino: string; born: string }
 
 // One workspace as the adapter needs it: where its project folder is (by its real path and
 // identity), what it may reach, its machine (when one exists) and the image that machine is made
@@ -71,7 +74,7 @@ export function folderIdentity(path: string): FolderId {
   const st = lstatSync(path, { bigint: true });
   if (st.isSymbolicLink()) throw new CoreError('validation', `${path} is a link: name the folder it points to.`);
   if (!st.isDirectory()) throw new CoreError('validation', `${path} is not a folder.`);
-  return { dev: String(st.dev), ino: String(st.ino) };
+  return { dev: String(st.dev), ino: String(st.ino), born: String(st.birthtimeNs) };
 }
 
 // Before every mount, copy, digest and reset: the folder is still the one the workspace was made
@@ -86,7 +89,7 @@ export function checkFolderId(folder: string, id: FolderId | null | undefined): 
   let real: string;
   try { real = realpathSync(folder); } catch { throw notThatFolder(folder, 'its path doesn’t resolve'); }
   if (real !== folder) throw notThatFolder(folder, `its path leads to ${real} now`);
-  if (String(st.dev) !== id.dev || String(st.ino) !== id.ino) throw notThatFolder(folder, 'a different folder is at that path now');
+  if (String(st.dev) !== id.dev || String(st.ino) !== id.ino || String(st.birthtimeNs) !== id.born) throw notThatFolder(folder, 'a different folder is at that path now');
 }
 
 export interface Digest { digest: string; files: number; bytes: number }

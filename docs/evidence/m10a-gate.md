@@ -7,7 +7,7 @@ run on GitHub's Ubuntu runner, against Docker's own engine there.
 
 ## Suite
 
-`npm run check` passes: the token lint, themes, typecheck, and **1016 tests: 1007 pass, 0 fail, 9
+`npm run check` passes: the token lint, themes, typecheck, and **1017 tests: 1008 pass, 0 fail, 9
 skipped** (after the hardening below; before it, 984: 975 pass, 9 skipped). The 9 skips are the
 existing opt-in real-service tests (real Ollama, real Claude, real Relay); none of the new tests
 skipped. The gate's tests:
@@ -197,7 +197,9 @@ first failure, the rows after it in that test weren't reached on the unfixed cod
 so for each, rather than claim them. For item 3, a separate probe ran the unfixed code to the end
 of each case (the numbers in its rows). One more test was added after the fixes, for a gap found
 in a review of them (a checkpoint copy that stopped part way was left on disk): it was seen failing
-with its fix removed, and passes with it. After the fixes all 31 pass, with
+with its fix removed, and passes with it. And one more after CI: GitHub's ext4 gave a new folder
+the old one's inode number again, which two tests caught there (not here); the folder's birth time
+was added to its identity, with a test that simulates the reuse. After the fixes all 31 pass, with
 the gate's own tests (updated: TLS stand-ins, folder identities, the test label).
 
 ### Isolation and integrity checks added
@@ -205,8 +207,9 @@ the gate's own tests (updated: TLS stand-ins, folder identities, the test label)
 | # | Attempt | Unfixed code | Now | Positive control | Test |
 |---|---|---|---|---|---|
 | 1 | An outer workspace turns an inner workspace's folder into a link to a canary folder; the inner one is reset | **Reproduced.** The reset followed the link: the canary was deleted and the inner checkpoint's files were copied into the canary folder | Refused before anything is touched (*"isn't the folder this workspace was made with … it is a link now"*), for the reset, a checkpoint and a rebuild's mount; a different folder at the path (another inode) is refused too; the canary is intact | Before the swap, a checkpoint of the inner folder works | `computer-folder`: *a folder replaced by a link …* |
+| 1 | A folder made in another's place with the same inode number (GitHub's ext4 gave it back; simulated here) | **Found on CI**, on the first version of the fix: two tests passed here and failed there | Told apart by its birth time (statx) as well as its device and inode | The folder itself passes | *a folder made in another's place is told apart …* |
 | 1 | A folder inside, holding, or equal to another workspace's | **Reproduced:** accepted | Refused when asked (*"is inside another workspace's folder"*), also through a link | A sibling folder is accepted | *a project folder never overlaps …*, *the approval binds …* |
-| 2 | A link is asked for as the folder; before the OK it is pointed at a canary folder | **Reproduced:** the task stored the link as given and would resolve it again when run | The task stores the real path, device and inode, the approval's title and goal show them, and the approved folder is the one mounted; the canary is untouched | — | *the approval binds the folder …* |
+| 2 | A link is asked for as the folder; before the OK it is pointed at a canary folder | **Reproduced:** the task stored the link as given and would resolve it again when run | The task stores the real path, device, inode and birth time, the approval's title and goal show them, and the approved folder is the one mounted; the canary is untouched | — | *the approval binds the folder …* |
 | 2 | The folder is replaced (same path, new inode) between the ask and the OK | Not reached there (the test stopped at the row above); by the code, the run only resolved the path again, so it would have gone ahead | Fails: *"isn't the folder you approved"* | — | same |
 | 2 | A brief for a folder without its identity, given to the ledger directly | Not reached there; by the code, no identity was asked for | Refused when delegated | — | same |
 | 3 | A tier-0 read starts a detached process that writes to a canary 3 s later | **Reproduced:** the read was done, and 5 s later the canary said `changed` | The process is stopped when the read ends (the machine restarted); the canary is unchanged; the read is done and says *"It left 2 processes running; Nova stopped them when it ended"*; only init and `sleep` run | — | `computer-processes`: *no process outlives its task …* |

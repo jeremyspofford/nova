@@ -53,11 +53,11 @@ export async function settled(core: { ledger: { get(id: string): { state: string
   throw new Error(`task ${id} never settled: ${core.ledger.get(id).state}`);
 }
 
-// The identity a workspace records for its folder at creation (device and inode), as the adapter
-// checks it before every mount, copy, digest and reset.
-export function folderIdOf(path: string): { dev: string; ino: string } {
+// The identity a workspace records for its folder at creation (device, inode and birth time), as
+// the adapter checks it before every mount, copy, digest and reset.
+export function folderIdOf(path: string): { dev: string; ino: string; born: string } {
   const st = lstatSync(path, { bigint: true });
-  return { dev: String(st.dev), ino: String(st.ino) };
+  return { dev: String(st.dev), ino: String(st.ino), born: String(st.birthtimeNs) };
 }
 
 // The processes running in a container, as the host sees them (`docker top`).

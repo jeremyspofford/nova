@@ -36,7 +36,7 @@ const MAX_OUTPUT = 1_000_000;
 
 export type WorkspaceState = 'creating' | 'ready' | 'broken' | 'destroyed';
 
-interface WsRow { id: string; name: string; folder: string; own_folder: number; egress: string; container: string | null; image: string; state: WorkspaceState; detail: string | null; task_id: string; created_at: string; updated_at: string; folder_dev: string | null; folder_ino: string | null; git_writable: number }
+interface WsRow { id: string; name: string; folder: string; own_folder: number; egress: string; container: string | null; image: string; state: WorkspaceState; detail: string | null; task_id: string; created_at: string; updated_at: string; folder_dev: string | null; folder_ino: string | null; folder_born: string | null; git_writable: number }
 interface CpRow { id: string; workspace_id: string; kind: 'clean' | 'auto' | 'named'; name: string | null; reason: string; image: string; digest: string; files: number; bytes: number; task_id: string | null; created_at: string }
 interface RunRow { task_id: string; workspace_id: string; op: Op; argv: string | null; access: string | null; exit_code: number | null; sha256: string | null; bytes: number | null; screen_id: string | null; verdict: string | null; checkpoint_id: string | null; outcome: string; at: string }
 
@@ -60,7 +60,7 @@ export interface ComputerOptions {
 
 export interface Inputs {
   op: Op; workspace: string;
-  name?: string; folder?: string; folder_dev?: string; folder_ino?: string; git_writable?: boolean; egress?: EgressDecl;
+  name?: string; folder?: string; folder_dev?: string; folder_ino?: string; folder_born?: string; git_writable?: boolean; egress?: EgressDecl;
   argv?: string[]; access?: 'read' | 'write'; timeout_s?: number;
   checkpoint?: string; label?: string; undo_of?: string; discard?: boolean;
 }
@@ -202,7 +202,7 @@ export class NovaComputer {
 
   // Builds the task for an action and gives it to the ledger, which gates it by tier and privacy.
   // A folder of the person's is resolved here, once: the task (and so the approval) names its real
-  // path, device and inode, and only that folder is ever used.
+  // path, device, inode and birth time, and only that folder is ever used.
   request(op: Op, body: Record<string, unknown>, workspace?: string): Task {
     const inputs: Record<string, unknown> = { op, workspace: workspace ?? (op === 'create' ? newId('w') : '') };
     for (const k of ['name', 'folder', 'egress', 'argv', 'access', 'timeout_s', 'checkpoint', 'label', 'undo_of', 'git_writable'] as const) if (body[k] !== undefined) inputs[k] = body[k];
@@ -215,7 +215,7 @@ export class NovaComputer {
         const id = folderIdentity(real);
         const over = this.#overFolder(real);
         if (over !== null) throw new CoreError('validation', `${real} is larger than the ${sizeWords(this.limits.folderBytes)} a workspace’s folder may hold.`);
-        Object.assign(inputs, { folder: real, folder_dev: id.dev, folder_ino: id.ino });
+        Object.assign(inputs, { folder: real, folder_dev: id.dev, folder_ino: id.ino, folder_born: id.born });
       }
     }
     if (op === 'reset') {
@@ -234,7 +234,7 @@ export class NovaComputer {
           : op === 'reset' ? `${i.undo_of ? `Undo task ${i.undo_of.slice(0, 8)} in “${name}”` : `Reset “${name}” to ${i.checkpoint ? `checkpoint ${i.checkpoint}` : 'its clean state'}`}${i.discard ? ` (what is there now is over the cap and won’t be kept)` : ''}`
             : `Delete the workspace “${name}” and its checkpoints`;
     const goal = op === 'exec' ? `Run ${words(i.argv!)} in the workspace “${name}” and keep its output as evidence.`
-      : op === 'create' && i.folder ? `${title}: the folder ${i.folder} (device ${i.folder_dev}, inode ${i.folder_ino}) and nothing else of yours is mounted.${i.git_writable ? ' Commands inside may change its .git, which git on this computer then runs.' : ''}`
+      : op === 'create' && i.folder ? `${title}: the folder ${i.folder} (device ${i.folder_dev}, inode ${i.folder_ino}, made ${i.folder_born}) and nothing else of yours is mounted.${i.git_writable ? ' Commands inside may change its .git, which git on this computer then runs.' : ''}`
         : `${title}.`;
     return this.#o.ledger.create({
       title, owner: COMPUTER_WORKER, origin: { kind: 'user' }, goal,
@@ -264,10 +264,10 @@ export class NovaComputer {
       out.git_writable = v.git_writable === true;
       if (v.folder !== undefined) {
         if (typeof v.folder !== 'string' || !v.folder.startsWith('/')) throw bad('folder must be a full path to the project’s folder.');
-        if (typeof v.folder_dev !== 'string' || !/^\d+$/.test(v.folder_dev) || typeof v.folder_ino !== 'string' || !/^\d+$/.test(v.folder_ino)) {
-          throw bad('A folder of yours is named through POST /computer/workspaces, which records which folder it is (inputs.folder_dev and folder_ino); this brief has none, so it can’t run.');
+        if (![v.folder_dev, v.folder_ino, v.folder_born].every((x) => typeof x === 'string' && /^\d+$/.test(x))) {
+          throw bad('A folder of yours is named through POST /computer/workspaces, which records which folder it is (inputs.folder_dev, folder_ino and folder_born); this brief has none, so it can’t run.');
         }
-        Object.assign(out, { folder: v.folder, folder_dev: v.folder_dev, folder_ino: v.folder_ino });
+        Object.assign(out, { folder: v.folder, folder_dev: v.folder_dev, folder_ino: v.folder_ino, folder_born: v.folder_born });
       }
     } else {
       const ws = this.#o.db.get<WsRow>('SELECT * FROM computer_workspace WHERE id = ?', v.workspace);
@@ -351,7 +351,7 @@ export class NovaComputer {
     }
   }
 
-  #idOf(r: WsRow): FolderId { return r.folder_dev && r.folder_ino ? { dev: r.folder_dev, ino: r.folder_ino } : (null as unknown as FolderId); }
+  #idOf(r: WsRow): FolderId { return r.folder_dev && r.folder_ino && r.folder_born ? { dev: r.folder_dev, ino: r.folder_ino, born: r.folder_born } : (null as unknown as FolderId); }
 
   #machine(r: WsRow): Machine {
     return { id: r.id, folder: r.folder, folderId: this.#idOf(r), egress: JSON.parse(r.egress) as EgressDecl, container: r.container, image: r.image, gitWritable: !!r.git_writable };
@@ -390,15 +390,15 @@ export class NovaComputer {
       id = folderIdentity(folder);
     } else {
       // Exactly the folder that was approved: the same real path (no link on the way now) and the
-      // same device and inode, and still overlapping no other workspace's.
-      const approved = { dev: i.folder_dev!, ino: i.folder_ino! };
+      // same device, inode and birth time, and still overlapping no other workspace's.
+      const approved = { dev: i.folder_dev!, ino: i.folder_ino!, born: i.folder_born! };
       let real: string;
       try { real = checkFolder(i.folder, { home: this.#o.home, userHome: this.#o.userHome ?? homedir(), others: this.#folders() }); } catch (e) {
         throw new CoreError('conflict', `${i.folder} isn’t the folder you approved any more: ${(e as Error).message}`);
       }
       let now: FolderId | null = null;
       try { now = folderIdentity(real); } catch { /* reported below */ }
-      if (real !== i.folder || !now || now.dev !== approved.dev || now.ino !== approved.ino) {
+      if (real !== i.folder || !now || now.dev !== approved.dev || now.ino !== approved.ino || now.born !== approved.born) {
         throw new CoreError('conflict', `${i.folder} isn’t the folder you approved (a different folder is at that path now, or it leads elsewhere), so the workspace wasn’t made. Ask again to approve the folder as it is.`);
       }
       if (this.#overFolder(real) !== null) throw new CoreError('conflict', `${real} is larger than the ${sizeWords(this.limits.folderBytes)} a workspace’s folder may hold, so the workspace wasn’t made.`);
@@ -406,8 +406,8 @@ export class NovaComputer {
       id = approved;
     }
     const at = this.#now().toISOString();
-    this.#o.db.run(`INSERT INTO computer_workspace (id, name, folder, own_folder, egress, container, image, state, detail, task_id, created_at, updated_at, folder_dev, folder_ino, git_writable) VALUES (?, ?, ?, ?, ?, NULL, ?, 'creating', NULL, ?, ?, ?, ?, ?, ?)`,
-      i.workspace, i.name!, folder, own ? 1 : 0, JSON.stringify(i.egress), IMAGE, brief.task_id, at, at, id.dev, id.ino, i.git_writable ? 1 : 0);
+    this.#o.db.run(`INSERT INTO computer_workspace (id, name, folder, own_folder, egress, container, image, state, detail, task_id, created_at, updated_at, folder_dev, folder_ino, folder_born, git_writable) VALUES (?, ?, ?, ?, ?, NULL, ?, 'creating', NULL, ?, ?, ?, ?, ?, ?, ?)`,
+      i.workspace, i.name!, folder, own ? 1 : 0, JSON.stringify(i.egress), IMAGE, brief.task_id, at, at, id.dev, id.ino, id.born, i.git_writable ? 1 : 0);
     const m = this.#machine(this.#row(i.workspace));
     try {
       await this.computer.create(m);

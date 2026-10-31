@@ -12,7 +12,7 @@ export function computerRoutes(c: NovaComputer): Route[] {
     },
     {
       method: 'POST', path: '/computer/workspaces', status: 201,
-      summary: 'Make a workspace: a machine of Nova’s own with one project folder. No folder: a new empty one (tier 1). A folder of yours: asks first (tier 2). Egress other than none: asks every time (tier 3), and never while Nova is local-only. A folder is resolved once, and the task names its real path, device and inode: only that folder is ever used. Its .git is read-only inside unless git_writable (asks first). Returns the ledger task.',
+      summary: 'Make a workspace: a machine of Nova’s own with one project folder. No folder: a new empty one (tier 1). A folder of yours: asks first (tier 2). Egress other than none: asks every time (tier 3), and never while Nova is local-only. A folder is resolved once, and the task names its real path, device, inode and birth time: only that folder is ever used. Its .git is read-only inside unless git_writable (asks first). Returns the ledger task.',
       body: '{name, folder?, egress?: {mode: none | registries | hosts, hosts?}, git_writable?}',
       handle: ({ body }) => c.request('create', body),
     },
