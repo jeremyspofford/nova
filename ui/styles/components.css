@@ -112,6 +112,11 @@
   font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body);
   text-decoration: none;
 }
+/* One rule for every rail item (UX review 1, F2): each is the rail's width less a small margin, and
+   its label wraps inside it, never past the rail's edge, however long a label gets. The rail itself
+   (layout/rail-width) is wide enough that today's labels sit on one line. */
+.rail .nav-item { width: calc(var(--layout-rail-width) - 2 * var(--space-1)); min-width: 0; padding-left: 0; padding-right: 0; }
+.rail .nav-label { max-width: 100%; text-align: center; overflow-wrap: anywhere; hyphens: auto; }
 .nav-item:hover { color: var(--text-primary); background: var(--surface-card-hover); }
 .nav-item[aria-current="page"] { color: var(--accent-primary); background: var(--surface-card); }
 .nav-badge {
