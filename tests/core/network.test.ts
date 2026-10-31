@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer as createNetServer, connect, type AddressInfo, type Socket } from 'node:net';
 import { createCore, type Core } from '../../src/core/index.ts';
 import { httpConfig, mask, mergePatch, secretPaths } from '../../src/core/network/targets.ts';
 import { startNetconfig } from '../../scripts/stand-ins/fake-netconfig.js';
@@ -61,14 +62,31 @@ async function setup(o: { device?: boolean } = {}) {
   let polling = false;
   let reached = 0;
   let dropped = 0;
+  // The simulated firewall, in front of the hub's mesh listener: each packet of the phone's is
+  // checked as it arrives, so one sent just before a change can't reach the hub after it. (Checked
+  // when the phone sent, a request slowed down in a busy run arrived after the change and counted as
+  // contact.)
+  const mesh = new URL(h.mesh);
+  const allowsMesh = () => (net.config().firewall?.allow ?? []).includes('mesh');
+  const open = new Set<Socket>();
+  const gate = createNetServer((sock) => {
+    const up = connect(Number(mesh.port), mesh.hostname);
+    open.add(sock).add(up);
+    const drop = () => { sock.destroy(); up.destroy(); };
+    sock.on('data', (chunk) => { if (!allowsMesh()) { dropped++; drop(); return; } up.write(chunk); });
+    up.pipe(sock);
+    for (const x of [sock, up]) { x.on('error', drop); x.on('close', () => { open.delete(x); drop(); }); }
+  });
+  await new Promise<void>((r) => gate.listen(0, '127.0.0.1', () => r()));
+  const viaGate = `http://127.0.0.1:${(gate.address() as AddressInfo).port}`;
   if (o.device !== false) {
     phone = await enroll(h, { name: 'Example phone', kind: 'phone' });
     polling = true;
     void (async () => {
       while (polling) {
         // The simulated network: the phone's packets get through only while the firewall allows the mesh.
-        if ((net.config().firewall?.allow ?? []).includes('mesh')) {
-          const r = await call(h.mesh, 'GET', '/api/v1/health', undefined, { authorization: `Bearer ${phone!.token}`, ...AWAY }).catch(() => null);
+        if (allowsMesh()) {
+          const r = await call(viaGate, 'GET', '/api/v1/health', undefined, { authorization: `Bearer ${phone!.token}`, ...AWAY }).catch(() => null);
           if (r) reached++;
         } else dropped++;
         await sleep(40);
@@ -78,7 +96,7 @@ async function setup(o: { device?: boolean } = {}) {
   return {
     h, net, t, token, dir, phone,
     reached: () => reached, dropped: () => dropped,
-    async stop() { polling = false; await sleep(60); await net.close(); await h.stop(); },
+    async stop() { polling = false; await sleep(60); for (const x of open) x.destroy(); await new Promise((r) => gate.close(r)); await net.close(); await h.stop(); },
   };
 }
 
