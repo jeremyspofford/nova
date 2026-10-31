@@ -7,6 +7,7 @@ import { DecisionService, type RemoteReceipt } from './service.ts';
 import { Registry, type Registered } from './registry.ts';
 import { INGEST_SCREEN_V1 } from './templates/ingest-screen.ts';
 import { INGEST_SCREEN_V2 } from './templates/ingest-screen-v2.ts';
+import { CAPTURE_SENSITIVE_V1 } from './templates/capture-sensitive.ts';
 import { JevSeat } from './seats/jev.ts';
 import { Tev1Seat, type Tev1Detail } from './seats/tev1.ts';
 import { LegacySeat } from './seats/legacy.ts';
@@ -18,16 +19,16 @@ import type { Hardware } from '../models/hardware.ts';
 import type { PrivacyMode } from '../envelope.ts';
 import type { SeatStatus, ServiceTemplate } from './types.ts';
 
-export { DecisionService, Registry, INGEST_SCREEN_V1, INGEST_SCREEN_V2, DEFAULT_SETTINGS, OPT_IN_WORDS, notices, recommend, validateSettings };
+export { DecisionService, Registry, INGEST_SCREEN_V1, INGEST_SCREEN_V2, CAPTURE_SENSITIVE_V1, DEFAULT_SETTINGS, OPT_IN_WORDS, notices, recommend, validateSettings };
 export { MemoryLog, FileLog, type DecisionLog } from './log.ts';
 export { validate } from './registry.ts';
 export { memoryVerdicts, type VerdictStore, type VerdictRecord } from './verdicts.ts';
 export type { AskOptions, RemoteReceipt } from './service.ts';
 export type { DecisionSettings, Notice, Recommendation, Registered };
-export type { Decided, DecisionRecord, ServiceTemplate, Feature, Question, Answer, FieldSpec, Policy, Outcome, Autonomy, Quality, Trust, SeatId } from './types.ts';
+export type { Decided, DecisionRecord, ServiceTemplate, Feature, OptIn, Finding, Precheck, Question, Answer, FieldSpec, Policy, Outcome, Autonomy, Quality, Trust, SeatId } from './types.ts';
 
 // The templates that ship with Nova.
-export const BUILT_INS: readonly ServiceTemplate[] = Object.freeze([INGEST_SCREEN_V1, INGEST_SCREEN_V2]);
+export const BUILT_INS: readonly ServiceTemplate[] = Object.freeze([INGEST_SCREEN_V1, INGEST_SCREEN_V2, CAPTURE_SENSITIVE_V1]);
 
 export interface ServiceSetup {
   settings: () => DecisionSettings;
