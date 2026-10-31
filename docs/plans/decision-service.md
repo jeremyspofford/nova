@@ -317,12 +317,25 @@ The input's use-case map is phased below as the record. **These are side PRs. Th
 - **ADR-7 names Jev as the first implementation of the decision interface** and a local model or rules for local-only. This ADR keeps that, with Tev1 as the local seat. The transitional `LocalModelProvider` (§2) is the existing local implementation and is retired per template.
 - **The ingest gate plan's "private content never goes to a cloud screener, in any privacy mode"** conflicts with Amendment B Part 1's "cloud mode uses the cloud Jev service". The amendment is newer and governs Part 1. This ADR keeps `ingest-screen`'s `privacy_floor` at `local-only` until the owner says otherwise (open question 1), because outside content often carries the person's private data (their mail, their files).
 
+## Owner decisions (2026-10-31)
+
+1. **The ingest screen in cloud mode: decided, yes.** In cloud mode, outside content goes to cloud Jev for screening whenever Jev is set up as the decision (System One) model.
+   - **Local-only mode** gets a toggle to use Jev anyway, until a local model passes its template's eval.
+   - The toggle is off by default.
+   - While it's on, screened content leaves the machine, and the setting says so in plain words: local-only isn't strictly local for screening while it is on.
+   - This replaces the ingest gate plan's "never in the cloud" for this one case, by the owner's choice.
+2. **Route and models: decided, the person chooses.** Providers and models for every seat are the person's choice.
+   - Nova shows its recommendation, and a plain notice when the chosen provider or model isn't one it recommends.
+   - Each model's eval scorecard (Amendment B Part 4) is shown before switching.
+   - No live call is made until the person has set a route up.
+3. **The transitional local model: decided, retire it per template.** Today's screener is the local chat model assigned as the "sorting model". It answers Nouls as a general chat model, with no eval behind it. It is retired for a template once Tev1 or Jev passes that template's eval.
+
 ## Open questions for the owner
 
-1. **The ingest screen in cloud mode.** Should outside content, including the person's mail and files, go to cloud Jev for screening in cloud mode, as Amendment B Part 1 reads? Or should the screen stay local-only, as the ingest gate plan decided? The proposal: local-only, with Tev1, and the stub when Tev1 is unavailable.
-2. **The cloud route and a budget.** Which route: a TypeSafe account (self-serve), OpenRouter (the owner's existing paid usage), or neither for now? And a budget for live probing? TypeSafe's own guidance is to probe each template with real requests before trusting thresholds. The proposal: OpenRouter, pinned to `jev-1.14.0`, with a small stated budget for DS2's evals.
-3. **The transitional local model.** Should it be retired per template once Tev1 or Jev passes that template's eval (the proposal), kept as a fourth seat, or removed now?
-4. **Frames to the cloud.** May camera and screen frames be sent to cloud Jev for Box questions at all? If so, only per source, with consent on, in cloud mode? The proposal: no, until the smart-home and camera phase, and then per source, with an explicit yes.
+1. **Frames to the cloud.** May camera and screen frames be sent to cloud Jev for Box questions at all? Box needs images, and Tev1 takes none, so Box only works through TypeSafe's cloud. The proposal:
+   - never in local-only mode;
+   - otherwise not until the smart-home and camera phase;
+   - then only per source, with an explicit yes.
 
 ## NOTES for Track 1
 
@@ -336,7 +349,7 @@ The input's use-case map is phased below as the record. **These are side PRs. Th
 >   - no ad hoc provider calls (seats not exported from core; a boundary test).
 > - **Part 1's eval** (#248: both Tev1 sizes failed, advisory) stands. `ingest-screen` is re-authored as v2 under the vendor's question rules, with a fresh pre-registered eval.
 > - **Phases DS1–DS3** are side PRs and don't displace M10e–M10k.
-> - **Open for the owner:** the ingest screen in cloud mode; the cloud route and budget (no live calls until then); retiring the transitional local model; frames to the cloud.
+> - **Owner decisions:** the ingest screen goes to Jev in cloud mode, with an off-by-default toggle for local-only; the person chooses providers and models, with recommendations and notices; the sorting-model screener is retired per template once a decision model passes its eval. **Open:** frames to the cloud for Box.
 
 **`docs/builder-packet/ROADMAP-AND-GATES.md`:** a line in the Amendment B section, or after "Ingest security gate":
 
