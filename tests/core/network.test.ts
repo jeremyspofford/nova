@@ -233,6 +233,36 @@ test('M10d: a revert that finds someone else’s change after Nova’s doesn’t
   } finally { await s.stop(); }
 });
 
+test('M10d: only a device trusted at the apply counts: one paired afterwards doesn’t keep the change', { timeout: 60_000 }, async () => {
+  const h = await hub({ core: { network: { windowMs: 4000 } } });
+  const dir = mkdtempSync(join(tmpdir(), 'nova-net-'));
+  const token = fakeToken();
+  const net = await startNetconfig({ file: join(dir, 'router.json'), token, initial: INITIAL });
+  try {
+    // The person's phone is paired, and silent: it can't reach the hub after the change.
+    await enroll(h, { name: 'Example phone', kind: 'phone' });
+    const t = h.core.network.createTarget({ name: 'Example router', kind: 'router', url: net.url });
+    h.core.network.setToken(t.id, token);
+    const { id, apply } = await toReview(h.core, t.id, { firewall: { allow: ['web'] } });
+    h.core.ledger.approve(apply.id, { confirm: true });
+    assert.equal((await settle(h.core, apply.id)).state, 'done');
+    // A second device, paired after the change, makes requests all through the window.
+    const late = await enroll(h, { name: 'Example tablet', kind: 'browser' });
+    const end = Date.now() + 4500;
+    while (Date.now() < end && h.core.network.view(id).state === 'watching') {
+      await call(h.mesh, 'GET', '/api/v1/health', undefined, { authorization: `Bearer ${late.token}` });
+      await sleep(50);
+    }
+    const v = await until(() => h.core.network.view(id), (x) => x.state === 'reverted', 10_000);
+    assert.equal(v.state, 'reverted', String(v.reason));
+    assert.equal(v.contact_at, null);
+    assert.deepEqual(net.config(), INITIAL);
+  } finally {
+    await net.close();
+    await h.stop();
+  }
+});
+
 test('M10d: after a restart, a change past its deadline with no contact reverts', { timeout: 60_000 }, async () => {
   // A long window, so only the restart's own check can fire it.
   const h = await hub({ core: { network: { windowMs: 3_600_000 } } });
