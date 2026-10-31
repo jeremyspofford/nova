@@ -65,6 +65,27 @@ export function normalizeHost(h: string): string {
   return h.trim().toLowerCase().replace(/\.$/, '');
 }
 
+// A declared host as the browser reads it: its name through the WHATWG URL parser (lower case,
+// IPv4 in every spelling as dotted quads, IPv6 compressed, international names as punycode), a
+// wildcard and a port kept. Null when it isn't a host at all.
+export function canonicalHost(raw: string): string | null {
+  const h = normalizeHost(String(raw ?? ''));
+  const wild = h.startsWith('*.');
+  const rest = wild ? h.slice(2) : h;
+  const m = /^(\[[^\]]+\]|[^:\[\]]+)(?::(\d{1,5}))?$/.exec(rest);
+  if (!m) return null;
+  let name: string;
+  try { name = new URL(`http://${m[1]}/`).hostname; } catch { return null; }
+  if (!name || (m[2] !== undefined && Number(m[2]) > 65535)) return null;
+  return `${wild ? '*.' : ''}${name}${m[2] !== undefined ? `:${Number(m[2])}` : ''}`;
+}
+
+// 169.254.0.0/16 and fe80::/10, however spelled (after canonicalHost).
+export function linkLocal(host: string): boolean {
+  const b = bareHost(host);
+  return /^169\.254\.\d{1,3}\.\d{1,3}$/.test(b) || /^fe[89ab][0-9a-f]?:/i.test(b);
+}
+
 // Where a URL goes: scheme, host (lower case, brackets kept for IPv6) and port (explicit or the
 // scheme's default). Null for anything that isn't http(s) or ws(s).
 export function target(url: string): { scheme: string; host: string; port: number } | null {
@@ -217,12 +238,19 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
   const need = (ok: boolean, msg: string) => { if (!ok) errors.push(msg); return ok; };
   const o = (typeof inputs === 'object' && inputs !== null ? inputs : {}) as Record<string, unknown>;
   const hosts = o.allowed_hosts;
+  // Each declared host as the browser itself reads it (review of PR #238, 3): 127.1, 2130706433 and
+  // 0x7f000001 are all 127.0.0.1 to Chromium, so they are to the checks below, and that is the form
+  // kept.
+  const canon: string[] = [];
   if (need(Array.isArray(hosts) && hosts.length > 0 && hosts.length <= MAX_HOSTS, `inputs.allowed_hosts must list the hosts this task may reach (1 to ${MAX_HOSTS})`)) {
     (hosts as unknown[]).forEach((h, i) => {
-      if (!need(typeof h === 'string' && HOST.test(normalizeHost(h)), `inputs.allowed_hosts[${i}] must be a host name, host:port or *.host`)) return;
-      const n = normalizeHost(h as string);
-      const m = (n.startsWith('[') || n.startsWith('*.[') ? /^(.*\])(?::(\d{1,5}))?$/ : /^([^:]+)(?::(\d{1,5}))?$/).exec(n);
-      if (!m || !thisMachine(m[1]!, hub)) return;
+      const n = typeof h === 'string' && HOST.test(normalizeHost(h)) ? canonicalHost(h) : null;
+      if (!need(n !== null && HOST.test(n), `inputs.allowed_hosts[${i}] must be a host name, host:port or *.host`)) return;
+      canon.push(n!);
+      const m = (n!.startsWith('[') || n!.startsWith('*.[') ? /^(.*\])(?::(\d{1,5}))?$/ : /^([^:]+)(?::(\d{1,5}))?$/).exec(n!);
+      if (!m) return;
+      need(!linkLocal(m[1]!), `inputs.allowed_hosts[${i}] (${m[1]}) is a link-local address: cloud metadata and a machine's own link services live there, so it is never a browser task's host`);
+      if (!thisMachine(m[1]!, hub)) return;
       // This machine without a port would take in Nova's own ports too, and Chromium sends
       // what it sends to a declared host straight there (WebSockets included, which no
       // interception sees), so the port must be named.
@@ -251,14 +279,14 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
         case 'navigate':
           if (need(isStr(s.url), `${at}.url is required`)) {
             need(target(s.url as string)?.scheme === 'http' || target(s.url as string)?.scheme === 'https', `${at}.url must be an http(s) address`);
-            if (Array.isArray(hosts)) need(allowed(s.url as string, hosts.filter((h): h is string => typeof h === 'string')), `${at}.url is outside the allowed hosts (${hostOf(s.url as string)})`);
+            if (Array.isArray(hosts)) need(allowed(s.url as string, canon), `${at}.url is outside the allowed hosts (${hostOf(s.url as string)})`);
             need(!reachesHub(s.url as string, hub), `${at}.url is ${HUB_REFUSAL}`);
             need(!payPath(s.url as string), `${at}.url is a pay address. ${PAY_REFUSAL}`);
           }
           break;
         case 'fill': case 'select': case 'click': {
           acting(s, at, need);
-          sendsOk(s, at, need, Array.isArray(hosts) ? hosts.filter((h): h is string => typeof h === 'string') : []);
+          sendsOk(s, at, need, canon);
           if (s.do !== 'click') need(typeof s.value === 'string' && s.value.length <= 10_000, `${at}.value must be text`);
           const sel = typeof s.selector === 'string' ? s.selector : '';
           const name = isObj(s.target) && typeof s.target.name === 'string' ? s.target.name : '';
@@ -287,7 +315,7 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
           for (const k of ['username', 'password', 'submit'] as const) need(isStr(s[k], 500), `${at}.${k} must be the selector of the ${k === 'submit' ? 'sign-in button' : `${k} field`}`);
           need(!['value', 'values', 'username_value', 'password_value', 'secret', 'credentials'].some((k) => k in s), `${at} names the fields, never a value: the sign-in comes from the vault at the moment of use (save it in Settings › Connections, never in a plan or a chat)`);
           if (s.done_when !== undefined) need(isStr(s.done_when, 500), `${at}.done_when must be a selector`);
-          sendsOk(s, at, need, Array.isArray(hosts) ? hosts.filter((h): h is string => typeof h === 'string') : []);
+          sendsOk(s, at, need, canon);
           break;
         case 'checkout':
           for (const k of ['lines', 'total'] as const) need(isStr(s[k], 500), `${at}.${k} must be the selector of the ${k === 'lines' ? 'itemised lines' : 'total'}`);
@@ -303,14 +331,14 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
     const v = (typeof o.verify === 'object' && o.verify !== null ? o.verify : {}) as Record<string, unknown>;
     need(Array.isArray(v.expect) && v.expect.length > 0 && v.expect.length <= 20 && v.expect.every((x) => isStr(x, 2000)), 'inputs.verify.expect must list the text the final page must show');
     if (v.url !== undefined && need(isStr(v.url), 'inputs.verify.url must be an address') && Array.isArray(hosts)) {
-      need(allowed(v.url as string, hosts.filter((h): h is string => typeof h === 'string')), `inputs.verify.url is outside the allowed hosts (${hostOf(v.url as string)})`);
+      need(allowed(v.url as string, canon), `inputs.verify.url is outside the allowed hosts (${hostOf(v.url as string)})`);
       need(!reachesHub(v.url as string, hub), `inputs.verify.url is ${HUB_REFUSAL}`);
     }
   }
   if (errors.length) throw new CoreError('validation', 'This browser plan can’t run.', errors);
   const list2 = (steps as Step[]).map((x) => ('quoted' in x && typeof x.quoted === 'number' ? { ...x, quoted: String(x.quoted) } : x)) as Step[];
   return {
-    allowed_hosts: (hosts as string[]).map(normalizeHost), steps: list2, ...(o.verify ? { verify: o.verify as Plan['verify'] } : {}),
+    allowed_hosts: canon, steps: list2, ...(o.verify ? { verify: o.verify as Plan['verify'] } : {}),
     profile: o.profile === 'fresh' ? 'fresh' : 'nova',
     ...(typeof o.learn === 'string' ? { learn: o.learn } : {}),
     ...(isObj(o.flow) ? { flow: o.flow as Plan['flow'] } : {}),

@@ -39,7 +39,7 @@ test('review 2: no hostile page pays or sends an order, on a checkout flow or a 
         const ev = await n.events(id!);
         const refused = ev.filter((e) => e.kind === 'pay_refused' || e.kind === 'send_refused');
         assert.ok(refused.length >= 1 || /pay control/.test(done.reason ?? ''), `${v} (${flow}): refused, and said so: ${done.state} ${done.reason} ${JSON.stringify(ev.map((e) => e.kind))}`);
-        const reached = shop.log.filter((l) => TARGETS.includes(l.path));
+        const reached = shop.log.filter((l: { path: string }) => TARGETS.includes(l.path));
         assert.deepEqual(reached, [], `${v} (${flow}): the shop’s log shows none of it`);
         lines.push(`${v}/${flow}: ${done.state}${done.state === 'failed' ? ` (${(done.reason ?? '').slice(0, 60)}…)` : ''}; refused: ${refused.map((e) => `${e.detail.method} ${e.kind}`).join(', ') || 'at the click'}`);
       }
@@ -69,7 +69,7 @@ test('review 2: after the itemised-total stop nothing that isn’t a GET leaves 
     const { id } = await n.task({ allowed_hosts: [shop.host], steps, verify: { url: `${shop.url}/cart`, expect: ['Example mug'] } }, 'Fill the cart');
     const done = await n.done(id!);
     assert.equal(done.state, 'done', `${done.reason}`);
-    assert.deepEqual(shop.log.filter((l) => ['/api/commit', '/collect-order', '/pay'].includes(l.path)), []);
+    assert.deepEqual(shop.log.filter((l: { path: string }) => ['/api/commit', '/collect-order', '/pay'].includes(l.path)), []);
     const ev = await n.events(id!);
     assert.ok(ev.some((e) => e.kind === 'pay_refused' && e.detail.method === 'POST'), JSON.stringify(ev.map((e) => e.kind)));
   } finally {

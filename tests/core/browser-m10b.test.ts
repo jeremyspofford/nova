@@ -171,6 +171,26 @@ test('sign-ins live in the vault under the host they were saved for', () => {
   assert.throws(() => loginName('not a host', 'password'));
 });
 
+// ---- review of PR #238, 3 and 5: declared hosts are canonical; link-local never ------------------
+
+test('review 3: a declared host is read as the browser reads it, before the this-machine and hub-port checks', () => {
+  const hub = { ports: [4318, 4320], hosts: ['myhost'] };
+  for (const h of ['127.1:4318', '2130706433:4318', '0x7f000001:4318', '017700000001:4318', '0177.0.0.1:4320', '[::ffff:127.0.0.1]:4318', 'LOCALHOST:4318']) {
+    assert.throws(() => validatePlan({ allowed_hosts: [h], steps: [{ do: 'read', selector: 'h1' }] }, hub), (e: any) => /Nova’s own address/.test(e.details.join(' ')), h);
+  }
+  for (const h of ['127.1', '0x7f000001', '2130706433']) {
+    assert.throws(() => validatePlan({ allowed_hosts: [h], steps: [{ do: 'read', selector: 'h1' }] }, hub), (e: any) => /name the port/.test(e.details.join(' ')), h);
+  }
+  // Stored as the browser reads it, so what it allows is what it says.
+  assert.deepEqual(validatePlan({ allowed_hosts: ['127.1:5000', 'Shop.Example.TEST'], steps: [{ do: 'navigate', url: 'http://127.0.0.1:5000/' }] }).allowed_hosts, ['127.0.0.1:5000', 'shop.example.test']);
+});
+
+test('review 5: a link-local address is never a declared host', () => {
+  for (const h of ['169.254.169.254', '169.254.1.1:80', '[fe80::1]:8080', '2852039166']) {
+    assert.throws(() => validatePlan({ allowed_hosts: [h], steps: [{ do: 'read', selector: 'h1' }] }), (e: any) => /link-local/.test(e.details.join(' ')), h);
+  }
+});
+
 // ---- review of PR #238, 2: where a step sends, and the lists as an extra signal -------------------
 
 test('review 2: a step names where it sends; a pay address there is refused; the lists know more ways to pay', async () => {
