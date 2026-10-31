@@ -2,6 +2,192 @@
 
 Decisions, dependencies and deviations, newest first within each section.
 
+## What changed (plain language)
+
+What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
+
+**2026-10-31 · #252 · The decision log now says what changed, in plain language**
+- What changed: this section, with one entry for every merge since 30 October and a short summary of each earlier milestone.
+- What you can now do: Nothing in the app changed: paperwork only. From now on every merge gets an entry here, in the same pull request.
+
+**2026-10-31 · #246 · Design: how captured data will travel from your other devices to your main Nova**
+- What changed: your approved design was filed. Capture data syncs to the main Nova over the device mesh; raw recordings go to one storage place you choose, and a device deletes its copy only after the stored copy is checked.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: none of it is built; it belongs to a later phase (M10h). Which part of the device software carries the data is still to be decided.
+
+**2026-10-31 · #244 · Two plans filed: a testing harness, and launch readiness**
+- What changed: your Amendment A (a test harness that checks what a change touches and sweeps the whole app) and Amendment B (eight launch-readiness parts, such as self-update, spending caps for work Nova does on its own, and diagnostics) were filed, with where each part lands.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: nothing in either is built here. The harness exists only as an approved prototype outside this repo; bringing it in comes after the M10 phases.
+
+**2026-10-31 · #245 · The automatic checks skip the long test run for paperwork-only changes**
+- What changed: the checks GitHub runs on each pull request now sort the change: documents only skip the full test run (about 22 minutes); any code or workflow change still runs everything. One always-run check, "gate", sums up the result.
+- What you can now do: Nothing in the app changed: paperwork only (this changes how changes are checked, not Nova).
+- Still unfinished: the timing for a code change comes from the next code merge. Measured so far: a documents-only change takes 19–36 seconds (it used to take about 22 minutes), and "gate" became main's required check right after this merged.
+
+**2026-10-31 · #243 · Design: how Nova will run and manage services across your devices**
+- What changed: a design document for a "Service Manager" that starts, watches, moves and rolls back services, using plain programs by default and an optional Kubernetes mode (K3s). Your input and your six decisions on it were filed word for word.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: nothing is built; it is planned as phases M10e to M10k. Its one open question was answered by #246.
+
+**2026-10-31 · #242 · A file too big to back up is reported once, not after every restart**
+- What changed: a file over 8 MB isn't copied to the standby (the second Nova that keeps a live copy). Nova used to report that again after every restart; now it is reported once, and the problem closes when the file fits or is deleted.
+- What you can now do: see one problem per oversized file instead of a new duplicate after each restart.
+- Still unfinished: files over 8 MB still aren't copied to the standby; that limit is unchanged.
+
+**2026-10-31 · #240 · Coding through chat: twelve fixes from an independent review**
+- What changed: the serious one: declining or cancelling during a merge let the merge go ahead while the record said nothing merged. Also fixed: settings files that could fake a passing test, file links that escaped the project, previews left running.
+- What you can now do: trust "decline" and "cancel" during a merge; past the point of no return Nova refuses them instead of misreporting.
+- Still unfinished: the agent can't edit settings-style files (JSON, YAML and the like) unless you list them; changes over 512 KB can't be merged through Nova; a test command that ignores "stop" can outlive its time limit.
+
+**2026-10-31 · #239 · Coding through chat**
+- What changed: ask in chat for a change to one of your git projects. A coding agent writes it on a separate branch, Nova runs the tests and starts a preview, and it merges only when you say yes. It never pushes.
+- What you can now do: review the change, the test result and a preview link, then approve the merge (asked every time) or decline it, which leaves your project untouched.
+- Still unfinished: only stand-in coding agents were used, never a real one; tests and previews run as you on this computer, which is why Nova asks first; the preview link works only on this computer, not from a phone; no deploy.
+
+**2026-10-31 · #238 · Nova's own browser (Nova Browser)**
+- What changed: Nova has its own browser profile, separate from yours. It signs in with logins saved in Nova's vault, follows steps on pages, flags pre-ticked extras, and can learn a repeatable flow for a site. You can watch, pause, take over and hand back.
+- What you can now do: save site sign-ins in Settings › Connections › Site sign-ins (never in chat). A checkout always stops at the itemised total and asks you; Nova never presses "pay".
+- Still unfinished: tested only against a pretend shop on this computer: no real site, login, CAPTCHA or purchase. Its checking model was a stand-in. It can't start on this machine outside a container (missing system libraries); its tests ran in one.
+
+**2026-10-31 · #237 · Design document wording: approval levels**
+- What changed: the M10 design called "do it, tell you, let you undo" approval level 2. Nova's spec calls that level 1; level 2 means "ask first". The wording now matches what was built.
+- What you can now do: Nothing in the app changed: paperwork only.
+
+**2026-10-31 · #236 · Nova Computer: sealed-off workspaces on this machine**
+- What changed: Nova can make one sealed-off workspace per project (a Docker container), run commands in it, keep the output as checked evidence, and snapshot and restore it exactly. It can't reach Nova, your other files, or any internet host you didn't declare.
+- What you can now do: nothing from a screen or chat yet: it is reachable only through Nova's programming interface, by design for this step.
+- Still unfinished: no chat tool drives it yet (coding through chat doesn't use it); where Docker can't cap a workspace's disk, Nova checks it every 5 seconds instead; internet access was tested only against pretend sites on this computer; it needs Docker.
+
+**2026-10-31 · #235 · A flaky device-software test fixed**
+- What changed: a test sometimes read a file while its helper was halfway through writing it. Test-only fix.
+- What you can now do: Nothing in the app changed: a test fix only.
+
+**2026-10-31 · #234 · M9: Feel and polish**
+- What changed: every screen loads and responds well inside Google's speed targets (on a slowed-down phone too), nothing jumps while loading, waiting shows real progress with no fake delays, animations are short and calm, every control is big enough to tap, and text contrast passes in all six designs.
+- What you can now do: fold, unfold or resize the screen without losing your place, a draft or an unsaved setting; use 200% text; get a second pane from 1024 px wide.
+- Still unfinished: all measured in an emulated browser; no real phone or foldable was used (your deferred check).
+
+**2026-10-31 · #233 · Design: the Execution Plane (M10)**
+- What changed: the M10 design was filed: Nova Computer, Nova's own browser, coding through chat, then infrastructure, networking and accounts, all built on what already exists.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: during the build, no real infrastructure, spending, accounts or network changes; everything is proven against stand-ins. The infrastructure phase (M10d) isn't merged yet.
+
+**2026-10-30 · #229 · The safety screen for outside content**
+- What changed: web pages, search results, emails, files Nova didn't write, captured text, device notes and uploaded skills are screened before the AI acting for you reads them. Content that tries to give orders is cleaned or blocked.
+- What you can now do: after Nova reads outside content, it asks before running commands, drafting mail, changing schedules or saving memories, and it checks what it sends out for your secrets and memory text. Health shows an "Outside content" check.
+- Still unfinished: the checks are pattern-based: without a local model, a reworded attack in command output can get through as plain data. Attachments aren't opened. You may be asked more often, since the flag lasts the whole conversation.
+
+**2026-10-30 · #228 · Six interface fixes: chat, times, Settings, Appearance, scrolling**
+- What changed: chat reads like a modern AI chat, the orb shows once per screen, messages show their time (exact time on hover or tap), Settings has eight categories with search, and each screen has one scroller.
+- What you can now do: try a design on this device with instant Undo, or for all devices with Save; get one recommended design with a reason; a live contrast check flags hard-to-read text and fixes it in one tap.
+- Still unfinished: bigger touch targets were moved to M9 (done in #234).
+
+**2026-10-30 · #232 · Capture works with Screenpipe 0.4**
+- What changed: Screenpipe 0.4 (the screen-recording app Nova can take context from) renamed one kind of data and refused Nova's requests. Nova now uses the new name, and the old one for older versions.
+- What you can now do: connect a Screenpipe 0.4 source without the "answered 400" error.
+- Still unfinished: fixed against a stand-in that behaves like 0.4; the record doesn't show it re-checked against your real Screenpipe.
+
+**2026-10-30 · #231 · Nova's chat knows Nova's real state**
+- What changed: each chat turn gets a factual briefing on Nova (models, connections, capture, devices, schedules, problems) and read-only tools to check live status. Secrets, memory contents and captured text are never included.
+- What you can now do: ask chat what Nova is running or why capture is failing and get answers from the real settings; a fresh Nova says it's fresh and offers to import a memory export.
+- Still unfinished: with a real local model, the larger one answered from the real settings; a smaller one stayed vague and once claimed a check it didn't make. Full profile import isn't built.
+
+**2026-10-30 · #230 · A restore test waits longer on a busy machine**
+- What changed: a checkpoint-restore test now waits up to a minute, not 10 seconds, for Nova to come back. What it checks is unchanged.
+- What you can now do: Nothing in the app changed: a test fix only.
+
+**2026-10-30 · #227 · Capture: edit a Screenpipe source; Screenpipe API keys**
+- What changed: a saved Screenpipe source's address and look-back can be edited, and Nova can use Screenpipe's API key, kept in the vault and never shown back. A refusal now says the key is needed.
+- What you can now do: in Settings › Capture › Address and API key, fix a mistyped address and add or remove the key.
+- Still unfinished: your real Screenpipe then hit a second error, fixed in #232.
+
+**2026-10-30 · #226 · Web reading can't reach Nova itself or your private network**
+- What changed: closed a hole where a web page could trick the chat agent into reading Nova's own data (such as memories) and sending it out in a link. Web reading now goes only to public internet addresses, re-checking every redirect.
+- What you can now do: nothing new; web reading is safer.
+- Still unfinished: the rest of the safety screen for outside content followed in #229.
+
+**2026-10-30 · #225 · Plan filed: Amendment C (polish, outside-content safety, the Execution Plane)**
+- What changed: your approved Amendment C and its UX research were filed, adding six interface fixes, M9 Feel and polish, the safety screen for outside content and M10, plus binding rules for honest progress and waiting.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: built since in #228, #229, #234 and #236 to #240; M10's infrastructure phase isn't merged yet.
+
+**2026-10-30 · #224 · Devices says where to add a device**
+- What changed: on a device that can't approve new devices, Settings › Devices hid "Add a device" without saying why. It now says to use the main Nova's own screen.
+- What you can now do: see why a phone or paired browser can't add devices, and where to do it instead.
+
+**2026-10-30 · #223 · iPhones no longer stick on "Check the digits"**
+- What changed: your iPhone joined and was approved, then stuck on "Check the digits". iPhone browsers can't store the key the pairing page kept; it now keeps only what's needed, and shows errors instead of silently retrying.
+- What you can now do: pair an iPhone without getting stuck, as shown end to end in an emulated iPhone browser; the tests now cover Safari's engine as well as Chrome's.
+- Still unfinished: not re-tried on your real iPhone (deferred); the half-paired "iPhone Duo" on the preview is yours to revoke; the short pairing time limits are still a logged defect.
+
+**2026-10-30 · #222 · Checkpoints and factory reset**
+- What changed: Nova takes a restore point of its own data before any self-change, upgrade or code switch, and won't go ahead without one. Factory reset wipes Nova's data, keys and backups after offering an encrypted export. Also closed: the chat agent could write almost anywhere in Nova's home.
+- What you can now do: make named checkpoints and restore one, or factory-reset from Settings › Danger zone; both ask every time, from the main Nova's screen only. Revoked devices and forgotten memories stay that way after a restore.
+- Still unfinished: some old keychain items can't be removed by a reset (they unlock nothing); restarting in place is untested on Windows.
+
+**2026-10-30 · #221 · Crash-safe problem records; two flaky tests fixed**
+- What changed: a crash at the wrong moment could leave a half-saved problem that never closed and caused duplicates; both parts are now saved together. A timing race in a network test was fixed too.
+- What you can now do: nothing new; problem records stay accurate through crashes.
+
+**2026-10-30 · #220 · M8: hand coding tasks to Relay**
+- What changed: Nova can send a coding task to Relay (your separate app that runs coding workers in their own copies of a project), get the change back and check it itself before calling it done. Local-only is respected.
+- What you can now do: use Relay as a provider. Real runs on Relay v0.9.0 passed, including Claude Code on your local model, with no sign-in and nothing leaving the machine.
+- Still unfinished: not yet run on your own Claude subscription; a worker that makes files the project ignores fails the run; Relay merging into a real repo comes later.
+
+**2026-10-30 · #219 · M7: Nova changes itself safely, and keeps itself running**
+- What changed: Nova ships changes to itself (extensions, designs, settings, templates, rule packs) through tests, health checks, your approval and a trial, with automatic rollback. It also restarts itself, has a safe mode, nightly backups with a restore drill, and repair steps for failures.
+- What you can now do: approve Nova's own changes with the evidence shown; a local model wrote a reminder pack that shipped this way; forgetting a memory reaches every backup, even a drive plugged in later.
+- Still unfinished: a real code release on your machine, a real backup drive and recovery key, and real-phone pairing are your checks, not yet done.
+
+**2026-10-30 · #218 · Pair a phone with the preview through Tailscale**
+- What changed: the preview can open the device door (the separate entrance devices pair through), so a phone coming in through Tailscale Serve isn't refused as "Cross-origin request refused".
+- What you can now do: point Tailscale Serve at the device door and pair from a phone.
+- Still unfinished: your first real attempt didn't finish; the real-phone check is deferred and the short pairing time limits are a logged defect.
+
+**2026-10-30 · #217 · M6: capture and local models**
+- What changed: Nova can take in context from screen capture: off by default, per source and device, with an indicator, pause and exclusions. Private windows are never stored, and captures become memories only when you choose. It runs on local models, and when they're down, local-only work waits instead of using the cloud.
+- What you can now do: Settings › Capture and Settings › Models. A whole local-only day ran on this machine's real models, with nothing leaving it.
+- Still unfinished: real Screenpipe, waking a real GPU computer and real model downloads were your checks; no transcription; the small sorting model suggests too many memories (none kept without you).
+
+**2026-10-30 · #216 · M5: other AIs and integrations**
+- What changed: Nova hands a task to another AI (Claude Code, Codex, an OpenAI-compatible model such as Ollama, n8n) with one brief and checks the result itself. Secrets live in an encrypted vault; Gmail and Home Assistant are connections; you can take over a browser task and hand it back.
+- What you can now do: Settings › Providers and Settings › Connections; take over a browser task from Home's card. A real local model fixed a test this way, verified by Nova.
+- Still unfinished: Codex, n8n and Home Assistant were tested against stand-ins only; a command-line agent runs as you, not in a sandbox; no screen control.
+
+**2026-10-30 · #215 · M4: pairing phones and computers; a standby Nova**
+- What changed: pair a phone by QR code and a computer by a one-line command, revoke either at any time, and run a standby Nova that keeps a live encrypted copy and can take over if the main one dies, with nothing lost.
+- What you can now do: add and revoke devices in Settings › Devices; promote the standby from its own screen.
+- Still unfinished: tested with an emulated phone, not a real one (deferred); a main Nova that stepped down must be set up again; automatic takeover is off by default.
+
+**2026-10-30 · #214 · Your perception principles made binding; preview restart fix**
+- What changed: your principles (real progress, one standout element per screen, fewer choices, no fake delays or guilt mechanics, every task ends verified) became binding design rules. The preview restart script now waits for the old server to let go.
+- What you can now do: Nothing in the app changed: paperwork only (plus a preview-script fix).
+- Still unfinished: two gaps were named; the missing design recommendation in Appearance was fixed in #228.
+
+**2026-10-30 · #213 · M3: switchable designs and the installable app**
+- What changed: six built-in designs that switch live with no restart, an installable app with phone, tablet, foldable and desktop layouts, and first-time setup inside the app.
+- What you can now do: change the design for every device or just one, and roll back; install Nova to a home screen; set up a blank Nova from the app alone.
+- Still unfinished: voice tested only in its off state (no speech engine here); foldables emulated, not real; trigger rules can't be created from Automations yet.
+
+### Earlier milestones, summarised
+
+**M0 to M7 · #209 to #222 · From a checked baseline to a Nova that maintains itself**
+- What they delivered: automatic checks on every change (M0); tasks that count as done only once Nova checks the proof itself, a local-only privacy mode, and setup by conversation (M1); triggers, and memory you can correct, export and truly forget, backups included (M2); then the M3 to M7 work above.
+- Still unfinished: real-world checks (a real phone, a foldable, voice, a real Screenpipe, a GPU computer, a backup drive) are yours; real-phone pairing is deferred.
+
+**M8 · #220 · Coding tasks through Relay**
+- What it delivered: coding tasks run on Relay's workers come back to Nova, which checks the change and runs the tests itself before calling it done; real runs used your local model.
+- Still unfinished: not run on your Claude subscription; Relay merging into a real repo is a later step.
+
+**M9 · #234 · Feel and polish**
+- What it delivered: measured speed, no jumping layouts, honest progress while waiting, calm animations, tap-sized controls and readable contrast in every design, on every screen size.
+- Still unfinished: measured in emulated browsers only; no real phone or foldable.
+
+**M10a to M10c · #236 to #240 · Nova's computer, browser and coding**
+- What they delivered: sealed-off workspaces on this machine (Nova Computer), Nova's own browser with vault logins and a hard stop before paying, and coding through chat with tests, a preview and a merge only on your yes.
+- Still unfinished: all tested against stand-ins (pretend sites and shops, stand-in coding agents), never real sites, accounts or agents; the browser can't start on this machine outside a container; no chat tool drives the workspaces yet; the infrastructure phase (M10d) isn't merged.
+
 ## Dependencies
 
 Runtime: **none**. The server, runner, markdown renderer and tests use Node 22
@@ -56,8 +242,6 @@ and `e160e581…`).
 - **One deliberate difference from the instruction's list:** markdown under the folders Nova loads at run time counts as code, not docs: `system/` (the system prompt), `templates/`, `skills/`, `schedules/`, `connectors/` and `design-systems/`. A change there can break a test.
 - **The default:** any file the script doesn't know counts as code.
 
-||||||| parent of df775f41 (docs(packet): Amendment 2026-10-31-B, Launch Readiness, and its research, as given)
-||||||| parent of 911bde48 (docs(m10): the capture data path design resolves the orchestration ADR's open question 1)
 **2026-10-31 (owner decisions on the orchestration ADR).** Same branch and PR (#243). The owner's
 decisions were added to the packet unchanged, below a one-line header, as
 `docs/builder-packet/INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md` (sha256 of the decisions
