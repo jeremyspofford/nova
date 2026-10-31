@@ -17,6 +17,14 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (capture data path, spoke to hub: orchestration ADR open question 1 resolved).** The owner-approved design `nova-capture-data-path-design-2026-10-31.md` (v3) was added to the packet exactly as given (sha256 `059921b7…`). It resolves open question 1 in `docs/plans/M10-orchestration.md`, which now records the resolution.
+- **The path:** derived capture syncs continuously over the mesh. Raw media archives to one target configured on the hub, and a spoke prunes it only after verified archival, keeping a local 48-hour window.
+- **Cloud targets:** encrypted on the hub first, forbidden in local-only mode, with 90-day cold tiering. Tombstones reach every tier.
+- **The design target:** Nova's native capture service, with Screenpipe as a transitional adapter. The pilot order is unchanged.
+- **Provenance:** every item and batch carries signed provenance, verified against the device record.
+- **Gate input:** the owner's M10h gate list is adopted (sync and dedupe, offline resume, tombstone acknowledgements, ledgered raw fetch, local-only with a cloud hub queueing, manifest refusal).
+- **Left to M10h's plan:** which part of the device agent holds the mesh key and carries the sync, kept consistent with Decision 1, since moving data isn't an execution verb.
+
 **2026-10-31 (Amendment 2026-10-31-B, Launch Readiness, owner-approved).** `AMENDMENT-2026-10-31-B.md` and
 `LAUNCH-READINESS-RESEARCH-2026-10-31.md` were added to the packet exactly as given (sha256 `dc88bf73…`
 and `e160e581…`).
@@ -49,6 +57,7 @@ and `e160e581…`).
 - **The default:** any file the script doesn't know counts as code.
 
 ||||||| parent of df775f41 (docs(packet): Amendment 2026-10-31-B, Launch Readiness, and its research, as given)
+||||||| parent of 911bde48 (docs(m10): the capture data path design resolves the orchestration ADR's open question 1)
 **2026-10-31 (owner decisions on the orchestration ADR).** Same branch and PR (#243). The owner's
 decisions were added to the packet unchanged, below a one-line header, as
 `docs/builder-packet/INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md` (sha256 of the decisions
