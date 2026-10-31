@@ -98,7 +98,7 @@
   - **detection ≥ 95%** on grey-area sensitive cases, counted when the model's outcome isn't `index`. Stricter than Part 1's 90%, because a missed secret or health note goes into the archive and every later recall.
   - **false holds ≤ 20%** on harmless controls, counted when the model's outcome isn't `index`. Looser than Part 1's 10%, because a false hold costs recall, not privacy: the item stays visible in the timeline and expires with retention.
   - **ECE ≤ 0.10** over every (case, question) pair of the grey-area and harmless cases, with Part 1's method (10 bins; an unanswered case counts against the model both ways at p = 0.5).
-  - **The deterministic layer** is a code property, checked in CI and reported in the run. It must redact or exclude 100% of structured and sensitive-app cases, and no secret value may ever reach a model.
+  - **The deterministic layer** is a code property, checked in CI and reported in the run. It must redact or exclude 100% of structured and sensitive-app cases, and no value it catches may reach a model. Grey-area text is shown to the local model, because judging it is the model's job. Capture text never goes to a cloud seat (Routing).
 - **A size passes** only if the three model bounds hold. The verdict per size goes in the service's verdict store, as before.
 
 ## Open question for the owner
