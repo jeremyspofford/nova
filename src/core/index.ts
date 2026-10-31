@@ -167,6 +167,8 @@ export * as evals from './evals/index.ts';
 // Hard caps on autonomy cost (Amendment 2026-10-31-B Part 5): ceilings, the meter, the loop detector.
 export { Caps, Meter, DEFAULT_LIMITS, LOOP, CHARS_PER_TOKEN, SPEND_DIR, signature, weightOf, capsRoutes } from './caps/index.ts';
 export type { Limits, Ceilings, Spend, Stop } from './caps/index.ts';
+// One-click diagnostics, redacted by construction (Amendment 2026-10-31-B Part 6).
+export { buildDiagnostics, diagnosticsRoutes, knownSecrets, Scrubber, formsOf, MARKER as DIAGNOSTICS_MARKER, RULE as DIAGNOSTICS_RULE } from './diagnostics/index.ts';
 
 export interface CoreOptions {
   home: string;
