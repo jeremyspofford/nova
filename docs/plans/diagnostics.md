@@ -49,8 +49,14 @@ these sections:
 
 ## Redaction, by construction
 
-There are three layers, in this order. Each layer would be enough for the canaries on its own.
-The three together are the design.
+There are three layers, in this order. They overlap, but no single layer is enough on its own.
+- **The allow-list** keeps vault values out, because nothing reads them.
+- **The value layer** catches a secret that a log line or a problem's detail quotes, which the
+  allow-list has to include.
+- **The key layer** catches a secret written into a config field.
+
+The mutation tests in the evidence show the gaps: with the shape patterns turned off, three
+planted secrets survive.
 
 1. **Allow-list.** Each section is built from named fields of Nova's own views, not by dumping
    objects. Content-bearing fields are never read: memory, sessions, capture events, task titles
@@ -138,8 +144,115 @@ safety invariants. It runs only where the core can build a bundle; the harness b
 
 - `src/core/diagnostics/index.ts`: the builder, the redaction, the scrub and the route function.
 - `src/core/index.ts`: one additive export line, which the boundary rule needs. It is not wiring.
-- `tests/core/diagnostics.test.ts`, `tests/acceptance/diagnostics.test.ts`, and the eval task.
+- `tests/core/diagnostics.test.ts`: a full core, with every secret store and the personal content.
+  A whole Nova, chat included, is covered by the eval task `safety.diagnostics-no-canary`, which
+  runs in `npm test`'s regression gate.
+- `src/core/README.md`: one row.
+
+## Limits, said plainly
+
+- **The value layer knows only what Nova keeps.** A secret Nova never stored, quoted raw in a log
+  line, is caught only if it is secret-shaped: Bearer, URL credentials, a JWT, a token prefix or
+  `token=`. A bare random string in free text that Nova has never seen can't be told from any
+  other word.
+- **What stays in the bundle:**
+  - Machine identifiers that aren't secrets: hostnames, IP addresses, GPU names, model names.
+  - Names the person gave (a network target's, an infra project's, a provider's model). These are
+    configuration, the way Home Assistant's diagnostics keep them.
+  - MAC addresses and serials are redacted.
+  - Problem messages and log messages are Nova's own words. Some quote what a service said; they
+    pass the value layer, and a problem's detail is clipped to 2,000 characters.
+- **A keychain-held vault key isn't read.** It isn't in Nova's home, and nothing in the bundle could
+  carry it. A file-held key is read, and checked against.
+- **Era 2's state is counts only.** Conversations, schedules and skills come from the server's
+  `era2` callback (NOTES §2). Without it, they are missing, not guessed.
 
 ## NOTES for Track 1
 
-Written when the build is done; see below.
+**What this branch touched outside its own module:**
+- an additive export line in `src/core/index.ts`, not wiring;
+- a row in `src/core/README.md`;
+- the eval task in `tests/evals/tasks/regression.ts`, the manifest, and the negative-control
+  exception in `tests/acceptance/evals-regression.test.ts`.
+
+### 1. The route (`src/core/index.ts`, `createCore`)
+
+```ts
+import { buildDiagnostics, diagnosticsRoutes } from './diagnostics/index.ts';
+// in the route table, after the health route:
+...diagnosticsRoutes(() => buildDiagnostics(core, { home: o.home, version: o.version, commit: self.build(), instance: o.instance, era2: () => era2Counts?.() ?? {} })),
+```
+
+`core` is the object `createCore` returns. Build it first and add the route after, or pass a
+getter. That gives `GET /api/v1/diagnostics` at the default `person` access.
+- **The response:** the bundle as JSON with
+  `content-disposition: attachment; filename="nova-diagnostics-YYYY-MM-DD-HHMM.json"` and
+  `cache-control: no-store`.
+- **Nothing is kept.** It is built per request, and never stored or sent.
+- **Optional test:** check through the API that it answers the console and refuses `public`.
+
+### 2. Era 2's counts (`src/server.js`)
+
+Hand the core a counts-only callback, the same way `core.self.attach` gets Era 2's state:
+
+```js
+core.diagnosticsEra2 = () => ({ conversations: store.list().length, schedules: runner.schedules.list().length, skills: runner.skills.installed().length });
+```
+
+Use whatever hook shape you prefer (`createCore` option, `attach`). It must return numbers
+only.
+
+### 3. Health: "Download diagnostics" (`ui/js/surfaces.js` `renderHealth`)
+
+At the end of the Checks panel, after the version line:
+
+```js
+<p class="settings-note">A file with Nova’s versions, health, settings and recent log, for getting help. Every secret is replaced by **REDACTED**, and none of your memories, conversations or captured text is in it. Nova doesn’t send it anywhere: you choose what to do with it.</p>
+<p><a class="btn small" href="/api/v1/diagnostics" download data-action="download-diagnostics">Download diagnostics</a></p>
+```
+
+- **Method:** a plain GET link is enough. The route is a GET, so it needs no `X-Nova` header.
+- **On a paired phone:** a device's session cookie carries it. Check that `person` access lets the
+  person's paired devices download it, or decide whether only the console should.
+- **Tokens only.** Add a UI test that the link is there, and that the file it returns parses and
+  contains `"marker":"**REDACTED**"`.
+
+### 4. LEDGER
+
+The plain-language "What changed" entry:
+
+> **What changed (2026-10-31): a diagnostics file for getting help.**
+> - **What it is:** Nova can put together one file with its versions, the state of each of its
+>   parts, its settings and its recent log, to share with whoever is helping you. It is the
+>   **Download diagnostics** button in Health once the button is in place.
+> - **Secrets:** every password, key and token is replaced by **REDACTED** before the file is
+>   made.
+> - **Your own things:** your memories, conversations and captured screen or audio text are never
+>   in it, only how many there are.
+> - **Where it goes:** Nova never sends it anywhere. It is a file for you to keep, share or
+>   delete.
+
+The decision entry:
+
+> **2026-10-31 (Amendment B Part 6: the diagnostics bundle).** Branch `diagnostics/bundle`, plan
+> `docs/plans/diagnostics.md`.
+> - **The builder:** `src/core/diagnostics/`.
+> - **The rule:** counts and states, never content.
+> - **Redaction,** in three layers: an allow-list, secret-named keys (Home Assistant's
+>   `**REDACTED**` pattern), and every known secret value in six encodings plus secret-shaped
+>   strings.
+> - **Local only:** built per request, never stored, never sent.
+> - **Canaries:** planted in every place Nova keeps a secret, and in personal content. None
+>   survives (`tests/core/diagnostics.test.ts`, eval `safety.diagnostics-no-canary`).
+> - **Not built here:** the integrity scrub, which is Track 1's Health work.
+> - **Limits:** in the plan.
+
+### 5. ROADMAP-AND-GATES and CAPABILITY-INVENTORY
+
+- **Roadmap:** Amendment B Part 6's first bullet is delivered (the bundle). The integrity scrub
+  and the disk-health signals are still open, on Track 1.
+- **Inventory row:**
+
+| Capability | Where | Verified by |
+|---|---|---|
+| One-click diagnostics bundle, redacted by construction (no secret, no personal content, local only) | `src/core/diagnostics/` | `tests/core/diagnostics.test.ts`, eval `safety.diagnostics-no-canary` |
