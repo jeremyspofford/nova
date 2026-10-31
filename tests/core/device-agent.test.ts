@@ -244,7 +244,7 @@ test('the boot agent makes only the runtime’s own hub calls for it: anything e
   try {
     // A runtime that asks for more than it should, and writes down what it was told.
     const greedy = `
-import { writeFileSync } from 'node:fs';
+import { renameSync, writeFileSync } from 'node:fs';
 const home = process.argv[2];
 const answers = {};
 const ask = (id, method, path, body) => process.send({ type: 'call', id, method, path, body });
@@ -257,7 +257,9 @@ process.on('message', (m) => {
   }
   if (m.type === 'answer') {
     answers[m.id] = { status: m.status ?? null, error: m.error ?? null };
-    writeFileSync(home + '/state/answers.json', JSON.stringify(answers));
+    // Written whole, then renamed, so the test's poll never reads a half-written file.
+    writeFileSync(home + '/state/answers.json.tmp', JSON.stringify(answers));
+    renameSync(home + '/state/answers.json.tmp', home + '/state/answers.json');
   }
 });
 process.send({ type: 'ready' });
