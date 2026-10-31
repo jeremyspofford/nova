@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Supervisor } from '../../src/supervisor/supervisor.ts';
+import type { ServiceDefinition } from '../../src/core/index.ts';
 import { FAST, fakeRepo, get } from './fake.ts';
 import { alive } from '../support/services.ts';
 import { scratch, until } from './support.ts';
@@ -14,7 +15,7 @@ export const SERVICE_TIMINGS = { ...FAST, healthEveryMs: 300, healthFailures: 2,
 
 export interface Harness { s: Supervisor; dir: string; repo: string; stop: () => Promise<void>; told: () => Promise<{ playbook: string; said: string; subject?: string }[]> }
 
-export async function supervised(prefix: string, o: { timings?: Partial<typeof SERVICE_TIMINGS>; dir?: string; repo?: string; make?: (dir: string, repo: string) => Supervisor } = {}): Promise<Harness> {
+export async function supervised(prefix: string, o: { timings?: Partial<typeof SERVICE_TIMINGS> & { maxTimerMs?: number }; dir?: string; repo?: string; make?: (dir: string, repo: string) => Supervisor } = {}): Promise<Harness> {
   const dir = o.dir ?? scratch(prefix);
   const repo = o.repo ?? fakeRepo(dir);
   const home = join(dir, 'home');
@@ -37,4 +38,9 @@ export async function supervised(prefix: string, o: { timings?: Partial<typeof S
       assert.deepEqual(s.services.pids(), []);
     },
   };
+}
+
+// Deploys with the typed word given up front: the tests approve their own commands.
+export function deploy(s: Supervisor, def: ServiceDefinition, say?: (l: string) => void) {
+  return s.manager.deploy(def, say, `${def.service}@${def.version}`);
 }

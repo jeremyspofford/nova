@@ -43,7 +43,8 @@ export function serviceDriverContract(name: string, make: () => Promise<DriverHa
     try {
       const svc = h.definition('1.0.0').service;
       assert.equal((await h.driver.apply(h.definition('1.0.0'))).ok, true);
-      assert.equal(await h.serving(), null, 'apply gave it no traffic');
+      // That apply moves no traffic is checked where there is traffic to move (2.0.0, below).
+      assert.ok(h.driver.status(svc)[0]!.versions.find((v) => v.version === '1.0.0')!.ports, 'it runs alongside');
       assert.equal(h.driver.status(svc)[0]!.versions.find((v) => v.version === '1.0.0')!.status, 'ready');
       const s1 = await h.driver.switch(svc, '1.0.0');
       assert.equal(s1.ok, true, s1.said);

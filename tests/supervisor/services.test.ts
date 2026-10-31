@@ -11,7 +11,7 @@ import { consoleDefinition, type ServiceDefinition } from '../../src/core/index.
 import { alive, call, freePort, standIn, standInFile, whoami } from '../support/services.ts';
 import { git } from './fake.ts';
 import { until } from './support.ts';
-import { SERVICE_TIMINGS, supervised } from './services-support.ts';
+import { SERVICE_TIMINGS, deploy, supervised } from './services-support.ts';
 
 const statusOf = (s: Supervisor, service = 'stand-in') => s.manager.status().find((x) => x.service === service)!;
 const versionOf = (s: Supervisor, version: string, service = 'stand-in') => statusOf(s, service).versions.find((v) => v.version === version)!;
@@ -23,16 +23,18 @@ test('deployed alongside with no traffic, promoted on the typed word, soaked, an
   let child = 0;
   try {
     const port = await freePort();
-    const r1 = await s.manager.deploy(standIn({ version: '1.0.0', port, soak_s: 2, flags: ['--child'] }));
+    const r1 = await deploy(s, standIn({ version: '1.0.0', port, soak_s: 2, flags: ['--child'] }));
     assert.equal(r1.ok, true, r1.said);
     assert.equal(versionOf(s, '1.0.0').status, 'ready');
-    assert.equal(await whoami(port), null, 'deploying gave it no traffic: nothing answers on the stable port');
+    // It runs (it answers on its own port); that deploying moves no traffic is checked below, where
+    // there is traffic to move: with 1.0.0 live, deploying 2.0.0 leaves the stable port on 1.0.0.
+    assert.equal((await whoami(versionOf(s, '1.0.0').ports!.api!))!.version, '1.0.0');
     assert.equal((await promote(s, '1.0.0')).ok, true);
     const one = (await whoami(port))!;
     assert.equal(one.version, '1.0.0');
     assert.ok(one.home.startsWith(join(h.dir, 'sup', 'services', 'stand-in')), 'a HOME of its own, never the person’s');
 
-    const r2 = await s.manager.deploy(standIn({ version: '2.0.0', port, soak_s: 2 }));
+    const r2 = await deploy(s, standIn({ version: '2.0.0', port, soak_s: 2 }));
     assert.equal(r2.ok, true, r2.said);
     const preview = versionOf(s, '2.0.0').ports!.api!;
     assert.notEqual(preview, port);
@@ -80,16 +82,17 @@ test('a version that fails its contract tests is never offered: nothing moves, a
   const { s } = h;
   try {
     const port = await freePort();
-    await s.manager.deploy(standIn({ version: '1.0.0', port }));
+    await deploy(s, standIn({ version: '1.0.0', port }));
     await promote(s, '1.0.0');
-    const r = await s.manager.deploy(standIn({ version: '1.1.0', port, flags: ['--no-contract'] }));
+    const r = await deploy(s, standIn({ version: '1.1.0', port, flags: ['--no-contract'] }));
     assert.equal(r.ok, false);
     assert.match(r.said, /Stopped at tests: http:\/contract: \/contract answered 404/);
     assert.equal(versionOf(s, '1.1.0').status, 'failed');
     assert.equal(versionOf(s, '1.1.0').pid, null, 'and it was stopped');
     const p = await promote(s, '1.1.0');
     assert.equal(p.ok, false);
-    assert.match(p.said, /isn’t ready to promote/);
+    // Never registered, so never offered (the driver's own refusal is the contract suite's).
+    assert.match(p.said, /isn’t registered: deploy it first/);
     assert.equal((await whoami(port))!.version, '1.0.0');
     await until(async () => (await h.told()).some((x) => x.playbook === 'service-stopped'), 'the problem');
     assert.match((await h.told()).find((x) => x.playbook === 'service-stopped')!.said, /never offered. 1.0.0 keeps running/);
@@ -103,14 +106,14 @@ test('a version whose health fails in its canary is rolled back by itself, and t
   const { s } = h;
   try {
     const port = await freePort();
-    await s.manager.deploy(standIn({ version: '1.0.0', port }));
+    await deploy(s, standIn({ version: '1.0.0', port }));
     await promote(s, '1.0.0');
     const before = (await whoami(port))!.pid;
     // Healthy long enough to pass its checks alongside, then sick: in the canary window.
-    assert.equal((await s.manager.deploy(standIn({ version: '2.0.0', port, flags: ['--healthy-for-ms', '1500'] }))).ok, true);
+    assert.equal((await deploy(s, standIn({ version: '2.0.0', port, flags: ['--healthy-for-ms', '1500'] }))).ok, true);
     const r = await promote(s, '2.0.0');
     assert.equal(r.ok, false);
-    assert.match(r.said, /Rolled back: \/health answered 500/);
+    assert.match(r.said, /Rolled back: Its health failed in the canary window: \/health answered 500\. 1\.0\.0 kept running and answers on its stable port\./);
     assert.equal((await whoami(port))!.version, '1.0.0');
     assert.equal((await whoami(port))!.pid, before, 'the live version ran on throughout (full: both ran)');
     assert.equal(versionOf(s, '2.0.0').status, 'rolled_back');
@@ -127,14 +130,14 @@ test('a version that fails during its soak goes back in one step, with nothing i
   try {
     const port = await freePort();
     const v1file = standInFile(join(h.dir, 'artifacts', 'v1'));
-    await s.manager.deploy(standIn({ version: '1.0.0', port, file: v1file, soak_s: 600 }));
+    await deploy(s, standIn({ version: '1.0.0', port, file: v1file, soak_s: 600 }));
     await promote(s, '1.0.0');
-    assert.equal((await s.manager.deploy(standIn({ version: '2.0.0', port, soak_s: 600, flags: ['--healthy-for-ms', '3500'] }))).ok, true);
+    assert.equal((await deploy(s, standIn({ version: '2.0.0', port, soak_s: 600, flags: ['--healthy-for-ms', '3500'] }))).ok, true);
     assert.equal((await promote(s, '2.0.0')).ok, true, 'it passed its canary');
     assert.equal((await whoami(port))!.version, '2.0.0');
     // 1.0.0's program is gone from where it came from: going back can only use its kept slot.
     rmSync(v1file);
-    const slotFile = join(h.dir, 'sup', 'services', 'stand-in', 'versions', '1.0.0', 'fake-service.js');
+    const slotFile = join(h.dir, 'sup', 'services', 'stand-in', 'versions', '1.0.0', 'bin', 'fake-service.js');
     const before = readFileSync(slotFile);
     await until(async () => (await whoami(port))?.version === '1.0.0', 'the soak’s rollback', 15_000);
     assert.deepEqual(readFileSync(slotFile), before, 'the kept slot ran as it was');
@@ -154,7 +157,7 @@ test('a crash is restarted with a growing wait; three within the window and the 
   const { s } = h;
   try {
     const port = await freePort();
-    await s.manager.deploy(standIn({ version: '1.0.0', port }));
+    await deploy(s, standIn({ version: '1.0.0', port }));
     await promote(s, '1.0.0');
     let pid = (await whoami(port))!.pid;
     process.kill(pid, 'SIGKILL');
@@ -182,7 +185,7 @@ test('a rollback the person asks for wants the word, and goes back to the kept v
   const { s } = h;
   try {
     const port = await freePort();
-    for (const v of ['1.0.0', '2.0.0']) { await s.manager.deploy(standIn({ version: v, port })); await promote(s, v); }
+    for (const v of ['1.0.0', '2.0.0']) { await deploy(s, standIn({ version: v, port })); await promote(s, v); }
     assert.equal((await whoami(port))!.version, '2.0.0');
     assert.equal((await s.manager.rollback('stand-in', 'yes')).ok, false);
     assert.equal((await whoami(port))!.version, '2.0.0');
@@ -201,11 +204,11 @@ test('copy runs the new version on a copy of the state, then on the real one aft
   try {
     const port = await freePort();
     const real = join(h.dir, 'sup', 'services', 'stand-in', 'state', 'data');
-    await s.manager.deploy(standIn({ version: '1.0.0', port, alongside: 'copy', state: true }));
+    await deploy(s, standIn({ version: '1.0.0', port, alongside: 'copy', state: true }));
     await promote(s, '1.0.0');
     assert.equal((await call(port, '/state/note', { method: 'POST', body: 'written by 1.0.0' }))!.status, 200);
     // 2.0.0 writes a file as it starts: alongside, that lands in its copy, not in the real state.
-    await s.manager.deploy(standIn({ version: '2.0.0', port, alongside: 'copy', state: true, flags: ['--child'] }));
+    await deploy(s, standIn({ version: '2.0.0', port, alongside: 'copy', state: true, flags: ['--child'] }));
     assert.equal(versionOf(s, '2.0.0').status, 'ready');
     assert.equal(versionOf(s, '2.0.0').pid, null, 'run on a copy, it stopped after its checks');
     assert.ok(!existsSync(join(real, 'child-2.0.0.pid')), 'what it wrote alongside stayed in its copy');
@@ -213,7 +216,7 @@ test('copy runs the new version on a copy of the state, then on the real one aft
     await promote(s, '2.0.0');
     assert.equal((await call(port, '/state/note'))!.body.value, 'written by 1.0.0', 'after the switch it runs on the real state');
 
-    await s.manager.deploy(standIn({ version: '3.0.0', port, alongside: 'none', state: true }));
+    await deploy(s, standIn({ version: '3.0.0', port, alongside: 'none', state: true }));
     assert.equal(versionOf(s, '3.0.0').status, 'ready');
     assert.equal(versionOf(s, '3.0.0').ports, null, 'it can’t run twice: not started yet');
     assert.equal((await whoami(port))!.version, '2.0.0');
@@ -227,7 +230,7 @@ test('copy runs the new version on a copy of the state, then on the real one aft
 test('the services run again after the supervisor restarts, on the same stable port', async () => {
   const h = await supervised('nova-svc-resume-');
   const port = await freePort();
-  await h.s.manager.deploy(standIn({ version: '1.0.0', port }));
+  await deploy(h.s, standIn({ version: '1.0.0', port }));
   await promote(h.s, '1.0.0');
   const first = (await whoami(port))!.pid;
   await h.stop();
@@ -246,14 +249,17 @@ test('the supervisor driver’s plan, as a snapshot, and what it refuses in plai
   const { s } = h;
   try {
     const def: ServiceDefinition = { ...standIn({ version: '1.4.2', port: 18_090, soak_s: 86_400 }) };
-    def.artifact = { program: { [Object.keys(def.artifact.program!)[0]!]: { url: 'file:///opt/stand-in/fake-service.js', sha256: 'ab'.repeat(32), command: ['node', 'fake-service.js'] } } };
+    def.artifact = { program: { [Object.keys(def.artifact.program!)[0]!]: { url: 'file:///opt/stand-in/fake-service.js', sha256: 'ab'.repeat(32), command: ['node', 'fake-service.js', '--verbose'] } } };
     const p = s.manager.plan(def);
     assert.ok(p.ok);
+    // Exactly what runs: Nova's own Node, the program in its slot, its own arguments.
+    const exe = join(h.dir, 'sup', 'services', 'stand-in', 'versions', '1.4.2', 'bin', 'fake-service.js');
+    const argv = [process.execPath, exe, '--verbose'];
     assert.deepEqual(p.plan, {
-      driver: 'supervisor', service: 'stand-in', version: '1.4.2', tier: 2, where: 'this hub', ok: true, refused: [],
+      driver: 'supervisor', service: 'stand-in', version: '1.4.2', tier: 2, where: 'this hub', ok: true, refused: [], command: argv,
       steps: [
         { step: 'install', said: 'Copy fake-service.js from its file: address into a slot of its own for 1.4.2, checking its SHA-256 (abababababab…). Nothing is downloaded.' },
-        { step: 'alongside', said: 'Start it next to the live version, on loopback ports of its own, with no traffic (full).' },
+        { step: 'alongside', said: `Start it next to the live version, on loopback ports of its own, with no traffic (full); after the switch both run on the real state until the old one stops. It runs exactly: ${argv.map((w) => JSON.stringify(w)).join(' ')}` },
         { step: 'tests', said: 'Contract tests on its own port: GET /contract, each answering 2xx.' },
         { step: 'health', said: 'GET /health answers 2xx 3 times in a row.' },
         { step: 'approval', said: 'Promotion asks first (tier 2).' },
@@ -278,14 +284,14 @@ test('the supervisor driver’s plan, as a snapshot, and what it refuses in plai
       const r = s.manager.plan({ ...def, ...extra });
       assert.ok(r.ok && !r.plan.ok, String(want));
       assert.match(r.plan.refused.join(' '), want);
-      const d = await s.manager.deploy({ ...def, ...extra, version: `9.${refusals.findIndex((x) => x[1] === want)}.0` });
+      const d = await deploy(s, { ...def, ...extra, version: `9.${refusals.findIndex((x) => x[1] === want)}.0` });
       assert.equal(d.ok, false);
     }
     // A program whose bytes aren't the ones pinned is never installed.
     const bad = standIn({ version: '5.0.0', port: await freePort() });
     const prog = Object.values(bad.artifact.program!)[0]!;
     prog.sha256 = '0'.repeat(64);
-    const r = await s.manager.deploy(bad);
+    const r = await deploy(s, bad);
     assert.match(r.said, /SHA-256 is .* not the 000000000000… its definition pins. Nothing was installed/);
     assert.ok(!s.services.slots('stand-in').includes('5.0.0'));
   } finally {

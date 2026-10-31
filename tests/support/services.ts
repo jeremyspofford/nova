@@ -39,13 +39,13 @@ export function standInFile(dir: string, name = 'fake-service.js'): string {
   return file;
 }
 
-export function standIn(o: { version: string; port: number; file?: string; service?: string; flags?: string[]; alongside?: ServiceDefinition['alongside']; soak_s?: number; contract?: string[]; state?: boolean; extra?: Partial<ServiceDefinition> }): ServiceDefinition {
+export function standIn(o: { version: string; port: number; file?: string; service?: string; flags?: string[]; command?: string[]; alongside?: ServiceDefinition['alongside']; soak_s?: number; contract?: string[]; state?: boolean; extra?: Partial<ServiceDefinition> }): ServiceDefinition {
   const file = o.file ?? STAND_IN;
   const name = file.split('/').pop()!;
   return {
     service: o.service ?? 'stand-in',
     version: o.version,
-    artifact: { program: { [platformKey()]: { url: pathToFileURL(file).href, sha256: sha256(file), command: ['node', name, '--flavour', o.version, ...(o.flags ?? [])] } } },
+    artifact: { program: { [platformKey()]: { url: pathToFileURL(file).href, sha256: sha256(file), command: o.command ?? ['node', name, ...(o.flags ?? [])] } } },
     ports: [{ name: 'api', port: o.port }],
     health: { http: '/health', every_s: 30 },
     contract_tests: o.contract ?? ['http:/contract'],

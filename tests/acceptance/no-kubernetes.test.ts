@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { freePort, standIn, whoami } from '../support/services.ts';
-import { supervised } from '../supervisor/services-support.ts';
+import { deploy, supervised } from '../supervisor/services-support.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const TRIPWIRE = join(ROOT, 'scripts', 'tripwire.sh');
@@ -48,7 +48,7 @@ test('Nova running a service under the supervisor driver calls no Kubernetes too
   const h = await supervised('nova-no-k8s-');
   try {
     const port = await freePort();
-    assert.equal((await h.s.manager.deploy(standIn({ version: '1.0.0', port }))).ok, true);
+    assert.equal((await deploy(h.s, standIn({ version: '1.0.0', port }))).ok, true);
     assert.equal((await h.s.manager.promote('stand-in', '1.0.0', 'stand-in@1.0.0')).ok, true);
     const w = (await whoami(port))!;
     assert.equal(w.version, '1.0.0');

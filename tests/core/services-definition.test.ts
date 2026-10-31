@@ -22,7 +22,9 @@ test('a good definition passes, and so does the ADR’s own example shape', () =
   assert.deepEqual(problems(good()), []);
   const adr = {
     service: 'inference', version: '1.4.2',
-    artifact: { image: DIGEST, program: { 'linux-x64': { url: 'https://example.invalid/runtime.tar', sha256: 'b'.repeat(64), command: ['bin/runtime', 'serve'] } } },
+    // The ADR's example names `bin/runtime` inside an archive; Nova installs one file, so its command
+    // names that file.
+    artifact: { image: DIGEST, program: { 'linux-x64': { url: 'https://example.invalid/runtime', sha256: 'b'.repeat(64), command: ['runtime', 'serve'] } } },
     ports: [{ name: 'api', port: 11434 }], health: { http: '/api/version', every_s: 30 }, contract_tests: ['http:/api/tags'], alongside: 'full',
     placement: { mode: 'preferred', roles: ['compute'], needs: { gpu_vram_gb: 8 }, failover: 'any' }, resources: { memory_mb: 4096 },
     state: { volume: 'models', size_gb: 50 }, secrets: [], egress: 'local', os_permissions: [], soak_s: 86_400,
@@ -77,9 +79,10 @@ test('the rest of the shape is checked, each in plain words', () => {
     [{ ...good(), artifact: { image: 'registry.example/runtime:latest' } }, /pinned by its digest/],
     [{ ...good(), artifact: { program: { 'beos-x86': { url: 'file:///x', sha256: 'c'.repeat(64), command: ['x'] } } } }, /isn’t a platform Nova knows/],
     [{ ...good(), artifact: { program: { 'linux-x64': { url: 'file:///x', sha256: 'c'.repeat(64), command: 'bin/x serve' } } } }, /never one shell string/],
+    [{ ...good(), artifact: { program: { 'linux-x64': { url: 'file:///opt/x/definition.json', sha256: 'c'.repeat(64), command: ['node', 'definition.json'] } } } }, /must end in the program’s file name/],
     [{ ...good(), artifact: { program: { 'linux-x64': { url: 'ftp://x', sha256: 'short', command: ['x'] } } } }, /file: or https: address/],
     [{ ...good(), artifact: { release: { tag: 'v1', command: ['node', 'x.js'] } } }, /Only Nova’s own console runs from a release tag/],
-    [{ ...good(), ports: [{ name: 'api', port: 0 }] }, /port number from 1 to 65535/],
+    [{ ...good(), ports: [{ name: 'api', port: 0 }] }, /port number from 1024 to 65535/],
     [{ ...good(), ports: [{ name: 'api', port: 1 }, { name: 'api', port: 2 }] }, /Two ports are named api/],
     [{ ...good(), health: { http: 'health', every_s: 30 } }, /health is \{http/],
     [{ ...good(), contract_tests: ['probe:runtime-lists-models'] }, /names a probe, and Nova has no named probes/],
@@ -116,4 +119,38 @@ test('promotion is tier 3 for the console and anything with secrets or OS permis
   assert.equal(promotionTier(good({ secrets: ['secret://x'] })), 3);
   assert.equal(promotionTier(good({ os_permissions: ['screen-recording'] })), 3);
   assert.equal(promotionTier(good()), 2);
+});
+
+test('the command runs the pinned program and nothing else: never another program, a shell, inline code or a path out of its folder', () => {
+  const withCommand = (command: string[]) => good({ artifact: { program: { 'linux-x64': { url: 'file:///opt/stand-in/fake-service.js', sha256: 'c'.repeat(64), command } } } });
+  const refused: [string[], RegExp][] = [
+    [['../../../../../../usr/bin/env', 'node', '/opt/elsewhere.js'], /starts with "..\/..\/..\/..\/..\/..\/usr\/bin\/env"/],
+    [['/usr/bin/env', 'node', 'fake-service.js'], /never another program, a shell, an absolute path/],
+    [['sh', '-c', 'node fake-service.js'], /starts with "sh"/],
+    [['bash', 'fake-service.js'], /starts with "bash"/],
+    [['python3', 'fake-service.js'], /starts with "python3"/],
+    [['node', '-e', 'require("child_process").execSync("id")'], /no interpreter option or inline code/],
+    [['node', '--eval', 'process.exit(0)'], /no interpreter option or inline code/],
+    [['node', '--input-type=module', '-e', 'import("x")'], /no interpreter option or inline code/],
+    [['node', '--require', '/tmp/x.js', 'fake-service.js'], /no interpreter option or inline code/],
+    [['node', '--import', 'data:text/javascript,1', 'fake-service.js'], /no interpreter option or inline code/],
+    [['node', 'other.js'], /the next word must be its own program, fake-service\.js/],
+    [['node', '../fake-service.js'], /the next word must be its own program/],
+    [['./../fake-service.js'], /never another program/],
+  ];
+  for (const [command, want] of refused) {
+    const p = problems(withCommand(command));
+    assert.ok(p.some((x) => want.test(x)), `${JSON.stringify(command)}: ${p.join('\n') || 'accepted'}`);
+  }
+  for (const command of [['node', 'fake-service.js'], ['node', './fake-service.js', '-e', 'is the program’s own argument'], ['fake-service.js', 'serve'], ['./fake-service.js']]) {
+    assert.deepEqual(problems(withCommand(command)), [], JSON.stringify(command));
+  }
+});
+
+test('ports below 1024 are refused: they need privileges and belong to the system', () => {
+  for (const port of [1, 22, 80, 443, 1023]) {
+    const p = problems(good({ ports: [{ name: 'api', port }] }));
+    assert.ok(p.some((x) => /from 1024 to 65535: lower ones need privileges/.test(x)), `${port}: ${p.join('\n')}`);
+  }
+  assert.deepEqual(problems(good({ ports: [{ name: 'api', port: 1024 }] })), []);
 });
