@@ -1,6 +1,6 @@
 {
   "id": "obsidian",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "kind": "design-system",
   "name": "Obsidian",
   "description": "A quiet control room. Always dark.",
@@ -72,7 +72,7 @@
     "motion/breathe": "6000ms",
     "motion/pulse": "1600ms",
     "motion/transition": "180ms",
-    "motion/duration-fast": "120ms",
+    "motion/duration-fast": "150ms",
     "motion/duration-slow": "260ms",
     "motion/ease": "cubic-bezier(0.2, 0, 0, 1)",
     "layout/rail-width": "72px",

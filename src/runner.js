@@ -341,10 +341,12 @@ export class Runner extends EventEmitter {
         onText: (chunk) => {
           const visible = filter.push(chunk);
           if (!visible) return;
+          // "Streaming" first, with the text from before this piece, then the piece: a page that
+          // takes the live state and adds each delta has every word, once (M9 review of #234).
+          if (run.live.phase !== 'streaming') this.setLive(sessionId, { phase: 'streaming', text: streamed });
           streamed += visible;
-          this.emit('delta', sessionId, { turn, attempt, text: visible });
-          if (run.live.phase !== 'streaming') this.setLive(sessionId, { phase: 'streaming' });
           run.live.text = streamed;
+          this.emit('delta', sessionId, { turn, attempt, text: visible });
         },
       });
 

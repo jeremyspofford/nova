@@ -25,6 +25,10 @@
   <script type="module" src="/js/app.js"></script>
 </head>
 <body data-layout="phone" data-posture="continuous" data-aside="off" data-room="no">
+  <!-- The shell shows once the app has set its layout and first view (no jump at start). Whatever
+       happens to the app (a hub that never answers, an error while starting), it shows within a
+       second: the page is never left blank. Not part of the app, so nothing in it can stop this. -->
+  <script>setTimeout(function () { document.body.dataset.shown = ''; }, 1000); /* wait: expiry: never blank */</script>
   <a class="skip-link" href="#scroller">Skip to content</a>
   <div class="shell app" id="app">
     <nav class="rail" id="rail" aria-label="Nova"></nav>

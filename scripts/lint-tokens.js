@@ -39,11 +39,101 @@ function varProblems(text, lineOf, ctx) {
   return out;
 }
 
+// Motion (Amendment 2026-10-30-C Part 2, M9): only transform and opacity move; a transition or a
+// one-off animation takes one of the 150–300 ms tokens as it is; a one-off never bounces. A loop
+// (`infinite`) shows a state for as long as it lasts, so it may use the loop tokens.
+const MOVES = new Set(['transform', 'translate', 'scale', 'rotate', 'opacity']);
+const FINITE = /^var\(--motion-(transition|duration-fast|duration-slow)\)$/;
+const ZERO = /^0m?s$/;
+const TIME = /^(var\(--motion-(?!ease\))[\w-]+\)|calc\(.*\)|\d*\.?\d+m?s)$/;
+const ANIM_WORDS = new Set(['none', 'infinite', 'alternate', 'alternate-reverse', 'normal', 'reverse', 'both', 'forwards', 'backwards', 'running', 'paused', 'linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out', 'step-start', 'step-end']);
+const ONLY = 'only transform and opacity animate';
+const FINITE_SAY = 'a transition or one-off animation takes --motion-transition, --motion-duration-fast or --motion-duration-slow as it is (150–300 ms)';
+
+// "a b(c, d) e" → ['a', 'b(c, d)', 'e']; and the same split on commas.
+function split(s, sep) {
+  const out = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of s) {
+    if (ch === '(') depth++;
+    if (ch === ')') depth--;
+    if (depth === 0 && (sep === ' ' ? /\s/.test(ch) : ch === sep)) { if (cur.trim()) out.push(cur.trim()); cur = ''; } else cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+function transitionProblems(value, line, { propertyOnly = false } = {}) {
+  const out = [];
+  for (const part of split(value, ',')) {
+    const words = split(part, ' ');
+    const prop = propertyOnly ? part : words[0];
+    if (!prop || prop === 'none') continue;
+    const times = propertyOnly ? [] : words.filter((w) => TIME.test(w));
+    if (prop === 'visibility') {
+      if (!propertyOnly && !ZERO.test(times[0] ?? '')) out.push([line, 'visibility only flips: give it 0s and a delay, never a duration']);
+      continue;
+    }
+    if (!MOVES.has(prop)) { out.push([line, `${ONLY}: ${prop}`]); continue; }
+    if (times[0] && !FINITE.test(times[0])) out.push([line, `${FINITE_SAY}; got ${times[0]}`]);
+  }
+  return out;
+}
+
+const OFFSET = { from: 0, to: 100 };
+function motionProblems(body, lineOf) {
+  const out = [];
+  const finite = new Set();
+  for (const m of body.matchAll(/(?:^|[;{\s])(transition|transition-property|animation)\s*:\s*([^;{}]+)/g)) {
+    const [, prop, raw] = m;
+    const value = raw.trim();
+    const line = lineOf(m.index);
+    if (prop !== 'animation') { out.push(...transitionProblems(value, line, { propertyOnly: prop === 'transition-property' })); continue; }
+    for (const part of split(value, ',')) {
+      const words = split(part, ' ');
+      if (words.length === 1 && words[0] === 'none') continue;
+      const name = words.find((w) => !ANIM_WORDS.has(w) && !TIME.test(w) && !/^(var|calc)\(/.test(w) && !/^\d/.test(w));
+      if (words.includes('infinite')) continue;
+      if (name) finite.add(name);
+      const time = words.find((w) => TIME.test(w));
+      if (time && !FINITE.test(time)) out.push([line, `${FINITE_SAY}; got ${time}`]);
+    }
+  }
+  for (const m of body.matchAll(/@keyframes\s+([\w-]+)\s*\{/g)) {
+    const name = m[1];
+    let depth = 1;
+    let i = m.index + m[0].length;
+    const start = i;
+    for (; i < body.length && depth; i++) { if (body[i] === '{') depth++; if (body[i] === '}') depth--; }
+    const inner = body.slice(start, i - 1);
+    const steps = [];
+    const bad = new Set();
+    for (const s of inner.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const offsets = s[1].split(',').map((o) => o.trim()).map((o) => OFFSET[o] ?? Number.parseFloat(o));
+      const decls = [...s[2].matchAll(/([a-z-]+)\s*:\s*([^;]+)/g)].map(([, p, v]) => [p, v.trim()]);
+      for (const [p] of decls) if (!MOVES.has(p) && !bad.has(p)) { bad.add(p); out.push([lineOf(m.index), `keyframes ${name}: ${ONLY}: ${p}`]); }
+      for (const o of offsets) steps.push([o, decls]);
+    }
+    if (!finite.has(name)) continue;
+    steps.sort((a, b) => a[0] - b[0]);
+    for (const p of MOVES) {
+      const values = steps.flatMap(([, d]) => d.filter(([q]) => q === p).map(([, v]) => v));
+      const nums = values.map((v) => Number.parseFloat(v)).filter((n) => Number.isFinite(n));
+      if (nums.length < 3) continue;
+      const signs = new Set(nums.slice(1).map((n, k) => Math.sign(n - nums[k])).filter(Boolean));
+      if (signs.size > 1) out.push([lineOf(m.index), `keyframes ${name} bounces: ${p} goes ${values.join(' → ')}; a one-off moves one way (no bounce or elastic)`]);
+    }
+  }
+  return out;
+}
+
 function cssProblems(css, ctx) {
   const out = [];
   const body = css.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
   const lineOf = (i) => body.slice(0, i).split('\n').length;
   out.push(...varProblems(body, lineOf, ctx));
+  out.push(...motionProblems(body, lineOf));
   for (const m of body.matchAll(/#[0-9a-fA-F]{3,8}\b/g)) out.push([lineOf(m.index), `raw color ${m[0]}`]);
   for (const m of body.matchAll(/\b(rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(/g)) out.push([lineOf(m.index), `raw color ${m[1]}()`]);
   for (const m of body.matchAll(/cubic-bezier\(|steps\(/g)) out.push([lineOf(m.index), 'raw easing curve']);
@@ -84,6 +174,8 @@ function jsProblems(js, ctx) {
   for (const m of js.matchAll(/cubic-bezier\(/g)) out.push([lineOf(m.index), 'raw easing curve in script']);
   for (const m of js.matchAll(/(fill|stroke)="(?!currentColor|none)[^"]+"/g)) out.push([lineOf(m.index), `inline SVG color: ${m[0]}`]);
   for (const m of js.matchAll(/\.style\.(color|background|fontFamily|font|borderRadius|boxShadow|transition|animation)\s*=/g)) out.push([lineOf(m.index), `inline style.${m[1]} bypasses tokens`]);
+  for (const m of js.matchAll(/\btransition:\s*([^;"'`]+)/g)) out.push(...transitionProblems(m[1].trim(), lineOf(m.index)));
+  for (const m of js.matchAll(/\.animate\(/g)) out.push([lineOf(m.index), 'animate() bypasses the motion tokens: use a CSS class']);
   return out;
 }
 

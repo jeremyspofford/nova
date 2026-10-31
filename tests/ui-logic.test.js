@@ -44,11 +44,11 @@ test('the quiet cards: a desktop right column with room, unless closed; always a
   assert.deepEqual(resolve({ viewport: 'wide', room: 'yes', override: 'half-open-vertical' }), { layout: 'tablet', posture: 'half-open-vertical', aside: 'on' });
 });
 
-test('breakpoints live in layout.css only: 600, 1024 and 1280 px, plus viewport segments', () => {
+test('breakpoints live in layout.css only: 600 and 1024 px, plus viewport segments', () => {
   const css = readFileSync('ui/styles/layout.css', 'utf8');
   assert.match(css, /@media \(min-width: 600px\) \{ :root \{ --viewport: medium; \} \}/);
-  assert.match(css, /@media \(min-width: 1024px\) \{ :root \{ --viewport: wide; \} \}/);
-  assert.match(css, /@media \(min-width: 1280px\) \{ :root \{ --aside-room: yes; \} \}/);
+  // M9: from 1024 px a desktop has room for the right column, so no expanded width is one stretched column.
+  assert.match(css, /@media \(min-width: 1024px\) \{ :root \{ --viewport: wide; --aside-room: yes; \} \}/);
   assert.match(css, /@media \(horizontal-viewport-segments: 2\)/);
   assert.match(css, /@media \(vertical-viewport-segments: 2\)/);
   for (const f of ['ui/styles/base.css', 'ui/styles/components.css', 'ui/styles/views.css']) {

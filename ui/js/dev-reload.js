@@ -15,6 +15,6 @@ es.addEventListener('change', (e) => {
 es.addEventListener('error', () => {
   if (!connected) return;
   es.close();
-  const wait = () => fetch('/api/health').then((r) => (r.ok ? location.reload() : setTimeout(wait, 300))).catch(() => setTimeout(wait, 300));
-  setTimeout(wait, 300);
+  const wait = () => fetch('/api/health').then((r) => (r.ok ? location.reload() : setTimeout(wait, 300))).catch(() => setTimeout(wait, 300)); // wait: poll: is the dev server back?
+  setTimeout(wait, 300); // wait: poll: is the dev server back?
 });

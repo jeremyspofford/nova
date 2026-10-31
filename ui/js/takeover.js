@@ -54,7 +54,9 @@ function ended(mine) {
   if (mine.done) return;
   mine.done = true;
   // The task goes on to its evidence; the sheet follows it there.
-  setTimeout(() => { if (live !== mine) return; stop(); mine.onEnd?.(); }, 600);
+  if (live !== mine) return;
+  stop();
+  mine.onEnd?.();
 }
 
 function stop() {
@@ -147,7 +149,7 @@ document.addEventListener('wheel', (e) => {
   const w = live.wheel ?? (live.wheel = { dx: 0, dy: 0, at: at(e, img), timer: 0 });
   w.dx += e.deltaX;
   w.dy += e.deltaY;
-  if (!w.timer) w.timer = setTimeout(() => { if (!live) return; const { dx, dy, at: p } = live.wheel; live.wheel = null; send({ type: 'scroll', ...p, dx, dy }); }, 80);
+  if (!w.timer) w.timer = setTimeout(() => { if (!live) return; const { dx, dy, at: p } = live.wheel; live.wheel = null; send({ type: 'scroll', ...p, dx, dy }); }, 80); // wait: debounce: one scroll per wheel turn
 }, { passive: false });
 
 document.addEventListener('submit', (e) => {

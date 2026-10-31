@@ -123,7 +123,10 @@ test('a third-party package installs over the API, validates, applies, and is re
   assert.equal(installed.status, 201);
   assert.equal(installed.body.design_system.id, 'example.slate');
   assert.deepEqual(installed.body.review, ['Asks for no permissions.']);
-  assert.deepEqual((await call('POST', '/design-systems/example.slate/validate')).body, { ok: true, problems: [] });
+  // A package made before M9 (the fixture's motion is 120/320 ms) is valid; its motion is a warning, clamped in the CSS.
+  const checked = (await call('POST', '/design-systems/example.slate/validate')).body;
+  assert.deepEqual({ ok: checked.ok, problems: checked.problems }, { ok: true, problems: [] });
+  assert.equal(checked.warnings.length, 2);
   await call('POST', '/design-systems/example.slate/apply', { scope: 'user' });
   assert.match((await text(`${root}/design-system.css`)).body, /Example Slate/);
   assert.equal((await call('DELETE', '/extensions/example.slate')).status, 200);

@@ -8,14 +8,14 @@
  *
  *   phone    < 600 px, or a folded cover screen: one column, bottom tabs.
  *   tablet   600–1023 px, or half-open (two viewport segments): rail and two panes.
- *   desktop  ≥ 1024 px: Calm Control, the rail, a centre column, and at ≥ 1280 px a right
- *            column of three quiet cards that the person can close.
+ *   desktop  ≥ 1024 px: Calm Control, the rail, a centre column, and a right
+ *            column of three quiet cards that the person can close (M9: every expanded width
+ *            gives its extra room to a second pane, never a stretched single column).
  */
 
 :root { --viewport: narrow; --aside-room: no; --segments: none; }
 @media (min-width: 600px) { :root { --viewport: medium; } }
-@media (min-width: 1024px) { :root { --viewport: wide; } }
-@media (min-width: 1280px) { :root { --aside-room: yes; } }
+@media (min-width: 1024px) { :root { --viewport: wide; --aside-room: yes; } }
 /* Settings: a sidebar beside the open category from the expanded width class (840px, UX-RESEARCH
    §7), the grouped list below it (app.js reads --settings-layout). */
 :root { --settings-layout: list; }
@@ -39,8 +39,10 @@ body[data-layout="phone"] .shell {
 body[data-layout="phone"] .tabs { display: flex; }
 
 /* tablet, foldable inner screen, or half-open: the rail and two panes. */
+/* The main column keeps a readable measure (M9: at least 45ch, at the expanded width of 840 px
+   too, with room for a scrollbar) and the context pane takes what is left, up to its own width. */
 body[data-layout="tablet"] .shell {
-  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 3fr) minmax(0, 2fr);
+  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(min(calc(50ch + 2 * var(--space-5)), calc(100% - var(--layout-rail-width) - var(--space-8) * 3)), 1fr) minmax(0, calc(var(--space-8) * 5.5));
 }
 body[data-layout="tablet"] .rail,
 body[data-layout="tablet"] .aside { display: flex; }
@@ -127,9 +129,47 @@ body:not([data-layout="phone"]):not([data-view="chat"]) .topbar-title {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
 
-/* A tablet showing Settings as sidebar and detail gives it the context pane's room: the sidebar is
-   the second pane (list-detail). */
-body[data-layout="tablet"][data-view="settings"][data-settings-layout="sidebar"] .shell {
+/* Settings as sidebar and detail gives it the context pane's room, on a tablet and a desktop: the
+   sidebar is the second pane (list-detail). */
+body[data-layout="tablet"][data-view="settings"][data-settings-layout="sidebar"] .shell,
+body[data-layout="desktop"][data-view="settings"][data-settings-layout="sidebar"] .shell {
   grid-template: "rail main" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr);
 }
-body[data-layout="tablet"][data-view="settings"][data-settings-layout="sidebar"] .aside { display: none; }
+body[data-view="settings"][data-settings-layout="sidebar"] .aside,
+body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { display: none; }
+
+/* ---- a real hinge (M9, Amendment 2026-10-30-C Part 2: nothing under the hinge) ------------------
+   Where the browser reports two viewport segments, every pane and overlay keeps to one of them and
+   the hinge between gets nothing: the panes are sized from env(viewport-segment-*), so the boundary
+   is the hinge itself, whatever its width. (?posture= emulates only the arrangement; these follow
+   the real geometry.) */
+@media (horizontal-viewport-segments: 2) {
+  body[data-layout="tablet"] .shell,
+  body[data-layout="tablet"][data-posture="half-open-horizontal"] .shell {
+    grid-template:
+      "rail main . aside" minmax(0, 1fr)
+      / var(--layout-rail-width) calc(env(viewport-segment-width 0 0) - var(--layout-rail-width)) calc(env(viewport-segment-left 1 0) - env(viewport-segment-right 0 0)) env(viewport-segment-width 1 0);
+  }
+  body[data-layout="tablet"] .aside { border-left: 0; }
+  /* Overlays: the sheet and a toast on the right-hand screen; the drawer and More stay left. */
+  .sheet { margin-inline-start: env(viewport-segment-left 1 0); max-width: calc(env(viewport-segment-width 1 0) - 2 * var(--space-4)); }
+  .toast { left: calc(env(viewport-segment-left 1 0) + env(viewport-segment-width 1 0) / 2); max-width: calc(env(viewport-segment-width 1 0) - 2 * var(--space-4)); }
+  .drawer { width: min(env(viewport-segment-width 0 0), calc(var(--space-8) * 5)); }
+  body[data-layout="tablet"] .more { max-width: calc(env(viewport-segment-width 0 0) - var(--layout-rail-width) - 2 * var(--space-3)); }
+}
+@media (vertical-viewport-segments: 2) {
+  body[data-layout="tablet"] .shell,
+  body[data-layout="tablet"][data-posture="half-open-vertical"] .shell {
+    grid-template:
+      "rail main" env(viewport-segment-height 0 0)
+      ". ." calc(env(viewport-segment-top 0 1) - env(viewport-segment-bottom 0 0))
+      "aside aside" env(viewport-segment-height 0 1)
+      / var(--layout-rail-width) minmax(0, 1fr);
+  }
+  body[data-layout="tablet"] .aside { border-top: 0; }
+  /* The conversation and its overlays above the hinge; a sheet on the lower screen. */
+  .drawer { bottom: calc(100dvh - env(viewport-segment-bottom 0 0)); }
+  body[data-layout="tablet"] .more { bottom: calc(100dvh - env(viewport-segment-bottom 0 0) + var(--space-3)); }
+  .toast { bottom: calc(100dvh - env(viewport-segment-bottom 0 0) + var(--space-5)); }
+  .sheet { margin-block-start: env(viewport-segment-top 0 1); max-height: calc(env(viewport-segment-height 0 1) - 2 * var(--space-3)); }
+}

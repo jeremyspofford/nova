@@ -5,6 +5,7 @@
 import { api } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, openSheet, toast } from './shell.js';
+import { over, waitingLine } from './wait.js';
 
 let data = null;    // { connectors, vault }
 let rules = [];     // the automation rules, to say which listen to a connection
@@ -15,6 +16,7 @@ export async function loadConnections() {
   try {
     const [c, r] = await Promise.all([api('GET', '/connectors'), api('GET', '/triggers/rules').catch(() => [])]);
     data = c;
+    over('connections');
     rules = r;
     failed = '';
   } catch (e) {
@@ -64,7 +66,7 @@ function offer(c, { primary }) {
 
 export function renderConnections() {
   const head = '<section class="memory-section" id="connections" aria-labelledby="set-connections"><h2 class="memory-heading" id="set-connections">Connections</h2>';
-  if (!data) return `${head}<p class="memory-lede">${esc(failed || 'Loading…')}</p>${failed ? '<button type="button" class="btn set-retry" data-action="retry-connections">Try again</button>' : ''}</section>`;
+  if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="retry-connections">Try again</button>` : waitingLine('Loading connections', { key: 'connections' })}</section>`;
   const all = data.connectors;
   const on = all.filter((c) => c.connected || c.broken);
   const pick = all.find((c) => c.recommended);

@@ -10,11 +10,13 @@ import { MODES, current as appearance, endPreview, fixContrast, follow, preview,
 import { recommend } from './contrast.js';
 import { contrastView, undoPlan } from './look.js';
 import { openTakeover } from './takeover.js';
+import { over, waitingLine } from './wait.js';
+import { showWaiting, waitingUnits } from './skeleton.js';
 
 // What the core has told this page, kept fresh by the event stream.
 export const store = {
   tasks: [], problems: [], resolved: [], health: null, profile: null, identity: null,
-  memory: [], rules: [], messages: [], workers: [], reachable: true, stale: false, loaded: false,
+  memory: [], rules: [], messages: [], workers: [], reachable: true, stale: false, loaded: false, tried: false,
   // The device mesh: the registry, whether other devices can reach Nova (and who this page is),
   // and devices waiting for an OK.
   devices: [], mesh: null, requests: [],
@@ -43,7 +45,10 @@ export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'm
     // Only the hub's screen and devices allowed to approve can see who is asking.
     requests: () => (store.mesh?.you?.can_approve === false ? Promise.resolve([[], false]) : get1('/mesh/requests')),
   };
-  const results = await Promise.all(parts.map((p) => settle(get[p]().then(([v, s]) => [p, v, s]), [p, undefined, false])));
+  // Each part in is a real unit of the first load: the 10 s words count them (DESIGN-SYSTEM §1).
+  let done = 0;
+  const counted = (x) => { done++; if (!store.loaded) for (const v of ['home', 'tasks']) waitingUnits(v, done, parts.length); return x; };
+  const results = await Promise.all(parts.map((p) => settle(get[p]().then(([v, s]) => [p, v, s]), [p, undefined, false]).then(counted)));
   let any = false;
   let wasStale = false;
   for (const [p, v, s] of results) {
@@ -55,6 +60,8 @@ export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'm
     else store[p] = v;
   }
   if (any) store.loaded = true;
+  store.tried = true;
+  if (store.health) over('health');
   store.stale = wasStale;
   if (parts.some((p) => p === 'devices' || p === 'mesh' || p === 'requests')) window.dispatchEvent(new CustomEvent('nova:devices'));
   // Live means at least one answer came from the server itself, not the offline cache.
@@ -101,6 +108,8 @@ function summary() {
 const today = (now = new Date()) => now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
 export function renderHome(el, now = new Date()) {
+  // Before the first answer, the view waits (skeleton.js): never an empty state that isn't true.
+  if (!store.loaded && !store.tried) { if (!el.querySelector('[data-skeleton], .view-waiting')) showWaiting('home', el, 'Loading Home', { total: 12, done: 0 }); return; }
   const name = store.identity?.address_as ?? store.identity?.user_name ?? '';
   const unread = store.messages.filter((m) => (m.hold === 'needs_ok' || (m.delivered_at && !m.read_at)));
   const asking = store.tasks.filter(asksYou);
@@ -143,6 +152,7 @@ const GROUPS = [
 ];
 
 export function renderTasks(el, now = new Date()) {
+  if (!store.loaded && !store.tried) { if (!el.querySelector('[data-skeleton], .view-waiting')) showWaiting('tasks', el, 'Loading Tasks', { total: 12, done: 0 }); return; }
   const by = new Map(GROUPS.map(([k]) => [k, []]));
   for (const t of store.tasks) by.get(statusOf(t))?.push(t);
   const groups = GROUPS.filter(([k]) => by.get(k).length).map(([k, title]) => `<section class="panel task-group" aria-labelledby="tg-${k}">
@@ -210,7 +220,7 @@ async function afterBrowser(id) {
   for (let i = 0; i < 20; i++) {
     const t = await api('GET', `/tasks/${encodeURIComponent(id)}`).catch(() => null);
     if (!t || !['active', 'verifying'].includes(t.state)) break;
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 250)); // wait: poll: has Nova checked the evidence?
   }
   if (sheetOpen()) openTask(id);
 }
@@ -297,7 +307,7 @@ export function renderHealth(el) {
 ${store.problems.length ? `<ul class="settings-list">${store.problems.map((p) => problem(p, true)).join('')}</ul>` : emptyState({ title: 'Nothing needs you', line: 'No problems are open.' })}</section>
 ${keepingRunning()}
 <section class="panel" aria-labelledby="h-checks"><h3 class="section-title" id="h-checks">Checks</h3>
-${h ? `<ul class="settings-list">${checks}</ul><p class="settings-note">Version ${esc(h.version)} · running for ${esc(uptime(h.uptime_s))}.</p>` : '<p class="settings-note">Checking…</p>'}</section>
+${h ? `<ul class="settings-list">${checks}</ul><p class="settings-note">Version ${esc(h.version)} · running for ${esc(uptime(h.uptime_s))}.</p>` : waitingLine('Checking Nova’s health', { key: 'health' })}</section>
 ${store.resolved.length ? `<details class="panel raw"><summary>Dealt with recently</summary><ul class="settings-list">${store.resolved.map((p) => problem(p, false)).join('')}</ul></details>` : ''}`;
 }
 
@@ -653,7 +663,7 @@ export async function addDevice() {
   const show = () => openSheet(addDeviceSheet(pairing), { label: 'Add a device', onClose: () => { clearTimeout(expiry); pairing = null; } });
   show();
   clearTimeout(expiry);
-  expiry = setTimeout(() => { if (pairing && document.querySelector(`#sheet .add-device[data-pairing="${CSS.escape(pairing.pairing_id)}"]`)) show(); }, Math.max(0, Date.parse(pairing.expires_at) - Date.now()) + 50);
+  expiry = setTimeout(() => { if (pairing && document.querySelector(`#sheet .add-device[data-pairing="${CSS.escape(pairing.pairing_id)}"]`)) show(); }, Math.max(0, Date.parse(pairing.expires_at) - Date.now()) + 50); // wait: expiry: the pairing code
 }
 
 export async function copyCommand() {

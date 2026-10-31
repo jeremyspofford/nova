@@ -155,7 +155,7 @@ export function renew() {
       if (!identity?.deviceId) return false;
       await startSession(identity);
       return true;
-    } catch { return false; } finally { setTimeout(() => { renewing = null; }, 0); }
+    } catch { return false; } finally { setTimeout(() => { renewing = null; }, 0); } // wait: after the event: callers in this turn share the renewal
   })();
   return renewing;
 }
