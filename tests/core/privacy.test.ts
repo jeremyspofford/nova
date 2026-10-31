@@ -50,14 +50,15 @@ test('setup tells the truth about a cloud chat model before asking about privacy
   const home = mkdtempSync(join(tmpdir(), 'nova-privacy-'));
   const nova = createNova({ ...loadConfig({ NOVA_HOME: home, NOVA_TZ: 'UTC' }), port: 0 });
   try {
-    for (let i = 0; i < 4; i++) nova.core.setup.answer('skip');
+    // The three device steps (M10f), then name, timezone, Nova's name and directness.
+    for (let i = 0; i < 7; i++) await nova.core.setup.answer('skip');
     assert.match(nova.core.setup.view().question ?? '', /chat is set up to use claude, which runs in the cloud\. With local-only, chat stays off until you add a local model/);
   } finally {
     await nova.core.close();
   }
   const local = createNova({ ...loadConfig({ NOVA_HOME: mkdtempSync(join(tmpdir(), 'nova-privacy-')), NOVA_AGENT_CMD: 'my-local-model', NOVA_AGENT_EGRESS: 'local', NOVA_TZ: 'UTC' }), port: 0 });
   try {
-    for (let i = 0; i < 4; i++) local.core.setup.answer('skip');
+    for (let i = 0; i < 7; i++) await local.core.setup.answer('skip');
     assert.doesNotMatch(local.core.setup.view().question ?? '', /cloud\. With local-only/);
   } finally {
     await local.core.close();
