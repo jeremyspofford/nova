@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #250 · Design: one Decision Service for every quick judgment Nova makes**
+- What changed: the plan for a single "Decision Service" is filed with your decisions. Every quick yes/no, pick-one, score or find-in-image judgment goes through named, versioned question sets. Each decision is logged with the exact model that answered. Screening content goes to Jev in cloud mode, with an off-by-default switch for local-only; Box in local-only stays on your machine.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: nothing is built. The local model (Tev1) failed its first safety test and stays advisory until a rewritten version passes. Choosing providers and models in Settings is designed, not built.
+
 **2026-10-31 · #253 · Smart Home and cameras: the design, with your decisions**
 - What changed: the plan for a Smart Home page (lights, locks, climate, cameras by room) is filed with your eight decisions. Tapping a tile acts at once, with one quick confirm for unlocking and similar. Anything Nova starts itself asks as before.
 - What you can now do: Nothing in the app changed: paperwork only.
@@ -215,6 +220,21 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (Decision Service ADR; extends Amendment B Part 1).** Owner input `nova-jev-decision-layer-2026-10-31.md` (copied unchanged).
+- **The decision:** ADR `docs/plans/decision-service.md`. Every System One judgment goes through one Decision Service:
+  - a registry of versioned templates (Noul, Choice, Score and Box questions; declared state; a policy as a truth table mapped onto tiers; pinned models; pre-registered evals);
+  - one provider interface with three seats (cloud Jev; Tev1 through Ollama; the stub, which is deterministic-only), routed by privacy mode as Part 1 says: local-only and local-first never use Jev;
+  - every decision logged to the Work Ledger with the template version, the pinned model that answered, the full probabilities and the policy outcome;
+  - no ad hoc provider calls (seats not exported from core; a boundary test).
+- **Part 1's eval** (#248: both Tev1 sizes failed, advisory) stands. `ingest-screen` is re-authored as v2 under the vendor's question rules, with a fresh pre-registered eval.
+- **Phases DS1–DS3** are side PRs and don't displace M10e–M10k.
+- **CONTRACTS §3:** gains Box, and a companion-Noul escape as an alternative to `unknown/other`.
+- **Owner decisions, the same day:**
+  - The ingest screen goes to Jev in cloud mode, with an off-by-default local-only toggle that says plainly that content leaves the machine.
+  - The person chooses providers and models, with Nova's recommendation, a notice for anything it doesn't recommend, and scorecards.
+  - The sorting-model screener is retired per template once a decision model passes its eval.
+  - Box on camera and screen frames is opt-in per feature, off by default, in every mode, with a plain notice. Refined the same day: in local-only mode Box never goes to a cloud provider, only to a local seat that reads images (none yet). Each feature returns to local once a local model passes.
 
 **2026-10-31 (owner input: Smart Home and cameras; the ADR, with the owner's decisions).** The owner-approved design `nova-smart-home-design-2026-10-31.md` was added to the packet exactly as given, including the owner's same-day change on camera paths (sha256 `5c28dd8d…`). Designed in `docs/plans/smart-home.md`.
 - **The design:**
