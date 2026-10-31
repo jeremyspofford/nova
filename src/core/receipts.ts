@@ -1,7 +1,10 @@
 // Context receipts (CONTRACTS §2, ADR-10): for every model call, what it was told (as references
 // and hashes, never the content) and where it went. The egress log is every remote receipt.
 // A remote call under local-only is a violation: it is refused and recorded as a problem, so it
-// can never sit in the log looking like an allowed call.
+// can never sit in the log looking like an allowed call. One exception, by the owner's decision
+// (Decision Service ADR, decision 1): the person's screening opt-in lets the Decision Service send
+// outside content to Jev for screening even in local-only, and the receipt names that opt-in. Box
+// (images) is never allowed under local-only, opt-in or not.
 import { randomUUID } from 'node:crypto';
 import { CoreError } from './errors.ts';
 import { PRIVACY_MODES, type PrivacyMode } from './envelope.ts';
@@ -21,8 +24,12 @@ export interface ReceiptInput {
   purpose: string;
   privacy_mode: PrivacyMode;
   egress: string;                // 'local' | 'remote:<name>'
+  // The person's explicit opt-in that allows this remote call in a local mode (Decision Service).
+  opt_in?: 'screening' | 'box' | undefined;
   context_items: ContextItem[];
 }
+
+export const OPT_INS = ['screening', 'box'] as const;
 
 export interface Receipt {
   id: string;
@@ -34,6 +41,7 @@ export interface Receipt {
   purpose: string;
   privacy_mode: PrivacyMode;
   egress: string;
+  opt_in: 'screening' | 'box' | null;
   context_items: ContextItem[];
 }
 
@@ -71,8 +79,10 @@ export class Receipts {
       purpose: text(i.purpose, 'purpose'),
       privacy_mode: i.privacy_mode as PrivacyMode,
       egress: typeof i.egress === 'string' ? i.egress : '',
+      opt_in: i.opt_in ?? null,
       context_items: [],
     };
+    if (r.opt_in !== null && !OPT_INS.includes(r.opt_in)) throw new CoreError('validation', `opt_in must be one of ${OPT_INS.join(', ')}.`);
     if (!PRIVACY_MODES.includes(r.privacy_mode)) throw new CoreError('validation', `privacy_mode must be one of ${PRIVACY_MODES.join(', ')}.`);
     if (!EGRESS.test(r.egress)) throw new CoreError('validation', 'egress must be "local" or "remote:<name>", naming where the call went.');
     if (!Array.isArray(i.context_items)) throw new CoreError('validation', 'context_items must be a list, even an empty one.');
@@ -84,7 +94,7 @@ export class Receipts {
       return { kind: c.kind, ref: redactText(c.ref), sha256: c.sha256 };
     });
 
-    if (r.privacy_mode === 'local-only' && r.egress !== 'local') {
+    if (r.privacy_mode === 'local-only' && r.egress !== 'local' && !(r.opt_in === 'screening' && r.provider === 'jev')) {
       const to = r.egress.slice('remote:'.length);
       const known = r.task_id && this.#db.get('SELECT 1 FROM task WHERE id = ?', r.task_id);
       this.#log.problem('receipts', `A model call for "${r.purpose}" was going to send context to ${to} while Nova is set to local-only. It was refused.`, {
@@ -95,8 +105,8 @@ export class Receipts {
     }
 
     this.#db.run(
-      'INSERT INTO receipt (id, at, task_id, session_id, provider, model, purpose, privacy_mode, egress, context_items) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      r.id, r.at, r.task_id, r.session_id, r.provider, r.model, r.purpose, r.privacy_mode, r.egress, JSON.stringify(r.context_items),
+      'INSERT INTO receipt (id, at, task_id, session_id, provider, model, purpose, privacy_mode, egress, opt_in, context_items) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      r.id, r.at, r.task_id, r.session_id, r.provider, r.model, r.purpose, r.privacy_mode, r.egress, r.opt_in, JSON.stringify(r.context_items),
     );
     return r;
   }
