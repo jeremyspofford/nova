@@ -493,7 +493,7 @@ test('setup says plainly that capture starts off, and what each kind of device c
   const h = await hub();
   try {
     let last: unknown = null;
-    for (const text of ['Hi, I am Alex.', 'yes', 'keep', 'plainly', 'keep everything on this machine', 'no']) last = (await h.c('POST', '/setup/messages', { text })).body;
+    for (const text of ['new', 'yes', 'yes', 'Hi, I am Alex.', 'yes', 'keep', 'plainly', 'keep everything on this machine', 'no', 'no']) last = (await h.c('POST', '/setup/messages', { text })).body;
     const said = JSON.stringify(last);
     assert.match(said, /I see nothing on your devices unless you turn capture on in Settings › Capture/);
     assert.match(said, /an iPhone or iPad allows no passive capture of other apps/);

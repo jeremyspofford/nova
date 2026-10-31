@@ -69,6 +69,12 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
     // device map shows it.
     const mapped = await until(async () => ((await m.get('/api/v1/models')) as { devices: { id: string; hub: boolean; hardware: { cpu: { threads: number }; ram_bytes: number } | null }[] }).devices.find((d) => d.id === online!.id), (d) => !!d?.hardware, 400);
     assert.ok(mapped?.hardware && mapped.hardware.ram_bytes > 0 && mapped.hardware.cpu.threads > 0, 'the computer’s hardware reached the hub');
+    // M10f: approved with no roles, it holds none; given one on the hub (tier 3), its agent hears it
+    // in the next heartbeat answer and keeps it, for its own check on any assignment.
+    const deviceFile = () => JSON.parse(readFileSync(join(deviceHome, 'boot', 'device.json'), 'utf8')) as { purposes?: string[] };
+    assert.deepEqual(deviceFile().purposes, []);
+    assert.equal((await m.send('PATCH', `/api/v1/mesh/devices/${online!.id}`, { purposes: ['compute'], confirm: true })).status, 200);
+    assert.deepEqual((await until(async () => deviceFile().purposes, (p) => p?.[0] === 'compute', 400)), ['compute'], 'the agent keeps the roles the hub holds for it');
     const first = bootPid();
     assert.ok(alive(first));
     const rt = JSON.parse(readFileSync(join(deviceHome, 'state', 'runtime.json'), 'utf8')) as { pid: number; hub_url: string };

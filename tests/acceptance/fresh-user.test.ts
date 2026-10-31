@@ -36,7 +36,7 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     // 2. Setup, as a conversation.
     const first = await get('/setup');
     evidence.push('## Setup conversation', '', `**Nova:** ${first.question}`, '');
-    const answers = ["Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'yes'];
+    const answers = ['new', 'yes', 'yes', "Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'no', 'yes'];
     let last: { reply: string; view: { done: boolean }; task: { id: string } | null } | null = null;
     for (const text of answers) {
       const r = await post('/setup/messages', { text });

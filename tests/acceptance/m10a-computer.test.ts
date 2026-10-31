@@ -30,7 +30,7 @@ test('M10a gate: a fresh user’s workspace — a command as a ledger task with 
   let ws = '';
   try {
     // A new user: setup by conversation, local-only.
-    for (const text of ["Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'yes']) assert.equal((await post('/setup/messages', { text })).status, 200);
+    for (const text of ['new', 'yes', 'yes', "Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'no', 'yes']) assert.equal((await post('/setup/messages', { text })).status, 200);
     assert.equal((await get('/profile')).privacy.default, 'local-only');
     const c0 = await get('/computer');
     assert.equal(c0.available, true, c0.detail);

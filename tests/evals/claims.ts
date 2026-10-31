@@ -20,6 +20,14 @@ export const CLAIMS: evals.Claim[] = [
   { id: 'setup.change-by-telling', where: 'src/core/setup.ts', text: 'you can change any answer later just by telling me', needs: [] },
   { id: 'setup.checks-its-welcome-note', where: 'src/core/setup.ts', text: 'I’ll write a short welcome note into your workspace and check it myself.', needs: [] },
 
+  // ---- onboarding (M10f): every claim backed by the suite, or worded to the evidence it names ------
+  { id: 'onboard.import-waits-for-ok', where: 'src/core/setup.ts', text: 'then waits in Memory for your OK: none of it is remembered until you keep it', needs: ['import', 'memory-review'] },
+  { id: 'onboard.first-action-review', where: 'src/core/onboard/first.ts', text: 'It waits in Memory for your OK. Keep what is right; nothing is remembered until you do.', needs: ['import', 'memory-review'] },
+  { id: 'onboard.first-action-import-folder', where: 'src/core/onboard/first.ts', text: 'in ~/workspace/import/, then tell Nova. They wait in Memory for your OK.', needs: ['first-run', 'import'] },
+  { id: 'onboard.discovery-finds-only', where: 'src/core/setup.ts', text: 'Looking only finds them: nothing is connected, and nothing is read.', needs: [], note: 'What the discovery step does, worded to tests/core/onboard.test.ts (one GET per known service, nothing connected, sources listed without opening a file); no golden task.' },
+  { id: 'onboard.backend-runs-today', where: 'src/core/onboard/backend.ts', text: 'Everything Nova does today runs this way; nothing in Nova needs Kubernetes.', needs: [], note: 'Worded to the M10e evidence: the whole suite runs under the no-Kubernetes tripwire (docs/evidence/m10e-gate.md); not an agent outcome.' },
+  { id: 'onboard.thin-client-runs-nothing', where: 'src/core/mesh/purposes.ts', text: 'A screen onto Nova. It never runs anything for Nova.', needs: [], note: 'Worded to tests/core/services-placement.test.ts: refused at proposal and again by the device agent; no golden task.' },
+
   // ---- memory, import and forgetting -----------------------------------------------------------
   { id: 'import.arrives-unreviewed', where: 'templates/home/workspace/import/README.md', text: 'they arrive in Memory unreviewed', needs: ['import', 'memory-review'] },
   { id: 'memory.waiting-unseen', where: 'ui/js/view.js', text: 'Nova doesn\'t see them until you keep them.', needs: ['memory-review'] },

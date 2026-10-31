@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { KIND_WORDS, createCore, ensureMark, finishReset, fromBrowserTask, ipcLink, originHost } from './core/index.ts';
+import { KIND_WORDS, createCore, ensureMark, finishReset, fromBrowserTask, ipcLink, originHost, standInOs, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -83,6 +83,9 @@ export function createNova(config = loadConfig(), deps = {}) {
     supervisor: deps.supervisor ?? ipcLink(process),
     // A sandbox copy started by the change pipeline (M7a): no outside work, no changes taken.
     sandbox: process.env.NOVA_SANDBOX === '1',
+    // Onboarding (M10f): NOVA_DETECT_OS is a stand-in detection (tests, demos: only the words
+    // change); NOVA_DISCOVERY_PORTS and NOVA_DISCOVERY_MDNS point discovery at stand-ins on loopback.
+    onboarding: { os: standInOs(process.env.NOVA_DETECT_OS), transport: transportFromEnv(process.env) },
   });
   // Chat goes through the registry: the provider the profile names for chat, or agent_cmd (the
   // default), which the runner runs exactly as before. Scheduled runs and helpers follow it.

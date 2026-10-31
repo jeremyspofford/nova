@@ -3,7 +3,7 @@
 // nothing outside src/core imports anything but this file.
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
-import { hostname, networkInterfaces } from 'node:os';
+import { homedir, hostname, networkInterfaces } from 'node:os';
 import { CoreError } from './errors.ts';
 import { Db, loadMigrations } from './db.ts';
 import { Log, addSecretValue } from './log.ts';
@@ -11,7 +11,11 @@ import { Profile, SECTIONS, type Section } from './profile.ts';
 import { Workspace, workspaceWorker } from './workspace.ts';
 import { Verifier, type Checker } from './verify.ts';
 import { Ledger, STATES, type LanedWorker, type State, type TaskInput } from './ledger.ts';
-import { Setup } from './setup.ts';
+import { Setup, type Onboarding } from './setup.ts';
+import { detectOs, type OsFamily } from './onboard/detect.ts';
+import { discover, realTransport, type DiscoveryTransport } from './onboard/discover.ts';
+import { findSources, importSources } from './onboard/sources.ts';
+import { backendFor } from './onboard/backend.ts';
 import { Extensions } from './extensions.ts';
 import { Design, type Scope } from './design.ts';
 import { Decisions, RulesProvider, Templates } from './decide.ts';
@@ -44,7 +48,7 @@ import { Capture, PROMOTE } from './capture/capture.ts';
 import { captureRoutes } from './capture/routes.ts';
 import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
-import { wireIngest, type ScreenInput } from './ingest/index.ts';
+import { wireIngest, type ScreenInput, type Taint } from './ingest/index.ts';
 import { NovaComputer, type ComputerOptions } from './computer/index.ts';
 import { computerRoutes } from './computer/routes.ts';
 import { Coding, type CodingOptions } from './coding/index.ts';
@@ -138,6 +142,19 @@ export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.
 export { trackChild } from './children.ts';
 // Services (M10e): the definition, the driver interface, the Service Manager.
 export * from './services/index.ts';
+// Onboarding (M10f): device detection, the backend words, discovery and import sources.
+export { OS_FAMILIES, OS_WORDS, detectOs, factsWords, recommendedHubPurposes, standInOs } from './onboard/detect.ts';
+export type { DeviceFacts, OsFamily } from './onboard/detect.ts';
+export { backendFor } from './onboard/backend.ts';
+export type { BackendSummary } from './onboard/backend.ts';
+export { LOCAL_PORTS as DISCOVERY_PORTS, SERVICES as DISCOVERY_SERVICES, discover, loopbackTransport, realTransport, transportFromEnv } from './onboard/discover.ts';
+export type { Discovery, DiscoveryTransport, Found } from './onboard/discover.ts';
+export { decodeMessage as decodeMdns, encodeQuery as encodeMdnsQuery, encodeResponse as encodeMdnsResponse } from './onboard/mdns.ts';
+export type { Answer as MdnsAnswer } from './onboard/mdns.ts';
+export { findSources, importSources } from './onboard/sources.ts';
+export type { Imported, Source as ImportSource } from './onboard/sources.ts';
+export { FIRST_ACTIONS, firstAction } from './onboard/first.ts';
+export type { FirstAction, FirstView } from './onboard/first.ts';
 // The ingest gate (Amendment 2026-10-30-C Part 3): what Era 2's agent loop screens with, escapes
 // with, and says when something is blocked.
 export { Ingest, BLOCK_LINE, DEFAULT_LINK_CAPS, PROTOCOL_NAMES, KIND_WORDS, cleanOrigin, escapeProtocol, fold, wrapData } from './ingest/index.ts';
@@ -198,6 +215,10 @@ export interface CoreOptions {
   models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number };
   // The supervisor that started this server, when one did (resilience/link.ts: ipcLink).
   supervisor?: SupervisorLink | null;
+  // Onboarding (M10f): a stand-in OS detection (NOVA_DETECT_OS), discovery's transport (stand-ins on
+  // loopback in tests; the real one sends one multicast query, only when the person asks), and the
+  // person's own home folder, where import sources are found.
+  onboarding?: { os?: OsFamily | null; transport?: DiscoveryTransport | null; userHome?: string; platform?: string };
   // Resilience (M7b), for tests: the clock watch's monotonic time, and the restore drill's sandbox.
   resilience?: { monotonic?: () => number; drill?: { root?: string; env?: Record<string, string>; timeoutMs?: number }; lookup?: (host: string) => Promise<unknown> };
   // This process is a sandbox copy started by the change pipeline (M7a, NOVA_SANDBOX=1): it runs
@@ -276,7 +297,23 @@ export function createCore(o: CoreOptions) {
     policy: () => profile.section('policy') as Policy,
     timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
   });
-  const setup = new Setup({ profile, ledger, now, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
+  // Onboarding's view of the rest of Nova (M10f). Everything here is read when setup asks, not now.
+  const userHome = o.onboarding?.userHome ?? homedir();
+  const deviceOs = o.onboarding?.os ?? detectOs();
+  const onboarding: Onboarding = {
+    os: () => deviceOs,
+    hardware: async () => (models ? await models.hubHardware() : null),
+    hubPurposes: () => devices.find(meshIdentity.id)?.purposes ?? [],
+    setHubPurposes: (p) => devices.setPurposes(meshIdentity.id, p, { confirm: true, approved: true, by: 'setup' }).device.purposes,
+    discover: (scope) => discover({ scope, transport: o.onboarding?.transport ?? realTransport(), now }),
+    sources: () => findSources(userHome, o.onboarding?.platform ?? process.platform),
+    import: (picked) => importSources(picked, {
+      screen: async (text, origin) => { const r = await ingest.screen({ text, source: { kind: 'file', origin } }); return { verdict: r.verdict, taint: r.taint }; },
+      candidate: (c) => { ingest.candidate({ op: 'remember', kind: c.kind, content: c.content, source: c.source, taint: c.taint as Taint[] }); },
+      kept: () => new Set([...memory.active().map((r) => r.content.toLowerCase()), ...ingest.candidates().filter((c) => c.op === 'remember' && c.content).map((c) => c.content!.toLowerCase())]),
+    }, { userHome, now: now() }),
+  };
+  const setup = new Setup({ profile, ledger, now, onboarding, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
   const design = new Design({ extensions, profile, ...(o.designSystems ? { dir: o.designSystems } : {}) });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
@@ -773,9 +810,15 @@ export function createCore(o: CoreOptions) {
       // After a factory reset, until setup is done, the browser forgets what it kept of the Nova that
       // was erased (M7 amendment §2).
       method: 'GET', path: '/setup', summary: 'The setup conversation so far, and the question Nova is asking.',
-      handle: ({ who, headers }) => { const v = setup.view(); const h = reset.clearHeaders(who.principal, header(headers, 'cookie')); return Object.keys(h).length ? new Reply(v, h) : v; },
+      handle: async ({ who, headers }) => { await setup.ready(); const v = setup.view(); const h = reset.clearHeaders(who.principal, header(headers, 'cookie')); return Object.keys(h).length ? new Reply(v, h) : v; },
     },
-    { method: 'POST', path: '/setup/messages', summary: 'Answer Nova in the setup conversation.', body: '{text}', handle: ({ body }) => setup.answer(str(body.text, 'text')) },
+    { method: 'POST', path: '/setup/messages', summary: 'Answer Nova in the setup conversation. Discovery and import, when asked for, run before the reply.', body: '{text}', handle: ({ body }) => setup.answer(str(body.text, 'text')) },
+    {
+      // Settings › Services, minimal (M10f): the backend in use and what it means on this OS. The map
+      // and switching come later (M10i, M10k); there is nothing to switch to yet, and it says so.
+      method: 'GET', path: '/services/backend', summary: 'How Nova runs its services on this computer: the backend in use (the supervisor), what it means on this OS, and where switching will be.',
+      handle: () => ({ backend: 'supervisor', ...backendFor(deviceOs), switchable: false }),
+    },
     {
       method: 'GET', path: '/tasks', summary: 'Work Ledger tasks, newest first. Filter with ?state=.',
       handle: ({ query }) => {
