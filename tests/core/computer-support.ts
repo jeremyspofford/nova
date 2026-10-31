@@ -3,6 +3,7 @@
 // workspace container's whole filesystem.
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { lstatSync } from 'node:fs';
 import { IMAGE } from '../../src/core/computer/policy.ts';
 
 const run = (args: string[], timeout = 30_000) => new Promise<{ code: number; out: string }>((ok) => {
@@ -26,6 +27,80 @@ export function dockerSkip(): Promise<string | null> {
 }
 
 export const docker = run;
+
+// Every container a test makes carries this label, unique to the test process, so a test removes
+// exactly its own (and never another Nova's or a person's) in its `finally`.
+export const TEST_LABELS: Record<string, string> = { 'nova.computer.test': `p${process.pid}-${Date.now().toString(36)}` };
+
+export async function removeTestContainers(): Promise<void> {
+  const [k, v] = Object.entries(TEST_LABELS)[0]!;
+  const ps = await run(['ps', '-aq', '--filter', `label=${k}=${v}`]);
+  const ids = ps.out.split('\n').map((s) => s.trim()).filter((s) => /^[0-9a-f]{12,64}$/.test(s));
+  if (ids.length) await run(['rm', '-f', ...ids], 60_000);
+  // A checkpoint's image is committed from a labelled container, so it carries the label too.
+  const im = await run(['images', '-q', '--filter', `label=${k}=${v}`]);
+  const imgs = [...new Set(im.out.split('\n').map((s) => s.trim()).filter((s) => /^[0-9a-f]{12,64}$/.test(s)))];
+  if (imgs.length) await run(['rmi', '-f', ...imgs], 120_000);
+}
+
+// A ledger task, once it stops moving.
+export async function settled(core: { ledger: { get(id: string): { state: string } } }, id: string, states = ['done', 'failed', 'waiting', 'cancelled']): Promise<import('../../src/core/ledger.ts').Task> {
+  for (let i = 0; i < 4800; i++) {
+    const t = core.ledger.get(id);
+    if (states.includes(t.state)) return t as import('../../src/core/ledger.ts').Task;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`task ${id} never settled: ${core.ledger.get(id).state}`);
+}
+
+// The identity a workspace records for its folder at creation (device and inode), as the adapter
+// checks it before every mount, copy, digest and reset.
+export function folderIdOf(path: string): { dev: string; ino: string } {
+  const st = lstatSync(path, { bigint: true });
+  return { dev: String(st.dev), ino: String(st.ino) };
+}
+
+// The processes running in a container, as the host sees them (`docker top`).
+export async function processes(container: string): Promise<string[]> {
+  const r = await run(['top', container, '-o', 'pid,args']);
+  return r.code === 0 ? r.out.split('\n').slice(1).map((l) => l.trim()).filter(Boolean) : [];
+}
+
+// A TLS stand-in for a declared host, with a throwaway self-signed certificate made for this test
+// (openssl), on this machine's loopback. Null when openssl isn't here. `seen` counts connections,
+// `secure` the TLS handshakes that completed. `sink` never reads; `flood` sends that many MiB.
+export async function tlsStandIn(reply: string, o: { sink?: boolean; flood?: number } = {}): Promise<{ server: import('node:tls').Server; port: number; seen: () => number; secure: () => number; close: () => void } | null> {
+  const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const tls = await import('node:tls');
+  const dir = mkdtempSync(join(tmpdir(), 'nova-tls-standin-'));
+  const made = await new Promise<boolean>((ok) => execFile('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', join(dir, 'k.pem'), '-out', join(dir, 'c.pem'), '-subj', '/CN=stand-in', '-addext', 'subjectAltName=IP:127.0.0.1,DNS:declared.test', '-days', '1'], { timeout: 30_000 }, (e) => ok(!e)));
+  if (!made) { rmSync(dir, { recursive: true, force: true }); return null; }
+  const key = readFileSync(join(dir, 'k.pem'));
+  const cert = readFileSync(join(dir, 'c.pem'));
+  rmSync(dir, { recursive: true, force: true });
+  let seen = 0;
+  let secure = 0;
+  const live = new Set<import('node:net').Socket>();
+  const server = tls.createServer({ key, cert }, (s) => {
+    secure++;
+    s.on('error', () => {});
+    if (o.sink) { s.pause(); return; }
+    if (o.flood) {
+      const chunk = Buffer.alloc(1 << 20, 0x62);
+      let left = o.flood;
+      const pump = () => { while (left > 0) { left--; if (!s.write(chunk)) { s.once('drain', pump); return; } } s.end(); };
+      pump();
+      return;
+    }
+    s.end(`HTTP/1.1 200 OK\r\ncontent-length: ${Buffer.byteLength(reply)}\r\nconnection: close\r\n\r\n${reply}`);
+  });
+  server.on('connection', (s) => { seen++; live.add(s); s.on('close', () => live.delete(s)); });
+  server.on('tlsClientError', () => {});
+  await new Promise<void>((ok) => server.listen(0, '127.0.0.1', () => ok()));
+  return { server, port: (server.address() as { port: number }).port, seen: () => seen, secure: () => secure, close: () => { for (const s of live) s.destroy(); server.close(); } };
+}
 
 interface Entry { line: string; left: number; pad: number; hash: ReturnType<typeof createHash> | null; meta: 'x' | 'L' | 'K' | 'g' | null; parts: Buffer[] }
 
