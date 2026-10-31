@@ -6,6 +6,26 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #260 · How Nova will check what it captures from your screen**
+- What changed: your decision is recorded. Captured screen text and transcripts get checked twice: for secrets or sensitive details before they're stored, and for hidden instructions before Nova uses them in an answer. It's checked on your machine, unless you're in cloud mode and turn it on per capture source.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: the two checks aren't built yet. Until then, captured text is never sent to a cloud model for checking.
+
+**2026-10-31 · #251 · Nova Vault and a credential guard: the design, with your decisions**
+- What changed: the plan for Nova's own password vault, and for a separate small "broker" program that alone can read saved passwords and keys, is filed with your decisions. Nova asks the broker to use a credential for a specific site; it never hands the value to Nova's main program or any model.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: nothing is built. Phase 1 (the broker and vault) comes as a side track after M10e. Viewing one of your saved passwords will be possible on the device's own screen, after a passkey or fingerprint check.
+
+**2026-10-31 · #256 · Spending limits for Nova's own work: built, not switched on yet**
+- What changed: Nova can now stop its own scheduled runs and helpers when they take too many steps, use too many tokens, or spend too much on a paid model. The defaults are 24 steps, 150,000 tokens or 50 cents per task, and 300 steps, 1.5M tokens or $5 a day. A stuck loop is stopped by its fifth repeat. Resuming waits for your OK.
+- What you can now do: nothing yet: the limits only take effect once they're wired in, a follow-up.
+- Still unfinished: the wiring, the limits form in Settings, the month's spend in Health. Claude Code, Codex and Relay run their own loops, so those aren't capped mid-run.
+
+**2026-10-31 · #254 · Chat box, health card, orb, sidebar and accessibility fixes**
+- What changed: a long message no longer turns the chat box into a big oval. It stays a rounded box, at most about a quarter of the screen, and scrolls inside. The health card says what's wrong in plain words, the orb looks like a lit sphere again, and sidebar labels fit.
+- What you can now do: type long messages comfortably; read the health card at a glance. Screen readers get cleaner pages (the review's 75 accessibility issues are fixed).
+- Still unfinished: tap-target sizes and the repeated card on Tasks (second pass). Whether minor problems should turn the orb amber rather than red is waiting on you.
+
 **2026-10-31 · #255 · One place where Nova asks a decision model its quick questions**
 - What changed: every quick judgment (yes/no, pick one, score, find in an image) now has one home: versioned question sets, three possible models (TypeSafe's Jev in the cloud, Tev1 on your machine, or Nova's fixed rules), and a record of each decision kept without the content that was judged.
 - What you can now do: nothing on screen yet: nothing uses it until the safety screen is moved onto it in a follow-up.
@@ -235,6 +255,61 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
+- **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:
+  1. sensitive-content detection before indexing or archiving;
+  2. injection screening when it is recalled into a model's context.
+- **When:** at use time, and at indexing for job 1, never continuously. The content-hash cache applies.
+- **Providers:**
+  - local-first and local-only use local seats only;
+  - cloud mode uses cloud Jev only with a per-source opt-in, off by default, worded plainly.
+- **Ordering and visibility:** deterministic rules (sensitive apps and windows) come first. Verdicts carry provenance and show in the capture timeline, never as a silent deletion.
+- **Building it:** the gate fix in #258 applies the provider rule now. With no per-source opt-in built yet, capture text goes to no cloud seat in any mode. The two jobs are a follow-up build.
+
+**2026-10-31 (owner input: Nova Vault and the Credential Broker; the ADR, with the owner's decisions).** The owner-approved design `nova-vault-broker-design-2026-10-31.md` (sha256 `b0b70e64…`), the owner's instruction and their decisions were added to the packet exactly as given (`INPUT-2026-10-31-VAULT-BROKER-INSTRUCTION.md`, `INPUT-2026-10-31-VAULT-BROKER-DECISIONS.md`). Design: `docs/plans/vault-broker.md`.
+- **The broker:**
+  - a separate, minimal process per device, with seven fixed verbs (`list_refs`, `use`, `create`, `update`, `rotate`, `bind`, `share_scope`);
+  - origin binding enforced by the broker, and policy checked on its own authority;
+  - local IPC only;
+  - ledger records carry ref, target and outcome, never values.
+- **The claim:** within Nova, the read capability exists only inside the broker (its process and launcher), never "Nova can never read your passwords".
+- **Phases, in order:**
+  - Phase 1: the broker and Nova Vault. Argon2id, per-item encryption, passkey or biometric unlock, ciphertext sync, no escrow.
+  - Phase 2: 1Password, with a dedicated vault recommended.
+  - Phase 3: optional Vaultwarden and further connectors.
+- **Phase 1's gate:** canary values found nowhere Nova writes, and the broker refusing a non-bound origin even when core asks.
+- **Owner decisions, the same day:**
+  - **Sync:** sealed per-device wraps may sync, as the one exception to "no key material in a form another device can use"; no passphrase, recovery or device unlock key ever moves.
+  - **Language:** TypeScript now, as an ADR-2 exception (Rust stays the end state, revisited at Phase 2 or the first external security review).
+  - **Nova's own keys:** they stay in core for Phase 1.
+  - **Open questions 1–5:** the defaults are accepted.
+  - **Question 6, modified:** the owner may reveal a vault value on the device's own screen, through a broker-rendered view, with passkey or biometric, tier 3, auto-hiding. It is never through a verb, and never to core or a model.
+- **Placement:** a side track after M10e. Nothing in M10e–M10k is reordered.
+
+**2026-10-31 (Amendment B Part 5: hard caps on autonomy cost, PR #256, Track 3).** Plan `docs/plans/cost-caps.md`.
+- **The pieces:** `src/core/caps/`, plus minimal hooks in the runner (`src/runner.js`) and the chat-run worker (`src/chat-run.js`). The hooks are inert until wired (`runner.caps` is null until Track 1 applies the plan's NOTES §1–2).
+- **Defaults:** per task, 24 steps, 150k tokens and $0.50 priced; per day, 300 steps, 1.5M tokens and $5. The plan gives the reasons.
+- **The loop detector:** a near-identical call seen *k* times in the last 10 counts 1+2*k* steps (at most 9). An exact loop is stopped before its 5th call.
+- **Resume:** offered as a new tier-2 task that continues the conversation with a fresh allowance.
+- **Spend:** JSON lines under `workers/spend/`. Unreported tokens are estimated at 4 characters a token, and labelled as estimates. Dollars count only priced usage; local usage is free.
+- **The eval task:** `safety.runaway-loop-stopped`, in the regression suite.
+- **Limits:**
+  - nothing is capped until wired;
+  - provider tasks (Claude Code, Codex, Relay) aren't capped live, and their reported usage counts only once wired;
+  - the spend file doesn't replicate;
+  - a waiting resume holds its schedule's next run;
+  - token and dollar ceilings can be overshot by one call.
+
+**2026-10-31 (UX review 1, PR #254).** Fixes from the owner-approved first UX review, F0 to F5. Plan and evidence: `docs/plans/ux-review-1.md`.
+- **F0, the composer:** past one line it uses `radius/input` and is capped at 25dvh.
+- **F1, the Health card:** plain summaries.
+- **F3, the orb:** a lit sphere in every state. The salmon disc was the alert state.
+- **F2, the rail:** one rule; `layout/rail-width` is 84 px in every built-in design system.
+- **F5, accessibility:** 75 → 0 axe nodes, with an advisory axe step in CI. The `axe-core` 4.14.0 devDependency is pinned.
+- **F4, the duplicate line:** a render dedupe. The event fired once.
+- **Not built:** F6 and F7 (the second pass).
+- **Open for the owner:** whether a problem that only wants a look should show amber instead of the alert colour.
 
 **2026-10-31 (DS1: the Decision Service).** ADR `docs/plans/decision-service.md` with the owner's decisions; plan `docs/plans/ds1.md`; PR #255.
 - **Built:** `src/core/decision-service/`.

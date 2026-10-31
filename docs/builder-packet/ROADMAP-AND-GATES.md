@@ -174,7 +174,7 @@ Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-3
 2. **First-session value:** folds into M10f onboarding (discovery, an import offer, a populated first view, a timed first win of under 15 minutes in the fresh-user test).
 3. **A self-update channel for Nova itself:** design doc (ADR) first, when scheduled.
 4. **The eval harness (golden tasks, capability and regression suites, a model-swap scorecard):** a side PR, when a slot is free. **Delivered 2026-10-31 (#249):** 28 tasks from failures on record. The regression suite runs at 100% with stand-ins in `npm test`, so a drop fails CI. The scorecard is written to `workers/evals/`, and Settings › Models shows it once its route and UI land. Part 5 (cost caps) follows.
-5. **Hard caps on autonomy cost:** a small design and build.
+5. **Hard caps on autonomy cost:** a small design and build. **Delivered 2026-10-31 (#256):** ceilings per task and per day, a loop detector, and resume as a new approval. Inert until wired (a Track 1 follow-up). Gate: `tests/acceptance/caps.test.ts`, plus the regression task `safety.runaway-loop-stopped`.
 6. **A diagnostics bundle and an integrity scrub:** fold into Health work.
 7. **A fault matrix and a soak run:** extend the QA harness under Amendment 2026-10-31-A.
 8. **QA Stage 2 integration with the Service Manager:** the recorded design, applied when Stage 2 is built, so the harness isn't built for the supervisor alone.
@@ -187,6 +187,13 @@ Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-3
   - Smart home, camera and knowledge-graph alignment come later. Nothing here displaces M10e–M10k.
   - Gate per template: a pre-registered eval passing on the exact model version, or the template ships advisory.
   - **DS1 built (PR #255):** the service, the seats, the decision log and the boundary test. Moving the gate onto it is Track 1's job.
+
+## Nova Vault and the Credential Broker (owner input 2026-10-31)
+Spec: `nova-vault-broker-design-2026-10-31.md`, with the owner's instruction and decisions. The design (ADR) is `docs/plans/vault-broker.md`. Each phase is ADR-gated, and nothing displaces in-flight work or the M10e–M10k order.
+- **Phase 1:** the broker and Nova Vault. A side track after M10e, in three PRs, ahead of M10h's spoke credentials and M10j's cluster credentials.
+  - **Gate:** canary values found nowhere Nova writes; the broker refusing a non-bound origin even when core asks; an adversarial review.
+- **Phase 2:** the 1Password connector behind the broker, after Phase 1's gate. A real account needs the owner's OK.
+- **Phase 3:** optional Vaultwarden and further connectors, by demand. Never a default.
 
 ## Sequencing rules
 - Relay stabilization may run parallel to M1–M2 (it is independent), integration only at M8.

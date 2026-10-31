@@ -1,6 +1,6 @@
 {
   "id": "orb-teal",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "kind": "design-system",
   "name": "Orb Teal",
   "description": "Deep teal light, a luminous orb and frosted glass cards. The default.",
@@ -67,7 +67,7 @@
     "motion/duration-fast": "160ms",
     "motion/duration-slow": "300ms",
     "motion/ease": "cubic-bezier(0.25, 0.1, 0.25, 1)",
-    "layout/rail-width": "76px",
+    "layout/rail-width": "84px",
     "layout/content-max": "720px",
     "layout/card-gap": "16px"
   },

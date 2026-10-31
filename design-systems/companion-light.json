@@ -1,6 +1,6 @@
 {
   "id": "companion-light",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "kind": "design-system",
   "name": "Companion Light",
   "description": "Warm cream, a soft coral accent, the teal orb and a serif voice.",
@@ -67,7 +67,7 @@
     "motion/duration-fast": "180ms",
     "motion/duration-slow": "300ms",
     "motion/ease": "cubic-bezier(0.4, 0, 0.2, 1)",
-    "layout/rail-width": "76px",
+    "layout/rail-width": "84px",
     "layout/content-max": "680px",
     "layout/card-gap": "16px"
   },

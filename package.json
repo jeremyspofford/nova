@@ -19,10 +19,12 @@
     "shots": "node scripts/shots.js",
     "typecheck": "tsc -p tsconfig.json",
     "test:ui": "node --test --test-concurrency=1 --test-force-exit --test-timeout=900000 'tests/ui/*.test.ts'",
-    "ui-test": "scripts/ui-test.sh"
+    "ui-test": "scripts/ui-test.sh",
+    "ui:axe": "node tests/ui/axe-advisory.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.6",
+    "axe-core": "4.14.0",
     "jsqr": "1.4.0",
     "playwright-core": "1.56.1",
     "typescript": "7.0.2"

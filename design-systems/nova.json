@@ -1,6 +1,6 @@
 {
   "id": "nova",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "kind": "design-system",
   "name": "Nova",
   "description": "A dark workspace that happens to contain a universe. Era 2’s default.",
@@ -75,7 +75,7 @@
     "motion/duration-fast": "150ms",
     "motion/duration-slow": "300ms",
     "motion/ease": "cubic-bezier(0.2, 0, 0, 1)",
-    "layout/rail-width": "72px",
+    "layout/rail-width": "84px",
     "layout/content-max": "720px",
     "layout/card-gap": "12px"
   },

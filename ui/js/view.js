@@ -243,7 +243,9 @@ function renderTool(tool, turnOpen) {
   const inside = tool.result?.link?.startsWith('/');
   const link = state === 'done' && tool.result?.link ? ` <a class="record-link" href="${esc(tool.result.link)}"${inside ? '' : ' target="_blank" rel="noopener"'}>${inside ? (tool.result.link === '/tasks' ? 'Follow it in Tasks' : 'Follow it in Activity') : 'Open in Gmail'}</a>` : '';
   if (!output) return `<div class="${cls}">${stamp}<span class="record-label">${label}</span>${link}${when}</div>`;
-  return `<details class="${cls}"><summary>${stamp}<span class="record-label">${label}</span>${link}${when}</summary><pre class="record-output" tabindex="0">${esc(output)}</pre></details>`;
+  const details = `<details class="${cls}"><summary>${stamp}<span class="record-label">${label}</span>${when}</summary><pre class="record-output" tabindex="0">${esc(output)}</pre></details>`;
+  // A link never goes inside <summary> (a control inside a control, UX review 1 F5): it sits beside it.
+  return link ? `<div class="record-row">${details}${link}</div>` : details;
 }
 
 const fromDay = (day) => {
@@ -263,18 +265,36 @@ export function renderNotes(notes, memory = new Map()) {
   }).join('');
 }
 
+// Status lines in the margin, one after another: identical ones show once (UX review 1, F4). Each
+// line is [key, html, count => html]: the count is how many identical lines it stands for.
+export function collapseLines(lines) {
+  const out = [];
+  for (const [key, html, many] of lines) {
+    const last = out.at(-1);
+    if (last && last.key === key) { last.n++; continue; }
+    out.push({ key, html, many, n: 1 });
+  }
+  return out.map((l) => (l.n > 1 && l.many ? l.many(l.n) : l.html)).join('');
+}
+
 // What Nova kept from this exchange, in the margin, linked to the Memory view.
+const HELD_WORDS = 'this came after reading something from outside';
 export function renderKept(ops, memory = new Map(), when = null) {
-  return ops.filter((o) => o.ok && !o.existing).map((o) => {
+  return collapseLines(ops.filter((o) => o.ok && !o.existing).map((o) => {
     // The ingest gate: memory from a conversation that read outside content waits for the person.
-    if (o.held) return `<p class="margin-note"><a class="margin-link" href="/memory#waiting">waiting for your OK</a>: this came after reading something from outside</p>`;
-    if (o.op === 'forget') return '<p class="margin-note is-quiet">forgot something, as you asked</p>';
+    // Several at once are one line that says how many (each is its own candidate in Memory).
+    if (o.held) {
+      return ['held', `<p class="margin-note"><a class="margin-link" href="/memory#waiting">waiting for your OK</a>: ${HELD_WORDS}</p>`,
+        (n) => `<p class="margin-note"><a class="margin-link" href="/memory#waiting">${n} things waiting for your OK</a>: they came after reading something from outside</p>`];
+    }
+    if (o.op === 'forget') return ['forget', '<p class="margin-note is-quiet">forgot something, as you asked</p>'];
     const entry = memory.get(o.id);
-    if (!entry) return '<p class="margin-note is-quiet">kept in memory, since forgotten</p>';
+    if (!entry) return ['gone', '<p class="margin-note is-quiet">kept in memory, since forgotten</p>'];
     const later = !o.replaced && entry.updated && when && entry.updated > when;
     const verb = o.op === 'note' ? 'noted for the day' : o.replaced ? 'corrected in memory' : later ? 'kept in memory, since changed' : 'kept in memory';
-    return `<p class="margin-note"><a class="margin-link" href="/memory#m-${esc(o.id)}">${verb}</a>: ${esc(clip(entry.text))}</p>`;
-  }).join('');
+    const html = `<p class="margin-note"><a class="margin-link" href="/memory#m-${esc(o.id)}">${verb}</a>: ${esc(clip(entry.text))}</p>`;
+    return [html, html];
+  }));
 }
 
 // One exchange: the user's message and everything Nova did in reply.
@@ -299,9 +319,12 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
   for (const it of turn.items) {
     if (it.kind === 'recall' || it.kind === 'memory') {
       const notes = it.kind === 'recall' ? renderNotes(it.notes, memory) : renderKept(it.ops, memory, turn.ts);
-      if (notes) nova += `<aside class="margins" aria-label="${it.kind === 'recall' ? 'From memory' : 'Kept in memory'}">${notes}</aside>`;
+      // A note, not a landmark: every turn has its own, so a landmark's name would repeat (F5).
+      // Two margins in a row that say the same thing show once (F4).
+      const block = notes ? `<div class="margins" role="note" aria-label="${it.kind === 'recall' ? 'From memory' : 'Kept in memory'}">${notes}</div>` : '';
+      if (block && !nova.endsWith(block)) nova += block;
     }
-    if (it.kind === 'skill') nova += `<aside class="margins" aria-label="Skill">${renderSkillNote(it, skills)}</aside>`;
+    if (it.kind === 'skill') nova += `<div class="margins" role="note" aria-label="Skill">${renderSkillNote(it, skills)}</div>`;
     if (it.kind === 'text') { nova += `<div class="prose" data-text="${esc(it.id)}">${renderMarkdown(it.text)}</div>`; lastTextId = it.id; }
     if (it.kind === 'tool' && !(it.name === 'use_skill' && it.result?.ok)) nova += renderTool(it, running);
     if (it.kind === 'error') {
