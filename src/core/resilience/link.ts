@@ -10,6 +10,7 @@
 //     upgraded and before any work runs (core.start()), so a release that changed the database
 //     knows exactly what going back would undo: everything after this, the work's own records too.
 import { readFileSync } from 'node:fs';
+import type { ServiceStatus } from '../services/driver.ts';
 
 export type ServerMode = 'starting' | 'running' | 'restarting' | 'safe_mode' | 'deploying' | 'stopped';
 
@@ -41,6 +42,8 @@ export interface SupervisorState {
   releases: { current: string | null; previous: string | null; last_good: string | null; slots: ReleaseSlot[]; base_commit?: string | null };
   deploy: { version: string; from: string | null; started_at: string; stage: Stage['stage']; stages: Stage[]; canary: { until: string; probes: ProbeLine[] } | null; outcome: 'running' | 'promoted' | 'rolled_back' | 'stopped' | 'refused' | null } | null;
   history: { version: string; from: string | null; at: string; outcome: string; said: string }[];
+  // The services the supervisor driver runs besides the console (M10e), as the driver reports them.
+  services?: ServiceStatus[];
 }
 
 export interface SupervisorProblem { source: string; said: string; playbook: string; subject?: string | null; detail?: string; repairs?: { name: string; ok: boolean; said: string }[] }

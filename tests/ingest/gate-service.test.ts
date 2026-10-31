@@ -106,6 +106,15 @@ test('an answer is used only when trusted and well formed: anything else is no s
   assert.equal((await gate(async () => answer('verdict')).screen({ text, source: src })).verdict, 'pass');
 });
 
+test('a later template version’s answer is no screen until the gate takes its outcome (DS2 NOTE 1, a follow-up)', async () => {
+  const text = 'Mix flour and water. Bake for an hour.';
+  const src = { kind: 'web' as const, origin: 'www.example.org' };
+  const r = await gate(async () => ({ ...answer('verdict'), version: 2 })).screen({ text, source: src });
+  assert.equal(r.verdict, 'quarantine');
+  assert.equal(r.scores, null);
+  assert.equal((await gate(async () => ({ ...answer('verdict'), version: 1 })).screen({ text, source: src })).verdict, 'pass');
+});
+
 test('Health says outside content is held back as unsure while no screen answer is relied on', () => {
   const db = new Db(':memory:');
   db.migrate();

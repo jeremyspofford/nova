@@ -182,6 +182,10 @@ export interface Blocked { id: string; kind: SourceKind; origin: string; flags: 
 // the answer may be used. `trust` is 'verdict' (a decision model that passed this template's eval
 // on that exact model), 'legacy' (the sorting model, until a decision model passes) or 'none'.
 export interface ScreenAnswer {
+  // The template version that answered. Only v1 is read here (by its five scores); a later version
+  // decides by its own rule, and taking its outcome is a follow-up (DS2's NOTE 1), so until then
+  // its answer is no screen: the content is held back.
+  version?: number;
   trust: 'verdict' | 'legacy' | 'none';
   seat: string;
   model: string | null;
@@ -396,6 +400,7 @@ export class Ingest {
     const one = async (part: string, i: number): Promise<One | null> => {
       const d = await ask({ source_kind: source.kind, origin: source.origin, content: fence(part) }, { ...o, shadow: i < SHADOW_CHUNKS });
       if (!d || (d.trust !== 'verdict' && d.trust !== 'legacy') || !d.answers) return null;
+      if (d.version !== undefined && d.version !== SCREEN.version) return null;
       const answers: Record<string, number> = {};
       for (const q of QUESTIONS) {
         const p = d.answers[q]?.noul;

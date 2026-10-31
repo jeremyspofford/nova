@@ -117,6 +117,22 @@ Each finding got a test first. The fix was then made, and the test was run again
 
 The reviewer's probes p1–p4 and p7, run on the fixed tree: Jev gets nothing after the switch (A, B and C); nothing for the local-only task (0 requests, no remote receipt); no content in `why`, `failures` or the logs; the swapped build's answer is untrusted (quarantine); 2 Jev asks per page instead of 715.
 
+## Merging main (#247 M10e, #257 DS2's ingest-screen v2)
+
+This is a merge, not a rebase, so the commits the evidence above cites are unchanged.
+- **Both sides' behaviour is kept.** The service chooses a version DS2's way: the newest that passed, else the newest the sorting model serves, else the newest. On top of that, the review's rules still hold:
+  - the live re-read before every cloud send;
+  - the shadow sample and the time limit;
+  - the digest pin;
+  - the capture-derived rule;
+  - the wording pin.
+
+  DS2's v2 verdicts in `verdicts.json` carry no wording hash, so they are unpinned; their eval is the record.
+- **Health reads the version that would answer now** (`service.version`), not the newest. With a sorting model assigned, v1 answers and Health says so.
+- **DS2's NOTE 1 is a follow-up, not done here.** That note is "the gate takes the service's outcome for v2 and later". It changes how the gate settles a verdict and needs its own tests. Until then, an answer from any version after v1 is no screen, so the content is held back. This is never looser, and today no v2 verdict passes (both Tev1 sizes failed). `gate-service.test.ts` checks it.
+- **A test changed because of the overlap:** `tests/ingest/ingest-v2-eval.test.ts`'s "second-to-last-of-15" placement is 16 overlapping gate chunks now. The payload is still in the second to last, and the cases are unchanged.
+- **v2's recorded eval ran on the gate's chunks before the overlap.** Its verdict (fail) stands. A rerun would use the overlapping chunks.
+
 ## Limits, said plainly
 
 - **Part 1's set is not under `src/core/decision-service/`.** It stays where Part 1 fixed it, `tests/ingest/tev1-eval/` (the generator, controls and manifest). Only its scoring (`eval.ts`) and verdicts are in the service. `INJECTION_SET` points there.

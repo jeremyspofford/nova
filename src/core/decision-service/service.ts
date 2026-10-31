@@ -19,7 +19,7 @@ import { wordingOf } from './registry.ts';
 import { SeatFailure, TooLong, Unavailable } from './wire.ts';
 import { CoreError } from '../errors.ts';
 import type { PrivacyMode } from '../envelope.ts';
-import type { Registry } from './registry.ts';
+import type { Registered, Registry } from './registry.ts';
 import type { LegacySeat } from './seats/legacy.ts';
 import type { DecisionSettings } from './settings.ts';
 import type { DecisionLog } from './log.ts';
@@ -50,7 +50,8 @@ export interface ServiceOptions {
 // `shadow`: false when an untrusted seat may not be asked for evidence on this question (the
 // caller has had its sample). `content_class`: 'capture-derived' for capture-derived text, which
 // is routed by its own rule (cloudAllowed).
-export interface AskOptions { subsystem: string; task_id?: string | null; privacy_mode?: PrivacyMode; shadow?: boolean; content_class?: 'capture-derived'; capture_source?: string }
+// `version`: a named template version (else the service picks one, see ask()).
+export interface AskOptions { subsystem: string; task_id?: string | null; privacy_mode?: PrivacyMode; version?: number; shadow?: boolean; content_class?: 'capture-derived'; capture_source?: string }
 export interface ContentClass { content_class?: 'capture-derived'; capture_source?: string }
 
 // A seat's evidence-only answers are bounded: at most this many asks per seat per UTC day.
@@ -149,9 +150,21 @@ export class DecisionService {
     return { ok: true, why: 'The sorting model answers until a decision model passes this template’s eval.' };
   }
 
+  // Which version answers (DS2): the newest version with a passing eval on a decision seat; else
+  // the newest one today's sorting model can still answer (so a new, untrusted version never takes
+  // away today's behaviour); else the newest. A caller may name a version.
+  version(templateId: string, version?: number): Registered | null {
+    if (version !== undefined) return this.#o.registry.get(templateId, version);
+    const all = this.#o.registry.versions(templateId);
+    if (!all.length) return null;
+    return all.find((r) => this.#o.verdicts.passed(templateId, r.template.version))
+      ?? all.find((r) => this.legacyAllowed(r.template).ok)
+      ?? all[0]!;
+  }
+
   // null when there is no such template (a cache miss: the caller falls back to its own rules).
   async ask(templateId: string, fields: Record<string, unknown>, o: AskOptions): Promise<Decided | null> {
-    const reg = this.#o.registry.get(templateId);
+    const reg = this.version(templateId, o.version);
     if (!reg) return null;
     const t = reg.template;
     const built = buildState(t, fields);
