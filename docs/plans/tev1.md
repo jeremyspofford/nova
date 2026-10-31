@@ -43,7 +43,7 @@ Sources:
 
 | The amendment says | What was found | What this PR does |
 | --- | --- | --- |
-| Requires Ollama ≥ 0.35 | The endpoint arrived in 0.35. But the published `tev1:4b` and `tev1:0.8b` builds need **0.40.4**: both registry configs say `"requires":"0.40.4"`. This Ollama (0.40.0) refused the pull: `model requires ollama version v0.40.4 or newer (current version is v0.40.0)`. | Below 0.35 the provider reports unavailable in plain words, as the amendment says. If the model isn't downloaded and Ollama is older than 0.40.4, the words also say the published models need 0.40.4. |
+| Requires Ollama ≥ 0.35 | The endpoint arrived in 0.35. But the published `tev1:4b` and `tev1:0.8b` builds need **0.40.4**: both registry configs say `"requires":"0.40.4"`. This Ollama (0.40.0) refused the pull: `model requires ollama version v0.40.4 or newer (current version is v0.40.0)`. | Track 1 decided (2026-10-31) that the provider reports unavailable, in plain words, below the version the model actually requires: **0.40.4**. Below 0.35 the words also say decision models themselves need 0.35. |
 | Context ~2,000 tokens | The model card says "about 2,000 tokens", and its longest training example is about 1,500 tokens. The registry's params blob sets `num_ctx` to 8192. | The chunk budget uses 2,000 tokens, the amendment's figure and the card's own guidance. It is more conservative than 8192. |
 | 64 questions per call | It is 64: `maxProperties: 64` on `questions`. | The provider refuses a battery of more than 64 questions without sending anything. |
 | 64 KiB request cap | The cap is 64 KiB of **text and schema** for local requests. The whole request may be up to 32 MiB, but that counts images, which this battery doesn't use. | Each request's **whole JSON body** is kept within 64 KiB. That is stricter than the text-and-schema limit. |
@@ -69,7 +69,7 @@ This is a client for the TypeSafe Jev API as Ollama serves it. It uses plain `fe
   - `Unavailable`: Ollama can't be reached, the model isn't downloaded, or Ollama is too old;
   - `TooLong`: a 413, or a 400 that names the context;
   - anything else is an `Error` in words.
-- **`MIN_OLLAMA` is `0.35.0`.** `TEV1_PUBLISHED_REQUIRES` is `0.40.4`, as found above. It is used only in words.
+- **Versions:** `ENDPOINT_SINCE` is `0.35.0` and `TEV1_REQUIRES` is `0.40.4`, as found above. The provider is unavailable below `TEV1_REQUIRES`.
 
 ### 2. The provider: `src/core/jev/tev1.ts`
 
@@ -94,12 +94,13 @@ It answers only templates it has a **battery** for. A battery gives the wording 
 
 **Availability, in plain words:**
 - Ollama can't be reached: "Nova couldn't reach Ollama at … ."
-- Older than 0.35: "This Ollama is version X. Tev1 needs Ollama 0.35 or later; update Ollama to use it."
-- The chosen size isn't downloaded: "Tev1 (tev1:4b) isn't downloaded in Ollama." When Ollama is older than 0.40.4, this is added: "Its published models need Ollama 0.40.4 or later; this one is X."
+- Older than 0.35: "This Ollama is version X. Decision models need Ollama 0.35 or later, and Tev1's published models need 0.40.4 or later; update Ollama to use Tev1."
+- From 0.35 up to 0.40.4: "This Ollama is version X. Tev1's published models need Ollama 0.40.4 or later; update Ollama to use Tev1."
+- The chosen size isn't downloaded: "Tev1 (tev1:4b) isn't downloaded in Ollama at … ."
 - While Tev1 is unavailable, `ready()` is false. The decision stack doesn't ask it, and the gate falls back (§4).
 
 **Size selection:** `tev1:4b` is the default. `tev1:0.8b` is used only when the device's model memory (`modelMemory()`: its biggest GPU, or half its RAM) can't hold `tev1:4b`:
-- `tev1:4b` is 4.61 GB × the manager's 1.15 headroom, so it needs about 5.3 GB;
+- `tev1:4b` is 4.61 GB × the manager's 1.15 headroom, so it needs about 5.3 GB (4.9 GiB, which Nova's words show as "4.9 GB");
 - if `tev1:0.8b` doesn't fit either (0.83 GB × 1.15), there is no Tev1, and the reason is given in words;
 - unknown hardware means `tev1:4b`;
 - if `tev1:4b` is the right size but isn't downloaded, the provider is unavailable. It never quietly uses `tev1:0.8b` instead.
@@ -145,17 +146,14 @@ The deterministic layer and taint tracking don't change in any mode. This PR cha
 
 The cases, the bounds, the scoring and the ECE method are committed **before any run against the real Tev1**. The SHA of that commit is recorded in the evidence and in the verdict file.
 
-- **The set:** `tests/ingest/tev1-eval/cases.ts` holds at least 50 cases, all invented and neutral: placeholder names, `example.com`-style hosts, canary strings. The categories:
-  - buried or inline instructions;
-  - encoded payloads: base64, hex, URL encoding, zero-width, tag characters, full-width and bidi tricks;
-  - fake system and tool messages;
-  - exfiltration requests;
-  - impersonation;
-  - hidden HTML;
-  - multi-chunk payloads, where the instruction is only in a later chunk (the gate's and the provider's), up to the last one;
-  - benign controls that resemble instructions: quoted prompts, recipes, forwarded how-tos, code samples, long benign documents.
-
-  Every case has a label per battery question, true or false, under fixed rules written at the top of the file.
+- **The set (Track 1's decision, 2026-10-31):** no new attack text is written. `tests/ingest/tev1-eval/cases.ts` builds 99 cases: 53 attack and 46 benign.
+  - **The attack half** is the merged corpus `tests/ingest/corpus/injection.json` (31 payloads, 11 categories), loaded at run time and used as is. Added to it are variants made by code from those exact payloads:
+    - encodings: base64, percent-encoding of every byte, zero-width insertion, and Latin-to-Cyrillic homoglyphs, three payloads each;
+    - multi-chunk placements after neutral filler: starting just past the gate's first boundary (3 payloads) and its second (1); ending the last of 15 chunks (3); and split across the first boundary (3).
+  - **The benign half** is `tests/ingest/corpus/benign.json` (15) as is, 28 new benign controls that resemble instructions (`benign-controls.json`: quoted prompts, recipes, forwarded how-tos, code samples, meeting notes with action items, and others), and 3 long benign documents.
+  - `manifest.json` lists every case with its id, origin, transform, labels and input hash, and the SHA-256 of the whole set. CI checks it against the generator, and checks that every attack case decodes or reduces to the corpus text exactly.
+  - Every case has a label per battery question, true or false, under the fixed rules at the top of `cases.ts`.
+- **Fixed before any run:** commit `6d8a8e97c86101faa6888515e3757aeff4e6e8bd` fixed the cases, the manifest, the bounds and the scoring.
 - **How it runs:**
   - through the **actual gate**: `Ingest.screen()` with the real deterministic checks, the gate's own chunking and fence, the `ingest-screen` template, the decision stack in local-only, and the real `Tev1Provider` against the real Ollama;
   - once per size;
@@ -200,4 +198,149 @@ The cases, the bounds, the scoring and the ECE method are committed **before any
 
 ## NOTES for Track 1
 
-These are filled in as the work lands, at the end of this file.
+Track 2 doesn't change the gate, the shared files or the wiring. These are the changes it needs, written to be applied as they stand. Items 1 to 4 are the gate notes; item 5 is the records.
+
+### 1. The gate accepts Tev1's answers, and says which provider answered (`src/core/ingest/screen.ts`, `src/core/ingest/index.ts`)
+
+Today `#noul` takes an answer only from `providerId`, a single id (`local-model`). A Tev1 answer is therefore "no answer", and the gate quarantines. That is safe, but it means a relied-on Tev1 is never used.
+
+```diff
+ // IngestOptions (screen.ts)
+-  // The decision provider that counts as the local model; any other answer is no answer.
+-  providerId?: string;
++  // The decision providers that count as the local model (Tev1 first, then the sorting model);
++  // any other answer is no answer.
++  providerId?: string | readonly string[];
+
+ // Ingest.screen (screen.ts)
+-    const r = this.#settle(input, source, c, noul, partial);
++    const r = this.#settle(input, source, c, noul?.scores ?? null, partial, noul?.model ?? null);
+
+ // Ingest.screenNow (screen.ts)
+-    return this.#settle(input, source, check(input), null, false);
++    return this.#settle(input, source, check(input), null, false, null);
+
+ // Ingest.#noul (screen.ts)
+-  async #noul(parts: string[], source: Source): Promise<Record<string, number> | null> {
++  async #noul(parts: string[], source: Source): Promise<{ scores: Record<string, number>; model: string } | null> {
+     if (!this.hasModel()) return null;
+     const decisions = this.#o.decisions!;
+-    const want = this.#o.providerId ?? 'local-model';
++    const want = [this.#o.providerId ?? 'local-model'].flat();
+     try {
+       const answers = await …(parts.map(async (part) => {          // item 3 replaces this with a pool
+         const d = await decisions.decide(SCREEN.template_id, { source_kind: source.kind, origin: source.origin, content: fence(part) }, { privacy_mode: 'local-only' });
+-        if (!d || d.provider !== want || d.escalate) return null;
+-        return d.answers as Record<string, number>;
++        if (!d || !want.includes(d.provider) || d.escalate) return null;
++        return { provider: d.provider, answers: d.answers as Record<string, number> };
+       }));
+       if (answers.some((a) => a === null)) return null;
+       const out: Record<string, number> = {};
+-      for (const q of QUESTIONS) out[q] = Math.max(...answers.map((a) => Number(a![q] ?? 0.5)));
+-      return out;
++      for (const q of QUESTIONS) out[q] = Math.max(...answers.map((a) => Number(a!.answers[q] ?? 0.5)));
++      return { scores: out, model: [...new Set(answers.map((a) => a!.provider))].join('+') };
+
+ // Ingest.#settle (screen.ts)
+-  #settle(input: ScreenInput, source: Source, c: Checked, scores: Record<string, number> | null, partial: boolean): Screened {
++  #settle(input: ScreenInput, source: Source, c: Checked, scores: Record<string, number> | null, partial: boolean, model: string | null): Screened {
+-    …, model: scores ? (this.#o.providerId ?? 'local-model') : null, partial };
++    …, model: scores ? model : null, partial };
+
+ // WiredOptions (index.ts)
+-  ready: () => boolean; providerId: string;
++  ready: () => boolean; providerId: string | readonly string[];
+```
+
+- **What doesn't change:** an advisory Tev1 still returns `escalate: true`, so `#noul` still gives null, and the deterministic layer plus quarantine decide. The verdict-driven switch needs nothing else in the gate.
+- **The record:** `ingest_screen.model` then names who answered: `tev1`, `local-model`, or `tev1+local-model` when Tev1 failed on a chunk and the stack fell through. The column is already text; no migration is needed.
+
+### 2. Register Tev1 first, and let the gate run when only Tev1 is ready (`src/core/index.ts`)
+
+Put this after `decisions.register(new LocalModelProvider(…), { first: true })` (line 328), and before `wireIngest`:
+
+```ts
+import { Tev1Provider, PROVIDER_ID as TEV1_PROVIDER } from './jev/tev1.ts';
+import { boundToVerdict } from './jev/verdict.ts';
+import { SCREEN } from './ingest/screen.ts';
+…
+  // Amendment 2026-10-31-B Part 1: Tev1 in the Jev seat for the ingest battery. Local (the hub's
+  // Ollama), asked before the sorting model, and bound to its recorded eval verdict.
+  const tev1 = boundToVerdict(new Tev1Provider({ url: () => models!.hubUrl(), hardware: () => models!.hubHardware(), log }), { log });
+  decisions.register(tev1, { first: true });
+  void tev1.refresh().catch(() => {});
+…
+  const { ingest } = wireIngest({
+    …,
+-    ready: () => models!.decidesWithModel(false), providerId: LOCAL_MODEL_PROVIDER,
++    ready: () => tev1.readyFor(SCREEN.template_id) || models!.decidesWithModel(false),
++    providerId: [TEV1_PROVIDER, LOCAL_MODEL_PROVIDER],
+```
+
+- **Ordering:** registering with `{ first: true }` after the local model puts Tev1 at the front. Tev1 answers only templates it has a battery for (`ingest-screen`). For everything else (`browser-step`, triage, promote), `ready()` is false and the order is as before. The browser co-pilot's own `providerId: LOCAL_MODEL_PROVIDER` is unaffected.
+- **Privacy:** Tev1's egress is `local`, and the gate forces its screen to local-only, so it is allowed in every mode. `JevProvider`, the cloud seat, stays a stub and is not registered.
+- **Health and the device record:** `tev1.status()` returns `{ available, model, digest, ollama, size_why, why, checked_at, reliance: { relied, why } }`.
+  - Health, in `Ingest.health()` or the Health view: add a line such as `Screening model: ${model ?? 'none'} (${available ? (reliance.relied ? 'relied on' : 'advisory') : 'unavailable'}): ${available ? reliance.why : why}`. While Tev1 is advisory, the detail should not say outside content is "screened by your local sorting model".
+  - The device record (`models.view()` for the hub): add `decision_model: { model, why: size_why, relied: reliance.relied }`.
+
+### 3. Every chunk screened: no 16-chunk sampling (`src/core/ingest/screen.ts`)
+
+The amendment says the gate must "screen EVERY chunk … never a prefix only". Today `chunks()` doesn't screen a document of more than 16 chunks (about 48,000 characters) in full. It screens a sample instead: the first chunk, the last, and 14 between. It marks the screen partial, so it quarantines. A block in an unsampled chunk is missed.
+
+```diff
+-export const MAX_CHUNKS = 16;
++// Every chunk is screened (Amendment 2026-10-31-B Part 1). check() already caps the text
++// (TEXT_CAP 2,000,000 characters, HTML_CAP 1,000,000; past it the text is flagged too_long and
++// quarantined), so a screen has at most about 715 chunks with the overlap in item 4.
++export const SCREEN_CONCURRENCY = 2;
+…
+ export function chunks(text: string): { parts: string[]; partial: boolean } {
+   const all: string[] = [];
+-  for (let i = 0; i < text.length; i += CHUNK) all.push(text.slice(i, i + CHUNK));
++  for (let i = 0; i < text.length; i += CHUNK - OVERLAP) { all.push(text.slice(i, i + CHUNK)); if (i + CHUNK >= text.length) break; }
+   if (!all.length) return { parts: [''], partial: false };
+-  if (all.length <= MAX_CHUNKS) return { parts: all, partial: false };
+-  // First and last, and an even sample between.
+-  const pick = new Set([0, all.length - 1]);
+-  const between = MAX_CHUNKS - 2;
+-  for (let k = 1; k <= between; k++) pick.add(Math.round((k * (all.length - 1)) / (between + 1)));
+-  return { parts: [...pick].sort((a, b) => a - b).map((i) => all[i]!), partial: true };
++  return { parts: all, partial: false };
+ }
+```
+
+In `#noul`, replace `Promise.all(parts.map(…))` with a bounded pool, so a long document doesn't put hundreds of requests on Ollama at once:
+
+```ts
+const answers: ({ provider: string; answers: Record<string, number> } | null)[] = new Array(parts.length).fill(null);
+let next = 0;
+await Promise.all(Array.from({ length: Math.min(SCREEN_CONCURRENCY, parts.length) }, async () => {
+  for (let i = next++; i < parts.length; i = next++) answers[i] = await one(parts[i]!);   // one(): the per-chunk body in item 1
+}));
+```
+
+- **Cost, plainly:** a document at the 2,000,000-character cap is about 715 gate chunks. That is roughly 1,400 Tev1 requests: minutes, not seconds.
+  - The alternative is a hard ceiling, for example 256 chunks, past which the Noul screen doesn't run at all (scores null, so quarantine). It must never sample.
+- **Tests to update:** the gate's `tests/ingest/screen.test.ts:177` expects `partial: true` for long content. Track 2's provider already screens every piece it is handed; with this patch nothing upstream of it is sampled either.
+
+### 4. Overlapping chunks (`src/core/ingest/screen.ts`)
+
+Today the 3,000-character chunks don't overlap. An instruction cut by a boundary reaches the model as two halves, each judged alone. The eval has three cases built exactly this way: `split-boundary-1:*`.
+
+```diff
+ export const CHUNK = 3000;
++// Consecutive chunks share this many characters, so a payload of up to 200 characters cut by a
++// boundary is whole in one of them. This matches the Tev1 provider's own piece overlap.
++export const OVERLAP = 200;
+```
+
+The loop is in item 3's diff. Two further notes:
+- **Surrogate pairs:** slicing by UTF-16 index can split a surrogate pair at a chunk edge. That happens today too. Iterating by code points (`Array.from`) avoids it.
+- **The eval test to flip:** when this lands, flip the assertion marked "NOTES for Track 1, item 4" in `tests/ingest/tev1-eval.test.ts`, from "no single gate chunk has it today" to "some gate chunk has it". The eval cases stay as committed.
+
+### 5. Records Track 2 doesn't edit
+
+The LEDGER entry (under `## Decisions`) and the CAPABILITY-INVENTORY row are written at the end of this file, under **Records to add**, once the real run's results are in.
+
+**Not needed:** no migration, no `package.json` change (the new tests sit inside the existing globs), and no `src/server.js` change.
