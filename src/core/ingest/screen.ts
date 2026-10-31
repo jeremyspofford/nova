@@ -371,20 +371,19 @@ export class Ingest {
     const got: (One | null)[] = new Array<One | null>(parts.length).fill(null);
     let next = 0;
     let settled = false;
-    try {
-      await Promise.all(Array.from({ length: Math.min(SCREEN_CONCURRENCY, parts.length) }, async () => {
-        while (!settled) {
-          const i = next++;
-          if (i >= parts.length) return;
-          const a = await one(parts[i]!);
-          if (!a) { settled = true; return; }
-          got[i] = a;
-        }
-      }));
-    } catch (e) {
-      this.#o.log?.warn('ingest', 'The decision model couldn’t screen some outside content; it is held back instead.', { error: (e as Error).message });
-      return null;
-    }
+    let failed: Error | null = null;
+    // A failure settles it too, so no other worker goes on sending chunks.
+    await Promise.all(Array.from({ length: Math.min(SCREEN_CONCURRENCY, parts.length) }, async () => {
+      while (!settled) {
+        const i = next++;
+        if (i >= parts.length) return;
+        let a: One | null = null;
+        try { a = await one(parts[i]!); } catch (e) { failed ??= e as Error; }
+        if (!a) { settled = true; return; }
+        got[i] = a;
+      }
+    }));
+    if (failed) this.#o.log?.warn('ingest', 'The decision model couldn’t screen some outside content; it is held back instead.', { error: (failed as Error).message });
     if (settled || got.some((a) => a === null)) return null;
     const scores: Record<string, number> = {};
     for (const q of QUESTIONS) scores[q] = Math.max(...got.map((a) => a!.answers[q]!));

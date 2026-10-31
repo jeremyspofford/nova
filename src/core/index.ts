@@ -701,7 +701,9 @@ export function createCore(o: CoreOptions) {
     if (body.use !== undefined) { models!.useForDecisions(body.use); return decisionsView(); }
     const { key, confirm, ...choices } = body;
     const was = decisionSettings();
-    const v = validateSettings({ jev: was.jev, tev1: was.tev1, opt_in: was.opt_in, ...choices });
+    // What isn't named stays as it was; each opt-in is its own switch.
+    const named = choices.opt_in && typeof choices.opt_in === 'object' ? choices.opt_in as Record<string, unknown> : {};
+    const v = validateSettings({ jev: was.jev, tev1: was.tev1, ...choices, opt_in: { ...was.opt_in, ...named } });
     const problems = v.ok ? [] : [...v.problems];
     if (key !== undefined && key !== null && (typeof key !== 'string' || !key.trim() || key.length > 4096)) problems.push('The Jev key must be the key text TypeSafe gave you.');
     if (!v.ok || problems.length) return new Reply({ error: 'These decision-model choices can’t be used.', problems }, {}, 422);

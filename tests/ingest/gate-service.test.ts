@@ -72,6 +72,13 @@ test('no trusted answer for a chunk: the screen stops sending and holds the cont
   assert.equal(r.verdict, 'quarantine');
   assert.equal(r.scores, null);
   assert.ok(asked <= SCREEN_CONCURRENCY + 1, `once settled, the rest isn’t sent (${asked} asked of ${chunks(plain(60_000)).parts.length})`);
+  // A service that fails settles it too: the other worker doesn't go on sending.
+  let tried = 0;
+  const failing: ScreenAsk = async (f) => { tried++; if (f.content.includes('first-chunk-marker')) throw new Error('down'); await new Promise((r) => setTimeout(r, 1)); return answer('verdict'); };
+  const f = await gate(failing).screen({ text: `first-chunk-marker ${plain(60_000)}`, source: { kind: 'web', origin: 'www.example.org' } });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(f.verdict, 'quarantine');
+  assert.ok(tried <= SCREEN_CONCURRENCY + 1, `a failure stops the sending (${tried} asked)`);
 });
 
 test('an answer is used only when trusted and well formed: anything else is no screen, never a pass', async () => {
