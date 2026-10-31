@@ -298,6 +298,82 @@ export const TOOLS = {
       };
     },
   },
+  // Infrastructure, networking and accounts through chat (M10d). Each starts work that asks the
+  // person in Tasks before anything changes outside (tier 3, every time); in a run that read outside
+  // content each asks before it even starts (runner.js GUARDED). Projects, targets, budgets, prices
+  // and tokens are the person's, set outside chat.
+  infra_plan: {
+    signature: '{"project": "<project name>", "destroy": false}',
+    doc: 'Plan an infrastructure project the person registered (OpenTofu configuration in a folder of theirs). Nova runs the plan by itself; it changes nothing. Nova prices it against the project’s monthly budget: a plan inside it is shown to the person in full, and applied only when they confirm, every time, in Tasks, after a checkpoint. A plan over budget, or with a resource Nova can’t price, is never applied: Nova alerts the person instead. "destroy": true plans removing everything in the project. You can’t change a project, its budget or its prices: the person does, outside chat. Tell the person what you started; don’t wait for it.',
+    needsApproval: false,
+    available: (ctx) => ctx.ops,
+    run(args, { ops, sessionId }) {
+      const { run } = ops.infra.start({ project: args?.project, destroy: args?.destroy === true }, { session: sessionId, origin: { kind: 'user', ref: `session:${sessionId}` } });
+      return {
+        output: `Started infrastructure run ${run.id} on “${run.project.name}”${run.destroy ? ', planning to destroy everything in it' : ''}. Nova runs the plan now (it changes nothing) and prices it against the project’s budget; the person sees the plan in full and confirms any apply in Tasks. Nothing is applied before that, and nothing over budget ever is.`,
+        summary: run.title,
+        link: '/tasks',
+      };
+    },
+  },
+  infra_status: {
+    signature: '{}',
+    doc: 'Infrastructure: whether OpenTofu is on this computer, each project with its budget and what it costs a month, and each run’s state (planning, waiting for the person to apply, applied, over budget, declined, failed) with the reason.',
+    needsApproval: false,
+    available: (ctx) => ctx.ops,
+    run(_args, { ops }) {
+      const x = ops.infra.list();
+      const projects = x.projects.map((p) => `${p.name} · ${p.words} · ${p.resources.length} ${p.resources.length === 1 ? 'resource' : 'resources'}`);
+      const runs = x.runs.slice(0, 20).map((r) => `${r.id} · ${r.title} · ${r.state}${r.reason ? `\n  ${r.reason}` : ''}`);
+      return {
+        output: [`OpenTofu ${x.tool.installed ? 'is' : 'isn’t'} on this computer.`, projects.length ? `Projects:\n${projects.join('\n')}` : 'No projects: the person registers one outside chat.', runs.length ? `Runs:\n${runs.join('\n')}` : 'No runs yet.'].join('\n'),
+        summary: `${x.projects.length} projects, ${x.runs.length} runs`,
+      };
+    },
+  },
+  network_change: {
+    signature: '{"target": "<target name>", "patch": {"firewall": {"allow_ssh": false}}, "title": "Close SSH from outside"}',
+    doc: 'Change a network target the person registered (a router, DNS, a firewall, a tailnet’s policy) with a JSON merge patch of its configuration (an object of what changes; null removes a key). Nova takes a snapshot and works out the diff; the person confirms the change in Tasks, every time; after it, if Nova can’t hear from one of their devices within a few minutes, it puts the snapshot back by itself. Never put a password, key or token in a patch: secrets aren’t changed from chat. network_status lists the targets and changes.',
+    needsApproval: false,
+    available: (ctx) => ctx.ops,
+    run(args, { ops, sessionId }) {
+      const { change } = ops.network.start({ target: args?.target, patch: args?.patch, ...(args?.title ? { title: args.title } : {}) }, { session: sessionId, origin: { kind: 'user', ref: `session:${sessionId}` } });
+      return {
+        output: `Started network change ${change.id} on ${change.target.name}: “${change.title}”. Nova takes a snapshot and works out the diff now; nothing changes until the person confirms it in Tasks. After the change, if Nova can’t hear from one of their devices within ${Math.round(change.window_s / 60)} minutes, it puts the snapshot back by itself.`,
+        summary: change.title,
+        link: '/tasks',
+      };
+    },
+  },
+  network_status: {
+    signature: '{}',
+    doc: 'Networking: the targets the person registered (names and kinds, never their configuration), the devices whose contact keeps a change, and each change’s state (waiting for the person, watching for contact, kept, reverted) with the reason.',
+    needsApproval: false,
+    available: (ctx) => ctx.ops,
+    run(_args, { ops }) {
+      const x = ops.network.list();
+      const targets = x.targets.map((t) => `${t.name} · ${t.kind}${t.token ? '' : ' · its token isn’t saved yet'}`);
+      const changes = x.changes.slice(0, 20).map((c) => `${c.id} · ${c.title} · ${c.target.name} · ${c.state}${c.changed.length ? ` · ${c.changed.join(', ')}` : ''}${c.reason ? `\n  ${c.reason}` : ''}`);
+      return {
+        output: [targets.length ? `Targets:\n${targets.join('\n')}` : 'No targets: the person registers one outside chat.', `Devices that keep a change: ${x.devices.map((d) => d.name).join(', ') || 'none paired'}. The window is ${Math.round(x.window_s / 60)} minutes.`, changes.length ? `Changes:\n${changes.join('\n')}` : 'No changes yet.'].join('\n'),
+        summary: `${x.targets.length} targets, ${x.changes.length} changes`,
+      };
+    },
+  },
+  account_change: {
+    signature: '{"change": "password", "site": "accounts.example.com", "steps": [{"do": "navigate", "url": "https://accounts.example.com/security"}, {"do": "new_password", "current": "#current", "password": "#new", "confirm": "#again", "submit": "#save", "done_when": ".saved"}], "verify": {"url": "https://accounts.example.com/security", "expect": ["Password updated"]}}',
+    doc: 'Change an account in Nova’s own browser, on one site: "change" is "password" (a new_password step: Nova makes the new password itself and keeps it in the vault), "create" (a create_account step with "name", the account’s email address or user name) or "mfa" (two-step sign-in, with a "code" step where the person types the code themselves). "steps" is a browser plan on that site (navigate, click, wait, read, login with the saved sign-in, and the account step), naming fields by CSS selector; "verify" names the page that shows it worked. Never ask the person for a password or a code in chat, and never put one in a plan: Nova types saved sign-ins and new passwords itself, and the person types codes. They confirm it in Tasks, every time, and must be there while it runs.',
+    needsApproval: false,
+    available: (ctx) => ctx.ops,
+    run(args, { ops, sessionId }) {
+      const t = ops.browser.account({ change: args?.change, site: args?.site, steps: args?.steps, verify: args?.verify, ...(args?.title ? { title: args.title } : {}) }, { origin: { kind: 'user', ref: `session:${sessionId}` } });
+      return {
+        output: `Asked the person in Tasks: “${t.title}”. It runs only when they confirm it, and only while they’re there: Nova types the saved sign-in and the new password it makes itself, and keeps it in the vault; any code is theirs to type. No password goes through this conversation.`,
+        summary: t.title,
+        link: '/tasks',
+      };
+    },
+  },
   // Nova's own state, read in process from its registries (src/core/self.ts). Read-only; names and
   // states only, never a secret.
   nova_instance: {
@@ -369,8 +445,8 @@ export const TOOLS = {
 
 // The tools on offer right now: Gmail's only while it's connected, use_skill
 // only when a skill is installed, delegate only in a conversation with the person.
-export function availableTools({ gmail = false, skills = 0, delegate = false, self = false, coding = false } = {}) {
-  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate, self, coding }));
+export function availableTools({ gmail = false, skills = 0, delegate = false, self = false, coding = false, ops = false } = {}) {
+  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate, self, coding, ops }));
 }
 
 // Local-only means nothing leaves the person's devices, so tools that reach the internet (the

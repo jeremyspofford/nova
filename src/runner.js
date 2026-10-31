@@ -37,6 +37,9 @@ export const GUARDED = {
   schedule_set: 'change a schedule',
   schedule_remove: 'change a schedule',
   code_change: 'change code in a repository',
+  infra_plan: 'plan infrastructure',
+  network_change: 'change your network',
+  account_change: 'change an account',
 };
 // The person's own files: never screened when read (their writes are guarded instead).
 const STANDING_EXACT = new Set([...WRITABLE, 'MEMORY.md']);
@@ -101,6 +104,7 @@ export class Runner extends EventEmitter {
     this.permissions = new Permissions(config.home, () => TOOLS);
     this.helpers = null; // set by the server: where delegate hands work
     this.coding = null; // set by the server: coding runs (the core's, M10c)
+    this.ops = null; // set by the server: infrastructure, networking and accounts (the core's, M10d)
   }
 
   record(sessionId, ev) {
@@ -313,7 +317,7 @@ export class Runner extends EventEmitter {
       const installed = this.skills.installed().filter((x) => !this.skillHeld(x.id));
       // Helpers and scheduled runs can't hand work to helpers of their own,
       // and a helper doesn't touch schedules.
-      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: this.skills.installed().length, delegate: !run.alone && !!this.helpers, self: !!this.self, coding: !run.alone && !run.helper && !!this.coding }), mode)
+      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: this.skills.installed().length, delegate: !run.alone && !!this.helpers, self: !!this.self, coding: !run.alone && !run.helper && !!this.coding, ops: !run.alone && !run.helper && !!this.ops }), mode)
         .filter((n) => !(run.helper && n.startsWith('schedule_')));
       const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
       const schedules = run.helper ? '' : schedulesSection(this.schedules.list(), this.config.timezone);
@@ -376,7 +380,7 @@ export class Runner extends EventEmitter {
       const ctx = {
         home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
         gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
-        schedules: this.schedules, sessionId, self: this.self, coding: this.coding,
+        schedules: this.schedules, sessionId, self: this.self, coding: this.coding, ops: this.ops,
         // A helper started from a run that read outside content starts with that taint.
         delegate: (args) => this.helpers.spawn({ ...args, parent: sessionId, turn, taint: run.taint }),
         seen: (p) => { page = p; },
@@ -642,6 +646,9 @@ export class Runner extends EventEmitter {
     if (call.name === 'exec') return String(a.command ?? '');
     // A coding run hands its goal and commands to a coding agent, which may be off the devices.
     if (call.name === 'code_change') return [a.goal, a.test_command, a.preview_command].filter((x) => typeof x === 'string').join('\n');
+    // M10d: what a change would write to a network target, and what an account step would send.
+    if (call.name === 'network_change') return JSON.stringify(a.patch ?? null);
+    if (call.name === 'account_change') return JSON.stringify([a.steps ?? null, a.verify ?? null]);
     return null;
   }
 
