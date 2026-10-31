@@ -20,6 +20,18 @@
 //   secrets            names; the Secret made at apply, never in git | refused for now (no vault hand-off)
 //   live version       live: <version>                               | where the stable port points
 //   soak_s             the previous Deployment kept at 0 replicas    | the previous slot kept, stopped
+//
+// The command (ADR Point 6: "the command a workload starts with is part of its signed manifest,
+// never an argument to a verb"): what runs is the pinned artifact and nothing else. A command is
+// either the artifact itself (`<name> args…` or `./<name> args…`, `<name>` being the last segment of
+// its url), or Nova's own Node with the artifact as its script (`node <name> args…`), the words
+// after it being the program's own arguments. Never another program on PATH, an absolute or `../`
+// path, a shell, or an interpreter option or inline code (`-e`, `--eval`, `--input-type`,
+// `--require`, `--import`) before the artifact. The supervisor driver checks it again at every start:
+// the file it runs is a regular file inside the version's slot whose SHA-256 is the pinned one.
+//
+// Ports below 1024 are refused (they need privileges and belong to the system); the ports Nova uses
+// itself (the console's, the device door's) are refused by the driver, from Nova's configuration.
 export const ALONGSIDE = Object.freeze(['full', 'shadow', 'copy', 'none'] as const);
 export type Alongside = (typeof ALONGSIDE)[number];
 export const PLACEMENT_MODES = Object.freeze(['pinned', 'preferred', 'floating'] as const);
@@ -73,6 +85,28 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const isStrs = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
 const isInt = (v: unknown, min: number, max: number) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
 const isCommand = (v: unknown) => isStrs(v) && v.length > 0 && v.every((x) => x.length > 0 && x.length < 4096 && !x.includes('\0'));
+// The interpreters a program may name before its own file: Nova's own Node, and nothing else.
+export const INTERPRETERS: ReadonlySet<string> = new Set(['node']);
+const PROGRAM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+// The file name an artifact's url gives it, or null when it gives none Nova would install.
+export function programName(url: string): string | null {
+  let name: string;
+  try { name = decodeURIComponent(new URL(url).pathname.split('/').pop() ?? ''); } catch { return null; }
+  return PROGRAM_NAME.test(name) && name !== 'definition.json' ? name : null;
+}
+
+// Why this command doesn't start exactly the pinned artifact, or null when it does.
+export function commandProblem(command: string[], name: string): string | null {
+  const isProgram = (w: string | undefined) => w === name || w === `./${name}`;
+  const [first, second] = command;
+  if (first !== undefined && INTERPRETERS.has(first)) {
+    if (isProgram(second)) return null;
+    return `With ${first}, the next word must be its own program, ${name}: no interpreter option or inline code (such as -e, --eval, --input-type, --require or --import) and no other file.`;
+  }
+  if (isProgram(first)) return null;
+  return `Its command starts with ${JSON.stringify(first ?? '')}. A program starts as itself (${name} or ./${name}) or with Nova’s own Node (node ${name} …): never another program, a shell, an absolute path or a path out of its folder.`;
+}
 // macOS and Windows devices never run containers (ADR Point 6(a)): K3s agent nodes are Linux only.
 export const notLinux = (platform: string) => /^(darwin|mac|ios|ipados|win)/i.test(platform);
 
@@ -110,7 +144,10 @@ export function validate(input: unknown, o: { devices?: DeviceView[] } = {}): Va
           if (!isObj(prog)) { p.push(`artifact.program.${plat} is {url, sha256, command}.`); continue; }
           if (typeof prog.url !== 'string' || !/^(file|https):\/\/\S+$/.test(prog.url)) p.push(`artifact.program.${plat}.url is a file: or https: address.`);
           if (typeof prog.sha256 !== 'string' || !SHA256.test(prog.sha256)) p.push(`artifact.program.${plat}.sha256 is the file’s SHA-256, 64 lowercase hex digits.`);
+          const name = typeof prog.url === 'string' ? programName(prog.url) : null;
+          if (typeof prog.url === 'string' && !name) p.push(`artifact.program.${plat}.url must end in the program’s file name (letters, digits, dots, dashes or underscores; not definition.json).`);
           if (!isCommand(prog.command)) p.push(`artifact.program.${plat}.command is the command that starts it, as a list of words (never one shell string).`);
+          else if (name) { const why = commandProblem(prog.command as string[], name); if (why) p.push(`artifact.program.${plat}.command: ${why}`); }
           for (const k of Object.keys(prog)) if (!['url', 'sha256', 'command'].includes(k)) p.push(`artifact.program.${plat}.${k} isn’t part of a program.`);
         }
       }
@@ -129,7 +166,7 @@ export function validate(input: unknown, o: { devices?: DeviceView[] } = {}): Va
     for (const [i, port] of d.ports.entries()) {
       if (!isObj(port) || typeof port.name !== 'string' || !PORT_NAME.test(port.name)) { p.push(`ports[${i}].name is lowercase letters, digits and dashes, at most 15 characters.`); continue; }
       // The console alone may say 0: the configured port, or a free one it names when it starts.
-      if (!isInt(port.port, isConsole ? 0 : 1, 65_535)) p.push(`ports[${i}].port (${port.name}) is a port number from 1 to 65535.`);
+      if (!isInt(port.port, isConsole ? 0 : 1024, 65_535)) p.push(`ports[${i}].port (${port.name}) is a port number from 1024 to 65535: lower ones need privileges and belong to the system.`);
       if (names.has(port.name)) p.push(`Two ports are named ${port.name}.`);
       if (nums.has(port.port as number)) p.push(`Port ${port.port} is listed twice.`);
       names.add(port.name);

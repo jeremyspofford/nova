@@ -3,9 +3,13 @@
 // release's code with an IPC channel, ready once it says where it listens. A service the supervisor
 // driver runs (M10e) gives its own command, runs as the leader of its own process group (the whole
 // group is ended with it), has no IPC channel, and is made ready by its health check (`markReady`).
+// Its group is signalled only while it is known to be the same group: while the leader hasn't been
+// reaped, or, after, while /proc still shows a member of it (Linux never reuses a group's number while
+// a member lives). Otherwise the number may belong to someone else by now, and nothing is sent.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
+import { members, stat, type ProcId } from './procs.ts';
 
 const KEEP_LINES = 200;
 
@@ -20,6 +24,7 @@ export class ServerProcess extends EventEmitter {
   #exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 
   readonly group: boolean;
+  readonly identity: ProcId | null;
 
   constructor(o: { root: string; env: Record<string, string>; echo?: (s: string) => void; argv?: string[]; group?: boolean }) {
     super();
@@ -29,6 +34,9 @@ export class ServerProcess extends EventEmitter {
     this.proc = spawn(cmd!, args, { cwd: o.root, env: o.env, stdio: this.group ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe', 'ipc'], detached: this.group });
     // A command that can't start (not found) is an exit like any other, never an unhandled error.
     this.proc.on('error', (e) => { this.#lines.push(`It couldn’t start: ${e.message}`); });
+    // Who it is, for a later supervisor: its pid and start time (Linux), read as soon as it exists.
+    const st = this.proc.pid ? stat(this.proc.pid) : null;
+    this.identity = st ? { pid: st.pid, start: st.start } : null;
     const take = (d: Buffer) => {
       const text = this.#partial + String(d);
       const lines = text.split('\n');
@@ -114,8 +122,18 @@ export class ServerProcess extends EventEmitter {
     try { this.proc.kill(s); } catch { /* already gone */ }
   }
 
+  // What the leader left behind. With the leader reaped, the group is signalled only if a member is
+  // still there to show the number is still this group's.
   #endGroup(): void {
-    if (this.group && this.proc.pid) try { process.kill(-this.proc.pid, 'SIGKILL'); } catch { /* nothing left */ }
+    if (!this.group || !this.proc.pid) return;
+    if (!this.alive && !members(this.proc.pid).length) return;
+    try { process.kill(-this.proc.pid, 'SIGKILL'); } catch { /* nothing left */ }
+  }
+
+  // The processes in its group now, by pid and start time (Linux; empty elsewhere).
+  groupMembers(): ProcId[] {
+    if (!this.group || !this.proc.pid) return [];
+    return members(this.proc.pid).map((m) => ({ pid: m.pid, start: m.start }));
   }
 
   exited() {

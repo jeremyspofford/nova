@@ -20,6 +20,8 @@ export interface Plan {
   refused: string[];
   where: string;
   steps: PlanStep[];
+  // Exactly what would be started, word for word, as the driver would run it (absent when it can't).
+  command?: string[];
 }
 
 export type VersionStatus = 'installed' | 'alongside' | 'ready' | 'live' | 'kept' | 'failed' | 'rolled_back' | 'removed';
@@ -64,4 +66,7 @@ export interface ServiceDriver {
   switch(service: string, version: string, say?: Say): Promise<Outcome>;
   // Back to the kept version in one step: nothing is installed or downloaded.
   rollback(service: string, o: { auto: boolean; reason: string }, say?: Say): Promise<Outcome>;
+  // Starts the live version again after it was held (it stopped too often), the person having fixed
+  // what stopped it. The same, approved version: nothing new runs. A driver may not offer it.
+  recover?(service: string, say?: Say): Promise<Outcome>;
 }

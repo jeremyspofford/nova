@@ -8,9 +8,11 @@
 //   node src/supervisor/main.ts rollback  [--confirm rollback]
 //   node src/supervisor/main.ts recover   leave safe mode and start Nova again
 //   node src/supervisor/main.ts services  [--json]          the services it runs (M10e)
-//   node src/supervisor/main.ts service plan|deploy <definition.json>
+//   node src/supervisor/main.ts service plan <definition.json>
+//   node src/supervisor/main.ts service deploy <definition.json> [--confirm <service>@<version>]
 //   node src/supervisor/main.ts service promote <service> <version> [--confirm <service>@<version>]
 //   node src/supervisor/main.ts service rollback <service> [--confirm rollback]
+//   node src/supervisor/main.ts service recover <service>
 //
 // `run` keeps the Nova server running (restarts, safe mode, health checks) and takes deploys.
 // Deploying is tier 3: it asks you to type the version, every time, unless --confirm repeats it.
@@ -18,9 +20,11 @@
 // (default ~/.nova-supervisor, or NOVA_SUPERVISOR_DIR). --repo is the git repository whose tags
 // are releases (default: this checkout).
 //
-// A service's version is deployed alongside the live one with no traffic (tier 1), then promoted on
-// the person's word: they type <service>@<version>, every time (tier 2, or 3 for the console and
-// anything with secrets or OS permissions). Going back asks for the word rollback (tier 2).
+// A service's version is deployed alongside the live one with no traffic (tier 1); deploying a
+// command no approved version ran asks first, shown word for word, and the person types
+// <service>@<version>. It is promoted on the person's word: they type <service>@<version>, every time
+// (tier 2, or 3 for the console and anything with secrets or OS permissions). Going back asks for the
+// word rollback (tier 2). Recovering a held service starts its approved version again (tier 1).
 import { connect } from 'node:net';
 import { createInterface } from 'node:readline/promises';
 import { readFileSync } from 'node:fs';
@@ -54,12 +58,12 @@ function readState(dir: string): SupervisorState | null {
 }
 
 // One request to the running supervisor; progress lines are printed as they come.
-function ask(dir: string, req: Record<string, unknown>): Promise<{ ok: boolean; said: string }> {
+function ask(dir: string, req: Record<string, unknown>): Promise<{ ok: boolean; said: string; asks?: boolean }> {
   return new Promise((done) => {
     const sock = connect(join(dir, 'control.sock'));
     let buf = '';
     let settled = false;
-    const finish = (r: { ok: boolean; said: string }) => { if (!settled) { settled = true; done(r); } };
+    const finish = (r: { ok: boolean; said: string; asks?: boolean }) => { if (!settled) { settled = true; done(r); } };
     sock.on('connect', () => sock.write(`${JSON.stringify(req)}\n`));
     sock.on('data', (d) => {
       buf += String(d);
@@ -68,8 +72,8 @@ function ask(dir: string, req: Record<string, unknown>): Promise<{ ok: boolean; 
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
         try {
-          const m = JSON.parse(line) as { said?: string; done?: boolean; ok?: boolean };
-          if (m.done) finish({ ok: m.ok === true, said: String(m.said ?? '') });
+          const m = JSON.parse(line) as { said?: string; done?: boolean; ok?: boolean; asks?: boolean };
+          if (m.done) finish({ ok: m.ok === true, said: String(m.said ?? ''), asks: m.asks === true });
           else if (m.said) process.stdout.write(`${m.said}\n`);
         } catch { /* not ours */ }
       }
@@ -104,7 +108,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     // Only the home is needed here. A setting the server would refuse is the server's to say (and,
     // if it keeps refusing, safe mode's), so the supervisor still starts.
     let configured: string;
-    try { configured = loadConfig().home; } catch { configured = process.env.NOVA_HOME ?? join(homedir(), 'Nova'); }
+    // The ports Nova itself uses, so no service the supervisor runs can take one.
+    let ports: { console: number | null; mesh: number | null } = { console: null, mesh: null };
+    try {
+      const cfg = loadConfig();
+      configured = cfg.home;
+      ports = { console: Number.isInteger(cfg.port) ? cfg.port : null, mesh: cfg.mesh?.port ?? null };
+    } catch { configured = process.env.NOVA_HOME ?? join(homedir(), 'Nova'); }
     const home = resolve(str(a.flags.home) ?? configured);
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^NOVA_(SUPERVISOR_|SANDBOX|SUPERVISED)/.test(k)) env[k] = v;
@@ -113,7 +123,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (str(a.flags['canary-s'])) timings.canaryMs = Number(a.flags['canary-s']) * 1000;
     const tests = str(a.flags.tests) ?? process.env.NOVA_RELEASE_TESTS ?? 'npm test';
     const sup = new Supervisor({
-      dir, home, repo: resolve(str(a.flags.repo) ?? CODE_ROOT), base: CODE_ROOT, env, tests: tests.split(/\s+/).filter(Boolean), timings,
+      dir, home, repo: resolve(str(a.flags.repo) ?? CODE_ROOT), base: CODE_ROOT, env, tests: tests.split(/\s+/).filter(Boolean), timings, ports,
       echo: (s) => process.stdout.write(s), log: (s) => process.stdout.write(s),
     });
     try {
@@ -127,6 +137,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const quit = () => { void sup.close().then(done); };
       process.once('SIGTERM', quit);
       process.once('SIGINT', quit);
+      // The terminal it ran in closed: stop as on SIGTERM, ending every service, not leave them.
+      process.once('SIGHUP', quit);
     });
     return 0;
   }
@@ -171,8 +183,22 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if ((sub === 'plan' || sub === 'deploy') && x) {
       let definition: unknown;
       try { definition = JSON.parse(readFileSync(resolve(x), 'utf8')); } catch (e) { process.stderr.write(`${x} isn’t a JSON file that can be read: ${(e as Error).message}\n`); return 2; }
-      const r = await ask(dir, { cmd: `service-${sub}`, definition });
+      let r = await ask(dir, { cmd: `service-${sub}`, definition, ...(str(a.flags.confirm) ? { confirm: str(a.flags.confirm) } : {}) });
+      if (sub === 'deploy' && r.asks) {
+        // It runs a command not yet approved: shown word for word, and asked.
+        const d = definition as { service?: string; version?: string };
+        const want = `${d.service}@${d.version}`;
+        process.stdout.write(`${r.said}\n`);
+        const ok = str(a.flags.confirm) === want || await confirm(`Type ${want} to run it: `, want);
+        if (!ok) { process.stderr.write(`Not deployed: it needs your confirmation (type ${want}, or pass --confirm ${want}).\n`); return 2; }
+        r = await ask(dir, { cmd: 'service-deploy', definition, confirm: want });
+      }
       process.stdout.write(`${sub === 'plan' && r.said.startsWith('{') ? JSON.stringify(JSON.parse(r.said), null, 2) : r.said}\n`);
+      return r.ok ? 0 : 1;
+    }
+    if (sub === 'recover' && x) {
+      const r = await ask(dir, { cmd: 'service-recover', service: x });
+      process.stdout.write(`${r.said}\n`);
       return r.ok ? 0 : 1;
     }
     if (sub === 'promote' && x && y) {
@@ -203,9 +229,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   node src/supervisor/main.ts rollback [--confirm rollback]
   node src/supervisor/main.ts recover | restart
   node src/supervisor/main.ts services [--json]
-  node src/supervisor/main.ts service plan | deploy <definition.json>
+  node src/supervisor/main.ts service plan <definition.json>
+  node src/supervisor/main.ts service deploy <definition.json> [--confirm <service>@<version>]
   node src/supervisor/main.ts service promote <service> <version> [--confirm <service>@<version>]
   node src/supervisor/main.ts service rollback <service> [--confirm rollback]
+  node src/supervisor/main.ts service recover <service>
 `);
   return a.cmd === 'help' ? 0 : 2;
 }

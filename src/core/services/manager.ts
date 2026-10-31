@@ -3,11 +3,16 @@
 // file per service and version, ADR-4), validates each one, picks the driver, and moves a version
 // through the stages in their order, each at its tier (NOVA-SPEC §6, the ADR's table):
 //   - deploy: installed and started alongside, with no production traffic, then its contract tests
-//     and health (tier 1: nothing serves from it, and undoing it removes it);
+//     and health (tier 1: nothing serves from it, and undoing it removes it). A command no approved
+//     version of the service has run (the first one, or one that changed since the live version)
+//     asks first, typed (tier 2, or 3), because deploying runs it. A version is registered only once
+//     it has passed;
 //   - promote: traffic moves to it (tier 2, or 3 for the console and anything with secrets or OS
 //     permissions), only for a version that passed; the previous one is kept for its soak;
 //   - rollback: the kept version again in one step (tier 2 when asked; tier 1 when the driver does it
-//     by itself after failed health).
+//     by itself after failed health);
+//   - recover: a held service's live version started again on the person's word (tier 1: the same
+//     approved version, nothing new runs).
 // The supervisor driver is the default; nothing here knows how a driver runs anything.
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -56,17 +61,32 @@ export class ServiceManager {
     return { ok: false, problems: this.drivers.map((d) => `${d.name}: ${d.available().said}`) };
   }
 
-  // Tier 1: started alongside, tested, never given traffic.
-  async deploy(input: unknown, say: Say = () => {}): Promise<Outcome> {
+  // Tier 1: started alongside, tested, never given traffic. A command not yet approved asks first.
+  async deploy(input: unknown, say: Say = () => {}, confirm?: unknown): Promise<Outcome & { tier?: 2 | 3; asks?: boolean }> {
     const p = this.plan(input);
     if (!p.ok) return { ok: false, said: `The definition can’t be used: ${p.problems.join(' ')}` };
     if (!p.plan.ok) return { ok: false, said: `The ${p.driver.name} driver can’t run ${p.def.service} ${p.def.version}: ${p.plan.refused.join(' ')}` };
-    const known = this.definition(p.def.service, p.def.version);
+    const { service, version } = p.def;
+    const known = this.definition(service, version);
     if (known && JSON.stringify(known) !== JSON.stringify(p.def)) {
-      return { ok: false, said: `${p.def.service} ${p.def.version} is already registered with a different definition. A changed service is a new version.` };
+      return { ok: false, said: `${service} ${version} is already registered with a different definition. A changed service is a new version.` };
     }
-    this.#save(p.def);
-    return p.driver.apply(p.def, say);
+    const cmds = commands(p.def);
+    if (cmds !== null) {
+      const live = this.#find(service)?.status.live ?? null;
+      const approved = live ? this.definition(service, live) : null;
+      if (!approved || commands(approved) !== cmds) {
+        const tier = Math.max(2, promotionTier(p.def)) as 2 | 3;
+        if (confirm !== `${service}@${version}`) {
+          const argv = p.plan.command ? p.plan.command.map((w) => JSON.stringify(w)).join(' ') : '(see its definition)';
+          return { ok: false, tier, asks: true, said: `Deploying ${service} ${version} runs a command ${approved ? `that ${live}, the approved version, doesn’t` : 'no approved version of it has run'}: ${argv}. Running it, even alongside with no traffic, asks first (tier ${tier}): type ${service}@${version}.` };
+        }
+      }
+    }
+    const r = await p.driver.apply(p.def, say);
+    // Registered only once it passed: a version that failed can be deployed again, corrected.
+    if (r.ok) this.#save(p.def);
+    return r;
   }
 
   // Tier 2 or 3: asked every time. `confirm` is what the person typed: <service>@<version>.
@@ -92,6 +112,14 @@ export class ServiceManager {
     if (!found) return { ok: false, said: `No driver runs ${service}.` };
     if (!found.status.previous) return { ok: false, said: `${service} has no previous version kept to go back to.` };
     return found.driver.rollback(service, { auto: false, reason: 'You asked to go back.' }, say);
+  }
+
+  // Tier 1, on the person's word: the held service's live version, started again.
+  async recover(service: string, say: Say = () => {}): Promise<Outcome> {
+    const found = this.#find(service);
+    if (!found) return { ok: false, said: `No driver runs ${service}.` };
+    if (!found.driver.recover) return { ok: false, said: `The ${found.driver.name} driver doesn’t recover services.` };
+    return found.driver.recover(service, say);
   }
 
   status(): ServiceStatus[] {
@@ -129,4 +157,11 @@ export class ServiceManager {
     }
     return null;
   }
+}
+
+// The commands a definition starts, per platform, as one comparable text; null when it has no program.
+function commands(def: ServiceDefinition): string | null {
+  const prog = def.artifact.program;
+  if (!prog) return null;
+  return JSON.stringify(Object.keys(prog).sort().map((k) => [k, prog[k]!.command]));
 }

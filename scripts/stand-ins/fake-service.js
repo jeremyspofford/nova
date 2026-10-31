@@ -6,6 +6,8 @@
 //   GET  /health         200 while healthy, 500 once sick
 //   GET  /contract       200, or 404 with --no-contract (a version that fails its contract tests)
 //   GET  /whoami         {service, version, pid, port, flavour}
+//   GET  /reset          resets the connection (RST) instead of answering
+//   POST /sicken         makes /health answer 500 from now on (until it is started again)
 //   POST /state/<name>   writes the body to <state>/<name>;  GET /state/<name> reads it back
 //
 // Flags (part of a version's command, so each version behaves as its definition says):
@@ -16,6 +18,11 @@
 //                           a SIGTERM in <state>/child-<version>.sigterm and otherwise ignores it
 //                           (only the group's SIGKILL ends it), and writes its pid to
 //                           <state>/child-<version>.pid: the whole group is asked, then made, to stop
+//   --chdir                 moves its working folder to / once started, as many daemons do
+//   --refuse-real-state     exits at once (code 3) unless it runs on a scratch copy of its state
+//   --start-once            starts once on its real state; started there again, it exits (code 4),
+//                           as a program would with a stale lock
+//   --slow-stop             ignores SIGTERM: only SIGKILL, after the grace period, stops it
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -37,12 +44,23 @@ if (flag('--child')) {
   writeFileSync(join(state, `child-${version}.pid`), String(child.pid));
 }
 
+if (flag('--chdir')) setTimeout(() => process.chdir('/'), 50);
+const scratch = state.includes('/scratch/');
+if (flag('--refuse-real-state') && !scratch) { console.error('refusing the real state'); process.exit(3); }
+if (flag('--start-once') && !scratch) {
+  const lock = join(state, `started-${version}`);
+  try { readFileSync(lock); console.error('a stale lock: started here before'); process.exit(4); } catch { writeFileSync(lock, String(process.pid)); }
+}
+let sick = false;
+
 const NAME = /^[a-z0-9-]{1,40}$/;
 const server = createServer((req, res) => {
   const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
   const url = req.url ?? '/';
-  if (url === '/health') return Date.now() - started < healthyFor ? json(200, { ok: true }) : json(500, { ok: false, said: 'sick' });
+  if (url === '/health') return !sick && Date.now() - started < healthyFor ? json(200, { ok: true }) : json(500, { ok: false, said: 'sick' });
+  if (url === '/sicken' && req.method === 'POST') { sick = true; return json(200, { ok: true }); }
   if (url === '/contract') return flag('--no-contract') ? json(404, { ok: false }) : json(200, { ok: true });
+  if (url === '/reset') return req.socket.resetAndDestroy();
   if (url === '/whoami') return json(200, { service: process.env.NOVA_SERVICE, version, pid: process.pid, port, flavour: value('--flavour') ?? null, home: process.env.HOME });
   const m = /^\/state\/([^/?]+)$/.exec(url);
   if (m && NAME.test(m[1])) {
@@ -58,4 +76,4 @@ const server = createServer((req, res) => {
   json(404, { ok: false });
 });
 server.listen(port, '127.0.0.1');
-process.on('SIGTERM', () => process.exit(0));
+process.on('SIGTERM', () => { if (!flag('--slow-stop')) process.exit(0); });

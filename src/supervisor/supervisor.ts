@@ -42,6 +42,8 @@ export interface Timings {
   canaryMs: number;
   probeEveryMs: number;
   testsMs: number;
+  // The longest single timer a service's soak uses (tests); longer waits are chained.
+  maxTimerMs?: number;
 }
 
 export const DEFAULT_TIMINGS: Timings = {
@@ -66,6 +68,9 @@ export interface SupervisorOptions {
   log?: (s: string) => void;
   // The console's definition for a version (default: consoleDefinition). Tests give their own.
   consoleDefinition?: (o: { version: string; port: number }) => ServiceDefinition;
+  // The ports Nova itself is configured to use (main.ts reads them from Nova's configuration), on
+  // top of what the environment says: no service may take one.
+  ports?: { console?: number | null; mesh?: number | null };
 }
 
 type Say = (line: string) => void;
@@ -125,11 +130,26 @@ export class Supervisor {
         },
       },
       problem: (p) => this.#problem(p),
+      reserved: () => this.reservedPorts(),
       changed: () => { if (this.state) this.#save(); },
       ...(o.log ? { log: o.log } : {}),
       ...(o.echo ? { echo: o.echo } : {}),
     });
     this.manager = new ServiceManager({ dir: join(o.dir, 'registry'), drivers: [this.services] });
+  }
+
+  // Every port Nova itself uses, by what it is, from its configuration and what runs now: the
+  // console's configured port (taken even while the console restarts, or is held), the port it
+  // answers on now, and the device door's.
+  reservedPorts(): { port: number; what: string }[] {
+    const out: { port: number; what: string }[] = [];
+    const add = (port: unknown, what: string) => { const n = Number(port); if (Number.isInteger(n) && n > 0 && n <= 65_535 && !out.some((x) => x.port === n)) out.push({ port: n, what }); };
+    add(this.o.ports?.console, 'Nova’s own console port');
+    add(this.o.env.NOVA_PORT, 'Nova’s own console port');
+    add(this.state?.server.port, 'the port Nova’s console answers on');
+    add(this.o.ports?.mesh, 'Nova’s device door');
+    try { if (this.o.env.NOVA_MESH_URL) add(new URL(this.o.env.NOVA_MESH_URL).port, 'Nova’s device door'); } catch { /* not a URL: the server says so */ }
+    return out;
   }
 
   // The console's service definition, for the release that runs (or `version`).
@@ -786,7 +806,7 @@ export class Supervisor {
       let req: { cmd?: string; version?: string; confirm?: unknown; service?: string; definition?: unknown };
       try { req = JSON.parse(line); } catch { sock.end(`${JSON.stringify({ done: true, ok: false, said: 'Not a request.' })}\n`); return; }
       const say: Say = (l) => { if (!sock.destroyed) sock.write(`${JSON.stringify({ said: l })}\n`); };
-      const end = (r: { ok: boolean; said: string }) => { if (!sock.destroyed) sock.end(`${JSON.stringify({ done: true, ...r })}\n`); };
+      const end = (r: { ok: boolean; said: string; asks?: boolean }) => { if (!sock.destroyed) sock.end(`${JSON.stringify({ done: true, ...r })}\n`); };
       void (async () => {
         if (req.cmd === 'status') return end({ ok: true, said: JSON.stringify(this.state) });
         // The confirmation is what the person typed (the version, or the word "rollback"), which
@@ -811,14 +831,16 @@ export class Supervisor {
         if (req.cmd === 'recover') return end(await this.recover());
         if (req.cmd === 'restart') return end(await this.restart());
         // Services (M10e), through the Service Manager. Deploying one starts it alongside with no
-        // traffic (tier 1); promoting it wants what the person typed, <service>@<version> (tier 2 or
-        // 3); going back wants the word rollback (tier 2).
+        // traffic (tier 1), and asks first, typed, when it runs a command not yet approved; promoting
+        // it wants what the person typed, <service>@<version> (tier 2 or 3); going back wants the word
+        // rollback (tier 2); recovering a held one starts its approved version again (tier 1).
         if (req.cmd === 'services') return end({ ok: true, said: JSON.stringify(this.manager.status()) });
         if (req.cmd === 'service-plan') {
           const p = this.manager.plan(req.definition);
           return end(p.ok ? { ok: p.plan.ok, said: JSON.stringify(p.plan) } : { ok: false, said: `The definition can’t be used: ${p.problems.join(' ')}` });
         }
-        if (req.cmd === 'service-deploy') return end(await this.manager.deploy(req.definition, say));
+        if (req.cmd === 'service-deploy') return end(await this.manager.deploy(req.definition, say, req.confirm));
+        if (req.cmd === 'service-recover') return end(await this.manager.recover(String(req.service ?? ''), say));
         if (req.cmd === 'service-promote') return end(await this.manager.promote(String(req.service ?? ''), String(req.version ?? ''), req.confirm, say));
         if (req.cmd === 'service-rollback') return end(await this.manager.rollback(String(req.service ?? ''), req.confirm, say));
         end({ ok: false, said: `The supervisor doesn’t know “${req.cmd}”.` });
