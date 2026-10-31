@@ -47,6 +47,8 @@ test('held: the holder hands back; others wait; the hub’s own screen can end s
   assert.deepEqual([mine.status, mine.action, mine.mine], ['waiting', 'hand-back', true]);
   assert.match(mine.line, /^You have control\. Nova waits until you hand back\. It asked you to: Type the code\./);
   assert.match(takeoverActions(mine), /data-action="hand-back">Hand back</);
+  // Second review of PR #238, 4: the person is told what goes while they hold it.
+  assert.match(mine.line, /A payment goes only when you press it yourself; the page can’t pay on its own, and it has no WebSockets\./);
   const other = takeoverState(v, { me: 'device:p2' });
   assert.deepEqual([other.line, other.action], ['Example phone has control. Nova waits until they hand back.', null]);
   const hub = takeoverState(v, { me: 'console' });

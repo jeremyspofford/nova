@@ -388,7 +388,7 @@ export function takeoverState(v, { me = 'console', canTake = true } = {}) {
   if (!v?.live) return { status: 'quiet', line: 'The browser work is over. Nova is checking what it proves.', action: null, held: false, mine: false };
   if (held) {
     const line = mine
-      ? `You have control. Nova waits until you hand back.${v.asked ? ` It asked you to: ${v.asked}` : ''}`
+      ? `You have control. Nova waits until you hand back.${v.asked ? ` It asked you to: ${v.asked}` : ''} A payment goes only when you press it yourself; the page can’t pay on its own, and it has no WebSockets.`
       : `${v.holder.label} has control. Nova waits until they hand back.`;
     // The hub's own screen can end someone else's takeover; nobody else can.
     const action = mine || (me === 'console' && canTake) ? 'hand-back' : null;
