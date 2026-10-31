@@ -177,10 +177,15 @@ export class DockerComputer implements Computer {
   async destroy(m: Machine, images: string[]): Promise<void> {
     await this.run(['rm', '-f', m.container ?? this.#name(m)], { timeoutMs: 60_000 });
     await this.run(['rm', '-f', this.#name(m)], { timeoutMs: 60_000 });
-    // Only this workspace's own images: never the pinned base image.
-    const own = images.filter((i) => i.startsWith(`nova-computer:${this.tag}-${m.id}-`));
-    if (own.length) await this.run(['rmi', '-f', ...own], { timeoutMs: 120_000 });
     m.container = null;
+    await this.drop(m, images);
+  }
+
+  // Only this workspace's own checkpoint images, never the pinned base image or the one its machine
+  // is made from now.
+  async drop(m: Machine, images: string[]): Promise<void> {
+    const own = images.filter((i) => i.startsWith(`nova-computer:${this.tag}-${m.id}-`) && (m.container === null || i !== m.image));
+    if (own.length) await this.run(['rmi', '-f', ...own], { timeoutMs: 120_000 });
   }
 
   async changes(m: Machine): Promise<string[]> {

@@ -30,6 +30,8 @@ export interface Computer {
   reset(m: Machine, to: { image: string; dir: string }): Promise<{ container: string }>;
   // `images`: the workspace's checkpoint images, removed with it.
   destroy(m: Machine, images: string[]): Promise<void>;
+  // Removes checkpoint images of this workspace's that are no longer kept (never the machine's own).
+  drop(m: Machine, images: string[]): Promise<void>;
   // What changed in the machine's own filesystem since its image (for checking a read).
   changes(m: Machine): Promise<string[]>;
   // A long-running process inside, for the egress relay (egress.ts), as `user`.

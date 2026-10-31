@@ -43,6 +43,8 @@ import { captureRoutes } from './capture/routes.ts';
 import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { wireIngest, type ScreenInput } from './ingest/index.ts';
+import { NovaComputer, type ComputerOptions } from './computer/index.ts';
+import { computerRoutes } from './computer/routes.ts';
 import { secretName } from './providers/types.ts';
 import { Resilience } from './resilience/index.ts';
 import { FactoryReset } from './resilience/reset.ts';
@@ -149,6 +151,9 @@ export interface CoreOptions {
   mesh?: MeshListenerInfo | null;
   // Where the vault's key lives (vault.ts): NOVA_VAULT_KEY by default; tests inject a keychain.
   vault?: { mode?: KeyMode; keychain?: ((account: string) => KeyStore | null) | null };
+  // Nova Computer (M10a), for tests: another adapter than Docker, whose home folder a project may
+  // never be, and which addresses the egress proxy counts as public.
+  computer?: Pick<ComputerOptions, 'computer' | 'userHome' | 'egressAllow'>;
   // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
   hubPorts?: () => number[];
   // How the browser worker starts a browser: Chromium, or a stand-in in tests.
@@ -325,6 +330,14 @@ export function createCore(o: CoreOptions) {
     secrets: () => { try { return vault.list().map((n) => vault.get(n)).filter((v): v is string => typeof v === 'string'); } catch { return []; } },
     memory: () => memory.active().map((r) => r.content),
   });
+  // Nova Computer (M10a): workspaces as containers on this machine, each action a ledger task; a
+  // command's output is screened by the ingest gate as tool output.
+  const computer = new NovaComputer({
+    db, log, home: o.home, ledger, verifier, now, privacy: () => profile.privacyDefault(),
+    screen: (r) => ingest.screen({ text: r.text, source: { kind: 'tool', origin: r.origin, ref: r.ref } }),
+    ...(o.computer ?? {}),
+  });
+  ledger.workers.set(computer.worker.id, computer.worker);
   const enroll = new Enrollment({ db, log, devices, identity: meshIdentity, now, publicUrl });
   const access = new Access({ devices, mesh: meshInfo });
   // Hub, standby and sync (M4 plan §3).
@@ -600,6 +613,7 @@ export function createCore(o: CoreOptions) {
       backups: keep.health(),
       changes: changes.health(),
       ingest: ingest.health(),
+      computer: computer.health(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
   }
@@ -969,6 +983,8 @@ export function createCore(o: CoreOptions) {
       body: '{need, kind: trigger-rules | template | skill-pack | design-system, via?: local-model | chat}',
       handle: ({ body }) => foundry.request(body),
     },
+    // ---- Nova Computer (M10a) ----
+    ...computerRoutes(computer),
     // ---- browser work with takeover (M5 plan §3) ----
     ...browserRoutes(browser, {
       home: o.home,
@@ -1060,7 +1076,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     self,
-    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer,
     ingest, vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
@@ -1121,6 +1137,7 @@ export function createCore(o: CoreOptions) {
       await role.close();
       // Browsers close first and their tasks stay as they are: the next start runs them again.
       await browser.close();
+      computer.close();
       await capture.stop();
       await Promise.race([ticking.then(() => ledger.idle()), new Promise((r) => setTimeout(r, 2000).unref())]);
       db.close();
