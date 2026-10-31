@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #265 · Nova's words now promise only what its tests show**
+- What changed: Nova's screens, setup questions and help text were reworded to promise only what its own tests can show. For example, Settings now says model calls stay on your devices under local-only, rather than "nothing leaves this machine". Two sentences were simply wrong and are fixed: Nova told itself every command waits for your OK, and that anything that can't be undone always asks. In fact a command runs without asking if you've switched that on; a command that comes after Nova reads something from outside still asks.
+- What you can now do: trust that what Nova tells you about itself has evidence behind it. Nothing works differently; only the words changed.
+- Still unfinished: each stronger promise is written down with the test that would prove it, and comes back when that test passes. A check now blocks any new unproven promise in what you read.
+
 **2026-10-31 · #267 · The layout no longer crushes columns on a folding phone, tablet or narrow window**
 - What changed: on a folding phone's inner screen, a tablet held upright, or any window between a phone and a laptop, Nova no longer squeezes three columns in. Each column has a smallest width, and the side column with your tasks, devices and health only appears when all three fit; until then those cards are on Home. No text is squeezed to a few letters a line, the Online/Offline labels no longer sit on top of device names, and the side column scrolls instead of running off the screen. On an installed app, nothing sits under the camera cutout or the home bar any more.
 - What you can now do: use Nova on the fold's inner screen in either direction, in any of the six designs, and read every card.
