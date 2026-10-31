@@ -33,8 +33,9 @@ const MAX_STEPS = 100;
 const MAX_HOSTS = 20;
 const isStr = (v: unknown, max = 2000): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max;
 
-// "host", "host:port", "*.host" or "*.host:port"; lower case; IPv6 in brackets.
-const HOST = /^(\*\.)?(\[[0-9a-f:.]+\]|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*)(:\d{1,5})?$/;
+// "host", "host:port", "*.host" or "*.host:port"; lower case; IPv6 in brackets. Also the syntax of
+// a Nova Computer workspace's declared hosts (computer/policy.ts).
+export const HOST = /^(\*\.)?(\[[0-9a-f:.]+\]|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*)(:\d{1,5})?$/;
 
 export function normalizeHost(h: string): string {
   return h.trim().toLowerCase().replace(/\.$/, '');

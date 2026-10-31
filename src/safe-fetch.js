@@ -19,31 +19,64 @@ for (const [net, bits] of [
   ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24],
   ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
 ]) PRIVATE.addSubnet(net, bits, 'ipv4');
+// IPv6. Besides loopback, link-local, unique-local, documentation, discard and multicast: ranges
+// that carry an IPv4 address or tunnel to one, since the IPv4 address inside could be this machine
+// or the LAN, refused whole: IPv4-compatible (::/96), the local-use NAT64 prefix (64:ff9b:1::/48),
+// Teredo (2001::/32), 6to4 (2002::/16). And the other IETF special ranges under 2001::/23 that are
+// not one host on the public web (benchmarking, ORCHID).
 for (const [net, bits] of [
-  ['::', 128], ['::1', 128], ['100::', 64], ['2001:db8::', 32], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8],
+  ['::', 96], ['::1', 128], ['100::', 64], ['64:ff9b:1::', 48], ['2001::', 32], ['2001:2::', 48], ['2001:10::', 28], ['2001:20::', 28],
+  ['2001:db8::', 32], ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8],
 ]) PRIVATE.addSubnet(net, bits, 'ipv6');
 
 // Names that only ever mean something on the person's own network.
 const PRIVATE_NAME = /(^|\.)(localhost|local|internal|intranet|lan|home|arpa|ts\.net)\.?$/i;
 
-// Whether an address is one a page may send the agent to: public, unicast.
-export function publicAddress(address) {
-  const kind = isIP(address);
-  if (kind === 4) return !PRIVATE.check(address, 'ipv4');
-  if (kind !== 6) return false;
-  const a = address.toLowerCase();
-  // An IPv4 address carried in IPv6 (mapped, or NAT64) is judged as the IPv4 address it is.
-  const v4 = a.match(/^(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/)?.[1] ?? fromHexV4(a);
-  if (v4) return publicAddress(v4);
-  return !PRIVATE.check(a, 'ipv6');
+// Whether a host name is one of those (Nova Computer's egress proxy applies the same rule).
+export function privateName(host) {
+  return PRIVATE_NAME.test(String(host));
 }
 
-function fromHexV4(a) {
-  const m = a.match(/^(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-  if (!m) return null;
-  const hi = parseInt(m[1], 16);
-  const lo = parseInt(m[2], 16);
-  return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+// Whether an address is one a page may send the agent to: public, unicast. An IPv6 address is
+// parsed into its 128 bits first, so it is judged by what it is, never by how it is written (with
+// leading zeros, uncompressed, with a zone): an IPv4 address carried in it (IPv4-mapped
+// ::ffff:0:0/96, IPv4-translated ::ffff:0:0:0/96, NAT64 64:ff9b::/96) is judged as that IPv4
+// address, so a NAT64 network still reaches the public IPv4 web while 127.0.0.1 in any spelling is
+// refused; everything else against the IPv6 list (which holds 64:ff9b:1::/48 whole).
+export function publicAddress(address) {
+  const kind = isIP(String(address).split('%')[0]);
+  if (kind === 4) return !PRIVATE.check(String(address), 'ipv4');
+  if (kind !== 6) return false;
+  const h = ipv6Words(String(address).split('%')[0]);
+  if (!h) return false;
+  const zero = (from, to) => h.slice(from, to).every((x) => x === 0);
+  const v4 = () => `${h[6] >> 8}.${h[6] & 255}.${h[7] >> 8}.${h[7] & 255}`;
+  if (zero(0, 5) && h[5] === 0xffff) return publicAddress(v4());
+  if (zero(0, 4) && h[4] === 0xffff && h[5] === 0) return publicAddress(v4());
+  if (h[0] === 0x64 && h[1] === 0xff9b && zero(2, 6)) return publicAddress(v4());
+  return !PRIVATE.check(h.map((x) => x.toString(16)).join(':'), 'ipv6');
+}
+
+// An IPv6 address as its eight 16-bit words, or null if it isn't one (a trailing dotted IPv4 part
+// counts as the last two words).
+function ipv6Words(a) {
+  let s = a.toLowerCase();
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s);
+  if (dotted) {
+    const b = dotted.slice(1).map(Number);
+    if (b.some((x) => x > 255)) return null;
+    s = `${s.slice(0, dotted.index)}${((b[0] << 8) | b[1]).toString(16)}:${((b[2] << 8) | b[3]).toString(16)}`;
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const part = (x) => (x ? x.split(':') : []);
+  const head = part(halves[0]);
+  const tail = halves.length === 2 ? part(halves[1]) : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  if (fill < 0 || (halves.length === 1 && head.length !== 8)) return null;
+  const words = [...head, ...Array(fill).fill('0'), ...tail];
+  if (words.length !== 8 || words.some((w) => !/^[0-9a-f]{1,4}$/.test(w))) return null;
+  return words.map((w) => parseInt(w, 16));
 }
 
 export class Refused extends Error {}

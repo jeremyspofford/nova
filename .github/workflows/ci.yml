@@ -34,6 +34,11 @@ jobs:
             node --check "$f"
           done
       - run: npm run check:themes
+      # Nova Computer's one image (M10a), pinned by digest in src/core/computer/policy.ts, pulled once
+      # here so its tests (Docker is on the runner) don't each wait for it. They skip, saying why, only
+      # where Docker isn't available.
+      - name: Nova Computer image
+        run: docker pull "$(node --input-type=module -e "const m = await import('./src/core/computer/policy.ts'); console.log(m.IMAGE)")"
       - run: npm test
       - run: npm audit --audit-level=high
 

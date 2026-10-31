@@ -12,8 +12,167 @@ built-ins only.
 | `jsqr` 1.4.0 | dev | Test-only: decodes the QR codes Nova draws (`tests/qr.test.js`, the M4 UI tests), so the encoder is checked by an independent decoder. Never loaded by Nova itself. |
 | `playwright-core` 1.56.1 | dev | Drives Chromium for `npm run shots` (golden screens, keyboard path, budgets); no bundled browser download. Never used by Nova at run time: the browser worker speaks CDP itself (M5c). |
 | `claude` CLI | external | The default `agent_cmd`. Swappable by config; nothing in Nova depends on it. |
+| `openssl` CLI | external (tests only) | M10a hardening: the egress tests make a throwaway self-signed certificate for their TLS stand-in hosts, in the test's temp dir, deleted at once. A test skips with the reason where it isn't installed. Never used by Nova. |
+| `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (M10a hardening, round two: the second review of PR #236).** Same branch and PR. The
+review ran probes against Docker and found three things to fix before merge, plus five follow-ups;
+all are fixed, each with a test seen failing on `bf488fe4` (10 of 10 failed there). Evidence:
+`docs/evidence/m10a-gate.md`, "Second review".
+- **The disk-cap poll could be switched off.** A tree 25 deep with 200-character names (made inside
+  with relative `mkdir`/`chdir`) is past PATH_MAX at the host's longer path; the size walk threw
+  ENAMETOOLONG, `.catch(() => {})` swallowed it, and the machine-disk check behind it never ran: 24
+  MiB past a 2 MiB cap. **Fix:** a check that fails stops the command; the folder and machine checks
+  are separate; every walk stops at PATH_LIMIT with a plain reason; such a folder can't be
+  checkpointed (writes refused), and a reset asks first (tier 2) and removes it at any depth.
+  **Choice:** a length limit, not a file-descriptor walk: portable, and a project rarely needs a
+  path that long.
+- **Command text in summaries.** `docker diff` paths reached the summary (a read touched
+  `/tmp/SYSTEM NOTE: …`). **Fix:** counts only; paths in the run file, screened, withheld by the API
+  with the output. Audited the rest: walk errors no longer name entries, docker CLI errors are one
+  line without paths, the folder check no longer names where a path leads.
+- **Host-run files only at the top level.** **Fix:** found at any depth (metadata only), reported by
+  kind. **Choice:** every `.git` (nested repositories, submodule and worktree `.git` files) is
+  read-only inside like the top one, up to 64; past that, the machine isn't made.
+- **Follow-ups:**
+  - IPv6 is parsed, so `::ffff:0:7f00:1`, `64:ff9b:0:0:0:0:7f00:1` and `0064:ff9b::7f00:1` are judged
+    by the IPv4 inside. **Deviation:** the review suggested blocking these prefixes whole; the
+    embedded address is judged instead, so NAT64 still reaches the public IPv4 web. No spelling
+    changes the answer.
+  - `docker top` failing restarts the machine, and if it still fails nothing runs.
+  - Migration 0015 marks rows without an identity broken, saying why.
+  - The digest tells FIFOs, sockets and devices apart.
+  - ECH is refused (the old claim, "ECH is refused", was wrong: the parser stopped at the SNI).
+- The suite: 1024 tests, 1015 pass, 9 skipped (the existing opt-in ones).
+
+**2026-10-30 (M10a hardening: the PR #236 review).** Same branch, `m10a/computer` (PR #236). The
+evidence is in `docs/evidence/m10a-gate.md`, "Hardening"; the plan `docs/plans/M10a.md` says what is
+built now. All fifteen items were answered, each with a test against real Docker in throwaway
+`mkdtemp` folders with canaries, every container labelled for its test and removed at the end. 27 of
+the 31 new tests failed on the unfixed code (3 passed and stay as guards; 1 tested a parser that
+didn't exist yet); all pass now. One more, for a gap found reviewing the fixes (a checkpoint copy
+that stopped part way stayed on disk), was seen failing with its fix removed. Another, for inode reuse (below). The suite: 1017
+tests, 1008 pass, 9 skipped (the existing opt-in ones).
+- **Folder identity (1, 2).** No two workspaces' folders overlap (nor one and Nova's home). A folder
+  of the person's is resolved when asked: the task stores its real path, device, inode and birth time, the
+  approval shows them, and only that folder is used. Before every mount, start, copy, digest and
+  reset the folder must still be it (not a link, its real path its path, the same device, inode and birth time).
+  Migration 0015 adds the columns.
+  - **Found on CI:** GitHub's ext4 gave a folder made in another's place the old one's inode number
+    again, so the device and inode alone passed it (two tests failed there, not here). The folder's
+    birth time (statx) is part of its identity now; where a filesystem records no births, only the
+    device and inode tell.
+  - **Found:** on the unfixed code, an outer workspace turning an inner one's folder into a link
+    made the inner one's reset delete a canary folder's file and copy into it.
+  - A workspace made on this branch before the migration has no identity on record, and Nova won't
+    touch its folder: make it again (the branch was never merged, so only test homes have one).
+- **No process outlives its command (3, 11).** Before and after every command only the machine's init
+  and its `sleep` may run, else the machine is restarted (0.24 s here) and checked again. The relay
+  lives for one command and starts only then, so nothing can hold its port first (and if something
+  did, it fails closed). The proxy asks on every new connection: not local-only, and the task still
+  running with its OK.
+- **Snapshots (4).** Paused for the image, the copy and the digest. The copy and digest are Nova's own
+  walk: links stay links, files are opened `O_NOFOLLOW` and checked against what was listed, FIFOs,
+  sockets and devices are never opened (and not kept). On the unfixed code a racing loop got a
+  canary's bytes into a checkpoint.
+- **`.git` (5).** Mounted read-only over itself when it is a real folder or file (never a link,
+  which Docker would follow). `git_writable` at creation lets commands commit, and asks first (tier
+  2). `.envrc`, `.vscode`, `.idea`, `.devcontainer`, `.husky`, `.gitmodules` and a `.git` a command made
+  aren't blocked (changing a project is what a workspace is for), but a command that changes one is
+  reported, by a metadata stamp with ctime (cheap for a large `.git`).
+- **Proxy memory (6).** Credit frames on the relay's stdio: 128 KiB in flight per connection each
+  way, at most 64 connections, a refused connection dropped. Measured: 138 MB held for a download
+  nobody read before, 64 KiB now.
+- **TLS and SNI (14).** It was cheap, so it is done: a tunnel must carry a ClientHello whose SNI is
+  the host asked for (none for an address). Non-TLS protocols through a tunnel are refused, which the
+  plan's "HTTPS only" already said.
+- **Untrusted text (7).** Attempts get fixed reason codes; summaries name only declarations and
+  counts; 200 raw attempts at most are kept (the rest counted), in the run file only, and screened
+  with the output.
+- **Disk (8).** Caps for workspaces (20), a folder (4 GiB), one workspace's checkpoint copies (16
+  GiB) and the machine's layer (8 GiB). `--storage-opt` is used only where a one-time probe shows it
+  enforced. **Found:** this machine's Docker accepts it and ignores it (64 MiB cap, 200 MiB written);
+  GitHub's overlay2 on ext4 refuses it. There the caps are checked before each command and every 5
+  s. A reset that can't checkpoint first (folder over the cap) asks first (tier 2).
+- **Read check (9)** by content; machine-side paths by what each is now (ctime included).
+- **Run records (10).** Raw output only when the gate passed it.
+- **Routes (12).** Did not reproduce: every `/computer` route was already behind the console's
+  checks. Kept as a test.
+- **safe-fetch (13).** 6to4, Teredo, IPv4-compatible and local NAT64 addresses were counted public;
+  now refused.
+- **Evidence (15).** "Byte for byte" and "every command is a ledger task" now say what they cover.
+- **Known limits:** domain fronting through a declared CDN host; publishing in registries mode;
+  caps checked by polling where not enforced; a `.git` a command creates is writable until the
+  machine is next made (reported); ECH (see round two, above).
+- **Decisions the owner may want to revisit:**
+  - the cap defaults (no source in the packet);
+  - TLS-only tunnels, which refuse SSH or `git://` through a declared host;
+  - host-run files reported rather than blocked.
+- **Deviation (the branch).** The local `m10a/computer` branch is checked out in another worktree,
+  which this work doesn't touch. The work was done on a local branch made from
+  `origin/m10a/computer` and pushed to `m10a/computer`, so PR #236 has it.
+
+**2026-10-30 (M10a, Nova Computer: Amendment 2026-10-30-C Part 4).** Branch `m10a/computer`. The
+ADR is `docs/plans/M10.md`, the plan `docs/plans/M10a.md` and the evidence `docs/evidence/m10a-gate.md`.
+- **One Nova.**
+  - Behind a `Computer` interface (`src/core/computer/`) with a Docker adapter.
+  - Every action is a Work Ledger task for the `computer` worker, gated by the ledger's own tiers
+    (`minTier`) and privacy gate (`egressFor` + `permits`).
+  - A command's output is screened by the ingest gate (source `tool`), and Nova verifies it itself
+    through a `confirmation` from `nova-computer`.
+  - The egress proxy applies `src/safe-fetch.js`'s rules (`publicAddress`, and its private-name rule,
+    now exported as `privateName`).
+  - Declared hosts use the browser's host syntax (`HOST`, now exported).
+  - Docker CLI processes are tracked with `trackChild`.
+- **Isolation is `--network none`, always:**
+  - only the project folder is mounted;
+  - Nova's own uid, never root;
+  - `--cap-drop ALL` and no-new-privileges;
+  - memory, CPU, pid and open-file limits;
+  - no Docker socket.
+
+  **Found while testing:** under Docker Desktop (this machine), a container on the default bridge
+  reaches this machine's loopback, and so Nova's console, through `host.docker.internal`. The
+  isolation test's positive control shows this, and with bridge networking the test fails on
+  exactly that.
+- **Egress was built, not deferred.** A relay inside the workspace runs as `nobody` and carries
+  connections over its `docker exec` stdio to a CONNECT-only proxy in Nova:
+  - the host and port must be declared;
+  - every resolved address must be public;
+  - names that only mean something on a private network are refused;
+  - the connection goes to exactly the checked address;
+  - every attempt is recorded.
+
+  No Docker network is created and nothing else is mounted, so the host's network configuration
+  doesn't change. Plain HTTP is refused (HTTPS only).
+- **Deviation, the tier numbers.** The ADR calls a reversible write "tier 2 (do, notify, undo)". In
+  this ledger (and NOVA-SPEC §6), tier 2 means *ask first*. The amendment's behaviour, "reversible
+  write = do + notify + undo", is NOVA-SPEC's tier 1, so it is recorded as tier 1:
+  - a write: a checkpoint first, then it runs, shows as handling and can be undone;
+  - a reset: the same;
+  - a read: tier 0;
+  - egress and delete: tier 3;
+  - a folder of the person's: tier 2.
+- **A read is checked, not trusted.** The folder's metadata digest and the container's `docker diff`
+  are taken before and after; a read that changed anything fails and says what changed.
+- **Tests:**
+  - `tests/core/computer-{policy,docker,egress,ledger}.test.ts`;
+  - `tests/acceptance/m10a-{isolation,computer}.test.ts`.
+
+  They skip with the reason where Docker isn't available. CI pulls the pinned image first.
+  - **Seen failing first:** the policy test, before `policy.ts` existed.
+  - **Mutation runs:** each fix was removed in turn and the test failed. The fixes removed were the
+    folder restore, `--network none` (bridge instead), the computer's local-only check, and the read
+    check.
+- **Gaps:**
+  - no disk quota (overlay2 on ext4 can't set one);
+  - the read check misses a change to a container file that had already changed;
+  - checkpoint copies are full copies;
+  - no agent tool drives the computer yet (M10c);
+  - no UI (the ADR asks for none in M10a);
+  - after a factory reset, its containers are swept the next time a workspace is made.
 
 **2026-10-30 (test fix: a device-agent test read a half-written file).**
 - **What happened:** CI on #233, which is docs only, failed `the boot agent makes only the runtime’s own hub calls for it` with `Unexpected end of JSON input`.

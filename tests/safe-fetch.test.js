@@ -22,6 +22,28 @@ test('only public, unicast addresses count as the public web', () => {
   }
 });
 
+// IPv6 ranges that carry or tunnel to an IPv4 address (or are otherwise not one host on the public
+// web): 6to4 (2002::/16, whose next 32 bits are an IPv4 address, 2002:7f00:1:: being 127.0.0.1),
+// Teredo (2001::/32), IPv4-compatible (::/96), the local-use NAT64 prefix (64:ff9b:1::/48), ORCHID
+// and the benchmarking range. All are refused, whatever IPv4 address they carry.
+test('IPv6 addresses that carry an IPv4 address, or tunnel to one, are never the public web', () => {
+  for (const a of ['2002:7f00:1::', '2002:7f00:0001::1', '2002:0a00:0001::1', '2002:5db8:d70e::1', '2001:0:4136:e378:8000:63bf:3fff:fdd2', '2001::1',
+    '::127.0.0.1', '::7f00:1', '::10.0.0.1', '0:0:0:0:0:ffff:7f00:1', '64:ff9b:1::1', '2001:10::1', '2001:20::1', '2001:2::1']) {
+    assert.equal(publicAddress(a), false, a);
+  }
+  // The same addresses in other spellings are judged by the address, not by how it is written: an
+  // IPv4-translated address, and NAT64 written long or with leading zeros.
+  for (const a of ['::ffff:0:7f00:1', '0:0:0:0:ffff:0:7f00:1', '::ffff:0:10.0.0.1', '64:ff9b:0:0:0:0:7f00:1', '0064:ff9b::7f00:1', '64:ff9b::a00:1',
+    '0064:ff9b:0000:0000:0000:0000:0a00:0001', '0:0:0:0:0:ffff:7f00:1', '::ffff:7f00:0001', '64:ff9b:1:0::1', 'fe80::1%eth0']) {
+    assert.equal(publicAddress(a), false, a);
+  }
+  // NAT64 and mapped forms of a public IPv4 address stay public (NAT64 is how an IPv6-only network
+  // reaches the IPv4 web).
+  for (const a of ['64:ff9b::808:808', '0064:ff9b:0:0:0:0:808:808', '::ffff:8.8.8.8', '::ffff:0:808:808']) assert.equal(publicAddress(a), true, a);
+  // Other 2001: space is the public web (2001:4860:: is a public resolver's).
+  for (const a of ['2001:4860:4860::8888', '2606:4700::1111', '2a00:1450:4001::1']) assert.equal(publicAddress(a), true, a);
+});
+
 test('web_fetch refuses Nova’s own console and anything on this machine or the private network', async () => {
   const { server, port } = await serve((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('[{"content":"a private note"}]'); });
   try {
