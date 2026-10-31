@@ -795,7 +795,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 /* M10f: a question's set answers, and the first view at the end. */
 .setup-choices { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-3); padding: 0; border: 0; }
 .setup-many { flex-direction: column; flex-wrap: nowrap; }
-.setup-many .confirm, .roles-field .role-choice { border-color: var(--border-subtle); align-items: flex-start; }
+.setup-many .confirm, .roles-field .role-choice { border-color: var(--border-strong); align-items: flex-start; }
 .setup-choice-off { margin: 0; padding: var(--space-2) var(--space-3); border: 1px dashed var(--border-subtle); border-radius: var(--radius-input); color: var(--text-secondary); }
 .setup-first { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--bg-raised); }
 .setup-first-title { margin: 0; font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-display); }
