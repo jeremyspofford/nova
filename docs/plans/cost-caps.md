@@ -28,9 +28,12 @@ Track 3, branch `costcaps/v1`. The amendment calls this "a small design + build"
   dollars per million tokens by model) is read, not copied. M10d's rule applies: what Nova can't
   price, it can't keep inside a dollar ceiling.
   - Local models cost $0.
-  - A model off the devices with no price makes a task with a dollar ceiling stop **before**
-    its first call, saying "add its price in Settings › Models". The cloud budget's
-    `budgetBlock` does the same.
+  - A model off the devices with no price is shown as "N tokens Nova has no price for". The dollar
+    ceilings count only priced usage ("where priced"), so the **token ceilings** are what holds
+    such a model.
+  - I first planned to stop such a task before its first call, as the cloud budget's
+    `budgetBlock` does with a budget set. With a default dollar ceiling, that would have stopped
+    every scheduled run of the default model command (the `claude` CLI, which counts as remote).
 - **The cloud budget** (`models.budget`, per task and per period, M6) still gates the cloud
   fallback of `models.infer`. These ceilings sit beside it and cap the whole autonomous run.
   Both apply, and neither replaces the other.
