@@ -3,15 +3,17 @@
 // rules every golden task must meet. The suites run end to end in tests/acceptance/evals-*.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { evals } from '../../src/core/index.ts';
 import { CAPABILITY, REGRESSION, TASKS } from '../evals/tasks/index.ts';
-import { CLAIMS } from '../evals/claims.ts';
-import { CLAIM_BACKLOG, CLAIM_CASES } from '../evals/tasks/claims.ts';
+import { CLAIMS, USER_FACING } from '../evals/claims.ts';
+import { CLAIM_BACKLOG, CLAIM_CASES } from '../evals/tasks/claim-backlog.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
+// Every text file under a folder (the closing rule's user-facing folders).
+const walk = (d: string): string[] => readdirSync(d).flatMap((n) => { const p = join(d, n); return statSync(p).isDirectory() ? walk(p) : /\.(js|ts|html|md)$/.test(n) ? [p] : []; });
 type T = evals.Trace;
 const trace = (reply: string, tools: Partial<evals.ToolStep>[] = [], sent: string[] = []): T => ({
   turns: [{ said: 'q', reply, tools: tools.map((t) => ({ name: 'x', args: {}, ok: true, output: '', asked: false, decision: null, ...t })), errors: [] }], sent,
@@ -136,10 +138,16 @@ test('scorecard routes and targets: what Settings › Models reads, from the reg
 });
 
 test('the injection suite loads Part 1’s set through its hook, and refuses a malformed one', async () => {
-  // The hook: by default, the gate's corpus in place (until Track 2's set lands); an override.
-  assert.deepEqual([...evals.INJECTION_SET], ['tests/ingest/corpus/injection.json', 'tests/ingest/corpus/benign.json']);
+  // The hook: by default Part 1's set (evals NOTE 5), mapped from its own shape; an override.
+  assert.deepEqual([...evals.INJECTION_SET], ['tests/ingest/tev1-eval/cases.ts']);
   const cases = evals.loadInjectionSet();
-  assert.ok(cases.length >= 40 && cases.some((c) => c.expect) && cases.some((c) => !c.expect));
+  const manifest = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'ingest', 'tev1-eval', 'manifest.json'), 'utf8')) as { total: number; attacks: number; benign: number; rows: { id: string }[] };
+  assert.deepEqual([cases.length, cases.filter((c) => c.expect).length, cases.filter((c) => !c.expect).length], [manifest.total, manifest.attacks, manifest.benign]);
+  assert.deepEqual(cases.map((c) => c.id), manifest.rows.map((r) => r.id), 'every case of Part 1’s manifest, in order');
+  // An attack keeps its corpus item's expectation; a transform of it must at least be held back.
+  const corpus = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'ingest', 'corpus', 'injection.json'), 'utf8')) as { id: string; expect: string }[];
+  for (const i of corpus) assert.equal(cases.find((c) => c.id === i.id)!.expect, i.expect, i.id);
+  for (const c of cases.filter((x) => x.id.includes(':') && x.expect)) assert.equal(c.expect, 'quarantine', c.id);
   const dir = mkdtempSync(join(tmpdir(), 'nova-injection-'));
   mkdirSync(join(dir, 'set'));
   writeFileSync(join(dir, 'set', 'a.json'), JSON.stringify({ cases: [{ id: 'one', category: 'direct', expect: 'block', source: { kind: 'web', origin: 'example.com' }, text: 'x' }] }));
@@ -191,47 +199,96 @@ test('the core’s regression manifest is the task files’ (bump a version in b
   assert.equal(evals.REGRESSION_FINGERPRINT, evals.fingerprintOf(evals.manifestOf(REGRESSION)));
 });
 
-test('the claims register: every quoted claim is still in its file, every tag is a task’s; unbacked claims are reported', () => {
+test('the claims register: every quoted claim is still in its file, every tag is a task’s; softened claims keep their strong words and name an eval', () => {
   const known = new Set(TASKS.flatMap((t) => t.demonstrates));
   const read = (f: string) => { try { return readFileSync(join(ROOT, f), 'utf8'); } catch { return null; } };
   const report = evals.checkClaims(CLAIMS, evals.demonstrated(TASKS), { read, knownTags: known });
   assert.deepEqual(report.drift.map((d) => `${d.claim.id}: ${d.why}`), []);
   assert.equal(new Set(CLAIMS.map((c) => c.id)).size, CLAIMS.length);
-  assert.ok(report.backed.length > 0 && report.unbacked.length > 0);
+  assert.ok(report.backed.length > 0);
+  // Each softened claim (and each instruction waiting for its eval) names the eval case that would
+  // prove it, as claim.<slug>, and a priority.
+  for (const c of CLAIMS.filter((x) => x.strong || x.kind === 'instruction')) {
+    assert.match(c.eval ?? '', /^claim\.[a-z0-9]+(?:-[a-z0-9]+)*$/, `${c.id}: eval`);
+    assert.ok([1, 2, 3].includes(c.priority ?? 0), `${c.id}: priority`);
+  }
   // Capability tasks back nothing: a tag only they carry leaves a claim unbacked.
   const capOnly = evals.checkClaims([{ id: 'x', where: 'README.md', text: 'Nova', needs: ['profile-pack'] }], evals.demonstrated(TASKS), { read, knownTags: known });
   assert.equal(capOnly.unbacked.length, 1);
   // A claim whose words left the file is drift, so the register can't go stale quietly.
   const gone = evals.checkClaims([{ id: 'y', where: 'README.md', text: 'a sentence that is not in the readme', needs: [] }], new Map(), { read, knownTags: known });
   assert.equal(gone.drift.length, 1);
+  // Strong words back in the file without an eval are drift too.
+  const back = evals.checkClaims([{ id: 'z', where: 'README.md', text: 'Nova', strong: 'Nova', needs: [], eval: 'claim.z', priority: 3 }], new Map(), { read, knownTags: known });
+  assert.match(back.drift[0]?.why ?? '', /strong words .* are back/);
   if (process.env.NOVA_EVALS_CLAIMS) {
     const line = (c: evals.Claim) => `| \`${c.id}\` | ${c.where} | “${c.text}” |`;
+    const soft = (c: evals.Claim) => `| \`${c.id}\` | ${c.priority} | ${c.where} | “${c.strong}” | “${c.text}” | \`${c.eval}\` |`;
+    const byPriority = (a: { claim: evals.Claim }, b: { claim: evals.Claim }) => (a.claim.priority ?? 9) - (b.claim.priority ?? 9);
     writeFileSync(process.env.NOVA_EVALS_CLAIMS, [
+      `${CLAIMS.length} claims: ${report.backed.length} backed, ${report.softened.length} softened, ${report.instructions.length} instruction${report.instructions.length === 1 ? '' : 's'}, ${report.unbacked.length} unbacked in user-facing text.`, '',
       '### Backed', '', '| claim | where | words | by |', '|---|---|---|---|', ...report.backed.map((b) => `${line(b.claim)} ${b.by.map((x) => `\`${x}\``).join(', ')} |`), '',
-      '### Not backed by the suite', '', '| claim | where | words | why |', '|---|---|---|---|', ...report.unbacked.map((u) => `${line(u.claim)} ${u.claim.note ?? (u.claim.needs.length ? `needs ${u.missing.join(', ')}` : 'no task demonstrates it')} |`), '',
+      '### Softened, waiting for an eval (Track 3’s backlog)', '', '| claim | priority | where | was | now | eval |', '|---|---|---|---|---|---|', ...[...report.softened].sort(byPriority).map((x) => soft(x.claim)), '',
+      '### Instructions to the model, waiting for an eval', '', '| claim | priority | where | words | eval |', '|---|---|---|---|---|', ...report.instructions.map((x) => `| \`${x.claim.id}\` | ${x.claim.priority} | ${x.claim.where} | “${x.claim.text}” | \`${x.claim.eval}\` |`), '',
+      '### Not backed by the suite, in user-facing text', '', report.unbacked.length ? report.unbacked.map((u) => `- \`${u.claim.id}\``).join('\n') : 'None.', '',
       '### What the suite demonstrates', '', ...[...evals.demonstrated(TASKS)].map(([tag, ids]) => `- \`${tag}\`: ${ids.map((x) => `\`${x}\``).join(', ')}`), '',
     ].join('\n'));
   }
 });
 
-test('the claim backlog: every unbacked claim has a named case, in priority order; built cases exist and say which claim; the rest say why', () => {
+// The closing rule, turned on for user-facing copy (owner decision 2026-10-31; docs/plans/evals.md
+// NOTES §4): a capability claim in user-facing text that no passing regression eval backs fails
+// CI. It is softened (with its strong words and eval kept in the register) or an eval backs it.
+// The strong words of every softened claim stay out of every user-facing file, not only their own.
+test('the closing rule: no unbacked claim in user-facing text, and no softened claim’s strong words anywhere a person reads', () => {
   const known = new Set(TASKS.flatMap((t) => t.demonstrates));
   const read = (f: string) => { try { return readFileSync(join(ROOT, f), 'utf8'); } catch { return null; } };
-  const unbacked = evals.checkClaims(CLAIMS, evals.demonstrated(TASKS), { read, knownTags: known }).unbacked.map((u) => u.claim.id);
-  assert.deepEqual(CLAIM_BACKLOG.map((b) => b.claim).sort(), [...unbacked].sort(), 'one backlog entry per unbacked claim');
-  assert.deepEqual(CLAIM_BACKLOG.map((b) => b.priority), CLAIM_BACKLOG.map((_, i) => i + 1), 'in priority order');
+  const report = evals.checkClaims(CLAIMS, evals.demonstrated(TASKS), { read, knownTags: known });
+  assert.deepEqual(report.unbacked.map((u) => `${u.claim.id} (${u.claim.where}): “${u.claim.text}”`), [], 'soften these to what the evidence supports, or back them with a regression eval');
+  const files = USER_FACING.flatMap((f) => (f.endsWith('/') ? walk(join(ROOT, f)) : [join(ROOT, f)]));
+  const flat = (x: string) => x.replace(/\s+/g, ' ');
+  const texts = files.map((f) => [f.slice(ROOT.length + 1), flat(readFileSync(f, 'utf8'))] as const);
+  const backed = new Set(report.backed.map((b) => b.claim.id));
+  const found: string[] = [];
+  for (const c of CLAIMS.filter((x) => x.strong && !backed.has(x.id))) {
+    for (const [f, t] of texts) if (t.includes(flat(c.strong!))) found.push(`${c.id}: “${c.strong}” is in ${f}`);
+  }
+  assert.deepEqual(found, []);
+});
+
+// The claim backlog (Track 3, owner decision 2026-10-31): one entry per eval case the register
+// names (claim.<slug>), with the claims it would prove and the register's priority, in priority
+// order. A built case is in the suite (CAPABILITY until it graduates) and names its claims; a
+// pending or blocked one says why. The register and the backlog can't drift apart.
+test('the claim backlog covers every case the register names, in priority order; built cases exist; the rest say why', () => {
+  const named = new Map<string, { claims: string[]; priority: number }>();
+  for (const c of CLAIMS) {
+    if (!c.eval) continue;
+    const e = named.get(c.eval) ?? { claims: [], priority: 9 };
+    e.claims.push(c.id);
+    e.priority = Math.min(e.priority, c.priority ?? 9);
+    named.set(c.eval, e);
+  }
+  assert.deepEqual(CLAIM_BACKLOG.map((b) => b.case).sort(), [...named.keys()].sort(), 'one backlog entry per eval case the register names');
   assert.equal(new Set(CLAIM_BACKLOG.map((b) => b.case)).size, CLAIM_BACKLOG.length);
   for (const b of CLAIM_BACKLOG) {
-    assert.match(b.case, /^claim\.[a-z0-9-]+$/);
+    const r = named.get(b.case)!;
+    assert.deepEqual([...b.claims].sort(), [...r.claims].sort(), `${b.case}: the register's claims`);
+    assert.equal(b.priority, r.priority, `${b.case}: the register's priority`);
     const c = CLAIM_CASES.find((x) => x.id === b.case);
     if (b.status === 'built') {
       assert.ok(c, `${b.case} is built`);
-      assert.equal(c!.claim, b.claim);
-      assert.equal(c!.suite, 'capability', 'a claim case starts in capability and graduates in its own PR');
+      assert.ok(b.claims.includes(c!.claim!), `${b.case} names one of its claims`);
+      assert.ok(c!.demonstrates.includes(b.case), `${b.case} demonstrates its own tag`);
+      assert.ok(c!.suite === 'capability', 'a claim case starts in capability and graduates in its own PR');
+      if (b.covers === 'partial') assert.ok((b.why ?? '').length > 20, `${b.case}: says what it doesn’t cover`);
     } else {
       assert.ok(!c, `${b.case} is ${b.status}, so it isn’t in the suite`);
       assert.ok((b.why ?? '').length > 20, `${b.case}: ${b.status} says why`);
     }
   }
+  const p = CLAIM_BACKLOG.map((b) => b.priority);
+  assert.deepEqual(p, [...p].sort((a, b) => a - b), 'in priority order');
   assert.equal(CLAIM_CASES.length, CLAIM_BACKLOG.filter((b) => b.status === 'built').length);
 });
+

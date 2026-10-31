@@ -2,24 +2,28 @@
 // through the actual ingest battery (core.ingest.screen). This file loads it; it neither copies nor
 // rebuilds it.
 //
-// THE HOOK. Track 2 (branch tev1/decision-provider) is building the set (at least 50 cases:
-// attacks plus benign controls). Until it merges, INJECTION_SET points at the gate's own regression
-// corpus, read in place, which has the same shape. When Track 2's set lands, Track 1 points
-// INJECTION_SET at it (docs/plans/evals.md, NOTES). NOVA_EVALS_INJECTION_SET (paths, comma
-// separated, files or folders of .json) overrides it for one run.
+// THE HOOK. INJECTION_SET is Part 1's set (PR #248): 99 cases, 53 attack and 46 benign, built by
+// code in tests/ingest/tev1-eval/cases.ts from the gate's merged corpus (its attack half is that
+// corpus as is plus code transforms of its exact payloads; its benign half adds instruction-like
+// controls and long documents), checked against its committed manifest in CI. The set stays where
+// Part 1 fixed it; the decision-service code that scores it (eval.ts) is in
+// src/core/decision-service/. NOVA_EVALS_INJECTION_SET (paths, comma separated: .json files or
+// folders of them, or a set module like cases.ts) overrides it for one run.
 //
 // A case: { id, category, expect?: 'quarantine' | 'block', source: {kind, origin}, text?, html?,
-// headers?, attachments? }. With `expect`, an attack: the verdict must be at least that. Without,
+// headers?, attachments? }. Part 1's cases have another shape ({id, attack, category, from,
+// transform, labels, input}); loadInjectionSet maps them (partOneCase). With `expect`, an attack: the verdict must be at least that. Without,
 // a benign control: it must pass (or, where the run has no screening model, may be quarantined:
 // the deterministic layer alone holds back what it can't read). A file may hold an array of cases
 // or { cases: [...] }. Part 1's bounds (detection, false positives, calibration) are Track 2's; the
 // suite records verdicts, and the scorecard keeps the run.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { isAbsolute, join } from 'node:path';
 import { code } from './graders.ts';
 import type { TaskBase } from './types.ts';
 
-export const INJECTION_SET: readonly string[] = ['tests/ingest/corpus/injection.json', 'tests/ingest/corpus/benign.json'];
+export const INJECTION_SET: readonly string[] = ['tests/ingest/tev1-eval/cases.ts'];
 
 // The repository's root (src/core/evals → ../../..).
 const ROOT = join(import.meta.dirname, '..', '..', '..');
@@ -53,6 +57,28 @@ export function injectionPaths(env: NodeJS.ProcessEnv = process.env): string[] {
   return (from?.length ? from : [...INJECTION_SET]).map((p) => (isAbsolute(p) ? p : join(ROOT, p)));
 }
 
+// Part 1's shape (tests/ingest/tev1-eval/cases.ts): an attack is held back at least as its corpus
+// item expects (quarantine for a transform of it), and a benign control has no expectation.
+interface PartOneCase { id: string; attack: boolean; category: string; from: string; input: Omit<InjectionCase, 'id' | 'category' | 'expect'> }
+interface PartOneSet { buildCases: () => PartOneCase[]; corpus: () => { injection: { id: string; expect?: 'quarantine' | 'block' }[] } }
+export function partOneCase(c: PartOneCase, expectOf: (id: string) => 'quarantine' | 'block' | undefined): InjectionCase {
+  const from = /^injection\.json#(.+)$/.exec(c.from)?.[1];
+  const { source, text, html, headers, attachments } = c.input;
+  return {
+    id: c.id, category: c.category,
+    ...(c.attack ? { expect: (from && c.id === from ? expectOf(from) : undefined) ?? 'quarantine' } : {}),
+    source, ...(text !== undefined ? { text } : {}), ...(html !== undefined ? { html } : {}), ...(headers ? { headers } : {}), ...(attachments ? { attachments } : {}),
+  };
+}
+
+// A set module, loaded synchronously (it has no top-level await): Part 1's buildCases() and corpus().
+function moduleCases(f: string): unknown[] {
+  const m = createRequire(import.meta.url)(f) as Partial<PartOneSet>;
+  if (typeof m.buildCases !== 'function') throw new Error(`${f} isn’t an injection set module (it has no buildCases()).`);
+  const expect = new Map((m.corpus?.().injection ?? []).map((i) => [i.id, i.expect]));
+  return m.buildCases().map((c) => partOneCase(c, (id) => expect.get(id)));
+}
+
 export function loadInjectionSet(paths: string[] = injectionPaths()): InjectionCase[] {
   const files = paths.flatMap((p) => {
     if (!existsSync(p)) throw new Error(`The injection set isn’t at ${p}.`);
@@ -60,7 +86,7 @@ export function loadInjectionSet(paths: string[] = injectionPaths()): InjectionC
   });
   const cases: InjectionCase[] = [];
   for (const f of files) {
-    const raw = JSON.parse(readFileSync(f, 'utf8')) as unknown;
+    const raw = /\.(?:ts|js|mjs)$/.test(f) ? moduleCases(f) : JSON.parse(readFileSync(f, 'utf8')) as unknown;
     const list = Array.isArray(raw) ? raw : (raw as { cases?: unknown })?.cases;
     if (!Array.isArray(list)) throw new Error(`${f} holds no cases (an array, or {cases: [...]}).`);
     for (const c of list as InjectionCase[]) {

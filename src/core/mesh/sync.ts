@@ -444,9 +444,15 @@ export class SyncLog {
       const row = JSON.parse(String(r.row)) as Record<string, unknown>;
       const cols = this.#cols(r.tbl);
       for (const [k, v] of Object.entries(row)) {
-        if (!cols.has(k)) bad(`column ${r.tbl}.${k}`);
+        // A column this node doesn't have yet (the hub is a release ahead) is left out when the row
+        // is applied, and said once; the rest of the batch goes on. Its name must still be a name.
+        if (!cols.has(k)) { if (!/^[a-z_][a-z0-9_]{0,63}$/.test(k)) bad(`column ${r.tbl}.${k}`); continue; }
         if (v !== null && typeof v !== 'string' && typeof v !== 'number') bad(`value of ${r.tbl}.${k}`);
       }
+      // Only a row that is this table's row plus new columns (a newer release's) is taken that way:
+      // one missing any of this node's columns is refused, as before.
+      const extra = Object.keys(row).filter((k) => !cols.has(k));
+      if (extra.length && [...cols].some((c) => !Object.hasOwn(row, c))) bad(`column ${r.tbl}.${extra[0]}`);
     }
   }
 
@@ -469,8 +475,16 @@ export class SyncLog {
     return c;
   }
 
+  #skipped = new Set<string>();
+
   #put(tbl: string, row: Record<string, unknown>): void {
-    const cols = Object.keys(row);
+    const known = this.#cols(tbl);
+    const cols = Object.keys(row).filter((c) => known.has(c));
+    for (const c of Object.keys(row)) {
+      if (known.has(c) || this.#skipped.has(`${tbl}.${c}`)) continue;
+      this.#skipped.add(`${tbl}.${c}`);
+      this.#log.warn('sync', `The hub sent ${tbl}.${c}, which this Nova doesn’t have yet (it is a release behind); that column is left out until it updates.`);
+    }
     this.#db.run(
       `INSERT OR REPLACE INTO "${tbl}" (${cols.map((c) => `"${c}"`).join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
       ...cols.map((c) => row[c] as string | number | null),

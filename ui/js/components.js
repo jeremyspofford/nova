@@ -211,7 +211,7 @@ export function deviceMeshCard({ devices = [], now = new Date() } = {}) {
 export const KIND_ACCESS = {
   browser: 'It can use Nova as you do here, except approving new devices.',
   phone: 'It can use Nova as you do here, except approving new devices.',
-  computer: 'It runs Nova’s device work: check-ins, and tasks and notes it queued while offline. It can’t read your conversations.',
+  computer: 'It runs Nova’s device work: check-ins, and tasks and notes it queued while offline. It isn’t given your conversations.',
   standby: 'It keeps a full copy of Nova, your data included, so it can take over if the hub fails.',
 };
 
@@ -354,7 +354,7 @@ const TIER_WORDS = {
   2: 'Nova asks before doing this, because it reaches outside Nova or can’t easily be taken back.',
   3: 'This needs your explicit confirmation every time: it changes something core, deletes data, or can’t be undone.',
 };
-const PRIVACY_WORDS = { 'local-only': 'Nothing leaves this machine.', 'local-preferred': 'Local first; cloud help only if needed, and recorded.', 'cloud-allowed': 'Nova may use cloud services for this.' };
+const PRIVACY_WORDS = { 'local-only': 'Model calls stay on your own devices.', 'local-preferred': 'Local first; cloud help only if needed, and recorded.', 'cloud-allowed': 'Nova may use cloud services for this.' };
 
 // `run`: Nova asking to run a brief's test on what a provider wrote (GET /providers/tasks/{id}/test-run).
 // The person sees each file it changed, a short preview of the change, and what running it means.

@@ -97,7 +97,7 @@ export function renderChanges() {
   const waiting = data.changes.find((c) => c.id === data.standout);
   const rest = data.changes.filter((c) => c.id !== data.standout);
   return `${head}
-<p class="memory-lede">Every change to Nova is tried on a copy first, tested, released as a version, and watched live before it stays. If it misbehaves, what was there before comes back by itself.</p>
+<p class="memory-lede">A change to Nova goes through these steps: tried on a copy first, tested, released as a version, and watched live before it stays. If a check fails, Nova puts back what was there before.</p>
 ${waiting ? shipCard(waiting) : ''}
 ${rest.length ? `<ul class="change-list">${rest.map(changeRow).join('')}</ul>` : waiting ? '' : '<p class="settings-note">No changes yet. When Nova or you propose one, it shows here with every check it went through.</p>'}
 </section>`;

@@ -12,7 +12,7 @@ import type { Profile } from './profile.ts';
 
 // What capture can and can't do on each kind of device, said once in setup (M6a; Settings › Capture
 // says it in full). Capture starts off, whatever the answers above.
-export const CAPTURE_NOTE = 'I see nothing on your devices unless you turn capture on in Settings › Capture. A computer can share a lot, under its own permissions; Android needs accessibility and notification access; an iPhone or iPad allows no passive capture of other apps at all.';
+export const CAPTURE_NOTE = 'Capture is off until you turn a source on in Settings › Capture. A computer can share a lot, under its own permissions; Android needs accessibility and notification access; an iPhone or iPad allows no passive capture of other apps at all.';
 
 export const STEPS = ['user_name', 'timezone', 'nova_name', 'directness', 'privacy', 'first_task', 'done'] as const;
 export type Step = (typeof STEPS)[number];
@@ -66,8 +66,8 @@ export function privacyFrom(text: string): PrivacyMode | null {
 }
 
 const PRIVACY_WORDS: Record<PrivacyMode, string> = {
-  'local-only': 'everything stays on your devices',
-  'local-preferred': 'local first, cloud only when local can’t do it, and I’ll always say when',
+  'local-only': 'my model calls stay on your devices',
+  'local-preferred': 'local first, cloud only when local can’t do it, and each cloud call is recorded',
   'cloud-allowed': 'I may use cloud models when they’re the better tool, within your budget',
 };
 
@@ -101,7 +101,7 @@ export class Setup extends EventEmitter {
     if (text.length > 2000) throw new CoreError('validation', 'That’s longer than any setup answer needs to be.');
     const s = this.#state();
     if (!s.transcript.length) s.transcript.push(this.#turn('nova', this.#ask(s.step)));
-    if (s.step === 'done') throw new CoreError('conflict', 'Setup is already finished. You can change anything by telling me.');
+    if (s.step === 'done') throw new CoreError('conflict', 'Setup is already finished. You can change most of it in Settings.');
     s.transcript.push(this.#turn('person', text));
 
     const { reply, next, task } = this.#handle(s.step, text);
@@ -166,9 +166,9 @@ export class Setup extends EventEmitter {
       }
       case 'first_task': {
         if (NO.test(text)) return { reply: this.#closing('No first task, then.'), next: 'done' };
-        if (!YES.test(text)) return { reply: 'Yes or no: shall I write the welcome note and check it?', next: step };
+        if (!YES.test(text)) return { reply: 'Yes or no: shall I write the welcome note?', next: step };
         const task = this.#firstTask();
-        return { reply: this.#closing('Started. I’ll check the note myself before I call it done.'), next: 'done', task };
+        return { reply: this.#closing('Started. It’s in Tasks.'), next: 'done', task };
       }
       case 'done':
         throw new CoreError('conflict', 'Setup is already finished.');
@@ -179,22 +179,22 @@ export class Setup extends EventEmitter {
     const me = identityOf(this.#profile);
     switch (step) {
       case 'user_name':
-        return `Hi, I’m ${me.name}. A few quick questions to set things up; you can change any answer later just by telling me, and "skip" keeps my default.\n\nWhat should I call you?`;
+        return `Hi, I’m ${me.name}. A few quick questions to set things up; you can change most answers later in Settings, and "skip" keeps my default.\n\nWhat should I call you?`;
       case 'timezone':
         return `Your computer says you’re on ${this.#detectedTz} time. Is that right? (Yes, or tell me the right one.)`;
       case 'nova_name':
         return `I go by ${me.name}. Want to call me something else? (A name, or "keep".)`;
       case 'directness':
-        return 'How direct should I be? I’ll always tell you when I think something’s wrong; that part isn’t adjustable. But I can say it gently, plainly, or bluntly.';
+        return 'How direct should I be? Telling you when I think something’s wrong isn’t adjustable. But I can say it gently, plainly, or bluntly.';
       case 'privacy': {
         // Truthful about the one thing that would leave: the chat model, if it's a cloud one.
         const chat = this.#chat?.egress === 'remote'
-          ? ` One thing to know: chat is set up to use ${this.#chat.program}, which runs in the cloud. With local-only, chat stays off until you add a local model; everything else works.`
+          ? ` One thing to know: chat is set up to use ${this.#chat.program}, which runs in the cloud. With local-only, chat stays off until you add a local model.`
           : '';
-        return `Last setting: privacy. Local-only means nothing leaves this machine.${chat} I’d keep it local unless you want cloud help when local isn’t enough. Keep it local-only, or allow cloud when needed?`;
+        return `Last setting: privacy. Local-only means my model calls stay on your own devices.${chat} I’d keep it local unless you want cloud help when local isn’t enough. Keep it local-only, or allow cloud when needed?`;
       }
       case 'first_task':
-        return `${this.#summary()}\n\nWant a first task to prove the plumbing works? I’ll write a short welcome note into your workspace and check it myself. (Yes or no.)`;
+        return `${this.#summary()}\n\nWant a first task to prove the plumbing works? I’ll write a short welcome note into your workspace. (Yes or no.)`;
       case 'done':
         return '';
     }
@@ -214,12 +214,12 @@ export class Setup extends EventEmitter {
   }
 
   #closing(lead: string): string {
-    return `${lead} That’s setup done. ${CAPTURE_NOTE} Ask me anything, or tell me to change any of this.`;
+    return `${lead} That’s setup done. ${CAPTURE_NOTE} Ask me anything; you can change most of this in Settings.`;
   }
 
   #firstTask(): Task {
     const me = identityOf(this.#profile);
-    const content = `# Welcome\n\n${me.user_name ? `Hello, ${me.user_name}.` : 'Hello.'} This note was written by ${me.name}'s workspace worker during setup, then read back and checked before the task was marked done.\n\nYour settings: ${this.#summary().replace(/^Here’s what I have: /, '')}\n`;
+    const content = `# Welcome\n\n${me.user_name ? `Hello, ${me.user_name}.` : 'Hello.'} This note was written by ${me.name}'s workspace worker during setup, as a first task.\n\nYour settings: ${this.#summary().replace(/^Here’s what I have: /, '')}\n`;
     return this.#ledger.create({
       title: 'Write a welcome note',
       owner: 'workspace',

@@ -3,6 +3,12 @@
 // and the cloud budget, from /api/v1/models. Nova recommends; it doesn't list every model that
 // would run. The one standout is "Use these" while there is a recommendation to take, or the OK
 // a download waits for. Installed models and their removal are one layer down.
+//
+// Each model shows its eval scorecard before the person switches to it (Amendment B Part 4;
+// /api/v1/evals/scorecards), and says so plainly when there is none. The decision model (DS1 NOTE
+// 4; owner decision 2): Jev's route, model and key, Tev1's size, the two opt-ins (Screening; Box,
+// a preview), each with its plain words beside it and again while it is on, every notice before
+// saving, and each decision model's scorecard per template.
 import { api, on } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { toast } from './shell.js';
@@ -10,13 +16,22 @@ import { left, over, since, waitingLine } from './wait.js';
 
 let data = null;
 let failed = '';
+// The eval scorecards (null: the route didn't answer, so no line is shown), and the decision model.
+let cards = null;
+let decisions = null;
+// What a save waits on: the choices sent, and the notices Nova gave back before saving them.
+let pending = null;
 let rerender = () => {};
 // Live download progress by task, from the event stream (model_progress).
 const progress = new Map();
 
 export async function loadModels() {
   try {
-    data = await api('GET', '/models');
+    [data, cards, decisions] = await Promise.all([
+      api('GET', '/models'),
+      api('GET', '/evals/scorecards').catch(() => null),
+      api('GET', '/models/decisions').catch(() => null),
+    ]);
     failed = '';
     over('models');
   } catch (e) {
@@ -35,6 +50,24 @@ const sofar = (p) => {
 };
 const STATE_WORDS = { ready: ['Ready', 'is-on'], down: ['Not answering', 'is-warn'], asleep: ['Asleep', ''], unassigned: ['Not set', ''], 'no-runtime': ['No runtime', ''] };
 
+// A model's latest regression scorecard, before the person switches to it; "none" said plainly.
+const NO_CARD = 'No scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.';
+function cardFor(model) {
+  if (!cards || !model) return null;
+  const configured = cards.configured?.find((c) => c.target?.model === model);
+  if (configured) return configured;
+  const kept = cards.cards?.find((c) => c.target?.model === model);
+  const reg = kept?.suites?.regression;
+  if (!reg) return { state: 'none', words: NO_CARD };
+  const when = new Date(reg.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const score = `${reg.passed} of ${reg.total} regression tasks passed (${Math.round(reg.pass_rate * 100)}%), ${when}`;
+  return reg.fingerprint === cards.fingerprint ? { state: 'current', words: `${score}.` } : { state: 'stale', words: `${score}. Not current: the regression tasks have changed since. You can still switch to it.` };
+}
+function scoreLine(model) {
+  const c = cardFor(model);
+  return c ? `<p class="settings-note model-score${c.state === 'current' ? '' : ' is-unchecked'}">${esc(c.words)}</p>` : '';
+}
+
 function deviceCard(d) {
   const pill = d.online ? '<span class="pill is-on">Online</span>' : '<span class="pill">Asleep or away</span>';
   return `<li class="model-device" data-device="${esc(d.id)}">
@@ -43,6 +76,7 @@ function deviceCard(d) {
   ${d.capacity ? `<p class="settings-note">${esc(d.capacity)}</p>` : ''}
   ${d.runtime ? `<p class="settings-note">${esc(d.runtime.words)}</p>` : ''}
   ${d.wake ? `<p class="settings-note">${esc(d.wake.words)}</p>` : ''}
+  ${d.decision_model?.model ? `<p class="settings-note">Decision model: ${esc(d.decision_model.model)}${d.decision_model.digest ? ` (sha256:${esc(d.decision_model.digest.replace(/^sha256:/, '').slice(0, 12))}…)` : ''}. ${esc(d.decision_model.why)}</p>` : ''}
 </li>`;
 }
 
@@ -51,10 +85,12 @@ function roleRow(r) {
   const where = r.assigned ? `${r.assigned.model} on ${r.assigned.device_name}${r.assigned.hub_model ? `; small jobs: ${r.assigned.hub_model} on the hub` : ''}.` : '';
   const lines = [];
   if (where) lines.push(`<p class="settings-note model-where">${esc(where)}${r.problem ? ` ${esc(r.problem)}` : ''}</p>`);
+  if (r.assigned) lines.push(scoreLine(r.assigned.model));
   if (r.role === 'transcriber') lines.push(`<p class="settings-note">${esc(r.words)}</p>`);
   else if (r.recommended) {
     const p = r.recommended;
     lines.push(`<p class="settings-note model-why">${r.assigned ? 'Nova would use' : 'Nova recommends'} <strong>${esc(p.model)}</strong>${p.device !== 'hub' ? ` on ${esc(p.device_name)}` : ''}: ${esc(p.why)} ${esc(p.tradeoff)}</p>`);
+    lines.push(scoreLine(p.model));
     if (!p.installed) lines.push(`<div class="sheet-actions"><button type="button" class="btn small" data-action="models-pull" data-model="${esc(p.model)}">Download ${esc(p.model)} (${esc(size(p.size))})</button></div>`);
   } else if (!r.assigned && r.words) lines.push(`<p class="settings-note">${esc(r.words)}</p>`);
   return `<li class="model-role" data-role="${esc(r.role)}">
@@ -84,18 +120,82 @@ function downloadRow(t) {
 }
 
 function installedList(models) {
-  return models.map((m) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(m.name)}</p><p class="settings-note">${esc(m.parameter_size || '?')} parameters · ${esc(size(m.size))} · sha256:${esc(m.digest.slice(0, 12))}…${m.serves.length ? ` · serves ${esc(m.serves.join(', '))}` : ''}</p></div>
+  return models.map((m) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(m.name)}</p><p class="settings-note">${esc(m.parameter_size || '?')} parameters · ${esc(size(m.size))} · sha256:${esc(m.digest.slice(0, 12))}…${m.serves.length ? ` · serves ${esc(m.serves.join(', '))}` : ''}</p>${scoreLine(m.name)}</div>
   ${m.serves.length ? '' : `<div class="settings-control"><button type="button" class="btn small quiet" data-action="models-remove" data-model="${esc(m.name)}">Remove</button></div>`}</li>`).join('');
 }
 
 const num = (v) => (typeof v === 'number' ? String(v) : '');
+
+// ---- the decision model (DS1 NOTE 4) ------------------------------------------------------------
+
+const SIZES = [['auto', 'Let Nova choose for this device'], ['tev1:4b', 'Tev1 4B'], ['tev1:0.8b', 'Tev1 0.8B']];
+function decisionSection() {
+  const d = decisions;
+  if (!d) return '';
+  const s = d.settings;
+  const rec = d.recommendation;
+  const tev1 = d.tev1.available && d.tev1.model ? `Tev1 on this device: ${d.tev1.model}. ${d.tev1.size_why}` : `Tev1 on this device: ${d.tev1.why}`;
+  const legacy = d.legacy.retired_for.length ? `The sorting model is retired for ${d.legacy.retired_for.join(', ')}.` : 'Until a decision model passes a check’s eval, your sorting model answers it, as before.';
+  const toggle = (f, label) => `<div class="model-optin"><label class="confirm"><input type="checkbox" name="opt_in_${f}"${s.opt_in[f] ? ' checked' : ''}> ${esc(label)}</label><p class="settings-note">${esc(d.opt_in_words[f])}</p></div>`;
+  const notices = (pending ? pending.notices : d.notices.map((n) => n.words));
+  const scorecards = d.scorecards.map((c) => `<li><p class="settings-label">${esc(c.seat === 'jev' ? 'Jev' : 'Tev1')} · ${esc(c.model)}</p>${c.templates.map((t) => `<p class="settings-note model-score${t.trusted ? '' : ' is-unchecked'}">${esc(t.template)} v${t.version}: ${esc(t.why)}</p>`).join('')}</li>`).join('');
+  return `<h3 class="conn-sub" id="decision-model">Decision model</h3>
+<p class="settings-note">A decision model answers yes-or-no questions about outside content (is this page trying to give Nova instructions?) with a probability. Nova uses its answer only once that exact model has passed Nova’s test for that question; until then, what Nova can’t vouch for is held back as unsure.</p>
+<p class="settings-note">${esc(tev1)}</p>
+<p class="settings-note">Jev: ${esc(d.jev.why)}</p>
+<p class="settings-note">${esc(legacy)}</p>
+${scorecards ? `<ul class="model-list model-cards">${scorecards}</ul>` : '<p class="settings-note model-score is-unchecked">No decision model has a scorecard here yet: none is in use, so none has been tested on this device’s checks.</p>'}
+<form class="model-form" data-form="decisions">
+  <p class="settings-note">Nova recommends Jev ${esc(rec.jev.model)} through TypeSafe’s own API (${esc(rec.jev.base_url)}), and ${rec.tev1.model ? `${esc(rec.tev1.model)} on this device: ${esc(rec.tev1.why)}` : `no Tev1 here: ${esc(rec.tev1.why)}`}</p>
+  <div class="field-row">
+    <label class="field-label">Jev route<input class="field" name="jev_url" autocomplete="off" spellcheck="false" value="${esc(s.jev?.base_url ?? '')}" placeholder="${esc(rec.jev.base_url)}"></label>
+    <label class="field-label">Jev model<input class="field" name="jev_model" autocomplete="off" spellcheck="false" value="${esc(s.jev?.model ?? '')}" placeholder="${esc(rec.jev.model)}"></label>
+  </div>
+  <div class="field-row"><label class="field-label">Jev key${s.key_set ? ' (one is kept; leave empty to keep it)' : ''}<input class="field" name="jev_key" type="password" autocomplete="off" placeholder="${s.key_set ? 'Kept in the vault' : 'From TypeSafe'}"></label></div>
+  <p class="settings-note">The key is kept in Nova’s vault and never shown again. No call is made to Jev until a route and a key are set.</p>
+  <div class="field-row"><label class="field-label">Tev1 size<select class="field" name="tev1">${SIZES.map(([v, w]) => `<option value="${v}"${(s.tev1?.model ?? 'auto') === v ? ' selected' : ''}>${esc(w)}</option>`).join('')}</select></label></div>
+  ${toggle('screening', 'Screening: let Jev judge outside content in local modes')}
+  <p class="settings-note">Screening covers pages, mail, files and tool output. Text from Capture (screen text and meeting transcripts) never goes to Jev, in any mode: only your local models and Nova’s own checks screen it.</p>
+  ${toggle('box', 'Box (preview): let Jev judge images')}
+  ${notices.length ? `<ul class="model-notices">${notices.map((w) => `<li class="settings-note is-unchecked">${esc(w)}</li>`).join('')}</ul>` : ''}
+  ${pending ? '<p class="settings-note">This changes where outside content may go or which model judges it. Read the notices above first.</p>' : ''}
+  <div class="sheet-actions">${pending ? '<button type="button" class="btn small primary" data-action="models-decisions-confirm">Save these choices</button><button type="button" class="btn small quiet" data-action="models-decisions-cancel">Not now</button>' : '<button type="submit" class="btn small">Save</button>'}</div>
+</form>`;
+}
+
+// The choices in the form, as PUT /models/decisions takes them.
+function decisionChoices(form) {
+  const f = new FormData(form);
+  const url = String(f.get('jev_url') ?? '').trim();
+  const model = String(f.get('jev_model') ?? '').trim();
+  const key = String(f.get('jev_key') ?? '').trim();
+  return {
+    jev: url || model ? { base_url: url || decisions.recommendation.jev.base_url, model: model || decisions.recommendation.jev.model } : null,
+    tev1: { model: String(f.get('tev1') ?? 'auto') },
+    opt_in: { screening: f.get('opt_in_screening') === 'on', box: f.get('opt_in_box') === 'on' },
+    ...(key ? { key } : {}),
+  };
+}
+
+async function saveDecisions(body) {
+  try {
+    decisions = await api('PUT', '/models/decisions', body);
+    pending = null;
+    toast('Decision-model choices saved.');
+  } catch (e) {
+    // Tier 2: Nova gives back every notice first; the person reads them and saves again.
+    if (e.status === 409) pending = { body, notices: e.details ?? [] };
+    else { pending = null; toast(e.details?.length ? `${e.message} ${e.details.join(' ')}` : e.message); }
+  }
+  rerender();
+}
 
 export function renderModels() {
   const head = '<section class="memory-section" id="models" aria-labelledby="set-models"><h2 class="memory-heading" id="set-models">Models</h2>';
   if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="models-retry">Try again</button>` : waitingLine('Loading models', { key: 'models' })}</section>`;
   const hub = data.devices[0];
   const lede = hub?.runtime?.ok
-    ? 'Nova runs models on your own devices. Here is what each can do, and what Nova recommends for each job.'
+    ? 'Nova runs models on your own devices. Here is what each can do, with a suggested model for each job.'
     : `Nova runs models on your own devices, through Ollama. ${hub?.runtime ? hub.runtime.words : ''}`;
   const standout = data.standout === 'accept' && !data.recent.some((t) => t.needs_ok);
   const cloud = data.cloud;
@@ -108,6 +208,7 @@ export function renderModels() {
 <ul class="model-list">${data.roles.map(roleRow).join('')}</ul>
 ${data.standout === 'accept' ? `<div class="sheet-actions"><button type="button" class="btn${standout ? ' primary' : ''}" data-action="models-accept">Use these</button></div>` : ''}
 ${data.recent.length ? `<h3 class="conn-sub">Downloads</h3><ul class="model-list">${data.recent.map(downloadRow).join('')}</ul>` : ''}
+${decisionSection()}
 <h3 class="conn-sub">Disk</h3>
 <form class="model-form" data-form="disk"><p class="settings-note">${esc(data.disk.words)}</p>
   <div class="field-row"><label class="field-label">Disk budget for models (GB)<input class="field" name="gb" type="number" min="1" step="1" inputmode="numeric" value="${esc(data.disk.budget_bytes ? String(Math.round(data.disk.budget_bytes / GB)) : '')}" placeholder="No budget"></label></div>
@@ -166,6 +267,8 @@ export function bindModels(root, render) {
     if (a === 'models-remove') act(() => api('POST', '/models/remove', { model: b.dataset.model }), 'Nova asks before it removes it: see Downloads.');
     if (a === 'models-approve') act(() => api('POST', `/tasks/${encodeURIComponent(b.dataset.task)}/approve`, {}), null);
     if (a === 'models-cancel') act(() => api('POST', `/tasks/${encodeURIComponent(b.dataset.task)}/cancel`, { reason: 'Not now.' }), null);
+    if (a === 'models-decisions-confirm' && pending) saveDecisions({ ...pending.body, confirm: true });
+    if (a === 'models-decisions-cancel') { pending = null; rerender(); }
   });
   root.addEventListener('submit', (e) => {
     const form = e.target.closest('.model-form');
@@ -176,5 +279,6 @@ export function bindModels(root, render) {
     if (form.dataset.form === 'disk') act(() => api('PUT', '/models/disk-budget', { gb: n(f.gb) }), 'Disk budget saved.');
     if (form.dataset.form === 'budget') act(() => api('PUT', '/models/budget', { per_task_usd: n(f.per_task_usd), per_period_usd: n(f.per_period_usd), period: data?.cloud?.budget?.period ?? 'month' }), 'Cloud budget saved.');
     if (form.dataset.form === 'pull' && f.model) act(() => api('POST', '/models/pull', { model: String(f.model).trim() }), 'Nova asks before it downloads anything: see Downloads.');
+    if (form.dataset.form === 'decisions' && decisions) saveDecisions(decisionChoices(form));
   });
 }

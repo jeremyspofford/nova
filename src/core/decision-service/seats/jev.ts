@@ -70,7 +70,9 @@ export class JevSeat implements Seat {
     return { available: true, model: c.model, why: `Jev (${c.model}) at ${new URL(c.base_url).host}.` };
   }
 
-  async ask(t: ServiceTemplate, built: BuiltState): Promise<SeatAnswer> {
+  // `beforeSend` runs before every request: the service re-reads the mode and the opt-ins there, so
+  // a switch turned off part-way stops the rest.
+  async ask(t: ServiceTemplate, built: BuiltState, o: { beforeSend?: () => void } = {}): Promise<SeatAnswer> {
     const s = this.status();
     const c = this.#config();
     if (!s.available || !c) throw new Unavailable(s.why);
@@ -80,7 +82,7 @@ export class JevSeat implements Seat {
     return askChunked({
       t, built,
       fits: (state) => fits(c.model, state, wq),
-      ask: (state) => client.ask(c.model, state, t.questions, { images: built.images }),
+      ask: (state) => { o.beforeSend?.(); return client.ask(c.model, state, t.questions, { images: built.images }); },
     });
   }
 }

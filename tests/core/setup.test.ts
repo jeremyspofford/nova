@@ -43,7 +43,7 @@ test('the whole conversation writes the profile and ends with a verified first t
   assert.match(say('hmm'), /Gently, plainly, or bluntly\?/);
   assert.match(say('bluntly please'), /Blunt it is/);
   const summary = say('keep it local');
-  assert.match(summary, /everything stays on your devices/);
+  assert.match(summary, /my model calls stay on your devices/);
   assert.match(summary, /I’ll call you Sam; America\/Chicago; I’m Nova; blunt about hard truths; local-only/);
   const last = s.answer('yes');
   assert.ok(last.task);

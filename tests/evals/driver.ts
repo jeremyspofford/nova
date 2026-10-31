@@ -35,6 +35,9 @@ export interface Turn {
   say: string | ((w: World) => string);
   // What the person says to anything that asks for an OK in this turn (default: no).
   decide?: 'allow' | 'deny';
+  // Start a new conversation for this turn (what is said in one is remembered in the next only
+  // through memory).
+  fresh?: boolean;
 }
 
 // A stand-in web on this machine, for tasks that read a page: pages by path, and every request it
@@ -86,6 +89,8 @@ export interface GoldenTask extends evals.TaskBase<World> {
   chatConfig?: Record<string, unknown>;
   // Chat points at a reserved example.com host its fixture's spy refuses (never a real service).
   remoteStandIn?: boolean;
+  // The remote stand-in answers chat calls with this (a cloud that works), instead of refusing.
+  remoteAnswer?: string;
 }
 
 const LOOPBACK = /^(127\.\d+\.\d+\.\d+|localhost|\[::1\])$/;
@@ -192,7 +197,7 @@ export async function drive(task: GoldenTask, target: TargetSpec, o: DriveOption
 
     // A remote stand-in (a reserved example.com host) is refused by a spy from before anything
     // could reach it: the registry's health check included.
-    const remoteCalls = task.remoteStandIn ? spyFetch(cleanup, /(^|\.)example\.com$/) : null;
+    const remoteCalls = task.remoteStandIn ? spyFetch(cleanup, /(^|\.)example\.com$/, task.remoteAnswer !== undefined ? { answer: task.remoteAnswer } : {}) : null;
     // The chat model, through the registry's existing interface.
     core.providers.configure(target.provider, { base_url: `${proxy.url}/v1`, model: target.model, ...(task.chatConfig ?? {}) });
     core.providers.enable(target.provider, { approved: true });
@@ -230,7 +235,7 @@ export async function drive(task: GoldenTask, target: TargetSpec, o: DriveOption
         id = String(t.brief.inputs?.run);
         world.session = id;
       } else {
-        if (!world.session) world.session = runner.createSession(text);
+        if (!world.session || t.fresh) world.session = runner.createSession(text);
         id = world.session!;
         runner.send(id, text);
       }

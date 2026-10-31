@@ -79,8 +79,12 @@ jobs:
 
   ui-gate:
     # The M3 gate in a real browser: live design-system swap, the resize/posture sweep, and setup
-    # completed from the PWA alone. In CI it never skips: no browser is a failure.
-    name: UI gate (Chromium)
+    # completed from the PWA alone. In CI it never skips: no browser is a failure. The fold-posture
+    # gate (tests/ui/fold-postures.test.ts, UX review F8/F9) runs here too, in Chromium and WebKit
+    # (both in this image): the review's ten postures over every main view, the derived bands in
+    # every design system, the committed screenshot baselines and the safe area. It gates, like the
+    # rest of test:ui.
+    name: UI gate (Chromium and WebKit)
     needs: changes
     if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-latest

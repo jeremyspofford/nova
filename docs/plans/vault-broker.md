@@ -53,7 +53,7 @@ It is built **from what exists**, not beside it:
 
 | Need | Built on | New |
 |---|---|---|
-| The store | `src/core/vault.ts`: one AES-256-GCM file, the key in the OS keychain or a key file, `secret://` names | Per-item encryption, an Argon2id-wrapped root key, device unlock. The code that reads values moves out of core into the broker |
+| The store | `src/core/vault.ts`: one AES-256-GCM file, **UNPROVEN** (no eval yet: `claim.vault-encrypted-at-rest`) the key in the OS keychain or a key file, `secret://` names | Per-item encryption, an Argon2id-wrapped root key, device unlock. The code that reads values moves out of core into the broker |
 | Supervision | `src/supervisor/supervisor.ts`: one child, restarts with backoff, safe mode, a 0600 `control.sock` | A second child, the broker, started before the Nova server |
 | A fixed-verb privileged part | The boot agent (ADR-3) and Decision 1's five verbs | The same pattern, for credentials |
 | Injection at use | M10b's `#login` in `browser/worker.ts`; M10d's `toolEnv` (`infra/tool.ts`) and `httpConfig` (`network/targets.ts`) | The same injections, done inside the broker or its launcher |
@@ -109,7 +109,7 @@ Every place a value exists or flows on `main` (55fa6786) and in the open M10d an
 
 | # | Consumer | Where the value is, and who reads it |
 |---|---|---|
-| 1 | The vault | `src/core/vault.ts`: all values in one AES-256-GCM file `home/vault/secrets.json`. The 32-byte key is in the keychain (`secretToolKeyStore`, `macKeyStore`, `windowsKeyStore`) or `vault/key`, with `FILE_KEY_NOTICE`. `get`/`resolve` hand plaintext to any core caller, and every read and write calls `addSecretValue` |
+| 1 | The vault | `src/core/vault.ts`: all values in one AES-256-GCM file `home/vault/secrets.json`. **UNPROVEN** (no eval yet: `claim.vault-encrypted-at-rest`) The 32-byte key is in the keychain (`secretToolKeyStore`, `macKeyStore`, `windowsKeyStore`) or `vault/key`, with `FILE_KEY_NOTICE`. `get`/`resolve` hand plaintext to any core caller, and every read and write calls `addSecretValue` |
 | 2 | Redaction | `log.ts` keeps every vault value in `SECRET_VALUES` for `redactText`. That is used by `receipts.ts`, `self.ts`, and `changes/kinds.ts` (`carriesSecret` refuses a change carrying a value). There is also the browser's `Redactor` |
 | 3 | The outbound guard | `core/index.ts` gives `wireIngest` every vault value (`secrets: () => vault.list().map(get)`), and `ingest/screen.ts` checks outbound text against them |
 | 4 | Provider and model keys | `providerSecret` in `core/index.ts` reads `provider/<NAME>`; `PUT /vault/{name}` takes the value. The key becomes a `Bearer` header in `providers/openai.ts` (`resolveCfg`, `probe`), and is used for the cloud model in `models/index.ts` and adapter secrets in `providers/registry.ts`. A development fallback, `NOVA_SECRET_<NAME>` (`server.js`), puts values in core's environment |
@@ -519,6 +519,12 @@ Evidence goes in `docs/evidence/vault-broker-p1-gate.md`, with an adversarial re
     - a network target, and OpenTofu through `fake-tofu`;
     - browser sign-ins and account steps, on `shop-site.js` and `account-site.js`.
 11. **The fresh-user test,** and a claims check under Amendment B's closing rule: every user-facing sentence about the vault matches "The claim, worded exactly".
+12. **A second-model review packet** (owner pattern, 2026-10-31; OPERATING-RULES). The broker code is the first named case. The builder prepares one self-contained document the owner can hand to another model (ChatGPT, Gemini) for review:
+    - the broker's code;
+    - the claims it must uphold;
+    - this threat model.
+
+    Findings come back as owner input and are triaged like any review, before Phase 1 merges.
 
 ## 11. Phase 2: the 1Password connector
 

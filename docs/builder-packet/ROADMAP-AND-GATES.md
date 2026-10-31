@@ -175,10 +175,10 @@ Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-3
 3. **A self-update channel for Nova itself:** design doc (ADR) first, when scheduled.
 4. **The eval harness (golden tasks, capability and regression suites, a model-swap scorecard):** a side PR, when a slot is free. **Delivered 2026-10-31 (#249):** 28 tasks from failures on record. The regression suite runs at 100% with stand-ins in `npm test`, so a drop fails CI. The scorecard is written to `workers/evals/`, and Settings › Models shows it once its route and UI land. Part 5 (cost caps) follows.
 5. **Hard caps on autonomy cost:** a small design and build. **Delivered 2026-10-31 (#256):** ceilings per task and per day, a loop detector, and resume as a new approval. Inert until wired (a Track 1 follow-up). Gate: `tests/acceptance/caps.test.ts`, plus the regression task `safety.runaway-loop-stopped`.
-6. **A diagnostics bundle and an integrity scrub:** fold into Health work.
+6. **A diagnostics bundle and an integrity scrub:** fold into Health work. **The bundle was built 2026-10-31 (#259).** It is redacted by construction and proven with canaries. Wiring it into Health, the integrity scrub and the disk-health signals are still open on Track 1.
 7. **A fault matrix and a soak run:** extend the QA harness under Amendment 2026-10-31-A.
 8. **QA Stage 2 integration with the Service Manager:** the recorded design, applied when Stage 2 is built, so the harness isn't built for the supervisor alone.
-- **Closing rule:** no capability is claimed in onboarding, docs or the UI that the Part 4 eval suite can't demonstrate.
+- **Closing rule:** no capability is claimed in onboarding, docs or the UI that the Part 4 eval suite can't demonstrate. **On for user-facing text, 2026-10-31** (owner decision; `docs/plans/honest-claims.md`): unproven claims softened, their eval cases named for Track 3, CI fails on an unbacked one.
 - **Decision Service (owner input 2026-10-31, extends Part 1):** `nova-jev-decision-layer-2026-10-31.md`, designed in `docs/plans/decision-service.md`.
   - Built as side PRs:
     - DS1: the service (registry, seats, decision log, boundary test);
@@ -194,6 +194,9 @@ Spec: `nova-vault-broker-design-2026-10-31.md`, with the owner's instruction and
   - **Gate:** canary values found nowhere Nova writes; the broker refusing a non-bound origin even when core asks; an adversarial review.
 - **Phase 2:** the 1Password connector behind the broker, after Phase 1's gate. A real account needs the owner's OK.
 - **Phase 3:** optional Vaultwarden and further connectors, by demand. Never a default.
+
+## Direction only (no work scheduled): second-model reviews through Relay
+Relay, the owner's existing multi-agent dispatcher, already integrated with Nova at the adapter level (M8), is the intended vehicle for dispatching second-model reviews automatically, once that integration is deepened. The owner will schedule that work separately. Until then, review packets are handed over by the owner (OPERATING-RULES, "Second-model review").
 
 ## Sequencing rules
 - Relay stabilization may run parallel to M1–M2 (it is independent), integration only at M8.

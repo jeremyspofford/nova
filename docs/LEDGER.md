@@ -6,6 +6,51 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #265 · Nova's words now promise only what its tests show**
+- What changed: Nova's screens, setup questions and help text were reworded to promise only what its own tests can show. For example, Settings now says model calls stay on your devices under local-only, rather than "nothing leaves this machine". Two sentences were simply wrong and are fixed: Nova told itself every command waits for your OK, and that anything that can't be undone always asks. In fact a command runs without asking if you've switched that on; a command that comes after Nova reads something from outside still asks.
+- What you can now do: trust that what Nova tells you about itself has evidence behind it. Nothing works differently; only the words changed.
+- Still unfinished: each stronger promise is written down with the test that would prove it, and comes back when that test passes. A check now blocks any new unproven promise in what you read.
+
+**2026-10-31 · #267 · The layout no longer crushes columns on a folding phone, tablet or narrow window**
+- What changed: on a folding phone's inner screen, a tablet held upright, or any window between a phone and a laptop, Nova no longer squeezes three columns in. Each column has a smallest width, and the side column with your tasks, devices and health only appears when all three fit; until then those cards are on Home. No text is squeezed to a few letters a line, the Online/Offline labels no longer sit on top of device names, and the side column scrolls instead of running off the screen. On an installed app, nothing sits under the camera cutout or the home bar any more.
+- What you can now do: use Nova on the fold's inner screen in either direction, in any of the six designs, and read every card.
+- Still unfinished: checking it on your real phone (the tests use the iPhone's engine, but not as an installed app). Whether the app should draw behind the iPhone's status bar, which would remove the empty band at the top but makes the time and battery white on the light designs, is your call.
+
+**2026-10-31 · #266 · Pairing a phone no longer fails now and then for no reason**
+- What changed: the browser engine behind every iPhone (WebKit) sometimes refuses a security key it has just made. Nova's pairing page took that as "this browser can't pair". Now it quietly makes another key of the same strength and carries on. A browser that really can't make these keys is still told so plainly.
+- What you can now do: pair a phone without the occasional unexplained failure. It was also the cause of a pairing test that failed every so often.
+- Still unfinished: whether a real iPhone ever does this is unknown; Apple's WebKit uses a different crypto engine from the test browser.
+
+**2026-10-31 · #258 · The safety screen now asks Nova's decision service, and checks every part of a long page**
+- What changed: Nova's screen for outside content (pages, mail, files, tool output) now asks the new decision service. It checks every part of a long document, not a sample, and the parts overlap, so a trick split across a boundary is still seen. Every decision is recorded, without the content.
+- What you can now do: in Settings › Models › Decision model, you can choose Jev (TypeSafe's cloud model) or a Tev1 size, and see each model's test results before you switch. Two separate switches let Jev screen outside content (Screening) or images (Box, a preview) even in local modes. Both are off, and each says plainly what leaves your machine. Health shows how outside content is being screened.
+- Still unfinished: text from Capture (screen text, meeting transcripts) is screened only on your devices; a switch to let Jev screen it in cloud mode is for later. No decision model has passed Nova's screening test yet, so anything Nova can't vouch for is still held back as unsure. Jev has never been called for real (no account). A very long document screened by Tev1 takes minutes.
+
+**2026-10-31 · #264 · A check for passwords and private details in captured screen text, the first to pass its test**
+- What changed: Nova can check text it captured from your screen or recordings for passwords, keys, and money or health details before keeping it. Fixed rules run first: password managers and banking apps are never kept, and key-like or card-like text is blanked out. On this computer's larger local model, the check caught 38 of 39 sensitive test notes and wrongly held only 1 of 40 harmless ones, so it passed. Its smaller model failed.
+- What you can now do: nothing yet: the check isn't switched on in capture. Nothing it reads leaves your machine.
+- Still unfinished: hooking it into capture and showing its verdict on the capture timeline. A second, independently written test set would make the pass stronger.
+
+**2026-10-31 · #259 · A diagnostics file for getting help, with secrets and your content left out**
+- What changed: Nova can make one file with its versions, the state of each of its parts, its settings and recent log lines, to give to whoever is helping you. Every password, key and token is replaced with REDACTED, and your memories, conversations and captured screen text are never in it, only how many there are. Nova never sends it anywhere.
+- What you can now do: nothing yet on screen: the "Download diagnostics" button in Health comes with the follow-up that wires it in.
+- Still unfinished: that button, and the weekly integrity check from the same part of the plan.
+
+**2026-10-31 · #247 · Nova can run more than one service, with safe upgrades and rollback**
+- What changed: Nova's supervisor, which used to run only Nova itself, now runs several services from one simple description each. A new version starts alongside the old one with no traffic, goes live only after its checks pass and you type a confirmation, and rolls back by itself if it fails. Nova's own console is now one of these services. Nothing uses Kubernetes.
+- What you can now do: nothing new on screen. Services are managed from the supervisor's command line (`service deploy`, `promote`, `rollback`, `recover`).
+- Still unfinished: there's no screen for services yet. A service must be a single program run by Nova's own Node. Adding services through the change pipeline is deferred.
+
+**2026-10-31 · #257 · The safety screen's questions rewritten: much better, still not trusted**
+- What changed: Nova's questions to the small local model (Tev1) about outside content were rewritten to the model maker's guidelines and tested on fresh cases written before the test ran. It caught 43 of 44 attacks, but flagged 18 of 75 harmless documents against a 10% bar, so it isn't trusted yet.
+- What you can now do: nothing changes. Nova still screens with its own checks and holds back anything unsure.
+- Still unfinished: a version that passes. The larger model got closest (24% false alarms, down from 100%).
+
+**2026-10-31 · #262 · Your three replies and the UX review filed; second-model reviews become a standing step**
+- What changed: your replies on the orb, the claims, the vault and capture screening are filed (they match what was already applied). So is your first UX review. Security-critical work, starting with the vault broker, will now come with a self-contained "review packet" you can hand to ChatGPT or Gemini.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: the folding-screen fixes from your iPhone Duo (F8/F9) are being built. The orb and claims changes are in progress.
+
 **2026-10-31 · #260 · How Nova will check what it captures from your screen**
 - What changed: your decision is recorded. Captured screen text and transcripts get checked twice: for secrets or sensitive details before they're stored, and for hidden instructions before Nova uses them in an answer. It's checked on your machine, unless you're in cloud mode and turn it on per capture source.
 - What you can now do: Nothing in the app changed: paperwork only.
@@ -255,6 +300,218 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
+- **The bands are derived, not round numbers:**
+  - each region has a minimum, computed from the design system's own tokens: the main column is 45ch plus its padding and scrollbar gutters; a card is 20ch plus its padding; the right column is one card plus its padding and scrollbar; the rail is `layout/rail-width`;
+  - the three-column band (rail, centre, right column) starts at their sum, and the two-column band at `max(600px, rail + main)`;
+  - they are `ui/`-declared custom properties in `layout.css`, not schema tokens, so no package changes. `shell.js` measures them at run time and again on a live swap or a text-size change.
+  - In the container, Orb Teal and Companion Light enter three columns at 851.6 px, Paper at 832.1, Aurora at 770.2, Nova at 752.2–793.1 and Obsidian at 734.1–773.6.
+- **Under the three-column band,** a flat tablet is the rail and one column, with the right column's cards on Home. Half-open postures keep their second pane: side by side where both fit or on a real hinge, stacked otherwise.
+- **M9's second-pane rule** ("every expanded width gives its extra room to a second pane") now applies from the three-column band, and Settings keeps its sidebar from 840 px. Between 840 px and the band, the centre keeps `layout/content-max`, so it never stretches.
+- **Cards** stack below the card minimum, never squeeze. A device row moves its pill under the words rather than over them.
+- **Safe area:** the shell keeps each inset clear once (`viewport-fit=cover`). No excess padding was found: the empty band at the top of the owner's screenshot is the iOS status bar above Nova's top bar.
+  - Drawing under the status bar (`black-translucent`) is left to the owner, because it turns the status text white over the light designs.
+- **The gate:**
+  - `tests/ui/fold-postures.test.ts` runs in the UI gate, in Chromium and WebKit: the review's 10 postures × 9 views, every design system at 560–1440 px, 20 screenshot baselines (2% tolerance) and the safe area.
+  - The posture sweep and M9 foldable 2 follow the derived bands.
+
+**2026-10-31 (capture screening, job 1: capture-sensitive).** Owner decision `INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`; plan `docs/plans/ds2-capture-sensitive.md`; evidence `docs/evidence/capture-sensitive-eval.md`; PR #264.
+- **The template:** `capture-sensitive` v1.
+  - **Deterministic first:** known password-manager and banking apps and sites are excluded with no model call; pattern detectors (keys, tokens, private keys, passwords, Luhn cards, mod-97 IBANs, SSNs, high-entropy secrets) redact before the model sees the text.
+  - **Four Nouls for the grey area:** password, secret_key, financial_details, health_details.
+  - **The rule** (0.7/0.3, not tuned, for a privacy screen): a password or secret excludes; finances or health hold; unsure holds; all no indexes.
+  - **Routing:** never to a cloud seat in local-first or local-only; in cloud mode only with a per-source opt-in (not built: never).
+  - The template and rule were fixed at `727b7509`, before any case.
+- **The eval,** fixed at `9cb2ca0a` before the run: 95 synthetic cases (39 grey, 12 structured, 4 app, 40 harmless look-alikes).
+- **Bounds:** detection ≥ 95%, false holds ≤ 20%, ECE ≤ 0.10; the deterministic layer 100%, with no caught value reaching a model.
+- **Result, on Ollama 0.40.13:**
+  - tev1:4b `7954dce2…`: 97.4%, 2.5%, 0.032, deterministic 16/16. **Pass**: trusted on that build.
+  - tev1:0.8b: detection 79.5%. **Fail**, evidence only.
+
+  **Caveats:** 39 grey cases (interval 86.8–99.6%); 11 of the 40 labelled judgments caught via "unsure → hold"; one author for the questions and the cases.
+- **Pending Track 1:** the consumers (indexing and archiving, timeline, intake drop of sensitive apps, migration).
+
+**2026-10-31 (owner decision: the unproven claims, split by audience).** Plan and the full list in `docs/plans/honest-claims.md`, branch `copy/honest-claims`.
+- **What a person can see is softened now:** UI copy, onboarding, the system prompt, briefing and tool docs the model repeats, the README, and the connector and skill files. Each claim says only what the evidence supports. The Amendment B closing rule is not deferred.
+- **The false claim is fixed.** "Every shell command waits for the person's approval" now reads: a command asks unless permissions.md lets commands run, and a command after outside content asks even then. Its cousin in the briefing ("anything that can't be undone always asks") is fixed too.
+- **Every softened claim stays in the register** (`tests/evals/claims.ts`) with three things: its old strong words, a named eval case (`claim.<slug>`, 35 cases for Track 3's backlog) and a priority. When an eval passes, the strong words may return, citing it.
+- **The register now holds 71 claims:** 16 backed, 54 softened, 1 instruction to the model kept as it is, and 0 unbacked. That includes 42 other places found saying the same things in other words.
+- **The closing rule is on for user-facing copy.** CI fails on an unbacked claim in user-facing text, and on a softened claim's strong words in any user-facing file.
+- **Internal design docs keep their claims,** marked **UNPROVEN** inline (13 marks in the inventory and the M5, M7 and vault-broker plans). The owner's verbatim inputs are untouched.
+
+**2026-10-31 (Amendment B Part 6: the diagnostics bundle, PR #259, Track 3).** Plan `docs/plans/diagnostics.md`.
+- **The builder:** `src/core/diagnostics/`.
+- **The rule:** counts and states, never content.
+- **Redaction**, in three layers:
+  1. an allow-list of the views it reads;
+  2. secret-named keys, using Home Assistant's `**REDACTED**` pattern;
+  3. every known secret value in six encodings, plus secret-shaped strings.
+- **Local only:** built per request, never stored, never sent.
+- **Canaries:** planted in every place Nova keeps a secret (17 sources), and in personal content. None survives (`tests/core/diagnostics.test.ts`, eval `safety.diagnostics-no-canary`).
+- **Not built here:**
+  - the route, Era 2's counts, and the Health "Download diagnostics" link (NOTES §1–3, a Track 1 follow-up);
+  - the integrity scrub, which is Track 1's Health work.
+- **Limits:** a raw secret Nova never stored and not shaped like one can't be recognised. Hostnames and names the person gave stay in the bundle.
+
+**2026-10-31 (the flaky WebKit pairing test, M4a).** Branch `fix/webkit-pairing-flake`. The UI
+gate's "M4a in WebKit" test timed out waiting for the join screen three times in a day (main run
+41205581247; both runs of PR #257), after 40 clean runs.
+- **Root cause, an app defect:** WebKit sometimes turns down a key it has just made.
+  `crypto.subtle.generateKey` throws `OperationError` for about one Ed25519 key in 150 and one
+  X25519 key in 500 in Playwright's WebKit; the rate was the same at full speed and on half a CPU,
+  so it is per key, not timing. `/pair`'s check that the browser can pair took any error as "This
+  browser can't pair" and stopped there, with no form, so the test waited for `#join` until it
+  timed out. A test run makes six keys, so roughly one run in 20 to 35 failed. When the device's
+  own key was the one refused, the page said "That didn't work" instead. The failure comes before
+  any signed time, so the logged pairing-clock defect is not involved. Whether a real iPhone's
+  WebKit does this too is not known.
+- **Fix:** `ui/js/device-key.js` makes each key through one helper that tries again on
+  `OperationError`, up to five times. Each try is a new key of the same kind, never a weaker one.
+  Any other error, such as `NotSupportedError`, is final, so a browser with no Ed25519 is still
+  told plainly.
+- **A second, smaller race in the same test:** it chose the mesh port from the ephemeral range,
+  where the hub's own port-0 listener can be handed the same port first (`EADDRINUSE`, 1 run in
+  100). It now uses the shared `freePort`, which picks below that range.
+- **Gate:** two new tests in `tests/ui/m4a-webkit-pair.test.ts`. In one, a browser fails every
+  first try at a key and still pairs to Home; it failed first, with CI's timeout. In the other, a
+  browser with no Ed25519 still sees "This browser can't pair".
+- **Evidence:**
+  - The real test file, run 100 times (four in parallel): 3 failures before (two `#join`
+    timeouts matching CI, and one `EADDRINUSE`), none after.
+  - The same flow 150 times in one container on one CPU: 8 failures before, every one a refused
+    key, and none after.
+
+**2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
+- **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
+  - Six Nouls: instructs_ai, override, fake_message, link_slot (decisive); wants_private_data, keep_from_user (supporting).
+  - Impersonation dropped (no one can judge a sender from the text; the deterministic layer checks headers and links), and the encoded/hidden question dropped (the gate decodes those).
+- **The rule:** a truth table at TypeSafe's 0.7/0.3 bands, not tuned. A decisive yes blocks; a decisive unsettled answer quarantines; supporting yeses quarantine alone and block together; all no passes. It replaces v1's "worst question wins at 0.2". The rule and the template were fixed at `47b26e21`, before any case.
+- **The fresh eval,** fixed at `0df233e7` before any run: 127 cases (44 text-borne attacks, 75 benign, 8 steering). No new attack text: the corpus's payloads through 8 new transforms, 5 new placements, 5 carriers and 4 steering framings. Benign: v1's 46, 24 new boundary controls, and 5 carrier-only documents.
+- **Bounds:** Part 1's, plus the steering cases scored on the combined gate.
+- **Result, on Ollama 0.40.13:**
+  - tev1:4b `7954dce2…`: detection 97.7%, false positives 24%, ECE 0.037, steering 8/8. **Fail.**
+  - tev1:0.8b `abc31fdb…`: 95.5%, 82.7%, 0.135, 8/8. **Fail.**
+
+  v2 is evidence only on both; v1 keeps its place; nothing was tuned. The service now picks the version: the newest that passed, else the newest the sorting model serves, else the newest.
+- **Pending Track 1:** the gate takes the outcome for v2 and later; a Health line.
+
+**2026-10-31 (owner documents filed: the replies on the orb, claims and vault; capture screening; the first UX review; the second-model review pattern).** Three owner documents were added to the packet exactly as given:
+- `nova-orb-claims-vault-reply-2026-10-31.md` (sha256 `0e4180d8…`);
+- `nova-capture-jev-screening-reply-2026-10-31.md` (`78ce474d…`);
+- `nova-ux-review-2026-10-31.md` (`b7fd3dcf…`).
+
+What each covers:
+- **A. Orb, claims, vault.** This is the same text the owner pasted earlier the same day; every sentence was checked against what was applied.
+  - The vault decisions are applied in `docs/plans/vault-broker.md` (merged in #251), which carries no open owner questions.
+  - The orb's fixed semantic states and the softening of user-facing claims are being built as two Track 1 PRs; the DESIGN-SYSTEM record comes with the orb PR.
+  - The 17 claims become eval cases on Track 3's backlog.
+- **B. Capture screening.** The same text is applied in the Decision Service ADR §2.1 and owner decision 5 (merged in #260).
+- **C. The UX review.** F0–F5 are merged in #254; F6 and F7 are second-pass notes.
+  - **F8 and F9** (real-device finds on the owner's iPhone Duo): the posture bands, with the desktop band's entry width derived from the sum of region minimums, minimum card widths, a floor of about 8 characters per line, and a right column that scrolls or collapses and never clips.
+  - They are gated by a 10-posture matrix in Chromium and WebKit, with duo-cover and duo-inner baselines, and are being built as a Track 1 PR.
+- **D. Second-model review, a new standing pattern.**
+  - ChatGPT and Gemini review; they don't build. Security- or design-critical artifacts get a self-contained review packet: the artifact, its claims and its threat model. Findings come back as owner input.
+  - Recorded in OPERATING-RULES. The vault broker's Phase 1 gate gains the packet (item 12).
+  - The roadmap notes Relay as the future vehicle for this, as direction only.
+
+**2026-10-31 (M10e: the Service Manager and the supervisor driver).** Branch `m10e/service-manager`.
+Plan `docs/plans/M10e.md`, evidence `docs/evidence/m10e-gate.md`, built from the orchestration ADR's
+M10e phase.
+- **One supervisor, generalised.** The supervisor runs N services from definitions; the console is
+  one of them (`nova-console`), started from its definition, its deploy path (`Supervisor.deploy`,
+  `rollback`) unchanged. Reused: `ServerProcess` (now given a command and, for services, a process
+  group) and the crash rule (factored out as `CrashWindow`, used by both). The existing supervisor
+  tests are unchanged and green.
+- **The definition format** is the ADR's, with two additions the code needed: `artifact.release`
+  `{tag, command}` (the console's artifact is a git tag, which neither `image` nor `program`
+  describes; only `nova-console` may use it, and only it may say port 0), and `contract_tests` as
+  `http:/<path>` (the ADR's `probe:<name>` has no probe registry, so it is refused by name).
+- **The Service Manager** lives in `src/core/services/` with the registry of definitions (one file per
+  version, registered once) and drives any `ServiceDriver`. Promotion is typed every time
+  (`<service>@<version>`): tier 3 for the console and anything with secrets or OS permissions, tier 2
+  otherwise. Only a version that passed its contract tests and health is offered, checked by the
+  manager and again by the driver.
+- **The supervisor driver** for plain programs: slots per version from a `file:` artifact pinned by
+  SHA-256; `full`, `shadow`, `copy`, `none`; a stable port forwarded on 127.0.0.1; canary with
+  automatic rollback; the old slot kept for `soak_s` (absent: until the next promotion) and removed
+  after; services get none of the supervisor's environment, run in their own process group, and are
+  ended whole. A supervisor killed outright leaves them running; the next one ends them, known by
+  pid and start time in `/proc` (Linux only).
+- **The no-Kubernetes tripwire** (`scripts/tripwire.sh`) wraps `npm test`, `npm run test:ui` and
+  `scripts/ui-test.sh`: stand-in `kubectl`, `helm`, `flux`, `k3s` first on PATH, `KUBECONFIG` unset, any
+  call fails the run. This machine has a real `kubectl`; the tripwire shadows it.
+- **Where the ADR didn't fit, written down:**
+  - The ADR's Order puts the `service` change kind in M10e, but its artifact is the definition plus
+    rendered Helm values and its gate is GitOps; the brief for this phase excluded Helm. Not built:
+    deferred to M10j/M10k, to be confirmed by the owner.
+  - M10e was to start after M10d (PR #241) merged. It was first built on main before that, as
+    instructed, then rebased onto main at `61bcb042` (M10d merged), then `a79ab31c`, `844a1271`, `736e80ce`, `43c41be4`, `a49e366d` and `9073f381` (the last two docs only) as main moved.
+  - "Both drivers' tests" and "one definition rendered by both drivers": only one driver exists. The
+    contract suite (`tests/support/service-driver-contract.ts`) is ready for M10j.
+  - The supervisor driver doesn't run image-only services (the ADR's "Docker where present" needs image
+    pulls the hard limits forbid), hand out secrets, download `https:` artifacts or place on other
+    devices. Each is refused in plain words.
+  - `scripts/preview.sh` doesn't use the supervisor at all, so the preview is unaffected.
+- **The review of PR #247** (fixed on the same branch; one test per finding, each seen failing with
+  its fix reverted; the evidence has the table):
+  - **What runs is the pinned program.** A command starts the artifact itself, or Nova's own Node
+    with the artifact as its script; never another program, a shell, an absolute or `../` path, or an
+    interpreter option or inline code before it. Checked by the validator, the driver's plan and at
+    every start (a regular file in the slot, the pinned SHA-256). The plan shows the exact argv, and
+    deploying a command no approved version has run asks first, typed (tier 2, or 3).
+  - **A failed switch tells the truth.** The live version's stable ports are untouched until the new
+    version passes, and every failure path puts them back; if the old version doesn't start again,
+    the service is held with a problem.
+  - **One queue per service** for changes, restarts and soak ends: nothing is refused, dropped or
+    raced. Health restarts count toward holding. `service recover` restarts a held service (tier 1).
+  - **Processes are known by pid and start time** (`/proc`), recorded at spawn with their group's
+    members; a group is signalled only while it is provably still ours.
+  - **Also:** soaks past one timer are chained; the program is lstat'ed, capped at 256 MB and read
+    asynchronously; ports below 1024 and Nova's own (from its configuration) are refused; half-close
+    and resets pass through the forwarder; ports are keyed by number; SIGHUP stops the supervisor;
+    shadow is one writer at the switch; a version is registered only once it passed.
+  - **Not proven separately:** each of the two S1 guards (each alone is enough), the leader check of
+    S5 (the leader is also among the recorded members), recording at spawn, the cleared forwarder
+    during a restart wait, the per-version health interval.
+  - **Limits stated, not fixed:** a process that leaves its group (`setsid`) outlives everything; the
+    tripwire sees PATH lookups only (a test reads the code for Kubernetes tools named as commands).
+- **An M10d test race, fixed in the test:** under this branch's heavier suite, CI twice counted a
+  phone request sent just before a network change as contact after it (`tests/core/network.test.ts`).
+  The simulated firewall now checks each packet as it arrives, through a gate in front of the mesh
+  listener. Reproduced on one busy CPU (main's file failed 2 of 3); fixed, 4 of 4 pass. The network
+  module is unchanged.
+
+**2026-10-31 (the ingest gate on the Decision Service, Track 1).** Plan `docs/plans/gate-decision-service.md`; PR #258. It applies DS1's NOTES 1–5, Tev1's NOTES 3–4 and the eval harness's NOTES 1, 2 and 5, under the owner's decisions in `docs/plans/decision-service.md`.
+- **The gate asks the service:** `ingest-screen`, one fenced chunk at a time. An answer counts only when the service trusts it (`verdict` or `legacy`) and all five probabilities are in [0, 1]. Otherwise the deterministic layer plus quarantine decide, as before.
+  - The forced local-only is gone. Cloud mode screens with Jev once it is set up.
+  - Local modes use Jev only with the screening opt-in. It is off by default, and its receipt names it.
+  - Box never goes to the cloud in local-only.
+- **Every chunk is screened:** no sampling; a pool of 2; 200-character overlap; surrogate pairs kept whole. Once a chunk has no trusted answer, nothing more is sent.
+  - Cost, measured against the stand-ins: a 2,000,000-character document is 715 chunks. That is about 2,100 Tev1 requests (minutes) or 715 Jev requests.
+- **Wiring:**
+  - the sorting model is the transitional seat, and the Jev key is in the vault as `decisions.jev`;
+  - records go to `decision_record` (migration 0019, with `receipt.opt_in` and the receipt sync triggers recreated);
+  - Health has one line per seat, and the hub's device record names the decision model;
+  - `GET`/`PUT /models/decisions`: 422 with problems; any change is tier 2, with every notice first; the key goes to the vault only; `{use}` is kept;
+  - the eval scorecard routes.
+- **Settings › Models:**
+  - the Decision model section, with two separate switches (Screening; Box, a preview) and their plain words;
+  - each model's scorecard before a switch, or a plain none.
+- **Evals:** the injection suite runs Part 1's 99 cases (`tests/ingest/tev1-eval/cases.ts`, mapped from its shape; the set was not moved into `src/core/decision-service/`).
+- **Safety evidence:**
+  - the deterministic layer and taint tracking are unchanged (an empty diff of `checks.ts`, `outbound.ts`, `context.js` and `tools.js`; `runner.js` changes only in passing the run's mode and task to the screen);
+  - the corpus and canary suites run in every mode with the seats unavailable, untrusted and a trusted stand-in. With no trusted seat, nothing is looser than checks plus quarantine;
+  - the fresh-user test and the eval regression suite pass.
+- **After the adversarial review:** each finding has a test that fails with its fix undone.
+  - A run's, a helper's or a ledger task's own mode now holds the screen.
+  - The mode and the opt-ins are re-read before every cloud send, and the receipt is held to the live setting.
+  - Records keep a status and a fixed reason, never a seat's words.
+  - The pin includes Tev1's digest, read again after every answer.
+  - Untrusted seats are a sample: 2 chunks per piece of content, 200 asks per seat per day. A screen has a 180 s limit.
+  - Capture-derived text never goes to a cloud seat (the owner's §2.1 rule; its per-source opt-in doesn't exist yet).
+  - Also: the receipt's task and state hash; sync with a standby a release behind; 422s for input that was dropped; a verdict pinned to its template's wording.
+- **Not done:** nothing calls TypeSafe. No ingest-screen eval has passed, so without a sorting model outside content is still held back as unsure. Sensitive-content detection at indexing and injection screening at recall, for capture-derived text, are follow-ups.
 
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:

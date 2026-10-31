@@ -6,12 +6,17 @@
 // runs only; CI recomputes Part 1's from its committed per-case results, so a hand edit fails.
 import { readFileSync } from 'node:fs';
 import { BOUNDS, type Bounds, type Metrics } from './eval.ts';
+import { BOUNDS_V2 } from './eval-v2.ts';
+import { BOUNDS_CS } from './eval-capture.ts';
 import { modelId, type Size } from './seats/tev1.ts';
 import type { SeatId } from './types.ts';
 
 // Part 1's verdicts: ingest-screen v1 on Tev1, per size and digest.
 export const VERDICTS_FILE = new URL('./tev1-verdicts.json', import.meta.url);
 export const PART1_TEMPLATE = { template_id: 'ingest-screen', version: 1 } as const;
+// The wording Part 1's eval ran on (registry.ts wordingOf(INGEST_SCREEN_V1)). Its verdicts count only
+// while ingest-screen v1 still reads exactly so; CI checks the template against it.
+export const PART1_WORDING = '444bb949c7426d08242b8fc191f7078ee37e8b88a15b4d20892c930cee370f0f';
 
 export type SizeStatus = 'pass' | 'fail' | 'not-run';
 export interface SizeVerdict {
@@ -52,8 +57,9 @@ export function relianceFor(v: VerdictFile | null, model: Size | null, digest: s
 
 // ---- the general store --------------------------------------------------------------------------
 
-export interface VerdictRecord { template_id: string; version: number; seat: SeatId; model: string; status: SizeStatus; why: string; run_at: string | null; ref: string }
-export interface Lookup { trusted: boolean; why: string; ref: string | null }
+// `wording_sha256`: the template wording the eval ran on (registry.ts wordingOf); absent, unpinned.
+export interface VerdictRecord { template_id: string; version: number; seat: SeatId; model: string; status: SizeStatus; why: string; run_at: string | null; ref: string; wording_sha256?: string }
+export interface Lookup { trusted: boolean; why: string; ref: string | null; wording?: string | null }
 
 export interface VerdictStore {
   // Whether this exact tuple has a passing verdict.
@@ -72,7 +78,7 @@ export function memoryVerdicts(records: VerdictRecord[]): VerdictStore {
       const r = records.find((x) => same(x, id, v) && x.seat === seat && x.model === model);
       if (!r) return { trusted: false, why: `${id} v${v} has no eval verdict on ${model}; its answers are evidence only until the eval runs on that exact model.`, ref: null };
       if (r.status !== 'pass') return { trusted: false, why: `${id} v${v} ${r.status === 'fail' ? 'failed' : 'hasn’t run'} its eval on ${model} (${r.why}); its answers are evidence only.`, ref: r.ref };
-      return { trusted: true, why: `${id} v${v} passed its eval on ${model}${r.run_at ? ` (${r.run_at.slice(0, 10)})` : ''}.`, ref: r.ref };
+      return { trusted: true, why: `${id} v${v} passed its eval on ${model}${r.run_at ? ` (${r.run_at.slice(0, 10)})` : ''}.`, ref: r.ref, wording: r.wording_sha256 ?? null };
     },
     passed: (id, v) => records.some((r) => same(r, id, v) && r.status === 'pass' && (r.seat === 'jev' || r.seat === 'tev1')),
     forModel: (seat, model) => records.filter((r) => r.seat === seat && r.model === model),
@@ -89,13 +95,42 @@ export function fileRecords(v: VerdictFile | null): VerdictRecord[] {
     .map(([size, s]) => ({
       ...PART1_TEMPLATE, seat: 'tev1' as const, model: modelId(size, s.digest!),
       status: ok ? s.status : 'not-run', why: ok ? s.why : 'recorded against other bounds',
-      run_at: s.run_at, ref: `tev1-verdicts.json#${size}@${v.bounds_commit ?? 'unpinned'}`,
+      run_at: s.run_at, ref: `tev1-verdicts.json#${size}@${v.bounds_commit ?? 'unpinned'}`, wording_sha256: PART1_WORDING,
     }));
 }
 
-// The verdicts the service uses: Part 1's file, read fresh each time so a new run takes effect.
-export function fileVerdicts(file: URL | string = VERDICTS_FILE): VerdictStore {
-  const read = () => { try { return memoryVerdicts(fileRecords(readVerdicts(file))); } catch { return memoryVerdicts([]); } };
+// Every later eval's verdicts (ingest-screen v2 onwards, DS2): records written by eval runs only,
+// each under the bounds and pre-run commit it was registered with. Under other bounds than the
+// code's, a record counts as not run.
+export const RECORDS_FILE = new URL('./verdicts.json', import.meta.url);
+export interface RecordsFile { bounds: Record<string, number>; pre_run_commit: string | null; cases_sha256: string | null; records: VerdictRecord[] }
+
+export function readRecords(file: URL | string = RECORDS_FILE): RecordsFile {
+  return JSON.parse(readFileSync(file, 'utf8')) as RecordsFile;
+}
+
+export function recordsOf(f: RecordsFile | null, bounds: Record<string, number> = BOUNDS_V2): VerdictRecord[] {
+  if (!f) return [];
+  const ok = Object.keys(bounds).length === Object.keys(f.bounds ?? {}).length && Object.keys(bounds).every((k) => f.bounds?.[k] === bounds[k]);
+  return f.records.map((r) => (ok ? r : { ...r, status: 'not-run' as const, why: 'recorded against other bounds' }));
+}
+
+// Each later eval keeps its own records file, under its own registered bounds.
+export const CAPTURE_RECORDS_FILE = new URL('./verdicts-capture-sensitive.json', import.meta.url);
+export const RECORD_SETS: { file: URL; bounds: Record<string, number> }[] = [
+  { file: RECORDS_FILE, bounds: BOUNDS_V2 },
+  { file: CAPTURE_RECORDS_FILE, bounds: BOUNDS_CS },
+];
+
+// The verdicts the service uses: Part 1's file and the records file, read fresh each time so a new
+// run takes effect.
+export function fileVerdicts(file: URL | string = VERDICTS_FILE, sets: { file: URL | string; bounds: Record<string, number> }[] = RECORD_SETS): VerdictStore {
+  const read = () => {
+    let all: VerdictRecord[] = [];
+    try { all = all.concat(fileRecords(readVerdicts(file))); } catch { /* none yet */ }
+    for (const set of sets) { try { all = all.concat(recordsOf(readRecords(set.file), set.bounds)); } catch { /* none yet */ } }
+    return memoryVerdicts(all);
+  };
   return {
     lookup: (...a) => read().lookup(...a),
     passed: (...a) => read().passed(...a),

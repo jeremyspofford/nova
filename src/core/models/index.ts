@@ -126,6 +126,10 @@ export interface ModelsOptions {
   // How often waiting tasks are checked against returning capacity; how often a waking device is asked.
   watchMs?: number;
   wakePollMs?: number;
+  // The hub's decision model as the Decision Service sees it (DS1 NOTE 4), for the device record.
+  decisionModel?: () => { model: string | null; digest: string | null; why: string } | null;
+  // Called after /models/refresh has read the hub again, so a newly pulled decision model is seen.
+  refreshed?: () => Promise<void>;
   now?: () => Date;
 }
 
@@ -1109,6 +1113,11 @@ export class Models extends EventEmitter {
 
   // ---- the view --------------------------------------------------------------------------------
 
+  // What the hub's runtime has installed, by name and digest, as last read (scorecard targets).
+  installedOnHub(): { name: string; digest: string }[] {
+    return (this.#inventory.get(HUB)?.models ?? []).map((m) => ({ name: m.name, digest: m.digest }));
+  }
+
   async view() {
     const advice = await this.recommendation();
     const hubHw = await this.hubHardware();
@@ -1120,6 +1129,7 @@ export class Models extends EventEmitter {
       const latency = hub ? null : this.wakeLatency(id);
       return {
         id, name, hub, online, hardware: hw, words: hw ? hardwareWords(hw) : 'It hasn’t reported its hardware yet.', capacity: hw ? capacityWords(hw) : '',
+        ...(hub ? { decision_model: this.#o.decisionModel?.() ?? null } : {}),
         runtime: inv ? { url: this.#urlFor(id), ok: inv.ok, version: inv.version, models: inv.models.length, problem: inv.problem, words: inv.ok ? `Ollama ${inv.version} · ${inv.models.length} model${inv.models.length === 1 ? '' : 's'}` : `Ollama isn’t answering${inv.problem ? `: ${inv.problem}` : ''}` } : null,
         wake: hub ? null : { mac: nic?.mac ?? null, latency_ms: latency, words: !nic ? 'Can’t be woken: no network card reported.' : latency !== null ? `Wakes in about ${secs(latency)} (measured).` : 'Can be woken; how long it takes isn’t measured yet.' },
       };
@@ -1162,7 +1172,7 @@ export class Models extends EventEmitter {
       cloud: {
         configured: !!cloud, name: cloud?.name ?? null, model: cloud?.model ?? null, priced: !!cloud && cloud.usd_per_mtok_in !== undefined && cloud.usd_per_mtok_out !== undefined,
         budget: b, spent_period: spentPeriod,
-        words: !cloud ? 'No cloud model is set, so everything runs on your devices.'
+        words: !cloud ? 'No cloud model is set here.'
           : this.#privacy() === 'local-only' ? `${cloud.name} is set, but your privacy setting is local-only, so it is never used.`
           : `${cloud.name} (${cloud.model}) helps ${this.#privacy() === 'local-preferred' ? 'only when your local models can’t' : 'when Nova chooses it'}. This ${b.period}: ${usd(spentPeriod)}${typeof b.per_period_usd === 'number' ? ` of ${usd(b.per_period_usd)}` : ''}.`,
       },
@@ -1171,6 +1181,14 @@ export class Models extends EventEmitter {
   }
 
   // ---- settings through the API ------------------------------------------------------------------
+
+  // Whether System 1 decisions use the local sorting model (model, the default once one is
+  // assigned) or only the rules. PUT /models/decisions with {use} (the core's route, which also
+  // takes the Decision Service's settings).
+  useForDecisions(use: unknown): void {
+    if (use !== 'model' && use !== 'rules') throw new CoreError('validation', 'use is model or rules.');
+    this.#set('decisions', use);
+  }
 
   // Where wake packets go (host:port; the device's own broadcast address by default) and how long
   // to wait for a computer never woken before.
@@ -1244,7 +1262,7 @@ export class Models extends EventEmitter {
     const view = () => this.view();
     return [
       { method: 'GET', path: '/models', summary: 'The model manager: each device’s hardware and runtime, the role recommendation with reasons, assigned roles, downloads with progress, the disk budget and the cloud budget.', handle: view },
-      { method: 'POST', path: '/models/refresh', summary: 'Read the hub’s hardware and every runtime again, now.', handle: async () => { await this.hubHardware(true); return view(); } },
+      { method: 'POST', path: '/models/refresh', summary: 'Read the hub’s hardware and every runtime again, now.', handle: async () => { await this.hubHardware(true); await this.#o.refreshed?.().catch(() => {}); return view(); } },
       { method: 'GET', path: '/models/versions', summary: 'Every model version Nova has seen on a device (?device=hub), by digest, with when it was first and last seen and when it went.', handle: ({ query }) => this.versions(query.get('device') ?? HUB) },
       { method: 'POST', path: '/models/roles/accept', summary: 'Assign every role Nova recommends from installed models. Roles needing a download or a runtime are left, and said.', handle: async () => ({ ...(await this.accept()), view: await view() }) },
       { method: 'PUT', path: '/models/roles/{role}', summary: 'Assign a role (triage-text, reasoner, embedder) to an installed model on the hub or a paired computer. A computer’s url must be one of its own addresses; hub_model is what small jobs use while it sleeps.', body: '{model, device?, url?, hub_model?}', handle: async ({ params, body }) => ({ placement: await this.assign(params.role, body), view: await view() }) },
@@ -1256,7 +1274,6 @@ export class Models extends EventEmitter {
       { method: 'PUT', path: '/models/budget', summary: 'Cloud budgets: per task and per period (day, week or month), in US dollars. Over budget, work waits with the reason; local stays the default.', body: '{per_task_usd?, per_period_usd?, period}', handle: async ({ body }) => { this.setBudget(body); return view(); } },
       { method: 'PUT', path: '/models/prices', summary: 'Prices per million tokens by model, for cloud usage that reports tokens but no cost (a coding agent off your devices). With a budget set, usage Nova can’t price makes the cloud wait.', body: '{"<model>": {usd_per_mtok_in, usd_per_mtok_out}}', handle: async ({ body }) => { this.setPrices(body); return view(); } },
       { method: 'PUT', path: '/models/cloud', summary: 'The cloud model local-preferred and cloud-allowed work may use when it must (an OpenAI-compatible address; its key in the vault). A new address needs {confirm: true}. {cloud: null} removes it.', body: '{cloud, confirm?}', handle: async ({ body }) => { this.setCloud(body.cloud, body.confirm === true); return view(); } },
-      { method: 'PUT', path: '/models/decisions', summary: 'Whether System 1 decisions use the local sorting model (model, the default once one is assigned) or only the rules.', body: '{use: model | rules}', handle: async ({ body }) => { if (body.use !== 'model' && body.use !== 'rules') throw new CoreError('validation', 'use is model or rules.'); this.#set('decisions', body.use); return view(); } },
       { method: 'POST', path: '/models/devices/{id}/wake', summary: 'Wake a paired computer with a Wake-on-LAN packet and wait for its models, as long as waking took last time.', handle: ({ params }) => this.wake(params.id!) },
       {
         method: 'POST', path: '/models/infer', summary: 'Ask the model serving a role (the internal inference API, for tools and tests): a reply to messages, or embeddings of input. It keeps to the privacy mode: local-only never leaves your devices.', body: '{role, messages? | input?, privacy_mode?, task_id?}',

@@ -22,6 +22,8 @@ export const store = {
   devices: [], mesh: null, requests: [],
   // Settings › Providers: GET /providers, loaded when Settings opens (M5a).
   providers: null,
+  // The recommended chat model’s eval scorecard status, shown before a switch (Amendment B Part 4).
+  chatCard: null,
   // Keeping Nova running (M7b): the supervisor, releases, backups, the last drill, playbooks.
   resilience: null,
 };
@@ -160,7 +162,7 @@ export function renderTasks(el, now = new Date()) {
   <ul class="task-list">${by.get(k).map((t) => taskRow(t, { now })).join('')}</ul>
 </section>`).join('');
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Tasks</h2>
-<p class="view-lede">Everything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.</p></header>
+<p class="view-lede">Everything Nova takes on, in plain words. A task shows Verified only after Nova has checked its evidence; tap Verified to see it.</p></header>
 ${groups || emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.' })}`;
 }
 
@@ -300,6 +302,8 @@ function checkLine(key, c) {
   if (key === 'ledger') return Object.entries(c.counts ?? {}).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ') || 'No tasks yet.';
   if (key === 'design') return `Showing ${appearance().list.find((d) => d.id === c.active)?.name ?? c.active}.`;
   if (key === 'problems') return c.open ? `${c.open} open.` : 'None open.';
+  // Outside content: how it is screened, then one plain line per decision seat (DS1 NOTE 4).
+  if (key === 'ingest') return [c.detail, ...(c.lines ?? [])].filter(Boolean).join(' ');
   if (key === 'mesh') return `${c.counts.trusted} paired${c.counts.revoked ? `, ${c.counts.revoked} revoked` : ''}. ${c.listening ? 'Other devices can reach Nova.' : 'Other devices can’t reach Nova: no mesh address.'} ${meshRoleLine(c)}`;
   if (c.counts) return Object.entries(c.counts).filter(([, n]) => typeof n === 'number' && n).map(([s, n]) => `${n} ${s.replace(/_/g, ' ').replace(/s$/, n === 1 ? '' : 's')}`).join(', ') || 'Nothing yet.';
   return c.detail ?? (c.ok ? 'Fine.' : 'Not fine.');
@@ -401,7 +405,7 @@ const uptime = (s) => (s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min
 
 export function renderRules(el) {
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Automations</h2>
-<p class="view-lede">Everything that runs on its own. Nothing runs that isn’t listed here, and each can be paused or removed.</p></header>
+<p class="view-lede">Rules Nova runs on its own. Each can be paused or removed.</p></header>
 <section class="panel" aria-labelledby="ru-title"><h3 class="section-title" id="ru-title">Rules</h3>
 ${store.rules.length ? `<ul class="trigger-list">${store.rules.map(triggerRow).join('')}</ul>` : '<p class="settings-note">No rules yet. Rules start work or send a message when something happens or on a schedule.</p>'}</section>`;
 }
@@ -419,7 +423,7 @@ export async function ruleAction(action, id) {
 // ---- Settings: you and Nova, privacy, appearance, devices -------------------------------------
 
 const PRIVACY = [
-  ['local-only', 'Local-only', 'Nothing leaves this machine. Never falls back to the cloud.'],
+  ['local-only', 'Local-only', 'Model calls stay on your own devices.'],
   ['local-preferred', 'Local first', 'Local first; cloud help only when local isn’t enough, and recorded.'],
   ['cloud-allowed', 'Cloud allowed', 'Nova may use cloud services within your policy.'],
 ];
@@ -432,7 +436,7 @@ export function renderYou() {
 <ul class="settings-list">
 ${settingsRow({ id: 'you-name-row', title: 'Your name', note: 'What Nova calls you.', control: `${field('you-name', i.user_name, 'Your name')}<button type="button" class="btn small" data-action="save-profile" data-section="user" data-key="name" data-field="you-name">Save</button>` })}
 ${settingsRow({ id: 'nova-name-row', title: 'Nova’s name', note: 'Only the name changes; the charter stays.', control: `${field('nova-name', i.name, 'Nova’s name')}<button type="button" class="btn small" data-action="save-profile" data-section="identity" data-key="name" data-field="nova-name">Save</button>` })}
-${settingsRow({ id: 'directness-row', title: 'Directness', note: 'Nova always says when it thinks something’s wrong; this is how.', control: `<label class="sr-only" for="directness">Directness</label><select class="input" id="directness" data-action="set-profile" data-section="tuning" data-key="directness">${DIRECTNESS.map(([v, l]) => `<option value="${v}"${i.directness === v ? ' selected' : ''}>${l}</option>`).join('')}</select>` })}
+${settingsRow({ id: 'directness-row', title: 'Directness', note: 'Telling you when Nova thinks something’s wrong isn’t adjustable; this is how it says it.', control: `<label class="sr-only" for="directness">Directness</label><select class="input" id="directness" data-action="set-profile" data-section="tuning" data-key="directness">${DIRECTNESS.map(([v, l]) => `<option value="${v}"${i.directness === v ? ' selected' : ''}>${l}</option>`).join('')}</select>` })}
 </ul></section>`;
 }
 
@@ -821,9 +825,12 @@ export function renderProviders() {
     const rec = c.recommended;
     const better = rec.id && rec.id !== c.current;
     const title = what === 'chat' ? `Chat uses ${name(c.current)}` : c.current ? `Coding tasks go to ${name(c.current)}` : 'Coding tasks';
+    // Before the person switches: the recommended model's scorecard, or that it has none
+    // (Amendment B Part 4).
+    const card = better && what === 'chat' ? store.chatCard : null;
     return settingsRow({
       title,
-      note: better ? `Nova recommends ${name(rec.id)}. ${rec.why}` : rec.why,
+      note: better ? `Nova recommends ${name(rec.id)}. ${rec.why}${card ? ` ${card.words}` : ''}` : rec.why,
       control: better ? `<button type="button" class="btn small${standout ? ' primary' : ''}" data-action="provider-choose" data-for="${what}" data-provider="${esc(rec.id)}">Use ${esc(name(rec.id))}</button>` : '',
     });
   };
@@ -849,6 +856,9 @@ export function renderProviders() {
 export async function loadProviders() {
   try {
     store.providers = await api('GET', '/providers');
+    const rec = store.providers?.chat?.recommended?.id;
+    const target = rec && rec !== store.providers.chat.current ? providerById(rec) : null;
+    store.chatCard = target?.model ? await api('GET', `/evals/scorecards/status?provider=${encodeURIComponent(target.id)}&model=${encodeURIComponent(target.model)}`).catch(() => null) : null;
   } catch { /* the part keeps what it had; the next event tries again */ }
   window.dispatchEvent(new CustomEvent('nova:providers'));
 }

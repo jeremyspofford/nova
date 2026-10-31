@@ -1,6 +1,6 @@
 ---
 name: Shopping research
-about: Finds and compares things to buy, and recommends one. It never buys anything.
+about: Finds and compares things to buy, and recommends one. It researches; you buy.
 when: The person wants help finding, comparing or choosing something to buy, or wants the best price for something.
 words: buy, buying, shop, shopping, pick, price, prices, cheapest, deals, recommend, compare, purchase
 try: Help me pick merino hiking socks, under $25 a pair.

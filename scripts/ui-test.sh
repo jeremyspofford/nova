@@ -4,9 +4,12 @@
 # network does not reach WSL from Docker Desktop). Evidence screenshots go to docs/screenshots/m3.
 #   scripts/ui-test.sh            the whole UI gate
 #   scripts/ui-test.sh <file>…    some of it
+#   NOVA_UPDATE_BASELINES=1 scripts/ui-test.sh tests/ui/fold-postures.test.ts
+#                                 rewrites the fold postures' screenshot baselines (commit them)
 # --test-force-exit: a test file ends when its tests have, even if one left a server or a browser
 # open (a failed assertion before its cleanup); --test-timeout bounds a test that never ends. Both
 # keep a failure from hanging the gate (PR #236's 90-minute UI-gate run).
+# It runs under the no-Kubernetes tripwire (scripts/tripwire.sh), as npm test does.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="mcr.microsoft.com/playwright:v$(node -p "require('$ROOT/node_modules/playwright-core/package.json').version")-noble"
@@ -18,5 +21,6 @@ exec docker run --rm --init --ipc=host \
   -v "$NODE_DIR:/opt/node:ro" \
   -e NOVA_UI_SHOTS="${NOVA_UI_SHOTS:-docs/screenshots/m3}" \
   ${NOVA_VITALS_RUNS:+-e NOVA_VITALS_RUNS="$NOVA_VITALS_RUNS"} \
+  ${NOVA_UPDATE_BASELINES:+-e NOVA_UPDATE_BASELINES="$NOVA_UPDATE_BASELINES"} \
   --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  "$IMAGE" bash -c 'export PATH=/opt/node/bin:$PATH CHROMIUM=$(ls -d /ms-playwright/chromium-*/chrome-linux/chrome | head -1); node --test --test-concurrency=1 --test-force-exit --test-timeout=900000 '"${FILES[*]}"
+  "$IMAGE" bash -c 'export PATH=/opt/node/bin:$PATH CHROMIUM=$(ls -d /ms-playwright/chromium-*/chrome-linux/chrome | head -1); sh scripts/tripwire.sh node --test --test-concurrency=1 --test-force-exit --test-timeout=900000 '"${FILES[*]}"
