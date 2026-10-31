@@ -57,6 +57,9 @@ export const FILL = `function (value) {
   if (el.disabled || el.readOnly) return 'disabled';
   const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : el instanceof HTMLInputElement ? HTMLInputElement.prototype : null;
   if (!proto) { if (el.isContentEditable) { el.focus(); el.textContent = value; el.dispatchEvent(new Event('input', { bubbles: true })); el.setAttribute('data-nova-set', '1'); return 'ok'; } return 'not-a-field'; }
+  // A password field never takes a value from a plan (M10d): the vault's, through a login or account
+  // step, or the person's own.
+  if (el instanceof HTMLInputElement && (el.getAttribute('type') || '').toLowerCase() === 'password') return 'secret-field';
   el.scrollIntoView({ block: 'center' });
   el.focus();
   Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
