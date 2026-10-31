@@ -23,7 +23,7 @@ reverted. The gate items are corrected where the review showed a claim wasn't tr
 - `npm run check`: **1442 tests: 1427 pass, 2 fail, 13 skipped** on this machine, the two being
   `tests/core/provider-guard.test.ts` › "a coding agent that changes more than Nova takes…" (the
   stand-in agent ended without a result) and `tests/skills-api.test.js` › "the email summary…" (timed
-  out). Neither touches M10f's code; both pass alone (35 of 35 in those two files), and failed the
+  out). Neither touches M10f's code; both pass alone (17 of 17 in those two files), and failed the
   same way in two other full runs here while other builders' suites loaded the machine (load average
   near 6). CI is the record: see the PR.
 - `scripts/ui-test.sh` (Chromium and WebKit): **101 tests: 101 pass, 0 fail**. The browser path's
