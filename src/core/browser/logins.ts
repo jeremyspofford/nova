@@ -3,11 +3,13 @@
 // browser worker reads them, at the moment it types them into a page on that very host. The
 // redactor holds every value a session used, and everything Nova writes from that session passes
 // through it.
+import { randomInt } from 'node:crypto';
 import { CoreError } from '../errors.ts';
 import { HOST, normalizeHost } from './plan.ts';
 
 export const LOGIN_PREFIX = 'browser/login/';
-export type LoginPart = 'username' | 'password';
+// `pending` (M10d): a new password an account step sent, kept aside until the site shows it took.
+export type LoginPart = 'username' | 'password' | 'pending';
 
 // A host as a vault path segment: the port's colon isn't allowed there, so it becomes "_"
 // (a host name never has one).
@@ -21,6 +23,22 @@ export function siteHost(raw: string): string {
 
 export function loginName(host: string, part: LoginPart): string {
   return `${LOGIN_PREFIX}${enc(siteHost(host))}/${part}`;
+}
+
+// A new password, made in Nova's own process for an account step (M10d): 24 characters from the
+// letters, the digits and a few symbols sites accept, with at least one of each. It is never shown:
+// it goes from here into the page's field and the vault.
+const LOWER = 'abcdefghijkmnopqrstuvwxyz';
+const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const DIGIT = '23456789';
+const SYMBOL = '-_.!@#%+=';
+export function generatePassword(length = 24): string {
+  const all = LOWER + UPPER + DIGIT + SYMBOL;
+  const pick = (set: string) => set[randomInt(set.length)]!;
+  const out = [pick(LOWER), pick(UPPER), pick(DIGIT), pick(SYMBOL)];
+  while (out.length < length) out.push(pick(all));
+  for (let i = out.length - 1; i > 0; i--) { const j = randomInt(i + 1); [out[i], out[j]] = [out[j]!, out[i]!]; }
+  return out.join('');
 }
 
 // The host a vault name was saved for, or null.
@@ -48,8 +66,17 @@ export function loginRefusal(pageUrl: string): string | null {
 export class Redactor {
   #values = new Set<string>();
 
+  // The value, and the forms it travels in (review of PR #241): base64 (and base64url), hex and
+  // URL-encoding.
   add(v: string | null | undefined): void {
-    if (typeof v === 'string' && v.length >= 3) this.#values.add(v);
+    if (typeof v !== 'string' || v.length < 3) return;
+    this.#values.add(v);
+    // Encoded forms of short values would mask ordinary text (a hash, a word): from 8 characters.
+    if (v.length < 8) return;
+    const b = Buffer.from(v, 'utf8');
+    for (const f of [v, b.toString('base64'), b.toString('base64').replace(/=+$/, ''), b.toString('base64url'), b.toString('hex'), encodeURIComponent(v), encodeURIComponent(v).replace(/%20/g, '+')]) {
+      if (f.length >= 3) this.#values.add(f);
+    }
   }
 
   get size(): number { return this.#values.size; }

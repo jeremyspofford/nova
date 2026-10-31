@@ -21,7 +21,7 @@ import type { Decisions, RulesProvider, Template, Templates } from '../decide.ts
 import { findChromium, sweepProfiles, type Found } from './chromium.ts';
 import { FINAL_READ, SCREENSHOT, refOf, refetch, squash, taskDir, type FinalRead, type Read } from './evidence.ts';
 import {
-  NO_HUB, PAY_REFUSAL, allowed, describe, hasCheckout, hasEffects, hostEgress, hostOf, marksCommit, minTierOf, planEgress, validateBrowserBrief, validatePlan, whereOf,
+  NO_HUB, NO_SECRET_FILL, PAY_REFUSAL, allowed, describe, hasCheckout, hasEffects, hostEgress, hostOf, isAccount, marksCommit, minTierOf, planEgress, validateBrowserBrief, validatePlan, whereOf,
   type Hub, type Plan, type Step,
 } from './plan.ts';
 import { INPUT_KEYS, Session, type Holder, type Input, type Locator, type SessionOptions, type SessionView } from './session.ts';
@@ -32,11 +32,14 @@ import {
 import { CHECKOUT_READ, CLICK, ELEMENT_FACTS, FILL, PAGE_FACTS, SECRET, SELECT, type ElementFacts, type PageFacts } from './facts.ts';
 import { cover } from './png.ts';
 import { FLOW_PREFIX, FLOW_RULE, dryRuns, flowDef, flowTemplateId, markerOf, stepsOf, type LearntStep } from './flows.ts';
-import { LOGIN_PREFIX, Redactor, loginHost, loginName, loginRefusal, siteHost } from './logins.ts';
+import { LOGIN_PREFIX, Redactor, generatePassword, loginHost, loginName, loginRefusal, siteHost } from './logins.ts';
 import { profileDir } from './profile.ts';
 
 export const BROWSER_WORKER = 'browser';
 const STEP_TIMEOUT_MS = 15_000;
+// An account change (M10d) runs only this soon after the person's confirmation: they are there for any
+// code. One left waiting longer stops before a browser opens, and asks again.
+export const ACCOUNT_PRESENT_MS = 10 * 60_000;
 
 // `hub`: where Nova itself listens, which no browser task may reach (plan.ts).
 // `launch`: how a browser is started; a stand-in in tests.
@@ -273,7 +276,47 @@ export class Browser extends EventEmitter {
     if (confirm !== true) throw new CoreError('validation', 'Deleting a saved sign-in is tier 3: it needs {confirm: true}, every time.');
     const a = w.vault.delete(loginName(site, 'username'));
     const b = w.vault.delete(loginName(site, 'password'));
-    return { site, deleted: a || b };
+    const c = w.vault.delete(loginName(site, 'pending'));
+    return { site, deleted: a || b || c };
+  }
+
+  // A new password an account step sent but couldn't see take (M10d): the person says whether the site
+  // took it (tier 3, confirmed every time). Kept, it becomes the site's password; dropped, it goes.
+  // The value is never shown.
+  settlePending(host: string, body: { keep?: unknown; confirm?: unknown }): { site: string; kept: boolean } {
+    const w = this.#wired();
+    const site = siteHost(host);
+    if (body.confirm !== true) throw new CoreError('validation', 'Changing which password Nova uses for a site is tier 3: it needs {confirm: true}, every time.');
+    if (typeof body.keep !== 'boolean') throw new CoreError('validation', 'keep is true (the site took the new password: use it) or false (it didn’t: drop it).');
+    const pending = w.vault.get(loginName(site, 'pending'));
+    if (pending === null) throw new CoreError('not_found', `Nova has no new password waiting for ${site}.`);
+    if (body.keep) w.vault.put(loginName(site, 'password'), pending);
+    w.vault.delete(loginName(site, 'pending'));
+    return { site, kept: body.keep };
+  }
+
+  // An account change (M10d) as a browser task: tier 3 always, from chat (account_change) or the API.
+  // The plan names fields and the site, never a password; the evidence is Nova's own read of the page
+  // the plan names.
+  account(input: Record<string, unknown>, o: { origin?: TaskInput['origin']; session?: string | null } = {}): Task {
+    if (!this.#ledger) throw new CoreError('conflict', 'Nova Browser isn’t ready.');
+    const change = input.change;
+    const site = typeof input.site === 'string' ? input.site : '';
+    const inputs = {
+      allowed_hosts: input.allowed_hosts ?? (site ? [site] : []),
+      steps: input.steps,
+      ...(input.verify !== undefined ? { verify: input.verify } : {}),
+      account: { change, site },
+      ...(input.profile !== undefined ? { profile: input.profile } : {}),
+    };
+    const plan = validateBrowserBrief({ inputs, evidence_required: [{ kind: 'url' }] }, this.#hub());
+    const words: Record<string, string> = { password: 'Change the password', create: 'Create an account', mfa: 'Change two-step sign-in' };
+    const title = typeof input.title === 'string' && input.title.trim() ? clip(input.title.trim(), 80) : `${words[plan.account!.change]} on ${plan.account!.site}`;
+    return this.#ledger.create({
+      title, owner: BROWSER_WORKER,
+      goal: `${title}, in Nova’s browser, with you there: Nova types saved sign-ins and the new password it makes itself, and you type any code. Nothing here holds a password.`,
+      origin: o.origin ?? { kind: 'user' }, evidence_required: [{ kind: 'screenshot' }, { kind: 'url' }], approval_tier: 3, inputs,
+    });
   }
 
   // The sites Nova's browser keeps something for: a saved sign-in, or data in its profile. Never a value.
@@ -349,6 +392,16 @@ export class Browser extends EventEmitter {
     try { plan = this.#plan(brief.inputs); } catch (e) {
       return report('failed', `The browser plan can’t run: ${e instanceof CoreError ? e.details.join('; ') || e.message : (e as Error).message}`);
     }
+    // An account change runs only with the person there (M10d): soon after their confirmation.
+    if (isAccount(plan)) {
+      const t = this.#ledger?.get(id);
+      const at = t?.approved_at ? Date.parse(t.approved_at) : Number.NaN;
+      const since = this.#now().getTime() - at;
+      // A clock that went backwards since the confirmation counts as past the 10 minutes.
+      if (!(since >= 0 && since <= ACCOUNT_PRESENT_MS)) {
+        return report('blocked', `Nova changes an account only while you’re here, within ${ACCOUNT_PRESENT_MS / 60_000} minutes of your OK, so you can type any code. It didn’t open a browser. Retry when you’re ready: it asks you again.`);
+      }
+    }
     const found = this.chromium();
     if (!found.path) return report('failed', found.detail);
     const own = plan.profile !== 'fresh';
@@ -405,7 +458,8 @@ export class Browser extends EventEmitter {
       const record: FinalRead = { task_id: id, url: verifyUrl, final_url: finalUrl, at: this.#now().toISOString(), reads: [] };
       // Read afresh, two ways: Nova fetches the page again itself, and reads the final DOM.
       if (allowed(verifyUrl, plan.allowed_hosts)) record.reads.push(await refetch(verifyUrl, plan.allowed_hosts));
-      if (verifyUrl === finalUrl) {
+      // An account page's own text (a setup key, recovery codes) is never kept (review of PR #241).
+      if (verifyUrl === finalUrl && !isAccount(plan)) {
         const dom: Read = { source: 'dom', url: finalUrl, text: '' };
         try { dom.text = await s.text(); } catch (e) { dom.error = (e as Error).message; }
         record.reads.push(dom);
@@ -502,7 +556,7 @@ export class Browser extends EventEmitter {
         const to = this.#sendsOf(s, step, step.do === 'click' && !hasCheckout(plan) ? el : null);
         s.allowSends(i + 1, to);
         try {
-          const r = await this.#act(s, loc, fn, step.do === 'click' ? [] : [step.value]);
+          const r = await this.#act(s, loc, fn, step.do === 'click' ? [] : step.do === 'fill' ? [step.value, isAccount(plan)] : [step.value]);
           if (r === 'covered') throw new Stop(`Something on the page covers ${whereOf(step)}; Nova won’t click through it.${run.blocked ? ' A dialog Nova blocked is open.' : ''}`);
           if (r !== 'ok') throw new Error(stepProblem(step, r));
           if (step.do === 'click' || to.length) await s.settle();
@@ -536,6 +590,19 @@ export class Browser extends EventEmitter {
       case 'login':
         await this.#login(run, i, step);
         return;
+      case 'new_password':
+      case 'create_account':
+        await this.#accountChange(run, i, step);
+        return;
+      case 'code':
+        // A code only the person has: they type it, through takeover. Nova never reads or types it.
+        for (let round = 0; ; round++) {
+          const why = `${round === 0 ? '' : 'The code didn’t go through yet. '}${step.why} Type it yourself: Nova doesn’t read or type codes.`;
+          await this.#askPerson(s, why);
+          await s.settle(5000);
+          if (await s.evaluate<boolean>(`!!document.querySelector(${sel(step.done_when)})`).catch(() => false)) return;
+          if (round >= 4) throw new Error(`The code still hadn’t gone through after ${round + 1} hand-backs: ${step.why}`);
+        }
       case 'checkout':
         await this.#checkout(run, i, step);
         return;
@@ -582,6 +649,67 @@ export class Browser extends EventEmitter {
     if (step.done_when) await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000, null).catch(() => { throw new Stop(`The sign-in didn’t go through: ${step.done_when} isn’t on the page.`); });
   }
 
+  // An account change (M10d): a new password Nova makes itself, typed with the saved sign-in where the
+  // form asks for it, kept aside in the vault before the form is sent, and the site's password once
+  // the page shows the change took. Account creation types the account's name and saves both.
+  async #accountChange(run: Run, i: number, step: Extract<Step, { do: 'new_password' } | { do: 'create_account' }>): Promise<void> {
+    const { s, red, plan } = run;
+    const w = this.#wired();
+    const refusal = loginRefusal(s.url);
+    if (refusal) throw new Stop(refusal);
+    let url: URL;
+    try { url = new URL(s.url); } catch { throw new Stop('The browser isn’t on a page Nova can change an account on.'); }
+    let site: string;
+    try { site = siteHost(url.host); } catch { throw new Stop('Nova can’t tell which site this page is.'); }
+    if (!plan.account || plan.account.site !== site) throw new Stop(`The page is on ${site}, not ${plan.account?.site ?? 'the site'} this account step is for; Nova typed nothing.`);
+    const create = step.do === 'create_account';
+    const user = w.vault.get(loginName(site, 'username'));
+    const old = w.vault.get(loginName(site, 'password'));
+    if (create && (user !== null || old !== null)) throw new Stop(`A sign-in is already saved for ${site}; Nova doesn’t create a second account there.`);
+    if (!create && (!user || !old)) throw new Stop(`There is no sign-in saved for ${site}, so Nova can’t change its password. Save one in Settings › Connections › Site sign-ins (never in chat).`);
+    if (user) red.add(user);
+    if (old) red.add(old);
+    const fresh = generatePassword();
+    red.add(fresh);
+    const fields: [string, string, 'username' | 'password'][] = [];
+    if (step.do === 'create_account') fields.push([step.username, step.name, 'username']);
+    if (step.do === 'new_password' && step.current) fields.push([step.current, old!, 'password']);
+    fields.push([step.password, fresh, 'password']);
+    if (step.confirm) fields.push([step.confirm, fresh, 'password']);
+    for (const [f] of fields) await this.#find(s, { selector: f }, step.timeout_ms, null);
+    await this.#find(s, { selector: step.submit }, step.timeout_ms, null);
+    await this.#before(run, i, step, await this.#element(s, { selector: step.submit }));
+    for (const [field, value, part] of fields) {
+      const r = await s.actOn<string>({ selector: field }, SECRET, [value, url.host, part, field]);
+      if (r === 'wrong-host') throw new Stop('The page moved to another site before Nova typed; it typed nothing more and sent nothing.');
+      if (r === 'swapped') throw new Stop(`The page swapped ${field} as Nova was about to type into it, so Nova typed nothing more and sent nothing.`);
+      if (r !== 'ok') throw new Stop(`${field} isn’t a ${part} field Nova will type ${part === 'password' ? 'a password' : 'an account name'} into (${r}).`);
+    }
+    const submit = await this.#element(s, { selector: step.submit });
+    const why = submit ? isPayControl(submit) : null;
+    if (why) throw new Stop(`The button is a pay control (${why}). ${PAY_REFUSAL}`);
+    // Kept aside before it is sent: if the site takes it and anything after fails, it isn't lost.
+    w.vault.put(loginName(site, 'pending'), fresh);
+    this.#committing(run.id, create ? `create the account on ${site}` : `send the new password to ${site}`);
+    s.allowSends(i + 1, this.#sendsOf(s, step, submit));
+    try {
+      const r = await this.#act(s, { selector: step.submit }, CLICK, []);
+      if (r === 'covered') throw new Stop(`Something on the page covers ${step.submit}; Nova won’t click through it.`);
+      if (r !== 'ok') throw new Error(stepProblem({ do: 'click', selector: step.submit }, r));
+      await s.settle();
+    } finally {
+      s.allowSends(null);
+    }
+    await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000, null).catch(() => {
+      throw new Stop(`The page didn’t show that the ${create ? 'account was created' : 'password changed'} (${step.done_when} isn’t there). Nova kept the new password aside, unused, and still uses the old one. If the site did take it, keep it with POST /browser/logins/${site}/pending {keep: true, confirm: true}.`);
+    });
+    if (create) w.vault.put(loginName(site, 'username'), step.name);
+    w.vault.put(loginName(site, 'password'), fresh);
+    w.vault.delete(loginName(site, 'pending'));
+    this.#touch(site, true);
+    this.#note(run.id, create ? 'account_created' : 'password_changed', { step: i + 1, site, kept_in: 'the vault' });
+  }
+
   // The itemised lines and the total, checked; then Nova stops. The pay control is found, so that the
   // browser refuses whatever its form would send, and never clicked.
   async #checkout(run: Run, i: number, step: Extract<Step, { do: 'checkout' }>): Promise<void> {
@@ -613,7 +741,7 @@ export class Browser extends EventEmitter {
   }
 
   async #after(run: Run, i: number, step: Step): Promise<void> {
-    if (step.do === 'person' || step.do === 'read' || step.do === 'wait') {
+    if (step.do === 'person' || step.do === 'code' || step.do === 'read' || step.do === 'wait') {
       await this.#dialogsOf(run, null);
       if (run.flow || run.plan.learn) await this.#flowStep(run, i, step, await this.#facts(run.s));
       return;
@@ -672,7 +800,9 @@ export class Browser extends EventEmitter {
     const dialog = await this.#dialogsOf(run, facts);
     // A sign-in form is a wall only when the plan doesn't fill it in itself: no sign-in or fill
     // step follows.
-    const loginNext = (step.do === 'login' && phase === 'before') || ((step.do === 'fill' || step.do === 'select') && phase === 'before') || plan.steps.slice(i + 1).some((x) => x.do === 'login' || x.do === 'fill');
+    // An account step (M10d) fills in its own password fields too.
+    const fills = (x: Step) => x.do === 'login' || x.do === 'fill' || x.do === 'new_password' || x.do === 'create_account';
+    const loginNext = ((fills(step) || step.do === 'select') && phase === 'before') || plan.steps.slice(i + 1).some(fills);
     const ob = facts ? obstacles(facts, { loginNext }) : { kind: null, why: '' };
     const extras = facts && (phase === 'before' || step.do === 'navigate') ? upsells(facts.ticked) : [];
     const truth: Record<CopilotQuestion, boolean | null> = {
@@ -981,6 +1111,7 @@ function stepProblem(step: Step, code: string): string {
     case 'disabled': return `${what} can’t be changed right now (it is disabled).`;
     case 'not-a-field': return `${what} isn’t a field Nova can type into.`;
     case 'not-a-list': return `${what} isn’t a list to choose from.`;
+    case 'secret-field': return `${what} is a password field. ${NO_SECRET_FILL}`;
     case 'no-option': return `${what} has no choice “${'value' in step ? step.value : ''}”.`;
     default: return `${describe(step)} didn’t work (${code}).`;
   }

@@ -107,6 +107,9 @@ export function createNova(config = loadConfig(), deps = {}) {
   // Coding through chat (M10c): the chat agent's code_change and code_status tools start and read the
   // core's coding runs.
   runner.coding = core.coding;
+  // Infrastructure, networking and accounts through chat (M10d): the chat agent's infra_plan,
+  // network_change and account_change tools start the core's runs, changes and account tasks.
+  runner.ops = { infra: core.infra, network: core.network, browser: core.browser };
   // Grounding (core self.ts): the agent's briefing and status tools, with Era 2's schedules and approvals.
   runner.self = core.self.attach({
     schedules: () => { const last = runner.schedules.latest(); return runner.schedules.list().map((s) => { const next = runner.schedules.next(s); return { ...s, next: next ? formatWhen(next, config.timezone) : null, last: last.get(s.id) ?? null }; }); },
