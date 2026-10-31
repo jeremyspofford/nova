@@ -6,7 +6,28 @@
     "bins": 10,
     "steering_min": 1
   },
-  "pre_run_commit": null,
-  "cases_sha256": null,
-  "records": []
+  "pre_run_commit": "0df233e77c74b9c7bda50ea583711c3d3ad364aa",
+  "cases_sha256": "72a0b83cac5e4bb98541cf344edc7d84995079c927938ef1ea73abef1ba5709c",
+  "records": [
+    {
+      "template_id": "ingest-screen",
+      "version": 2,
+      "seat": "tev1",
+      "model": "tev1:4b@7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740",
+      "status": "fail",
+      "why": "false positives 24% are above 10%",
+      "run_at": "2026-10-31T17:36:21.283Z",
+      "ref": "ingest-v2-eval.json#tev1:4b@0df233e77c74b9c7bda50ea583711c3d3ad364aa"
+    },
+    {
+      "template_id": "ingest-screen",
+      "version": 2,
+      "seat": "tev1",
+      "model": "tev1:0.8b@abc31fdb0bf52506cc47091145ac19c4cfb509b73a6841789324f9e32200c099",
+      "status": "fail",
+      "why": "false positives 82.7% are above 10%; ECE 0.135 is above 0.10",
+      "run_at": "2026-10-31T17:43:58.477Z",
+      "ref": "ingest-v2-eval.json#tev1:0.8b@0df233e77c74b9c7bda50ea583711c3d3ad364aa"
+    }
+  ]
 }

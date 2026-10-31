@@ -108,6 +108,91 @@ This section is the method. The cases are generated and committed in the next co
 
 The verdict per size is written to the service's verdict store, so it sets trust as DS1 does.
 
+## The result (2026-10-31)
+
+v2 and its rule were fixed at `47b26e21`. The fresh eval was fixed at `0df233e7` before the run. The run was on Ollama 0.40.13.
+
+| Size | Digest | Detection | False positives | ECE | Steering held | Verdict |
+|---|---|---:|---:|---:|---:|---|
+| `tev1:4b` | `7954dce2…0740` | 97.7% (43/44) | **24% (18/75)** | 0.037 | 8/8 | **fail: evidence only** |
+| `tev1:0.8b` | `abc31fdb…c099` | 95.5% (42/44) | **82.7% (62/75)** | **0.135** | 8/8 | **fail: evidence only** |
+
+Held out (v1's 99 cases, reported only):
+- 4B: detection 48 of 53 (the five misses are the metadata-borne cases); false positives 9 of 46.
+- 0.8B: detection 50 of 53; false positives 37 of 46.
+
+The full reading is in `docs/evidence/ingest-v2-eval.md`.
+
+**What changes in Nova: nothing yet.**
+- `verdicts.json` records `fail` for both sizes on their digests, so v2 is untrusted. The service keeps asking v1 while today's sorting model serves it.
+- With no sorting model, the service asks v2. Its answers are kept as shadows (evidence), and the gate's no-model path decides.
+- The sorting model is not retired: no decision seat has passed `ingest-screen`.
+
 ## NOTES for Track 1
 
-Filled in when the results are in, at the end of this file.
+Track 2 changed no gate code and no shared file. These are the changes the result needs.
+
+### 1. The gate takes the service's OUTCOME for v2 and later (`src/core/ingest/screen.ts`)
+
+The gate code in DS1's NOTE 1 maps a trusted answer onto v1's five question ids and applies the gate's score thresholds. v2 has different questions and a truth table of its own. Once any version from 2 on is trusted, the gate must use the service's `outcome` (`pass`, `quarantine` or `block`), not re-threshold probabilities. v1 keeps the score path, so today's behaviour with the sorting model is unchanged.
+
+```diff
+ // Ingest.#noul, per chunk (on top of DS1's NOTE 1)
+         const d = await this.#o.ask!({ source_kind: source.kind, origin: source.origin, content: fence(part) });
+         if (!d || d.trust === 'none' || !d.answers) return null;
+-        return { model: `${d.seat}:${d.model}`, answers: Object.fromEntries(QUESTIONS.map((q) => [q, Number(d.answers![q]?.noul ?? 0.5)])) };
++        if (d.version === 1) return { model: `${d.seat}:${d.model}`, answers: Object.fromEntries(QUESTIONS.map((q) => [q, Number(d.answers![q]?.noul ?? 0.5)])), outcome: null };
++        // v2 and later decide by their own rule: the gate uses the outcome, never the raw scores.
++        return { model: `${d.seat}:${d.model}@v${d.version}`, answers: null, outcome: d.outcome as 'pass' | 'quarantine' | 'block' };
+       }));
+       if (answers.some((a) => a === null)) return null;
++      // A version-2-or-later screen: the strictest outcome over the chunks.
++      if (answers.some((a) => a!.outcome)) {
++        const rank = { pass: 0, quarantine: 1, block: 2 } as const;
++        const worst = answers.map((a) => a!.outcome ?? 'quarantine').reduce((x, y) => (rank[y] > rank[x] ? y : x));
++        return { scores: null, outcome: worst, model: [...new Set(answers.map((a) => a!.model))].join('+') };
++      }
+
+ // Ingest.#settle: when the screen has an outcome, use it where the thresholds were
+-    const verdict: Verdict = blocking || (max !== null && max >= t.block_at) ? 'block'
+-      : max === null || partial || holding || max >= t.pass_below ? 'quarantine' : 'pass';
++    const verdict: Verdict = outcome
++      ? (blocking || outcome === 'block' ? 'block' : partial || holding || outcome === 'quarantine' ? 'quarantine' : 'pass')
++      : blocking || (max !== null && max >= t.block_at) ? 'block'
++      : max === null || partial || holding || max >= t.pass_below ? 'quarantine' : 'pass';
+```
+
+- **This is the combination the eval scored** (`eval-v2.ts` `combined`), so what was measured is what the gate would do.
+- **The `ingest_screen` record:** store `scores` as null and the outcome in `max`'s place; or better, add an `outcome` column (a one-line migration, `ALTER TABLE ingest_screen ADD COLUMN outcome TEXT`).
+- **`whyBlocked`** names the outcome: "The decision model's rule (ingest-screen v2) judged it an attack."
+- **When it is needed:** only once v2 or a later version passes an eval. Until then nothing reaches this path, because v2 is untrusted. It is safe to land now: no trusted v2 answer exists.
+
+### 2. Health
+
+Under "Outside content", add a line from the service: "The decision model's screen (ingest-screen v2) hasn't passed its test on this device's Tev1 (tev1:4b: too many false alarms, 24%), so Nova's own checks decide, and hold back anything unsure." Take it from `ds.view().scorecards`, which already lists v2 per seat and model.
+
+### 3. The records
+
+**`docs/LEDGER.md`, under `## Decisions`:**
+
+> **2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #⟨n⟩.
+> - **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
+>   - Six Nouls: instructs_ai, override, fake_message, link_slot (decisive); wants_private_data, keep_from_user (supporting).
+>   - Impersonation dropped (no one can judge a sender from the text; the deterministic layer checks headers and links), and the encoded/hidden question dropped (the gate decodes those).
+> - **The rule:** a truth table at TypeSafe's 0.7/0.3 bands, not tuned. A decisive yes blocks; a decisive unsettled answer quarantines; supporting yeses quarantine alone and block together; all no passes. It replaces v1's "worst question wins at 0.2". The rule and the template were fixed at `47b26e21`, before any case.
+> - **The fresh eval,** fixed at `0df233e7` before any run: 127 cases (44 text-borne attacks, 75 benign, 8 steering). No new attack text: the corpus's payloads through 8 new transforms, 5 new placements, 5 carriers and 4 steering framings. Benign: v1's 46, 24 new boundary controls, and 5 carrier-only documents.
+> - **Bounds:** Part 1's, plus the steering cases scored on the combined gate.
+> - **Result, on Ollama 0.40.13:**
+>   - tev1:4b `7954dce2…`: detection 97.7%, false positives 24%, ECE 0.037, steering 8/8. **Fail.**
+>   - tev1:0.8b `abc31fdb…`: 95.5%, 82.7%, 0.135, 8/8. **Fail.**
+>
+>   v2 is evidence only on both; v1 keeps its place; nothing was tuned. The service now picks the version: the newest that passed, else the newest the sorting model serves, else the newest.
+> - **Pending Track 1:** the gate takes the outcome for v2 and later; a Health line.
+
+**The plain-language entry:**
+
+> Nova rewrote the questions it asks a small local model about outside content, following the model maker's own guidelines, and tested them on a fresh set of cases written before the test ran. The rewrite is much better than the first version: it caught 43 of 44 attacks, and its confidence matched how often it was right. But it still flagged 18 of 75 harmless documents, and the bar was 10%. So, as agreed, it isn't trusted yet. Nova keeps screening with its own checks and holds back anything unsure, exactly as before.
+
+**`docs/builder-packet/CAPABILITY-INVENTORY.md`,** on the Decision Service row:
+
+> **DS2:** `ingest-screen` v2 (re-authored, six Nouls, truth-table rule, `templates/ingest-screen-v2.ts`) failed its pre-registered fresh eval on both Tev1 sizes. tev1:4b: 24% false positives against a 10% bound; detection 97.7%, ECE 0.037, steering 8/8. tev1:0.8b: 82.7% false positives, ECE 0.135. It is evidence only; v1 is still asked while the sorting model serves it. The service picks versions by verdict. **Gap:** the gate uses the service's outcome for v2 and later (NOTE 1) once a version passes.
