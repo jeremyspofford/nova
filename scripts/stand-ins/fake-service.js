@@ -12,9 +12,10 @@
 //   --flavour <word>        said by /whoami, to tell versions apart
 //   --no-contract           /contract answers 404
 //   --healthy-for-ms <n>    healthy for n ms after it starts, then sick for good
-//   --child                 starts a child process that does nothing (the same process group), and
-//                           writes its pid to <state>/child-<version>.pid, to check that the whole
-//                           group is ended with the service
+//   --child                 starts a child process in its process group that does nothing, notes
+//                           a SIGTERM in <state>/child-<version>.sigterm and otherwise ignores it
+//                           (only the group's SIGKILL ends it), and writes its pid to
+//                           <state>/child-<version>.pid: the whole group is asked, then made, to stop
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -31,7 +32,8 @@ const port = Number(process.env.PORT ?? 0);
 mkdirSync(state, { recursive: true });
 
 if (flag('--child')) {
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const termed = join(state, `child-${version}.sigterm`);
+  const child = spawn(process.execPath, ['-e', `process.on('SIGTERM', () => require('node:fs').writeFileSync(${JSON.stringify(termed)}, 'SIGTERM')); setInterval(() => {}, 1000)`], { stdio: 'ignore' });
   writeFileSync(join(state, `child-${version}.pid`), String(child.pid));
 }
 
