@@ -98,7 +98,8 @@ test('a task delegated over the API is done, with its evidence and its event tra
 test('settings and setup write the same profile records', async () => {
   const { call, stop } = await boot();
   await call('GET', '/setup');
-  await call('POST', '/setup/messages', { text: 'Sam' });
+  // The device steps first (M10f), then the person's name.
+  for (const text of ['new', 'yes', 'yes', 'Sam']) await call('POST', '/setup/messages', { text });
   const put = await call('PUT', '/profile/tuning/directness', { value: 'gentle' });
   assert.deepEqual(put.body, { directness: 'gentle' });
   const profile = (await call('GET', '/profile')).body;
