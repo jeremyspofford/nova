@@ -271,6 +271,34 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (the flaky WebKit pairing test, M4a).** Branch `fix/webkit-pairing-flake`. The UI
+gate's "M4a in WebKit" test timed out waiting for the join screen three times in a day (main run
+41205581247; both runs of PR #257), after 40 clean runs.
+- **Root cause, an app defect:** WebKit sometimes turns down a key it has just made.
+  `crypto.subtle.generateKey` throws `OperationError` for about one Ed25519 key in 150 and one
+  X25519 key in 500 in Playwright's WebKit; the rate was the same at full speed and on half a CPU,
+  so it is per key, not timing. `/pair`'s check that the browser can pair took any error as "This
+  browser can't pair" and stopped there, with no form, so the test waited for `#join` until it
+  timed out. A test run makes six keys, so roughly one run in 20 to 35 failed. When the device's
+  own key was the one refused, the page said "That didn't work" instead. The failure comes before
+  any signed time, so the logged pairing-clock defect is not involved. Whether a real iPhone's
+  WebKit does this too is not known.
+- **Fix:** `ui/js/device-key.js` makes each key through one helper that tries again on
+  `OperationError`, up to five times. Each try is a new key of the same kind, never a weaker one.
+  Any other error, such as `NotSupportedError`, is final, so a browser with no Ed25519 is still
+  told plainly.
+- **A second, smaller race in the same test:** it chose the mesh port from the ephemeral range,
+  where the hub's own port-0 listener can be handed the same port first (`EADDRINUSE`, 1 run in
+  100). It now uses the shared `freePort`, which picks below that range.
+- **Gate:** two new tests in `tests/ui/m4a-webkit-pair.test.ts`. In one, a browser fails every
+  first try at a key and still pairs to Home; it failed first, with CI's timeout. In the other, a
+  browser with no Ed25519 still sees "This browser can't pair".
+- **Evidence:**
+  - The real test file, run 100 times (four in parallel): 3 failures before (two `#join`
+    timeouts matching CI, and one `EADDRINUSE`), none after.
+  - The same flow 150 times in one container on one CPU: 8 failures before, every one a refused
+    key, and none after.
+
 **2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
 - **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
   - Six Nouls: instructs_ai, override, fake_message, link_slot (decisive); wants_private_data, keep_from_user (supporting).
