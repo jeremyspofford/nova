@@ -123,7 +123,18 @@ test('health and memory cards say what is true', () => {
   assert.match(healthCard({ reachable: false }), /isn’t answering/);
   const ok = { ok: true, checks: { database: { ok: true }, workers: { ok: true, workers: [{}, {}] } } };
   assert.match(healthCard({ health: ok }), /All systems normal/);
-  assert.match(healthCard({ health: ok, problems: [{ id: 1, message: 'The heartbeat couldn’t run.' }] }), /1 problem to look at[\s\S]*heartbeat/);
+  // A problem in human terms: how many and what about; never its own message, which can name a path
+  // (UX review 1, F1). The message itself is in Health.
+  const sync = { id: 1, source: 'sync', message: 'workspace/screenpipe-snapshot/index.sqlite-wal is larger than 8 MB, so the standby doesn’t get a copy of it.' };
+  const one = healthCard({ health: ok, problems: [sync] });
+  assert.match(one, /1 problem to look at[\s\S]*About the standby’s copy of your files\.[\s\S]*is in Health/);
+  assert.doesNotMatch(one, /sqlite-wal|workspace\//);
+  assert.match(healthCard({ health: ok, problems: [sync, { ...sync, id: 2 }] }), /2 problems to look at[\s\S]*Both are about the standby’s copy of your files/);
+  assert.match(healthCard({ health: ok, problems: [sync, { id: 3, source: 'backups', message: 'x' }, { id: 4, source: 'whatever', message: 'y' }] }), /About the standby’s copy of your files, backups and Nova itself\./);
+  // A check that isn't fine, with no problem open: its name, not its detail.
+  const badCheck = healthCard({ health: { ok: false, checks: { backups: { ok: false, detail: '/mnt/backup: ENOENT' } } } });
+  assert.match(badCheck, /Something isn’t right[\s\S]*Needs a look: Backups\./);
+  assert.doesNotMatch(badCheck, /ENOENT|\/mnt/);
   assert.match(memoryHighlightCard({ records: [] }), /Nothing kept yet/);
   assert.match(memoryHighlightCard({ records: [{ active: true, user_state: 'active', content: 'Prefers tea.', kind: 'preference', created_at: '2026-10-29T08:00:00Z' }] }), /Prefers tea\./);
 });

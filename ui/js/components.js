@@ -306,7 +306,25 @@ export function addDeviceSheet(p, { now = new Date() } = {}) {
 </div>`;
 }
 
-// Health: everything fine, or what isn't, in human terms; detail is on the Health page.
+// Health: everything fine, or what isn't, in human terms; detail is on the Health page
+// (DESIGN-SYSTEM §6). The card never quotes a problem's own message, which can name a file, a path
+// or an error: it says how many and what they are about, and Health has the rest (UX review 1, F1).
+export const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices', browser: 'Browser work', backups: 'Backups', changes: 'Changes', capture: 'Capture', vault: 'Vault', connectors: 'Connections', ingest: 'Outside content' };
+// What a problem is about, by where it came from.
+const PROBLEM_AREAS = {
+  sync: 'the standby’s copy of your files', mesh: 'your devices', connectors: 'a connection', providers: 'a model provider',
+  backups: 'backups', changes: 'changes to Nova', capture: 'capture', ingest: 'outside content', resilience: 'keeping Nova running',
+  reset: 'a reset', ledger: 'a task that failed', coding: 'a coding task', vault: 'the vault', triggers: 'automations', design: 'the design system',
+  models: 'local models', 'chat-run': 'a conversation', receipts: 'privacy', api: 'Nova itself',
+};
+const listWords = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+export function problemsSummary(problems) {
+  const areas = [...new Set(problems.map((p) => PROBLEM_AREAS[p.source] ?? 'Nova itself'))];
+  const shown = areas.length > 3 ? [...areas.slice(0, 2), 'more'] : areas;
+  if (areas.length === 1 && problems.length > 1) return `${problems.length === 2 ? 'Both are' : `All ${problems.length} are`} about ${areas[0]}.`;
+  const words = listWords(shown);
+  return `About ${words}.`;
+}
 export function healthCard({ health = null, problems = [], reachable = true } = {}) {
   let body;
   if (!reachable) body = '<p class="card-lead">Nova isn’t answering.</p><p class="card-line">This page reconnects when it’s back.</p>';
@@ -314,8 +332,10 @@ export function healthCard({ health = null, problems = [], reachable = true } = 
   else {
     const bad = Object.entries(health.checks ?? {}).filter(([, c]) => c && c.ok === false);
     const lead = problems.length ? `${problems.length} problem${problems.length === 1 ? '' : 's'} to look at` : bad.length ? 'Something isn’t right' : 'All systems normal';
-    const lines = problems.length ? [clip(problems[0].message, 90)] : bad.length ? bad.map(([, c]) => clip(c.detail ?? '', 90)) : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
-    body = `<p class="card-lead" data-status="${problems.length || bad.length ? 'failed' : 'verified'}">${esc(lead)}</p>${lines.slice(0, 2).map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}`;
+    const lines = problems.length ? [problemsSummary(problems), 'What happened, and what you can do, is in Health.']
+      : bad.length ? [`Needs a look: ${listWords(bad.map(([k]) => CHECK_NAMES[k] ?? 'another check'))}.`, 'The detail is in Health.']
+        : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
+    body = `<p class="card-lead" data-status="${problems.length || bad.length ? 'failed' : 'verified'}">${esc(lead)}</p>${lines.map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}`;
   }
   return card({ kind: 'health-card', title: 'System health', icon: 'health', body, action: '<a class="link" href="/health" data-nav="health">Health</a>' });
 }
