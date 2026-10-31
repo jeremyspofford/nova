@@ -25,6 +25,31 @@ export const INNER_HOME = '/tmp';
 export const MAX_TIMEOUT_S = 3600;
 export const DEFAULT_TIMEOUT_S = 120;
 
+// Disk, which a container's limits don't cover: the project folder is the host's disk, and so are
+// the checkpoint copies and the machine's own layer. Each is capped (docs/plans/M10a.md, "Disk").
+//  - workspaces: how many this Nova keeps;
+//  - folderBytes: what a project folder may hold (checked when asked, before every checkpoint, and
+//    while a command runs);
+//  - checkpointBytes: all of one workspace's folder copies together (clean, automatic and named);
+//  - layerBytes: the machine's own filesystem beyond its image (Docker's --storage-opt where the
+//    storage driver enforces it, otherwise checked while a command runs);
+//  - watchMs: how often a running command is checked against them.
+export interface DiskLimits { workspaces: number; folderBytes: number; checkpointBytes: number; layerBytes: number; watchMs: number }
+const GiB = 1024 ** 3;
+export const DISK: Readonly<DiskLimits> = Object.freeze({ workspaces: 20, folderBytes: 4 * GiB, checkpointBytes: 16 * GiB, layerBytes: 8 * GiB, watchMs: 5000 });
+
+// Bytes in words a person reads: 2 MiB, 4 GiB.
+export function sizeWords(n: number): string {
+  for (const [u, b] of [['GiB', GiB], ['MiB', 1024 ** 2], ['KiB', 1024]] as const) if (n >= b) return `${Number((n / b).toFixed(n % b ? 1 : 0))} ${u}`;
+  return `${n} bytes`;
+}
+
+// Files in a project that tools on this computer run by themselves, outside any workspace: git's
+// own folder (its hooks and its config, whose fsmonitor runs on a plain `git status`), direnv's
+// .envrc, editor and devcontainer settings, git hooks managers. A command that changes one is
+// reported (and .git, when it is there, is read-only inside unless the person chose otherwise).
+export const HOST_RUN = ['.devcontainer', '.envrc', '.git', '.gitmodules', '.husky', '.idea', '.vscode'] as const;
+
 // The package registries `registries` may reach, over HTTPS only.
 export const REGISTRIES: readonly string[] = Object.freeze([
   'registry.npmjs.org:443', 'registry.yarnpkg.com:443',
@@ -85,7 +110,19 @@ export function runUser(uid = process.getuid?.() ?? 1000, gid = process.getgid?.
 
 const USER = /^[1-9]\d{0,9}:\d{1,10}$/;
 
-export interface CreateArgs { name: string; image: string; folder: string; tag: string; ws: string; user: string }
+export interface CreateArgs {
+  name: string; image: string; folder: string; tag: string; ws: string; user: string;
+  // Labels beyond Nova's own (tests mark their containers with one).
+  labels?: Record<string, string>;
+  // The project's .git, mounted again read-only over itself (null when there is none, or it is a
+  // link, or the person chose to let commands change it).
+  gitReadOnly?: string | null;
+  // Docker's --storage-opt size, where the storage driver enforces it.
+  layerBytes?: number | null;
+}
+
+const LABEL = /^[a-z0-9][a-z0-9.-]{0,62}$/;
+const LABEL_VALUE = /^[A-Za-z0-9._-]{1,64}$/;
 
 // `docker create` for a workspace. The network is none whatever the egress declaration: a workspace
 // that may reach outside does so only through Nova's proxy, over its relay's stdio (egress.ts).
@@ -94,9 +131,19 @@ export function createArgs(o: CreateArgs): string[] {
   if (!ID.test(o.ws) || !/^[a-z0-9]{1,16}$/.test(o.tag)) throw bad('A workspace id is lower-case letters, digits and dashes.');
   if (!isAbsolute(o.folder) || /[,\n\r\u0000]/.test(o.folder)) throw bad('A project folder must be a full path without commas or line breaks.');
   if (o.image.startsWith('-') || o.name.startsWith('-')) throw bad('Not an image or a name.');
+  const extra = Object.entries(o.labels ?? {}).flatMap(([k, v]) => {
+    if (!LABEL.test(k) || k === 'nova.computer' || k === 'nova.computer.home' || k === 'nova.computer.workspace' || !LABEL_VALUE.test(v)) throw bad(`Not a label Nova adds: ${k}.`);
+    return ['--label', `${k}=${v}`];
+  });
+  let dotgit: string[] = [];
+  if (o.gitReadOnly) {
+    if (o.gitReadOnly !== `${o.folder}/.git`) throw bad('Only the project’s own .git is mounted read-only.');
+    dotgit = ['--mount', `type=bind,source=${o.gitReadOnly},target=${WORKDIR}/.git,readonly`];
+  }
+  const storage = o.layerBytes ? ['--storage-opt', `size=${Math.max(1, Math.floor(o.layerBytes / 1024 ** 2))}M`] : [];
   return [
     'create', '--name', o.name, '--hostname', 'nova-computer',
-    '--label', 'nova.computer=1', '--label', `nova.computer.home=${o.tag}`, '--label', `nova.computer.workspace=${o.ws}`,
+    '--label', 'nova.computer=1', '--label', `nova.computer.home=${o.tag}`, '--label', `nova.computer.workspace=${o.ws}`, ...extra,
     '--network', 'none',
     '--user', o.user,
     '--cap-drop', 'ALL',
@@ -106,6 +153,8 @@ export function createArgs(o: CreateArgs): string[] {
     '--memory', LIMITS.memory, '--memory-swap', LIMITS.memory, '--cpus', LIMITS.cpus,
     '--pids-limit', String(LIMITS.pids), '--ulimit', `nofile=${LIMITS.nofile}:${LIMITS.nofile}`,
     '--mount', `type=bind,source=${o.folder},target=${WORKDIR}`,
+    ...dotgit,
+    ...storage,
     '--workdir', WORKDIR,
     '--env', `HOME=${INNER_HOME}`,
     '--entrypoint', '',
@@ -145,9 +194,11 @@ const SYSTEM_DEEP = ['/bin', '/boot', '/dev', '/etc', '/lib', '/lib32', '/lib64'
 const within = (child: string, parent: string) => { const r = relative(parent, child); return r === '' || (!r.startsWith('..') && !isAbsolute(r)); };
 
 // A folder of the person's that may be a project's: it is mounted into the workspace, so it must be
-// one project, not their home, a hidden folder of theirs (keys, settings), Nova's own home, or the
-// system's. Returns the real path, which is what is mounted.
-export function checkFolder(folder: unknown, o: { home: string; userHome: string }): string {
+// one project, not their home, a hidden folder of theirs (keys, settings), Nova's own home, the
+// system's, or one that holds or is inside another workspace's folder (`others`: those folders'
+// real paths), since that workspace could then change this one's folder under it. Returns the real
+// path, which is what is mounted.
+export function checkFolder(folder: unknown, o: { home: string; userHome: string; others?: string[] }): string {
   if (typeof folder !== 'string' || !isAbsolute(folder)) throw bad('folder must be a full path to the project’s folder.');
   let real: string;
   try { real = realpathSync(folder); } catch { throw bad(`${folder} isn’t there.`); }
@@ -161,6 +212,9 @@ export function checkFolder(folder: unknown, o: { home: string; userHome: string
   if (within(home, real) || within(real, home)) throw bad(`${folder} is in Nova’s own home, or holds it: a workspace never sees Nova’s data.`);
   if (within(real, userHome) && relative(userHome, real).split(sep)[0]!.startsWith('.')) throw bad(`${folder} is a hidden folder of yours (settings, keys): it is never a project.`);
   if (/[,\n\r]/.test(real)) throw bad('A project folder’s path can’t contain commas or line breaks.');
+  for (const other of o.others ?? []) {
+    if (within(real, other) || within(other, real)) throw bad(`${folder} ${real === other ? 'is' : within(real, other) ? 'is inside' : 'holds'} another workspace’s folder (${other}): two workspaces never share a folder, or one could change the other’s under it.`);
+  }
   return real;
 }
 
@@ -170,13 +224,16 @@ export const OPS: readonly Op[] = ['create', 'exec', 'checkpoint', 'reset', 'des
 // The ledger tier of each action (docs/plans/M10a.md, "Tiers"). The ledger's numbers are
 // NOVA-SPEC §6's: 0 silent, 1 act and report (undo), 2 ask first, 3 confirm every time. A reversible
 // write inside the workspace is "do, notify, undo" (the amendment), which is tier 1 here.
-export function tierFor(o: { op: Op; egress: EgressDecl; access?: 'read' | 'write'; ownFolder?: boolean }): Tier {
+// Two more: a workspace whose commands may change the project's .git asks first even on Nova's own
+// folder (git on this computer would run what they put there); a reset that can't checkpoint what
+// is there first (it is over the disk cap) asks first, since it couldn't be undone.
+export function tierFor(o: { op: Op; egress: EgressDecl; access?: 'read' | 'write'; ownFolder?: boolean; gitWritable?: boolean; discard?: boolean }): Tier {
   const outside = o.egress.mode !== 'none';
   switch (o.op) {
     case 'exec': return outside ? 3 : o.access === 'read' ? 0 : 1;
-    case 'create': return outside ? 3 : o.ownFolder ? 1 : 2;
+    case 'create': return outside ? 3 : o.ownFolder && !o.gitWritable ? 1 : 2;
     case 'checkpoint': return 1;
-    case 'reset': return 1;
+    case 'reset': return o.discard ? 2 : 1;
     case 'destroy': return 3;
   }
 }

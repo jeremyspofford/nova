@@ -39,7 +39,7 @@ test('every /computer route goes through the console’s session, header, origin
       const what = `${r.method} ${r.path}`;
       const url = fill(r.path);
       // From the mesh, with no paired device: refused, with or without Nova's header.
-      for (const h of [{}, { 'x-nova': '1' }]) {
+      for (const h of [{}, { 'x-nova': '1' }] as Record<string, string>[]) {
         const res = await raw(mesh + url, r.method, { ...json, ...h }, r.method === 'POST' ? body : undefined);
         assert.equal(res.status, 401, `${what} from the mesh with no session: ${res.status} ${res.text}`);
       }

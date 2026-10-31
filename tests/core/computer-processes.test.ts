@@ -42,7 +42,9 @@ test('no process outlives its task: a read that leaves a delayed write behind ch
     const read = core.computer.request('exec', { argv: ['sh', '-c', 'setsid sh -c "sleep 3; echo changed > /workspace/canary.txt; echo late > /tmp/late" >/dev/null 2>&1 </dev/null & echo started'], access: 'read' }, ws);
     assert.equal(read.approval_tier, 0);
     const r = await settled(core, read.id);
-    assert.match(r.report?.summary ?? r.reason ?? '', /left 2 processes running|stopped/);
+    // It ran as a read and changed nothing while it ran, so it is done, and says what it left behind.
+    assert.equal(r.state, 'done', r.reason ?? '');
+    assert.match(r.report!.summary, /It left 2 processes running; Nova stopped them when it ended/);
     await sleep(5000);
     assert.equal(readFileSync(join(folder, 'canary.txt'), 'utf8'), 'original\n', 'the delayed write never happened');
     const procs = await processes(containerOf(core, ws));

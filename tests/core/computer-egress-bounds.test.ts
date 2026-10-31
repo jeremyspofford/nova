@@ -181,7 +181,7 @@ test('a tunnel carries TLS for the name it was opened to: another SNI, or no TLS
 
 test('the SNI is read from a real ClientHello, without a handshake', async () => {
   const hello = (servername?: string) => new Promise<Buffer>((ok) => {
-    const srv = createServer((s) => s.once('data', (d) => { ok(d); s.destroy(); srv.close(); }));
+    const srv = createServer((s) => s.once('data', (d) => { ok(d as Buffer); s.destroy(); srv.close(); }));
     srv.listen(0, '127.0.0.1', () => {
       const port = (srv.address() as { port: number }).port;
       const t = tlsConnect({ socket: netConnect(port, '127.0.0.1'), rejectUnauthorized: false, ...(servername ? { servername } : {}) });

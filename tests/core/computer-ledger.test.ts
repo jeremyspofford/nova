@@ -4,13 +4,12 @@
 // Nova is local-only and outside the declaration. With the real Docker adapter, in process.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer, type Server } from 'node:net';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../../src/core/errors.ts';
 import { treeDigest } from '../../src/core/computer/computer.ts';
-import { docker, dockerSkip } from './computer-support.ts';
+import { TEST_LABELS, docker, dockerSkip, removeTestContainers, tlsStandIn } from './computer-support.ts';
 import { open } from './resilience-support.ts';
 import type { Core } from '../../src/core/index.ts';
 import type { Task } from '../../src/core/ledger.ts';
@@ -27,19 +26,19 @@ async function settled(core: Core, id: string, states = ['done', 'failed', 'wait
   throw new Error(`task ${id} never settled: ${core.ledger.get(id).state}`);
 }
 
-const listen = (reply: string) => new Promise<Server>((ok) => { const s = createServer((c) => c.end(reply)); s.listen(0, '127.0.0.1', () => ok(s)); });
 
-test('the computer through the ledger: tiers, evidence, screening, undo, a read that writes, egress and local-only', { skip: skip ?? false, timeout: 300_000 }, async () => {
+test('the computer through the ledger: tiers, evidence, screening, undo, a read that writes, egress and local-only', { skip: skip ?? false, timeout: 300_000 }, async (t0) => {
   const root = mkdtempSync(join(tmpdir(), 'nova-computer-ledger-'));
   const home = join(root, 'home');
   const userHome = join(root, 'user');
   const project = join(userHome, 'code', 'project');
   mkdirSync(project, { recursive: true });
   writeFileSync(join(project, 'notes.txt'), 'a placeholder project\n');
-  const declared = await listen('hello from a declared host\n');
-  const port = (declared.address() as { port: number }).port;
+  const declared = await tlsStandIn('hello from a declared host\n');
+  if (!declared) { t0.skip('openssl isn’t here to make the stand-in host’s certificate'); return; }
+  const port = declared.port;
   // The stand-in host is on loopback, which the real rule never reaches; for this test only, it counts.
-  const core = open(home, { computer: { userHome, egressAllow: (a) => a === '127.0.0.1' } });
+  const core = open(home, { computer: { userHome, labels: TEST_LABELS, egressAllow: (a) => a === '127.0.0.1' } });
   const ids: string[] = [];
   try {
     core.start();
@@ -77,8 +76,12 @@ test('the computer through the ledger: tiers, evidence, screening, undo, a read 
     read = await settled(core, read.id);
     assert.equal(read.state, 'done', read.reason ?? '');
     assert.match(read.verification!.checks[0]!.why, /read the command’s output back itself/);
-    const rec = core.computer.run(read.id) as { record: { stdout: string; screen: { id: string; verdict: string } } };
-    assert.equal(rec.record.stdout, 'a placeholder project\n');
+    const rec = core.computer.run(read.id) as { record: { stdout?: string; withheld?: string; screen: { id: string; verdict: string } } };
+    // The gate held it back (no local model here), so the API doesn't hand the raw output back; the
+    // file on disk is the evidence.
+    assert.equal(rec.record.stdout, undefined);
+    assert.match(rec.record.withheld!, /quarantine/);
+    assert.equal(JSON.parse(readFileSync(join(home, 'workers', 'computer', 'runs', `${read.id}.json`), 'utf8')).stdout, 'a placeholder project\n');
     const screen = core.ingest.get(rec.record.screen.id);
     assert.ok(screen, 'the ingest gate kept its record');
     assert.equal(screen!.kind, 'tool');
@@ -135,17 +138,19 @@ test('the computer through the ledger: tiers, evidence, screening, undo, a read 
     const ows = String(outDone.brief.inputs!.workspace);
     ids.push(ows);
     // Even a read there asks: it can reach outside.
-    const reach = core.computer.request('exec', { argv: ['sh', '-c', `curl -sS --http0.9 --proxytunnel http://127.0.0.1:${port}/; curl -sS --proxytunnel https://undeclared.example.test/ 2>&1; true`], access: 'read' }, ows);
+    const reach = core.computer.request('exec', { argv: ['sh', '-c', `curl -sSk --proxytunnel https://127.0.0.1:${port}/; curl -sS --proxytunnel https://undeclared.example.test/ 2>&1; true`], access: 'read' }, ows);
     assert.equal(reach.approval_tier, 3);
     assert.equal(reach.state, 'waiting');
     core.ledger.approve(reach.id, { confirm: true });
     const reached = await settled(core, reach.id);
     assert.equal(reached.state, 'done', reached.reason ?? '');
-    const r2 = core.computer.run(reached.id) as { record: { stdout: string; egress: { host: string; allowed: boolean; why: string }[] } };
+    const r2 = { record: JSON.parse(readFileSync(join(home, 'workers', 'computer', 'runs', `${reached.id}.json`), 'utf8')) as { stdout: string; egress: { host: string; allowed: boolean; why: string }[] } };
     assert.match(r2.record.stdout, /hello from a declared host/);
     assert.match(r2.record.stdout, /403/);
     assert.deepEqual(r2.record.egress.map((a) => [a.host, a.allowed]), [['127.0.0.1', true], ['undeclared.example.test', false]]);
-    assert.match(reached.report!.summary, /refused: undeclared\.example\.test:443 \(not declared for this workspace\)/);
+    // The summary names only the declared host and a fixed reason: never what the command asked for.
+    assert.match(reached.report!.summary, new RegExp(`Reached outside: 127\\.0\\.0\\.1:${port} \\(1\\)\\. Refused 1: 1 not declared\\.`));
+    assert.doesNotMatch(reached.report!.summary, /undeclared\.example\.test/);
 
     // Back to local-only: a command there is refused by the ledger, and by the computer for one
     // already approved.
@@ -178,5 +183,6 @@ test('the computer through the ledger: tiers, evidence, screening, undo, a read 
     }
     declared.close();
     await core.close();
+    await removeTestContainers();
   }
 });

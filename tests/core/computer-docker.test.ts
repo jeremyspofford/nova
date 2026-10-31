@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { DockerComputer } from '../../src/core/computer/docker.ts';
 import { treeDigest, type Machine } from '../../src/core/computer/computer.ts';
 import { IMAGE } from '../../src/core/computer/policy.ts';
-import { docker, dockerSkip, exportDigest } from './computer-support.ts';
+import { TEST_LABELS, docker, dockerSkip, exportDigest, folderIdOf, removeTestContainers } from './computer-support.ts';
 
 const skip = await dockerSkip();
 
@@ -28,8 +28,8 @@ function project(): string {
 test('a workspace: created, a command runs as Nova’s own user, a checkpoint and a reset return it byte for byte', { skip: skip ?? false, timeout: 240_000 }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-computer-home-'));
   const folder = project();
-  const c = new DockerComputer({ home });
-  const m: Machine = { id: `t${Date.now().toString(36)}`, folder, egress: { mode: 'none', hosts: [] }, container: null, image: IMAGE };
+  const c = new DockerComputer({ home, labels: TEST_LABELS });
+  const m: Machine = { id: `t${Date.now().toString(36)}`, folder, folderId: folderIdOf(folder), egress: { mode: 'none', hosts: [] }, container: null, image: IMAGE };
   const images: string[] = [];
   try {
     assert.equal((await c.available()).ok, true);
@@ -89,7 +89,7 @@ test('a workspace: created, a command runs as Nova’s own user, a checkpoint an
 
     // What a read check sees: the container's own changes since its image.
     await c.exec(m, { argv: ['touch', '/tmp/after-reset'], timeoutS: 30 });
-    assert.ok((await c.changes(m)).some((l) => l.endsWith('/tmp/after-reset')));
+    assert.ok((await c.changes(m)).some((l) => l.split('\t')[0]!.endsWith('/tmp/after-reset')));
   } finally {
     await c.destroy(m, images).catch(() => {});
     rmSync(folder, { recursive: true, force: true });
@@ -98,13 +98,14 @@ test('a workspace: created, a command runs as Nova’s own user, a checkpoint an
   assert.notEqual((await docker(['container', 'inspect', m.container!])).code, 0);
   for (const i of images) assert.notEqual((await docker(['image', 'inspect', i])).code, 0, i);
   assert.equal(existsSync(join(home, 'cp-a')), true, 'the copy on disk is the caller’s to remove');
+  await removeTestContainers();
 });
 
 test('a machine that went missing is made again from its image on the next command', { skip: skip ?? false, timeout: 120_000 }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-computer-home-'));
   const folder = project();
-  const c = new DockerComputer({ home });
-  const m: Machine = { id: `u${Date.now().toString(36)}`, folder, egress: { mode: 'none', hosts: [] }, container: null, image: IMAGE };
+  const c = new DockerComputer({ home, labels: TEST_LABELS });
+  const m: Machine = { id: `u${Date.now().toString(36)}`, folder, folderId: folderIdOf(folder), egress: { mode: 'none', hosts: [] }, container: null, image: IMAGE };
   try {
     m.container = (await c.create(m)).container;
     await docker(['rm', '-f', m.container]);
@@ -112,6 +113,7 @@ test('a machine that went missing is made again from its image on the next comma
     assert.equal(r.stdout, '# A project\n');
   } finally {
     await c.destroy(m, []).catch(() => {});
+    await removeTestContainers();
     rmSync(folder, { recursive: true, force: true });
   }
 });

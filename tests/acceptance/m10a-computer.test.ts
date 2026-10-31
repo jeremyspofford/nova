@@ -23,6 +23,9 @@ test('M10a gate: a fresh user’s workspace — a command as a ledger task with 
     return t;
   };
   const evidence: string[] = ['# M10a gate: Nova Computer, end to end', ''];
+  // A command's output as Nova kept it, read by the test from the file on disk: the API hands raw
+  // output back only when the ingest gate passed it, and with no local model here it holds it back.
+  const kept = (id: string) => JSON.parse(readFileSync(join(m.home, 'workers', 'computer', 'runs', `${id}.json`), 'utf8')) as { stdout: string };
   let nova = await m.start();
   let ws = '';
   try {
@@ -53,12 +56,16 @@ test('M10a gate: a fresh user’s workspace — a command as a ledger task with 
     assert.equal(write.state, 'done', write.reason);
     assert.deepEqual((await get(`/tasks/${write.id}/events`)).map((e: { kind: string }) => e.kind), ['created', 'dispatched', 'reported', 'verifying', 'verified']);
     const run = await get(`/computer/runs/${write.id}`);
-    assert.match(run.record.stdout, /^v26\./);
+    assert.match(kept(write.id).stdout, /^v26\./);
+    if (run.verdict !== 'pass') {
+      assert.equal(run.record.stdout, undefined, 'held-back output isn’t handed back');
+      assert.match(run.record.withheld, new RegExp(run.verdict));
+    }
     // The test checks the evidence itself: the output file on disk matches what Nova recorded.
     const file = readFileSync(join(m.home, 'workers', 'computer', 'runs', `${write.id}.json`));
     assert.equal(createHash('sha256').update(file).digest('hex'), run.sha256);
     assert.equal(write.report.artifacts[0].sha256, run.sha256);
-    assert.equal(JSON.parse(String(file)).stdout, run.record.stdout);
+    assert.equal(JSON.parse(String(file)).stdout, kept(write.id).stdout);
     assert.ok(['pass', 'quarantine', 'block'].includes(run.record.screen.verdict) && run.record.screen.id, 'the output was screened by the ingest gate');
     evidence.push(`- Ran \`${write.brief.inputs.argv.join(' ')}\` (tier ${write.approval_tier}): ${write.report.summary}`,
       `  - Events: ${(await get(`/tasks/${write.id}/events`)).map((e: { kind: string }) => e.kind).join(', ')}`,
@@ -68,19 +75,19 @@ test('M10a gate: a fresh user’s workspace — a command as a ledger task with 
     assert.equal(r.body.approval_tier, 0);
     const read = await settle(r.body.id);
     assert.equal(read.state, 'done', read.reason);
-    assert.equal((await get(`/computer/runs/${read.id}`)).record.stdout, 'hello from the workspace\n');
+    assert.equal(kept(read.id).stdout, 'hello from the workspace\n');
 
     // Undo the write: back to the checkpoint before it.
     const u = await post(`/computer/runs/${write.id}/undo`);
     const undo = await settle(u.body.id);
     assert.equal(undo.state, 'done', undo.reason);
     const after = await settle((await post(`/computer/workspaces/${ws}/exec`, { argv: ['ls', '-A'], access: 'read' })).body.id);
-    assert.equal((await get(`/computer/runs/${after.id}`)).record.stdout, '', 'the folder is as it was before the write');
+    assert.equal(kept(after.id).stdout, '', 'the folder is as it was before the write');
     evidence.push(`- Undo: ${undo.report.summary}`, `  - Verified: ${undo.verification.checks[0].why}`);
 
     // From inside, Nova's console isn't there (tested in full in m10a-isolation).
     const probe = await settle((await post(`/computer/workspaces/${ws}/exec`, { argv: ['node', '-e', `const s=require('net').connect(${nova.port},'127.0.0.1');s.on('connect',()=>{console.log('REACHED');process.exit(0)});s.on('error',(e)=>{console.log(e.code);process.exit(0)})`], access: 'read' })).body.id);
-    assert.equal((await get(`/computer/runs/${probe.id}`)).record.stdout.trim(), 'ECONNREFUSED');
+    assert.equal(kept(probe.id).stdout.trim(), 'ECONNREFUSED');
 
     // Local-only: no egress, refused before anything runs.
     for (const egress of [{ mode: 'registries' }, { mode: 'hosts', hosts: ['example.test'] }]) {
@@ -102,7 +109,7 @@ test('M10a gate: a fresh user’s workspace — a command as a ledger task with 
     assert.equal((await get('/computer')).workspaces[0].id, ws);
     const again = await settle((await post(`/computer/workspaces/${ws}/exec`, { argv: ['node', '-e', 'console.log(1 + 1)'], access: 'read' })).body.id);
     assert.equal(again.state, 'done', again.reason);
-    assert.equal((await get(`/computer/runs/${again.id}`)).record.stdout, '2\n');
+    assert.equal(kept(again.id).stdout, '2\n');
     // Reset to the clean state, then delete: tier 3, asked every time.
     const reset = await settle((await post(`/computer/workspaces/${ws}/reset`)).body.id);
     assert.equal(reset.state, 'done', reset.reason);

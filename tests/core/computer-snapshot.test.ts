@@ -140,7 +140,7 @@ test('a read is checked by content: same size and time, or a path that had alrea
     // The machine: a file that was already in its change list since the image, changed again.
     const machineSly = await settled(core, core.computer.request('exec', { argv: ['sh', '-c', 'm=$(stat -c %y /tmp/state.txt); printf "dddd\\n" > /tmp/state.txt; touch -d "$m" /tmp/state.txt'], access: 'read' }, ws).id);
     assert.equal(machineSly.state, 'failed');
-    assert.match(machineSly.reason!, /in the machine: \/tmp\/state\.txt/);
+    assert.match(machineSly.reason!, /in the machine: A \/tmp\/state\.txt/);
   } finally {
     if (ws) {
       try { const d = core.computer.request('destroy', {}, ws); core.ledger.approve(d.id, { confirm: true }); await settled(core, d.id); } catch { /* best effort */ }

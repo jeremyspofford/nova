@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { DockerComputer } from '../../src/core/computer/docker.ts';
 import { IMAGE, runUser } from '../../src/core/computer/policy.ts';
 import type { Machine } from '../../src/core/computer/computer.ts';
-import { docker, dockerSkip } from '../core/computer-support.ts';
+import { TEST_LABELS, docker, dockerSkip, folderIdOf, removeTestContainers } from '../core/computer-support.ts';
 import { blank, stop } from './support.ts';
 
 const skip = await dockerSkip();
@@ -108,8 +108,8 @@ test('M10a gate: no escape from a workspace to the console, the mesh, Nova’s h
 
   const folder = mkdtempSync(join(tmpdir(), 'nova-m10a-project-'));
   writeFileSync(join(folder, 'README.md'), '# placeholder project\n');
-  const c = new DockerComputer({ home: m.home });
-  const ws: Machine = { id: `i${Date.now().toString(36)}`, folder, egress: { mode: 'none', hosts: [] }, container: null, image: IMAGE };
+  const c = new DockerComputer({ home: m.home, labels: TEST_LABELS });
+  const ws: Machine = { id: `i${Date.now().toString(36)}`, folder, folderId: folderIdOf(folder), egress: { mode: 'none', hosts: [] }, container: null, image: IMAGE };
   const evidence: string[] = ['# M10a isolation: each escape attempted from inside a workspace', '', `Docker: ${(await docker(['info', '--format', '{{.OperatingSystem}}'])).out.trim()}. Console port ${nova.port} (loopback), mesh port ${meshPort} on ${meshBind}, Nova’s home ${m.home}.`, ''];
   try {
     await c.create(ws);
@@ -136,7 +136,7 @@ test('M10a gate: no escape from a workspace to the console, the mesh, Nova’s h
 
     // Positive controls: the same probe, with one piece of isolation removed, gets through.
     const control = async (what: string, args: string[], kinds: string[]) => {
-      const res = await docker(['run', '--rm', '--user', runUser(), ...args, '--entrypoint', 'node', IMAGE, '-e', PROBE, JSON.stringify(probeArgs)], 180_000);
+      const res = await docker(['run', '--rm', ...Object.entries(TEST_LABELS).flatMap(([k, v]) => ['--label', `${k}=${v}`]), '--user', runUser(), ...args, '--entrypoint', 'node', IMAGE, '-e', PROBE, JSON.stringify(probeArgs)], 180_000);
       assert.equal(res.code, 0, res.out);
       const got: Attempt[] = JSON.parse(res.out.slice(res.out.indexOf('[')));
       for (const k of kinds) assert.ok(got.some((a) => a.what === k && a.reached), `the control "${what}" reaches ${k}: ${JSON.stringify(got.filter((a) => a.what === k))}`);
@@ -151,6 +151,7 @@ test('M10a gate: no escape from a workspace to the console, the mesh, Nova’s h
     evidence.push('');
   } finally {
     await c.destroy(ws, []).catch(() => {});
+    await removeTestContainers();
     await stop(nova);
     rmSync(folder, { recursive: true, force: true });
   }

@@ -152,8 +152,9 @@ export interface CoreOptions {
   // Where the vault's key lives (vault.ts): NOVA_VAULT_KEY by default; tests inject a keychain.
   vault?: { mode?: KeyMode; keychain?: ((account: string) => KeyStore | null) | null };
   // Nova Computer (M10a), for tests: another adapter than Docker, whose home folder a project may
-  // never be, and which addresses the egress proxy counts as public.
-  computer?: Pick<ComputerOptions, 'computer' | 'userHome' | 'egressAllow'>;
+  // never be, which addresses the egress proxy counts as public, smaller disk caps, and a label
+  // for the containers.
+  computer?: Pick<ComputerOptions, 'computer' | 'userHome' | 'egressAllow' | 'limits' | 'labels'>;
   // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
   hubPorts?: () => number[];
   // How the browser worker starts a browser: Chromium, or a stand-in in tests.
