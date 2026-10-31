@@ -45,6 +45,7 @@ const DB_FILE = /^nova\.db/;
 const TMP = /\.nova-sync-\d+\.tmp$/;
 // A bigger file isn't carried; it is reported once instead.
 export const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const TOO_BIG = /^(.+) is larger than \d+ MB, so the standby doesn’t get a copy of it/;
 // A standby this far behind the oldest entry it hasn't acknowledged is "behind".
 export const BEHIND_AFTER_S = 60;
 
@@ -76,7 +77,6 @@ export class SyncLog {
   // The journal: what each file was when last looked at, and what the log says it is.
   #seen = new Map<string, { mtimeMs: number; size: number; sha: string }>();
   #logged: Map<string, string> | null = null;
-  #tooBig = new Set<string>();
   #timer: ReturnType<typeof setInterval> | null = null;
   #watcher: FSWatcher | null = null;
   #soon: ReturnType<typeof setTimeout> | null = null;
@@ -162,6 +162,14 @@ export class SyncLog {
     this.#scanVault();
     const logged = this.#loggedFiles();
     const present = new Set<string>();
+    // What the person was already told is too big to carry, from the open problems themselves, so a
+    // restart doesn't tell them again; it closes once the file fits again or is gone.
+    const told = new Map<string, number>();
+    for (const p of this.#log.problems({ open: true })) {
+      const m = p.source === 'sync' ? TOO_BIG.exec(p.message) : null;
+      if (m) told.set(m[1]!, p.id);
+    }
+    const big = new Set<string>();
     const writes: { path: string; data: Buffer | null }[] = [];
     const walk = (rel: string) => {
       let entries;
@@ -177,16 +185,15 @@ export class SyncLog {
         let st;
         try { st = lstatSync(join(this.home, r)); } catch { continue; }
         if (st.size > MAX_FILE_BYTES) {
-          if (!this.#tooBig.has(r)) {
-            this.#tooBig.add(r);
+          big.add(r);
+          if (!told.has(r)) {
             // A copy the standby already has would go stale: it is told to drop it (the file_delete
             // below, since the file isn't counted as present), so it never serves old content.
             const had = logged.has(r);
-            this.#log.problem('sync', `${r} is larger than ${MAX_FILE_BYTES / 1024 / 1024} MB, so the standby doesn’t get a copy of it${had ? '; its older copy there was removed, so it doesn’t keep stale content' : ''}. If the hub failed, it wouldn’t be on the new hub.`);
+            told.set(r, this.#log.problem('sync', `${r} is larger than ${MAX_FILE_BYTES / 1024 / 1024} MB, so the standby doesn’t get a copy of it${had ? '; its older copy there was removed, so it doesn’t keep stale content' : ''}. If the hub failed, it wouldn’t be on the new hub.`).id);
           }
           continue;
         }
-        this.#tooBig.delete(r);
         present.add(r);
         const known = this.#seen.get(r);
         if (known && known.mtimeMs === st.mtimeMs && known.size === st.size && logged.get(r) === known.sha) continue;
@@ -198,6 +205,7 @@ export class SyncLog {
       }
     };
     walk('');
+    for (const [path, id] of told) if (!big.has(path)) this.#log.resolve(id);
     for (const path of logged.keys()) if (!present.has(path)) writes.push({ path, data: null });
     if (!writes.length) return { put, deleted };
     this.#db.tx(() => {
