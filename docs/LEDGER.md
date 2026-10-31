@@ -271,6 +271,49 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10f: device roles, placement, and onboarding, supervisor only).** Branch `m10f/roles-onboarding`.
+Plan `docs/plans/M10f.md`, evidence `docs/evidence/m10f-gate.md`, built from the orchestration ADR's M10f
+phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in.
+- **Roles are `purposes`, beside the mesh `role`** (migration 0019; the device table's replication
+  triggers made again with the column). A phone or browser runs no agent, so it is a thin client only;
+  a standby is always a hub candidate; the hub always holds hub candidate and general server; a thin
+  client can't also hold a workload role or a candidacy. Widening is tier 3 (`confirm`), narrowing
+  tier 2 (`approved`), and adding hub candidate to a computer needs `confirm_candidate` on top, at
+  pairing and in Settings (Decision 2: "each candidacy itself tier 3"). **A standby's tier-3
+  approval is its candidacy**, as the ADR says for standbys paired before; no second box for it.
+- **The roster lists every other hub candidate** (`candidates`, only when there is one, so a
+  roster without them reads as before). **Device agents keep pinning only the hub's and the
+  standby's keys** (`trust.ts rosterKeys` unchanged): those keys also sign runtime bundles, so
+  trusting a candidate's key before M10g's fencing covers candidates would widen what a computer
+  accepts. "Pinned in the next roster" is met as the roster naming it; device-side trust is M10g's.
+- **The placement resolver is pure and checked twice:** the Service Manager (`placement` option)
+  and `POST /services/placement` (tier 0) refuse at proposal; the device agent's
+  `assignmentAllowed` refuses against the roles it keeps in `device.json` (from the approval and
+  every heartbeat answer, over its own session). A resolution to a device other than the hub is
+  refused: native workloads are M10h. The supervisor's own manager isn't given devices (it doesn't
+  read the hub's database), so on the supervisor's command line placement stays "this hub only",
+  as in M10e.
+- **Onboarding is setup's conversation, not a new flow:** `device`, `roles`, `backend` before the
+  person's questions (the ADR's order), `discover` and `import` after privacy (so the local-only
+  answer is known before anything looks at the network), then the first task. `answer()` is now
+  async (discovery and import run before the reply), one answer at a time. The tests' fixed
+  answer lists gained the four new answers.
+- **The backend words are cut to the evidence** (the closing rule): the ADR's draft named capture on
+  every device and services on other devices (M10h) and K3s's minimums next to this computer's
+  (M10k). Onboarding says what is true now; K3s is shown on Linux as not available yet, offered
+  nowhere as working. Settings › Services exists, minimal, and says there is nothing to switch to.
+- **Discovery** follows the smart-home ADR: asked for, tier 1, found and never connected, an
+  injected transport; tests use stand-ins on 127.0.0.1 only. Under local-only it says, before
+  asking, that looking on the network sends one query onto it. The real multicast path has not run
+  on a real network.
+- **Import reuses `importPack`'s path** (screen the file, then candidates waiting for the person's
+  OK); notes, `.ics` files and Chromium-family and Firefox bookmarks, listed without reading.
+- **The first view's one action** comes from intents carrying eval tags; a test fails if a tag isn't
+  demonstrated by a regression task. Six onboarding claims are registered in `tests/evals/claims.ts`:
+  three backed (`import`, `memory-review`, `first-run`), three worded to named test evidence.
+- **The first win** is measured at machine speed (the API path, and a browser path in Chromium) with
+  each step's time recorded; the human path is an estimate (words read, answers, clicks), said so.
+
 **2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
 - **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
   - Six Nouls: instructs_ai, override, fake_message, link_slot (decisive); wants_private_data, keep_from_user (supporting).
