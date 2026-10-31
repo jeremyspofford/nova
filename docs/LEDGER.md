@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #247 · Nova can run more than one service, with safe upgrades and rollback**
+- What changed: Nova's supervisor, which used to run only Nova itself, now runs several services from one simple description each. A new version starts alongside the old one with no traffic, goes live only after its checks pass and you type a confirmation, and rolls back by itself if it fails. Nova's own console is now one of these services. Nothing uses Kubernetes.
+- What you can now do: nothing new on screen. Services are managed from the supervisor's command line (`service deploy`, `promote`, `rollback`, `recover`).
+- Still unfinished: there's no screen for services yet. A service must be a single program run by Nova's own Node. Adding services through the change pipeline is deferred.
+
 **2026-10-31 · #257 · The safety screen's questions rewritten: much better, still not trusted**
 - What changed: Nova's questions to the small local model (Tev1) about outside content were rewritten to the model maker's guidelines and tested on fresh cases written before the test ran. It caught 43 of 44 attacks, but flagged 18 of 75 harmless documents against a 10% bar, so it isn't trusted yet.
 - What you can now do: nothing changes. Nova still screens with its own checks and holds back anything unsure.
@@ -298,6 +303,73 @@ What each covers:
   - ChatGPT and Gemini review; they don't build. Security- or design-critical artifacts get a self-contained review packet: the artifact, its claims and its threat model. Findings come back as owner input.
   - Recorded in OPERATING-RULES. The vault broker's Phase 1 gate gains the packet (item 12).
   - The roadmap notes Relay as the future vehicle for this, as direction only.
+
+**2026-10-31 (M10e: the Service Manager and the supervisor driver).** Branch `m10e/service-manager`.
+Plan `docs/plans/M10e.md`, evidence `docs/evidence/m10e-gate.md`, built from the orchestration ADR's
+M10e phase.
+- **One supervisor, generalised.** The supervisor runs N services from definitions; the console is
+  one of them (`nova-console`), started from its definition, its deploy path (`Supervisor.deploy`,
+  `rollback`) unchanged. Reused: `ServerProcess` (now given a command and, for services, a process
+  group) and the crash rule (factored out as `CrashWindow`, used by both). The existing supervisor
+  tests are unchanged and green.
+- **The definition format** is the ADR's, with two additions the code needed: `artifact.release`
+  `{tag, command}` (the console's artifact is a git tag, which neither `image` nor `program`
+  describes; only `nova-console` may use it, and only it may say port 0), and `contract_tests` as
+  `http:/<path>` (the ADR's `probe:<name>` has no probe registry, so it is refused by name).
+- **The Service Manager** lives in `src/core/services/` with the registry of definitions (one file per
+  version, registered once) and drives any `ServiceDriver`. Promotion is typed every time
+  (`<service>@<version>`): tier 3 for the console and anything with secrets or OS permissions, tier 2
+  otherwise. Only a version that passed its contract tests and health is offered, checked by the
+  manager and again by the driver.
+- **The supervisor driver** for plain programs: slots per version from a `file:` artifact pinned by
+  SHA-256; `full`, `shadow`, `copy`, `none`; a stable port forwarded on 127.0.0.1; canary with
+  automatic rollback; the old slot kept for `soak_s` (absent: until the next promotion) and removed
+  after; services get none of the supervisor's environment, run in their own process group, and are
+  ended whole. A supervisor killed outright leaves them running; the next one ends them, known by
+  pid and start time in `/proc` (Linux only).
+- **The no-Kubernetes tripwire** (`scripts/tripwire.sh`) wraps `npm test`, `npm run test:ui` and
+  `scripts/ui-test.sh`: stand-in `kubectl`, `helm`, `flux`, `k3s` first on PATH, `KUBECONFIG` unset, any
+  call fails the run. This machine has a real `kubectl`; the tripwire shadows it.
+- **Where the ADR didn't fit, written down:**
+  - The ADR's Order puts the `service` change kind in M10e, but its artifact is the definition plus
+    rendered Helm values and its gate is GitOps; the brief for this phase excluded Helm. Not built:
+    deferred to M10j/M10k, to be confirmed by the owner.
+  - M10e was to start after M10d (PR #241) merged. It was first built on main before that, as
+    instructed, then rebased onto main at `61bcb042` (M10d merged), then `a79ab31c`, `844a1271`, `736e80ce`, `43c41be4`, `a49e366d` and `9073f381` (the last two docs only) as main moved.
+  - "Both drivers' tests" and "one definition rendered by both drivers": only one driver exists. The
+    contract suite (`tests/support/service-driver-contract.ts`) is ready for M10j.
+  - The supervisor driver doesn't run image-only services (the ADR's "Docker where present" needs image
+    pulls the hard limits forbid), hand out secrets, download `https:` artifacts or place on other
+    devices. Each is refused in plain words.
+  - `scripts/preview.sh` doesn't use the supervisor at all, so the preview is unaffected.
+- **The review of PR #247** (fixed on the same branch; one test per finding, each seen failing with
+  its fix reverted; the evidence has the table):
+  - **What runs is the pinned program.** A command starts the artifact itself, or Nova's own Node
+    with the artifact as its script; never another program, a shell, an absolute or `../` path, or an
+    interpreter option or inline code before it. Checked by the validator, the driver's plan and at
+    every start (a regular file in the slot, the pinned SHA-256). The plan shows the exact argv, and
+    deploying a command no approved version has run asks first, typed (tier 2, or 3).
+  - **A failed switch tells the truth.** The live version's stable ports are untouched until the new
+    version passes, and every failure path puts them back; if the old version doesn't start again,
+    the service is held with a problem.
+  - **One queue per service** for changes, restarts and soak ends: nothing is refused, dropped or
+    raced. Health restarts count toward holding. `service recover` restarts a held service (tier 1).
+  - **Processes are known by pid and start time** (`/proc`), recorded at spawn with their group's
+    members; a group is signalled only while it is provably still ours.
+  - **Also:** soaks past one timer are chained; the program is lstat'ed, capped at 256 MB and read
+    asynchronously; ports below 1024 and Nova's own (from its configuration) are refused; half-close
+    and resets pass through the forwarder; ports are keyed by number; SIGHUP stops the supervisor;
+    shadow is one writer at the switch; a version is registered only once it passed.
+  - **Not proven separately:** each of the two S1 guards (each alone is enough), the leader check of
+    S5 (the leader is also among the recorded members), recording at spawn, the cleared forwarder
+    during a restart wait, the per-version health interval.
+  - **Limits stated, not fixed:** a process that leaves its group (`setsid`) outlives everything; the
+    tripwire sees PATH lookups only (a test reads the code for Kubernetes tools named as commands).
+- **An M10d test race, fixed in the test:** under this branch's heavier suite, CI twice counted a
+  phone request sent just before a network change as contact after it (`tests/core/network.test.ts`).
+  The simulated firewall now checks each packet as it arrives, through a gate in front of the mesh
+  listener. Reproduced on one busy CPU (main's file failed 2 of 3); fixed, 4 of 4 pass. The network
+  module is unchanged.
 
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:

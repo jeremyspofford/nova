@@ -58,6 +58,27 @@ export const PLAYBOOKS: Readonly<Record<string, PlaybookDef>> = {
       'Fix the problem forward in a new release, or, if losing what was written since is acceptable, restore the pre-upgrade backup yourself with Nova stopped.',
     ],
   },
+  // ---- services the supervisor runs (M10e) ----
+  'service-crashed': {
+    id: 'service-crashed', title: 'A service stopped unexpectedly',
+    repair: 'restart-service', automatic: 'The supervisor starts it again, waiting a little longer after each time.',
+    steps: ['Nothing to do if it stays up.', 'If it keeps happening, the technical detail has the last lines it wrote. Fix it in a new version, or go back: node src/supervisor/main.ts service rollback <service>.'],
+  },
+  'service-held': {
+    id: 'service-held', title: 'A service is held',
+    steps: [
+      'It stopped too often within a minute, so the supervisor stopped restarting it rather than restart it forever. Nothing else is affected.',
+      'Go back to the version kept for it (node src/supervisor/main.ts service rollback <service>), or deploy and promote a fixed version.',
+    ],
+  },
+  'service-stopped': {
+    id: 'service-stopped', title: 'A service’s new version didn’t pass its checks',
+    steps: ['Nothing changed: the live version keeps running, and the new one was never offered.', 'The technical detail says which check failed (its install, its contract tests or its health). Fix it in a new version.'],
+  },
+  'service-rolled-back': {
+    id: 'service-rolled-back', title: 'A service was rolled back',
+    steps: ['The supervisor went back to the version before by itself, because the new one failed its health or kept stopping. The version before runs from its kept slot.', 'The technical detail says what failed. Fix it in a new version before promoting again.'],
+  },
   // ---- backups and the restore drill ----
   'backup-failed': {
     id: 'backup-failed', title: 'A backup didn’t finish',
