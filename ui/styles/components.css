@@ -639,11 +639,16 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   backdrop-filter: blur(var(--blur-glass));
   -webkit-backdrop-filter: blur(var(--blur-glass));
 }
+/* Grown past one line, the composer keeps the input radius (UX review 1, F0): a pill's radius grows
+   with its height, so a tall pill is an ellipse that clips the text at its sides. Its padding
+   doesn't depend on the radius, and it never takes more than about a quarter of the screen: past
+   that, the field scrolls inside, with Send and the microphone still at its foot. */
+.composer.is-grown { border-radius: var(--radius-input); }
 .composer:focus-within { border-color: var(--accent-primary); }
 .composer textarea {
   flex: 1;
   min-width: 0;
-  max-height: 40vh;
+  max-height: 25dvh;
   padding: var(--space-2) 0;
   border: 0;
   background: transparent;

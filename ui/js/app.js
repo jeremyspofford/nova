@@ -686,9 +686,15 @@ function saveDraft() {
   draftTimer = setTimeout(() => { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch {} }, 250); // wait: debounce: saving the draft
 }
 
+// The field grows with what is typed, up to its cap (then it scrolls inside). Past one line the
+// composer stops being a pill: it keeps the input radius (UX review 1, F0).
 function autosize() {
   el.input.style.height = 'auto';
   el.input.style.height = `${el.input.scrollHeight}px`;
+  const cs = getComputedStyle(el.input);
+  const line = Number.parseFloat(cs.lineHeight) || 0;
+  const one = line + Number.parseFloat(cs.paddingTop) + Number.parseFloat(cs.paddingBottom);
+  el.composer.classList.toggle('is-grown', el.input.scrollHeight >= one + line * 0.9);
 }
 
 function say(notice, ms = 4000) {
