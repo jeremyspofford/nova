@@ -25,6 +25,8 @@ import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
 import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
 import { Enrollment } from './mesh/enroll.ts';
+import { resolvePlacement, type PlacementDevice } from './services/placement.ts';
+import { validate } from './services/definition.ts';
 import { APPROVER_ONLY, Access, allows, loopbackAddress, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
 import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
@@ -85,6 +87,8 @@ export * from './mesh/wire.ts';
 export { SlidingWindowLimiter } from './mesh/limiter.ts';
 export { KINDS as DEVICE_KINDS, ROLE_OF, SESSION_TTL_MS } from './mesh/devices.ts';
 export { JOIN_REVEAL_TTL_MS, JOIN_APPROVE_TTL_MS, rateKey } from './mesh/enroll.ts';
+export { PURPOSES, PURPOSE_WORDS, WORKLOAD_PURPOSES, allowedPurposes, checkPurposes, defaultPurposes, fixedPurposes, mayRunWork, purposeChange } from './mesh/purposes.ts';
+export type { Purpose, PurposeChange } from './mesh/purposes.ts';
 export { BROWSER_TASK_HEADER, PUBLIC_PATHS, SESSION_COOKIE, allows, fromBrowserTask, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
 export { DEVICE_CONFIG_SECTIONS, INBOX_KINDS, MAX_BATCH as INBOX_MAX_BATCH } from './mesh/spokes.ts';
 export { RUNTIME_FILES, agentFiles, agentTar, joinScript, tar } from './mesh/agent.ts';
@@ -636,6 +640,19 @@ export function createCore(o: CoreOptions) {
       this: p ? (p.kind === 'device' ? p.device.id === d.id : p.kind === 'console' && d.id === meshIdentity.id) : false,
     };
   }
+  // The devices placement is resolved against (M10f): roles, hardware and health, as the hub knows
+  // them now.
+  async function placementDevices(): Promise<PlacementDevice[]> {
+    const hubHw = models ? await models.hubHardware().catch(() => null) : null;
+    return devices.list().map((d) => {
+      const hw = d.id === meshIdentity.id ? hubHw : models?.hardwareOf(d.id) ?? null;
+      return {
+        id: d.id, name: d.name, kind: d.kind, role: d.role, platform: d.platform, purposes: d.purposes, trust: d.trust, last_seen: d.last_seen,
+        hardware: hw ? { ram_bytes: hw.ram_bytes, gpus: hw.gpus.map((g) => ({ vram_bytes: g.vram_bytes, unified: g.unified })), disk: hw.disk ? { free_bytes: hw.disk.free_bytes } : null, platform: hw.platform, arch: hw.arch } : null,
+        healthy: deviceView(d).online,
+      };
+    });
+  }
   // A paired device's appearance id is remembered as its, so revoking it forgets its appearance.
   const ownedBy = (w: Who, appearanceId: unknown) => { if (w.principal.kind === 'device' && typeof appearanceId === 'string') design.own(appearanceId, w.principal.device.id); };
   const by = (w: Who) => (w.principal.kind === 'device' ? `device:${w.principal.device.id}` : w.principal.kind);
@@ -891,6 +908,18 @@ export function createCore(o: CoreOptions) {
         ...(query.get('egress') ? { egress: query.get('egress') as 'local' | 'remote' } : {}),
       }),
     },
+    {
+      // Tier 0: drafting. Where a definition would run, and why each device may or may not take it.
+      method: 'POST', path: '/services/placement', summary: 'Where a service definition would run, resolved against every device’s roles, hardware and health: the device or devices, and each device’s reason. Nothing is deployed (tier 0).', body: '{definition}',
+      handle: async ({ body }) => {
+        const devs = await placementDevices();
+        const v = validate(body.definition, { devices: devs.filter((d) => d.trust === 'trusted').map((d) => ({ id: d.id, platform: d.platform, roles: [...d.purposes] })) });
+        if (!v.ok) return { valid: false, problems: v.problems, resolution: null };
+        const resolution = resolvePlacement(v.def, devs, { hubId: meshIdentity.id, now: now() });
+        const away = resolution.ok ? resolution.devices.filter((d) => d.id !== meshIdentity.id) : [];
+        return { valid: true, problems: [], resolution, ...(away.length ? { note: 'Running services on devices other than the hub comes with native workloads; nothing is deployed there yet.' } : {}) };
+      },
+    },
     // ---- the device mesh (M4 plan §0–§1) ----
     {
       method: 'GET', path: '/mesh/hello', access: 'public', summary: 'The hub’s fingerprint, epoch, role and public keys. No person data; anyone may ask.',
@@ -916,11 +945,13 @@ export function createCore(o: CoreOptions) {
     },
     { method: 'GET', path: '/mesh/devices', summary: 'The device registry, the hub first. The device asking is marked `this`.', handle: ({ who }) => devices.list().map((d) => deviceView(d, who.principal)) },
     {
-      method: 'PATCH', path: '/mesh/devices/{id}', summary: 'Rename a device, or let it approve new devices (tier 3: needs {confirm: true}, and only an approver may grant it).', body: '{name?, can_approve?, confirm?}',
+      method: 'PATCH', path: '/mesh/devices/{id}', summary: 'Rename a device, let it approve new devices (tier 3: needs {confirm: true}, and only an approver may grant it), or change its roles (purposes: widening is tier 3, {confirm: true}; narrowing is tier 2, {approved: true}; making a computer a hub candidate also needs {confirm_candidate: true}).', body: '{name?, can_approve?, purposes?, confirm?, approved?, confirm_candidate?}',
       handle: ({ params, body, who }) => {
-        if (body.can_approve !== undefined && allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', 'Only the hub’s own screen, or a device you’ve allowed to approve, can change who approves.');
+        if ((body.can_approve !== undefined || body.purposes !== undefined) && allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', 'Only the hub’s own screen, or a device you’ve allowed to approve, can change who approves or what a device is for.');
         if (body.name !== undefined) devices.rename(params.id!, body.name);
         if (body.can_approve !== undefined) devices.setCanApprove(params.id!, body.can_approve, body.confirm === true);
+        // Nothing runs on other devices before native workloads (M10h), so narrowing stops nothing.
+        if (body.purposes !== undefined) devices.setPurposes(params.id!, body.purposes, { confirm: body.confirm === true, approved: body.approved === true, confirm_candidate: body.confirm_candidate === true, by: by(who), stops: () => [] });
         return deviceView(devices.get(params.id!), who.principal);
       },
     },
@@ -931,13 +962,13 @@ export function createCore(o: CoreOptions) {
     { method: 'POST', path: '/mesh/pairings', status: 201, access: 'approver', summary: 'Make a pairing code: single use, five minutes. The reply has the QR address, the one-line command and the hub’s fingerprint.', handle: ({ who }) => enroll.createPairing(by(who)) },
     { method: 'GET', path: '/mesh/requests', access: 'approver', summary: 'Devices waiting for your OK, each with the six digits it shows.', handle: () => enroll.requests() },
     {
-      method: 'POST', path: '/mesh/requests/{id}/approve', access: 'approver', summary: 'Approve a device (tier 3: needs {confirm: true}) once its digits match. This creates its device record.', body: '{confirm}',
-      handle: ({ params, body, who }) => { const r = enroll.approve(params.id!, { confirm: body.confirm === true, by: by(who) }); return { request: r.request, device: deviceView(r.device, who.principal) }; },
+      method: 'POST', path: '/mesh/requests/{id}/approve', access: 'approver', summary: 'Approve a device (tier 3: needs {confirm: true}) once its digits match, with the roles you settled on (purposes; default: what it asked for). A computer as hub candidate also needs {confirm_candidate: true}. This creates its device record.', body: '{confirm, purposes?, confirm_candidate?}',
+      handle: ({ params, body, who }) => { const r = enroll.approve(params.id!, { confirm: body.confirm === true, by: by(who), ...(body.purposes !== undefined ? { purposes: body.purposes } : {}), confirm_candidate: body.confirm_candidate === true }); return { request: r.request, device: deviceView(r.device, who.principal) }; },
     },
     { method: 'POST', path: '/mesh/requests/{id}/deny', access: 'approver', summary: 'Turn a device away.', handle: ({ params, who }) => enroll.deny(params.id!, by(who)) },
     {
       method: 'POST', path: '/mesh/join', status: 201, access: 'public', summary: 'A device asks to join with a code, its public keys, and a commitment to its nonce. A wrong or spent code is a 400 with no detail.',
-      body: '{code, public_key, x25519_public_key, x25519_sig, claims: {name, platform, kind, capabilities[], address?}, commitment}',
+      body: '{code, public_key, x25519_public_key, x25519_sig, claims: {name, platform, kind, capabilities[], purposes?[], address?}, commitment}',
       handle: ({ body, who }) => { meshOnly(who); enroll.limit('calls', who.address); return enroll.join(body, who.address); },
     },
     {

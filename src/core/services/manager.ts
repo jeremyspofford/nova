@@ -18,26 +18,41 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFile
 import { join } from 'node:path';
 import { promotionTier, validate, type DeviceView, type ServiceDefinition } from './definition.ts';
 import type { Outcome, Plan, Say, ServiceDriver, ServiceStatus } from './driver.ts';
+import { resolvePlacement, type PlacementDevice, type Resolution } from './placement.ts';
 
 export interface ManagerOptions {
   // The registry's folder: <dir>/<service>/<version>.json.
   dir: string;
   // In order of preference: the first is the default.
   drivers: ServiceDriver[];
-  // What the validator may know about devices (M10f gives them roles).
+  // What the validator may know about devices (their roles, M10f).
   devices?: () => DeviceView[];
+  // The devices placement is resolved against (M10f): roles, hardware and health. With it, a
+  // proposal is refused when no device may take it, and when it would go to a device other than the
+  // hub (native workloads on devices come with M10h).
+  placement?: () => { devices: PlacementDevice[]; hubId: string | null; current?: (service: string) => string | null };
 }
 
 export class ServiceManager {
   readonly dir: string;
   readonly drivers: readonly ServiceDriver[];
   #devices: () => DeviceView[] | undefined;
+  #placement: ManagerOptions['placement'];
 
   constructor(o: ManagerOptions) {
     if (!o.drivers.length) throw new Error('The Service Manager needs a driver.');
     this.dir = o.dir;
     this.drivers = o.drivers;
     this.#devices = o.devices ?? (() => undefined);
+    this.#placement = o.placement;
+  }
+
+  // Where it would run, resolved against the devices' roles, hardware and health. Null when this
+  // manager wasn't given devices (the supervisor's own, which runs on the hub only).
+  resolve(def: ServiceDefinition): Resolution | null {
+    const p = this.#placement?.();
+    if (!p) return null;
+    return resolvePlacement(def, p.devices, { hubId: p.hubId, current: p.current?.(def.service) ?? null });
   }
 
   // The definition as Nova would use it, or every reason it can't be, in plain words.
@@ -50,6 +65,12 @@ export class ServiceManager {
   plan(input: unknown): { ok: false; problems: string[] } | { ok: true; def: ServiceDefinition; plan: Plan; driver: ServiceDriver } {
     const v = this.check(input);
     if (!v.ok) return v;
+    // Checked at proposal (Point 9): a placement no device may take is refused here, with each
+    // device's reason, before any driver is asked.
+    const where = this.resolve(v.def);
+    if (where && !where.ok) return { ok: false, problems: [where.why] };
+    const away = where?.ok ? where.devices.filter((d) => d.id !== this.#placement!().hubId) : [];
+    if (away.length) return { ok: false, problems: [`It would run on ${away.map((d) => d.name).join(', ')}. Running services on devices other than the hub comes with native workloads; until then, pin it to the hub.`] };
     let first: { plan: Plan; driver: ServiceDriver } | null = null;
     for (const driver of this.drivers) {
       if (!driver.available().ok) continue;

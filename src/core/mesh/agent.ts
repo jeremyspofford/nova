@@ -132,7 +132,7 @@ exit 1
   const sha = /^[0-9a-f]{64}$/.test(tarSha256 ?? '') ? tarSha256! : '';
   return `#!/bin/sh
 # Adds this computer to Nova at ${hub}.
-#   curl -fsS ${hub}/join.sh | sh -s -- <code> [--name <name>] [--kind computer|standby] [--nova-home <dir>]
+#   curl -fsS ${hub}/join.sh | sh -s -- <code> [--name <name>] [--kind computer|standby] [--roles compute,storage] [--nova-home <dir>]
 # What it does: checks for Node.js 26 or newer, downloads Nova's device agent from the same hub,
 # unpacks it into the device home (NOVA_DEVICE_HOME, or ~/.nova-device), asks to join with the code,
 # and once you approve on the hub, starts the agent in the background. It installs nothing outside

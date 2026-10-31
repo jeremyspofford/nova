@@ -302,6 +302,11 @@ export class Models extends EventEmitter {
     if (ROLES.some((r) => this.placement(r)?.device === device.id)) void this.check();
   }
 
+  // What a paired computer last reported about its hardware, or null (placement reads it, M10f).
+  hardwareOf(id: string): Hardware | null {
+    return this.#spokeHardware(id);
+  }
+
   #spokeHardware(id: string): Hardware | null {
     const r = this.#o.db.get<{ hardware: string }>('SELECT hardware FROM device_hardware WHERE device_id = ?', id);
     return r ? JSON.parse(r.hardware) as Hardware : null;

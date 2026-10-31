@@ -4,7 +4,7 @@
 // updates only when a pinned key signed them. The runtime can never touch any of this.
 //
 //   node src/device/boot.ts join <hub-url> --code <code> [--name <name>] [--kind computer|standby]
-//                                [--nova-home <dir>] [--address <url>]
+//                                [--roles compute,storage,…] [--nova-home <dir>] [--address <url>]
 //   node src/device/boot.ts run        keep the runtime running (what join.sh starts)
 //   node src/device/boot.ts status     what this device is, where its hub is, how it is (--json)
 //   node src/device/boot.ts recover    reinstall the runtime from the hub and leave safe mode
@@ -27,7 +27,7 @@ import {
   hubResetMessage, revealMessage, runtimeManifest, sessionMessage, sha256Hex, signMessage, statusMessage, verifyDeviceSignature, verifyRoster, x25519Statement,
   type DeviceKeys, type SignedRoster,
 } from '../core/mesh/wire.ts';
-import { acceptRoster, checkProof, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof } from './trust.ts';
+import { acceptRoster, assignmentAllowed, checkProof, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof, type Verdict } from './trust.ts';
 import { Watchdog } from './watchdog.ts';
 import { detectHardware, type Hardware } from '../core/models/hardware.ts';
 import { Queue, QUEUE_KINDS, type QueueKind } from './queue.ts';
@@ -83,6 +83,9 @@ export interface DeviceFile {
   epoch: number;
   joined_at: string;
   nova_home?: string;
+  // What the person approved this device for (M10f), updated from each heartbeat answer. The agent
+  // refuses any assignment these don't allow (trust.ts assignmentAllowed).
+  purposes?: string[];
 }
 export interface BootState {
   safe_mode: boolean;
@@ -155,7 +158,7 @@ const errorOf = (r: Res) => (typeof r.body === 'object' && r.body?.error ? r.bod
 
 // ---- join ---------------------------------------------------------------------------------------
 
-export interface JoinOptions { say?: (line: string) => void; hub: string; code: string; name?: string; kind?: 'computer' | 'standby'; novaHome?: string; address?: string; pollMs?: number; timeoutMs?: number }
+export interface JoinOptions { say?: (line: string) => void; hub: string; code: string; name?: string; kind?: 'computer' | 'standby'; roles?: string[]; novaHome?: string; address?: string; pollMs?: number; timeoutMs?: number }
 
 // Enrollment (CONTRACTS §5) from this side: make keys here, ask with the code, show the six digits,
 // wait for the person to approve on the hub, then pin the roster the hub signed.
@@ -180,6 +183,8 @@ export async function joinHub(home: string, o: JoinOptions, env: NodeJS.ProcessE
   const name = o.name?.trim() || hostname() || 'Computer';
   const claims: Record<string, unknown> = { name, platform: `${process.platform} ${process.arch}`, kind, capabilities: kind === 'standby' ? ['sync'] : CAPABILITIES };
   if (kind === 'standby' && o.address) claims.address = o.address;
+  // What this computer is for (M10f): asked here, confirmed or changed on the hub's approval screen.
+  if (o.roles?.length) claims.purposes = o.roles;
   const j = await call(hub, 'POST', '/api/v1/mesh/join', {
     body: {
       code: o.code, public_key: keys.ed25519.publicKey, x25519_public_key: keys.x25519.publicKey,
@@ -198,6 +203,7 @@ export async function joinHub(home: string, o: JoinOptions, env: NodeJS.ProcessE
   if (rv.body.confirmation !== digits) throw new Error('The hub’s digits don’t match the ones this device worked out. Don’t approve anything; start again with a new code.');
   say(`Hub: ${hub} (fingerprint ${fp})`);
   say(`This device: ${name} (${kind}), key ${keyFingerprint(keys.ed25519.publicKey)}`);
+  say(o.roles?.length ? `Asked to be: ${o.roles.join(', ')}. The hub confirms or changes this when you approve.` : 'No roles asked for: you pick what it is for on the hub when you approve (nothing runs on it until it has one).');
   say(`Check that the hub shows these digits: ${digits.slice(0, 3)} ${digits.slice(3)}`);
   say('Then approve it there. Waiting…');
 
@@ -218,6 +224,7 @@ export async function joinHub(home: string, o: JoinOptions, env: NodeJS.ProcessE
   const deviceId = status.body.device_id as string;
   const device: DeviceFile = {
     version: 1, device_id: deviceId, name, kind, hub_url: hub, join_url: hub, roster, pinned: rosterKeys(roster.roster), epoch: roster.roster.epoch, joined_at: new Date().toISOString(),
+    purposes: Array.isArray(status.body.purposes) ? (status.body.purposes as unknown[]).filter((x): x is string => typeof x === 'string') : [],
     ...(o.novaHome ? { nova_home: resolve(o.novaHome) } : {}),
   };
   if (kind === 'standby') writeStandby(resolve(o.novaHome!), keys, device, ca ? (env.NOVA_CA_FILE ? resolve(env.NOVA_CA_FILE) : p.ca) : null);
@@ -615,7 +622,7 @@ export class Boot {
       const r = await call(s.url, m.method, m.path, { token: s.token, body: m.body });
       answer({ status: r.status, body: r.body });
       // A heartbeat answer this agent got itself, over its own session: the hub may say it was reset.
-      if (m.path === '/api/v1/mesh/devices/me/heartbeat' && r.status === 200) this.#heardReset(r.body);
+      if (m.path === '/api/v1/mesh/devices/me/heartbeat' && r.status === 200) { this.#heardPurposes(r.body); this.#heardReset(r.body); }
     } catch (e) {
       answer({ error: (e as Error).message });
     }
@@ -734,6 +741,27 @@ export class Boot {
   }
   #saidUnsigned = false;
 
+  // The roles the hub holds for this device (M10f), from a heartbeat answer over this agent's own
+  // session with a node that proved a pinned key. Kept in device.json, so the check below works
+  // offline and across restarts.
+  #heardPurposes(body: unknown): void {
+    const p = (body as { purposes?: unknown } | null)?.purposes;
+    if (!Array.isArray(p) || p.length > 12 || !p.every((x) => typeof x === 'string' && /^[a-z][a-z-]{0,31}$/.test(x))) return;
+    if (JSON.stringify(p) === JSON.stringify(this.d.purposes ?? [])) return;
+    this.d.purposes = p as string[];
+    writeJson(this.p.device, this.d);
+    this.say(`The hub says this computer is for: ${p.length ? p.join(', ') : 'nothing yet'}.`);
+  }
+
+  // The second check on an assignment (M10f): the hub checked it when it was proposed; this agent
+  // refuses one its own roles don't allow, whatever the hub sent. Native workloads (M10h) call this
+  // before installing anything.
+  mayRun(workload: { service: string; roles?: readonly string[] }): Verdict {
+    const v = assignmentAllowed(this.d.purposes, workload);
+    if (!v.ok) this.say(v.reason);
+    return v;
+  }
+
   async #hubReset(): Promise<void> {
     if (this.#closed) return;
     this.#session = null;
@@ -831,7 +859,7 @@ function parse(argv: string[]): { cmd: string; args: string[]; flags: Record<str
 }
 
 const USAGE = `Nova's device agent (boot).
-  join <hub-url> --code <code> [--name <name>] [--kind computer|standby] [--nova-home <dir>] [--address <url>]
+  join <hub-url> --code <code> [--name <name>] [--kind computer|standby] [--roles compute,storage,…] [--nova-home <dir>] [--address <url>]
   run | status [--json] | recover
   queue <${QUEUE_KINDS.join('|')}> '<json body>' [--key <key>]
 The device home is NOVA_DEVICE_HOME (default ~/.nova-device).`;
@@ -845,7 +873,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       const hub = args[0];
       const code = str('code') ?? args[1];
       if (!hub || !code) { say(USAGE); return 2; }
-      await joinHub(home, { hub, code, ...(str('name') ? { name: str('name')! } : {}), kind: (str('kind') ?? 'computer') as 'computer', ...(str('nova-home') ? { novaHome: str('nova-home')! } : {}), ...(str('address') ? { address: str('address')! } : {}), ...(env.NOVA_DEVICE_POLL_MS ? { pollMs: Number(env.NOVA_DEVICE_POLL_MS) } : {}) }, env);
+      await joinHub(home, { hub, code, ...(str('name') ? { name: str('name')! } : {}), ...(str('roles') ? { roles: str('roles')!.split(',').map((r) => r.trim()).filter(Boolean) } : {}), kind: (str('kind') ?? 'computer') as 'computer', ...(str('nova-home') ? { novaHome: str('nova-home')! } : {}), ...(str('address') ? { address: str('address')! } : {}), ...(env.NOVA_DEVICE_POLL_MS ? { pollMs: Number(env.NOVA_DEVICE_POLL_MS) } : {}) }, env);
       return 0;
     }
     case 'run': {
