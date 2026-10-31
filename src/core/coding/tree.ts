@@ -3,13 +3,15 @@
 // worktree. A coding agent runs as the person, so what it leaves is read as data: links are kept as
 // links (their target as written), and anything that isn't a plain file, a folder or a link is
 // refused, never opened.
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync, chmodSync } from 'node:fs';
+import { closeSync, constants, copyFileSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, rmdirSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, chmodSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, normalize, posix } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { safePath } from '../providers/taskspace.ts';
 
-export interface Entry { kind: 'file' | 'link'; exec: boolean; size: number; hash: string; target?: string }
+// `big`: a file over MAX_FILE_BYTES, never read: its hash stands for its size and modification time
+// only. Nova never takes one from an agent (refusals), so an unchanged one only has to stay as it was.
+export interface Entry { kind: 'file' | 'link'; exec: boolean; size: number; hash: string; target?: string; big?: true; mtimeMs?: number }
 export type Snapshot = Map<string, Entry>;
 export interface Walk { entries: Snapshot; refused: { path: string; why: string }[]; bytes: number }
 export interface Change { path: string; kind: 'added' | 'modified' | 'deleted'; entry: Entry | null }
@@ -17,6 +19,10 @@ export interface Change { path: string; kind: 'added' | 'modified' | 'deleted'; 
 // What one run takes from an agent at most (the provider registry's caps).
 export const MAX_CHANGES = 200;
 export const MAX_CHANGE_BYTES = 50 * 1024 * 1024;
+// One file Nova reads at most (larger ones are listed by size, never read), and all it reads in one
+// walk: more, and it stops and says so. The review of PR #239, item 7.
+export const MAX_FILE_BYTES = MAX_CHANGE_BYTES;
+export const MAX_WALK_BYTES = 1024 * 1024 * 1024;
 // A tree Nova walks at most: more, and it stops and says so.
 const MAX_ENTRIES = 100_000;
 const MAX_DEPTH = 64;
@@ -62,6 +68,11 @@ export function walk(root: string, o: { skipTopGit?: boolean } = {}): Walk {
       }
       if (!st.isFile()) { refused.push({ path: r, why: 'it is not a plain file (a FIFO, socket or device)' }); continue; }
       if (st.nlink > 1) { refused.push({ path: r, why: 'it is a hard link to a file somewhere else' }); continue; }
+      if (st.size > MAX_FILE_BYTES) {
+        entries.set(r, { kind: 'file', exec: (st.mode & 0o111) !== 0, size: st.size, hash: sha(`big:${st.size}:${Math.trunc(st.mtimeMs)}`), big: true, mtimeMs: Math.trunc(st.mtimeMs) });
+        continue;
+      }
+      if (bytes + st.size > MAX_WALK_BYTES) throw new CoreError('validation', `The folder holds more than ${MAX_WALK_BYTES / 1024 ** 3} GB of files; Nova stopped reading at ${r}.`);
       const data = readPlain(abs, st);
       bytes += data.length;
       entries.set(r, { kind: 'file', exec: (st.mode & 0o111) !== 0, size: data.length, hash: sha(data) });
@@ -89,20 +100,51 @@ export function changes(before: Snapshot, after: Snapshot): Change[] {
   return out;
 }
 
-// Whether a link's target, as written, stays inside the folder it is in.
-export function linkStaysInside(path: string, target: string): boolean {
-  if (!target || isAbsolute(target) || target.includes('\0') || target.includes('\\')) return false;
-  const joined = posix.normalize(posix.join(posix.dirname(path), target));
-  return joined !== '..' && !joined.startsWith('../') && joined !== '.' && !joined.startsWith('/') && !isGit(joined);
+// Where a path really leads in a walked tree: every link on the way is followed as the kernel would
+// (a link's target is read from its own folder; ".." after a link goes up from where the link led),
+// without touching the disk. null when it leaves the tree, passes through `.git`, or loops. The
+// review of PR #239, item 4: a link's text alone ("q/../../x" after "q -> .") doesn't say.
+export function resolveIn(s: Snapshot, path: string): string | null {
+  const queue = path.split('/');
+  const stack: string[] = [];
+  let hops = 0;
+  while (queue.length) {
+    const seg = queue.shift()!;
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { if (!stack.length) return null; stack.pop(); continue; }
+    if (seg === '.git') return null;
+    stack.push(seg);
+    const e = s.get(stack.join('/'));
+    if (e?.kind !== 'link') continue;
+    if (++hops > 40) return null;
+    const t = e.target ?? '';
+    if (!t || isAbsolute(t) || t.includes('\0') || t.includes('\\')) return null;
+    stack.pop();
+    queue.unshift(...t.split('/'));
+  }
+  return stack.join('/');
+}
+
+// Whether a link in a walked tree stays inside it, followed through every other link there.
+export function linkStaysInside(s: Snapshot, path: string): boolean {
+  return resolveIn(s, path) !== null;
 }
 
 // The changes Nova won't take, in plain words (null when there are none), before anything is
-// written: git's own files, links that leave the folder, the caps.
-export function refusals(cs: Change[], walked: Walk): string | null {
+// written: git's own files, links that lead out of the repository (followed through the tree as it
+// now is, including links that led nowhere bad before and do now), files too big to read, the caps.
+export function refusals(cs: Change[], walked: Walk, before: Snapshot = new Map()): string | null {
   const bad: string[] = walked.refused.map((r) => `${r.path} (${r.why})`);
   for (const c of cs) {
     if (isGit(c.path)) bad.push(`${c.path} (it is git’s own, which an agent never changes)`);
-    if (c.entry?.kind === 'link' && !linkStaysInside(c.path, c.entry.target ?? '')) bad.push(`${c.path} (a link to ${JSON.stringify(c.entry.target ?? '').slice(0, 80)}, outside the repository)`);
+    if (c.entry?.big) bad.push(`${c.path} (over ${MAX_FILE_BYTES / 1024 / 1024} MB, which Nova doesn’t take from an agent)`);
+  }
+  for (const [p, e] of walked.entries) {
+    if (e.kind !== 'link' || linkStaysInside(walked.entries, p)) continue;
+    // A link that already led out of the repository before the agent, the same link, is the person's.
+    const was = before.get(p);
+    if (was?.kind === 'link' && was.target === e.target && !linkStaysInside(before, p)) continue;
+    bad.push(`${p} (a link to ${JSON.stringify(e.target ?? '').slice(0, 80)}, outside the repository)`);
   }
   if (bad.length) return `Nova refused the work: ${bad.slice(0, 5).join('; ')}${bad.length > 5 ? `; and ${bad.length - 5} more` : ''}. Nothing was committed.`;
   const bytes = cs.reduce((n, c) => n + (c.entry?.kind === 'file' ? c.entry.size : 0), 0);
@@ -118,6 +160,13 @@ export function copyWalk(from: string, s: Snapshot, to: string): void {
     mkdirSync(dirname(dest), { recursive: true });
     if (e.kind === 'link') { symlinkSync(e.target!, dest); continue; }
     const src = join(from, ...rel.split('/'));
+    // A file too big to read is copied as it is, with its time, so it walks the same in the copy.
+    if (e.big) {
+      copyFileSync(src, dest, constants.COPYFILE_EXCL);
+      chmodSync(dest, e.exec ? 0o755 : 0o644);
+      utimesSync(dest, new Date(e.mtimeMs!), new Date(e.mtimeMs!));
+      continue;
+    }
     const data = readPlain(src, lstatSync(src));
     if (sha(data) !== e.hash) throw new CoreError('conflict', `${rel} changed while Nova copied it.`);
     writeFileSync(dest, data, { mode: e.exec ? 0o755 : 0o644, flag: 'wx' });
