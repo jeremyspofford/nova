@@ -366,3 +366,48 @@ test('M10c: starting checks the repository, the branch, the agent and the privac
     await core.close();
   }
 });
+
+test('M10c: two runs on one repository at once each get their own worktree and branch', { timeout: 120_000 }, async () => {
+  const { core } = boot();
+  const repos = makeRepos();
+  claude(core, agentScript('fix', join(repos.dir, 'scripts')));
+  try {
+    const [a, b] = await Promise.all([1, 2].map((n) => core.coding.start({ repo: repos.person, goal: `Fix greet(), take ${n}.`, test_command: 'node --test' })));
+    const [ta, tb] = await Promise.all([settle(core, a!.task.id), settle(core, b!.task.id)]);
+    assert.equal(ta.state, 'done', ta.reason);
+    assert.equal(tb.state, 'done', tb.reason);
+    const [va, vb] = [core.coding.view(a!.run.id), core.coding.view(b!.run.id)];
+    assert.notEqual(va.nova_branch, vb.nova_branch);
+    assert.equal(va.base, vb.base);
+    assert.deepEqual([va.changes.length, vb.changes.length], [1, 1]);
+  } finally {
+    await core.close();
+  }
+});
+
+test('M10c: after a restart the merge ask stands, says its preview stopped, and still merges only the reviewed commit', { timeout: 120_000 }, async () => {
+  const { core, home } = boot();
+  const repos = makeRepos();
+  claude(core, agentScript('fix', join(repos.dir, 'scripts')));
+  const { run, check } = await toReview(core, repos);
+  core.ledger.approve(check.id);
+  await settle(core, check.id);
+  const merge = await settle(core, taskOf(core, run, 'merge')!.id);
+  const url = core.coding.view(run).preview!.url;
+  await core.close();
+  const again = createCore({ home, version: '0.1.0', trustedOrigin: () => true, coding: { testTimeoutS: 60, previewTimeoutS: 20 } });
+  try {
+    again.start();
+    const v = again.coding.view(run);
+    assert.equal(v.state, 'review');
+    assert.equal(v.preview!.running, false);
+    assert.ok(v.preview!.why_stopped);
+    await assert.rejects(fetch(url, { signal: AbortSignal.timeout(3000) }), 'no preview outlives Nova');
+    assert.equal(again.ledger.get(merge.id).state, 'waiting');
+    again.ledger.approve(merge.id, { confirm: true });
+    assert.equal((await settle(again, merge.id)).state, 'done');
+    assert.equal(git(repos.person, 'rev-parse', 'main'), v.head);
+  } finally {
+    await again.close();
+  }
+});

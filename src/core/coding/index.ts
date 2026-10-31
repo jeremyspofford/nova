@@ -89,6 +89,9 @@ export class Coding {
   #now: () => Date;
   #key = Symbol('coding');
   #previews = new Map<string, ChildProcess>();
+  // One thing at a time in each of Nova's repositories (a fetch, a worktree made or removed): two
+  // runs on one repository would otherwise race for its refs.
+  #queues = new Map<string, Promise<unknown>>();
 
   constructor(o: CodingOptions) {
     this.#o = o;
@@ -334,8 +337,19 @@ export class Coding {
   #work(id: string): string { return join(this.#runDir(id), 'work'); }
   #novaBranch(id: string): string { return `nova/${id}`; }
 
+  #serial<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const next = (this.#queues.get(key) ?? Promise.resolve()).catch(() => {}).then(fn);
+    this.#queues.set(key, next);
+    void next.finally(() => { if (this.#queues.get(key) === next) this.#queues.delete(key); }).catch(() => {});
+    return next;
+  }
+
   // Nova's copy of the person's repository, with the branch fetched (a read of theirs).
-  async #fetch(r: RunRow): Promise<{ mirror: string; tip: string }> {
+  #fetch(r: RunRow): Promise<{ mirror: string; tip: string }> {
+    return this.#serial(this.#mirror(r.repo), () => this.#fetchNow(r));
+  }
+
+  async #fetchNow(r: RunRow): Promise<{ mirror: string; tip: string }> {
     const mirror = this.#mirror(r.repo);
     if (!existsSync(join(mirror, 'HEAD'))) {
       mkdirSync(mirror, { recursive: true });
@@ -348,7 +362,11 @@ export class Coding {
   }
 
   // Removes the run's worktree and its branch from Nova's repository (the tier-1 undo).
-  async #dropTree(r: RunRow): Promise<void> {
+  #dropTree(r: RunRow): Promise<void> {
+    return this.#serial(this.#mirror(r.repo), () => this.#dropTreeNow(r));
+  }
+
+  async #dropTreeNow(r: RunRow): Promise<void> {
     const mirror = this.#mirror(r.repo);
     if (existsSync(join(mirror, 'HEAD'))) {
       await this.#git.run(['--git-dir', mirror, 'worktree', 'remove', '--force', '--force', this.#tree(r.id)], { allow: [128, 1] });
@@ -366,7 +384,7 @@ export class Coding {
     const { mirror, tip: base } = await this.#fetch(r);
     const tree = this.#tree(r.id);
     mkdirSync(this.#runDir(r.id), { recursive: true });
-    await this.#git.run(['--git-dir', mirror, 'worktree', 'add', '--quiet', '-b', this.#novaBranch(r.id), tree, base]);
+    await this.#serial(mirror, () => this.#git.run(['--git-dir', mirror, 'worktree', 'add', '--quiet', '-b', this.#novaBranch(r.id), tree, base]));
     const before = walk(tree, { skipTopGit: true });
     if (before.refused.length) return report('failed', `Nova can’t work on ${r.repo} at ${short(base)}: ${before.refused.slice(0, 3).map((x) => `${x.path} (${x.why})`).join('; ')}.`);
     copyWalk(tree, before.entries, this.#work(r.id));
