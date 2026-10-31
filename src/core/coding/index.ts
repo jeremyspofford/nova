@@ -774,7 +774,7 @@ export class Coding {
     const s = scopeOf(tops, { ...(editable ? { editable } : {}), test_command: r.test_command }, files);
     if (editable) return { ...s, words: `You may change only these: ${editable.join(', ')}. Nova refuses the work if anything else changes.`, shown: `You let it change: ${editable.join(', ')}. Nothing else.` };
     const words = 'You may change source files, documents and images, but not the tests, the test runner’s settings (package.json, lockfiles, any hidden file such as .npmrc, *.config.* files, tsconfig, build files) or anything the test command names. Nova refuses the work if any of those change.';
-    return { ...s, editable: (p: string) => s.editable(p) && SOURCE.test(p) && !TEST_FILE.test(p) && !runsTests(p), words, shown: `Source files, documents and images only: not the tests, the test runner’s settings, or anything \`${r.test_command}\` names.` };
+    return { ...s, editable: (p: string) => s.editable(p) && SOURCE.test(p) && !TEST_FILE.test(p) && !runsTests(p), words, shown: `Source files, documents and images only: not the tests, the test runner’s settings, or anything “${r.test_command}” names.` };
   }
 
   // ---- what callers see -----------------------------------------------------------------------------
