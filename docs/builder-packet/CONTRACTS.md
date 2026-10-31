@@ -18,7 +18,7 @@ A versioned, cached schema for a recurring decision: `template_id`, `version`, `
 Rules: templates are authored **on cache miss only**, by a cheap authoring model or a human, then validated (schema check + dry runs) before activation. Never generate a schema per-request. Templates whose calibration drifts beyond threshold are retired and re-authored. Template creation is itself a ledger task with evidence.
 
 ## 4. Extension manifest
-Every extension (connector, MCP server wrapper, plugin, skill pack, automation adapter, design system) declares: `id`, `version`, `kind`, `capabilities[]`, `permissions[]` (data read/write scopes, network egress, device actions), `secrets[]` (names only — values live in the vault), `config_schema`, `setup_flow`, `health_check`, `nova_compat` (version range), `on_remove` (what is deleted, what is kept, what is exported). See EXTENSION-MODEL.
+Every extension (connector, MCP server wrapper, plugin, skill pack, automation adapter, design system) declares: `id`, `version`, `kind`, `capabilities[]`, `permissions[]` (data read/write scopes, network egress, device actions), `secrets[]` (names only — values live in the vault; under the Credential Broker (`docs/plans/vault-broker.md`) each name is a ref the broker resolves, and an extension is given uses, never values), `config_schema`, `setup_flow`, `health_check`, `nova_compat` (version range), `on_remove` (what is deleted, what is kept, what is exported). See EXTENSION-MODEL.
 
 ## 5. Device enrollment
 One protocol, three front doors (QR code / hub URL + confirmation code / one-line command):

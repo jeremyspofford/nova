@@ -24,6 +24,24 @@
 - 2: ask first;
 - 3: explicit confirmation every time.
 
+## Owner decisions (2026-10-31)
+
+The owner decided this ADR's conflicts and open questions the same day, verbatim in `docs/builder-packet/INPUT-2026-10-31-VAULT-BROKER-DECISIONS.md`. These govern wherever the text below proposed otherwise.
+- **Conflicts row 2, sync:** a wrap sealed to a specific holder device's broker key MAY travel in sync. It is unusable anywhere else, so it isn't an "unlock key" in the rule's sense. The rule, restated precisely: **no passphrase, recovery key or device unlock key ever moves, and no key material ever moves in a form another device can use.** Sealed per-device wraps are the one allowed exception, recorded as such.
+- **Conflicts row 3, language: an ADR-2 exception, approved.** TypeScript now, with the size budget and the narrowing of Node's permission model as proposed. The Rust port stays the stated end state under ADR-2. It is revisited at Phase 2 or at the first external security review, whichever comes first. This is an exception, not a change to ADR-2.
+- **Conflicts row 4, Nova's own keys:** they stay in core, out of the broker's scope for Phase 1, with the plain statement as drafted. They are Nova's data and identity keys, not user credentials. Growing sign or encrypt verbs for core would break the fixed-verb discipline that makes the broker auditable.
+- **Open questions 1–5:** the proposed defaults are accepted.
+  1. seven verbs, delete as `update(remove)`, `sealed` and `oauth` as sources, `unlock` and `lock` as protocol messages that return no value;
+  2. separate-user mode offered at install on a Linux or macOS hub (tier 3), same-user elsewhere with the plain notice;
+  3. "no network surface": nothing inbound, and outbound only during a `use`, to the bound origin;
+  4. passkey approvals required for `bind`, `share_scope` and external connections where WebAuthn works, with core-relayed approval as the fallback, stated in Settings;
+  5. placement: a side track after M10e. M10h ships with no credential on a spoke if Phase 1 isn't merged.
+- **Open question 6, showing a value: modified.**
+  - **What stands:** never through a verb, never to core or any model.
+  - **What changes:** the owner may reveal a Nova Vault value **on the device's own screen**, through a UI the broker renders, gated by passkey or biometric. It is tier 3 and hides itself again automatically, the same precedent as the backup recovery key.
+  - **Why:** a vault that can never show its owner a password traps them the first time they need that login outside Nova. The reveal path keeps the value out of every API without locking the owner out of their own credentials.
+  - Nothing else about question 6 changes.
+
 ## Decision
 
 Nova gets a **Credential Broker**: a small process of its own on each device that holds credentials. It answers seven fixed verbs, plus three protocol messages that return no value (§4). Nova core, every model, chat, memory, logs and the Work Ledger work with refs and metadata. The broker checks bindings, sensitivity class and approval itself, and refuses on its own authority. Behind it sit pluggable backends:
@@ -583,18 +601,7 @@ These follow M10.md and M10-orchestration.md:
 
 ## Open questions for the owner
 
-Each has a proposed default. The build follows the default unless the owner decides otherwise.
-1. **The fixed verbs.** The instruction says the broker does nothing else, and three needs sit around the seven:
-   - deleting, as `update(remove)`;
-   - values the person types (`sealed`) and OAuth codes (`oauth`), as `create` and `update` sources;
-   - `unlock` and `lock`, as protocol messages that return no value.
-
-   *Proposed:* accept this reading, so the verb list stays at seven. The alternative is to add verbs.
-2. **Separate-user mode.** *Proposed:* offer it at install on a Linux or macOS hub (tier 3, needs administrator rights), and use same-user mode elsewhere with a plain notice. *Alternative:* same-user only, with the `exec` caveat stated.
-3. **"No network surface".** *Proposed reading:* nothing inbound. Outbound only during a `use`, to the bound origin (§3).
-4. **Approvals by passkey.** *Proposed:* required for `bind`, `share_scope` and external connections wherever WebAuthn works. Core-relayed approval stays a fallback for other tier-3 verbs, and for setups with no passkey, stated in Settings. *Alternative:* require a passkey for every tier-3 broker action, so a setup with no passkey can't bind anything new.
-5. **Placement** (§13). *Proposed:* a side track after M10e, ahead of M10h's spoke credentials and M10j. M10h doesn't wait: it ships with no credential on a spoke if Phase 1 isn't merged.
-6. **Showing a value to the person.** There is no verb for it, so Nova Vault never shows a saved password, even to its owner. *Proposed:* keep it that way, so people see values in their own password manager (Phases 2 and 3). The backup recovery key stays as it is: it is shown at tier 3 on the hub's own screen (Conflicts row 4).
+All decided on 2026-10-31; see Owner decisions at the top.
 
 ## NOTES for Track 1
 

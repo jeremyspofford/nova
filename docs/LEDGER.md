@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #251 · Nova Vault and a credential guard: the design, with your decisions**
+- What changed: the plan for Nova's own password vault, and for a separate small "broker" program that alone can read saved passwords and keys, is filed with your decisions. Nova asks the broker to use a credential for a specific site; it never hands the value to Nova's main program or any model.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: nothing is built. Phase 1 (the broker and vault) comes as a side track after M10e. Viewing one of your saved passwords will be possible on the device's own screen, after a passkey or fingerprint check.
+
 **2026-10-31 · #256 · Spending limits for Nova's own work: built, not switched on yet**
 - What changed: Nova can now stop its own scheduled runs and helpers when they take too many steps, use too many tokens, or spend too much on a paid model. The defaults are 24 steps, 150,000 tokens or 50 cents per task, and 300 steps, 1.5M tokens or $5 a day. A stuck loop is stopped by its fifth repeat. Resuming waits for your OK.
 - What you can now do: nothing yet: the limits only take effect once they're wired in, a follow-up.
@@ -245,6 +250,26 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (owner input: Nova Vault and the Credential Broker; the ADR, with the owner's decisions).** The owner-approved design `nova-vault-broker-design-2026-10-31.md` (sha256 `b0b70e64…`), the owner's instruction and their decisions were added to the packet exactly as given (`INPUT-2026-10-31-VAULT-BROKER-INSTRUCTION.md`, `INPUT-2026-10-31-VAULT-BROKER-DECISIONS.md`). Design: `docs/plans/vault-broker.md`.
+- **The broker:**
+  - a separate, minimal process per device, with seven fixed verbs (`list_refs`, `use`, `create`, `update`, `rotate`, `bind`, `share_scope`);
+  - origin binding enforced by the broker, and policy checked on its own authority;
+  - local IPC only;
+  - ledger records carry ref, target and outcome, never values.
+- **The claim:** within Nova, the read capability exists only inside the broker (its process and launcher), never "Nova can never read your passwords".
+- **Phases, in order:**
+  - Phase 1: the broker and Nova Vault. Argon2id, per-item encryption, passkey or biometric unlock, ciphertext sync, no escrow.
+  - Phase 2: 1Password, with a dedicated vault recommended.
+  - Phase 3: optional Vaultwarden and further connectors.
+- **Phase 1's gate:** canary values found nowhere Nova writes, and the broker refusing a non-bound origin even when core asks.
+- **Owner decisions, the same day:**
+  - **Sync:** sealed per-device wraps may sync, as the one exception to "no key material in a form another device can use"; no passphrase, recovery or device unlock key ever moves.
+  - **Language:** TypeScript now, as an ADR-2 exception (Rust stays the end state, revisited at Phase 2 or the first external security review).
+  - **Nova's own keys:** they stay in core for Phase 1.
+  - **Open questions 1–5:** the defaults are accepted.
+  - **Question 6, modified:** the owner may reveal a vault value on the device's own screen, through a broker-rendered view, with passkey or biometric, tier 3, auto-hiding. It is never through a verb, and never to core or a model.
+- **Placement:** a side track after M10e. Nothing in M10e–M10k is reordered.
 
 **2026-10-31 (Amendment B Part 5: hard caps on autonomy cost, PR #256, Track 3).** Plan `docs/plans/cost-caps.md`.
 - **The pieces:** `src/core/caps/`, plus minimal hooks in the runner (`src/runner.js`) and the chat-run worker (`src/chat-run.js`). The hooks are inert until wired (`runner.caps` is null until Track 1 applies the plan's NOTES §1–2).

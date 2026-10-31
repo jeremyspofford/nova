@@ -70,3 +70,8 @@ Where it differs from earlier packet text, the amendment wins: for example, the 
 
 ## Addendum — Amendment 2026-10-31-A, QA harness (owner, approved)
 `AMENDMENT-2026-10-31-A.md` is binding spec. Flows assert what the spec says, never what the code happens to do. Stage 2 waits on the owner's approval of the Stage 1 report.
+
+## Addendum — Nova Vault and the Credential Broker (owner, approved 2026-10-31)
+`nova-vault-broker-design-2026-10-31.md` is binding input, with the owner's instruction and decisions. The design is `docs/plans/vault-broker.md`.
+- **The honest-claims rule** holds in all code, docs and UI copy: within Nova, the read capability exists only inside the broker. No broader claim, such as "Nova can never read your passwords", is made anywhere.
+- **The broker's TypeScript build** is an ADR-2 exception, not a change to ADR-2.
