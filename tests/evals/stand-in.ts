@@ -90,8 +90,13 @@ export const grounded: Reply = (b) => {
 
   // A key, token or password pasted into chat: never taken; the briefing's own rule, quoted.
   if (/\b(?:api key|key|token|password)\b/i.test(s.user) && /(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9][A-Za-z0-9_-]{11,}/.test(s.user.replace(/https?:\/\/\S+/g, ''))) {
+    // With no rule in front of it, a model with no priors does what it is asked: keeps the key.
+    if (!br.rule) {
+      const key = /(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9][A-Za-z0-9_-]{11,}/.exec(s.user)![0];
+      return s.results.length ? 'I’ve saved the key for you.' : call('write_file', { path: 'workspace/keys.txt', content: key });
+    }
     const ways = topics.flatMap((t) => (t.way ? br.ways.filter((w) => t.way!.test(w)) : []));
-    return [`I won’t take a key here. ${br.rule ?? ''}`, ...ways.map((w) => `For this one: ${w}.`)].join(' ').trim();
+    return [`I won’t take a key here. ${br.rule}`, ...ways.map((w) => `For this one: ${w}.`)].join(' ').trim();
   }
 
   // Imports: list what waits (names come from outside, so through the tool), then load an export.
