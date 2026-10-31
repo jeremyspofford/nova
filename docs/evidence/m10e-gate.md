@@ -8,7 +8,7 @@ the console under the in-process supervisor is the stand-in server of `tests/sup
 Kubernetes, Helm or Flux was installed or run. This machine has a real `kubectl` at
 `/usr/local/bin/kubectl`; the tripwire shadows it for the whole suite, and it was never called.
 
-The branch was rebased onto main at `61bcb042` (M10d merged) before the review's fixes, then onto `a79ab31c` (#248 and #250 merged) after them.
+The branch was rebased onto main at `61bcb042` (M10d merged) before the review's fixes, then onto `a79ab31c` (#248 and #250 merged) after them, and onto `844a1271` (#249, the eval harness) last.
 
 **Deferred, said plainly: the `service` change kind is not built.** The ADR's Order lists it in
 M10e, but its artifact is "the definition plus the rendered values" and its gate is GitOps
@@ -17,10 +17,10 @@ the supervisor with typed confirmations, as console releases are.
 
 ## Suite
 
-`npm run check` passes: the token lint, themes, typecheck, and **1216 tests: 1206 pass, 0 fail, 10 skipped** (61 of them M10e's). One earlier full run, before the second rebase, failed two M10c tests (`coding.test.ts`, `coding-review.test.ts`) on a port race under the load (a preview's free port taken first: EADDRINUSE); both files pass alone, 27 of 27, and the next full run was green. The 9 skips are the
+`npm run check` passes: the token lint, themes, typecheck, and **1254 tests: 1243 pass, 0 fail, 11 skipped** (61 of them M10e's; at `844a1271`). One earlier full run, before the second rebase, failed two M10c tests (`coding.test.ts`, `coding-review.test.ts`) on a port race under the load (a preview's free port taken first: EADDRINUSE); both files pass alone, 27 of 27, and the next full run was green. The 9 skips are the
 existing opt-in real-service tests.
 
-`scripts/ui-test.sh` (Chromium in the Playwright container, under the tripwire): **89 tests: 89 pass, 0 fail**.
+`scripts/ui-test.sh` (Chromium in the Playwright container, under the tripwire): **89 tests: 89 pass, 0 fail** (at `a79ab31c`; #249 changed nothing under `ui/`, and CI runs the UI gate at the head).
 
 The run's log, start and end (`npm test` and the UI gate both say it):
 
