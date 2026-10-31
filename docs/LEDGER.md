@@ -23,7 +23,7 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 **2026-10-31 · #245 · The automatic checks skip the long test run for paperwork-only changes**
 - What changed: the checks GitHub runs on each pull request now sort the change: documents only skip the full test run (about 22 minutes); any code or workflow change still runs everything. One always-run check, "gate", sums up the result.
 - What you can now do: Nothing in the app changed: paperwork only (this changes how changes are checked, not Nova).
-- Still unfinished: the before-and-after timings were left "pending" in the pull request. The pull request said main has no branch protection, so nothing yet forces "gate" to pass.
+- Still unfinished: the timing for a code change comes from the next code merge. Measured so far: a documents-only change takes 19–36 seconds (it used to take about 22 minutes), and "gate" became main's required check right after this merged.
 
 **2026-10-31 · #243 · Design: how Nova will run and manage services across your devices**
 - What changed: a design document for a "Service Manager" that starts, watches, moves and rolls back services, using plain programs by default and an optional Kubernetes mode (K3s). Your input and your six decisions on it were filed word for word.
@@ -242,8 +242,6 @@ and `e160e581…`).
 - **One deliberate difference from the instruction's list:** markdown under the folders Nova loads at run time counts as code, not docs: `system/` (the system prompt), `templates/`, `skills/`, `schedules/`, `connectors/` and `design-systems/`. A change there can break a test.
 - **The default:** any file the script doesn't know counts as code.
 
-||||||| parent of df775f41 (docs(packet): Amendment 2026-10-31-B, Launch Readiness, and its research, as given)
-||||||| parent of 911bde48 (docs(m10): the capture data path design resolves the orchestration ADR's open question 1)
 **2026-10-31 (owner decisions on the orchestration ADR).** Same branch and PR (#243). The owner's
 decisions were added to the packet unchanged, below a one-line header, as
 `docs/builder-packet/INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md` (sha256 of the decisions
