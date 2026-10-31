@@ -8,10 +8,12 @@
 import { randomUUID } from 'node:crypto';
 import { CoreError } from './errors.ts';
 import { PRIVACY_MODES, type PrivacyMode } from './envelope.ts';
+import { stricter } from './workers.ts';
 import type { Db } from './db.ts';
 import { redactText, type Log } from './log.ts';
 
-export const ITEM_KINDS = ['memory', 'file', 'skill', 'session', 'standing'] as const;
+// 'outside': outside content a decision model was asked to judge (the ingest screen's state), by hash.
+export const ITEM_KINDS = ['memory', 'file', 'skill', 'session', 'standing', 'outside'] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
 
 export interface ContextItem { kind: ItemKind; ref: string; sha256: string }
@@ -55,10 +57,15 @@ export class Receipts {
   #log: Log;
   #now: () => Date;
 
-  constructor(o: { db: Db; log: Log; now?: () => Date }) {
+  // The person's settings as they are right now (the core passes them): a decision-model receipt is
+  // checked against these, never only against the mode and opt-in its caller names.
+  #live: { mode: () => PrivacyMode; optIn: (f: 'screening' | 'box') => boolean } | null;
+
+  constructor(o: { db: Db; log: Log; now?: () => Date; live?: { mode: () => PrivacyMode; optIn: (f: 'screening' | 'box') => boolean } }) {
     this.#db = o.db;
     this.#log = o.log;
     this.#now = o.now ?? (() => new Date());
+    this.#live = o.live ?? null;
   }
 
   record(input: ReceiptInput): Receipt {
@@ -94,6 +101,12 @@ export class Receipts {
       return { kind: c.kind, ref: redactText(c.ref), sha256: c.sha256 };
     });
 
+    // A decision model's receipt (or one naming an opt-in) is held to the person's settings NOW: the
+    // stricter of the mode it names and the live one, and an opt-in only while it is on.
+    if (this.#live && (r.provider === 'jev' || r.opt_in)) {
+      r.privacy_mode = stricter(r.privacy_mode, this.#live.mode());
+      if (r.opt_in && !this.#live.optIn(r.opt_in)) r.opt_in = null;
+    }
     if (r.privacy_mode === 'local-only' && r.egress !== 'local' && !(r.opt_in === 'screening' && r.provider === 'jev')) {
       const to = r.egress.slice('remote:'.length);
       const known = r.task_id && this.#db.get('SELECT 1 FROM task WHERE id = ?', r.task_id);

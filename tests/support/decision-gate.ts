@@ -55,7 +55,7 @@ export function gateService(o: {
     ...(o.receipt ? { receipt: o.receipt } : {}),
   });
   const t = INGEST_SCREEN_V1;
-  const ask: ScreenAsk = (fields) => service.ask('ingest-screen', fields, { subsystem: 'ingest' });
+  const ask: ScreenAsk = (fields, o) => service.ask('ingest-screen', fields, { subsystem: 'ingest', ...(o ?? {}) });
   // As the core's standing(): an answer would be relied on when a trusted seat may answer now, or
   // the sorting model still may.
   const screening = (): ScreenStanding => {

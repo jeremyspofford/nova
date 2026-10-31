@@ -10,7 +10,8 @@ import { Log, addSecretValue } from './log.ts';
 import { Profile, SECTIONS, type Section } from './profile.ts';
 import { Workspace, workspaceWorker } from './workspace.ts';
 import { Verifier, type Checker } from './verify.ts';
-import { Ledger, STATES, type LanedWorker, type State, type TaskInput } from './ledger.ts';
+import { Ledger, STATES, TASK_CONTEXT, type LanedWorker, type State, type TaskInput } from './ledger.ts';
+import type { PrivacyMode as PrivacyModeOf } from './envelope.ts';
 import { Setup } from './setup.ts';
 import { Extensions } from './extensions.ts';
 import { Design, type Scope } from './design.ts';
@@ -280,7 +281,9 @@ export function createCore(o: CoreOptions) {
   const design = new Design({ extensions, profile, ...(o.designSystems ? { dir: o.designSystems } : {}) });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
   const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)) });
-  const receipts = new Receipts({ db, log, now });
+  // A decision model's receipt is checked against the person's settings as they are at the send.
+  const liveDecisionOptIn = (f: 'screening' | 'box'): boolean => { const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {}); return v.ok && v.settings.opt_in[f]; };
+  const receipts = new Receipts({ db, log, now, live: { mode: () => profile.privacyDefault(), optIn: liveDecisionOptIn } });
   for (const p of design.ensureBuiltins()) log.problem('design', p);
   // Providers (M5a): each enabled one is a ledger worker. A model on one of the person's own
   // devices counts as local.
@@ -373,7 +376,8 @@ export function createCore(o: CoreOptions) {
     hardware: () => models!.hubHardware(),
     jevKey: () => { try { return vault.get('decisions.jev') ?? null; } catch { return null; } },
     legacy: { provider: localModel, old: (id) => templates.get(id) },
-    receipt: (r) => { receipts.record({ task_id: r.task_id ?? undefined, provider: 'jev', model: r.model, purpose: r.purpose, privacy_mode: r.privacy_mode, egress: r.egress, context_items: [], ...(r.opt_in ? { opt_in: r.opt_in } : {}) }); },
+    // The receipt names the task and the hash of what was judged (never the content).
+    receipt: (r) => { receipts.record({ task_id: r.task_id ?? undefined, provider: 'jev', model: r.model, purpose: r.purpose, privacy_mode: r.privacy_mode, egress: r.egress, context_items: [{ kind: 'outside', ref: r.purpose, sha256: r.state_sha256 }], ...(r.opt_in ? { opt_in: r.opt_in } : {}) }); },
     ...(o.decisions?.verdicts ? { verdicts: o.decisions.verdicts } : {}),
     now,
   });
@@ -386,7 +390,22 @@ export function createCore(o: CoreOptions) {
   // and the standing files.
   const { ingest } = wireIngest({
     db, log, home: o.home, now, templates, ledger, verifier,
-    ask: (fields) => decisionService.service.ask('ingest-screen', fields, { subsystem: 'ingest' }),
+    // The screen is never looser than the run's or the task's own mode: the strictest of the mode
+    // the caller names, the mode of the ledger task it runs inside, and (in the service) the
+    // person's setting. The task is named on the record and the receipt.
+    ask: (fields, a) => {
+      const ctx = TASK_CONTEXT.getStore();
+      const task_id = a?.task_id ?? ctx?.task_id ?? null;
+      let taskMode: PrivacyModeOf | undefined = ctx?.task_id === task_id ? ctx?.privacy_mode : undefined;
+      if (!taskMode && task_id) { try { taskMode = ledger.get(task_id).privacy_mode; } catch { /* not a ledger task */ } }
+      const modes = [a?.privacy_mode, taskMode].filter((m): m is PrivacyModeOf => !!m);
+      const privacy_mode = modes.length ? modes.reduce((x, y) => stricter(x, y)) : undefined;
+      return decisionService.service.ask('ingest-screen', fields, {
+        subsystem: 'ingest', task_id, shadow: a?.shadow ?? true,
+        ...(privacy_mode ? { privacy_mode } : {}),
+        ...(a?.content_class ? { content_class: a.content_class } : {}), ...(a?.capture_source ? { capture_source: a.capture_source } : {}),
+      });
+    },
     screening: () => decisionService.standing('ingest-screen'),
     infer: (r) => models!.infer(r),
     secrets: () => { try { return vault.list().map((n) => vault.get(n)).filter((v): v is string => typeof v === 'string'); } catch { return []; } },
@@ -507,7 +526,8 @@ export function createCore(o: CoreOptions) {
     proposer: () => (models!.decidesWithModel(rules.has(PROMOTE.template_id)) ? LOCAL_MODEL_PROVIDER : null),
     // Captured text is screened before triage reads it: audio and meetings as transcripts, the rest
     // as screen text (OCR).
-    screen: (r) => ingest.screen({ text: r.text, source: { kind: r.kind === 'audio' || r.kind === 'meeting' ? 'transcript' : 'ocr', origin: r.origin } }),
+    // Capture-derived text: never to a cloud seat until the owner's per-source opt-in exists (§2.1).
+    screen: (r) => ingest.screen({ text: r.text, from: 'capture', source: { kind: r.kind === 'audio' || r.kind === 'meeting' ? 'transcript' : 'ocr', origin: r.origin } }),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
     secrets: vault,
@@ -698,7 +718,15 @@ export function createCore(o: CoreOptions) {
   }
 
   async function putDecisions(body: Record<string, unknown>) {
-    if (body.use !== undefined) { models!.useForDecisions(body.use); return decisionsView(); }
+    // Nothing sent is dropped in silence: {use} stands alone, and every field must be one we read.
+    if (body.use !== undefined) {
+      const extra = Object.keys(body).filter((k) => k !== 'use');
+      if (extra.length) return new Reply({ error: 'These decision-model choices can’t be used.', problems: [`{use} chooses between the sorting model and the rules, on its own; send ${extra.join(', ')} separately.`] }, {}, 422);
+      models!.useForDecisions(body.use); return decisionsView();
+    }
+    const unknown = Object.keys(body).filter((k) => !['jev', 'tev1', 'opt_in', 'key', 'confirm'].includes(k));
+    if (unknown.length) return new Reply({ error: 'These decision-model choices can’t be used.', problems: [`Nova doesn’t know ${unknown.join(', ')}; it takes jev, tev1, opt_in, key and confirm.`] }, {}, 422);
+    if (body.opt_in !== undefined && (typeof body.opt_in !== 'object' || body.opt_in === null || Array.isArray(body.opt_in) || Object.keys(body.opt_in).some((k) => k !== 'screening' && k !== 'box'))) return new Reply({ error: 'These decision-model choices can’t be used.', problems: ['opt_in must be {screening, box}, each on or off.'] }, {}, 422);
     const { key, confirm, ...choices } = body;
     const was = decisionSettings();
     // What isn't named stays as it was; each opt-in is its own switch.

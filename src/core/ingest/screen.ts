@@ -26,12 +26,29 @@ import { outbound, shingles, type OutboundResult } from './outbound.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { TemplateDef, Templates } from '../decide.ts';
+import type { PrivacyMode } from '../envelope.ts';
 
 export const SOURCE_KINDS = ['web', 'search', 'email', 'file', 'skill', 'ocr', 'transcript', 'qr', 'tool', 'handoff', 'connector'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 export interface Source { kind: SourceKind; origin: string; ref?: string }
 export type Verdict = 'pass' | 'quarantine' | 'block';
-export interface ScreenInput { text?: string; html?: string; headers?: Record<string, string | undefined>; attachments?: Attachment[]; source: Source }
+export interface ScreenInput {
+  text?: string; html?: string; headers?: Record<string, string | undefined>; attachments?: Attachment[]; source: Source;
+  // The privacy mode of the run or task that read it, and that task. The screen is never looser
+  // than the strictest of this and the person's setting (the Decision Service applies it).
+  privacy_mode?: PrivacyMode;
+  task_id?: string | null;
+  // Where it came from inside Nova: 'capture' for anything Capture took in (CAPTURE_DERIVED).
+  from?: 'capture';
+}
+
+// Capture-derived text: anything Capture took in, such as screen text (OCR) and meeting or audio
+// transcripts. The Decision Service applies the owner's rule for this class (decision-service.md
+// §2.1): never a cloud seat in local-first or local-only, and in cloud mode only with that source's
+// own opt-in, which doesn't exist yet. So today it is screened by local seats and Nova's own checks
+// only, in every mode.
+export const CAPTURE_DERIVED = { from: ['capture'] as readonly string[], kinds: ['ocr', 'transcript'] as readonly SourceKind[] };
+export const captureDerived = (i: Pick<ScreenInput, 'from' | 'source'>): boolean => (!!i.from && CAPTURE_DERIVED.from.includes(i.from)) || CAPTURE_DERIVED.kinds.includes(i.source.kind);
 // What a read leaves on the run that made it (plan §5).
 export interface Taint { screen: string; kind: SourceKind; origin: string; verdict: Verdict; max: number | null }
 export interface Screened {
@@ -63,6 +80,13 @@ export const OVERLAP = 200;
 // a page's hidden text. They are asked at most this many at a time, so a long document doesn't put
 // hundreds of requests on a model at once.
 export const SCREEN_CONCURRENCY = 2;
+// Answers from a seat that hasn't passed this template's eval are evidence only. They are asked
+// for at most this many chunks of one piece of content (the Decision Service also keeps a daily
+// budget per seat); past that, an untrusted seat isn't asked at all.
+export const SHADOW_CHUNKS = 2;
+// The longest one screen may take. Past it, nothing more is asked and the content is held back as
+// unsure, never passed on part of it.
+export const SCREEN_TIME_LIMIT_MS = 180_000;
 const MAX_EXTRACT = 20_000;
 
 export const QUESTIONS = ['direct_instruction', 'hidden_instruction', 'exfiltration', 'impersonation', 'unrequested_action'] as const;
@@ -163,7 +187,10 @@ export interface ScreenAnswer {
   model: string | null;
   answers: Record<string, { type: string; noul?: number }> | null;
 }
-export type ScreenAsk = (fields: { source_kind: string; origin: string; content: string }) => Promise<ScreenAnswer | null>;
+// `shadow`: whether an untrusted seat may be asked for evidence on this chunk. `content_class`:
+// 'capture-derived' for capture-derived text, which the service routes by its own rule.
+export interface ScreenAskOptions { privacy_mode?: PrivacyMode; task_id?: string | null; shadow: boolean; content_class?: 'capture-derived'; capture_source?: string }
+export type ScreenAsk = (fields: { source_kind: string; origin: string; content: string }, o?: ScreenAskOptions) => Promise<ScreenAnswer | null>;
 // Whether a screen answer would be relied on now, by whom, and the Decision Service's view of each
 // seat in plain words, for Health.
 export interface ScreenStanding { relied: boolean; who: string | null; lines: string[] }
@@ -185,6 +212,8 @@ export interface IngestOptions {
   memory?: () => string[];
   standing?: () => string[];
   now?: () => Date;
+  // The longest one screen may take (SCREEN_TIME_LIMIT_MS; tests shorten it).
+  timeLimitMs?: number;
 }
 
 export interface Candidate { id: string; at: string; op: 'remember' | 'note' | 'forget'; kind: string | null; content: string | null; target: string | null; replaces: string | null; source: string | null; taint: Taint[] }
@@ -230,7 +259,11 @@ export class Ingest {
     const c = check(input);
     const { parts, partial } = chunks(judged(c));
     // The checks are already done (synchronously); the model runs on the chunks.
-    const noul = await this.#noul(parts, source);
+    const noul = await this.#noul(parts, source, {
+      ...(input.privacy_mode ? { privacy_mode: input.privacy_mode } : {}),
+      ...(input.task_id ? { task_id: input.task_id } : {}),
+      ...(captureDerived({ source, ...(input.from ? { from: input.from } : {}) }) ? { content_class: 'capture-derived' as const, capture_source: source.kind } : {}),
+    });
     const r = this.#settle(input, source, c, noul?.scores ?? null, partial, noul?.model ?? null);
     if (r.verdict === 'quarantine' && noul) {
       const extract = await this.#readFacts(c, source).catch(() => null);
@@ -353,12 +386,15 @@ export class Ingest {
   // time. Null (no screen: the deterministic layer and quarantine decide) unless EVERY chunk got a
   // trusted answer with all five probabilities in [0, 1]. Once one chunk has no trusted answer the
   // outcome is settled (held back), so chunks not yet asked aren't sent anywhere.
-  async #noul(parts: string[], source: Source): Promise<{ scores: Record<string, number>; model: string } | null> {
+  //
+  // Untrusted seats are asked for evidence on the first SHADOW_CHUNKS chunks only. The whole screen
+  // has SCREEN_TIME_LIMIT_MS: past it nothing more is asked, and the content is held back.
+  async #noul(parts: string[], source: Source, o: Omit<ScreenAskOptions, 'shadow'>): Promise<{ scores: Record<string, number>; model: string } | null> {
     if (!this.hasModel()) return null;
     const ask = this.#o.ask!;
     type One = { model: string; answers: Record<string, number> };
-    const one = async (part: string): Promise<One | null> => {
-      const d = await ask({ source_kind: source.kind, origin: source.origin, content: fence(part) });
+    const one = async (part: string, i: number): Promise<One | null> => {
+      const d = await ask({ source_kind: source.kind, origin: source.origin, content: fence(part) }, { ...o, shadow: i < SHADOW_CHUNKS });
       if (!d || (d.trust !== 'verdict' && d.trust !== 'legacy') || !d.answers) return null;
       const answers: Record<string, number> = {};
       for (const q of QUESTIONS) {
@@ -372,18 +408,27 @@ export class Ingest {
     let next = 0;
     let settled = false;
     let failed: Error | null = null;
-    // A failure settles it too, so no other worker goes on sending chunks.
-    await Promise.all(Array.from({ length: Math.min(SCREEN_CONCURRENCY, parts.length) }, async () => {
+    let late = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // A failure settles it too, so no other worker goes on sending chunks; so does the time limit,
+    // which doesn't wait for a request in flight.
+    const timeUp = new Promise<void>((r) => { timer = setTimeout(() => { late = true; settled = true; r(); }, this.#o.timeLimitMs ?? SCREEN_TIME_LIMIT_MS); });
+    const work = Promise.all(Array.from({ length: Math.min(SCREEN_CONCURRENCY, parts.length) }, async () => {
       while (!settled) {
         const i = next++;
         if (i >= parts.length) return;
         let a: One | null = null;
-        try { a = await one(parts[i]!); } catch (e) { failed ??= e as Error; }
+        try { a = await one(parts[i]!, i); } catch (e) { failed ??= e as Error; }
+        if (settled) return;
         if (!a) { settled = true; return; }
         got[i] = a;
       }
     }));
-    if (failed) this.#o.log?.warn('ingest', 'The decision model couldn’t screen some outside content; it is held back instead.', { error: (failed as Error).message });
+    await Promise.race([work, timeUp]);
+    clearTimeout(timer);
+    // Never the error's words: they may carry what a seat said back (content).
+    if (failed) this.#o.log?.warn('ingest', 'The decision model couldn’t screen some outside content; it is held back instead.', { error: (failed as Error).name });
+    if (late) this.#o.log?.warn('ingest', 'Screening some outside content took longer than Nova allows; it is held back instead.', { chunks: parts.length });
     if (settled || got.some((a) => a === null)) return null;
     const scores: Record<string, number> = {};
     for (const q of QUESTIONS) scores[q] = Math.max(...got.map((a) => a!.answers[q]!));

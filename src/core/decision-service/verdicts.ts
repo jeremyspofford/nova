@@ -12,6 +12,9 @@ import type { SeatId } from './types.ts';
 // Part 1's verdicts: ingest-screen v1 on Tev1, per size and digest.
 export const VERDICTS_FILE = new URL('./tev1-verdicts.json', import.meta.url);
 export const PART1_TEMPLATE = { template_id: 'ingest-screen', version: 1 } as const;
+// The wording Part 1's eval ran on (registry.ts wordingOf(INGEST_SCREEN_V1)). Its verdicts count only
+// while ingest-screen v1 still reads exactly so; CI checks the template against it.
+export const PART1_WORDING = '444bb949c7426d08242b8fc191f7078ee37e8b88a15b4d20892c930cee370f0f';
 
 export type SizeStatus = 'pass' | 'fail' | 'not-run';
 export interface SizeVerdict {
@@ -52,8 +55,9 @@ export function relianceFor(v: VerdictFile | null, model: Size | null, digest: s
 
 // ---- the general store --------------------------------------------------------------------------
 
-export interface VerdictRecord { template_id: string; version: number; seat: SeatId; model: string; status: SizeStatus; why: string; run_at: string | null; ref: string }
-export interface Lookup { trusted: boolean; why: string; ref: string | null }
+// `wording_sha256`: the template wording the eval ran on (registry.ts wordingOf); absent, unpinned.
+export interface VerdictRecord { template_id: string; version: number; seat: SeatId; model: string; status: SizeStatus; why: string; run_at: string | null; ref: string; wording_sha256?: string }
+export interface Lookup { trusted: boolean; why: string; ref: string | null; wording?: string | null }
 
 export interface VerdictStore {
   // Whether this exact tuple has a passing verdict.
@@ -72,7 +76,7 @@ export function memoryVerdicts(records: VerdictRecord[]): VerdictStore {
       const r = records.find((x) => same(x, id, v) && x.seat === seat && x.model === model);
       if (!r) return { trusted: false, why: `${id} v${v} has no eval verdict on ${model}; its answers are evidence only until the eval runs on that exact model.`, ref: null };
       if (r.status !== 'pass') return { trusted: false, why: `${id} v${v} ${r.status === 'fail' ? 'failed' : 'hasn’t run'} its eval on ${model} (${r.why}); its answers are evidence only.`, ref: r.ref };
-      return { trusted: true, why: `${id} v${v} passed its eval on ${model}${r.run_at ? ` (${r.run_at.slice(0, 10)})` : ''}.`, ref: r.ref };
+      return { trusted: true, why: `${id} v${v} passed its eval on ${model}${r.run_at ? ` (${r.run_at.slice(0, 10)})` : ''}.`, ref: r.ref, wording: r.wording_sha256 ?? null };
     },
     passed: (id, v) => records.some((r) => same(r, id, v) && r.status === 'pass' && (r.seat === 'jev' || r.seat === 'tev1')),
     forModel: (seat, model) => records.filter((r) => r.seat === seat && r.model === model),
@@ -89,7 +93,7 @@ export function fileRecords(v: VerdictFile | null): VerdictRecord[] {
     .map(([size, s]) => ({
       ...PART1_TEMPLATE, seat: 'tev1' as const, model: modelId(size, s.digest!),
       status: ok ? s.status : 'not-run', why: ok ? s.why : 'recorded against other bounds',
-      run_at: s.run_at, ref: `tev1-verdicts.json#${size}@${v.bounds_commit ?? 'unpinned'}`,
+      run_at: s.run_at, ref: `tev1-verdicts.json#${size}@${v.bounds_commit ?? 'unpinned'}`, wording_sha256: PART1_WORDING,
     }));
 }
 
