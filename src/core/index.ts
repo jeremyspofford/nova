@@ -49,6 +49,8 @@ import { Coding, type CodingOptions } from './coding/index.ts';
 import { codingRoutes } from './coding/routes.ts';
 import { Infra, type InfraOptions } from './infra/index.ts';
 import { infraRoutes } from './infra/routes.ts';
+import { Network, type NetworkOptions } from './network/index.ts';
+import { networkRoutes } from './network/routes.ts';
 import { secretName } from './providers/types.ts';
 import { Resilience } from './resilience/index.ts';
 import { FactoryReset } from './resilience/reset.ts';
@@ -165,6 +167,8 @@ export interface CoreOptions {
   // Infrastructure through chat (M10d), for tests: the PATH the plan/apply tool is found on (the
   // stand-in's), whose home folder a project may never be, and the tool's timeout.
   infra?: Pick<InfraOptions, 'path' | 'userHome' | 'timeoutS'>;
+  // Networking through chat (M10d), for tests: the dead-man's switch's window in milliseconds.
+  network?: Pick<NetworkOptions, 'windowMs'>;
   // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
   hubPorts?: () => number[];
   // How the browser worker starts a browser: Chromium, or a stand-in in tests.
@@ -407,6 +411,17 @@ export function createCore(o: CoreOptions) {
     notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'infra', name: 'Infrastructure', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('infra', 'Nova couldn’t tell you about an infrastructure run.', { error: (e as Error).message })); },
   });
   ledger.workers.set(infra.worker.id, infra.worker);
+  // Networking through chat (M10d): snapshot and diff (tier 1), apply (tier 3) after a checkpoint,
+  // then the dead-man's switch on the device mesh: no contact from the person's devices within the
+  // window (mesh.contact_window_s), and Nova puts the snapshot back by itself.
+  const network = new Network({
+    db, log, home: o.home, ledger, verifier, vault, devices, now, privacy: () => profile.privacyDefault(),
+    checkpoint: (reason) => checkpoints.auto(reason),
+    windowS: () => { const v = profile.get<number>('mesh', 'contact_window_s'); return typeof v === 'number' ? v : 300; },
+    ...(o.network ?? {}),
+    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'network', name: 'Network', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('network', 'Nova couldn’t tell you about a network change.', { error: (e as Error).message })); },
+  });
+  ledger.workers.set(network.worker.id, network.worker);
   // Every forget reaches each checkpoint (and a restore that is staged).
   backups.also((table, ids, words) => checkpoints.forget(table, ids, words));
   // The change pipeline and the foundry (M7a): changes to Nova go through gates, never live edits.
@@ -1029,6 +1044,8 @@ export function createCore(o: CoreOptions) {
     ...codingRoutes(coding),
     // ---- infrastructure through chat (M10d) ----
     ...infraRoutes(infra),
+    // ---- networking through chat (M10d) ----
+    ...networkRoutes(network),
     // ---- browser work with takeover (M5 plan §3) ----
     ...browserRoutes(browser, {
       home: o.home,
@@ -1063,6 +1080,8 @@ export function createCore(o: CoreOptions) {
     void keep.sweep().catch((e) => log.warn('resilience', 'The repair sweep stumbled.', { error: (e as Error).message }));
     // Every infrastructure project against its budget (M10d).
     try { infra.sweep(); } catch (e) { log.warn('infra', 'The budget sweep stumbled.', { error: (e as Error).message }); }
+    // The dead-man's switch, on the clock as well as its timers (M10d).
+    try { network.sweep(); } catch (e) { log.warn('network', 'The dead-man’s switch sweep stumbled.', { error: (e as Error).message }); }
   };
   // The hub's own work: the ledger, recovered, and the heartbeat. A standby runs neither.
   function startHub() {
@@ -1070,6 +1089,7 @@ export function createCore(o: CoreOptions) {
     providers.recover();
     coding.recover();
     infra.recover();
+    network.recover();
     // A sandbox copy reaches nothing outside itself and keeps no clock of its own: the pipeline
     // drives it.
     if (o.sandbox) return recovered;
@@ -1088,6 +1108,7 @@ export function createCore(o: CoreOptions) {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
     changes.stop();
+    network.close();
     models!.stop();
     providers.stop();
     connectors.stop().catch(() => {});
@@ -1130,7 +1151,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     self,
-    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network,
     ingest, vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
@@ -1193,6 +1214,7 @@ export function createCore(o: CoreOptions) {
       await browser.close();
       computer.close();
       coding.close();
+      network.close();
       await capture.stop();
       await Promise.race([ticking.then(() => ledger.idle()), new Promise((r) => setTimeout(r, 2000).unref())]);
       db.close();

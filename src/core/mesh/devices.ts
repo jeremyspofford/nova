@@ -196,8 +196,10 @@ export class Devices extends EventEmitter {
     return { epoch: this.state().epoch, revoked };
   }
 
-  // Heard from now. Written at most every 30 s per device.
+  // Heard from now. Written at most every 30 s per device. Every call is also a `heard` event, before
+  // the throttle: a request a trusted device's session just made (M10d's dead-man's switch listens).
   touch(id: string): void {
+    this.emit('heard', id);
     const now = this.#now().getTime();
     if (now - (this.#touched.get(id) ?? 0) < TOUCH_EVERY_MS) return;
     this.#touched.set(id, now);
