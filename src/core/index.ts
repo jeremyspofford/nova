@@ -141,6 +141,9 @@ export { IMPORT_DIR } from './self.ts';
 export type { Self, Era2State } from './self.ts';
 // The eval harness (Amendment 2026-10-31-B Part 4): graders, suites, the model-swap scorecard.
 export * as evals from './evals/index.ts';
+// Hard caps on autonomy cost (Amendment 2026-10-31-B Part 5): ceilings, the meter, the loop detector.
+export { Caps, Meter, DEFAULT_LIMITS, LOOP, CHARS_PER_TOKEN, SPEND_DIR, signature, weightOf, capsRoutes } from './caps/index.ts';
+export type { Limits, Ceilings, Spend, Stop } from './caps/index.ts';
 
 export interface CoreOptions {
   home: string;

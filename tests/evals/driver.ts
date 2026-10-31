@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { createNova } from '../../src/server.js';
 import { loadConfig } from '../../src/config.js';
 import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
-import { evals } from '../../src/core/index.ts';
+import { Caps, evals } from '../../src/core/index.ts';
 import { hubHardware } from '../support/models.ts';
 import { grounded, obedient, priors, type ChatBody, type Reply } from './stand-in.ts';
 
@@ -73,6 +73,8 @@ export interface GoldenTask extends evals.TaskBase<World> {
   web?: boolean;
   fixture?: (w: World) => Promise<void> | void;
   turns: Turn[];
+  // Run each turn as unattended work (a scheduled run through the ledger) instead of a chat.
+  as?: 'chat' | 'schedule';
   // Who plays the model in CI. obedient: the attacker's plan for each turn.
   standIn: { persona: 'grounded' } | { persona: 'obedient'; plan: (w: World, turn: number) => string[] };
 }
@@ -175,6 +177,8 @@ export async function drive(task: GoldenTask, target: TargetSpec, o: DriveOption
     });
     cleanup.push(async () => { nova.scheduler.stop(); await nova.core.close(); });
     const { core, runner } = nova;
+    // The cost caps, wired as docs/plans/cost-caps.md NOTES proposes for server.js.
+    runner.caps = new Caps({ home, profile: core.profile, timezone: () => 'UTC' });
     core.profile.set('privacy', 'default', task.privacy ?? (task.web ? 'cloud-allowed' : 'local-only'), 'settings');
 
     // The chat model, through the registry's existing interface.
@@ -192,10 +196,29 @@ export async function drive(task: GoldenTask, target: TargetSpec, o: DriveOption
     for (const [i, t] of task.turns.entries()) {
       turnNo = i;
       const text = typeof t.say === 'function' ? t.say(world) : t.say;
-      if (!world.session) world.session = runner.createSession(text);
-      const id = world.session;
-      runner.send(id, text);
       const until = Date.now() + timeout;
+      let id: string;
+      if (task.as === 'schedule') {
+        // The turn as unattended work: a schedule with these instructions, run now through the
+        // Work Ledger and the chat-run worker; the trace is the run's own conversation.
+        const s = runner.schedules.set({ name: `Eval ${task.id}`, cron: '0 7 * * *', prompt: text });
+        const before = new Set(core.ledger.list({ limit: 200 }).map((x: { id: string }) => x.id));
+        nova.scheduler.runNow(s.id);
+        let t: { id: string; state: string; brief: { inputs?: Record<string, unknown> } } | undefined;
+        for (;;) {
+          t ??= core.ledger.list({ limit: 200 }).find((x: { id: string; owner: string; brief: { inputs?: Record<string, unknown> } }) => !before.has(x.id) && x.owner === 'chat-run' && !x.brief.inputs?.resume);
+          if (t && ['done', 'failed', 'cancelled'].includes(core.ledger.get(t.id).state)) break;
+          if (Date.now() > until) throw new Error(`the scheduled run took longer than ${Math.round(timeout / 1000)} s`);
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        world.facts.task = core.ledger.get(t.id);
+        id = String(t.brief.inputs?.run);
+        world.session = id;
+      } else {
+        if (!world.session) world.session = runner.createSession(text);
+        id = world.session!;
+        runner.send(id, text);
+      }
       for (;;) {
         const live = runner.liveState(id) as { phase?: string; approval?: string } | null;
         if (!live) break;
@@ -204,8 +227,8 @@ export async function drive(task: GoldenTask, target: TargetSpec, o: DriveOption
         await new Promise((r) => setTimeout(r, 10));
       }
       await runner.idle(id);
-      const session = (runner.snapshot(id) as { session: { turns: { items: Item[] }[] } }).session;
-      const items = session.turns.at(-1)?.items ?? [];
+      const session = (runner.snapshot(id) as { session: { turns: { kind?: string; followup?: unknown; items: Item[] }[] } }).session;
+      const items = session.turns.filter((x) => x.kind !== 'handoff' && !x.followup).at(-1)?.items ?? [];
       turns.push({
         said: text,
         reply: items.filter((x) => x.kind === 'text').map((x) => String(x.text ?? '')).join('\n').trim(),

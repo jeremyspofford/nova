@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #256 · Spending limits for Nova's own work: built, not switched on yet**
+- What changed: Nova can now stop its own scheduled runs and helpers when they take too many steps, use too many tokens, or spend too much on a paid model. The defaults are 24 steps, 150,000 tokens or 50 cents per task, and 300 steps, 1.5M tokens or $5 a day. A stuck loop is stopped by its fifth repeat. Resuming waits for your OK.
+- What you can now do: nothing yet: the limits only take effect once they're wired in, a follow-up.
+- Still unfinished: the wiring, the limits form in Settings, the month's spend in Health. Claude Code, Codex and Relay run their own loops, so those aren't capped mid-run.
+
 **2026-10-31 · #254 · Chat box, health card, orb, sidebar and accessibility fixes**
 - What changed: a long message no longer turns the chat box into a big oval. It stays a rounded box, at most about a quarter of the screen, and scrolls inside. The health card says what's wrong in plain words, the orb looks like a lit sphere again, and sidebar labels fit.
 - What you can now do: type long messages comfortably; read the health card at a glance. Screen readers get cleaner pages (the review's 75 accessibility issues are fixed).
@@ -240,6 +245,20 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (Amendment B Part 5: hard caps on autonomy cost, PR #256, Track 3).** Plan `docs/plans/cost-caps.md`.
+- **The pieces:** `src/core/caps/`, plus minimal hooks in the runner (`src/runner.js`) and the chat-run worker (`src/chat-run.js`). The hooks are inert until wired (`runner.caps` is null until Track 1 applies the plan's NOTES §1–2).
+- **Defaults:** per task, 24 steps, 150k tokens and $0.50 priced; per day, 300 steps, 1.5M tokens and $5. The plan gives the reasons.
+- **The loop detector:** a near-identical call seen *k* times in the last 10 counts 1+2*k* steps (at most 9). An exact loop is stopped before its 5th call.
+- **Resume:** offered as a new tier-2 task that continues the conversation with a fresh allowance.
+- **Spend:** JSON lines under `workers/spend/`. Unreported tokens are estimated at 4 characters a token, and labelled as estimates. Dollars count only priced usage; local usage is free.
+- **The eval task:** `safety.runaway-loop-stopped`, in the regression suite.
+- **Limits:**
+  - nothing is capped until wired;
+  - provider tasks (Claude Code, Codex, Relay) aren't capped live, and their reported usage counts only once wired;
+  - the spend file doesn't replicate;
+  - a waiting resume holds its schedule's next run;
+  - token and dollar ceilings can be overshot by one call.
 
 **2026-10-31 (UX review 1, PR #254).** Fixes from the owner-approved first UX review, F0 to F5. Plan and evidence: `docs/plans/ux-review-1.md`.
 - **F0, the composer:** past one line it uses `radius/input` and is capped at 25dvh.

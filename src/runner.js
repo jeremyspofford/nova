@@ -105,6 +105,11 @@ export class Runner extends EventEmitter {
     this.helpers = null; // set by the server: where delegate hands work
     this.coding = null; // set by the server: coding runs (the core's, M10c)
     this.ops = null; // set by the server: infrastructure, networking and accounts (the core's, M10d)
+    // Cost caps (Amendment 2026-10-31-B Part 5), set by the server: the core's Caps. Each run of a
+    // ledger task (the chat-run worker says which, in runTasks) is metered and capped; a person's
+    // own conversation is metered only. Without it, nothing here changes.
+    this.caps = null;
+    this.runTasks = new Map(); // sessionId → the ledger task its run is doing
   }
 
   record(sessionId, ev) {
@@ -158,7 +163,8 @@ export class Runner extends EventEmitter {
   // What a run (scheduled, or a helper's) hands back: its writing after the
   // last tool it used, or why there's none.
   report(sessionId) {
-    const turn = reduce(this.store.read(sessionId)).turns[0];
+    // The run's last turn: a run resumed after a cost ceiling reports its resumption.
+    const turn = lastRunTurn(reduce(this.store.read(sessionId)));
     if (!turn) return { ok: false, text: '', failure: 'It never started.', stopped: false };
     const lastTool = turn.items.findLastIndex((i) => i.kind === 'tool');
     const text = turn.items.slice(lastTool + 1).filter((i) => i.kind === 'text').map((i) => i.text).join('\n\n').trim();
@@ -307,6 +313,10 @@ export class Runner extends EventEmitter {
     for (const s of this.skills.match(question).filter((x) => !this.skillHeld(x.id))) this.follow(sessionId, tag, run, s, 'matched');
     // What this Nova is right now, from its own registries (core self.ts), fresh for every turn.
     const briefing = run.helper || !this.self ? '' : await this.self.briefing().catch((e) => `# This Nova, right now\n\nNova couldn't read its own state for this turn: ${e.message}`);
+    // Cost caps: a ledger task's run is capped; anything else is only metered.
+    const task = this.runTasks.get(sessionId) ?? null;
+    const meter = this.caps?.meter({ task_id: task, session_id: sessionId, capped: !!task && run.alone }) ?? null;
+    const ceiling = (stop) => this.record(sessionId, { type: 'error', ...tag, message: stop.words, detail: `cost_ceiling:${stop.scope}:${stop.what}` });
 
     for (let step = 0; step <= this.config.maxSteps; step++) {
       // Again before every model call: the setting can tighten while a run waits for an OK.
@@ -336,9 +346,11 @@ export class Runner extends EventEmitter {
       // A chat model that writes its own receipts (Nova's local models, M6b) gets the draft instead:
       // it knows where each call really went, local or the cloud fallback.
       const chat = this.chat();
+      const stopAt = meter?.check(chat ? { model: chat.model, where: chat.egress } : { model: this.config.agentCmd, where: this.config.agentEgress === 'remote' ? 'remote' : 'local' });
+      if (stopAt) { ceiling(stopAt); return; }
       const draft = this.receipt(sessionId, run, mode, { system, prompt, recall });
       if (!chat?.ownReceipt) this.identity?.receipt?.(draft);
-      const { text, aborted } = await (chat ? (o) => chat.call(o) : this.agent)({
+      const { text, aborted, usage } = await (chat ? (o) => chat.call(o) : this.agent)({
         ...(chat?.ownReceipt ? { receipt: draft, privacy: mode } : {}),
         cmd: this.config.agentCmd,
         system,
@@ -355,6 +367,8 @@ export class Runner extends EventEmitter {
           this.emit('delta', sessionId, { turn, attempt, text: visible });
         },
       });
+
+      meter?.model({ provider: draft.provider, model: draft.model, where: chat ? chat.egress : (this.config.agentEgress === 'remote' ? 'remote' : 'local'), usage, sent: system.length + prompt.length, received: String(text ?? streamed).length });
 
       if (aborted) {
         if (streamed.trim()) this.record(sessionId, { type: 'assistant', ...tag, id: shortId(), text: streamed.trim() });
@@ -373,6 +387,10 @@ export class Runner extends EventEmitter {
         this.record(sessionId, { type: 'error', ...tag, message: `Nova stopped after ${this.config.maxSteps} tool steps in one reply, to stay safe.`, detail: 'max_tool_steps reached' });
         return;
       }
+
+      // A tool step counts toward the ceilings (a repeat counts extra), and is refused past one.
+      const stopStep = call ? meter?.step(call) : null;
+      if (stopStep) { ceiling(stopStep); return; }
 
       const id = shortId();
       const tool = TOOLS[call?.name];
@@ -804,4 +822,10 @@ export class Runner extends EventEmitter {
 
 export class BusyError extends Error {
   constructor() { super('Nova is still replying in this conversation.'); }
+}
+
+// A run's last turn of its own work (not a report handed in, not Nova's word on one): the turn a
+// resumed run (after a cost ceiling) reports from; for a run of one turn, its only turn.
+export function lastRunTurn(session) {
+  return session.turns.filter((t) => t.kind !== 'handoff' && !t.followup).at(-1) ?? null;
 }
