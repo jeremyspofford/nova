@@ -256,6 +256,21 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
+- **The bands are derived, not round numbers:**
+  - each region has a minimum, computed from the design system's own tokens: the main column is 45ch plus its padding and scrollbar gutters; a card is 20ch plus its padding; the right column is one card plus its padding and scrollbar; the rail is `layout/rail-width`;
+  - the three-column band (rail, centre, right column) starts at their sum, and the two-column band at `max(600px, rail + main)`;
+  - they are `ui/`-declared custom properties in `layout.css`, not schema tokens, so no package changes. `shell.js` measures them at run time and again on a live swap or a text-size change.
+  - In the container, Orb Teal and Companion Light enter three columns at 851.6 px, Paper at 832.1, Aurora at 770.2, Nova at 752.2–793.1 and Obsidian at 734.1–773.6.
+- **Under the three-column band,** a flat tablet is the rail and one column, with the right column's cards on Home. Half-open postures keep their second pane: side by side where both fit or on a real hinge, stacked otherwise.
+- **M9's second-pane rule** ("every expanded width gives its extra room to a second pane") now applies from the three-column band, and Settings keeps its sidebar from 840 px. Between 840 px and the band, the centre keeps `layout/content-max`, so it never stretches.
+- **Cards** stack below the card minimum, never squeeze. A device row moves its pill under the words rather than over them.
+- **Safe area:** the shell keeps each inset clear once (`viewport-fit=cover`). No excess padding was found: the empty band at the top of the owner's screenshot is the iOS status bar above Nova's top bar.
+  - Drawing under the status bar (`black-translucent`) is left to the owner, because it turns the status text white over the light designs.
+- **The gate:**
+  - `tests/ui/fold-postures.test.ts` runs in the UI gate, in Chromium and WebKit: the review's 10 postures × 9 views, every design system at 560–1440 px, 20 screenshot baselines (2% tolerance) and the safe area.
+  - The posture sweep and M9 foldable 2 follow the derived bands.
+
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:
   1. sensitive-content detection before indexing or archiving;
