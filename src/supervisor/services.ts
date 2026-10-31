@@ -22,7 +22,7 @@
 // own process group, and the whole group is ended with it.
 import { createHash } from 'node:crypto';
 import { createServer, connect, type Server, type Socket } from 'node:net';
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { totalmem } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -85,6 +85,9 @@ interface Rec {
   health: { ok: boolean | null; checked_at: string | null; said: string | null };
   versions: VersionRec[];
   history: { at: string; version: string; outcome: string; said: string }[];
+  // The processes running for it when this was written: a supervisor that was killed leaves them,
+  // and the next one ends them before it starts its own.
+  procs?: { pid: number; version: string }[];
 }
 interface Instance { version: string; proc: ServerProcess; ports: Record<string, number>; state: string }
 interface Runtime {
@@ -333,6 +336,7 @@ export class SupervisorDriver implements ServiceDriver {
     }
     rec.previous = null;
     rec.soak_until = null;
+    rt.crashes.reset();
     if (cur) this.#version(rec, cur, 'rolled_back', o.reason);
     this.#version(rec, target, 'live', 'Live again.');
     this.#history(rec, target, o.auto ? 'rolled back' : 'went back', `${o.reason}${cur ? ` (from ${cur})` : ''}`);
@@ -350,7 +354,6 @@ export class SupervisorDriver implements ServiceDriver {
     for (const p of def.ports) { const f = await this.#forwarder(rt, p.name, p.port); if (f.ok) rt.forwarders.get(p.name)!.target = started.inst.ports[p.name] ?? null; }
     rec.live = def.version;
     rec.held = null;
-    rt.crashes.reset();
     rt.failing = 0;
     this.#watch(rec.service, started.inst);
     return { ok: true, said: `${def.version} is running.` };
@@ -382,6 +385,7 @@ export class SupervisorDriver implements ServiceDriver {
 
   // After the supervisor starts: every live service that isn't held runs again, and soaks go on.
   async resume(): Promise<void> {
+    for (const rec of this.#recs.values()) this.#endLeftovers(rec);
     for (const rec of this.#recs.values()) {
       if (!rec.live || rec.held) continue;
       const def = this.#def(rec.service, rec.live);
@@ -712,7 +716,29 @@ export class SupervisorDriver implements ServiceDriver {
     } catch { /* none yet */ }
   }
 
+  // A supervisor that was killed (not stopped) leaves its services running, each in its own process
+  // group. Ended here, whole groups, but only a process that is still one of ours: its working
+  // folder is that version's slot (read from /proc, so on Linux; elsewhere it is left, and said).
+  #endLeftovers(rec: Rec): void {
+    for (const p of rec.procs ?? []) {
+      if (!Number.isInteger(p.pid) || p.pid <= 1 || !VERSION.test(p.version)) continue;
+      let cwd: string | null = null;
+      try { cwd = readlinkSync(`/proc/${p.pid}/cwd`); } catch { /* gone, or no /proc */ }
+      if (cwd === this.#slot(rec.service, p.version)) {
+        try { process.kill(-p.pid, 'SIGKILL'); } catch { try { process.kill(p.pid, 'SIGKILL'); } catch { /* gone */ } }
+        this.#say(`${rec.service} ${p.version} (process ${p.pid}) was still running from a supervisor that stopped without ending it; it was ended.`);
+      } else if (cwd === null && process.platform !== 'linux' && pidAlive(p.pid)) {
+        this.#say(`${rec.service} ${p.version} may still be running as process ${p.pid} from before; it wasn’t ended, as it can’t be told apart from another program here.`);
+      }
+    }
+    rec.procs = [];
+  }
+
   #save(): void {
+    for (const rec of this.#recs.values()) {
+      const rt = this.#rt.get(rec.service);
+      rec.procs = [rt?.live, rt?.alongside].flatMap((i) => (i?.proc.pid && i.proc.alive ? [{ pid: i.proc.pid, version: i.version }] : []));
+    }
     const tmp = `${this.file}.tmp`;
     writeFileSync(tmp, `${JSON.stringify({ v: 1, services: [...this.#recs.values()] }, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, this.file);
@@ -768,6 +794,10 @@ export function freePort(): Promise<number> {
   });
 }
 
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
 function readOr(path: string): string | null {
   try { return readFileSync(path, 'utf8'); } catch { return null; }
 }
@@ -790,7 +820,13 @@ export class Forwarder {
         const target = this.target;
         if (!target) { client.destroy(); return; }
         const up = connect(target, '127.0.0.1');
-        for (const x of [client, up]) { this.#sockets.add(x); x.once('close', () => this.#sockets.delete(x)); x.on('error', () => { client.destroy(); up.destroy(); }); }
+        // Either side gone, both go: a client kept alive to a version that stopped connects again,
+        // to the live one.
+        for (const x of [client, up]) {
+          this.#sockets.add(x);
+          x.once('close', () => { this.#sockets.delete(x); client.destroy(); up.destroy(); });
+          x.on('error', () => { client.destroy(); up.destroy(); });
+        }
         client.pipe(up);
         up.pipe(client);
       });

@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { request } from 'node:http';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { platformKey, type ServiceDefinition } from '../../src/core/index.ts';
@@ -50,13 +51,24 @@ export function standIn(o: { version: string; port: number; file?: string; servi
   };
 }
 
+// One request on a new connection (no keep-alive), so each one says who answers now.
+export function call(port: number, path: string, o: { method?: string; body?: string } = {}): Promise<{ status: number; body: any } | null> {
+  return new Promise((resolve) => {
+    const req = request({ host: '127.0.0.1', port, path, method: o.method ?? 'GET', agent: false, timeout: 3000 }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => { const text = Buffer.concat(chunks).toString('utf8'); let body: any = text; try { body = JSON.parse(text); } catch { /* text */ } resolve({ status: res.statusCode ?? 0, body }); });
+      res.on('error', () => resolve(null));
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end(o.body);
+  });
+}
+
 export async function whoami(port: number): Promise<{ version: string; pid: number; flavour: string | null; home: string } | null> {
-  try {
-    const r = await fetch(`http://127.0.0.1:${port}/whoami`, { signal: AbortSignal.timeout(3000) });
-    return r.ok ? await r.json() as { version: string; pid: number; flavour: string | null; home: string } : null;
-  } catch {
-    return null;
-  }
+  const r = await call(port, '/whoami');
+  return r && r.status === 200 ? r.body as { version: string; pid: number; flavour: string | null; home: string } : null;
 }
 
 export function alive(pid: number): boolean {
