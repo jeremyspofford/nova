@@ -17,6 +17,35 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10b: the second review of PR #238).** Same branch and PR. The review read the code;
+each item was first written as a live Chromium test on stand-in variants and run against the code
+as it was (evidence: "The second review of PR #238").
+1. **WebSockets and WebRTC went around the send guard** (reproduced: an upgrade, a frame, a TURN
+   connection after the checkout stop). `Network.setBlockedURLs` didn't stop the WebSocket, and
+   Chromium decides a WebSocket's proxy as http's, so neither CDP blocking nor the proxy could tell.
+   **Choice:** Nova's browser has no sockets of its own: the constructors are removed from every
+   frame before its scripts run and from every worker before it runs; QUIC is off. **Trade-off:**
+   sites that need WebSockets or WebRTC don't work, even for the person; the wall is in JavaScript,
+   set first.
+2. The evidence's wording now matches: GETs carry what they carry (the known limit).
+3. **One send per declared address** (reproduced: four bodies to one path), from the main frame; a
+   form's own submission only as a navigation.
+4. **Takeover** (reproduced: the page's script posted to /pay while the person held it). **Choice:**
+   a pay-like address or a post-stop non-GET goes only as a main-frame navigation within 2 s of the
+   person's click or key; the sheet says so. **Limit:** a script navigating the main frame to pay in
+   that window passes.
+5. **Pause** (reproduced: 13 posts): no non-GET while paused or waiting for the person.
+6. **Workers** (partly reproduced: a service worker from an earlier task). **Choice:** no service
+   worker is carried between tasks. **Side effect:** first-party Cache Storage, kept with service
+   workers, doesn't outlive a task.
+7. **Pictures** (reproduced: a value split one letter per element). **Choice:** after a sign-in the
+   whole picture is covered, as the review suggested: it fails closed. The region measuring is gone.
+8. **Forget** (reproduced: partitioned cookie, OPFS, and storage partitioned under another site
+   stayed). Cookies are deleted with their partition key; Nova serves itself, through CDP, a page
+   that clears every store first-party and as a frame under every site its browser visited.
+- Did not reproduce, kept as guards: 307/308 redirects into a POST, pagehide beacons and keepalive
+  fetches, a form sent on unload, a POST form into a new window, a meta refresh to pay.
+
 **2026-10-31 (M10b: the adversarial review of PR #238).** Same branch and PR. All seven items
 answered, test-first, on loopback stand-ins with fake per-test credentials; evidence in
 `docs/evidence/m10b-gate.md`, "The adversarial review of PR #238", with what failed when each fix
