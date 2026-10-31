@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #248 · Tev1, a local safety screener, built and tested: it failed, so it only advises**
+- What changed: Nova can use Tev1, a small decision model running in your own Ollama, to score outside content for prompt-injection tricks. Its 99-case safety test was fixed before it ran. Both sizes failed: they flagged every harmless case too.
+- What you can now do: nothing changes in how Nova screens. Tev1's scores are only logged; Nova's fixed checks, plus holding back anything unsure, still decide.
+- Still unfinished: rewritten questions and a fresh test (v2, per the Decision Service design). Wiring it into the screen, with every piece of long content screened, comes in a follow-up.
+
 **2026-10-31 · #250 · Design: one Decision Service for every quick judgment Nova makes**
 - What changed: the plan for a single "Decision Service" is filed with your decisions. Every quick yes/no, pick-one, score or find-in-image judgment goes through named, versioned question sets. Each decision is logged with the exact model that answered. Screening content goes to Jev in cloud mode, with an off-by-default switch for local-only; Box in local-only stays on your machine.
 - What you can now do: Nothing in the app changed: paperwork only.
@@ -220,6 +225,19 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31: Amendment B Part 1, Tev1 as the local decision provider and the injection eval (PR #248, Track 2).**
+- **The API as found:** `POST /v1/systemone` with named Noul questions (1 to 64), P(true) answers, a 64 KiB cap on text and schema, and context overflow as a 400 that is never truncated.
+  - The published Tev1 builds require Ollama 0.40.4; the amendment said 0.35, which is when the endpoint arrived. The provider is unavailable below 0.40.4, in plain words (Track 1's decision).
+  - `num_ctx` is 8192. The chunk budget uses the card's and the amendment's ~2,000 tokens.
+- **What was built:** `src/core/jev/`: the client, `Tev1Provider` (one request per piece with the whole battery; every piece screened; worst score per question; split and retry on overflow; `tev1:4b` by default, `tev1:0.8b` only where memory requires), and the verdict-driven switch.
+- **The eval:** 99 cases, 53 attack and 46 benign. The attack half is the merged corpus plus code transforms of its exact payloads; no new attack text was written. The cases, bounds and scoring were fixed in `6d8a8e97` before any run.
+- **The run:** 2026-10-31 on Ollama 0.40.13, `tev1:4b` `7954dce2…`, `tev1:0.8b` `abc31fdb…`.
+  - **Both FAIL**, with detection 100%, false positives 100%, and ECE 0.106 (4B) and 0.286 (0.8B).
+  - The `impersonation` question sits at about 0.25 to 0.45 on benign content, so every case crosses 0.2.
+  - **Both sizes are ADVISORY:** scores are logged, and the deterministic layer plus quarantine-on-uncertain decide. Not tuned.
+- **Unchanged:** the deterministic layer and taint tracking (no file under `src/core/ingest/` changed).
+- **Gate patches proposed for Track 1:** in `docs/plans/tev1.md` NOTES.
 
 **2026-10-31 (Decision Service ADR; extends Amendment B Part 1).** Owner input `nova-jev-decision-layer-2026-10-31.md` (copied unchanged).
 - **The decision:** ADR `docs/plans/decision-service.md`. Every System One judgment goes through one Decision Service:
