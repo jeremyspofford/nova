@@ -6,6 +6,16 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #266 · Pairing a phone no longer fails now and then for no reason**
+- What changed: the browser engine behind every iPhone (WebKit) sometimes refuses a security key it has just made. Nova's pairing page took that as "this browser can't pair". Now it quietly makes another key of the same strength and carries on. A browser that really can't make these keys is still told so plainly.
+- What you can now do: pair a phone without the occasional unexplained failure. It was also the cause of a pairing test that failed every so often.
+- Still unfinished: whether a real iPhone ever does this is unknown; Apple's WebKit uses a different crypto engine from the test browser.
+
+**2026-10-31 · #258 · The safety screen now asks Nova's decision service, and checks every part of a long page**
+- What changed: Nova's screen for outside content (pages, mail, files, tool output) now asks the new decision service. It checks every part of a long document, not a sample, and the parts overlap, so a trick split across a boundary is still seen. Every decision is recorded, without the content.
+- What you can now do: in Settings › Models › Decision model, you can choose Jev (TypeSafe's cloud model) or a Tev1 size, and see each model's test results before you switch. Two separate switches let Jev screen outside content (Screening) or images (Box, a preview) even in local modes. Both are off, and each says plainly what leaves your machine. Health shows how outside content is being screened.
+- Still unfinished: text from Capture (screen text, meeting transcripts) is screened only on your devices; a switch to let Jev screen it in cloud mode is for later. No decision model has passed Nova's screening test yet, so anything Nova can't vouch for is still held back as unsure. Jev has never been called for real (no account). A very long document screened by Tev1 takes minutes.
+
 **2026-10-31 · #264 · A check for passwords and private details in captured screen text, the first to pass its test**
 - What changed: Nova can check text it captured from your screen or recordings for passwords, keys, and money or health details before keeping it. Fixed rules run first: password managers and banking apps are never kept, and key-like or card-like text is blanked out. On this computer's larger local model, the check caught 38 of 39 sensitive test notes and wrongly held only 1 of 40 harmless ones, so it passed. Its smaller model failed.
 - What you can now do: nothing yet: the check isn't switched on in capture. Nothing it reads leaves your machine.
@@ -326,6 +336,34 @@ built-ins only.
   - the integrity scrub, which is Track 1's Health work.
 - **Limits:** a raw secret Nova never stored and not shaped like one can't be recognised. Hostnames and names the person gave stay in the bundle.
 
+**2026-10-31 (the flaky WebKit pairing test, M4a).** Branch `fix/webkit-pairing-flake`. The UI
+gate's "M4a in WebKit" test timed out waiting for the join screen three times in a day (main run
+41205581247; both runs of PR #257), after 40 clean runs.
+- **Root cause, an app defect:** WebKit sometimes turns down a key it has just made.
+  `crypto.subtle.generateKey` throws `OperationError` for about one Ed25519 key in 150 and one
+  X25519 key in 500 in Playwright's WebKit; the rate was the same at full speed and on half a CPU,
+  so it is per key, not timing. `/pair`'s check that the browser can pair took any error as "This
+  browser can't pair" and stopped there, with no form, so the test waited for `#join` until it
+  timed out. A test run makes six keys, so roughly one run in 20 to 35 failed. When the device's
+  own key was the one refused, the page said "That didn't work" instead. The failure comes before
+  any signed time, so the logged pairing-clock defect is not involved. Whether a real iPhone's
+  WebKit does this too is not known.
+- **Fix:** `ui/js/device-key.js` makes each key through one helper that tries again on
+  `OperationError`, up to five times. Each try is a new key of the same kind, never a weaker one.
+  Any other error, such as `NotSupportedError`, is final, so a browser with no Ed25519 is still
+  told plainly.
+- **A second, smaller race in the same test:** it chose the mesh port from the ephemeral range,
+  where the hub's own port-0 listener can be handed the same port first (`EADDRINUSE`, 1 run in
+  100). It now uses the shared `freePort`, which picks below that range.
+- **Gate:** two new tests in `tests/ui/m4a-webkit-pair.test.ts`. In one, a browser fails every
+  first try at a key and still pairs to Home; it failed first, with CI's timeout. In the other, a
+  browser with no Ed25519 still sees "This browser can't pair".
+- **Evidence:**
+  - The real test file, run 100 times (four in parallel): 3 failures before (two `#join`
+    timeouts matching CI, and one `EADDRINUSE`), none after.
+  - The same flow 150 times in one container on one CPU: 8 failures before, every one a refused
+    key, and none after.
+
 **2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
 - **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
   - Six Nouls: instructs_ai, override, fake_message, link_slot (decisive); wants_private_data, keep_from_user (supporting).
@@ -425,6 +463,37 @@ M10e phase.
   The simulated firewall now checks each packet as it arrives, through a gate in front of the mesh
   listener. Reproduced on one busy CPU (main's file failed 2 of 3); fixed, 4 of 4 pass. The network
   module is unchanged.
+
+**2026-10-31 (the ingest gate on the Decision Service, Track 1).** Plan `docs/plans/gate-decision-service.md`; PR #258. It applies DS1's NOTES 1–5, Tev1's NOTES 3–4 and the eval harness's NOTES 1, 2 and 5, under the owner's decisions in `docs/plans/decision-service.md`.
+- **The gate asks the service:** `ingest-screen`, one fenced chunk at a time. An answer counts only when the service trusts it (`verdict` or `legacy`) and all five probabilities are in [0, 1]. Otherwise the deterministic layer plus quarantine decide, as before.
+  - The forced local-only is gone. Cloud mode screens with Jev once it is set up.
+  - Local modes use Jev only with the screening opt-in. It is off by default, and its receipt names it.
+  - Box never goes to the cloud in local-only.
+- **Every chunk is screened:** no sampling; a pool of 2; 200-character overlap; surrogate pairs kept whole. Once a chunk has no trusted answer, nothing more is sent.
+  - Cost, measured against the stand-ins: a 2,000,000-character document is 715 chunks. That is about 2,100 Tev1 requests (minutes) or 715 Jev requests.
+- **Wiring:**
+  - the sorting model is the transitional seat, and the Jev key is in the vault as `decisions.jev`;
+  - records go to `decision_record` (migration 0019, with `receipt.opt_in` and the receipt sync triggers recreated);
+  - Health has one line per seat, and the hub's device record names the decision model;
+  - `GET`/`PUT /models/decisions`: 422 with problems; any change is tier 2, with every notice first; the key goes to the vault only; `{use}` is kept;
+  - the eval scorecard routes.
+- **Settings › Models:**
+  - the Decision model section, with two separate switches (Screening; Box, a preview) and their plain words;
+  - each model's scorecard before a switch, or a plain none.
+- **Evals:** the injection suite runs Part 1's 99 cases (`tests/ingest/tev1-eval/cases.ts`, mapped from its shape; the set was not moved into `src/core/decision-service/`).
+- **Safety evidence:**
+  - the deterministic layer and taint tracking are unchanged (an empty diff of `checks.ts`, `outbound.ts`, `context.js` and `tools.js`; `runner.js` changes only in passing the run's mode and task to the screen);
+  - the corpus and canary suites run in every mode with the seats unavailable, untrusted and a trusted stand-in. With no trusted seat, nothing is looser than checks plus quarantine;
+  - the fresh-user test and the eval regression suite pass.
+- **After the adversarial review:** each finding has a test that fails with its fix undone.
+  - A run's, a helper's or a ledger task's own mode now holds the screen.
+  - The mode and the opt-ins are re-read before every cloud send, and the receipt is held to the live setting.
+  - Records keep a status and a fixed reason, never a seat's words.
+  - The pin includes Tev1's digest, read again after every answer.
+  - Untrusted seats are a sample: 2 chunks per piece of content, 200 asks per seat per day. A screen has a 180 s limit.
+  - Capture-derived text never goes to a cloud seat (the owner's §2.1 rule; its per-source opt-in doesn't exist yet).
+  - Also: the receipt's task and state hash; sync with a standby a release behind; 422s for input that was dropped; a verdict pinned to its template's wording.
+- **Not done:** nothing calls TypeSafe. No ingest-screen eval has passed, so without a sorting model outside content is still held back as unsure. Sensitive-content detection at indexing and injection screening at recall, for capture-derived text, are follow-ups.
 
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:

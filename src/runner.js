@@ -473,7 +473,7 @@ export class Runner extends EventEmitter {
       let taints = true;
       const read = this.outsideRead(call, String(output ?? ''), { page, hints, ok });
       if (read) {
-        screen = await this.ingest.screen(read);
+        screen = await this.ingest.screen({ ...read, ...this.screenScope(sessionId, run) });
         taints = this.taints(call, screen);
         if (taints) run.taint.push(screen.taint);
       }
@@ -788,6 +788,13 @@ export class Runner extends EventEmitter {
     } catch { /* no record kept: the file reads as unknown, and is screened */ }
   }
 
+  // What a screen of this run's reads is held to: the run's own privacy mode (a ledger task's) and
+  // its task. The screen is never looser than this or the person's setting.
+  screenScope(sessionId, run) {
+    const task = this.runTasks.get(sessionId) ?? null;
+    return { ...(run.privacy ? { privacy_mode: run.privacy } : {}), ...(task ? { task_id: task } : {}) };
+  }
+
   // A helper's files: its own pass as they are (escaped); the rest are screened, and the run is
   // tainted by them.
   async screenFiles(sessionId, tag, run) {
@@ -795,7 +802,7 @@ export class Runner extends EventEmitter {
     run.helper.files = await Promise.all(run.helper.files.map(async (f) => {
       const whole = !/\n\[truncated: the file is \d+ characters\]$/.test(f.text ?? '');
       if (whole && this.ownFile(f.path, f.text ?? '')) return { ...f, text: escapeProtocol(f.text ?? '') };
-      const s = await this.ingest.screen({ text: f.text ?? '', source: { kind: 'file', origin: f.path } });
+      const s = await this.ingest.screen({ text: f.text ?? '', source: { kind: 'file', origin: f.path }, ...this.screenScope(sessionId, run) });
       taint.push(s.taint);
       return { ...f, text: s.extract };
     }));
@@ -807,12 +814,12 @@ export class Runner extends EventEmitter {
 
   // A report from a run that read outside content carries its taint, and the conversation it goes
   // to is given only its screened form.
-  async screenReport(run, handoff) {
+  async screenReport(run, handoff, scope = {}) {
     if (!this.store.exists(run)) return {};
     const session = reduce(this.store.read(run));
     const taint = this.taintOf(session);
     if (!taint.length || !handoff.text) return {};
-    const s = await this.ingest.screen({ text: handoff.text, source: { kind: 'handoff', origin: handoff.name ?? 'a report', ref: run } });
+    const s = await this.ingest.screen({ text: handoff.text, source: { kind: 'handoff', origin: handoff.name ?? 'a report', ref: run }, ...(scope.privacy ? { privacy_mode: scope.privacy } : {}), ...(scope.task_id ? { task_id: scope.task_id } : {}) });
     // The links the helper's run really read travel with the report as data, never scraped from
     // its text.
     const links = [...this.knownUrls(session, { helper: true })].slice(0, 500);

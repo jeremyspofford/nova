@@ -1,9 +1,8 @@
 // Runs the eval set through the ACTUAL ingest gate (plan docs/plans/tev1.md "The eval"): the real
-// Ingest.screen with its deterministic checks, its own chunking and fence, the ingest-screen
-// template and the decision stack in local-only, with the Tev1 seat answering the registry's
-// ingest-screen v1 (the same wording and state Part 1 ran). The gate still asks through the old
-// decision stack until Track 1 moves it onto the Decision Service, so the seat is wrapped here, in
-// the test, as an old-style provider. No verdict switch: this measures Tev1, not the switch.
+// Ingest.screen with its deterministic checks, its own chunking, overlap and fence, with the Tev1
+// seat answering the registry's ingest-screen v1 (the same wording and state Part 1 ran) for every
+// chunk. The gate asks through its `ask` (DS1 NOTE 1); here `ask` goes to the seat directly and
+// counts its answer, so there is no verdict switch: this measures Tev1, not the switch.
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,14 +10,13 @@ import { Db } from '../../../src/core/db.ts';
 import { Log } from '../../../src/core/log.ts';
 import { Verifier } from '../../../src/core/verify.ts';
 import { Workspace } from '../../../src/core/workspace.ts';
-import { Decisions, RulesProvider, Templates } from '../../../src/core/decide.ts';
-import { Ingest } from '../../../src/core/ingest/screen.ts';
+import { RulesProvider, Templates } from '../../../src/core/decide.ts';
+import { Ingest, type ScreenAsk } from '../../../src/core/ingest/screen.ts';
 import { BLOCK_LINE } from '../../../src/core/ingest/screen.ts';
 import { BOUNDS, pct, score, verdictOf, type CaseResult, type Metrics } from '../../../src/core/decision-service/eval.ts';
 import { buildState } from '../../../src/core/decision-service/state.ts';
 import { INGEST_SCREEN_V1 } from '../../../src/core/decision-service/templates/ingest-screen.ts';
 import type { Tev1Seat } from '../../../src/core/decision-service/seats/tev1.ts';
-import type { Decision, DecisionProvider, Template } from '../../../src/core/decide.ts';
 import { QUESTIONS, type Case } from './cases.ts';
 
 export interface CaseRun extends CaseResult {
@@ -37,21 +35,18 @@ export async function runCases(seat: Tev1Seat, cases: Case[]): Promise<CaseRun[]
   const verifier = new Verifier(new Workspace(join(mkdtempSync(join(tmpdir(), 'nova-tev1-eval-')), 'workspace')));
   const rules = new RulesProvider();
   const templates = new Templates({ db, verifier, rules });
-  const decisions = new Decisions({ templates, providers: [rules], privacy: () => 'local-only', log });
-  // Count every request the gate's chunks cause, across its several decisions per case.
+  // Count every request the gate's chunks cause, across its several decisions per case. An answer
+  // the seat couldn't give is no answer (the case counts as unanswered).
   const tally = { requests: 0, input_tokens: 0 };
-  const counted: DecisionProvider = {
-    id: seat.id, egress: seat.egress, questionTypes: ['noul'],
-    ready: (t: Template) => t.template_id === INGEST_SCREEN_V1.template_id && seat.status().available,
-    decide: async (t: Template, inputs: Record<string, unknown>): Promise<Decision> => {
-      const a = await seat.ask(INGEST_SCREEN_V1, buildState(INGEST_SCREEN_V1, inputs));
+  const ask: ScreenAsk = async (fields) => {
+    if (!seat.status().available) return null;
+    try {
+      const a = await seat.ask(INGEST_SCREEN_V1, buildState(INGEST_SCREEN_V1, fields));
       tally.requests += a.requests; tally.input_tokens += a.usage.input_tokens;
-      const answers = Object.fromEntries(Object.entries(a.answers).map(([q, x]) => [q, x.type === 'noul' ? x.noul : 0.5]));
-      return { template_id: t.template_id, version: t.version, answers, confidence: 0, provider: seat.id, escalate: false, why: `Tev1 (${a.model_answered}), ${a.requests} requests.` };
-    },
+      return { trust: 'verdict', seat: seat.id, model: a.model_answered, answers: a.answers as Record<string, { type: string; noul?: number }> };
+    } catch { return null; }
   };
-  decisions.register(counted, { first: true });
-  const ingest = new Ingest({ db, log, templates, decisions, ready: () => true, providerId: seat.id });
+  const ingest = new Ingest({ db, log, templates, ask });
   const out: CaseRun[] = [];
   for (const c of cases) {
     tally.requests = 0; tally.input_tokens = 0;

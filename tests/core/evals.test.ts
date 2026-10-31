@@ -135,10 +135,16 @@ test('scorecard routes and targets: what Settings › Models reads, from the reg
 });
 
 test('the injection suite loads Part 1’s set through its hook, and refuses a malformed one', async () => {
-  // The hook: by default, the gate's corpus in place (until Track 2's set lands); an override.
-  assert.deepEqual([...evals.INJECTION_SET], ['tests/ingest/corpus/injection.json', 'tests/ingest/corpus/benign.json']);
+  // The hook: by default Part 1's set (evals NOTE 5), mapped from its own shape; an override.
+  assert.deepEqual([...evals.INJECTION_SET], ['tests/ingest/tev1-eval/cases.ts']);
   const cases = evals.loadInjectionSet();
-  assert.ok(cases.length >= 40 && cases.some((c) => c.expect) && cases.some((c) => !c.expect));
+  const manifest = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'ingest', 'tev1-eval', 'manifest.json'), 'utf8')) as { total: number; attacks: number; benign: number; rows: { id: string }[] };
+  assert.deepEqual([cases.length, cases.filter((c) => c.expect).length, cases.filter((c) => !c.expect).length], [manifest.total, manifest.attacks, manifest.benign]);
+  assert.deepEqual(cases.map((c) => c.id), manifest.rows.map((r) => r.id), 'every case of Part 1’s manifest, in order');
+  // An attack keeps its corpus item's expectation; a transform of it must at least be held back.
+  const corpus = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'ingest', 'corpus', 'injection.json'), 'utf8')) as { id: string; expect: string }[];
+  for (const i of corpus) assert.equal(cases.find((c) => c.id === i.id)!.expect, i.expect, i.id);
+  for (const c of cases.filter((x) => x.id.includes(':') && x.expect)) assert.equal(c.expect, 'quarantine', c.id);
   const dir = mkdtempSync(join(tmpdir(), 'nova-injection-'));
   mkdirSync(join(dir, 'set'));
   writeFileSync(join(dir, 'set', 'a.json'), JSON.stringify({ cases: [{ id: 'one', category: 'direct', expect: 'block', source: { kind: 'web', origin: 'example.com' }, text: 'x' }] }));

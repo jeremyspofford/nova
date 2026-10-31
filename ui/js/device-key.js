@@ -16,6 +16,21 @@ export const b64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(byte
 const fromB64url = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
 const utf8 = (s) => new TextEncoder().encode(s);
 
+// A new key pair of one kind. WebKit now and then turns down a key it has just made, with an
+// OperationError: about one Ed25519 key in 150 and one X25519 key in 500 in Playwright's WebKit,
+// at any load. Each try draws a new key of the same kind, so trying again is never a weaker
+// fallback. Any other error (NotSupportedError: no such algorithm here) is final.
+const TRIES = 5;
+async function generate(name, usages) {
+  for (let i = 1; ; i++) {
+    try {
+      return await crypto.subtle.generateKey({ name }, false, usages);
+    } catch (e) {
+      if (e?.name !== 'OperationError' || i >= TRIES) throw e;
+    }
+  }
+}
+
 // Whether this browser can be a paired device, and if not, why, in plain words.
 export async function support() {
   if (!window.isSecureContext) {
@@ -23,8 +38,8 @@ export async function support() {
   }
   if (!crypto?.subtle || !window.indexedDB) return { ok: false, reason: 'This browser can’t keep keys safely, so it can’t be paired with Nova. Try an up-to-date browser.' };
   try {
-    await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
-    await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']);
+    await generate('Ed25519', ['sign', 'verify']);
+    await generate('X25519', ['deriveBits']);
   } catch {
     return { ok: false, reason: 'This browser can’t make the kind of key Nova uses (Ed25519), so it can’t be paired. Update it, or use another browser. Nova won’t fall back to a weaker key.' };
   }
@@ -72,8 +87,8 @@ export async function forget() {
 // WebKit (every iPhone browser) can't store an X25519 key in IndexedDB, and the whole record would
 // read back as nothing. A page that someday opens sealed boxes needs another way to keep it.
 export async function create() {
-  const ed = await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign', 'verify']);
-  const x = await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']);
+  const ed = await generate('Ed25519', ['sign', 'verify']);
+  const x = await generate('X25519', ['deriveBits']);
   const v = {
     ed, deviceId: null, hub: null, created_at: new Date().toISOString(),
     publicKey: b64url(await crypto.subtle.exportKey('raw', ed.publicKey)),
