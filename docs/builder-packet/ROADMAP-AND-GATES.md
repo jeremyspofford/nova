@@ -195,6 +195,9 @@ Spec: `nova-vault-broker-design-2026-10-31.md`, with the owner's instruction and
 - **Phase 2:** the 1Password connector behind the broker, after Phase 1's gate. A real account needs the owner's OK.
 - **Phase 3:** optional Vaultwarden and further connectors, by demand. Never a default.
 
+## Direction only (no work scheduled): second-model reviews through Relay
+Relay, the owner's existing multi-agent dispatcher, already integrated with Nova at the adapter level (M8), is the intended vehicle for dispatching second-model reviews automatically, once that integration is deepened. The owner will schedule that work separately. Until then, review packets are handed over by the owner (OPERATING-RULES, "Second-model review").
+
 ## Sequencing rules
 - Relay stabilization may run parallel to M1–M2 (it is independent), integration only at M8.
 - Nothing in CAPABILITY-INVENTORY marked "Later" enters an earlier milestone without a packet amendment.

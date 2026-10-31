@@ -88,6 +88,12 @@ export class Registry {
     return v.get(Math.max(...v.keys())) ?? null;
   }
 
+  // Every version of a template, newest first.
+  versions(id: string): Registered[] {
+    const v = this.#by.get(id);
+    return v ? [...v.entries()].sort((a, b) => b[0] - a[0]).map(([, r]) => r) : [];
+  }
+
   list(): Registered[] {
     return [...this.#by.values()].flatMap((v) => [...v.values()]);
   }

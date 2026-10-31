@@ -10,14 +10,22 @@
 // command line, or the API from the hub's own screen. Going back across a database upgrade
 // restores the pre-upgrade backup only when nothing was written since; otherwise it refuses, says
 // why, and keeps the newer release running with the problem open. It never loses data silently.
+//
+// The console is one service among the ones it runs (M10e, docs/plans/M10e.md): it starts from the
+// console's service definition (its command, its health check and how often), and the supervisor
+// driver (services.ts) runs the other services, plain programs, by the same rules. The Service
+// Manager (src/core/services) moves their versions through the stages; the console's deploy path is
+// this file's, unchanged.
 import { createServer as createHttp, type Server as HttpServer } from 'node:http';
 import { createServer as createNet, type Server as NetServer, type Socket } from 'node:net';
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
+import { CONSOLE, ServiceManager, consoleDefinition, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type ServiceStatus, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
 import { runningPid } from '../home.js';
 import { ServerProcess } from './server.ts';
+import { CrashWindow } from './crashes.ts';
+import { SupervisorDriver } from './services.ts';
 import { Slots, carryProblems, isRelease, mark, packageVersion, preMigrationBackup, problemsSince, recordProblem, sandboxable, schemaVersion, writesSince, type Mark } from './releases.ts';
 
 // The code the supervisor was started from, when no release is current.
@@ -34,6 +42,8 @@ export interface Timings {
   canaryMs: number;
   probeEveryMs: number;
   testsMs: number;
+  // The longest single timer a service's soak uses (tests); longer waits are chained.
+  maxTimerMs?: number;
 }
 
 export const DEFAULT_TIMINGS: Timings = {
@@ -56,6 +66,11 @@ export interface SupervisorOptions {
   timings?: Partial<Timings>;
   echo?: (s: string) => void;
   log?: (s: string) => void;
+  // The console's definition for a version (default: consoleDefinition). Tests give their own.
+  consoleDefinition?: (o: { version: string; port: number }) => ServiceDefinition;
+  // The ports Nova itself is configured to use (main.ts reads them from Nova's configuration), on
+  // top of what the environment says: no service may take one.
+  ports?: { console?: number | null; mesh?: number | null };
 }
 
 type Say = (line: string) => void;
@@ -69,7 +84,7 @@ export class Supervisor {
   readonly stateFile: string;
   state: SupervisorState;
   server: ServerProcess | null = null;
-  #crashes: number[] = [];
+  #crashes: CrashWindow;
   #restartTimer: ReturnType<typeof setTimeout> | null = null;
   #healthTimer: ReturnType<typeof setInterval> | null = null;
   #deploying = false;
@@ -84,17 +99,63 @@ export class Supervisor {
   #marks = new WeakMap<ServerProcess, Mark>();
   // When a repair last asked for a restart: at most one a minute.
   #askedRestartAt = 0;
+  // The supervisor driver (the console and every other service) and the Service Manager over it.
+  readonly services: SupervisorDriver;
+  readonly manager: ServiceManager;
 
   constructor(o: SupervisorOptions) {
     this.o = o;
     const t = { ...DEFAULT_TIMINGS, ...o.timings };
+    // How often the console's health is checked is its definition's, unless the timings say.
+    if (o.timings?.healthEveryMs === undefined) t.healthEveryMs = this.console(BASE).health.every_s * 1000;
     t.canaryMs = Math.max(t.canaryMs, MIN_CANARY_MS);
     t.probeEveryMs = Math.min(t.probeEveryMs, t.canaryMs / 2);
     this.t = t;
+    this.#crashes = new CrashWindow(t);
     this.slots = new Slots({ dir: o.dir, repo: o.repo });
     this.stateFile = join(o.dir, 'state.json');
     mkdirSync(o.dir, { recursive: true, mode: 0o700 });
     this.state = this.#load();
+    this.services = new SupervisorDriver({
+      dir: o.dir,
+      timings: { ...t, healthEveryMs: o.timings?.healthEveryMs },
+      console: {
+        definition: () => this.console(),
+        status: () => this.#consoleStatus(),
+        prepare: (v) => this.#prepare(v),
+        deploy: (v, say) => this.deploy(v, say),
+        rollback: (r, say) => {
+          if (this.#deploying) return Promise.resolve({ ok: false, said: 'A deploy is running; it rolls back by itself if its canary fails.' });
+          return this.rollback({ ...r, target: this.state.releases.previous, say });
+        },
+      },
+      problem: (p) => this.#problem(p),
+      reserved: () => this.reservedPorts(),
+      changed: () => { if (this.state) this.#save(); },
+      ...(o.log ? { log: o.log } : {}),
+      ...(o.echo ? { echo: o.echo } : {}),
+    });
+    this.manager = new ServiceManager({ dir: join(o.dir, 'registry'), drivers: [this.services] });
+  }
+
+  // Every port Nova itself uses, by what it is, from its configuration and what runs now: the
+  // console's configured port (taken even while the console restarts, or is held), the port it
+  // answers on now, and the device door's.
+  reservedPorts(): { port: number; what: string }[] {
+    const out: { port: number; what: string }[] = [];
+    const add = (port: unknown, what: string) => { const n = Number(port); if (Number.isInteger(n) && n > 0 && n <= 65_535 && !out.some((x) => x.port === n)) out.push({ port: n, what }); };
+    add(this.o.ports?.console, 'Nova’s own console port');
+    add(this.o.env.NOVA_PORT, 'Nova’s own console port');
+    add(this.state?.server.port, 'the port Nova’s console answers on');
+    add(this.o.ports?.mesh, 'Nova’s device door');
+    try { if (this.o.env.NOVA_MESH_URL) add(new URL(this.o.env.NOVA_MESH_URL).port, 'Nova’s device door'); } catch { /* not a URL: the server says so */ }
+    return out;
+  }
+
+  // The console's service definition, for the release that runs (or `version`).
+  console(version: string = this.state?.releases.current ?? BASE): ServiceDefinition {
+    const port = Number(this.o.env.NOVA_PORT ?? 4317);
+    return (this.o.consoleDefinition ?? consoleDefinition)({ version, port: Number.isInteger(port) && port >= 0 && port <= 65_535 ? port : 0 });
   }
 
   // ---- running ----------------------------------------------------------------------------------
@@ -129,6 +190,8 @@ export class Supervisor {
       this.#start();
     }
     this.#healthTimer = setInterval(() => { void this.#healthCheck(); }, this.t.healthEveryMs);
+    // Every other service it runs, as they were when it stopped.
+    await this.services.resume();
     this.#save();
   }
 
@@ -136,6 +199,7 @@ export class Supervisor {
     this.#closed = true;
     if (this.#restartTimer) clearTimeout(this.#restartTimer);
     if (this.#healthTimer) clearInterval(this.#healthTimer);
+    await this.services.close();
     await this.#stopServer();
     await this.#closePage();
     await new Promise<void>((r) => (this.#control ? this.#control.close(() => r()) : r()));
@@ -152,8 +216,13 @@ export class Supervisor {
   #start(): void {
     if (this.#closed) return;
     const root = this.codeRoot();
+    // Its command is its definition's: `node` is the Node running the supervisor, and the script
+    // after it is in the release's code.
+    const [cmd, script, ...rest] = this.console().artifact.release!.command;
+    const argv = cmd === 'node' ? [process.execPath, ...(script ? [script.startsWith('-') || script.startsWith('/') ? script : join(root, script)] : []), ...rest] : [cmd!, ...(script ? [script] : []), ...rest];
     const s = new ServerProcess({
       root,
+      argv,
       env: { ...this.o.env, NOVA_HOME: this.o.home, NOVA_SUPERVISED: '1', NOVA_SUPERVISOR_STATE: this.stateFile },
       ...(this.o.echo ? { echo: this.o.echo } : {}),
     });
@@ -182,14 +251,14 @@ export class Supervisor {
 
   #crashed(s: ServerProcess, e: { code: number | null; signal: string | null }): void {
     const now = Date.now();
-    this.#crashes = [...this.#crashes.filter((x) => now - x < this.t.windowMs), now];
+    this.#crashes.record(now);
     const how = e.signal ? `was stopped by ${e.signal}` : `exited with code ${e.code}`;
     const tail = s.tail(15);
-    if (this.#crashes.length >= this.t.crashes) {
-      void this.#enterSafeMode(`Nova stopped ${this.#crashes.length} times within ${Math.round(this.t.windowMs / 1000)} s (the last time it ${how}), so the supervisor stopped restarting it.`, tail);
+    if (this.#crashes.tooMany) {
+      void this.#enterSafeMode(`Nova stopped ${this.#crashes.count} times within ${Math.round(this.t.windowMs / 1000)} s (the last time it ${how}), so the supervisor stopped restarting it.`, tail);
       return;
     }
-    const wait = Math.min(this.t.maxBackoffMs, this.t.backoffMs * 2 ** (this.#crashes.length - 1));
+    const wait = this.#crashes.wait();
     this.state.mode = 'restarting';
     this.state.server.restarts++;
     this.#save();
@@ -220,7 +289,7 @@ export class Supervisor {
   async recover(): Promise<{ ok: boolean; said: string }> {
     if (this.state.mode !== 'safe_mode') return { ok: false, said: 'Nova isn’t in safe mode.' };
     await this.#closePage();
-    this.#crashes = [];
+    this.#crashes.reset();
     this.state.safe_mode = null;
     this.#start();
     const port = await this.server?.ready(this.t.readyMs);
@@ -270,7 +339,7 @@ export class Supervisor {
 
   async #health(port: number): Promise<{ answered: boolean; ok: boolean; failing: { name: string; detail: string }[]; said: string }> {
     try {
-      const r = await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: AbortSignal.timeout(Math.min(5000, Math.max(1000, this.t.healthEveryMs))) });
+      const r = await fetch(`http://127.0.0.1:${port}${this.console().health.http}`, { signal: AbortSignal.timeout(Math.min(5000, Math.max(1000, this.t.healthEveryMs))) });
       const body = await r.json() as { ok?: boolean; checks?: Record<string, { ok: boolean; detail?: string }> };
       const failing = Object.entries(body.checks ?? {}).filter(([, c]) => !c.ok).map(([name, c]) => ({ name, detail: c.detail ?? 'not ok' }));
       return { answered: true, ok: r.status === 200 && body.ok === true, failing, said: failing.length ? failing.map((f) => `${f.name}: ${f.detail}`).join('; ') : 'Healthy.' };
@@ -337,9 +406,9 @@ export class Supervisor {
     const since = now - this.#askedRestartAt;
     if (since < this.t.windowMs) return { ok: false, said: `Nova was restarted on request ${Math.round(since / 1000)} s ago; the supervisor does that at most once every ${Math.round(this.t.windowMs / 1000)} s.` };
     this.#askedRestartAt = now;
-    this.#crashes = [...this.#crashes.filter((x) => now - x < this.t.windowMs), now];
-    if (this.#crashes.length >= this.t.crashes) {
-      void this.#enterSafeMode(`Nova stopped or was restarted ${this.#crashes.length} times within ${Math.round(this.t.windowMs / 1000)} s (the last time a repair asked for it), so the supervisor stopped restarting it.`, this.server?.tail(15) ?? '');
+    this.#crashes.record(now);
+    if (this.#crashes.tooMany) {
+      void this.#enterSafeMode(`Nova stopped or was restarted ${this.#crashes.count} times within ${Math.round(this.t.windowMs / 1000)} s (the last time a repair asked for it), so the supervisor stopped restarting it.`, this.server?.tail(15) ?? '');
       return { ok: true, said: 'Nova was stopped or restarted too often within a minute, so the supervisor holds it in safe mode instead.' };
     }
     // A moment's wait, so the answer gets back to whoever asked before the server stops.
@@ -479,7 +548,7 @@ export class Supervisor {
       if (from !== BASE) this.#slot(from, { status: 'previous' });
       this.state.deploy!.outcome = 'promoted';
       this.state.mode = 'running';
-      this.#crashes = [];
+      this.#crashes.reset();
       stage('promote', true, `${version} is live; ${from === BASE ? 'the code the supervisor started from' : from} is kept to go back to.`);
       this.#history(version, from, 'promoted', 'Passed its tests, the sandbox, the smoke probes and the canary.');
       return { ok: true, said: `${version} is live.` };
@@ -641,6 +710,39 @@ export class Supervisor {
     }
   }
 
+  // ---- the console as a service (the driver's view of it) ---------------------------------------
+
+  // The slot for a release, made from its tag: what "apply" is for the console. Its alongside start
+  // (the sandbox on a copy of the home) is part of its deploy, as it always was.
+  async #prepare(version: string): Promise<{ ok: boolean; said: string }> {
+    if (!isRelease(version)) return { ok: false, said: 'That isn’t a release’s tag.' };
+    if (version === this.state.releases.current) return { ok: false, said: `${version} is already running.` };
+    try {
+      const slot = await this.slots.ensure(version);
+      if (!sandboxable(slot.path)) return { ok: false, said: 'This release is from before Nova could run a release in a sandbox, so it can’t go through the pipeline.' };
+      this.#slot(version, { commit: slot.commit, status: 'ready' });
+      return { ok: true, said: `Release ${version} is commit ${slot.commit.slice(0, 12)}, ready to deploy: its tests, a sandbox on a copy of your home and the smoke probes run when it is promoted.` };
+    } catch (e) {
+      return { ok: false, said: (e as Error).message };
+    }
+  }
+
+  #consoleStatus(): ServiceStatus {
+    const s = this.state;
+    const kind: Record<ReleaseSlot['status'], ServiceStatus['versions'][number]['status']> = { ready: 'ready', live: 'live', previous: 'kept', failed: 'failed', rolled_back: 'rolled_back' };
+    const cur = s.releases.current ?? BASE;
+    const versions = s.releases.slots.map((r) => ({ version: r.version, status: kind[r.status], since: r.created_at, said: null as string | null, ports: r.version === cur && s.server.port ? { console: s.server.port } : null, pid: r.version === cur ? s.server.pid : null }));
+    if (!versions.some((v) => v.version === cur)) versions.unshift({ version: cur, status: 'live', since: s.server.started_at ?? s.since, said: cur === BASE ? 'The code the supervisor started from.' : null, ports: s.server.port ? { console: s.server.port } : null, pid: s.server.pid });
+    return {
+      service: CONSOLE, driver: 'supervisor', live: cur, previous: s.releases.previous, soak_until: null,
+      held: s.safe_mode ? { reason: s.safe_mode.reason, at: s.safe_mode.at } : null,
+      health: { ok: s.health.last_check_at ? s.health.failing === 0 : null, checked_at: s.health.last_check_at, said: s.health.said },
+      stable: s.server.port ? { console: s.server.port } : {},
+      versions,
+      history: s.history.map((h) => ({ at: h.at, version: h.version, outcome: h.outcome, said: h.said })),
+    };
+  }
+
   // ---- the state file ------------------------------------------------------------------------------
 
   #load(): SupervisorState {
@@ -663,6 +765,7 @@ export class Supervisor {
   }
 
   #save(): void {
+    if (this.services) this.state.services = this.services.status().filter((x) => x.service !== CONSOLE);
     const tmp = `${this.stateFile}.tmp`;
     writeFileSync(tmp, `${JSON.stringify(this.state, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, this.stateFile);
@@ -700,10 +803,10 @@ export class Supervisor {
       if (nl < 0) return;
       const line = buf.slice(0, nl);
       buf = '';
-      let req: { cmd?: string; version?: string; confirm?: unknown };
+      let req: { cmd?: string; version?: string; confirm?: unknown; service?: string; definition?: unknown };
       try { req = JSON.parse(line); } catch { sock.end(`${JSON.stringify({ done: true, ok: false, said: 'Not a request.' })}\n`); return; }
       const say: Say = (l) => { if (!sock.destroyed) sock.write(`${JSON.stringify({ said: l })}\n`); };
-      const end = (r: { ok: boolean; said: string }) => { if (!sock.destroyed) sock.end(`${JSON.stringify({ done: true, ...r })}\n`); };
+      const end = (r: { ok: boolean; said: string; asks?: boolean }) => { if (!sock.destroyed) sock.end(`${JSON.stringify({ done: true, ...r })}\n`); };
       void (async () => {
         if (req.cmd === 'status') return end({ ok: true, said: JSON.stringify(this.state) });
         // The confirmation is what the person typed (the version, or the word "rollback"), which
@@ -722,11 +825,24 @@ export class Supervisor {
           const target = this.state.mode === 'safe_mode' ? (this.state.safe_mode?.last_good && this.state.safe_mode.last_good !== this.state.releases.current ? this.state.safe_mode.last_good : this.state.releases.previous) : this.state.releases.previous;
           // Nowhere to go: safe mode holds, rather than leave nothing running.
           if (!target) return end({ ok: false, said: this.state.mode === 'safe_mode' ? 'There is no other release to go back to, so Nova stays in safe mode. Fix what the reason names, then run recover.' : 'There is no previous release to go back to.' });
-          if (this.state.mode === 'safe_mode') { await this.#closePage(); this.state.safe_mode = null; this.#crashes = []; }
+          if (this.state.mode === 'safe_mode') { await this.#closePage(); this.state.safe_mode = null; this.#crashes.reset(); }
           return end(await this.rollback({ auto: false, reason: 'You asked to go back.', target, say }));
         }
         if (req.cmd === 'recover') return end(await this.recover());
         if (req.cmd === 'restart') return end(await this.restart());
+        // Services (M10e), through the Service Manager. Deploying one starts it alongside with no
+        // traffic (tier 1), and asks first, typed, when it runs a command not yet approved; promoting
+        // it wants what the person typed, <service>@<version> (tier 2 or 3); going back wants the word
+        // rollback (tier 2); recovering a held one starts its approved version again (tier 1).
+        if (req.cmd === 'services') return end({ ok: true, said: JSON.stringify(this.manager.status()) });
+        if (req.cmd === 'service-plan') {
+          const p = this.manager.plan(req.definition);
+          return end(p.ok ? { ok: p.plan.ok, said: JSON.stringify(p.plan) } : { ok: false, said: `The definition can’t be used: ${p.problems.join(' ')}` });
+        }
+        if (req.cmd === 'service-deploy') return end(await this.manager.deploy(req.definition, say, req.confirm));
+        if (req.cmd === 'service-recover') return end(await this.manager.recover(String(req.service ?? ''), say));
+        if (req.cmd === 'service-promote') return end(await this.manager.promote(String(req.service ?? ''), String(req.version ?? ''), req.confirm, say));
+        if (req.cmd === 'service-rollback') return end(await this.manager.rollback(String(req.service ?? ''), req.confirm, say));
         end({ ok: false, said: `The supervisor doesn’t know “${req.cmd}”.` });
       })().catch((e) => end({ ok: false, said: (e as Error).message }));
     });

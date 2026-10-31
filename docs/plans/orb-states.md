@@ -57,6 +57,8 @@ record didn't say whether it stops Nova, so the record now does:
 - the local model not answering (`src/core/models/index.ts:639`);
 - the standby falling behind or taking over;
 - release checks that kept the old release running;
+- the supervisor's other services (`service-crashed`, `service-held`, `service-stopped`,
+  `service-rolled-back`, M10e). A service of the person's stopping doesn't stop Nova;
 - budget guardrails (`src/core/infra/index.ts`). They refuse the plan but are not security
   refusals. An apply they stop also fails its task, and that failure is stopped.
 
