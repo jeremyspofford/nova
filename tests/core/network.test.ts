@@ -13,12 +13,17 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCore, type Core } from '../../src/core/index.ts';
-import { httpConfig, mask, mergePatch, secretPaths, type Config } from '../../src/core/network/targets.ts';
+import { httpConfig, mask, mergePatch, secretPaths } from '../../src/core/network/targets.ts';
 import { startNetconfig } from '../../scripts/stand-ins/fake-netconfig.js';
-import { call, enroll, hub } from './mesh-support.ts';
+import { PUBLIC_URL, call, enroll, hub } from './mesh-support.ts';
 import { fakeToken, filesHolding } from '../support/infra.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// The phone reaches the hub from another machine, through the TLS proxy in front of the mesh listener
+// (the `proxy` transport takes the address it reports): a device on the hub's own machine never
+// counts as contact (review of PR #241, S5). 192.0.2.x is documentation space.
+const PROXY = { publicUrl: PUBLIC_URL, transport: 'proxy' as const };
+const AWAY = { 'x-forwarded-for': '192.0.2.50' };
 const WINDOW_MS = 800;
 // A placeholder home network: a firewall that lets the mesh port through, DNS, and a Wi-Fi key.
 const INITIAL = {
@@ -46,7 +51,7 @@ async function until<T>(read: () => T, done: (v: T) => boolean, ms = 15_000): Pr
 
 // The hub, a target, a phone, and the phone's path to the hub through the simulated firewall.
 async function setup(o: { device?: boolean } = {}) {
-  const h = await hub({ core: { network: { windowMs: WINDOW_MS } } });
+  const h = await hub({ core: { mesh: PROXY, network: { windowMs: WINDOW_MS } } });
   const dir = mkdtempSync(join(tmpdir(), 'nova-net-'));
   const token = fakeToken();
   const net = await startNetconfig({ file: join(dir, 'router.json'), token, initial: INITIAL });
@@ -63,7 +68,7 @@ async function setup(o: { device?: boolean } = {}) {
       while (polling) {
         // The simulated network: the phone's packets get through only while the firewall allows the mesh.
         if ((net.config().firewall?.allow ?? []).includes('mesh')) {
-          const r = await call(h.mesh, 'GET', '/api/v1/health', undefined, { authorization: `Bearer ${phone!.token}` }).catch(() => null);
+          const r = await call(h.mesh, 'GET', '/api/v1/health', undefined, { authorization: `Bearer ${phone!.token}`, ...AWAY }).catch(() => null);
           if (r) reached++;
         } else dropped++;
         await sleep(40);
@@ -135,7 +140,9 @@ test('M10d gate: a network change applies, the stand-in loses contact, and Nova 
     assert.equal(revert.brief.inputs?.by, 'switch');
     assert.equal(revert.state, 'done');
     assert.match(revert.verification!.checks[0]!.why, /the snapshot exactly/);
-    assert.match(core.log.problems({ open: true }).map((p) => p.message).join('\n'), /Nova lost contact with your devices after “Close everything but the web” on Example router, so it is putting the snapshot back by itself/);
+    const lost = core.log.problems().filter((p) => /Nova lost contact with your devices after “Close everything but the web” on Example router, so it is putting the snapshot back by itself/.test(p.message));
+    assert.equal(lost.length, 1, 'the problem was raised');
+    assert.ok(lost[0]!.resolved_at, 'and closed once the snapshot was back');
     assert.match(messages(core), /is back to how it was before “Close everything but the web”/);
     // The phone reaches the hub again.
     await until(s.reached, (n) => n > reachedAtApply + 2);
@@ -193,7 +200,7 @@ test('M10d: the hub’s own screen is not contact: with the phone silent, consol
 test('M10d: no paired device, no change; a patch that sets a secret is refused; a target changed since the snapshot is left alone', { timeout: 60_000 }, async () => {
   const none = await setup({ device: false });
   try {
-    assert.throws(() => none.h.core.network.start({ target: none.t.id, patch: { firewall: { allow: ['web'] } } }), /Nova confirms a network change by hearing from one of your devices afterwards, and none is paired/);
+    assert.throws(() => none.h.core.network.start({ target: none.t.id, patch: { firewall: { allow: ['web'] } } }), /Nova confirms a network change by hearing from one of your devices afterwards \(phone or browser\), and none is paired/);
   } finally { await none.stop(); }
 
   const s = await setup();
@@ -227,14 +234,14 @@ test('M10d: a revert that finds someone else’s change after Nova’s doesn’t
     writeFileSync(s.net.file, `${JSON.stringify(theirs, null, 2)}\n`);
     const v = await until(() => core.network.view(id), (x) => ['kept', 'reverted', 'revert_failed'].includes(x.state), 15_000);
     assert.equal(v.state, 'revert_failed', String(v.reason));
-    assert.match(String(v.reason), /changed after Nova’s change \(it isn’t the snapshot or Nova’s change\), so Nova didn’t overwrite it/);
+    assert.match(String(v.reason), /changed after Nova’s change, so Nova didn’t overwrite it/);
     assert.match(core.log.problems({ open: true }).map((p) => p.message).join('\n'), /Nova couldn’t put Example router back to the snapshot/);
     assert.deepEqual(s.net.config(), theirs);
   } finally { await s.stop(); }
 });
 
 test('M10d: only a device trusted at the apply counts: one paired afterwards doesn’t keep the change', { timeout: 60_000 }, async () => {
-  const h = await hub({ core: { network: { windowMs: 4000 } } });
+  const h = await hub({ core: { mesh: PROXY, network: { windowMs: 4000 } } });
   const dir = mkdtempSync(join(tmpdir(), 'nova-net-'));
   const token = fakeToken();
   const net = await startNetconfig({ file: join(dir, 'router.json'), token, initial: INITIAL });
@@ -250,7 +257,7 @@ test('M10d: only a device trusted at the apply counts: one paired afterwards doe
     const late = await enroll(h, { name: 'Example tablet', kind: 'browser' });
     const end = Date.now() + 4500;
     while (Date.now() < end && h.core.network.view(id).state === 'watching') {
-      await call(h.mesh, 'GET', '/api/v1/health', undefined, { authorization: `Bearer ${late.token}` });
+      await call(h.mesh, 'GET', '/api/v1/health', undefined, { authorization: `Bearer ${late.token}`, ...AWAY });
       await sleep(50);
     }
     const v = await until(() => h.core.network.view(id), (x) => x.state === 'reverted', 10_000);
@@ -265,7 +272,7 @@ test('M10d: only a device trusted at the apply counts: one paired afterwards doe
 
 test('M10d: after a restart, a change past its deadline with no contact reverts', { timeout: 60_000 }, async () => {
   // A long window, so only the restart's own check can fire it.
-  const h = await hub({ core: { network: { windowMs: 3_600_000 } } });
+  const h = await hub({ core: { mesh: PROXY, network: { windowMs: 3_600_000 } } });
   const dir = mkdtempSync(join(tmpdir(), 'nova-net-'));
   const token = fakeToken();
   const net = await startNetconfig({ file: join(dir, 'router.json'), token, initial: INITIAL });
@@ -281,7 +288,7 @@ test('M10d: after a restart, a change past its deadline with no contact reverts'
     const clock = h.clock.t;
     await h.stop();
     // Nova starts again two hours later.
-    core2 = createCore({ home: h.home, version: '0.1.0', trustedOrigin: () => true, now: () => new Date(clock + 2 * 3600_000), mesh: { publicUrl: 'http://hub.example:4320', transport: 'network' } });
+    core2 = createCore({ home: h.home, version: '0.1.0', trustedOrigin: () => true, now: () => new Date(clock + 2 * 3600_000), mesh: PROXY });
     core2.start();
     const v = await until(() => core2!.network.view(id), (x) => x.state === 'reverted', 15_000);
     assert.equal(v.state, 'reverted', String(v.reason));
@@ -300,9 +307,9 @@ test('M10d: Nova stopped mid-write still has a switch: after the restart, withou
   const landed = { yes: false };
   const hanging = (t: { url: string; token: () => string | null }) => {
     const real = httpConfig({ url: t.url, token: t.token });
-    return { read: real.read, write: async (config: Config, v: string) => { await real.write(config, v); landed.yes = true; return new Promise<never>(() => {}); } };
+    return { read: real.read, write: async (body: string, v: string) => { await real.write(body, v); landed.yes = true; return new Promise<never>(() => {}); } };
   };
-  const h = await hub({ core: { network: { windowMs: 3_600_000, target: hanging } } });
+  const h = await hub({ core: { mesh: PROXY, network: { windowMs: 3_600_000, target: hanging } } });
   let core2: Core | null = null;
   try {
     await enroll(h, { name: 'Example phone', kind: 'phone' });
@@ -316,7 +323,7 @@ test('M10d: Nova stopped mid-write still has a switch: after the restart, withou
     assert.ok(h.core.network.view(id).deadline, 'the deadline was written before the write');
     const clock = h.clock.t;
     await h.stop();
-    core2 = createCore({ home: h.home, version: '0.1.0', trustedOrigin: () => true, now: () => new Date(clock + 2 * 3600_000), mesh: { publicUrl: 'http://hub.example:4320', transport: 'network' } });
+    core2 = createCore({ home: h.home, version: '0.1.0', trustedOrigin: () => true, now: () => new Date(clock + 2 * 3600_000), mesh: PROXY });
     core2.start();
     const v = await until(() => core2!.network.view(id), (x) => x.state === 'reverted', 15_000);
     assert.equal(v.state, 'reverted', String(v.reason));

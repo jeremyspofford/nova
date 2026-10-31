@@ -7,16 +7,20 @@
 //   PUT /config   → If-Match: "<version>" required; 412 if the configuration changed since; 200 with
 //                   the new ETag
 //
-// Both need Authorization: Bearer <token>. Every request is kept (`hits`), never its token. Used as
-// a module (startNetconfig) or on its own: node fake-netconfig.js --file F --token T [--port N].
+// Both need Authorization: Bearer <token>. Every request is kept (`hits`), never its token. A PUT is
+// kept byte for byte as it was sent (a real target that re-serialised would hide what a client did to
+// the text). Variants: `stamp: 'revision'` sets that field itself on every write (re-serialising), as
+// many config APIs do, and `etagOnPut: false` answers a PUT without an ETag.
+// Used as a module (startNetconfig) or on its own: node fake-netconfig.js --file F --token T [--port N].
 import { createHash } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 
 const version = (text) => createHash('sha256').update(text).digest('hex').slice(0, 16);
 
-/** @param {{ file: string, token: string, initial?: unknown, port?: number }} o */
-export async function startNetconfig({ file, token, initial = null, port = 0 }) {
+/** @param {{ file: string, token: string, initial?: unknown, port?: number, stamp?: string | null, etagOnPut?: boolean }} o */
+export async function startNetconfig({ file, token, initial = null, port = 0, stamp = null, etagOnPut = true }) {
+  let rev = 0;
   if (initial !== null) writeFileSync(file, `${JSON.stringify(initial, null, 2)}\n`);
   const hits = [];
   const read = () => readFileSync(file, 'utf8');
@@ -36,10 +40,11 @@ export async function startNetconfig({ file, token, initial = null, port = 0 }) 
       let parsed;
       try { parsed = JSON.parse(body); } catch { return send(400, { error: 'not JSON' }); }
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return send(400, { error: 'a configuration is an object' });
-      const text = `${JSON.stringify(parsed, null, 2)}\n`;
+      let text = body;
+      if (stamp) { parsed[stamp] = ++rev; text = `${JSON.stringify(parsed, null, 2)}\n`; }
       writeFileSync(`${file}.tmp`, text);
       renameSync(`${file}.tmp`, file);
-      return send(200, { version: version(text) }, { etag: `"${version(text)}"` });
+      return etagOnPut ? send(200, { version: version(text) }, { etag: `"${version(text)}"` }) : send(200, { ok: true });
     }
     return send(405, { error: 'GET or PUT' });
   });

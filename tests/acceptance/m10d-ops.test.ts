@@ -35,9 +35,11 @@ test('M10d gate: infrastructure, a network change and an account step through ch
   const net = await startNetconfig({ file: join(mkdtempSync(join(tmpdir(), 'nova-m10d-net-')), 'router.json'), token: netToken, initial: INITIAL });
   const nova = await m.start({
     NOVA_AGENT_CMD: `node ${join(ROOT, 'scripts/stand-ins/fake-ops-chat.js')}`, NOVA_AGENT_EGRESS: 'none',
-    NOVA_MESH_URL: 'http://127.0.0.1:0', NOVA_MESH_TRANSPORT: 'network',
+    NOVA_MESH_URL: 'http://127.0.0.1:0', NOVA_MESH_TRANSPORT: 'proxy', NOVA_MESH_PUBLIC_URL: 'https://hub.example.test',
     PATH: `${path}:${process.env.PATH ?? ''}`,
   });
+  // Behind the (stand-in) TLS proxy: the listener's own address, from the server's ready line.
+  const meshBase = `http://127.0.0.1:${/listening on [^ ]*:(\d+),/.exec(nova.out.join(''))?.[1]}`;
   const chat = async (text: string) => {
     const res = await fetch(`${m.base}/api/sessions`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify({ text }) });
     assert.equal(res.status, 201);
@@ -115,9 +117,12 @@ test('M10d gate: infrastructure, a network change and an account step through ch
     transcripts.push(refused.text);
     assert.match(refused.text, /none is paired\. Pair your phone first/);
     evidence.push('- Network change with no paired device: refused, and chat said why (“Pair your phone first”).');
-    // A phone pairs over the mesh listener, and keeps in touch while the firewall lets the mesh through.
+    // A phone pairs over the mesh listener, and keeps in touch while the firewall lets the mesh through,
+    // from another machine through the TLS proxy in front of the listener (NOVA_MESH_TRANSPORT=proxy:
+    // the proxy reports its address; 192.0.2.x is documentation space). Contact from the hub's own
+    // machine never counts.
     const code = (await post('/mesh/pairings')).body.code;
-    const phone = new Joiner(nova.mesh!, () => Math.floor(Date.now() / 1000), { name: 'Example phone', kind: 'phone' });
+    const phone = new Joiner(meshBase, () => Math.floor(Date.now() / 1000), { name: 'Example phone', kind: 'phone' });
     assert.equal((await phone.join(code)).status, 201);
     assert.equal((await phone.reveal()).status, 200);
     assert.equal((await post(`/mesh/requests/${phone.requestId}/approve`, { confirm: true })).status, 200);
@@ -127,7 +132,7 @@ test('M10d gate: infrastructure, a network change and an account step through ch
     polling = true;
     void (async () => {
       while (polling) {
-        if ((net.config().firewall?.allow ?? []).includes('mesh')) await call(nova.mesh!, 'GET', '/api/v1/health', undefined, { authorization: `Bearer ${session.body.token}` }).catch(() => null);
+        if ((net.config().firewall?.allow ?? []).includes('mesh')) await call(meshBase, 'GET', '/api/v1/health', undefined, { authorization: `Bearer ${session.body.token}`, 'x-forwarded-for': '192.0.2.50' }).catch(() => null);
         await sleep(100);
       }
     })();
