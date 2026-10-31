@@ -103,6 +103,10 @@ test('M10f: the whole first session on Linux by clicking, ending on the first vi
     for (const text of ['Alex', 'yes', 'keep', 'plainly', 'keep everything on this machine']) { await typed(page, text); mark(`typed “${text}”`); }
     assert.match((await lastNova(page)) ?? '', /You chose local-only: looking on the network sends one short query/);
     await click('#setup [data-action="setup-pick"][data-label="The network too"]', 'look: the network too');
+    // Local-only: the warning is acknowledged before anything is sent onto the network.
+    assert.match((await lastNova(page)) ?? '', /beyond this machine[\s\S]*go ahead\?/);
+    assert.equal(runtime.hits.length, 0);
+    await click('#setup [data-action="setup-pick"][data-label="Yes, look on the network"]', 'acknowledged the warning');
     assert.match((await lastNova(page)) ?? '', /On this computer I found Ollama 0\.35\.1[\s\S]*None of it is connected/);
     // The import: every source found, ticked; Continue brings them in.
     assert.equal(await page.locator('#setup input[name="setup-choice"]').count(), 3);

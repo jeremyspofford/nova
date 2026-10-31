@@ -70,7 +70,7 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     assert.match(first.question, /This is a (Linux|macOS|Windows|Linux inside Windows \(WSL2\)) computer/);
     mark('setup opened: this computer described');
     evidence.push('## Setup conversation', '', `**Nova:** ${first.question}`, '');
-    const answers = ['new', 'yes', 'yes', "Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'this computer and the network too', 'all', 'yes'];
+    const answers = ['new', 'yes', 'yes', "Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'this computer and the network too', 'yes, look on the network', 'all', 'yes'];
     let last: { reply: string; view: { done: boolean; step: string; options: { choices: { id: string; selected: boolean; available?: boolean }[] } | null; first: { found: { kind: string; connected: boolean }[]; waiting: number; action: { id: string; label: string }; device: { backend: string } } | null }; task: { id: string } | null } | null = null;
     for (const text of answers) {
       const before = last?.view.step ?? 'device';
@@ -122,7 +122,7 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     assert.ok(humanS * 1000 < FIRST_WIN_LIMIT_MS, `the human path, estimated, is ${humanS} s`);
     evidence.push('## The timed first win', '',
       `- Measured (machine speed, from the first GET /setup): **${winMs} ms**, under the 15-minute bound.`,
-      `- The human path, estimated: ${answers.length} answers, ${clicks} clicks after setup, ${words} words shown by Nova. At ${READ_WPM} words a minute, ${ANSWER_S} s per answer and ${CLICK_S} s per click: **about ${Math.round(humanS / 60)} min ${humanS % 60} s**. An estimate, not a measurement of a person.`,
+      `- The human path, estimated: ${answers.length} answers, ${clicks} clicks after setup, ${words} words shown by Nova. At ${READ_WPM} words a minute, ${ANSWER_S} s per answer and ${CLICK_S} s per click: **about ${Math.floor(humanS / 60)} min ${humanS % 60} s**. An estimate, not a measurement of a person.`,
       '', '| Step | ms from start |', '|---|---|', ...path.map((p) => `| ${p.step.replace(/\|/g, '/')} | ${p.ms} |`), '');
     console.log(`first win: ${winMs} ms measured; the human path estimated at ${humanS} s (${words} words, ${answers.length} answers, ${clicks} clicks)`);
     const profile = await get('/profile');

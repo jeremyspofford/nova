@@ -15,6 +15,7 @@ import { backendFor, SUPERVISOR_WORDS } from './onboard/backend.ts';
 import { detectOs, factsFrom, factsWords, recommendedHubPurposes, type DeviceFacts, type OsFamily } from './onboard/detect.ts';
 import type { Discovery } from './onboard/discover.ts';
 import { firstAction, type FirstView } from './onboard/first.ts';
+import { mentionsDevice, readPicks, readScope } from './onboard/consent.ts';
 import type { Imported, Source } from './onboard/sources.ts';
 import type { Hardware } from './models/hardware.ts';
 import type { PrivacyMode } from './envelope.ts';
@@ -36,6 +37,8 @@ export interface Onboarded {
   network?: 'new';
   backend?: 'supervisor';
   discovery?: Discovery | null;
+  // Under local-only, a network yes waits here until the warning is acknowledged.
+  network_pending?: boolean;
   sources?: Source[];
   imported?: Imported[];
 }
@@ -85,7 +88,6 @@ const PURPOSE_HINTS: [Purpose, RegExp][] = [
   ['capture-source', /\bcapture/i],
   ['general-server', /\b(general|server|services?)\b/i],
 ];
-const SOURCE_HINTS: Record<Source['kind'], RegExp> = { notes: /\bnotes?\b/i, calendar: /\b(calendar|events?|ics)\b/i, bookmarks: /\b(bookmarks?|browser|chrome|chromium|firefox|brave|edge)\b/i };
 
 const clean = (s: string) => s.trim().replace(/\s+/g, ' ').replace(/[.!]+$/, '');
 
@@ -289,15 +291,23 @@ export class Setup extends EventEmitter {
         return then(`Got it: ${PRIVACY_WORDS[p]}.`, 'discover');
       }
       case 'discover': {
-        // Discovery runs only when the person asks (the smart-home ADR §6): "skip" means no.
-        if (NO.test(text) || /^(none|nothing|don['’]?t)\b/i.test(text)) {
+        // Discovery runs only when the person asks (the smart-home ADR §6), and consent fails closed
+        // (onboard/consent.ts): only an unambiguous yes looks, and only where it says.
+        let scope = readScope(text);
+        if (on.network_pending) {
+          // The warning was shown: a plain yes now acknowledges it; naming this computer keeps it here.
+          if (scope === 'device' && !mentionsDevice(text)) scope = 'network';
+        } else if (scope === 'network' && this.#profile.privacyDefault() === 'local-only') {
+          on.network_pending = true;
+          return { reply: this.#ask('discover', s), next: step };
+        }
+        if (scope === 'unclear') return { reply: on.network_pending ? 'Look on the network, this computer only, or no?' : 'This computer only, the network too, or no?', next: step };
+        on.network_pending = false;
+        if (scope === 'none') {
           on.discovery = null;
           return then(`No looking, then. ${IMPORT_FOLDER}`, 'first_task');
         }
-        const network = /\b(network|lan|wi-?fi|both|everything|too|also)\b/i.test(text);
-        if (!network && !(YES.test(text) || /\b(this (computer|machine|one)|here|locally|just this|only this)\b/i.test(text))) {
-          return { reply: 'This computer only, the network too, or no?', next: step };
-        }
+        const network = scope === 'network';
         const d = await this.#on.discover(network ? 'network' : 'device');
         on.discovery = d;
         on.sources = this.#on.sources();
@@ -306,15 +316,10 @@ export class Setup extends EventEmitter {
       }
       case 'import': {
         const sources = on.sources ?? [];
-        let picked: Source[];
-        if (NO.test(text) || /^(none|nothing)\b/i.test(text)) picked = [];
-        else if (YES.test(text) || /^(all|everything)\b/i.test(text)) picked = sources;
-        else {
-          // By name first (what a screen sends), then by the words people use.
-          const named = sources.filter((src) => text.toLowerCase().includes(src.label.toLowerCase()));
-          picked = named.length ? named : sources.filter((src) => SOURCE_HINTS[src.kind].test(text) || (!!src.app && text.toLowerCase().includes(src.app.toLowerCase())));
-          if (!picked.length) return { reply: `Which of these, if any: ${sources.map((x) => x.label).join('; ')}? (Say which, “all”, or “none”.)`, next: step };
-        }
+        // Only what is said yes to is read (onboard/consent.ts); anything unclear asks again.
+        const read = readPicks(text, sources);
+        if (read.kind === 'unclear') return { reply: `Which of these, if any: ${sources.map((x) => x.label).join('; ')}? (Say which, “all”, or “none”.)`, next: step };
+        const picked: Source[] = read.kind === 'none' ? [] : sources.filter((x) => read.ids.includes(x.id));
         if (!picked.length) { on.imported = []; return then(`Nothing brought in, then. ${IMPORT_FOLDER}`, 'first_task'); }
         const done = await this.#on.import(picked);
         on.imported = done;
@@ -377,6 +382,7 @@ export class Setup extends EventEmitter {
         return `Last setting: privacy. Local-only means nothing leaves this machine.${chat} I’d keep it local unless you want cloud help when local isn’t enough. Keep it local-only, or allow cloud when needed?`;
       }
       case 'discover': {
+        if (s.onboarding?.network_pending) return 'Looking on the network sends one short query to the devices on it, beyond this machine, with nothing about you in it. You chose local-only, so I ask first: go ahead? (Yes, “this computer only”, or no.)';
         // Looking on the network sends a query onto it: under local-only, that is said before asking.
         const local = this.#profile.privacyDefault() === 'local-only' ? ' You chose local-only: looking on the network sends one short query to the devices on it, with nothing about you in it, so say “network too” only if that’s fine.' : '';
         return `Shall I look for things Nova could work with? On this computer: a local model runtime, Screenpipe or Home Assistant, and notes, calendar files or browser bookmarks I could bring in. On your network too: a home hub, and other computers that could join. Looking only finds them: nothing is connected, and nothing is read.${local} (This computer, network too, or no?)`;
@@ -409,6 +415,11 @@ export class Setup extends EventEmitter {
       case 'backend':
         return { kind: 'one', choices: backendFor(this.#deviceFacts(s).os).options.map((o) => ({ id: o.id, label: o.label, note: o.note, selected: o.recommended, available: o.available })) };
       case 'discover':
+        if (s.onboarding?.network_pending) return { kind: 'one', choices: [
+          { id: 'network-ok', label: 'Yes, look on the network', note: 'One short query to the devices on it.', selected: false },
+          { id: 'device', label: 'This computer only', note: 'Nothing goes onto the network.', selected: true },
+          { id: 'no', label: 'No', note: 'Look for nothing.', selected: false },
+        ] };
         return { kind: 'one', choices: [
           { id: 'device', label: 'This computer', note: 'Services here, and notes, calendar files or bookmarks.', selected: true },
           { id: 'network', label: 'The network too', note: 'One short query to the devices on it.', selected: false },

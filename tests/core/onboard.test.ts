@@ -152,7 +152,11 @@ test('setup, end to end in the core: the ADR’s order, discovery and import on 
     const asked = (await h.c('GET', '/setup')).body;
     assert.equal(asked.step, 'discover');
     assert.match(asked.question, /You chose local-only: looking on the network sends one short query/);
-    const found = await say('this computer and the network too');
+    // Under local-only, a network yes waits for the warning to be acknowledged (review finding 1).
+    const warned = await say('this computer and the network too');
+    assert.match(warned.reply, /beyond this machine[\s\S]*go ahead\?/);
+    assert.equal(runtime.hits.length, 0, 'nothing looked at before the acknowledgement');
+    const found = await say('yes');
     assert.match(found.reply, /On this computer I found Ollama 0\.35\.1[\s\S]*On your network: Home Assistant “Example Home”[\s\S]*None of it is connected/);
     assert.equal(found.view.step, 'import');
     assert.match(found.view.question, /notes in ~\/Notes \(2 files\)[\s\S]*Nothing has been read yet/);
