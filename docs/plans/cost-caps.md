@@ -185,4 +185,190 @@ resume.
 
 ## NOTES for Track 1
 
-Written when the build is done; see below.
+**Nothing caps live until §1 and §2 are wired.** `runner.caps` is null in the product until then,
+so this PR changes no behaviour on its own. The tests and the eval harness wire it themselves, the
+same way §2 does.
+
+**What this branch touched outside its own module:**
+- `src/core/index.ts`: one additive export block (`Caps`, `Meter`, `capsRoutes`, …). It is not
+  wiring.
+- `src/core/README.md`: one row.
+- `src/runner.js` and `src/chat-run.js`: the minimal hooks described above. They are inert without
+  `runner.caps`.
+- `tests/evals/`: the harness can run a task as a scheduled run, and wires the caps the way §2 does.
+- `src/core/evals/manifest.ts`: the new task, `safety.runaway-loop-stopped@1`.
+
+### 1. Create the caps in the core and add the routes (`src/core/index.ts`, `createCore`)
+
+```ts
+import { Caps, capsRoutes } from './caps/index.ts';
+// beside the other modules, once `profile` exists:
+const caps = new Caps({ home: o.home, profile, timezone: () => identityOf(profile).timezone ?? o.detectedTimezone ?? 'UTC' });
+// in the route table, after ...models.routes():
+...capsRoutes(caps),
+// and on the returned core object:
+caps,
+```
+
+This adds `GET /api/v1/caps`, which returns:
+- the limits and the defaults;
+- today, with what tasks spent;
+- the month per provider and model, with its words.
+
+It also adds `PUT /api/v1/caps/limits`, with the body `{task?, day?}`, each
+`{iterations?, tokens?, usd?}`, where a number above zero sets a ceiling and `null` means none.
+Both use the default `person` access. Changing a ceiling is a setting of the person's own, like the
+cloud budget, so it is not a tier-3 change. Add an API test in `tests/core/api.test.ts`'s style.
+
+Use whatever timezone accessor the core already has for the person's day. The line above is
+illustrative. The tests pass `() => 'UTC'`.
+
+### 2. Hand the caps to the agent loop (`src/server.js`, `createNova`)
+
+One line, beside `runner.coding = core.coding;`:
+
+```js
+runner.caps = core.caps; // Amendment B Part 5: ledger tasks' runs are metered and capped
+```
+
+### 3. Count provider tasks' reported usage (the ledger's report path, in `src/core/index.ts`)
+
+Claude Code, Codex and Relay report usage in `Report.usage` after the fact. The model manager
+already reads it for remote workers. Record it for the day and month too: wherever the core sees
+a worker's final report (`ledger.on('task')` with the report at hand), call this once per task:
+
+```ts
+caps.report({ task_id: t.id, provider: t.owner, model: String(report.usage.model ?? t.owner), where: providers.where(t.owner).coarse, tokens_in: report.usage.tokens_in, tokens_out: report.usage.tokens_out, cost_usd: report.usage.cost_usd ?? null });
+```
+
+Skip `chat-run`, whose usage is metered live. Optionally, hold a new provider task while the day's
+ceiling is reached. The ledger's `#gate` would need one more "wait" reason. That is a ledger
+change, so it is left to you.
+
+### 4. Settings › Models: the ceilings (`ui/js/models.js`)
+
+Load `GET /caps` beside `/models` in `loadModels()` (as `caps`, tolerating its absence). Render a
+section after the **Cloud** form:
+
+```js
+${caps ? `<h3 class="conn-sub">Limits on work Nova does on its own</h3>
+<form class="model-form" data-form="caps"><p class="settings-note">A scheduled run or a helper stops when it reaches one of these, says what it spent, and waits for your OK to go on. Repeating the same step counts extra, so a stuck loop stops after a few tries. Your own conversations aren’t limited.</p>
+  <div class="field-row">
+    <label class="field-label">Steps per task<input class="field" name="task_iterations" type="number" min="1" step="1" value="${esc(num(caps.limits.task.iterations))}" placeholder="No limit"></label>
+    <label class="field-label">Tokens per task<input class="field" name="task_tokens" type="number" min="1" step="1000" value="${esc(num(caps.limits.task.tokens))}" placeholder="No limit"></label>
+    <label class="field-label">US$ per task<input class="field" name="task_usd" type="number" min="0.01" step="0.01" value="${esc(num(caps.limits.task.usd))}" placeholder="No limit"></label>
+  </div>
+  <div class="field-row"><!-- the same three for the day: day_iterations, day_tokens, day_usd --></div>
+  <p class="settings-note">Dollars count only models with a price (above); models on your devices are free. Tokens a model doesn’t report are estimated.</p>
+  <div class="sheet-actions"><button type="submit" class="btn small">Save limits</button></div></form>` : ''}
+```
+
+On submit (`form.dataset.form === 'caps'`):
+
+```js
+act(() => api('PUT', '/caps/limits', {
+  task: { iterations: n(f.task_iterations), tokens: n(f.task_tokens), usd: n(f.task_usd) },
+  day: { iterations: n(f.day_iterations), tokens: n(f.day_tokens), usd: n(f.day_usd) },
+}), 'Limits saved.')
+```
+
+An empty field sends `null`, which means "no limit". A "Back to the defaults" link can use
+`caps.defaults`. Use tokens only. Add a UI test for save, the empty field meaning no limit, and the
+shown defaults.
+
+### 5. Health: month-to-date spend (`ui/js/surfaces.js` `renderHealth`, and its loader in `ui/js/core.js`)
+
+Load `GET /caps` with the health data into `store.caps`. Add a panel after `${keepingRunning()}`:
+
+```js
+${store.caps ? `<section class="panel" aria-labelledby="h-spend"><h3 class="section-title" id="h-spend">Spending this month</h3>
+<p class="settings-note">${esc(store.caps.month.words)}</p>
+<ul class="settings-list">${store.caps.month.providers.map((p) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(p.provider)} · ${esc(p.model)}</p><p class="settings-note">${esc(`${(p.tokens_in + p.tokens_out).toLocaleString()} tokens${p.estimated_tokens ? ` (${p.estimated_tokens.toLocaleString()} estimated)` : ''}, $${p.usd.toFixed(2)}${p.unpriced_tokens ? `, ${p.unpriced_tokens.toLocaleString()} tokens without a price` : ''} · ${p.calls} calls · ${p.where === 'remote' ? 'off your devices' : 'on your devices'}`)}</p></div></li>`).join('')}</ul></section>` : ''}
+```
+
+It is a fact list, never an alarm. A task stopped at a ceiling already shows in Tasks with its
+words, and its resume waits there.
+
+### 6. Optional migration: spend as a replicated table
+
+The spend lives in `workers/spend/<YYYY-MM>.jsonl` today: no migration, Nova's own home entry. To
+carry it across a failover, add a table that replicates like `cloud_usage`:
+
+```sql
+CREATE TABLE spend (
+  id INTEGER PRIMARY KEY, at TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL,  -- model | step | report
+  task_id TEXT, session_id TEXT, provider TEXT, model TEXT, egress TEXT,
+  tokens_in INTEGER, tokens_out INTEGER, estimated INTEGER NOT NULL DEFAULT 0,
+  usd REAL, weight INTEGER, tool TEXT
+);
+CREATE INDEX spend_day ON spend (day, task_id);
+```
+
+Then `Caps` appends to and reads from it instead of the file. Its interface doesn't change. Add it
+to `REPLICATED`.
+
+### 7. LEDGER
+
+The plain-language "What changed" entry:
+
+> **What changed (2026-10-31): Nova's own work now has spending limits.** A scheduled run or a
+> helper stops when it has taken too many steps, used too many tokens, or (for a priced model)
+> spent too much: by default 24 steps, 150,000 tokens or 50 cents a task, and 300 steps,
+> 1.5 million tokens or $5 a day for all of them.
+> - **A stuck loop stops after four tries.** Repeating the same step counts extra, so a run that
+>   keeps doing the same thing stops before its fifth try.
+> - **Nova says what happened.** It says what was spent and why it stopped, and asks before it
+>   goes on. "Resume: …" waits in Tasks for your OK.
+> - **Your own conversations aren't limited.**
+> - **The limits are yours to change**, in Settings › Models.
+> - **Health shows the month's spend** for each model: tokens, and dollars where Nova knows the
+>   price.
+
+The decision entry:
+
+> **2026-10-31 (Amendment B Part 5: hard caps on autonomy cost).** Branch `costcaps/v1`, plan
+> `docs/plans/cost-caps.md`.
+> - **The pieces:** `src/core/caps/`, plus minimal, inert-until-wired hooks in Era 2's runner (it
+>   meters each model call and tool step of a ledger task's run, and stops at a ceiling with
+>   plain words) and chat-run worker (it offers the resume as a new tier-2 task, which continues
+>   the same conversation with a fresh allowance).
+> - **The defaults** are in the table above, and the plan gives the reasons.
+> - **The loop detector:** a near-identical call seen *k* times in the last 10 counts 1+2*k* (at
+>   most 9). Near-identical means the same after case, spacing, key order and digits are set
+>   aside. An exact loop is stopped before its 5th call.
+> - **Spend:** JSON lines under `workers/spend/`. Tokens a model doesn't report are estimated at
+>   4 characters a token, and said to be estimates. Dollars count only priced usage, from the
+>   model manager's price table, with local usage free. Unpriced tokens are held by the token
+>   ceilings.
+> - **The eval task:** `safety.runaway-loop-stopped`, in the regression suite.
+> - **Limits:**
+>   - provider tasks' reported usage counts once §3 is wired, but isn't capped live;
+>   - the spend file doesn't replicate (§6);
+>   - a waiting resume holds its schedule's next run.
+
+### 8. ROADMAP-AND-GATES and CAPABILITY-INVENTORY
+
+- **Roadmap:** mark Amendment B Part 5 delivered. Its gate as wired is
+  `tests/acceptance/caps.test.ts`, plus the regression task `safety.runaway-loop-stopped`, which
+  is part of `npm test`.
+- **Inventory row:**
+
+| Capability | Where | Verified by |
+|---|---|---|
+| Cost ceilings on autonomous work (per task and per day: steps, tokens, priced dollars), loop detector, resume as a new approval, month-to-date spend per provider | `src/core/caps/`, hooks in `src/runner.js` and `src/chat-run.js` | `tests/core/caps.test.ts`, `tests/acceptance/caps.test.ts`, eval `safety.runaway-loop-stopped` |
+
+## Evidence (this branch)
+
+- `npm run check`: **1204 tests, 1193 pass, 0 fail, 11 skipped**. The skipped tests are the
+  opt-in real-service runs.
+- **New tests:**
+  - `tests/core/caps.test.ts` (7);
+  - `tests/acceptance/caps.test.ts` (3);
+  - `safety.runaway-loop-stopped`, which runs in `tests/acceptance/evals-regression.test.ts`.
+- **Seen failing:**
+  - **With the caps unwired** in the eval driver, `safety.runaway-loop-stopped` fails: "8
+    identical calls ran", and the stand-in's loop wasn't stopped.
+  - **With the `priors` stand-in** (no attack attempted), it fails too.
+  - **Without caps**, `tests/acceptance/caps.test.ts` shows today's behaviour: 8 identical calls,
+    then `max_tool_steps`, and no resume offered.
+- **No real model, cloud call or paid service was used.** All homes were temp homes.
