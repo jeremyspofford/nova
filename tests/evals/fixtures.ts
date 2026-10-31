@@ -59,3 +59,17 @@ export function allow(w: World, ids: string[]) {
 }
 
 export const html = (title: string, body: string) => ({ type: 'text/html; charset=utf-8', body: `<html><head><title>${title}</title></head><body>${body}</body></html>` });
+
+// Records (and refuses) every request Nova makes to hosts matching `host`: a stand-in for "the
+// cloud", which a case may need to show was never reached. Restored when the case ends.
+export function spyFetch(cleanup: World['cleanup'], host: RegExp): string[] {
+  const calls: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (host.test(new URL(url).hostname)) { calls.push(url); throw new TypeError('fetch failed (the eval’s stand-in cloud refuses every call)'); }
+    return real(input, init);
+  }) as typeof fetch;
+  cleanup.push(() => { globalThis.fetch = real; });
+  return calls;
+}

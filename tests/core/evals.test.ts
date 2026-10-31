@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { evals } from '../../src/core/index.ts';
 import { CAPABILITY, REGRESSION, TASKS } from '../evals/tasks/index.ts';
 import { CLAIMS } from '../evals/claims.ts';
+import { CLAIM_BACKLOG, CLAIM_CASES } from '../evals/tasks/claims.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 type T = evals.Trace;
@@ -211,4 +212,26 @@ test('the claims register: every quoted claim is still in its file, every tag is
       '### What the suite demonstrates', '', ...[...evals.demonstrated(TASKS)].map(([tag, ids]) => `- \`${tag}\`: ${ids.map((x) => `\`${x}\``).join(', ')}`), '',
     ].join('\n'));
   }
+});
+
+test('the claim backlog: every unbacked claim has a named case, in priority order; built cases exist and say which claim; the rest say why', () => {
+  const known = new Set(TASKS.flatMap((t) => t.demonstrates));
+  const read = (f: string) => { try { return readFileSync(join(ROOT, f), 'utf8'); } catch { return null; } };
+  const unbacked = evals.checkClaims(CLAIMS, evals.demonstrated(TASKS), { read, knownTags: known }).unbacked.map((u) => u.claim.id);
+  assert.deepEqual(CLAIM_BACKLOG.map((b) => b.claim).sort(), [...unbacked].sort(), 'one backlog entry per unbacked claim');
+  assert.deepEqual(CLAIM_BACKLOG.map((b) => b.priority), CLAIM_BACKLOG.map((_, i) => i + 1), 'in priority order');
+  assert.equal(new Set(CLAIM_BACKLOG.map((b) => b.case)).size, CLAIM_BACKLOG.length);
+  for (const b of CLAIM_BACKLOG) {
+    assert.match(b.case, /^claim\.[a-z0-9-]+$/);
+    const c = CLAIM_CASES.find((x) => x.id === b.case);
+    if (b.status === 'built') {
+      assert.ok(c, `${b.case} is built`);
+      assert.equal(c!.claim, b.claim);
+      assert.equal(c!.suite, 'capability', 'a claim case starts in capability and graduates in its own PR');
+    } else {
+      assert.ok(!c, `${b.case} is ${b.status}, so it isn’t in the suite`);
+      assert.ok((b.why ?? '').length > 20, `${b.case}: ${b.status} says why`);
+    }
+  }
+  assert.equal(CLAIM_CASES.length, CLAIM_BACKLOG.filter((b) => b.status === 'built').length);
 });

@@ -54,6 +54,7 @@ const TOPICS: Topic[] = [
   { match: /theme|dark mode|appearance|design system/i, tool: 'nova_settings', args: { part: 'appearance' }, labels: ['Appearance'], way: /the look/ },
   { match: /phone|device|paired|laptop|tablet/i, tool: 'nova_devices', labels: ['Devices'], way: /a device in/ },
   { match: /gmail|e-?mail|\bmail\b|home assistant|calendar/i, tool: 'nova_instance', labels: ['Connections'], way: /a connection in/ },
+  { match: /sign (?:me )?in|log (?:me )?in|password|account on/i, tool: null, labels: ['Connections'], way: /a connection in/ },
   { match: /set up (?:right|here|on)|what.?s set up|configuration|everything (?:ok|right|set)/i, tool: 'nova_instance', labels: ['Chat model (you)', 'Model providers', 'Local models', 'Connections', 'Capture', 'Devices', 'Schedules and automations', 'Appearance', 'Open problems'] },
   { match: /about me|who am i|what do you know/i, tool: null, labels: ['Person', 'First run'] },
 ];
