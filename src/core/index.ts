@@ -317,6 +317,7 @@ export function createCore(o: CoreOptions) {
     sources: () => findSources(userHome, o.onboarding?.platform ?? process.platform),
     import: (picked) => importSources(picked, {
       screen: async (text, origin) => { const r = await ingest.screen({ text, source: { kind: 'file', origin } }); return { verdict: r.verdict, taint: r.taint }; },
+      screenNow: (text, origin) => { const r = ingest.screenNow({ text, source: { kind: 'file', origin } }); return { verdict: r.verdict, taint: r.taint, flagged: r.flags.some((f) => f.level !== 'note') }; },
       candidate: (c) => { ingest.candidate({ op: 'remember', kind: c.kind, content: c.content, source: c.source, taint: c.taint as Taint[] }); },
       kept: () => new Set([...memory.active().map((r) => r.content.toLowerCase()), ...ingest.candidates().filter((c) => c.op === 'remember' && c.content).map((c) => c.content!.toLowerCase())]),
     }, { userHome, now: now() }),

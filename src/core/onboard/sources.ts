@@ -5,7 +5,7 @@
 //     outside content of unknown provenance, as `self.importPack` does for a memory export. A block
 //     holds that file back with the reason; everything else becomes a memory candidate, waiting in
 //     Memory for the person's OK, out of every prompt. None of it is memory until they keep it.
-import { copyFileSync, existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdtempSync, openSync, readdirSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, extname, join, relative, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -16,6 +16,31 @@ export interface Imported { id: string; label: string; waiting: number; held: nu
 
 const MAX_FILE = 256 * 1024;
 const MAX_NOTES = 50;
+// What setup reads at most of one source (review finding 10): a calendar file, a Chromium-family
+// Bookmarks file, a Firefox places database.
+export const MAX_ICS_BYTES = 1024 * 1024;
+export const MAX_BOOKMARKS_BYTES = 8 * 1024 * 1024;
+export const MAX_PLACES_BYTES = 64 * 1024 * 1024;
+
+export class NotPlain extends Error {}
+export class TooLarge extends Error {}
+
+// Reads a file as it is now (review finding 10): not through a link, never blocking on a pipe or a
+// device, a regular file only, and no more than `max` bytes. What was listed at discovery may have
+// been swapped since.
+export function readPlain(path: string, max: number): Buffer {
+  let fd: number;
+  try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch { throw new NotPlain('It isn’t a plain file now (a link, or gone).'); }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new NotPlain('It isn’t a plain file now.');
+    if (st.size > max) throw new TooLarge('It is larger than Nova reads during setup.');
+    const buf = Buffer.alloc(st.size);
+    let got = 0;
+    while (got < st.size) { const n = readSync(fd, buf, got, st.size - got, got); if (!n) break; got += n; }
+    return buf.subarray(0, got);
+  } finally { closeSync(fd); }
+}
 const NOTE_EXT = new Set(['.md', '.markdown', '.txt']);
 
 // "~/Notes" for a path in the person's home, so a screen never shows the full path.
@@ -115,7 +140,7 @@ export function firefoxBookmarks(file: string): Bookmark[] {
   const dir = mkdtempSync(join(tmpdir(), 'nova-places-'));
   try {
     const copy = join(dir, 'places.sqlite');
-    copyFileSync(file, copy);
+    writeFileSync(copy, readPlain(file, MAX_PLACES_BYTES), { mode: 0o600 });
     const db = new DatabaseSync(copy, { readOnly: true });
     try {
       const rows = db.prepare(`SELECT b.title AS title, p.url AS url, f.title AS folder FROM moz_bookmarks b JOIN moz_places p ON p.id = b.fk LEFT JOIN moz_bookmarks f ON f.id = b.parent WHERE b.type = 1 AND p.url NOT LIKE 'place:%' LIMIT 2000`).all() as { title: string | null; url: string; folder: string | null }[];
@@ -170,6 +195,9 @@ export function calendarMemories(events: CalEvent[], now: Date): string[] {
 export interface Gate {
   // The ingest gate's screen of one file's text, as outside content of unknown provenance.
   screen(text: string, origin: string): Promise<{ verdict: 'pass' | 'quarantine' | 'block'; taint: unknown }>;
+  // Nova's own checks on each record, as importPack does: a block holds that record back; a flagged
+  // one waits flagged, with its own screen in its taint.
+  screenNow(text: string, origin: string): { verdict: 'pass' | 'quarantine' | 'block'; taint: unknown; flagged: boolean };
   // A memory waiting for the person's OK.
   candidate(c: { kind: string; content: string; source: string; taint: unknown[] }): void;
   // What is kept already or already waiting, by its words, lower case.
@@ -180,16 +208,16 @@ export interface Gate {
 export async function importSources(picked: readonly Source[], gate: Gate, o: { userHome: string; now: Date }): Promise<Imported[]> {
   const out: Imported[] = [];
   const have = gate.kept();
-  const offer = (kind: string, items: string[], source: string, taint: unknown) => {
-    let n = 0;
+  const offer = (r: Imported, kind: string, items: string[], source: string, origin: string, taint: unknown) => {
     for (const content of items) {
       const key = content.toLowerCase();
-      if (!content || have.has(key)) continue;
+      if (!content || have.has(key)) { r.skipped++; continue; }
+      const own = gate.screenNow(content, origin);
+      if (own.verdict === 'block') { r.held++; continue; }
       have.add(key);
-      gate.candidate({ kind, content, source, taint: [taint] });
-      n++;
+      gate.candidate({ kind, content, source, taint: own.flagged ? [taint, own.taint] : [taint] });
+      r.waiting++;
     }
-    return n;
   };
   for (const s of picked) {
     const r: Imported = { id: s.id, label: s.label, waiting: 0, held: 0, skipped: 0, said: '' };
@@ -198,31 +226,29 @@ export async function importSources(picked: readonly Source[], gate: Gate, o: { 
         const files = noteFiles(s.path);
         r.skipped += Math.max(0, files.length - MAX_NOTES);
         for (const f of files.slice(0, MAX_NOTES)) {
-          if (statSync(f).size > MAX_FILE) { r.skipped++; continue; }
-          const text = readFileSync(f, 'utf8');
+          let text: string;
+          try { text = readPlain(f, MAX_FILE).toString('utf8'); } catch (e) { if (e instanceof NotPlain || e instanceof TooLarge) { r.skipped++; continue; } throw e; }
           const where = tilde(o.userHome, f);
           const screened = await gate.screen(text, where);
           if (screened.verdict === 'block') { r.held++; continue; }
-          const n = offer('fact', [noteMemory(f, text)], `imported from ${where}`, screened.taint);
-          if (!n) r.skipped++;
-          r.waiting += n;
+          offer(r, 'fact', [noteMemory(f, text)], `imported from ${where}`, where, screened.taint);
         }
       } else if (s.kind === 'calendar') {
-        if (statSync(s.path).size > 4 * MAX_FILE) { r.skipped++; r.said = 'It is larger than Nova reads during setup.'; out.push(r); continue; }
-        const text = readFileSync(s.path, 'utf8');
+        const text = readPlain(s.path, MAX_ICS_BYTES).toString('utf8');
         const where = tilde(o.userHome, s.path);
         const screened = await gate.screen(text, where);
         if (screened.verdict === 'block') r.held++;
-        else r.waiting += offer('timeline', calendarMemories(icsEvents(text), o.now), `imported from ${where}`, screened.taint);
+        else offer(r, 'timeline', calendarMemories(icsEvents(text), o.now), `imported from ${where}`, where, screened.taint);
       } else {
-        const list = s.path.endsWith('.sqlite') ? firefoxBookmarks(s.path) : chromiumBookmarks(readFileSync(s.path, 'utf8'));
+        const list = s.path.endsWith('.sqlite') ? firefoxBookmarks(s.path) : chromiumBookmarks(readPlain(s.path, MAX_BOOKMARKS_BYTES).toString('utf8'));
         const memories = bookmarkMemories(list, s.app ?? 'browser');
-        const screened = await gate.screen(memories.join('\n'), `${s.app ?? 'browser'} bookmarks`);
+        const origin = `${s.app ?? 'browser'} bookmarks`;
+        const screened = await gate.screen(memories.join('\n'), origin);
         if (screened.verdict === 'block') r.held++;
-        else r.waiting += offer('fact', memories, `imported from ${s.app ?? 'browser'} bookmarks`, screened.taint);
+        else offer(r, 'fact', memories, `imported from ${origin}`, origin, screened.taint);
       }
     } catch (e) {
-      r.said = `Nova couldn’t read it: ${(e as Error).message.slice(0, 120)}`;
+      r.said = e instanceof NotPlain || e instanceof TooLarge ? `Nova didn’t read it: ${e.message}` : `Nova couldn’t read it: ${(e as Error).message.slice(0, 120)}`;
     }
     if (!r.said) r.said = `${r.waiting} waiting for your OK${r.held ? `, ${r.held} held back because ${r.held === 1 ? 'it' : 'they'} looked like ${r.held === 1 ? 'it was' : 'they were'} trying to give instructions` : ''}${r.skipped ? `, ${r.skipped} skipped (already kept, empty or too large)` : ''}.`;
     out.push(r);

@@ -74,6 +74,10 @@ test('what to bring in: negations leave a source out, “only” leaves the rest
   assert.equal(ids('not the notes'), 'unclear');
   assert.equal(ids('hmm'), 'unclear');
   assert.equal(ids('notes? no'), 'unclear', 'a mention and a bare no together are unclear');
+  // Labels are matched exactly, case and all: on Linux ~/Notes and ~/notes are two folders.
+  const two = [SOURCES[0], { ...SOURCES[0], id: 'notes:notes', label: 'notes in ~/notes' }];
+  const r = readPicks('notes in ~/notes', two as never);
+  assert.deepEqual(r.kind === 'picked' ? r.ids : r.kind, ['notes:notes']);
   // What a screen sends: the labels picked, joined.
   assert.deepEqual(ids('notes in ~/Notes, bookmarks from Firefox'), ['notes:Notes', 'bookmarks:firefox']);
 });

@@ -128,6 +128,7 @@ test('import sources: listed by place without reading a file; only what is picke
   const waiting: { kind: string; content: string; source: string }[] = [];
   const gate = {
     screen: async (text: string, origin: string) => { screened.push(origin); return { verdict: /lighthouses/.test(text) ? 'block' as const : 'quarantine' as const, taint: { origin } }; },
+    screenNow: () => ({ verdict: 'pass' as const, taint: null, flagged: false }),
     candidate: (c: { kind: string; content: string; source: string }) => { waiting.push(c); },
     kept: () => new Set<string>(),
   };
@@ -254,4 +255,52 @@ test('hostile mDNS replies: bounded work (answers per reply, instances per disco
   assert.throws(() => decodeMessage(Buffer.concat(parts)), /too long/);
   const q = encodeMdnsQuery([SVC]);
   assert.throws(() => decodeMessage(q.subarray(0, q.length - 3)), /question runs past the end/);
+});
+
+test('review finding 10: each record checked as importPack does, a file swapped for a link or a pipe refused at import, Chromium bookmarks capped', async () => {
+  const { symlinkSync, unlinkSync, writeFileSync, mkdirSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const { MAX_BOOKMARKS_BYTES } = await import('../../src/core/onboard/sources.ts');
+  const home = mkdtempSync(join(tmpdir(), 'nova-onboard-10-'));
+  seedUserHome(home);
+  const found = findSources(home, 'linux');
+  const waiting: { content: string; taint: unknown[] }[] = [];
+  const checked: string[] = [];
+  const gate = {
+    screen: async () => ({ verdict: 'quarantine' as const, taint: { file: true } }),
+    // Each record on its own: one that tries to give instructions is held back; a flagged one waits flagged.
+    screenNow: (text: string) => { checked.push(text); return /Example bread/.test(text) ? { verdict: 'block' as const, taint: { rec: 'block' }, flagged: true } : /soup/.test(text) ? { verdict: 'quarantine' as const, taint: { rec: 'flag' }, flagged: true } : { verdict: 'pass' as const, taint: { rec: 'ok' }, flagged: false }; },
+    candidate: (c: { content: string; taint: unknown[] }) => { waiting.push(c); },
+    kept: () => new Set<string>(),
+  };
+  // Each bookmark folder is one record; the Recipes folder holds the blocked title.
+  const chrome = found.find((s) => s.app === 'Chrome')!;
+  const r = await importSources([chrome], gate as never, { userHome: home, now: new Date('2026-10-31T00:00:00Z') });
+  assert.equal(r[0]!.held, 1, JSON.stringify(r));
+  assert.ok(checked.length >= 2, 'every record was checked');
+  assert.ok(waiting.every((w) => !/Example bread/.test(w.content)));
+  // A note swapped for a link after it was found, and a calendar file swapped for a pipe: refused, no hang.
+  const notes = found.find((s) => s.kind === 'notes')!;
+  const target = join(home, 'Notes', 'reading.md');
+  unlinkSync(target);
+  symlinkSync('/etc/hostname', target);
+  const ics = found.find((s) => s.kind === 'calendar')!;
+  unlinkSync(ics.path);
+  execFileSync('mkfifo', [ics.path]);
+  waiting.length = 0;
+  const swapped = await importSources([notes, ics], gate as never, { userHome: home, now: new Date('2026-10-31T00:00:00Z') });
+  assert.ok(waiting.every((w) => !/localhost|hostname/i.test(w.content)), 'nothing read through the link');
+  assert.equal(swapped[0]!.waiting, 1, 'the other note still came in');
+  // Read through a link, even one swapped in after the folder was listed: refused at the read itself.
+  const { readPlain } = await import('../../src/core/onboard/sources.ts');
+  assert.throws(() => readPlain(target, 1024), /isn’t a plain file/);
+  assert.throws(() => readPlain(ics.path, 1024), /isn’t a plain file/, 'a pipe is refused without blocking');
+  assert.match(swapped[1]!.said, /isn’t a plain file/);
+  // A Bookmarks file over the cap is refused, unread.
+  const big = mkdtempSync(join(tmpdir(), 'nova-onboard-big-'));
+  mkdirSync(join(big, '.config', 'google-chrome', 'Default'), { recursive: true });
+  writeFileSync(join(big, '.config', 'google-chrome', 'Default', 'Bookmarks'), Buffer.alloc(MAX_BOOKMARKS_BYTES + 1, 0x20));
+  const bigSrc = findSources(big, 'linux').find((s) => s.kind === 'bookmarks')!;
+  const capped = await importSources([bigSrc], gate as never, { userHome: big, now: new Date() });
+  assert.match(capped[0]!.said, /larger than Nova reads during setup/);
 });
