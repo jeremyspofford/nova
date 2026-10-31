@@ -50,7 +50,8 @@ test('M10d: the apply sheet shows the plan in full and the budget, the network s
     assert.equal(apply.approval_tier, 3);
     const sheet = await open(apply.id, 'infra-sheet');
     const said = (await sheet.textContent()) ?? '';
-    assert.match(said, /Nova planned “Example” with OpenTofu\. Nothing has changed yet\./);
+    assert.match(said, /Nova planned “Example” with OpenTofu\. No infrastructure has changed yet\./);
+    assert.match(said, /Planning changes no infrastructure, but OpenTofu runs the project’s providers and data sources/);
     assert.match(said, /standin_server\.web · add · \+\$5\.00 a month/);
     assert.match(said, /After it: \$5\.00 a month of the \$6\.00 budget \(83 %\)\. That is past 80 % of the budget\./);
     assert.ok(await sheet.locator('.infra-plan[open] pre').isVisible(), 'the plan is open in front of the person');
@@ -96,6 +97,7 @@ test('M10d: the apply sheet shows the plan in full and the budget, the network s
     assert.match(nsaid, /After the change, if Nova can’t hear from one of your devices within 5 minutes, it puts the snapshot back by itself\./);
     assert.match((await nsheet.locator('.network-diff pre').textContent()) ?? '', /\+\s+"vpn"/);
     assert.ok(!nsaid.includes('example-wifi-key-placeholder'), 'the Wi-Fi key is masked');
+    assert.match(nsaid, /Keeps the changeA request from Example phone, not from this computer/);
     assert.equal(await nsheet.locator('[data-action="approve"]').isDisabled(), true);
     await nsheet.locator('input[name="confirm"]').check();
     assert.equal(await nsheet.locator('[data-action="approve"]').isDisabled(), false);
