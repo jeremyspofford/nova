@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #257 · The safety screen's questions rewritten: much better, still not trusted**
+- What changed: Nova's questions to the small local model (Tev1) about outside content were rewritten to the model maker's guidelines and tested on fresh cases written before the test ran. It caught 43 of 44 attacks, but flagged 18 of 75 harmless documents against a 10% bar, so it isn't trusted yet.
+- What you can now do: nothing changes. Nova still screens with its own checks and holds back anything unsure.
+- Still unfinished: a version that passes. The larger model got closest (24% false alarms, down from 100%).
+
 **2026-10-31 · #262 · Your three replies and the UX review filed; second-model reviews become a standing step**
 - What changed: your replies on the orb, the claims, the vault and capture screening are filed (they match what was already applied). So is your first UX review. Security-critical work, starting with the vault broker, will now come with a self-contained "review packet" you can hand to ChatGPT or Gemini.
 - What you can now do: Nothing in the app changed: paperwork only.
@@ -260,6 +265,20 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
+- **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
+  - Six Nouls: instructs_ai, override, fake_message, link_slot (decisive); wants_private_data, keep_from_user (supporting).
+  - Impersonation dropped (no one can judge a sender from the text; the deterministic layer checks headers and links), and the encoded/hidden question dropped (the gate decodes those).
+- **The rule:** a truth table at TypeSafe's 0.7/0.3 bands, not tuned. A decisive yes blocks; a decisive unsettled answer quarantines; supporting yeses quarantine alone and block together; all no passes. It replaces v1's "worst question wins at 0.2". The rule and the template were fixed at `47b26e21`, before any case.
+- **The fresh eval,** fixed at `0df233e7` before any run: 127 cases (44 text-borne attacks, 75 benign, 8 steering). No new attack text: the corpus's payloads through 8 new transforms, 5 new placements, 5 carriers and 4 steering framings. Benign: v1's 46, 24 new boundary controls, and 5 carrier-only documents.
+- **Bounds:** Part 1's, plus the steering cases scored on the combined gate.
+- **Result, on Ollama 0.40.13:**
+  - tev1:4b `7954dce2…`: detection 97.7%, false positives 24%, ECE 0.037, steering 8/8. **Fail.**
+  - tev1:0.8b `abc31fdb…`: 95.5%, 82.7%, 0.135, 8/8. **Fail.**
+
+  v2 is evidence only on both; v1 keeps its place; nothing was tuned. The service now picks the version: the newest that passed, else the newest the sorting model serves, else the newest.
+- **Pending Track 1:** the gate takes the outcome for v2 and later; a Health line.
 
 **2026-10-31 (owner documents filed: the replies on the orb, claims and vault; capture screening; the first UX review; the second-model review pattern).** Three owner documents were added to the packet exactly as given:
 - `nova-orb-claims-vault-reply-2026-10-31.md` (sha256 `0e4180d8…`);
