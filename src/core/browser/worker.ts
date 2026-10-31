@@ -29,7 +29,8 @@ import {
   BAD, COPILOT_QUESTIONS, QUESTION_WORDS, STEP_TEMPLATE, checkTotals, clip, intentMatches, isPayControl, judge, obstacles, showMoney, upsells,
   type CopilotQuestion, type Totals,
 } from './copilot.ts';
-import { CHECKOUT_READ, CLICK, ELEMENT_FACTS, FILL, MASK, PAGE_FACTS, SECRET, SELECT, type ElementFacts, type PageFacts } from './facts.ts';
+import { CHECKOUT_READ, CLICK, ELEMENT_FACTS, FILL, MASK, PAGE_FACTS, SECRET, SECRET_RECTS, SELECT, type ElementFacts, type PageFacts } from './facts.ts';
+import { cover, type Rect } from './png.ts';
 import { FLOW_PREFIX, FLOW_RULE, dryRuns, flowDef, flowTemplateId, markerOf, stepsOf, type LearntStep } from './flows.ts';
 import { LOGIN_PREFIX, Redactor, loginHost, loginName, loginRefusal, siteHost } from './logins.ts';
 import { profileDir } from './profile.ts';
@@ -106,6 +107,9 @@ export class Browser extends EventEmitter {
   #w: Wired | null = null;
   // Nova's own profile is used by one browser at a time (Chromium locks it): a task, or Forget.
   #profileUser: string | null = null;
+  // Each running task's redactor: the values its session used, masked in everything Nova writes for
+  // it, its ledger notes included.
+  #reds = new Map<string, Redactor>();
 
   constructor(o: BrowserOptions) {
     super();
@@ -334,6 +338,7 @@ export class Browser extends EventEmitter {
     const started = Date.now();
     const id = brief.task_id;
     const red = new Redactor();
+    this.#reds.set(id, red);
     const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => red.value({
       envelope: ENVELOPE_VERSION, task_id: id, status, summary, evidence: [], artifacts: [], blockers: [], follow_up_suggestions: [],
       usage: { duration_ms: Date.now() - started }, ...extra,
@@ -391,8 +396,7 @@ export class Browser extends EventEmitter {
       s.emit('change');
       mkdirSync(dir, { recursive: true });
       // Saved values never reach a picture or a read: masked on the page first.
-      if (red.size) await s.evaluate<number>(`(${MASK}).call(null, ${JSON.stringify(red.values())})`).catch(() => 0);
-      const png = await s.screenshot();
+      const png = await this.#shot(run);
       writeFileSync(join(dir, SCREENSHOT), png);
       const finalUrl = s.url;
       const verifyUrl = plan.verify?.url ?? finalUrl;
@@ -451,6 +455,7 @@ export class Browser extends EventEmitter {
       await s.close();
       if (this.sessions.get(id) === s) this.sessions.delete(id);
       if (this.#profileUser === id) this.#profileUser = null;
+      if (this.#reds.get(id) === red) this.#reds.delete(id);
     }
   }
 
@@ -796,6 +801,30 @@ export class Browser extends EventEmitter {
     if (d.answers.next !== 'continue') throw new Stop(`The site no longer matches the flow “${run.plan.flow!.name}” v${t.version} Nova learnt: ${d.why} It stopped.`);
   }
 
+  // A picture of the page. After a sign-in, saved values are masked in the page's text and fields
+  // first, then every region that could show one (a canvas, CSS content, a shadow root…) is measured
+  // before and after the capture and painted over in the PNG itself, in Nova's process, where the
+  // page can't take the cover away (review of PR #238, 4).
+  async #shot(run: Run): Promise<Buffer> { return this.#picture(run.s); }
+
+  async #picture(s: Session): Promise<Buffer> {
+    const red = this.#reds.get(s.taskId);
+    if (!red || !red.size) return s.screenshot();
+    const values = red.values();
+    await s.inspect<number>({ selector: 'html' }, MASK, [values]).catch(() => 0);
+    const measure = async (): Promise<{ all: boolean; rects: Rect[] }> => {
+      const r = await s.inspect<{ all: boolean; rects: Rect[] }>({ selector: 'html' }, SECRET_RECTS, [values]).catch(() => null);
+      const sh = await s.shadowRects().catch(() => null);
+      return r && sh ? { all: r.all, rects: [...r.rects, ...sh] } : { all: true, rects: [] };
+    };
+    const before = await measure();
+    const png = await s.screenshot();
+    const after = await measure();
+    // Anything that couldn't be measured is covered whole.
+    const rects = before.all || after.all ? [{ x: 0, y: 0, w: 1e6, h: 1e6 }] : [...before.rects, ...after.rects];
+    return cover(png, rects);
+  }
+
   // Where a step may send: its `sends` (paths on the page's own site), and the form the element
   // submits, when it is a submit button and one is given.
   #sendsOf(s: Session, step: Step, el: ElementFacts | null): string[] {
@@ -839,7 +868,7 @@ export class Browser extends EventEmitter {
       if (found) return null;
       if (Date.now() > deadline) {
         if (click && this.#o.locate) {
-          const at = await this.#o.locate(await s.screenshot(), describe(click)).catch(() => null);
+          const at = await this.#o.locate(await this.#picture(s), describe(click)).catch(() => null);
           if (at) return at;
         }
         throw new Error(`Nothing on ${hostOf(s.url)} matches ${loc.selector ?? (loc.target ? `the ${loc.target.role} “${loc.target.name}”` : '')}, after ${Math.round(timeoutMs / 1000)} s.`);
@@ -939,6 +968,8 @@ export class Browser extends EventEmitter {
   }
 
   #note(id: string, kind: string, detail: unknown): void {
+    const red = this.#reds.get(id);
+    if (red?.size) detail = red.value(detail);
     try { this.#ledger?.note(id, kind, detail); } catch (e) { this.#o.log.warn('browser', `Couldn’t record ${kind} for a task.`, { task: id, detail: (e as Error).message }); }
   }
 

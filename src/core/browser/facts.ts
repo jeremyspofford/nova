@@ -102,6 +102,7 @@ export const SECRET = `function (value, host, part) {
 // Every place a saved value shows on the page, masked: page text that echoes it, and fields that
 // hold it. Run before a screenshot or a final read. Returns how many it masked.
 export const MASK = `function (values) {
+  values = values || [];
   let n = 0;
   if (!values.length) return 0;
   const walk = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT);
@@ -120,6 +121,38 @@ export const MASK = `function (values) {
     }
   }
   return n;
+}`;
+
+// Where on the screen a saved value could show (review of PR #238, 4), in viewport pixels: the
+// fields that hold one, and everything a page can paint what it read into: canvas, video, images,
+// frames, SVG, embedded objects, open shadow roots and custom elements, CSS-generated content and
+// background images made from data. Closed shadow roots are found through CDP (session.ts). Too
+// much to list means the whole screen.
+export const SECRET_RECTS = `function (values) {
+  const out = [];
+  const vw = innerWidth, vh = innerHeight;
+  const add = (el) => {
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0) || r.bottom < 0 || r.right < 0 || r.top > vh || r.left > vw) return;
+    out.push({ x: r.left - 2, y: r.top - 2, w: r.width + 4, h: r.height + 4 });
+  };
+  const has = (s) => values.some((v) => String(s).includes(v));
+  const all = document.querySelectorAll('*');
+  if (all.length > 20000) return { all: true, rects: [] };
+  const PAINTS = new Set(['CANVAS', 'VIDEO', 'IFRAME', 'FRAME', 'EMBED', 'OBJECT', 'IMG', 'PICTURE', 'SVG', 'MATH']);
+  for (const el of all) {
+    const tag = el.tagName.toUpperCase();
+    if (el.hasAttribute('data-nova-secret') || ((tag === 'INPUT' || tag === 'TEXTAREA') && has(el.value))) { add(el); continue; }
+    if (PAINTS.has(tag) || el.shadowRoot || tag.includes('-')) { add(el); continue; }
+    const cs = getComputedStyle(el);
+    if (/url\\((["']?)(data:|blob:)/i.test(cs.backgroundImage) || /url\\((["']?)(data:|blob:)/i.test(cs.maskImage || '')) { add(el); continue; }
+    for (const ps of ['::before', '::after', '::marker']) {
+      const c = getComputedStyle(el, ps).content;
+      if (c && c !== 'none' && c !== 'normal' && c !== '""' && c !== "''" && !(ps === '::marker' && /^"[^"]{0,3}"$/.test(c))) { add(el); break; }
+    }
+    if (out.length > 500) return { all: true, rects: [] };
+  }
+  return { all: false, rects: out };
 }`;
 
 // The page as Nova's checks need it. `pay`: the forms on it and their submit controls, for the pay

@@ -701,6 +701,31 @@ export class Session extends EventEmitter {
     return mine.length;
   }
 
+  // Where the page hosts shadow roots of its own, closed ones included (CDP sees through them), in
+  // viewport pixels: what they show can't be read from the page, so it is covered in a picture
+  // taken after a sign-in (review of PR #238, 4).
+  async shadowRects(): Promise<{ x: number; y: number; w: number; h: number }[]> {
+    type N = { backendNodeId: number; children?: N[]; shadowRoots?: (N & { shadowRootType?: string })[] };
+    const { root } = await this.#send<{ root: N }>('DOM.getDocument', { depth: -1, pierce: true });
+    const hosts: number[] = [];
+    const walk = (n: N, depth = 0) => {
+      if (depth > 200 || hosts.length >= 200) return;
+      if ((n.shadowRoots ?? []).some((r) => r.shadowRootType !== 'user-agent')) hosts.push(n.backendNodeId);
+      for (const c of n.children ?? []) walk(c, depth + 1);
+      for (const r of n.shadowRoots ?? []) if (r.shadowRootType !== 'user-agent') walk(r, depth + 1);
+    };
+    walk(root);
+    const out: { x: number; y: number; w: number; h: number }[] = [];
+    for (const id of hosts) {
+      const m = await this.#send<{ model: { border: number[] } }>('DOM.getBoxModel', { backendNodeId: id }).catch(() => null);
+      if (!m) continue;
+      const xs = [m.model.border[0]!, m.model.border[2]!, m.model.border[4]!, m.model.border[6]!];
+      const ys = [m.model.border[1]!, m.model.border[3]!, m.model.border[5]!, m.model.border[7]!];
+      out.push({ x: Math.min(...xs) - 2, y: Math.min(...ys) - 2, w: Math.max(...xs) - Math.min(...xs) + 4, h: Math.max(...ys) - Math.min(...ys) + 4 });
+    }
+    return out;
+  }
+
   async screenshot(): Promise<Buffer> {
     const r = await this.#send<{ data: string }>('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     return Buffer.from(r.data, 'base64');

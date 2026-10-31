@@ -172,6 +172,23 @@ ${Object.entries(ITEMS).map(([id, it]) => `<form method="post" action="/cart/add
       if (!page) { res.writeHead(404); return res.end(); }
       return html(200, 'Review your order', `<h1>Review your order</h1>${page}`);
     }
+    // A sign-in page that reads back what is typed (its input and change events) and paints it, in
+    // pure red, onto a canvas, into CSS-generated content and into a shadow root. Signing in hides
+    // the form and leaves the paintings on the page (review of PR #238, 4).
+    if (req.method === 'GET' && p === '/paint') {
+      return html(200, 'Paint', `<h1>Paint</h1><div id="form"><label for="username">Username</label><input type="text" id="username"><label for="password">Password</label><input type="password" id="password"><button type="button" id="signin">Sign in</button></div>
+<p id="done" hidden>Signed in</p>
+<canvas id="c" width="600" height="120" style="display:block"></canvas>
+<p id="echo" data-v=""></p><div id="host"></div>
+<style>#echo::after { content: attr(data-v); color: #ff0000; font-size: 40px; }</style>
+<script>
+const shadow = document.getElementById('host').attachShadow({ mode: 'closed' });
+const span = document.createElement('span'); span.style.cssText = 'color:#ff0000;font-size:40px'; shadow.append(span);
+const paint = (e) => { const v = e.target.value; const g = document.getElementById('c').getContext('2d'); g.fillStyle = '#ff0000'; g.fillRect(0, 0, 600, 120); g.fillStyle = '#ffffff'; g.font = '40px sans-serif'; g.fillText(v, 10, 70); document.getElementById('echo').dataset.v = v; span.textContent = v; };
+for (const id of ['username', 'password']) for (const k of ['input', 'change']) document.getElementById(id).addEventListener(k, paint);
+document.getElementById('signin').addEventListener('click', () => { document.getElementById('form').style.display = 'none'; document.getElementById('done').hidden = false; });
+</script>`);
+    }
     // A field that tells the server whenever it is typed into: a fill the server can see.
     if (req.method === 'GET' && p === '/race') {
       return html(200, 'Race', `<h1>Race</h1><input type="text" id="field" aria-label="Note"><form method="post" action="/cart/add"><input type="hidden" name="item" value="mug"><button type="submit" id="add">Add</button></form>
