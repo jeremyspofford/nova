@@ -5,12 +5,16 @@
 //     { verdict: pass | quarantine | block, id, scores, flags, extract, taint }
 //
 // - The deterministic checks (checks.ts) and the Noul screen run side by side.
-// - The Noul screen is the built-in decision template `ingest-screen`: five yes/no probabilities,
-//   asked only of the local model through the decision stack, forced local-only, with no tools,
-//   memory or secrets. The content goes to it fenced as data under a random tag, in chunks of about
-//   3,000 characters (at most 16; longer content is sampled and never passes). Each question takes
-//   its highest probability across the chunks.
-// - With no local sorting model there is no Noul screen: what isn't blocked is quarantined.
+// - The Noul screen is the template `ingest-screen`: five yes/no probabilities, asked of the
+//   Decision Service (src/core/decision-service, DS1) one fenced chunk at a time, with no tools,
+//   memory or secrets. The service routes it by the live privacy mode and the person's opt-ins,
+//   and says whether its answer may be used: a decision model that passed this template's eval on
+//   that exact model, or the sorting model until one has. The content goes fenced as data under a
+//   random tag, in chunks of about 3,000 characters that overlap by 200, and EVERY chunk is
+//   screened (Amendment 2026-10-31-B Part 1). Each question takes its highest probability across
+//   the chunks.
+// - Without a trusted answer for every chunk there is no Noul screen: what isn't blocked is
+//   quarantined, exactly as with no model at all.
 // - `extract` is all an acting model may see: pass → the content wrapped as data; quarantine →
 //   instruction-like spans and hidden text removed (and, with a model, a facts-only extract by the
 //   reader), wrapped as data; block → one line. Every screen is recorded (never the content), and
@@ -21,7 +25,7 @@ import { check, hasProtocolTags, instructionSpans, protocolSpans, KIND_WORDS, PR
 import { outbound, shingles, type OutboundResult } from './outbound.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
-import type { Decisions, TemplateDef, Templates } from '../decide.ts';
+import type { TemplateDef, Templates } from '../decide.ts';
 
 export const SOURCE_KINDS = ['web', 'search', 'email', 'file', 'skill', 'ocr', 'transcript', 'qr', 'tool', 'handoff', 'connector'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
@@ -50,7 +54,15 @@ export const DEFAULT_THRESHOLDS: Thresholds = Object.freeze({ pass_below: 0.2, b
 // chosen is a little information (plan §7, review N1b). Raising one is tier 3, like the thresholds.
 export const DEFAULT_LINK_CAPS: Readonly<{ per_host: number; total: number }> = Object.freeze({ per_host: 8, total: 20 });
 export const CHUNK = 3000;
-export const MAX_CHUNKS = 16;
+// Consecutive chunks share this many characters, so a payload of up to 200 characters cut by a
+// boundary is whole in one of them (Tev1 NOTE 4; the Tev1 seat overlaps its own pieces the same).
+export const OVERLAP = 200;
+// Every chunk is screened (Amendment 2026-10-31-B Part 1: "never a prefix only"); nothing is
+// sampled. check() caps the text it judges (TEXT_CAP, 2,000,000 characters; past it the content is
+// flagged too_long and quarantined), so a screen is at most about 715 chunks of visible text, plus
+// a page's hidden text. They are asked at most this many at a time, so a long document doesn't put
+// hundreds of requests on a model at once.
+export const SCREEN_CONCURRENCY = 2;
 const MAX_EXTRACT = 20_000;
 
 export const QUESTIONS = ['direct_instruction', 'hidden_instruction', 'exfiltration', 'impersonation', 'unrequested_action'] as const;
@@ -120,29 +132,50 @@ function judged(c: Checked): string {
   return c.hidden.length ? `${c.visible}\n\n[Not shown to a reader:]\n${c.hidden.map((h) => h.text).join('\n')}` : c.visible;
 }
 
+// The chunks the Noul screen judges: at most CHUNK characters each, each starting OVERLAP
+// characters before the previous one ended, covering the whole text. A boundary never splits a
+// surrogate pair. `partial` is always false now (every chunk is screened); it stays in the shape
+// of a screen and its record.
+const high = (c: number) => c >= 0xd800 && c <= 0xdbff;
 export function chunks(text: string): { parts: string[]; partial: boolean } {
   const all: string[] = [];
-  for (let i = 0; i < text.length; i += CHUNK) all.push(text.slice(i, i + CHUNK));
+  for (let i = 0; i < text.length;) {
+    let end = Math.min(i + CHUNK, text.length);
+    if (end < text.length && high(text.charCodeAt(end - 1))) end--;
+    all.push(text.slice(i, end));
+    if (end >= text.length) break;
+    let next = end - OVERLAP;
+    if (next > 0 && high(text.charCodeAt(next - 1))) next--;
+    i = Math.max(next, i + 1);
+  }
   if (!all.length) return { parts: [''], partial: false };
-  if (all.length <= MAX_CHUNKS) return { parts: all, partial: false };
-  // First and last, and an even sample between.
-  const pick = new Set([0, all.length - 1]);
-  const between = MAX_CHUNKS - 2;
-  for (let k = 1; k <= between; k++) pick.add(Math.round((k * (all.length - 1)) / (between + 1)));
-  return { parts: [...pick].sort((a, b) => a - b).map((i) => all[i]!), partial: true };
+  return { parts: all, partial: false };
 }
 
 export interface Blocked { id: string; kind: SourceKind; origin: string; flags: string[]; max: number | null; why: string }
+
+// What the Decision Service answered for one chunk (DS1 NOTE 1): which seat and model, and whether
+// the answer may be used. `trust` is 'verdict' (a decision model that passed this template's eval
+// on that exact model), 'legacy' (the sorting model, until a decision model passes) or 'none'.
+export interface ScreenAnswer {
+  trust: 'verdict' | 'legacy' | 'none';
+  seat: string;
+  model: string | null;
+  answers: Record<string, { type: string; noul?: number }> | null;
+}
+export type ScreenAsk = (fields: { source_kind: string; origin: string; content: string }) => Promise<ScreenAnswer | null>;
+// Whether a screen answer would be relied on now, by whom, and the Decision Service's view of each
+// seat in plain words, for Health.
+export interface ScreenStanding { relied: boolean; who: string | null; lines: string[] }
 
 export interface IngestOptions {
   db: Db | null;
   log?: Log;
   templates?: Templates | null;
-  decisions?: Decisions | null;
-  // Whether a local sorting model is assigned now (Models.decidesWithModel).
-  ready?: () => boolean;
-  // The decision provider that counts as the local model; any other answer is no answer.
-  providerId?: string;
+  // The Decision Service, for template ingest-screen (DS1): one fenced chunk per call. Null: no
+  // model screen (the deterministic layer and quarantine decide).
+  ask?: ScreenAsk | null;
+  screening?: (() => ScreenStanding) | null;
   // The reader (plan §6): the local model, with no tools, asked for facts only.
   read?: ((fenced: string, source: Source) => Promise<string | null>) | null;
   blocked?: (b: Blocked) => void;
@@ -169,18 +202,23 @@ export class Ingest {
     o.templates?.builtIn(SCREEN);
   }
 
-  // Whether the Noul screen can run now.
+  // Whether the Noul screen is asked at all (the Decision Service is wired). Whether an answer is
+  // used is the service's to say, chunk by chunk.
   hasModel(): boolean {
-    return !!this.#o.decisions && (this.#o.ready?.() ?? false);
+    return !!this.#o.ask;
   }
 
-  health(): { ok: boolean; model: boolean; detail: string; counts: undefined } {
-    const model = this.hasModel();
+  // `model`: whether a screen answer would be relied on now. While none would, outside content is
+  // held back as unsure, and the detail says so.
+  health(): { ok: boolean; model: boolean; detail: string; lines: string[]; counts: undefined } {
+    let s: ScreenStanding = { relied: false, who: null, lines: [] };
+    try { if (this.hasModel() && this.#o.screening) s = this.#o.screening(); } catch (e) { this.#o.log?.warn('ingest', 'Nova couldn’t read how outside content is screened.', { error: (e as Error).message }); }
+    const model = this.hasModel() && s.relied;
     return {
-      ok: true, model, counts: undefined,
+      ok: true, model, counts: undefined, lines: s.lines,
       detail: model
-        ? 'Outside content is screened by your local sorting model and Nova’s own checks before a model reads it.'
-        : 'Screening outside content without a model: Nova’s own checks still run, and anything they don’t block is held back as unsure, never passed straight through. Assign a sorting model in Settings › Models to screen it fully.',
+        ? `Outside content is screened by ${s.who ?? 'a decision model'} and Nova’s own checks before a model reads it.`
+        : 'Screening outside content without a model whose answers Nova relies on: Nova’s own checks still run, and anything they don’t block is held back as unsure, never passed straight through. Assign a sorting model, or set up a decision model, in Settings › Models to screen it fully.',
     };
   }
 
@@ -193,7 +231,7 @@ export class Ingest {
     const { parts, partial } = chunks(judged(c));
     // The checks are already done (synchronously); the model runs on the chunks.
     const noul = await this.#noul(parts, source);
-    const r = this.#settle(input, source, c, noul, partial);
+    const r = this.#settle(input, source, c, noul?.scores ?? null, partial, noul?.model ?? null);
     if (r.verdict === 'quarantine' && noul) {
       const extract = await this.#readFacts(c, source).catch(() => null);
       if (extract) r.extract = wrapData(extract, source, r.id, 'quarantine', `${HELD_LINE} ${removedWords(c.flags)}`.trim());
@@ -205,7 +243,7 @@ export class Ingest {
   // a pass.
   screenNow(input: ScreenInput): Screened {
     const source = this.#source(input.source);
-    return this.#settle(input, source, check(input), null, false);
+    return this.#settle(input, source, check(input), null, false, null);
   }
 
   list(limit = 50): Record<string, unknown>[] {
@@ -311,28 +349,49 @@ export class Ingest {
     return { kind: s.kind, origin: cleanOrigin(s.origin) || 'unknown', ...(s.ref ? { ref: cleanOrigin(s.ref) } : {}) };
   }
 
-  // The Noul screen on each chunk, or null when there is no model (or it didn't answer every chunk).
-  async #noul(parts: string[], source: Source): Promise<Record<string, number> | null> {
+  // The Noul screen on every chunk, through the Decision Service, at most SCREEN_CONCURRENCY at a
+  // time. Null (no screen: the deterministic layer and quarantine decide) unless EVERY chunk got a
+  // trusted answer with all five probabilities in [0, 1]. Once one chunk has no trusted answer the
+  // outcome is settled (held back), so chunks not yet asked aren't sent anywhere.
+  async #noul(parts: string[], source: Source): Promise<{ scores: Record<string, number>; model: string } | null> {
     if (!this.hasModel()) return null;
-    const decisions = this.#o.decisions!;
-    const want = this.#o.providerId ?? 'local-model';
+    const ask = this.#o.ask!;
+    type One = { model: string; answers: Record<string, number> };
+    const one = async (part: string): Promise<One | null> => {
+      const d = await ask({ source_kind: source.kind, origin: source.origin, content: fence(part) });
+      if (!d || (d.trust !== 'verdict' && d.trust !== 'legacy') || !d.answers) return null;
+      const answers: Record<string, number> = {};
+      for (const q of QUESTIONS) {
+        const p = d.answers[q]?.noul;
+        if (typeof p !== 'number' || !Number.isFinite(p) || p < 0 || p > 1) return null;
+        answers[q] = p;
+      }
+      return { model: `${d.seat}:${d.model ?? 'unnamed'}`, answers };
+    };
+    const got: (One | null)[] = new Array<One | null>(parts.length).fill(null);
+    let next = 0;
+    let settled = false;
     try {
-      const answers = await Promise.all(parts.map(async (part) => {
-        const d = await decisions.decide(SCREEN.template_id, { source_kind: source.kind, origin: source.origin, content: fence(part) }, { privacy_mode: 'local-only' });
-        if (!d || d.provider !== want || d.escalate) return null;
-        return d.answers as Record<string, number>;
+      await Promise.all(Array.from({ length: Math.min(SCREEN_CONCURRENCY, parts.length) }, async () => {
+        while (!settled) {
+          const i = next++;
+          if (i >= parts.length) return;
+          const a = await one(parts[i]!);
+          if (!a) { settled = true; return; }
+          got[i] = a;
+        }
       }));
-      if (answers.some((a) => a === null)) return null;
-      const out: Record<string, number> = {};
-      for (const q of QUESTIONS) out[q] = Math.max(...answers.map((a) => Number(a![q] ?? 0.5)));
-      return out;
     } catch (e) {
-      this.#o.log?.warn('ingest', 'The local model couldn’t screen some outside content; it is held back instead.', { error: (e as Error).message });
+      this.#o.log?.warn('ingest', 'The decision model couldn’t screen some outside content; it is held back instead.', { error: (e as Error).message });
       return null;
     }
+    if (settled || got.some((a) => a === null)) return null;
+    const scores: Record<string, number> = {};
+    for (const q of QUESTIONS) scores[q] = Math.max(...got.map((a) => a!.answers[q]!));
+    return { scores, model: [...new Set(got.map((a) => a!.model))].join('+') };
   }
 
-  #settle(input: ScreenInput, source: Source, c: Checked, scores: Record<string, number> | null, partial: boolean): Screened {
+  #settle(input: ScreenInput, source: Source, c: Checked, scores: Record<string, number> | null, partial: boolean, model: string | null): Screened {
     const id = `scr-${randomUUID().slice(0, 12)}`;
     const max = scores ? Math.max(...Object.values(scores)) : null;
     const t = this.thresholds;
@@ -344,7 +403,7 @@ export class Ingest {
       : verdict === 'pass' ? wrapData(c.visible, source, id, 'pass')
         : wrapData(strip(c.visible, c.spans), source, id, 'quarantine', `${HELD_LINE} ${removedWords(c.flags)}`.trim());
     const raw = `${input.text ?? ''}\0${input.html ?? ''}`;
-    const r: Screened = { id, verdict, scores, max, flags: c.flags, extract, taint: { screen: id, kind: source.kind, origin: source.origin, verdict, max }, model: scores ? (this.#o.providerId ?? 'local-model') : null, partial };
+    const r: Screened = { id, verdict, scores, max, flags: c.flags, extract, taint: { screen: id, kind: source.kind, origin: source.origin, verdict, max }, model: scores ? model : null, partial };
     try {
       this.#o.db?.run(
         `INSERT INTO ingest_screen (id, at, kind, origin, ref, sha256, length, chunks, partial, verdict, scores, max, flags, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -382,7 +441,7 @@ function toCandidate(r: Record<string, string | null>): Candidate {
 export function whyBlocked(flags: Flag[], scores: Record<string, number> | null, t: Thresholds = DEFAULT_THRESHOLDS): string {
   const said = flags.filter((f) => f.level === 'block').map((f) => KIND_WORDS[f.kind] ?? f.kind);
   const high = scores ? Object.entries(scores).filter(([, p]) => p >= t.block_at).map(([q, p]) => `${QUESTION_WORDS[q] ?? q} (${p.toFixed(2)})`) : [];
-  return [said.length ? `Nova’s checks found ${said.join(' and ')}.` : '', high.length ? `The local model judged it likely to ${high.join(', ')}.` : ''].filter(Boolean).join(' ');
+  return [said.length ? `Nova’s checks found ${said.join(' and ')}.` : '', high.length ? `The screening model judged it likely to ${high.join(', ')}.` : ''].filter(Boolean).join(' ');
 }
 
 export const QUESTION_WORDS: Record<string, string> = {

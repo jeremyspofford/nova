@@ -22,6 +22,8 @@ import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { egressOf, info, permits, stricter, type Egress } from './workers.ts';
 import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
+import { createDecisionService, DbLog, OPT_IN_WORDS, validateSettings, DEFAULT_SETTINGS as DEFAULT_DECISION_SETTINGS, type DecisionSettings, type VerdictStore } from './decision-service/index.ts';
+import { Scorecards, scorecardRoutes, targetsFrom, REGRESSION_FINGERPRINT } from './evals/index.ts';
 import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
 import { Enrollment } from './mesh/enroll.ts';
@@ -190,6 +192,9 @@ export interface CoreOptions {
   // The local model manager (M6b): where the hub's Ollama answers by default, and (tests) a fixed
   // hardware reading and quicker watch and wake polls.
   models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number };
+  // The Decision Service (DS1), for tests: a verdict store in place of the committed eval verdicts
+  // (src/core/decision-service/tev1-verdicts.json), so a stand-in seat can be trusted or not.
+  decisions?: { verdicts?: VerdictStore };
   // The supervisor that started this server, when one did (resilience/link.ts: ipcLink).
   supervisor?: SupervisorLink | null;
   // Resilience (M7b), for tests: the clock watch's monotonic time, and the restore drill's sandbox.
@@ -299,6 +304,9 @@ export function createCore(o: CoreOptions) {
   // The model manager (M6b) is made once the device registry exists (below); providers reach it
   // through these, for a provider set to a role and for cloud budgets.
   let models: Models | null = null;
+  // The Decision Service (DS1) is made once the model manager exists (below); the model manager's
+  // device record and refresh reach it through this.
+  let ds: ReturnType<typeof createDecisionService> | null = null;
   // Made once the ledger's other parts exist (below); capture asks it whether retention may run.
   let resilience: Resilience | null = null;
   const providers = new Providers({
@@ -327,8 +335,14 @@ export function createCore(o: CoreOptions) {
     secret: (v) => { const n = secretName(v); return n ? providerSecret(n) : null; },
     // The person is told the way proactive messages go: triaged, quiet hours kept.
     notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'models', name: 'Local models', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('models', 'Nova couldn’t tell you about waiting work.', { error: (e as Error).message })); },
+    // The device record's decision model (DS1 NOTE 4), and a newly pulled Tev1 seen without a restart.
+    decisionModel: () => { const d = ds?.tev1(); return d ? { model: d.model, digest: d.digest, why: d.available ? d.size_why : d.why } : null; },
+    refreshed: () => ds?.refresh() ?? Promise.resolve(),
   });
   ledger.workers.set(models.worker.id, models.worker);
+  // The model-swap scorecards (Amendment B Part 4): files under workers/evals/, read by Settings ›
+  // Models before a switch.
+  const scorecards = new Scorecards(o.home);
   // System 1 on the local sorting model (ADR-7): asked first once one is assigned; the rules answer
   // when it isn't, or can't.
   // The person's policy still binds it: what the triage rule decides from a hard setting (a category
@@ -339,13 +353,41 @@ export function createCore(o: CoreOptions) {
     const rule = triageRule(inputs as never).answers.decision;
     return hard && answers.decision !== rule ? `your settings say “${rule}” here (${inputs.category_off ? 'this is turned off' : 'quiet hours'}).` : null;
   };
-  decisions.register(new LocalModelProvider({ infer: (r) => models!.infer(r), ready: (t) => models!.decidesWithModel(rules.has(t.template_id)), guard: triageGuard }), { first: true });
+  const localModel = new LocalModelProvider({ infer: (r) => models!.infer(r), ready: (t) => models!.decidesWithModel(rules.has(t.template_id)), guard: triageGuard });
+  decisions.register(localModel, { first: true });
+  // The Decision Service (DS1, docs/plans/ds1.md): every System One question about outside content
+  // goes through it. Its seats are Tev1 on the hub's Ollama, cloud Jev on the route the person
+  // chose (its key in the vault as decisions.jev, read at call time), and the sorting model above
+  // until a decision model passes a template's eval. It routes by the live privacy mode and the
+  // person's opt-ins, records every decision (decision_record, no content), and takes a receipt
+  // BEFORE anything goes to the cloud, so a refused receipt stops the send.
+  const decisionSettings = (): DecisionSettings => {
+    const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {});
+    return v.ok ? v.settings : DEFAULT_DECISION_SETTINGS;
+  };
+  ds = createDecisionService({
+    settings: decisionSettings,
+    privacy: () => profile.privacyDefault(),
+    log: new DbLog(db, { onError: (e) => log.warn('decisions', 'Nova couldn’t write a decision record.', { error: e.message }) }),
+    ollamaUrl: () => models!.hubUrl(),
+    hardware: () => models!.hubHardware(),
+    jevKey: () => { try { return vault.get('decisions.jev') ?? null; } catch { return null; } },
+    legacy: { provider: localModel, old: (id) => templates.get(id) },
+    receipt: (r) => { receipts.record({ task_id: r.task_id ?? undefined, provider: 'jev', model: r.model, purpose: r.purpose, privacy_mode: r.privacy_mode, egress: r.egress, context_items: [], ...(r.opt_in ? { opt_in: r.opt_in } : {}) }); },
+    ...(o.decisions?.verdicts ? { verdicts: o.decisions.verdicts } : {}),
+    now,
+  });
+  const decisionService = ds;
+  if (!o.sandbox) void decisionService.refresh().catch(() => {});
   // The ingest security gate (Amendment 2026-10-30-C Part 3): every read of outside content is
-  // screened before a model acts on it. The Noul screen is the local sorting model only, and the
-  // outbound guard knows the vault's values, memory and the standing files.
+  // screened before a model acts on it. The Noul screen asks the Decision Service for ingest-screen,
+  // one fenced chunk at a time, and uses an answer only when the service trusts it; otherwise the
+  // deterministic layer plus quarantine decide. The outbound guard knows the vault's values, memory
+  // and the standing files.
   const { ingest } = wireIngest({
-    db, log, home: o.home, now, templates, decisions, ledger, verifier,
-    ready: () => models!.decidesWithModel(false), providerId: LOCAL_MODEL_PROVIDER,
+    db, log, home: o.home, now, templates, ledger, verifier,
+    ask: (fields) => decisionService.service.ask('ingest-screen', fields, { subsystem: 'ingest' }),
+    screening: () => decisionService.standing('ingest-screen'),
     infer: (r) => models!.infer(r),
     secrets: () => { try { return vault.list().map((n) => vault.get(n)).filter((v): v is string => typeof v === 'string'); } catch { return []; } },
     memory: () => memory.active().map((r) => r.content),
@@ -646,6 +688,37 @@ export function createCore(o: CoreOptions) {
     if (w.principal.kind !== 'device') throw new CoreError('forbidden', 'Only a paired computer’s device agent sends this.');
     return w.principal.device;
   };
+
+  // The Decision Service's settings as the person sees them: never the key, only whether one is kept.
+  async function decisionsView() {
+    const s = decisionSettings();
+    let key = false;
+    try { key = vault.has('decisions.jev'); } catch { /* a vault that won't open says so in health */ }
+    return { ...(await decisionService.view()), settings: { ...s, key_set: key }, opt_in_words: OPT_IN_WORDS, privacy: profile.privacyDefault() };
+  }
+
+  async function putDecisions(body: Record<string, unknown>) {
+    if (body.use !== undefined) { models!.useForDecisions(body.use); return decisionsView(); }
+    const { key, confirm, ...choices } = body;
+    const was = decisionSettings();
+    const v = validateSettings({ jev: was.jev, tev1: was.tev1, opt_in: was.opt_in, ...choices });
+    const problems = v.ok ? [] : [...v.problems];
+    if (key !== undefined && key !== null && (typeof key !== 'string' || !key.trim() || key.length > 4096)) problems.push('The Jev key must be the key text TypeSafe gave you.');
+    if (!v.ok || problems.length) return new Reply({ error: 'These decision-model choices can’t be used.', problems }, {}, 422);
+    const next = v.settings;
+    const changed = JSON.stringify(next.jev) !== JSON.stringify(was.jev) || JSON.stringify(next.tev1) !== JSON.stringify(was.tev1)
+      || next.opt_in.screening !== was.opt_in.screening || next.opt_in.box !== was.opt_in.box || key !== undefined;
+    if (changed && confirm !== true) {
+      const words = (await decisionService.noticesFor(next)).map((n) => n.words);
+      throw new CoreError('conflict', 'This changes where outside content may go or which model judges it. Read the notices, then send confirm: true to save it.', words);
+    }
+    if (typeof key === 'string') vault.put('decisions.jev', key.trim());
+    else if (key === null) vault.delete('decisions.jev');
+    profile.set('models', 'decision', next, 'settings');
+    log.info('decisions', 'The decision-model choices changed.', { jev: next.jev?.model ?? null, tev1: next.tev1?.model ?? null, screening: next.opt_in.screening, box: next.opt_in.box });
+    void decisionService.refresh().catch(() => {});
+    return decisionsView();
+  }
 
   function health() {
     let database: { ok: boolean; detail: string };
@@ -1031,6 +1104,18 @@ export function createCore(o: CoreOptions) {
     // ---- capture (M6 plan §1) ----
     ...captureRoutes(capture),
     ...models.routes(),
+    // ---- the Decision Service's settings (DS1 NOTE 4; owner decision 2) ----
+    { method: 'GET', path: '/models/decisions', summary: 'The decision model: Tev1 and Jev as Nova sees them, the person’s choices (the Jev key only as set or not), what Nova recommends, a plain notice for each choice it doesn’t and for each opt-in that is on, each model’s eval scorecard, and what each opt-in means.', handle: () => decisionsView() },
+    {
+      method: 'PUT', path: '/models/decisions', summary: 'Choose the decision models: {jev: {base_url, model} | null, tev1: {model: auto | tev1:4b | tev1:0.8b} | null, opt_in: {screening, box}, key?: the Jev key (kept in the vault) | null}. Changing a seat, an opt-in or the key changes where content goes, so it is tier 2: without confirm: true it is refused with the notices to read first. 422 with problems when a choice can’t be used. {use: model | rules} still says whether System 1 uses the sorting model or only the rules.', body: '{jev?, tev1?, opt_in?, key?, confirm?} | {use}',
+      handle: async ({ body }) => putDecisions(body),
+    },
+    // ---- the eval harness's scorecards (Amendment B Part 4; docs/plans/evals.md NOTE 1) ----
+    ...scorecardRoutes({
+      store: scorecards,
+      fingerprint: REGRESSION_FINGERPRINT,
+      targets: () => targetsFrom(providers.list(), models!.installedOnHub()),
+    }),
     // ---- resilience (M7 plan §2–§3): backups, the drill, playbooks, the supervisor ----
     ...keep.routes((w) => { if (w.principal.kind !== 'console') throw new CoreError('forbidden', 'Releases are deployed and rolled back from the hub’s own screen only.'); }),
     // ---- checkpoints (M7 amendment §1) ----
@@ -1158,7 +1243,10 @@ export function createCore(o: CoreOptions) {
   return {
     self,
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network,
-    ingest, vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
+    ingest, vault, connectors, capture, models, changes,
+    // The Decision Service (DS1): its view of the seats, a refresh, how a template stands, and
+    // asking for a template. Never a seat: nothing reaches a decision model except through it.
+    decisionService: { view: decisionService.view, refresh: decisionService.refresh, standing: decisionService.standing, ask: decisionService.service.ask.bind(decisionService.service) }, foundry, resilience: keep, checkpoints, restarter, reset,
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
     restartInPlace: (why: string) => restarter.restartInPlace(why),

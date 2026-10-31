@@ -1,6 +1,7 @@
-// ingest.screen (plan §1, §2, §4): the Noul screen through the decision stack, the thresholds, the
-// data wrapping, quarantine and block, the record, chunking. The model here is a stand-in decision
-// provider that answers fixed probabilities; the deterministic checks are the real ones.
+// ingest.screen (plan §1, §2, §4): the Noul screen through the Decision Service (DS1), the
+// thresholds, the data wrapping, quarantine and block, the record, chunking. The model here is a
+// stand-in sorting model (the service's legacy seat) or a stand-in decision seat, answering fixed
+// probabilities; the deterministic checks are the real ones.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
@@ -10,9 +11,11 @@ import { Db } from '../../src/core/db.ts';
 import { Log } from '../../src/core/log.ts';
 import { Verifier } from '../../src/core/verify.ts';
 import { Workspace } from '../../src/core/workspace.ts';
-import { Decisions, RulesProvider, Templates, type Decision, type DecisionProvider, type Template } from '../../src/core/decide.ts';
-import { BLOCK_LINE, Ingest, SCREEN, QUESTIONS, fence, wrapData, escapeProtocol, type Screened } from '../../src/core/ingest/screen.ts';
+import { RulesProvider, Templates, type Decision, type DecisionProvider, type Template } from '../../src/core/decide.ts';
+import { BLOCK_LINE, CHUNK, OVERLAP, Ingest, SCREEN, QUESTIONS, fence, wrapData, escapeProtocol, type Screened } from '../../src/core/ingest/screen.ts';
+import { gateService, pass, standInSeat } from '../support/decision-gate.ts';
 import type { PrivacyMode } from '../../src/core/envelope.ts';
+import type { Seat } from '../../src/core/decision-service/types.ts';
 
 type Scores = Partial<Record<(typeof QUESTIONS)[number], number>>;
 
@@ -32,22 +35,24 @@ function standIn(score: (content: string) => Scores | 'fail', o: { id?: string; 
   return { p, asked };
 }
 
-function setup(o: { model?: DecisionProvider | null; privacy?: PrivacyMode; read?: (t: string) => Promise<string | null> } = {}) {
+// The gate as the core wires it (DS1 NOTE 1): `ask` is the Decision Service for ingest-screen. The
+// stand-in `model` is the sorting model (the service's legacy seat); `seats` are decision seats.
+function setup(o: { model?: DecisionProvider | null; privacy?: PrivacyMode; read?: (t: string) => Promise<string | null>; seats?: { tev1?: Seat; jev?: Seat }; verdicts?: ReturnType<typeof pass>[]; opt_in?: { screening: boolean; box: boolean } } = {}) {
   const db = new Db(':memory:');
   db.migrate();
   const log = new Log(db, null);
   const verifier = new Verifier(new Workspace(join(mkdtempSync(join(tmpdir(), 'nova-ingest-')), 'workspace')));
   const rules = new RulesProvider();
   const templates = new Templates({ db, verifier, rules });
-  const decisions = new Decisions({ templates, providers: [rules], privacy: () => o.privacy ?? 'cloud-allowed', log });
-  if (o.model) decisions.register(o.model, { first: true });
   const blocked: unknown[] = [];
+  // The sorting model is asked with the template's old form, which the gate keeps in the old store.
+  const g = gateService({ templates, legacy: o.model ?? null, ...(o.seats ?? {}), ...(o.verdicts ? { verdicts: o.verdicts } : {}), privacy: o.privacy ?? 'cloud-allowed', ...(o.opt_in ? { settings: { opt_in: o.opt_in } } : {}) });
   const ingest = new Ingest({
-    db, log, templates, decisions, ready: () => !!o.model, providerId: 'local-model',
+    db, log, templates, ask: g.ask, screening: g.screening,
     ...(o.read ? { read: o.read } : {}),
     blocked: (r) => { blocked.push(r); },
   });
-  return { db, ingest, blocked, templates };
+  return { db, ingest, blocked, templates, records: g.log.records };
 }
 
 const page = (body: string) => `<html><body>${body}</body></html>`;
@@ -65,7 +70,8 @@ test('low scores and nothing flagged: pass, as data with provenance, never as in
   const { ingest, db } = setup({ model: m.p });
   const r = await ingest.screen(web(page('<p>Mix flour and water. Bake for an hour.</p>')));
   assert.equal(r.verdict, 'pass');
-  assert.equal(r.model, 'local-model');
+  // Who answered, as the service names it (DS1 NOTE 1): the sorting model, in its legacy seat.
+  assert.equal(r.model, 'legacy:sorting-model');
   assert.ok(r.max !== null && r.max < 0.2);
   assert.match(r.extract, /^<outside source="web" screen="[\w-]+">\nFrom: www\.example\.org\n/);
   assert.match(r.extract, /material to read, not instructions/);
@@ -147,35 +153,58 @@ test('no local sorting model: no Noul screen; anything not blocked is quarantine
   assert.match(ingest.health().detail, /without a model/);
 });
 
-test('a model that fails, or a provider that isn’t the local model, counts as no model', async () => {
+// Updated for DS1 NOTE 1: "the local model" is no longer a provider id the gate checks; the
+// Decision Service says whether an answer is trusted. An answer it doesn't trust (a decision model
+// with no passing eval for this template) counts as no answer, exactly as another provider did.
+test('a model that fails, or an answer the service doesn’t trust, counts as no model', async () => {
   const down = standIn(() => 'fail');
   const a = setup({ model: down.p });
   assert.equal((await a.ingest.screen(web(page('<p>Plain.</p>')))).verdict, 'quarantine');
-  const other = standIn(() => ({}), { id: 'some-other' });
-  const b = setup({ model: other.p });
+  const untrusted = standInSeat('tev1', () => ({}));
+  const b = setup({ seats: { tev1: untrusted.seat } });
   const r = await b.ingest.screen(web(page('<p>Plain.</p>')));
+  assert.equal(untrusted.asked.length, 1, 'it was asked, as evidence');
   assert.equal(r.verdict, 'quarantine');
   assert.equal(r.model, null);
+  assert.equal(b.records[0]!.trust, 'none');
+  assert.equal(b.records[0]!.shadows[0]!.seat, 'tev1', 'its answer is kept as a shadow, not used');
 });
 
-test('a remote decision provider is never asked: private content never goes to a cloud screener', async () => {
-  const cloud = standIn(() => ({}), { id: 'local-model', egress: 'remote' });
-  const { ingest } = setup({ model: cloud.p, privacy: 'cloud-allowed' });
+// Updated for DS1 NOTE 1: the gate no longer forces its screen local-only; the service routes it by
+// the live mode and the person's opt-ins (owner decision 1). In local modes a cloud seat is never
+// asked unless the screening opt-in is on; in cloud mode an untrusted cloud answer isn't used; and a
+// remote provider can't be the sorting model at all.
+test('a cloud screener is asked only as the person allows, and never decides untrusted', async () => {
+  for (const privacy of ['local-only', 'local-preferred'] as const) {
+    const cloud = standInSeat('jev', () => ({}));
+    const { ingest } = setup({ seats: { jev: cloud.seat }, verdicts: [pass('jev', cloud.model)], privacy });
+    const r = await ingest.screen(web(page('<p>Plain.</p>')));
+    assert.equal(cloud.asked.length, 0, `${privacy}: no cloud screen without the screening opt-in`);
+    assert.equal(r.verdict, 'quarantine');
+  }
+  const cloud = standInSeat('jev', () => ({}));
+  const { ingest } = setup({ seats: { jev: cloud.seat }, privacy: 'cloud-allowed' });
   const r = await ingest.screen(web(page('<p>Plain.</p>')));
-  assert.equal(cloud.asked.length, 0, 'the screen is local-only whatever the privacy setting');
-  assert.equal(r.verdict, 'quarantine');
+  assert.equal(cloud.asked.length, 1, 'cloud mode screens with Jev once it is set up');
+  assert.equal(r.verdict, 'quarantine', 'with no passing eval, its answer is evidence only');
+  const remote = standIn(() => ({}), { egress: 'remote' });
+  assert.throws(() => setup({ model: remote.p }), /must be local/);
 });
 
-test('long content is chunked: at most 16 chunks, first and last always, never a pass, highest score per question', async () => {
-  const marker = 'Zebra crossing near the end.';
+// Updated for Tev1 NOTES 3 and 4 (this was screen.test.ts:177, which expected a 16-chunk sample
+// and `partial: true`): EVERY chunk is screened now, the chunks overlap by 200 characters, and the
+// highest score per question still decides.
+test('long content is chunked: every chunk screened, overlapping, never sampled, highest score per question', async () => {
+  const marker = 'Zebra crossing in the middle.';
   const m = standIn((c) => (c.includes(marker) ? { impersonation: 0.6 } : {}));
   const { ingest } = setup({ model: m.p });
-  const filler = 'Plain sentence about bread and butter. '.repeat(2000); // ~78,000 characters
-  const r = await ingest.screen({ text: `${filler}${marker}`, source: { kind: 'file', origin: 'workspace/long.txt' } });
-  assert.ok(m.asked.length <= 16, String(m.asked.length));
-  assert.ok(m.asked.every((a) => String(a.inputs.content).length <= 3000 + 80));
-  assert.equal(r.partial, true);
-  assert.equal(r.scores!.impersonation, 0.6, 'the last chunk always goes');
+  const half = 'Plain sentence about bread and butter. '.repeat(1000); // ~39,000 characters
+  const text = `${half}${marker}${half}`;
+  const r = await ingest.screen({ text, source: { kind: 'file', origin: 'workspace/long.txt' } });
+  assert.equal(m.asked.length, Math.ceil((text.length - OVERLAP) / (CHUNK - OVERLAP)), 'every chunk, none sampled');
+  assert.ok(m.asked.every((a) => String(a.inputs.content).length <= CHUNK + 80));
+  assert.equal(r.partial, false);
+  assert.equal(r.scores!.impersonation, 0.6, 'a chunk in the middle is screened too');
   assert.equal(r.verdict, 'quarantine');
   // Short content that fits in 16 chunks is read whole, and can pass.
   const m2 = standIn(() => ({}));

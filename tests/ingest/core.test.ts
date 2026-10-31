@@ -38,7 +38,8 @@ test('with a sorting model: the screen asks it local-only, passes plain content 
     await core.models.assign('triage-text', { model: 'example-small:3b' });
     const r = await core.ingest.screen({ html: '<p>Mix flour and water.</p>', source: { kind: 'web', origin: 'www.example.org' } });
     assert.equal(r.verdict, 'pass', JSON.stringify(r));
-    assert.equal(r.model, 'local-model');
+    // Who answered, as the Decision Service names it (DS1 NOTE 1): the sorting model's legacy seat.
+    assert.equal(r.model, 'legacy:sorting-model');
     const asked = o.requests.filter((x: { path: string }) => x.path === '/api/chat');
     assert.equal(asked.length, 1);
     const receipt = core.receipts.list({}).find((x: { purpose: string }) => x.purpose === 'decision: ingest-screen@1');
