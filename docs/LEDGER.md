@@ -35,6 +35,8 @@ and `e160e581…`).
   - Stage 1 is a standalone prototype built outside this repo.
   - Stage 2, folding it into the repo, starts only on the owner's approval of the Stage 1 report.
   - Its rule binds every flow: assertions come from the spec, never from observed behaviour.
+  - **Stage 1 report approved by the owner, 2026-10-31.** Its prototype is outside this repo, at `~/workspace/nova-qa`: catalogue v1.0.0 in `catalogue/flows.yaml`, the sweep in `harness/sweep.mjs`, two runs in `evidence/`, and a QA instance on ports 4321/4322 with its own home. The written report isn't on this machine; the prototype and its run results are what Stage 2 builds from.
+  - **Stage 2 placement (the builder's call, per Amendment A):** the milestone after M10k on the critical path, because Amendment B keeps the M10e–M10k order. It is built with Amendment B Part 8's design from the start, so it isn't built for the supervisor alone. Part 7 (the fault matrix and soak) follows it. Its runner and its axe dependency come in through the existing Docker Playwright gate, not a host install.
 
 **2026-10-31 (CI: change-aware, with one always-run required check).** Owner instruction.
 - **Sorting:** a `changes` job sorts the change's files with `scripts/ci-changes.sh`.

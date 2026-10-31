@@ -149,7 +149,7 @@ Nova gets its own sandboxed computer and browser. A design doc (ADR) comes first
 ## QA harness — Amendment 2026-10-31-A
 Spec: AMENDMENT-2026-10-31-A. A local harness with two modes: change-aware PR testing, and a sweep of the full application on disposable seeded instances, with nothing leaving this machine.
 - **Stage 1:** a standalone prototype, outside this repo.
-- **Stage 2:** the repo build. It starts only on the owner's approval of the Stage 1 report. It lands as a milestone after M10, or as the verification stage of the change pipeline, the builder's call with its reasons.
+- **Stage 2:** the repo build. The owner approved the Stage 1 report on 2026-10-31. Stage 2 is the milestone after M10k on the critical path, which keeps Amendment B's rule that nothing displaces the M10e–M10k order. It is built with Amendment B Part 8's design from the start, and Part 7 follows it.
 - **The change pipeline** consumes its results before any canary deploy.
 - **Assertions come from the spec,** never from observed behaviour, and UX findings are always advisory.
 - **Amendment 2026-10-31-B:** Parts 7 and 8 extend it.
