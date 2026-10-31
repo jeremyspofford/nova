@@ -148,7 +148,7 @@ test('M10f: pairing with roles on the hub’s approval sheet, a candidacy confir
   if (typeof b === 'string') return t.skip(b);
   const m = blank('nova-ui-m10f-roles-');
   const mesh = `http://127.0.0.1:${await meshPort()}`;
-  const nova = await m.start({ NOVA_MESH_URL: mesh, NOVA_MESH_TRANSPORT: 'network', NOVA_MESH_PUBLIC_URL: mesh });
+  const nova = await m.start({ NOVA_MESH_URL: mesh, NOVA_MESH_TRANSPORT: 'network', NOVA_MESH_PUBLIC_URL: mesh, NOVA_DETECT_OS: 'linux' });
   const shots = shotDir();
   try {
     await finishSetup(m);

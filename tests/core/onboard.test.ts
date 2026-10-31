@@ -51,6 +51,25 @@ test('the backend, per OS: the supervisor pre-selected everywhere; K3s never off
   assert.match(backendFor('wsl2').misses, /WSL2[\s\S]*counts as Windows/);
 });
 
+test('review finding 9: the backend and device words claim nothing unbuilt: no reinstall promise, no “would run”, switching only where K3s could come', async () => {
+  for (const os of ['linux', 'macos', 'windows', 'wsl2'] as const) {
+    const b = backendFor(os);
+    const all = [b.words, ...b.options.map((o) => o.note)].join(' ');
+    assert.doesNotMatch(all, /reinstall/i, os);
+    assert.doesNotMatch(all, /would run|would add/i, os);
+    if (os === 'linux') assert.match(b.switching, /Switching to K3s/); else assert.doesNotMatch(b.words, /Switching to K3s/, os);
+  }
+  const { Setup, quietOnboarding } = await import('../../src/core/setup.ts');
+  const { Db } = await import('../../src/core/db.ts');
+  const { Profile } = await import('../../src/core/profile.ts');
+  const db = new Db(':memory:');
+  db.migrate();
+  const s = new Setup({ profile: new Profile(db), ledger: {} as never, onboarding: quietOnboarding({ os: 'macos' }) });
+  const q = s.view().question ?? '';
+  assert.doesNotMatch(q, /change in Settings › Devices and Settings › Services/);
+  assert.match(q, /Settings › Devices/);
+});
+
 test('the mDNS codec: a query, an answer with compressed names, and garbage refused', () => {
   const q = decodeMdns(encodeMdnsQuery(['_home-assistant._tcp.local'], 7));
   assert.deepEqual([q.id, q.response, q.questions], [7, false, [{ name: '_home-assistant._tcp.local', type: 12 }]]);

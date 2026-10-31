@@ -354,7 +354,7 @@ export class Setup extends EventEmitter {
     switch (step) {
       case 'device': {
         const f = this.#deviceFacts(s);
-        return `Hi, I’m ${me.name}. A few quick questions to set things up; you can change any answer later just by telling me, and "skip" keeps my default. The first three are about this computer, and those you change in Settings › Devices and Settings › Services.\n\nThis is ${factsWords(f)}. I’d make it the hub of a new Nova network: your phone and other computers join it later. Or, if you already have a Nova hub, this computer can join that instead. (New, or join?)`;
+        return `Hi, I’m ${me.name}. A few quick questions to set things up; you can change any answer later just by telling me, and "skip" keeps my default. The first three are about this computer: its roles you change later in Settings › Devices, and Settings › Services shows how it runs services.\n\nThis is ${factsWords(f)}. I’d make it the hub of a new Nova network: your phone and other computers join it later. Or, if you already have a Nova hub, this computer can join that instead. (New, or join?)`;
       }
       case 'roles': {
         const rec: Purpose[] = recommendedHubPurposes(this.#deviceFacts(s)).filter((p) => p !== 'hub-candidate');

@@ -36,7 +36,8 @@ export function renderServices() {
     settingsRow({ id: 'services-backend', title: 'In use: ordinary programs', note: `${data.gets}` }),
     settingsRow({ title: 'On this computer', note: data.misses }),
     ...other.map((o) => settingsRow({ title: o.label, note: o.note })),
-    settingsRow({ id: 'services-switch', title: 'Switching', note: 'Switching to K3s isn’t available yet, so there is nothing to switch to. When it is, it will be here, it won’t need a reinstall, and it will ask for your explicit confirmation.' }),
+    // Only where K3s could come (Linux); elsewhere the row above says it isn't offered.
+    ...(data.os === 'linux' ? [settingsRow({ id: 'services-switch', title: 'Switching', note: 'Switching to K3s isn’t available yet, so there is nothing to switch to. When it is, it will be here, and it will ask for your explicit confirmation.' })] : []),
   ];
   return `<section class="memory-section" id="services" aria-labelledby="set-services">${head}
 <p class="memory-lede">How Nova runs the services it manages here, and what that means on this computer.</p>
