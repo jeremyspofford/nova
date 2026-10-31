@@ -144,6 +144,16 @@ rename promotes; p3 rollback succeeds, 1.0.0 live; p4 not held, restarted; p6 re
 200 through the stable port; p9 the slot kept; p10 held, truthful, two problems raised; p13 no group
 kill. p5's own script reads the old record format and stopped; the S5 tests cover it.
 
+**CI, and an M10d test race this branch's load exposed.** At `e1bdad88`, CI's test job failed twice
+in a row, each time in `tests/core/network.test.ts` (M10d), on a different test: a phone request
+sent while the simulated firewall allowed the mesh reached the hub after the change was armed, and
+counted as contact (`kept` instead of `revert_failed` or `reverted`). Main's CI hadn't shown it; this
+branch adds 61 tests that start many processes. Reproduced here by pinning main's file to one CPU
+that two busy loops also hold: 2 runs of 3 failed. The fix is in the test only: the simulated
+firewall is a gate in front of the mesh listener that checks each packet as it arrives (checked when
+the phone sent it, a slowed request arrived after the change). Under the same pinning, 4 runs of 4
+pass. The network module is unchanged.
+
 One process left from a run with a fix reverted (a `--chdir` stand-in) was found afterwards and
 ended; its cause wasn't pinned down. Runs of the real code leave none (checked after each).
 

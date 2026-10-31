@@ -317,6 +317,11 @@ M10e phase.
     during a restart wait, the per-version health interval.
   - **Limits stated, not fixed:** a process that leaves its group (`setsid`) outlives everything; the
     tripwire sees PATH lookups only (a test reads the code for Kubernetes tools named as commands).
+- **An M10d test race, fixed in the test:** under this branch's heavier suite, CI twice counted a
+  phone request sent just before a network change as contact after it (`tests/core/network.test.ts`).
+  The simulated firewall now checks each packet as it arrives, through a gate in front of the mesh
+  listener. Reproduced on one busy CPU (main's file failed 2 of 3); fixed, 4 of 4 pass. The network
+  module is unchanged.
 
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:
