@@ -169,3 +169,54 @@ tools, the coding sheets.
   agent can't change it.
 - No real coding agent was run for this gate: the stand-ins speak each CLI's real protocol (as in M5
   and M8). A run on the owner's subscription needs their OK.
+
+## The review of PR #239
+
+An independent review of PR #239 at `43c91792` found twelve items. The PR was merged as it stood
+(`22a95930`); the fixes are on `m10c/review-fixes`. Each item became a test in
+`tests/core/coding-review.test.ts` first (throwaway repositories under `mkdtemp`, a bare clone as the
+"remote", Claude Code's stand-in, previews on 127.0.0.1). The reviewer's own probe scripts were run as
+well, against the merged code and after the fixes. Run on 2026-10-31.
+
+**Against the merged code:** 14 of the 15 tests failed, each with the reviewer's symptom; the item-10
+test passed (below). **With the fixes:** 15 of 15 pass. **Each fix reverted in turn** (the rest kept),
+its test:
+
+| Item | Test | Merged code | Fix reverted |
+|---|---|---|---|
+| 1. Decline during a confirmed merge still merged (blocking) | review 1 | fails: "decline: accepted … discard: accepted", run `declined` while `main` moved to the reviewed commit | fails the same way |
+| 2. A preview outlived decline and shutdown | review 2 (two tests) | fails: "nothing of it still answers" false; a recorded group survives a restart | fails: each, the same |
+| 3. Test-runner config (`.npmrc` `script-shell=/bin/true`) | review 3 (two tests) | fails: `.npmrc` committed, the merge offered; chat's `editable: ["**"]` accepted | fails: `.npmrc` committed; chat's `editable` accepted |
+| 4. A link escaping through another link | review 4 | fails: `sub/p -> q/../../OUTSIDE` (after `sub/q -> .`) committed | fails the same way |
+| 5. Merge into a checked-out branch not a compare-and-swap | review 5 (two tests) | fails: the person switched to `other` at the commit point, and `other` was moved ("finds ce2df6b, not the reviewed …"); a branch moved in the window ended failed, no new round | fails: the same |
+| 6. The repository's own `protocol.http.allow=always` | review 6 | fails: 1 request reached the loopback http listener | protocol names removed: fails, 1 request; fetch in the person's repository put back: fails (the merge can't fetch through the rewritten URL) |
+| 7. Huge files read whole | review 7 | fails: a 1.5 GB sparse file read in full ("read 1610612742 bytes") | fails: stopped by the second wall instead (the walk's 1 GB cap) |
+| 8. A cut diff called "exactly this diff" | review 8 | fails: a ~700 KB diff written and offered | fails the same way |
+| 9. A merge that moved the branch before a crash ends "failed" | review 9 | fails: "main moved since you reviewed the change…", a new round | fails the same way |
+| 10. Cancel during the write's add/commit leaks | review 10 | **passes: not reproduced** with this injection (a cancel just after the agent returns: the write's `git add` then fails on a removed worktree, and nothing is left) | passes (a guard only) |
+| 11. Loopback check only on the assigned port, once | review 11 | fails: a second server on `0.0.0.0` in the preview's group went unnoticed | fails the same way |
+| 12. Records and repositories never pruned | review 12 | fails (records weren't named by run, and nothing removed them) | fails: "its records went with the run" |
+
+The reviewer's probes after the fixes (`probe-b.ts`): `decline-during-merge` → "decline refused: Nova
+is already moving main to the reviewed commit…", run `merged`, `main` at the reviewed commit;
+`switch-during-merge` → `main` moved, `other` untouched, "The checkout … has another branch now; Nova
+didn't touch it"; `symlink` → refused; `npmrc` → refused before anything ran; `preview-orphan` →
+"after decline, preview gone", "after close, preview gone", nothing listening on its port.
+
+**The tier-2 OK, plainly.** The check sheet now says: "This runs code the coding agent wrote, as you:
+it can do anything you can on this computer, Nova's own files included. Nova's later promise, to merge
+only exactly what you reviewed, is only as strong as this OK." The check task's goal says the same.
+That is the consequence the reviewer named: code run after that OK can write Nova's own home (its
+records, its worktree, its database), so the guarantees of the tier-3 merge rest on that decision.
+
+**New limits** (also in the plan): the loopback check looks twice when the preview first answers, and
+misses a listener opened later, UDP and a process that left the group; previews are stopped after a
+crash on Linux only; by default the agent may not change JSON, YAML, TOML or INI files without the
+person's list (through the API); a diff over 512 KB can't be merged through Nova; a test command that
+ignores SIGTERM outlives its timeout (seen in the review's probe, not one of its items, not changed).
+
+**Suite after the fixes:** `npm run check`: 1082 tests, 1073 pass, 0 fail, 9 skipped (the same
+opt-in real-service tests). `scripts/ui-test.sh`: 87 tests, 86 passed in the whole run; the one
+failure was M6a's capture indicator ("Nova's server didn't answer", a 30 s wait), a test this work
+doesn't touch, which passed when run again on its own (1/1). The M10c UI test passed in both runs,
+and its screenshots were taken again with the new words on the check sheet and the scope on both.
