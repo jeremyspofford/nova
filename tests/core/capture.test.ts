@@ -495,7 +495,7 @@ test('setup says plainly that capture starts off, and what each kind of device c
     let last: unknown = null;
     for (const text of ['Hi, I am Alex.', 'yes', 'keep', 'plainly', 'keep everything on this machine', 'no']) last = (await h.c('POST', '/setup/messages', { text })).body;
     const said = JSON.stringify(last);
-    assert.match(said, /I see nothing on your devices unless you turn capture on in Settings › Capture/);
+    assert.match(said, /Capture is off until you turn a source on in Settings › Capture/);
     assert.match(said, /an iPhone or iPad allows no passive capture of other apps/);
     assert.equal((await h.c('GET', '/capture/status')).body.active, false);
   } finally {

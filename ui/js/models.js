@@ -95,7 +95,7 @@ export function renderModels() {
   if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="models-retry">Try again</button>` : waitingLine('Loading models', { key: 'models' })}</section>`;
   const hub = data.devices[0];
   const lede = hub?.runtime?.ok
-    ? 'Nova runs models on your own devices. Here is what each can do, and what Nova recommends for each job.'
+    ? 'Nova runs models on your own devices. Here is what each can do, with a suggested model for each job.'
     : `Nova runs models on your own devices, through Ollama. ${hub?.runtime ? hub.runtime.words : ''}`;
   const standout = data.standout === 'accept' && !data.recent.some((t) => t.needs_ok);
   const cloud = data.cloud;

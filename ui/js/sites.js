@@ -38,14 +38,14 @@ export function renderSites() {
   if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="retry-sites">Try again</button>` : waitingLine('Loading sites', { key: 'browser-sites' })}</section>`;
   const sites = data.sites ?? [];
   return `${head}
-<p class="memory-lede">${esc(sites.length ? 'Nova’s own browser remembers these sites between tasks, so it stays signed in where you let it. Sign-ins stay in Nova’s vault, encrypted, and are typed only into the site they belong to.' : 'Nova’s own browser hasn’t kept anything for a site yet. Save a sign-in here and Nova can sign in for you; it is typed only into the site it belongs to.')}</p>
+<p class="memory-lede">${esc(sites.length ? 'Nova’s own browser remembers these sites between tasks, so it stays signed in where you let it. Sign-ins are kept in Nova’s vault, each saved for the site it belongs to.' : 'Nova’s own browser hasn’t kept anything for a site yet. Save a sign-in here and Nova can sign in for you; it is saved for the site it belongs to.')}</p>
 ${sites.length ? `<ul class="conn-list">${sites.map(row).join('')}</ul>` : ''}
 <details class="raw conn-more"><summary>Save a sign-in</summary>
 <form class="site-login" data-form="site-login"><div class="field-row">
   <div><label class="field-label">Site<input class="field" name="site" type="text" autocomplete="off" spellcheck="false" placeholder="shop.example.com" required></label></div>
   <div><label class="field-label">Username<input class="field" name="username" type="text" autocomplete="off" spellcheck="false" required></label></div>
   <div><label class="field-label">Password<input class="field" name="password" type="password" autocomplete="new-password" required></label></div>
-</div><p class="settings-note">Never type a password into chat. Nova never asks for one there.</p>
+</div><p class="settings-note">Never type a password into chat; save it here instead.</p>
 <div class="sheet-actions"><button type="submit" class="btn">Save sign-in</button></div></form>
 </details>
 </section>`;

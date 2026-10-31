@@ -41,7 +41,7 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
     await ready(page);
     const section = page.locator('#capture');
     await section.locator('form[data-form="screenpipe"]').waitFor();
-    assert.match((await section.textContent()) ?? '', /Nothing is captured until you turn a source on/);
+    assert.match((await section.textContent()) ?? '', /Each source starts turned off/);
     await section.locator('details.raw summary', { hasText: 'What each kind of device can capture' }).click();
     assert.match((await section.textContent()) ?? '', /No passive capture of other apps/);
     // Private windows: said plainly how they are recognised, and what is surer.

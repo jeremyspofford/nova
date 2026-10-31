@@ -90,7 +90,7 @@ function render() {
     ? '<div class="dock"><button type="button" class="btn primary" data-action="setup-continue">Continue to Nova</button></div>'
     : `<div class="dock"><form class="composer" id="setup-form"><label class="sr-only" for="setup-input">Answer Nova</label><textarea id="setup-input" rows="1" placeholder="Your answer…" autocomplete="off"></textarea><button type="submit" class="send" aria-label="Send">${ICONS.send}</button></form></div>`;
   el.innerHTML = `<div class="setup-panel" role="dialog" aria-modal="true" aria-labelledby="setup-title">
-  <header class="setup-head">${liveOrb('rail')}<div><h1 class="setup-title" id="setup-title">Setting up Nova</h1><p class="setup-sub">A few quick questions. You can change any answer later just by telling Nova.</p></div></header>
+  <header class="setup-head">${liveOrb('rail')}<div><h1 class="setup-title" id="setup-title">Setting up Nova</h1><p class="setup-sub">A few quick questions. You can change most answers later in Settings.</p></div></header>
   <div class="setup-log" id="setup-log" aria-live="polite">${resetCard()}${log}${result()}</div>
   ${dock}
 </div>`;
