@@ -595,6 +595,8 @@ Open question 1 (how a spoke's capture data reaches the hub) was **resolved by t
   - a manifest from an unknown or revoked device, or with a bad signature, is refused.
 - **For M10h's plan to settle, consistent with Decision 1:** which part of the device agent holds the mesh key, signs manifests and carries the sync. Today the runtime agent has no network, and the boot agent's five verbs are about execution. Moving data is not an execution verb, so a data channel doesn't widen Decision 1's fixed set. It still has to be designed and tested as its own path, with the runtime's no-network rule kept or explicitly amended.
 
+- **Camera clips** Nova keeps use the same path (`docs/plans/smart-home.md` §5).
+
 ## Open questions for the owner
 
 None left from this ADR. Conflicts row 10 (no vault secret stored in a cloud-controlled cluster) stays a proposed default until the owner says otherwise.

@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #253 · Smart Home and cameras: the design, with your decisions**
+- What changed: the plan for a Smart Home page (lights, locks, climate, cameras by room) is filed with your eight decisions. Tapping a tile acts at once, with one quick confirm for unlocking and similar. Anything Nova starts itself asks as before.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: nothing is built. It is milestone M11 — Home, after the M10 chain and the QA harness. The real Home Assistant and Scrypted checks will be your step when its first phase arrives.
+
 **2026-10-31 · #241 · Infrastructure, network changes and account steps through chat**
 - What changed:
   - Nova can plan cloud infrastructure with a monthly budget, and applies a plan only with your confirmation. Over-budget and unpriced plans are never offered.
@@ -210,6 +215,27 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (owner input: Smart Home and cameras; the ADR, with the owner's decisions).** The owner-approved design `nova-smart-home-design-2026-10-31.md` was added to the packet exactly as given, including the owner's same-day change on camera paths (sha256 `5c28dd8d…`). Designed in `docs/plans/smart-home.md`.
+- **The design:**
+  - a device model by capability, fed by connector adapters;
+  - a phone-first Smart Home page that is a view over the model;
+  - control through the existing tiered service-call path, with read-back.
+- **Backends, in order:** Home Assistant (cameras through its stream proxy), then Scrypted, then direct and vendor connectors by demand. Matter is out of scope.
+- **Cameras:**
+  - bridge-fed streams go through the hub;
+  - vendor-cloud and remote cloud paths are allowed outside local-only;
+  - kept clips follow the capture data path.
+- **Owner decisions, the same day:**
+  1. Direct taps need no approval at tiers 0–2 and one on-tile confirm at tier 3; Nova-initiated commands follow the tier table.
+  2. Locking is tier 1. Garage or gate: opening is tier 3, closing tier 2. Heating within the comfort range (default 60–75 °F, a setting) is tier 2; above it, or turning heating off, is tier 3.
+  3. The connect flow: card, then sign-in, then a read-only preview by room before import; cancelling revokes the token.
+  4. Plain `http` to Home Assistant only on a confirmed local or tailnet address, scoped to that connector.
+  5. Box in local-only only to a local seat, never a cloud provider.
+  6. Camera views are logged in the Work Ledger.
+  7. No face recognition.
+  8. The milestone is M11 — Home, after the M10 chain and QA Stage 2.
+- **Still open:** the home token's class, on its proposed default (standard).
 
 **2026-10-31 (M10d: the adversarial review of PR #241).** Same branch and PR, rebased onto main at
 ccc58b5e. The review's probes were read and re-run; each item became a failing test first in
