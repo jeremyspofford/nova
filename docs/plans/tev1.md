@@ -10,6 +10,8 @@
 
 It may read the ingest gate but does not change it. It does not touch the LEDGER, the roadmap, the capability inventory, migrations, `src/server.js`, shared UI or `package.json`. What those need is written below, under **NOTES for Track 1**.
 
+**Moved (DS1, 2026-10-31):** this code now lives in the Decision Service, `src/core/decision-service/` (`systemone.ts` → `wire.ts`, `tev1.ts` → `seats/tev1.ts` with the battery in `templates/ingest-screen.ts`, `verdict.ts` → `verdicts.ts`; `eval.ts` and `tev1-verdicts.json` unchanged). The paths below are as built in PR #248. See `docs/plans/ds1.md`.
+
 ## The API, as found on 2026-10-31
 
 Sources:

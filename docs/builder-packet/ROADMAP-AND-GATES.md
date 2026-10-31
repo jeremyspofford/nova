@@ -186,6 +186,7 @@ Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-3
     - DS3: browser verification, with M10b.
   - Smart home, camera and knowledge-graph alignment come later. Nothing here displaces M10e–M10k.
   - Gate per template: a pre-registered eval passing on the exact model version, or the template ships advisory.
+  - **DS1 built (PR #255):** the service, the seats, the decision log and the boundary test. Moving the gate onto it is Track 1's job.
 
 ## Sequencing rules
 - Relay stabilization may run parallel to M1–M2 (it is independent), integration only at M8.

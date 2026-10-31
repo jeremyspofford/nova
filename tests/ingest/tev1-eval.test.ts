@@ -9,10 +9,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { check } from '../../src/core/ingest/checks.ts';
 import { CHUNK, chunks } from '../../src/core/ingest/screen.ts';
-import { BOUNDS, binOf, reliability, score, verdictOf, wilson, type CaseResult } from '../../src/core/jev/eval.ts';
-import { CONTEXT_TOKENS, Tev1Provider, estimateTokens } from '../../src/core/jev/tev1.ts';
-import { MAX_BODY_BYTES } from '../../src/core/jev/systemone.ts';
-import { readVerdicts } from '../../src/core/jev/verdict.ts';
+import { BOUNDS, binOf, reliability, score, verdictOf, wilson, type CaseResult } from '../../src/core/decision-service/eval.ts';
+import { CONTEXT_TOKENS, Tev1Seat } from '../../src/core/decision-service/seats/tev1.ts';
+import { estimateTokens } from '../../src/core/decision-service/chunk.ts';
+import { MAX_BODY_BYTES } from '../../src/core/decision-service/wire.ts';
+import { readVerdicts } from '../../src/core/decision-service/verdicts.ts';
 import { ENCODED, MANIFEST_FILE, PLACEMENTS, QUESTIONS, buildCases, corpus, manifest } from './tev1-eval/cases.ts';
 import { judge, runCases, type EvidenceFile } from './tev1-eval/harness.ts';
 import { startTev1StandIn } from '../support/tev1-stand-in.ts';
@@ -141,7 +142,7 @@ test('the committed verdicts agree with the eval: same set, same bounds, recompu
 test('the harness runs all cases through the real gate: every case answered, every request within both caps', async () => {
   const s = await startTev1StandIn();
   try {
-    const p = new Tev1Provider({ url: s.url, model: 'tev1:4b' });
+    const p = new Tev1Seat({ url: s.url, model: 'tev1:4b' });
     await p.refresh();
     const runs = await runCases(p, cases);
     assert.equal(runs.length, cases.length);

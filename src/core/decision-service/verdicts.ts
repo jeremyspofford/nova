@@ -1,0 +1,104 @@
+// Eval binding (ADR §6; moved and generalised from Part 1's verdict.ts). A template's thresholds
+// count only while a pre-registered eval verdict PASSES for that exact tuple: template, version,
+// seat, and model version (a Jev version id, or a Tev1 tag and registry digest). Anything else is
+// untrusted: the seat answers as a shadow, logged as evidence, and doesn't decide. A model bump is
+// a new tuple, so its verdict is missing until the eval runs again. Verdicts are written by eval
+// runs only; CI recomputes Part 1's from its committed per-case results, so a hand edit fails.
+import { readFileSync } from 'node:fs';
+import { BOUNDS, type Bounds, type Metrics } from './eval.ts';
+import { modelId, type Size } from './seats/tev1.ts';
+import type { SeatId } from './types.ts';
+
+// Part 1's verdicts: ingest-screen v1 on Tev1, per size and digest.
+export const VERDICTS_FILE = new URL('./tev1-verdicts.json', import.meta.url);
+export const PART1_TEMPLATE = { template_id: 'ingest-screen', version: 1 } as const;
+
+export type SizeStatus = 'pass' | 'fail' | 'not-run';
+export interface SizeVerdict {
+  status: SizeStatus;
+  why: string;
+  digest: string | null;
+  run_at: string | null;
+  ollama: string | null;
+  metrics: Pick<Metrics, 'detection' | 'false_positive' | 'ece'> | null;
+}
+export interface VerdictFile {
+  bounds: Bounds;
+  bounds_commit: string | null;
+  cases_sha256: string;
+  sizes: Record<Size, SizeVerdict>;
+}
+
+export function readVerdicts(file: URL | string = VERDICTS_FILE): VerdictFile {
+  return JSON.parse(readFileSync(file, 'utf8')) as VerdictFile;
+}
+
+export interface Reliance { relied: boolean; why: string }
+const sameBounds = (a: Bounds, b: Bounds) => (Object.keys(b) as (keyof Bounds)[]).every((k) => a?.[k] === b[k]) && Object.keys(a ?? {}).length === Object.keys(b).length;
+const short = (d: string | null) => (d ? d.replace(/^sha256:/, '').slice(0, 12) : 'none');
+
+// Part 1's rule, for a Tev1 size and installed digest.
+export function relianceFor(v: VerdictFile | null, model: Size | null, digest: string | null): Reliance {
+  if (!model) return { relied: false, why: 'No Tev1 size is in use.' };
+  const s = v?.sizes?.[model];
+  if (!v || !s) return { relied: false, why: `There is no recorded eval verdict for ${model}; its scores are advisory.` };
+  if (!sameBounds(v.bounds, BOUNDS)) return { relied: false, why: `The eval verdict for ${model} was recorded against other bounds; its scores are advisory until the eval runs again.` };
+  if (s.status === 'not-run') return { relied: false, why: `The injection eval hasn’t been run on ${model} yet (${s.why}); its scores are advisory.` };
+  if (s.status === 'fail') return { relied: false, why: `${model} didn’t pass the injection eval (${s.why}); its scores are advisory.` };
+  const want = digest?.replace(/^sha256:/, '') ?? null;
+  if (!want || s.digest?.replace(/^sha256:/, '') !== want) return { relied: false, why: `The installed ${model} isn’t the build the eval passed (${short(s.digest)} was tested, ${short(digest)} is installed); its scores are advisory until the eval runs again.` };
+  return { relied: true, why: `${model} passed the injection eval on ${s.run_at?.slice(0, 10) ?? 'record'}; its scores are used.` };
+}
+
+// ---- the general store --------------------------------------------------------------------------
+
+export interface VerdictRecord { template_id: string; version: number; seat: SeatId; model: string; status: SizeStatus; why: string; run_at: string | null; ref: string }
+export interface Lookup { trusted: boolean; why: string; ref: string | null }
+
+export interface VerdictStore {
+  // Whether this exact tuple has a passing verdict.
+  lookup(templateId: string, version: number, seat: SeatId, model: string | null): Lookup;
+  // Whether any decision seat has passed this template version (retires the sorting model).
+  passed(templateId: string, version: number): boolean;
+  // Every record for a seat and model (the scorecard shown before switching).
+  forModel(seat: SeatId, model: string): VerdictRecord[];
+}
+
+export function memoryVerdicts(records: VerdictRecord[]): VerdictStore {
+  const same = (r: VerdictRecord, id: string, v: number) => r.template_id === id && r.version === v;
+  return {
+    lookup(id, v, seat, model) {
+      if (!model) return { trusted: false, why: `${seat} has no model in use.`, ref: null };
+      const r = records.find((x) => same(x, id, v) && x.seat === seat && x.model === model);
+      if (!r) return { trusted: false, why: `${id} v${v} has no eval verdict on ${model}; its answers are evidence only until the eval runs on that exact model.`, ref: null };
+      if (r.status !== 'pass') return { trusted: false, why: `${id} v${v} ${r.status === 'fail' ? 'failed' : 'hasn’t run'} its eval on ${model} (${r.why}); its answers are evidence only.`, ref: r.ref };
+      return { trusted: true, why: `${id} v${v} passed its eval on ${model}${r.run_at ? ` (${r.run_at.slice(0, 10)})` : ''}.`, ref: r.ref };
+    },
+    passed: (id, v) => records.some((r) => same(r, id, v) && r.status === 'pass' && (r.seat === 'jev' || r.seat === 'tev1')),
+    forModel: (seat, model) => records.filter((r) => r.seat === seat && r.model === model),
+  };
+}
+
+// Part 1's file as records: a size's verdict applies only to its exact digest, and only under the
+// bounds in eval.ts.
+export function fileRecords(v: VerdictFile | null): VerdictRecord[] {
+  if (!v) return [];
+  const ok = sameBounds(v.bounds, BOUNDS);
+  return (Object.entries(v.sizes) as [Size, SizeVerdict][])
+    .filter(([, s]) => s.digest)
+    .map(([size, s]) => ({
+      ...PART1_TEMPLATE, seat: 'tev1' as const, model: modelId(size, s.digest!),
+      status: ok ? s.status : 'not-run', why: ok ? s.why : 'recorded against other bounds',
+      run_at: s.run_at, ref: `tev1-verdicts.json#${size}@${v.bounds_commit ?? 'unpinned'}`,
+    }));
+}
+
+// The verdicts the service uses: Part 1's file, read fresh each time so a new run takes effect.
+export function fileVerdicts(file: URL | string = VERDICTS_FILE): VerdictStore {
+  const read = () => { try { return memoryVerdicts(fileRecords(readVerdicts(file))); } catch { return memoryVerdicts([]); } };
+  return {
+    lookup: (...a) => read().lookup(...a),
+    passed: (...a) => read().passed(...a),
+    forModel: (...a) => read().forModel(...a),
+  };
+}
