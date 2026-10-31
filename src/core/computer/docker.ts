@@ -13,7 +13,7 @@
 //    digest;
 //  - the project's .git is read-only inside unless the person chose otherwise.
 import { spawn, type ChildProcess } from 'node:child_process';
-import { lstatSync } from 'node:fs';
+import { lstatSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { trackChild } from '../children.ts';
 import { CoreError } from '../errors.ts';
@@ -312,6 +312,8 @@ export class DockerComputer implements Computer {
       return { image, ...d, skipped };
     } catch (e) {
       if (committed) await this.run(['rmi', '-f', image], { timeoutMs: 60_000 });
+      // A copy that stopped part way isn't a checkpoint, and would hold disk no cap counts.
+      rmSync(cp.dir, { recursive: true, force: true });
       throw e;
     } finally {
       if (paused) await this.run(['unpause', container], { timeoutMs: 60_000 });

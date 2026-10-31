@@ -7,7 +7,7 @@ run on GitHub's Ubuntu runner, against Docker's own engine there.
 
 ## Suite
 
-`npm run check` passes: the token lint, themes, typecheck, and **1015 tests: 1006 pass, 0 fail, 9
+`npm run check` passes: the token lint, themes, typecheck, and **1016 tests: 1007 pass, 0 fail, 9
 skipped** (after the hardening below; before it, 984: 975 pass, 9 skipped). The 9 skips are the
 existing opt-in real-service tests (real Ollama, real Claude, real Relay); none of the new tests
 skipped. The gate's tests:
@@ -195,7 +195,9 @@ main): of the 31 new tests (20, and 11 subtests), 27 failed there, 3 passed (kep
 below), and 1 couldn't run (the SNI parser it tests didn't exist). Where a test stopped at its
 first failure, the rows after it in that test weren't reached on the unfixed code; the table says
 so for each, rather than claim them. For item 3, a separate probe ran the unfixed code to the end
-of each case (the numbers in its rows). After the fixes all 31 pass, with
+of each case (the numbers in its rows). One more test was added after the fixes, for a gap found
+in a review of them (a checkpoint copy that stopped part way was left on disk): it was seen failing
+with its fix removed, and passes with it. After the fixes all 31 pass, with
 the gate's own tests (updated: TLS stand-ins, folder identities, the test label).
 
 ### Isolation and integrity checks added
@@ -214,6 +216,7 @@ the gate's own tests (updated: TLS stand-ins, folder identities, the test label)
 | 4 | A detached loop swaps 200 files for links to a canary while checkpoints are taken | **Reproduced:** checkpoint 0's copy held the canary's bytes (in `f48`) | No copy holds them, in 8 checkpoints (nothing runs then; the machine is paused; files are opened `O_NOFOLLOW` and checked against what was listed) | — | `computer-snapshot`: *a process racing a checkpoint …* |
 | 4 | Links (to a file and to a folder outside) made from inside | Guard: the unfixed copy also kept links as links | Kept as links; the digest reads the link, not its target | — | *a link in the folder …* |
 | 4 | A FIFO (two) and a socket in the folder | Guard: the unfixed copy skipped them too | A checkpoint, a digest and a reset finish at once; they are left out of the copy | — | *a FIFO or a socket …* |
+| 4 | A checkpoint whose copy stops part way (a file its owner made unreadable from inside) | Not tested there; by the code, a part-made copy stayed on disk | The copy and the image are removed, so repeated failures hold no disk | — | *a checkpoint whose copy stops part way …* |
 | 9 | A read writes new bytes of the same size and puts the old modification time back | **Reproduced:** the read was done | Fails as having written (*"in the project folder"*) | A real read is done | *a read is checked by content …* |
 | 9 | A read changes a machine file already in `docker diff` since the image, same size and time | Not reached there (the test stopped at the row above); the unfixed plan listed it as a known gap | Fails as having written (*"in the machine: A /tmp/state.txt"*) | same | same |
 | 5 | Writes from inside to `.git/config` (an fsmonitor), `.git/hooks/pre-commit`; `rm -rf .git`; `mv .git` | **Reproduced:** the config write went through | All refused (read-only mount); the host's `.git` digest is unchanged; reading the repository and writing other files still work | With `git_writable`, the same config write lands | `computer-folder`: *the project's .git is read-only …* |

@@ -5,13 +5,13 @@
 // test's temp dir with canaries outside them; the containers carry the test's label.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DockerComputer } from '../../src/core/computer/docker.ts';
 import { treeDigest, type Machine } from '../../src/core/computer/computer.ts';
 import { IMAGE } from '../../src/core/computer/policy.ts';
-import { TEST_LABELS, dockerSkip, folderIdOf, removeTestContainers, settled } from './computer-support.ts';
+import { TEST_LABELS, docker, dockerSkip, folderIdOf, removeTestContainers, settled } from './computer-support.ts';
 import { open } from './resilience-support.ts';
 
 const skip = await dockerSkip();
@@ -146,6 +146,25 @@ test('a read is checked by content: same size and time, or a path that had alrea
       try { const d = core.computer.request('destroy', {}, ws); core.ledger.approve(d.id, { confirm: true }); await settled(core, d.id); } catch { /* best effort */ }
     }
     await core.close();
+    await removeTestContainers();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a checkpoint whose copy stops part way leaves nothing on disk', { skip: skip ?? (process.getuid?.() === 0 ? 'as root every file is readable, so the copy can’t be made to fail' : false), timeout: 120_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'nova-snap-partial-'));
+  const c = new DockerComputer({ home: join(root, 'home'), labels: TEST_LABELS });
+  const m = machine(root, 'q');
+  try {
+    await c.create(m);
+    // A file Nova can't read (its owner made it so from inside): the copy stops at it.
+    assert.equal((await c.exec(m, { argv: ['sh', '-c', 'mkdir -p a && echo one > a/one && echo two > z-unreadable && chmod 000 z-unreadable'], timeoutS: 30 })).exit, 0);
+    const dir = join(root, 'home', 'cp-a');
+    await assert.rejects(c.checkpoint(m, { id: 'a', dir }), /couldn’t read z-unreadable/);
+    assert.equal(existsSync(dir), false, 'the part-made copy is gone');
+    assert.notEqual((await docker(['image', 'inspect', `nova-computer:${c.tag}-${m.id}-a`])).code, 0, 'and its image');
+  } finally {
+    await c.destroy(m, []).catch(() => {});
     await removeTestContainers();
     rmSync(root, { recursive: true, force: true });
   }

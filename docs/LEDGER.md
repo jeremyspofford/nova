@@ -21,7 +21,10 @@ built-ins only.
 evidence is in `docs/evidence/m10a-gate.md`, "Hardening"; the plan `docs/plans/M10a.md` says what is
 built now. All fifteen items were answered, each with a test against real Docker in throwaway
 `mkdtemp` folders with canaries, every container labelled for its test and removed at the end. 27 of
-the 31 new tests failed on the unfixed code; all pass now.
+the 31 new tests failed on the unfixed code (3 passed and stay as guards; 1 tested a parser that
+didn't exist yet); all pass now. One more, for a gap found reviewing the fixes (a checkpoint copy
+that stopped part way stayed on disk), was seen failing with its fix removed. The suite: 1016 tests,
+1007 pass, 9 skipped (the existing opt-in ones).
 - **Folder identity (1, 2).** No two workspaces' folders overlap (nor one and Nova's home). A folder
   of the person's is resolved when asked: the task stores its real path, device and inode, the
   approval shows them, and only that folder is used. Before every mount, start, copy, digest and
