@@ -1,16 +1,17 @@
-3064 ms
-164 ms · setup open
-226 ms · new network
-301 ms · roles: the recommendation
-379 ms · backend: ordinary programs
-426 ms · typed “Alex”
-477 ms · typed “yes”
-510 ms · typed “keep”
-543 ms · typed “plainly”
-577 ms · typed “keep everything on this machine”
-2164 ms · look: the network too
-2413 ms · import: all three
-2460 ms · no first task
-2700 ms · followed the suggested action
-3033 ms · kept the note
-3064 ms · Nova finds it
+2915 ms
+140 ms · setup open
+204 ms · new network
+271 ms · roles: the recommendation
+338 ms · backend: ordinary programs
+370 ms · typed “Alex”
+404 ms · typed “yes”
+437 ms · typed “keep”
+471 ms · typed “plainly”
+504 ms · typed “keep everything on this machine”
+571 ms · look: the network too
+2137 ms · acknowledged the warning
+2404 ms · import: all three
+2437 ms · no first task
+2546 ms · followed the suggested action
+2904 ms · kept the note
+2915 ms · Nova finds it

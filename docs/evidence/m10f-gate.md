@@ -10,10 +10,27 @@ sent, no real network was looked at, no real device was paired, and nothing was 
 No Kubernetes, Helm or Flux was installed or run; the no-Kubernetes tripwire was armed for every run.
 
 The branch is `m10f/roles-onboarding`, from main at `c0bae29d` (M10e merged), with main merged in at
-`e343026f` (#259, the diagnostics bundle) and `4881a2b2` (#264, capture-sensitive; docs and the
-decision service only, no overlap with this phase's code).
+`e343026f` (#259, the diagnostics bundle), `4881a2b2` (#264, capture-sensitive) and `572ef193` (#258,
+the gate on the Decision Service, which took migration 0019: M10f's is now **0020**).
+
+**Reviewed:** the independent review of #268 at `fa2f73cc` found 11 items (1 blocking, 5 should-fix,
+5 minor). Each is in "The review of #268" below, with its test, its fix, and the test run with the fix
+reverted. The gate items are corrected where the review showed a claim wasn't true (item 2).
 
 ## Suite
+
+**After the review**, at `098cc4e2` (main merged at `572ef193`, #258):
+- `npm run check`: **1442 tests: 1427 pass, 2 fail, 13 skipped** on this machine, the two being
+  `tests/core/provider-guard.test.ts` › "a coding agent that changes more than Nova takes…" (the
+  stand-in agent ended without a result) and `tests/skills-api.test.js` › "the email summary…" (timed
+  out). Neither touches M10f's code; both pass alone (35 of 35 in those two files), and failed the
+  same way in two other full runs here while other builders' suites loaded the machine (load average
+  near 6). CI is the record: see the PR.
+- `scripts/ui-test.sh` (Chromium and WebKit): **101 tests: 101 pass, 0 fail**. The browser path's
+  first win: **2915 ms**.
+- Both logs end `no-Kubernetes tripwire: never fired`.
+
+**Before the review** (kept for the record):
 
 `npm run check` passes (token lint, themes, typecheck, the suite under the tripwire): **1341 tests:
 1329 pass, 0 fail, 12 skipped** (the existing opt-in real-service tests), at `ccbb94bf` (main merged
@@ -29,7 +46,10 @@ The new and changed tests:
 
 | File | Tests | What it proves |
 |---|---|---|
-| `tests/core/mesh-purposes.test.ts` | 6 | The roles and what each kind may hold; pairing with roles (asked, shown, changed on the approval screen, told to the device); a hub candidacy asks on its own at pairing and is in the next signed roster; Settings edits at their tiers, the candidacy confirmed every time and unpinned when removed; devices paired before (migration 0019's backfill and the replication triggers carrying the column); the heartbeat answer carrying the roles and the hub's dry run of placement |
+| `tests/core/onboard-consent.test.ts` | 4 | Review 1: consent in setup fails closed: the reviewer's phrasings and more; under local-only the network waits for the warning |
+| `tests/core/roles-bound-work.test.ts` | 3 | Review 2: model roles, downloads and inference need compute; capture needs capture source; narrowing says what stops and stops it |
+| `tests/core/sync-skew.test.ts` | 5 | Review 3: one mechanism for a standby a release behind (a 0019 standby against a 0020 hub; an 0018 one; a hub that didn't adapt; the registry complete) |
+| `tests/core/mesh-purposes.test.ts` | 7 | The roles and what each kind may hold; pairing with roles (asked, shown, changed on the approval screen, told to the device); a hub candidacy asks on its own at pairing and is in the next signed roster; Settings edits at their tiers, the candidacy confirmed every time and unpinned when removed; devices paired before (migration 0020's backfill (with computers that already serve a model role or capture keeping that role) and the replication triggers carrying the column); the heartbeat answer carrying the roles and the hub's dry run of placement |
 | `tests/core/services-placement.test.ts` | 7 | The resolver, one test per mode (pinned, preferred plus failover, floating) and per refusal; the failover when a stand-in stops heartbeating past the window; the validator placing by workload roles only; checked twice (the Service Manager at proposal, before any driver; the device agent's own check) |
 | `tests/core/onboard.test.ts` | 7 | The device detected (WSL2 told apart); the per-OS backend words (supervisor pre-selected and the only available choice; K3s shown on Linux as not available, offered nowhere else); the mDNS codec; discovery on loopback stand-ins (found, never connected; the network query only when asked, bound to 127.0.0.1); import sources listed without opening a file, only what is picked read and screened, a blocked file held back; setup end to end in the core in the ADR's order, ending on the first view with one action; the closing rule |
 | `tests/core/setup.test.ts` | 10 (changed) | The conversation now starts with the device; `answer()` is async |
@@ -53,12 +73,20 @@ The new and changed tests:
 - `/pair` says a phone or browser is a thin client (`ui/js/pair.js`, `#pair-role`); the computer's
   command takes `--roles compute,storage` (`src/device/boot.ts`, passed through by `join.sh`).
 
-### 2. Placement on a thin client is refused at proposal and again at the device
+### 2. Placement on a thin client is refused, and again at the device
 
-- At proposal: `services-placement.test.ts` › "checked twice…": a Service Manager given the hub's
-  devices refuses a definition pinned to a thin-client laptop or a phone before any driver is asked
-  (the recording driver's `plan` is called 0 times), naming the reason; `mesh-purposes.test.ts` ›
-  the hub's dry run `POST /services/placement` refuses a thin-client computer.
+**Corrected after the review (finding 6).** The first draft claimed a hub-side Service Manager check
+at proposal. It doesn't exist in the running system: the only Service Manager that proposes services
+is the supervisor's (`service deploy`, M10e), built without devices. What checks it today, exactly:
+- **The hub's dry run** `POST /services/placement` (tier 0, advisory: it deploys and gates nothing)
+  refuses a thin-client computer (`mesh-purposes.test.ts`), and since review 4 reads `hub` as the hub.
+- **The supervisor driver** (M10e, unchanged) refuses any placement pinned to a device other than the
+  hub, so no workload reaches a thin client, or any spoke. Roles don't yet bound what it runs on the
+  hub itself.
+- **The Service Manager's `placement` option** is built and tested (`services-placement.test.ts` ›
+  "checked twice…": refused before any driver is asked), and is wired to the real path with M10h.
+- **Work that already reaches a computer** is bounded by its roles since review 2 (model roles,
+  downloads, inference, capture).
 - At the device: `assignmentAllowed` (`src/device/trust.ts`) refuses a thin client, a device with no
   workload role, a device that never heard its roles, and one missing the role a workload asks for.
   The boot agent keeps its roles in `device.json` from the approval and each heartbeat answer:
@@ -130,6 +158,33 @@ Screenshot `docs/screenshots/m10f/settings-services.png`.
 
 ### 9. The fresh-user test, with the timed first win
 
+**After the review** (main merged at `572ef193`; under local-only the network now waits for the warning
+to be acknowledged, so the path has one more answer):
+
+- Measured (machine speed, from the first GET /setup): **2706 ms**, under the 15-minute bound.
+- The human path, estimated: 12 answers, 2 clicks after setup, 786 words shown by Nova. At 200 words a minute, 10 s per answer and 5 s per click: **about 6 min 6 s**. An estimate, not a measurement of a person.
+
+| Step | ms from start |
+|---|---|
+| setup opened: this computer described | 6 |
+| answered device: “new” | 19 |
+| answered roles: “yes” | 28 |
+| answered backend: “yes” | 33 |
+| answered user_name: “Hi! I'm Sam.” | 39 |
+| answered timezone: “yes” | 46 |
+| answered nova_name: “keep” | 51 |
+| answered directness: “plainly, please” | 57 |
+| answered privacy: “keep everything on this machine” | 63 |
+| answered discover: “this computer and the network too” | 68 |
+| answered discover: “yes, look on the network” | 1586 |
+| answered import: “all” | 2672 |
+| answered first_task: “yes” | 2686 |
+| followed “Review what Nova brought in”: the imported note waits in Memory | 2698 |
+| kept the imported note | 2703 |
+| Nova found it: “Note “Garden plans”: Plant Larkspur by the north fence in sp…” | 2706 |
+
+**Before the review:**
+
 `tests/acceptance/fresh-user.test.ts`: the real server as its own process on a blank home, with the
 egress tripwire preloaded, local-only. Every check it had still holds (the profile, the welcome note
 verified with Nova's evidence and checked again from disk, an extension in and out, a restart, no
@@ -183,7 +238,65 @@ evidence it is worded to. The register's own check (`tests/core/evals.test.ts`) 
 | `onboard.backend-runs-today` | “Everything Nova does today runs this way; nothing in Nova needs Kubernetes.” | Worded to M10e's tripwire evidence; not an agent outcome |
 | `onboard.thin-client-runs-nothing` | “A screen onto Nova. It never runs anything for Nova.” | Worded to `tests/core/services-placement.test.ts`; no golden task |
 
-## Guards removed, one at a time, to show their tests fail
+## The review of #268
+
+Each finding was reproduced with the reviewer's probe (`m10f-probes/p1`–`p5`) or a test written from
+it first, which failed; then fixed; then each fix's guard was removed on its own and its test run
+again (`scratchpad/guards2.py`: remove, run the file, put back), on the code at `a96c7640`, where
+every one failed. **Order:** for each item the test was written and seen failing before the fix.
+
+| # | Finding | Reproduced? | Fix | Test | With the fix reverted |
+|---|---|---|---|---|---|
+| 1 | Typed answers turn a no into a yes (BLOCKING) | Yes (p2: "Just this computer, not the network" looked on the network; "I don't want the calendar" read the calendar) | `onboard/consent.ts`: consent fails closed. Negation before a thing leaves it out; only leaves the rest out; "sure, but not X" is all but X; a refusal of one thing asks again; a mention with a bare no asks again. A network yes under local-only waits for the warning to be acknowledged (its own choices: yes, this computer only, no) | `onboard-consent.test.ts` (the reviewer's 7 phrasings, 40 more, in the parser and in setup) | Each of 5 guards fails 1–3 tests (negation, bare no, refusal-not-yes, the acknowledgement, asking again) |
+| 2 | Roles don't bound model and capture work on a computer | Yes (p1: a thin-client computer took the reasoner role and a download) | Model roles, downloads (asked and when run) and inference to a paired computer need compute; capture from it (offered, taken in, turned on) needs capture source; the hub is exempt (it runs Nova and its own models). Narrowing names what stops ("its thinking and writing model", a capture source's name) and stops it (inference refused, sources turned off); the sheet asks with `dry_run`. Computers already doing that work get the role in 0020. No other path puts work on a spoke today (browser, coding, infra, the computer and Relay run on the hub; the inbox's tasks run on the hub) | `roles-bound-work.test.ts` (3), the 0020 backfill in `mesh-purposes.test.ts`; existing capture and model tests now enroll computers with the role | 9 guards, each fails its test |
+| 3 | A standby one release behind refuses the batch | Yes (p4: a 0018 standby refused the whole batch for `device.purposes`) | One mechanism, `ADDED_COLUMNS` in `mesh/sync.ts` (receipt.opt_in at 19, device.purposes at 20): the standby says its schema when it pulls, the hub leaves out what it lacks (unstated: taken as 19); a standby that gets one anyway leaves it out and records a problem once (#258's receiving side, kept). 0020 remakes the receipt triggers to carry opt_in always, so #258's case uses it too. The always-true `logged.length >= 0` is replaced | `sync-skew.test.ts` (5), `mesh-purposes.test.ts` (the logged row carries every column), `mesh-sync.test.ts` (a real standby gets the roles), #258's `gate-review.test.ts` case rewritten to the mechanism | 4 guards, each fails |
+| 4 | After a failover the new hub can't take hub services | Yes (p5: the promoted standby held only hub candidate) | Promotion gives the new hub's record the hub's fixed roles (hub candidate, general server): one rule, the record says what is true, Settings shows it. Chosen over a resolver special case for "the active hub" | `mesh-sync.test.ts` › promotion (roles, and the dry run pinned to `hub` resolving to the new hub) | Fails |
+| 5 | mDNS matching is quadratic | Yes (p3: 16 × 3600 PTRs, 14.9 s) | Answers indexed by name; 256 answers read per reply, 64 instances per discovery (64 replies were already the cap); names over 255 bytes, a TXT string past its record and a cut-off question refused; TXT with no prototype | `onboard.test.ts` › "hostile mDNS replies" (the probe's packing: now about 7 ms) | 5 guards, each fails |
+| 6 | The evidence claims a hub-side proposal check that doesn't exist | Yes | Gate item 2, the plan §2 and the LEDGER now say exactly what checks it today (above) and what waits for M10h | — (records) | — |
+| 7 | The human estimate's minutes rounded up | Yes ("about 6 min 52 s" for 352 s) | `Math.floor` | `fresh-user.test.ts` | — (arithmetic) |
+| 8 | Placement wording, a removed device, floating | Yes (p5) | Leaving a device says why (gone, no longer allowed, or silent past the window); a removed device counts as moved; floating copies keep their device through the window | `services-placement.test.ts` › "review finding 8" | 3 guards, each fails |
+| 9 | Copy promises unbuilt things | Yes | No reinstall promise; switching named only on Linux; no "would run" or "would add"; the device step no longer says Settings › Services changes anything | `onboard.test.ts` › "review finding 9" | Fails |
+| 10 | Import checks per file only, labels, a swapped file, Bookmarks size | Yes | Each record through Nova's own checks, as `importPack`; labels matched exactly, case and all; every file read with `O_NOFOLLOW | O_NONBLOCK` and `fstat` (a link or a pipe refused, no hang); caps: Bookmarks 8 MB, `.ics` 1 MB, places 64 MB | `onboard.test.ts` › "review finding 10", `onboard-consent.test.ts` (labels) | 3 guards, each fails |
+| 11 | `PATCH /mesh/devices` mixes changes, keeps a rename | Yes | One change per call; a mixed call is refused whole | `mesh-purposes.test.ts` › "review finding 11" | Fails |
+
+The guard runs:
+
+| Guard removed (finding: guard) | Test file | Result |
+|---|---|---|
+| 1 negation leaves a thing out | `tests/core/onboard-consent.test.ts` | caught: 3 failing: in setup: the reviewer’s phrasings look and read only what was said yes to; what to bring in: negations leave a source out, “only” leaves the rest out, and a bare refusal reads nothing; whe |
+| 1 a bare no with a mention is unclear | `tests/core/onboard-consent.test.ts` | caught: 2 failing: in setup: the reviewer’s phrasings look and read only what was said yes to; where to look: “not the network”, “only this computer” and the like never look on the network; unclear asks again |
+| 1 a refusal of one thing is not a yes to the rest | `tests/core/onboard-consent.test.ts` | caught: 2 failing: in setup: the reviewer’s phrasings look and read only what was said yes to; what to bring in: negations leave a source out, “only” leaves the rest out, and a bare refusal reads nothing |
+| 1 local-only: the warning acknowledged first | `tests/core/onboard-consent.test.ts` | caught: 1 failing: under local-only, looking on the network waits for the warning to be acknowledged; anything else looks on this computer only or asks |
+| 1 setup asks again when unclear | `tests/core/onboard-consent.test.ts` | caught: 1 failing: in setup: the reviewer’s phrasings look and read only what was said yes to |
+| 2 a model role needs compute | `tests/core/roles-bound-work.test.ts` | caught: 1 failing: a thin client, or a computer without compute, gets no model role and no download |
+| 2 a download needs compute | `tests/core/roles-bound-work.test.ts` | caught: 2 failing: a thin client, or a computer without compute, gets no model role and no download; with compute it may; taking compute away says its reasoner model stops there, and no model work goes to it  |
+| 2 inference needs compute | `tests/core/roles-bound-work.test.ts` | caught: 1 failing: with compute it may; taking compute away says its reasoner model stops there, and no model work goes to it after |
+| 2 capture taken in only from a capture source | `tests/core/roles-bound-work.test.ts` | caught: 1 failing: capture from a computer needs capture source: offered, taken in and turned on only then; taking it away turns its sources off |
+| 2 capture offered only by a capture source | `tests/core/roles-bound-work.test.ts` | caught: 1 failing: capture from a computer needs capture source: offered, taken in and turned on only then; taking it away turns its sources off |
+| 2 capture turned on only on a capture source | `tests/core/roles-bound-work.test.ts` | caught: 1 failing: capture from a computer needs capture source: offered, taken in and turned on only then; taking it away turns its sources off |
+| 2 narrowing turns capture off | `tests/core/roles-bound-work.test.ts` | caught: 1 failing: capture from a computer needs capture source: offered, taken in and turned on only then; taking it away turns its sources off |
+| 2 narrowing says what stops | `tests/core/roles-bound-work.test.ts` | caught: 1 failing: capture from a computer needs capture source: offered, taken in and turned on only then; taking it away turns its sources off |
+| 2 the migration keeps what computers already do | `tests/core/mesh-purposes.test.ts` | caught: 1 failing: devices paired before roles: phones and browsers are thin clients, the standby a hub candidate, computers what they already do, the hub its own |
+| 3 the hub leaves out what the standby lacks | `tests/core/sync-skew.test.ts` | caught: 2 failing: a 0019 standby against a 0020 hub: the hub leaves out device.purposes for it, and the whole batch lands; a standby that doesn’t say its schema is taken to be on 19 |
+| 3 the standby says its schema | `tests/core/mesh-sync.test.ts` | caught: 2 failing: a standby catches up from nothing, keeps up, refuses changes, and gets forgetting right, backups included; promotion: a new epoch, a roster signed by the standby’s own key, a verified ledge |
+| 3 a standby leaves out a column it lacks, and says so | `tests/core/sync-skew.test.ts` | caught: 1 failing: a hub that didn’t adapt: the standby leaves the column out, says once it is behind, and the rest of the batch lands |
+| 3 the receipt triggers carry opt_in always | `tests/core/sync-skew.test.ts` | caught: 5 failing: a 0019 standby against a 0020 hub: the hub leaves out device.purposes for it, and the whole batch lands; a hub that didn’t adapt: the standby leaves the column out, says once it is behind,  |
+| 4 a promoted standby holds the hub roles | `tests/core/mesh-sync.test.ts` | caught: 1 failing: promotion: a new epoch, a roster signed by the standby’s own key, a verified ledger record; the old hub fences itself; revoked stays revoked |
+| 5 instances capped and indexed | `tests/core/onboard.test.ts` | caught: 1 failing: hostile mDNS replies: bounded work |
+| 5 answers per reply capped | `tests/core/onboard.test.ts` | caught: 1 failing: hostile mDNS replies: bounded work |
+| 5 TXT within its record | `tests/core/onboard.test.ts` | caught: 1 failing: hostile mDNS replies: bounded work |
+| 5 TXT with no prototype | `tests/core/onboard.test.ts` | caught: 1 failing: hostile mDNS replies: bounded work |
+| 5 names within 255 bytes | `tests/core/onboard.test.ts` | caught: 1 failing: hostile mDNS replies: bounded work |
+| 8 why it leaves a device that lost its role | `tests/core/services-placement.test.ts` | caught: 1 failing: review finding 8: a device that lost its role is said so, not “hasn’t answered”; a removed device counts as moved; floating waits out one late heartbeat |
+| 8 a removed device counts as moved | `tests/core/services-placement.test.ts` | caught: 1 failing: review finding 8: a device that lost its role is said so, not “hasn’t answered”; a removed device counts as moved; floating waits out one late heartbeat |
+| 8 floating waits out a late heartbeat | `tests/core/services-placement.test.ts` | caught: 1 failing: review finding 8: a device that lost its role is said so, not “hasn’t answered”; a removed device counts as moved; floating waits out one late heartbeat |
+| 9 no reinstall promise | `tests/core/onboard.test.ts` | caught: 1 failing: review finding 9: the backend and device words claim nothing unbuilt: no reinstall promise, no “would run”, switching only where K3s could come |
+| 10 each record checked | `tests/core/onboard.test.ts` | caught: 1 failing: review finding 10: each record checked as importPack does, a file swapped for a link or a pipe refused at import, Chromium bookmarks capped |
+| 10 no reading through a link | `tests/core/onboard.test.ts` | caught: 1 failing: review finding 10: each record checked as importPack does, a file swapped for a link or a pipe refused at import, Chromium bookmarks capped |
+| 10 Chromium bookmarks capped | `tests/core/onboard.test.ts` | caught: 1 failing: review finding 10: each record checked as importPack does, a file swapped for a link or a pipe refused at import, Chromium bookmarks capped |
+| 11 one change per call | `tests/core/mesh-purposes.test.ts` | caught: 1 failing: review finding 11: one change per call: a rename with a roles change |
+
+## Guards removed, one at a time, to show their tests fail (before the review)
 
 Each guard was removed on its own (`scratchpad/guards.py` in the build session: replace the guard,
 run the test file that should catch it, put it back), on the code at `138b33e4` (the last row at `0e46269f`):
@@ -216,6 +329,12 @@ guard.
 
 ## Where the ADR didn't fit the code
 
+- **"Checked when a change is proposed"** is not met on the real proposal path yet (review finding 6):
+  the supervisor's Service Manager isn't given devices; M10e's "this hub only" rule holds there, and
+  the hub's dry run is advisory. Wiring waits for M10h, when something first deploys to a spoke.
+- **The hub's own roles** don't bound its own models or the services the supervisor runs on it: the
+  hub runs Nova. Roles bound paired computers.
+
 - **"Pins its key in the next roster"** is met as the signed roster naming every candidate
   (`candidates`). Device agents keep trusting only the hub's and the standby's keys: the same pinned
   keys verify runtime bundles (`verifyBundle`), so trusting a candidate's key before M10g's fencing
@@ -237,6 +356,12 @@ guard.
   after the privacy question, so a local-only answer is known before anything looks at the network.
 
 ## Limits
+
+- **The real migration path** from a deployed 0019 hub has been tested in process (the backfill test),
+  not on a real home.
+- **Two releases behind:** a standby on code from before #258 that is sent `receipt.opt_in` (now always
+  in the log) still refuses it, as it did for a set opt_in before. The hub leaves it out only for a
+  standby that says it is on 18; one that says nothing is taken to be on 19.
 
 - Discovery's real path (one multicast query from an ephemeral port, 224.0.0.251:5353) has run only
   as the same bytes by unicast to a loopback responder. It hasn't been tried on a real network, and
