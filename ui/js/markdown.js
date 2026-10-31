@@ -188,9 +188,14 @@ function renderBlocks(blocks, tight = false) {
       }
       case 'table': {
         const cell = (tag, c, j) => `<${tag}${b.align[j] ? ` style="text-align:${b.align[j]}"` : ''}>${renderInline(c ?? '')}</${tag}>`;
-        const head = `<tr>${b.head.map((c, j) => cell('th', c, j)).join('')}</tr>`;
+        // An empty header cell (a row-label column) is a plain cell: a header with no words names
+        // nothing. The scroll box is a named group, not a landmark: a conversation can hold many
+        // tables, and landmarks with one name can't be told apart (UX review 1, F5).
+        const head = `<tr>${b.head.map((c, j) => cell(String(c ?? '').trim() ? 'th' : 'td', c, j)).join('')}</tr>`;
         const rows = b.rows.map((r) => `<tr>${b.head.map((_, j) => cell('td', r[j], j)).join('')}</tr>`).join('');
-        return `<div class="table-wrap" tabindex="0" role="region" aria-label="Table"><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+        const named = b.head.map((c) => String(c ?? '').replace(/[*_`]/g, '').trim()).filter(Boolean);
+        const name = named.length ? `Table: ${named.slice(0, 4).join(', ')}` : 'Table';
+        return `<div class="table-wrap" tabindex="0" role="group" aria-label="${escapeHtml(name)}"><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
       }
       case 'list': {
         const tag = b.ordered ? 'ol' : 'ul';

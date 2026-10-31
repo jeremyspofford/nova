@@ -1,6 +1,6 @@
 {
   "id": "paper",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "kind": "design-system",
   "name": "Paper",
   "description": "Warm paper, ink, and a serif voice.",
@@ -75,7 +75,7 @@
     "motion/duration-fast": "200ms",
     "motion/duration-slow": "300ms",
     "motion/ease": "cubic-bezier(0.4, 0, 0.2, 1)",
-    "layout/rail-width": "72px",
+    "layout/rail-width": "84px",
     "layout/content-max": "680px",
     "layout/card-gap": "12px"
   },

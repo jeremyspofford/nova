@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #254 · Chat box, health card, orb, sidebar and accessibility fixes**
+- What changed: a long message no longer turns the chat box into a big oval. It stays a rounded box, at most about a quarter of the screen, and scrolls inside. The health card says what's wrong in plain words, the orb looks like a lit sphere again, and sidebar labels fit.
+- What you can now do: type long messages comfortably; read the health card at a glance. Screen readers get cleaner pages (the review's 75 accessibility issues are fixed).
+- Still unfinished: tap-target sizes and the repeated card on Tasks (second pass). Whether minor problems should turn the orb amber rather than red is waiting on you.
+
 **2026-10-31 · #255 · One place where Nova asks a decision model its quick questions**
 - What changed: every quick judgment (yes/no, pick one, score, find in an image) now has one home: versioned question sets, three possible models (TypeSafe's Jev in the cloud, Tev1 on your machine, or Nova's fixed rules), and a record of each decision kept without the content that was judged.
 - What you can now do: nothing on screen yet: nothing uses it until the safety screen is moved onto it in a follow-up.
@@ -235,6 +240,16 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (UX review 1, PR #254).** Fixes from the owner-approved first UX review, F0 to F5. Plan and evidence: `docs/plans/ux-review-1.md`.
+- **F0, the composer:** past one line it uses `radius/input` and is capped at 25dvh.
+- **F1, the Health card:** plain summaries.
+- **F3, the orb:** a lit sphere in every state. The salmon disc was the alert state.
+- **F2, the rail:** one rule; `layout/rail-width` is 84 px in every built-in design system.
+- **F5, accessibility:** 75 → 0 axe nodes, with an advisory axe step in CI. The `axe-core` 4.14.0 devDependency is pinned.
+- **F4, the duplicate line:** a render dedupe. The event fired once.
+- **Not built:** F6 and F7 (the second pass).
+- **Open for the owner:** whether a problem that only wants a look should show amber instead of the alert colour.
 
 **2026-10-31 (DS1: the Decision Service).** ADR `docs/plans/decision-service.md` with the owner's decisions; plan `docs/plans/ds1.md`; PR #255.
 - **Built:** `src/core/decision-service/`.
