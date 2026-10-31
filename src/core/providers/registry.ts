@@ -4,7 +4,7 @@
 // and checked by Nova itself before anything it did counts.
 import { EventEmitter } from 'node:events';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { lstatSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { ENVELOPE_VERSION, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
@@ -631,17 +631,15 @@ export class Providers extends EventEmitter {
     };
   }
 
-  async #run(id: string, brief: Brief, signal: AbortSignal): Promise<Report> {
-    const started = performance.now();
+  // What every run of a provider passes first, whoever asked for it (its own task, or a coding run
+  // through workIn): the settings read once, Relay asked again where its work goes, the task's
+  // privacy mode (never looser than the person's setting now), on or off, the cloud budget. Returns
+  // the run's footing, or a blocked outcome in plain words.
+  async #prelude(id: string, brief: Brief, signal: AbortSignal): Promise<{ blocked: string } | { x: Installed & { manifest: ProviderManifest }; impl: Impl; config: Config; name: string; mode: PrivacyMode; where: Where; role: string | null }> {
     const x = this.#entry(id);
-    const a = x.manifest.adapter;
     const impl = this.#impl(x);
     const config = this.config(id);
     const name = x.manifest.name;
-    const report: Reporter = (status, summary, more = {}, usage = {}) => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
-      ...more, usage: { ...usage, duration_ms: Math.round(performance.now() - started) },
-    });
     // The task's own mode, and never looser than the person's setting right now.
     const mode: PrivacyMode = stricter(brief.privacy_mode, this.#o.profile.privacyDefault());
     // A service that reports where its work goes is asked again now: what it said at the last check
@@ -651,19 +649,103 @@ export class Providers extends EventEmitter {
       const problem = await impl.probe(config, this.#secret, AbortSignal.any([signal, AbortSignal.timeout(6000)])).catch((e) => (e as Error).message);
       this.#probes.set(id, { key: canonicalJson(config), problem, at: this.#now().toISOString() });
       this.emit('change', { id, action: 'checked' });
-      if (problem) return report('blocked', problem);
+      if (problem) return { blocked: problem };
     }
     const where = this.#whereOf(x, config);
-    if (!permits(mode, where.coarse)) return report('blocked', `Waiting on local capacity: ${name} would send this off your devices (${where.words.replace(/\.$/, '')}), and this task is ${mode}.`);
-    if (x.state !== 'enabled') return report('blocked', `${name} is turned off.`);
+    if (!permits(mode, where.coarse)) return { blocked: `Waiting on local capacity: ${name} would send this off your devices (${where.words.replace(/\.$/, '')}), and this task is ${mode}.` };
+    if (x.state !== 'enabled') return { blocked: `${name} is turned off.` };
     // Cloud spend is a policy (LOCAL-MODELS, Budgets): over budget, work for a provider off the
     // devices waits with the reason.
     const over = where.coarse === 'remote' ? this.#o.budget?.(brief) ?? null : null;
     if (over) {
       try { this.#o.ledger.note(brief.task_id, 'waiting_on_model', { role: 'reasoner', kind: 'budget', via: 'provider', reason: over }); } catch { /* the reason stands */ }
-      return report('blocked', `Waiting on the cloud budget: ${over}`);
+      return { blocked: `Waiting on the cloud budget: ${over}` };
     }
-    const role = roleOf(config);
+    return { x, impl, config, name, mode, where, role: roleOf(config) };
+  }
+
+  // A provider that was busy (Relay's single run slot) or never started: Nova asks again by itself,
+  // up to a limit, and a dispatch that started nothing isn't counted. Returns the words to report.
+  #notDone(brief: Brief, name: string, config: Config, out: WorkOutcome): { summary: string; blockers?: string[] } {
+    if (out.status === 'blocked' && out.retry_after_s) {
+      // Asked again by itself, up to a limit (120 times in a row by default, an hour at 30 s);
+      // then the task waits for the person.
+      const streak = this.#busyStreak(brief.task_id) + 1;
+      if (streak >= num(config.busy_limit, 120)) {
+        const words = `${name} has been busy for ${duration(streak * out.retry_after_s)}; Nova stopped asking. Retry when ${name} is free.`;
+        if (out.not_started) { try { this.#o.ledger.notStarted(brief.task_id, out.not_started); } catch { /* counted, then */ } }
+        return { summary: words, blockers: [words] };
+      }
+      this.#retryLater(brief.task_id, out.retry_after_s, out.summary);
+    }
+    // Nothing was started, so this dispatch isn't an attempt (the ledger takes it only with a
+    // blocked report).
+    if (out.status === 'blocked' && out.not_started) { try { this.#o.ledger.notStarted(brief.task_id, out.not_started); } catch { /* counted, then */ } }
+    return { summary: out.summary, ...(out.blockers ? { blockers: out.blockers } : {}) };
+  }
+
+  // A coding agent (or a chat model, through the JSON files contract) working in a folder Nova made
+  // for it, for a coding run (M10c, coding/). The same gates as a provider's own task (#prelude), the
+  // same receipt and the same adapters; the folder, the diff and the tests are the caller's. Every
+  // outcome comes back as a WorkOutcome; a busy Relay is asked again by itself, as for its own tasks.
+  async workIn(id: string, o: { brief: Brief; cwd: string; files: { path: string; sha256: string }[]; may: string; signal: AbortSignal }): Promise<WorkOutcome & { provider_name: string; egress: string }> {
+    const { brief, cwd, signal } = o;
+    const pre = await this.#prelude(id, brief, signal);
+    if ('blocked' in pre) return { status: 'blocked', summary: pre.blocked, blockers: [pre.blocked], usage: {}, provider_name: this.view(id).name, egress: 'unknown' };
+    const { x, impl, config, name, mode, where, role } = pre;
+    const a = x.manifest.adapter;
+    if (a.class === 'automation') return { status: 'failed', summary: `${name} is an automation, not a coding agent.`, usage: {}, provider_name: name, egress: where.receipt };
+    const log = (line: string) => this.#o.log.info('providers', `${id}: ${line.slice(0, 500)}`, { task: brief.task_id });
+    const contract = a.class === 'chat';
+    let system: string;
+    let prompt: string;
+    if (contract) {
+      const files = o.files.map((f) => ({ path: f.path, text: (() => { try { return readFileSync(join(cwd, f.path), 'utf8'); } catch { return ''; } })() })).filter((f) => f.text.length <= 200_000 && !f.text.includes('\u0000')).slice(0, 200);
+      system = CONTRACT_SYSTEM;
+      prompt = contractPrompt(brief, files, o.may);
+    } else {
+      system = 'You are a coding agent doing one task for Nova, a personal assistant. Nova checks your work itself afterwards.';
+      prompt = agentPrompt(brief, o.files.map((f) => f.path), o.may);
+    }
+    const items = [
+      { kind: 'file' as const, ref: `brief:${brief.task_id}`, sha256: sha256(`${system}\n\n${prompt}`) },
+      ...o.files.slice(0, 500).map((f) => ({ kind: 'file' as const, ref: `repo:${f.path}`, sha256: f.sha256 })),
+    ];
+    let egress = where.receipt;
+    if (!role && !impl.reportedWhere) {
+      try { this.#receipt(id, brief, mode, where.receipt, impl.model(config), items); } catch (e) { return { status: 'failed', summary: (e as Error).message, usage: {}, provider_name: name, egress }; }
+    }
+    let out: WorkOutcome;
+    try {
+      out = role ? await this.#roleWork(role, brief, mode, system, prompt, items, signal) : await impl.work({ provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log,
+        privacy: mode, ...(impl.reportedWhere ? { receipt: (e: string) => { egress = e; this.#receipt(id, brief, mode, e, impl.model(config), items); } } : {}) });
+    } catch (e) {
+      if (signal.aborted) throw e;
+      return { status: 'failed', summary: `${name} stopped with an error: ${(e as Error).message}`, usage: {}, provider_name: name, egress };
+    }
+    if (out.status !== 'done') return { ...out, ...this.#notDone(brief, name, config, out), provider_name: name, egress };
+    if (contract) {
+      try {
+        const reply = parseContract(out.reply ?? '');
+        const written = applyFiles(cwd, reply.files);
+        return { ...out, summary: [summarize(reply.notes, written.length ? `Changed ${written.join(', ')}.` : 'Changed nothing.'), out.summary].filter(Boolean).join(' '), provider_name: name, egress };
+      } catch (e) {
+        return { status: 'failed', summary: `Nova didn’t apply ${name}’s reply: ${(e as Error).message}`, usage: out.usage, provider_name: name, egress };
+      }
+    }
+    return { ...out, provider_name: name, egress };
+  }
+
+  async #run(id: string, brief: Brief, signal: AbortSignal): Promise<Report> {
+    const started = performance.now();
+    const report: Reporter = (status, summary, more = {}, usage = {}) => ({
+      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
+      ...more, usage: { ...usage, duration_ms: Math.round(performance.now() - started) },
+    });
+    const pre = await this.#prelude(id, brief, signal);
+    if ('blocked' in pre) return report('blocked', pre.blocked);
+    const { x, impl, config, name, mode, where, role } = pre;
+    const a = x.manifest.adapter;
     const test = testCommand(brief);
     if (brief.evidence_required.some((r) => r.kind === 'test_result') && !test) {
       return report('failed', 'The brief asks for a test result but names no test command (inputs.test_command) for Nova to run itself.');
@@ -729,21 +811,8 @@ export class Providers extends EventEmitter {
     }
     if (out.status !== 'done') {
       // Busy for now: Nova asks again by itself (safe: the provider works on a copy).
-      if (out.status === 'blocked' && out.retry_after_s) {
-        // Asked again by itself, up to a limit (120 times in a row by default, an hour at 30 s);
-        // then the task waits for the person.
-        const streak = this.#busyStreak(brief.task_id) + 1;
-        if (streak >= num(config.busy_limit, 120)) {
-          const words = `${name} has been busy for ${duration(streak * out.retry_after_s)}; Nova stopped asking. Retry when ${name} is free.`;
-          if (out.not_started) { try { this.#o.ledger.notStarted(brief.task_id, out.not_started); } catch { /* counted, then */ } }
-          return report('blocked', words, { blockers: [words] }, out.usage);
-        }
-        this.#retryLater(brief.task_id, out.retry_after_s, out.summary);
-      }
-      // Nothing was started, so this dispatch isn't an attempt (the ledger takes it only with a
-      // blocked report).
-      if (out.status === 'blocked' && out.not_started) { try { this.#o.ledger.notStarted(brief.task_id, out.not_started); } catch { /* counted, then */ } }
-      return report(out.status, out.summary, out.blockers ? { blockers: out.blockers } : {}, out.usage);
+      const said = this.#notDone(brief, name, config, out);
+      return report(out.status, said.summary, said.blockers ? { blockers: said.blockers } : {}, out.usage);
     }
     const reported: Report['artifacts'] = out.artifacts ?? [];
 
