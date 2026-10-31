@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #⟨n⟩ · Your three replies and the UX review filed; second-model reviews become a standing step**
+- What changed: your replies on the orb, the claims, the vault and capture screening are filed (they match what was already applied). So is your first UX review. Security-critical work, starting with the vault broker, will now come with a self-contained "review packet" you can hand to ChatGPT or Gemini.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: the folding-screen fixes from your iPhone Duo (F8/F9) are being built. The orb and claims changes are in progress.
+
 **2026-10-31 · #260 · How Nova will check what it captures from your screen**
 - What changed: your decision is recorded. Captured screen text and transcripts get checked twice: for secrets or sensitive details before they're stored, and for hidden instructions before Nova uses them in an answer. It's checked on your machine, unless you're in cloud mode and turn it on per capture source.
 - What you can now do: Nothing in the app changed: paperwork only.
@@ -255,6 +260,25 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (owner documents filed: the replies on the orb, claims and vault; capture screening; the first UX review; the second-model review pattern).** Three owner documents were added to the packet exactly as given:
+- `nova-orb-claims-vault-reply-2026-10-31.md` (sha256 `0e4180d8…`);
+- `nova-capture-jev-screening-reply-2026-10-31.md` (`78ce474d…`);
+- `nova-ux-review-2026-10-31.md` (`b7fd3dcf…`).
+
+What each covers:
+- **A. Orb, claims, vault.** This is the same text the owner pasted earlier the same day; every sentence was checked against what was applied.
+  - The vault decisions are applied in `docs/plans/vault-broker.md` (merged in #251), which carries no open owner questions.
+  - The orb's fixed semantic states and the softening of user-facing claims are being built as two Track 1 PRs; the DESIGN-SYSTEM record comes with the orb PR.
+  - The 17 claims become eval cases on Track 3's backlog.
+- **B. Capture screening.** The same text is applied in the Decision Service ADR §2.1 and owner decision 5 (merged in #260).
+- **C. The UX review.** F0–F5 are merged in #254; F6 and F7 are second-pass notes.
+  - **F8 and F9** (real-device finds on the owner's iPhone Duo): the posture bands, with the desktop band's entry width derived from the sum of region minimums, minimum card widths, a floor of about 8 characters per line, and a right column that scrolls or collapses and never clips.
+  - They are gated by a 10-posture matrix in Chromium and WebKit, with duo-cover and duo-inner baselines, and are being built as a Track 1 PR.
+- **D. Second-model review, a new standing pattern.**
+  - ChatGPT and Gemini review; they don't build. Security- or design-critical artifacts get a self-contained review packet: the artifact, its claims and its threat model. Findings come back as owner input.
+  - Recorded in OPERATING-RULES. The vault broker's Phase 1 gate gains the packet (item 12).
+  - The roadmap notes Relay as the future vehicle for this, as direction only.
 
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:
