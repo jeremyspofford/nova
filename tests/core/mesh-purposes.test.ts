@@ -167,3 +167,20 @@ test('the hub tells a computer its roles in every heartbeat answer, and a dry ru
     assert.equal(onHub.body.resolution.devices[0].name, 'Hub', 'the hub holds general server; the thin client doesn’t');
   } finally { await h.stop(); }
 });
+
+test('review finding 11: one change per call: a rename with a roles change (or with who approves) is refused whole, and nothing of it is kept', async () => {
+  const h = await hub();
+  try {
+    const dev = await asking(h, { name: 'Desk box', kind: 'computer', platform: 'linux x64', capabilities: [], purposes: [] });
+    const id = (await h.c('POST', `/mesh/requests/${dev.requestId}/approve`, { confirm: true })).body.device.id;
+    const mixed = await h.c('PATCH', `/mesh/devices/${id}`, { name: 'Renamed', purposes: ['compute'] });
+    assert.equal(mixed.status, 400);
+    assert.match(mixed.body.error, /one thing at a time/);
+    const both = await h.c('PATCH', `/mesh/devices/${id}`, { name: 'Renamed', purposes: ['compute'], confirm: true });
+    assert.equal(both.status, 400, 'even confirmed: a confirmation is for one change');
+    const d = (await h.c('GET', '/mesh/devices')).body.find((x: { id: string }) => x.id === id);
+    assert.deepEqual([d.name, d.purposes], ['Desk box', []], 'the rename wasn’t kept');
+    assert.equal((await h.c('PATCH', `/mesh/devices/${id}`, { name: 'Renamed', can_approve: false, confirm: true })).status, 400);
+    assert.equal((await h.c('PATCH', `/mesh/devices/${id}`, { name: 'Renamed' })).body.name, 'Renamed');
+  } finally { await h.stop(); }
+});

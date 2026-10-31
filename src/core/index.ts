@@ -1117,6 +1117,9 @@ export function createCore(o: CoreOptions) {
     {
       method: 'PATCH', path: '/mesh/devices/{id}', summary: 'Rename a device, let it approve new devices (tier 3: needs {confirm: true}, and only an approver may grant it), or change its roles (purposes: widening is tier 3, {confirm: true}; narrowing is tier 2, {approved: true}; making a computer a hub candidate also needs {confirm_candidate: true}).', body: '{name?, can_approve?, purposes?, confirm?, approved?, confirm_candidate?}',
       handle: ({ params, body, who }) => {
+        // One change per call (review finding 11): a confirmation is for one change, and a refused one
+        // must not leave another half made.
+        if ([body.name, body.can_approve, body.purposes].filter((v) => v !== undefined).length > 1) throw new CoreError('validation', 'Change one thing at a time: the name, who approves, or the roles. Each is confirmed on its own.');
         if ((body.can_approve !== undefined || body.purposes !== undefined) && allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', 'Only the hub’s own screen, or a device you’ve allowed to approve, can change who approves or what a device is for.');
         if (body.name !== undefined) devices.rename(params.id!, body.name);
         if (body.can_approve !== undefined) devices.setCanApprove(params.id!, body.can_approve, body.confirm === true);
