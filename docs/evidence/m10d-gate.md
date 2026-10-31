@@ -21,16 +21,17 @@ stand-ins only, in folders made under the system's temp folder:
 
 ## Suite
 
-`npm run check` passes: the token lint, themes, typecheck, and **1094 tests: 1085 pass, 0 fail, 9
-skipped**. The 9 skips are the existing opt-in real-service tests (real Ollama, real Claude, real
-Relay). Before M10d the suite was 1067 tests (1058 pass, 9 skipped). One earlier full run had one
+`npm run check` passes: the token lint, themes, typecheck, and **1109 tests: 1100 pass, 0 fail, 9
+skipped**, on `main` at f4618a66 (with the M10c review fixes) plus this branch. The 9 skips are the existing opt-in real-service tests (real Ollama, real Claude, real
+Relay). M10d adds 27 tests to it. One earlier full run had one
 failure in an untouched test, the Screenpipe cursor test in `tests/core/capture.test.ts` (a pull
 answered without `kept` under the full suite's load); it passed three times alone and in the next full
 run. It is written down here as a flake, not fixed.
 
 `scripts/ui-test.sh` (Chromium in the Playwright container): **89 tests: 89 pass, 0 fail** (the whole
-UI gate, with the two new M10d tests; the two were run again, and passed, after the last change to
-`src/core/network/`).
+UI gate with the two new M10d tests, before rebasing onto f4618a66). After the last change to
+`src/core/network/` and the rebase, the two M10d UI tests, the M10c sheets test and the approvals test
+were run again: 4 pass.
 
 The new tests:
 
