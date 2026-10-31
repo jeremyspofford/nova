@@ -1,0 +1,8 @@
+// Writes manifest.json from the generator: node tests/ingest/tev1-eval/write-manifest.ts
+// CI checks the committed manifest against the generator's output, so the two can't drift.
+import { writeFileSync } from 'node:fs';
+import { MANIFEST_FILE, manifest } from './cases.ts';
+
+const m = manifest();
+writeFileSync(MANIFEST_FILE, `${JSON.stringify(m, null, 1)}\n`);
+console.log(`${m.total} cases (${m.attacks} attack, ${m.benign} benign), sha256 ${m.cases_sha256}`);
