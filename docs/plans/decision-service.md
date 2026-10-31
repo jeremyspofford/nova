@@ -221,7 +221,7 @@ Further rules for the log:
 
 Box locates a target in an image as four edges, each a fraction of the image's width or height.
 - **The docs mark Box and images "Dreamer-ready",** not production. They need the images header and, for Box, `jev-1.14.0`.
-- **Tev1 takes no images,** so Box exists only on the cloud seat. In local-only and local-first, a Box template is unavailable and its deterministic default applies. Ollama's Clef models read images and could be a later local image seat; that is not designed here.
+- **Tev1 takes no images,** so Box exists only on the cloud seat. In local-only and local-first, a Box template uses cloud Jev only when the person has switched on the Box opt-in (owner decision 4); otherwise it is unavailable and its deterministic default applies. Camera frames stay local in local-only mode even with the opt-in on (the Smart Home ADR's camera rule, owner to confirm). Ollama's Clef models read images and could be a later local image seat; that is not designed here.
 
 **How Nova uses Box, when its phase comes:**
 
@@ -232,7 +232,7 @@ Box locates a target in an image as four edges, each a fraction of the image's w
 | **Capture** (screen frames) | Nouls: "is a password field focused in `frame`?", "is a banking app in front?". A Box locates the region to redact. | A "yes" pauses capture or redacts the region. This only ever makes capture **more** private, so it can act at tier 0. |
 
 The rules for every Box use:
-- **Consent:** frames are sent only from sources whose capture consent is on (CONTEXT-AND-CAPTURE), and only in cloud mode.
+- **Consent:** frames are sent only from sources whose capture consent is on (CONTEXT-AND-CAPTURE), and only with the Box opt-in switched on (owner decision 4).
 - **Owner approval:** a camera or screen frame leaving the home is a new kind of egress, and needs the owner's explicit yes (open question 4) before the phase starts.
 - **Logging:** the log keeps the frame's hash and the Box coordinates, never the image.
 
