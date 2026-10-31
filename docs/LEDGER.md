@@ -256,6 +256,29 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (the ingest gate on the Decision Service, Track 1).** Plan `docs/plans/gate-decision-service.md`; PR #⟨n⟩. It applies DS1's NOTES 1–5, Tev1's NOTES 3–4 and the eval harness's NOTES 1, 2 and 5, under the owner's decisions in `docs/plans/decision-service.md`.
+- **The gate asks the service:** `ingest-screen`, one fenced chunk at a time. An answer counts only when the service trusts it (`verdict` or `legacy`) and all five probabilities are in [0, 1]. Otherwise the deterministic layer plus quarantine decide, as before.
+  - The forced local-only is gone. Cloud mode screens with Jev once it is set up.
+  - Local modes use Jev only with the screening opt-in. It is off by default, and its receipt names it.
+  - Box never goes to the cloud in local-only.
+- **Every chunk is screened:** no sampling; a pool of 2; 200-character overlap; surrogate pairs kept whole. Once a chunk has no trusted answer, nothing more is sent.
+  - Cost, measured against the stand-ins: a 2,000,000-character document is 715 chunks. That is about 2,100 Tev1 requests (minutes) or 715 Jev requests.
+- **Wiring:**
+  - the sorting model is the transitional seat, and the Jev key is in the vault as `decisions.jev`;
+  - records go to `decision_record` (migration 0019, with `receipt.opt_in` and the receipt sync triggers recreated);
+  - Health has one line per seat, and the hub's device record names the decision model;
+  - `GET`/`PUT /models/decisions`: 422 with problems; any change is tier 2, with every notice first; the key goes to the vault only; `{use}` is kept;
+  - the eval scorecard routes.
+- **Settings › Models:**
+  - the Decision model section, with two separate switches (Screening; Box, a preview) and their plain words;
+  - each model's scorecard before a switch, or a plain none.
+- **Evals:** the injection suite runs Part 1's 99 cases (`tests/ingest/tev1-eval/cases.ts`, mapped from its shape; the set was not moved into `src/core/decision-service/`).
+- **Safety evidence:**
+  - the deterministic layer and taint tracking are unchanged (an empty diff of `checks.ts`, `outbound.ts`, `runner.js`, `context.js` and `tools.js`);
+  - the corpus and canary suites run in every mode with the seats unavailable, untrusted and a trusted stand-in. With no trusted seat, nothing is looser than checks plus quarantine;
+  - the fresh-user test and the eval regression suite pass.
+- **Not done:** nothing calls TypeSafe. No ingest-screen eval has passed, so without a sorting model outside content is still held back as unsure.
+
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:
   1. sensitive-content detection before indexing or archiving;
