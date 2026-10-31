@@ -416,6 +416,12 @@ test('promotion: a new epoch, a roster signed by the standby’s own key, a veri
     assert.equal(core.mesh.sync.logging(), true);
     assert.ok(verifyRoster(r.body.roster, [core.mesh.identity.publicKey]), 'signed with the standby’s own key');
     assert.equal(r.body.roster.roster.hub.id, p.dev.deviceId);
+    // M10f review 4: the new hub holds what a hub always holds, so it can take hub services.
+    assert.deepEqual(core.mesh.devices.get(p.dev.deviceId).purposes, ['hub-candidate', 'general-server']);
+    const service = { service: 'stand-in', version: '1.0.0', artifact: { program: { 'linux-x64': { url: 'file:///opt/stand-in/s.js', sha256: 'a'.repeat(64), command: ['node', 's.js'] } } }, ports: [{ name: 'api', port: 18080 }], health: { http: '/health', every_s: 5 }, contract_tests: [], alongside: 'full', secrets: [], egress: 'local', os_permissions: [] };
+    const placed = await p.s.api('POST', '/services/placement', { definition: { ...service, placement: { mode: 'pinned', device: 'hub' } } });
+    assert.equal(placed.body.resolution.ok, true, JSON.stringify(placed.body));
+    assert.equal(placed.body.resolution.devices[0].id, p.dev.deviceId);
     assert.equal(r.body.roster.roster.hub.public_key, pinned, 'the key devices pinned for the standby');
     const task = r.body.task;
     assert.equal(task.title, 'Standby promoted to hub');

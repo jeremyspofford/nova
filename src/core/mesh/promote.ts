@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
+import { fixedPurposes, sortPurposes } from './purposes.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Route } from '../api.ts';
@@ -402,7 +403,10 @@ export class MeshRole extends EventEmitter {
       this.#o.db.tx(() => {
         this.#o.sync.setLogging(true);
         this.#o.db.run(`UPDATE mesh_state SET epoch = ?, role = 'hub', hub_id = ?, standby_id = NULL, updated_at = ? WHERE id = 1`, epoch, me, at);
-        this.#o.db.run(`UPDATE device SET role = 'hub' WHERE id = ?`, me);
+        // The hub always holds hub candidate and general server (mesh/purposes.ts): it runs Nova and its
+        // services. Promotion, confirmed at tier 3, is what makes it the hub, so it gains them here,
+        // and placement keeps one rule (roles) rather than a special case for whichever node is hub.
+        this.#o.db.run(`UPDATE device SET role = 'hub', purposes = ? WHERE id = ?`, JSON.stringify(sortPurposes([...self.purposes, ...fixedPurposes('computer', { hub: true })])), me);
         // The old hub is still the person's computer, trusted as before, but not hub or standby.
         if (previous && previous !== me) this.#o.db.run(`UPDATE device SET role = 'spoke' WHERE id = ? AND role = 'hub'`, previous);
       });

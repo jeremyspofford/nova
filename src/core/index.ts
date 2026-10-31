@@ -975,7 +975,10 @@ export function createCore(o: CoreOptions) {
       method: 'POST', path: '/services/placement', summary: 'Where a service definition would run, resolved against every device’s roles, hardware and health: the device or devices, and each device’s reason. Nothing is deployed (tier 0).', body: '{definition}',
       handle: async ({ body }) => {
         const devs = await placementDevices();
-        const v = validate(body.definition, { devices: devs.filter((d) => d.trust === 'trusted').map((d) => ({ id: d.id, platform: d.platform, roles: [...d.purposes] })) });
+        // `hub` names whichever node is hub, as the supervisor driver reads it.
+        const views = devs.filter((d) => d.trust === 'trusted').map((d) => ({ id: d.id, platform: d.platform, roles: [...d.purposes] }));
+        const hubView = views.find((d) => d.id === meshIdentity.id);
+        const v = validate(body.definition, { devices: hubView ? [...views, { ...hubView, id: 'hub' }] : views });
         if (!v.ok) return { valid: false, problems: v.problems, resolution: null };
         const resolution = resolvePlacement(v.def, devs, { hubId: meshIdentity.id, now: now() });
         const away = resolution.ok ? resolution.devices.filter((d) => d.id !== meshIdentity.id) : [];
