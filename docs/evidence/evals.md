@@ -295,3 +295,30 @@ passes only if every trial does.
 Two more things are not done. Only gemma4:12b was scored. qwen3.8:27b, the model the grounding
 evidence found best, has no card yet; a run takes about 15 minutes per suite per trial. No
 scorecard was written to any real Nova home: the runs used a scratch home only.
+
+## Claim cases (the backlog of softened claims)
+
+The register (`tests/evals/claims.ts`, "Honest claims" #265) names 35 eval cases. They are in
+`tests/evals/tasks/claim-backlog.ts`: 20 built, 10 pending and 5 blocked, each with its reason.
+`docs/plans/evals.md` § "Claim cases" has every case's status.
+
+**With stand-ins** (`sh scripts/evals.sh --suite capability`, at the merge of #265): 25 capability
+tasks, 16 passing.
+- **The 20 claim cases:**
+  - 12 pass, 5 of them only partly (they grade part of their strong words, and say which);
+  - 7 fail honestly, 6 because their strong words are false as written and 1 for want of a
+    keychain;
+  - 1 passes only trivially.
+- **The other 5** are the original capability tasks, 3 passing.
+
+**Opt-in, local Ollama, 2026-10-31.** The model was `gemma4:12b`, digest
+`4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c`, with 2 trials per case. A case
+passes only if both trials do. Nothing was pulled or changed, and no cloud call was made: the
+"cloud" in `claim.local-first-says-when-cloud` is the fetch spy's stand-in.
+
+| case | gemma4:12b, 2 trials |
+|---|---|
+| `claim.memory-recalled-next-conversation` | **passes**: it kept the fact in one conversation and knew it in the next, both times |
+| `claim.schedule-runs-unattended` | **passes** |
+| `claim.local-first-says-when-cloud` | **passes**. The note is Nova's own, not the model's |
+| `claim.never-asks-for-site-password` | **fails**. It didn't ask for the password, but it said it can't keep a session and never named where sign-ins are saved (Settings › Connections) |
