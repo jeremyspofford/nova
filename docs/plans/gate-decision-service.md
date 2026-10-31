@@ -7,7 +7,7 @@
 - The owner's decisions in `docs/plans/decision-service.md`, "Owner decisions".
 - The ingest gate's own plan, `docs/plans/ingest-gate.md`.
 
-**Branch:** `gate/decision-service`, PR #⟨n⟩. **Track:** 1.
+**Branch:** `gate/decision-service`, PR #258. **Track:** 1.
 
 ## The owner's decisions, as built
 
@@ -96,7 +96,7 @@ These figures are measured against the stand-ins with `node tests/support/screen
 
 ## What changed (plain language), for the coordinator to insert at merge
 
-**2026-10-31 · #⟨n⟩ · The safety screen now asks Nova's decision service, and checks every part of a long page**
+**2026-10-31 · #258 · The safety screen now asks Nova's decision service, and checks every part of a long page**
 - What changed: Nova's screen for outside content (pages, mail, files, tool output) now asks the new decision service. It checks every part of a long document, not a sample, and the parts overlap, so a trick split across a boundary is still seen. Every decision is recorded, without the content.
 - What you can now do: in Settings › Models › Decision model, you can choose Jev (TypeSafe's cloud model) or a Tev1 size, and see each model's test results before you switch. Two separate switches let Jev screen outside content (Screening) or images (Box, a preview) even in local modes. Both are off, and each says plainly what leaves your machine. Health shows how outside content is being screened.
 - Still unfinished: no decision model has passed Nova's screening test yet, so anything Nova can't vouch for is still held back as unsure. Jev has never been called for real (no account). A very long document screened by Tev1 takes minutes.

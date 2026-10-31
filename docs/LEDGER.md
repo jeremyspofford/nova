@@ -256,7 +256,7 @@ built-ins only.
 
 ## Decisions
 
-**2026-10-31 (the ingest gate on the Decision Service, Track 1).** Plan `docs/plans/gate-decision-service.md`; PR #⟨n⟩. It applies DS1's NOTES 1–5, Tev1's NOTES 3–4 and the eval harness's NOTES 1, 2 and 5, under the owner's decisions in `docs/plans/decision-service.md`.
+**2026-10-31 (the ingest gate on the Decision Service, Track 1).** Plan `docs/plans/gate-decision-service.md`; PR #258. It applies DS1's NOTES 1–5, Tev1's NOTES 3–4 and the eval harness's NOTES 1, 2 and 5, under the owner's decisions in `docs/plans/decision-service.md`.
 - **The gate asks the service:** `ingest-screen`, one fenced chunk at a time. An answer counts only when the service trusts it (`verdict` or `legacy`) and all five probabilities are in [0, 1]. Otherwise the deterministic layer plus quarantine decide, as before.
   - The forced local-only is gone. Cloud mode screens with Jev once it is set up.
   - Local modes use Jev only with the screening opt-in. It is off by default, and its receipt names it.
