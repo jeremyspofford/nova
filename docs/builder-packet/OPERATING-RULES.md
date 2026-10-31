@@ -75,3 +75,14 @@ Where it differs from earlier packet text, the amendment wins: for example, the 
 `nova-vault-broker-design-2026-10-31.md` is binding input, with the owner's instruction and decisions. The design is `docs/plans/vault-broker.md`.
 - **The honest-claims rule** holds in all code, docs and UI copy: within Nova, the read capability exists only inside the broker. No broader claim, such as "Nova can never read your passwords", is made anywhere.
 - **The broker's TypeScript build** is an ADR-2 exception, not a change to ADR-2.
+
+## Second-model review (owner-approved standing pattern, 2026-10-31)
+- **Reviewers, not builders:** ChatGPT and Gemini review; the build stays single-builder, for coherence.
+- **What gets a packet:** security-critical or design-critical artifacts. The vault broker code is the first named case.
+- **The review packet:** the builder prepares one self-contained document the owner can hand to another model:
+  - the artifact;
+  - the claims it must uphold;
+  - the threat model.
+- **The packet's name:** it sits beside the work, as `docs/reviews/<artifact>-review-packet.md`.
+- **Findings** come back as owner input and are triaged like any review, each with a failing test first where it reproduces.
+- **This doesn't replace** the in-house independent or adversarial review a milestone already has.
