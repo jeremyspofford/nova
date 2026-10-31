@@ -1,21 +1,49 @@
 /*
  * Layouts and postures (DESIGN-SYSTEM §5): the one file where breakpoints live.
  *
- * Widths become words on :root (--viewport, --aside-room, --segments); ui/js/layout.js reads
- * them with the posture and sets <body data-layout data-posture data-aside data-room>. Every
+ * Three bands, each entered where its regions fit (UX review 2026-10-31, F8/F9): the widths are
+ * derived from the regions' minimums below, never round numbers, so they follow the design
+ * system's tokens and the text size. ui/js/shell.js measures --band-two and --band-three, compares
+ * them with the viewport, and sets <body data-layout data-posture data-aside data-room>. Every
  * other rule here keys off those attributes, so a layout is chosen by viewport and posture,
  * never by device name, and every layout shows the same destinations, arranged differently.
  *
- *   phone    < 600 px, or a folded cover screen: one column, bottom tabs.
- *   tablet   600–1023 px, or half-open (two viewport segments): rail and two panes.
- *   desktop  ≥ 1024 px: Calm Control, the rail, a centre column, and a right
- *            column of three quiet cards that the person can close (M9: every expanded width
- *            gives its extra room to a second pane, never a stretched single column).
+ *   phone    under --band-two, or a folded cover screen: one column, bottom tabs.
+ *   tablet   from --band-two, or half-open (two viewport segments): the rail and one column, a
+ *            second pane only where the posture gives it room.
+ *   desktop  from --band-three: Calm Control, the rail, a centre column, and a right column of
+ *            three quiet cards that the person can close (M9: in this band the extra room goes to
+ *            a second pane; below it the centre column keeps --layout-content-max, never stretched).
  */
 
-:root { --viewport: narrow; --aside-room: no; --segments: none; }
-@media (min-width: 600px) { :root { --viewport: medium; } }
-@media (min-width: 1024px) { :root { --viewport: wide; --aside-room: yes; } }
+/* The regions' minimums. Every column is at least this wide wherever it is drawn, so no band is
+   entered where its columns can't fit, and none crushes:
+     main   M9's readable measure (45ch), the view's padding, and a scrollbar gutter on each side
+            (the scroller keeps both: scrollbar-gutter: stable both-edges);
+     card   20 characters inside a card's padding: "last seen 3 h ago" on one line, a two-word
+            heading unbroken; below it cards stack, never squeeze;
+     aside  one card, the column's padding and its scrollbar;
+     rail   layout/rail-width.
+   --scrollbar-room is what this browser's scrollbars take (0 where they overlay), measured by
+   shell.js. --band-two keeps the compact width class (600 px) as its floor: under it, thumbs get
+   bottom tabs even where a rail would fit. */
+:root {
+  --scrollbar-room: 0px;
+  --region-main-min: calc(45ch + 2 * var(--space-5) + 2 * var(--scrollbar-room));
+  --region-card-min: calc(20ch + 2 * var(--space-5));
+  --region-aside-min: calc(var(--region-card-min) + 2 * var(--space-5) + var(--scrollbar-room));
+  --region-aside-max: calc(var(--space-8) * 5.5);
+  --band-two: max(600px, calc(var(--layout-rail-width) + var(--region-main-min)));
+  --band-three: calc(var(--layout-rail-width) + var(--region-main-min) + var(--region-aside-min));
+}
+/* What shell.js measures them with: never seen, never in the way. */
+.band-probes { position: fixed; top: 0; left: 0; width: 0; height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
+.band-probe { height: 0; }
+.band-probe[data-band="two"] { width: var(--band-two); }
+.band-probe[data-band="three"] { width: var(--band-three); }
+.band-probe[data-band="scrollbar"] { width: var(--space-8); height: var(--space-8); overflow-y: scroll; }
+
+:root { --segments: none; }
 /* Settings: a sidebar beside the open category from the expanded width class (840px, UX-RESEARCH
    §7), the grouped list below it (app.js reads --settings-layout). */
 :root { --settings-layout: list; }
@@ -25,7 +53,11 @@
 
 /* ---- the shell ---------------------------------------------------------------------------- */
 
-.shell { display: grid; height: 100dvh; min-height: 0; }
+/* An installed app draws to the screen's edges (viewport-fit=cover): each safe-area inset is kept
+   clear once, here, so no control sits under a notch, a status bar or the home indicator. A phone's
+   tabs keep the bottom one themselves. Where nothing is reported, every inset is 0. */
+.shell { display: grid; height: 100dvh; min-height: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+body[data-layout="phone"] .shell { padding-bottom: 0; }
 .main { grid-area: main; }
 .rail, .tabs, .aside { display: none; }
 .rail { grid-area: rail; }
@@ -38,41 +70,38 @@ body[data-layout="phone"] .shell {
 }
 body[data-layout="phone"] .tabs { display: flex; }
 
-/* tablet, foldable inner screen, or half-open: the rail and two panes. */
-/* The main column keeps a readable measure (M9: at least 45ch, at the expanded width of 840 px
-   too, with room for a scrollbar) and the context pane takes what is left, up to its own width. */
+/* tablet, foldable inner screen: the rail and one column. The three-column band isn't reached,
+   so there is no right column to crush; its cards are on Home. */
 body[data-layout="tablet"] .shell {
-  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(min(calc(50ch + 2 * var(--space-5)), calc(100% - var(--layout-rail-width) - var(--space-8) * 3)), 1fr) minmax(0, calc(var(--space-8) * 5.5));
+  grid-template: "rail main" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr);
 }
-body[data-layout="tablet"] .rail,
-body[data-layout="tablet"] .aside { display: flex; }
+body[data-layout="tablet"] .rail { display: flex; }
+body[data-layout="tablet"][data-aside="on"] .aside { display: flex; }
 
-/* Half-open with the segments side by side (book posture): one pane on each. */
-body[data-layout="tablet"][data-posture="half-open-horizontal"] .shell {
-  grid-template-columns: var(--layout-rail-width) minmax(0, 1fr) minmax(0, 1fr);
+/* Half-open with the segments side by side (book posture): one pane on each, where both fit. */
+body[data-layout="tablet"][data-posture="half-open-horizontal"][data-room="yes"] .shell {
+  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(var(--region-main-min), 1fr) minmax(var(--region-aside-min), 1fr);
 }
 /* Half-open with the segments stacked (laptop posture): the conversation on top, the active
-   card below. Also a half-open screen too narrow for panes side by side. */
+   card below. Also a book posture too narrow for its panes side by side. */
 body[data-layout="tablet"][data-posture="half-open-vertical"] .shell {
   grid-template: "rail main" minmax(0, 1fr) "rail aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr);
 }
-@media (max-width: 599px) {
-  body[data-layout="tablet"] .shell,
-  body[data-layout="tablet"][data-posture="half-open-horizontal"] .shell {
-    grid-template: "rail main" minmax(0, 3fr) "rail aside" minmax(0, 2fr) / var(--layout-rail-width) minmax(0, 1fr);
-  }
+body[data-layout="tablet"][data-posture="half-open-horizontal"][data-room="no"] .shell {
+  grid-template: "rail main" minmax(0, 3fr) "rail aside" minmax(0, 2fr) / var(--layout-rail-width) minmax(0, 1fr);
 }
-body[data-layout="tablet"][data-posture="half-open-vertical"] .aside,
 body[data-layout="tablet"] .aside { border-left: 1px solid var(--border-subtle); }
-body[data-layout="tablet"][data-posture="half-open-vertical"] .aside { border-left: 0; border-top: 1px solid var(--border-subtle); }
+body[data-layout="tablet"][data-posture="half-open-vertical"] .aside,
+body[data-layout="tablet"][data-posture="half-open-horizontal"][data-room="no"] .aside { border-left: 0; border-top: 1px solid var(--border-subtle); }
 
-/* desktop: Calm Control. */
+/* desktop: Calm Control. Each column at least its minimum; the right column grows to its own
+   width first, then the centre takes the rest. */
 body[data-layout="desktop"] .shell {
   grid-template: "rail main" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr);
 }
 body[data-layout="desktop"] .rail { display: flex; }
 body[data-layout="desktop"][data-aside="on"] .shell {
-  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr) calc(var(--space-8) * 5.5);
+  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(var(--region-main-min), 1fr) minmax(var(--region-aside-min), var(--region-aside-max));
 }
 body[data-layout="desktop"][data-aside="on"] .aside { display: flex; }
 .aside-toggle { display: none; }
@@ -87,12 +116,12 @@ body:not([data-layout="phone"]) .home-hero .orb { display: none; }
 body[data-layout="desktop"] .home-hero { align-items: flex-start; text-align: left; padding-top: var(--space-6); }
 body[data-layout="phone"] .home-hero .orb { --orb-size: calc(var(--space-8) * 2.6); }
 
-/* Cards the right column already shows aren't repeated on Home. */
+/* Cards the right column already shows aren't repeated on Home; without one, Home has them. */
 body[data-aside="on"] .home [data-asideable] { display: none; }
-body[data-layout="tablet"] .home [data-asideable] { display: none; }
 
-/* Home's cards: a stack on a phone and in a pane, two across on a wide centre column. */
-body[data-layout="desktop"][data-aside="off"] .home-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Home's cards: a stack on a phone and in a pane, two across on a wide centre column, never
+   under a card's minimum width: below it they stack. */
+body[data-layout="desktop"][data-aside="off"] .home-cards { grid-template-columns: repeat(auto-fit, minmax(max(var(--region-card-min), calc((100% - var(--layout-card-gap)) / 2)), 1fr)); }
 
 /* The phone's top bar carries a small orb, since there is no rail; Home has the big one, so a
    phone shows no top bar there at all. Never a second orb in a conversation. */
@@ -147,7 +176,7 @@ body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { displ
    the real geometry.) */
 @media (horizontal-viewport-segments: 2) {
   body[data-layout="tablet"] .shell,
-  body[data-layout="tablet"][data-posture="half-open-horizontal"] .shell {
+  body[data-layout="tablet"][data-posture="half-open-horizontal"][data-room] .shell {
     grid-template:
       "rail main . aside" minmax(0, 1fr)
       / var(--layout-rail-width) calc(env(viewport-segment-width 0 0) - var(--layout-rail-width)) calc(env(viewport-segment-left 1 0) - env(viewport-segment-right 0 0)) env(viewport-segment-width 1 0);

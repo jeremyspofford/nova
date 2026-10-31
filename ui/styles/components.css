@@ -34,6 +34,9 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* It scrolls up and down only: a phone Home's breathing orb glow, wider than the screen at its
+     fullest, must not make the view pan sideways (tables and code scroll sideways in their own box). */
+  overflow-x: hidden;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
 }
@@ -92,6 +95,8 @@
   backdrop-filter: blur(var(--blur-glass));
   -webkit-backdrop-filter: blur(var(--blur-glass));
   overflow-y: auto;
+  /* The orb's glow reaches past the rail's edges; it must not make the rail scroll sideways. */
+  overflow-x: hidden;
 }
 .rail-home { display: grid; place-items: center; margin-bottom: var(--space-4); border-radius: 50%; text-decoration: none; }
 .rail-list, .tabs-list { list-style: none; margin: 0; padding: 0; display: flex; }
@@ -405,12 +410,16 @@ button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transp
 .lii-icon { color: var(--accent-primary); }
 
 .device-list { list-style: none; margin: 0; padding: 0; }
-.device-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-1) 0; color: var(--text-secondary); }
+/* A device row keeps its words readable (F8): the name and its line keep at least 12 characters
+   beside the icon, and the pill moves under them when there isn't room for all three, rather than
+   squeezing the words a few letters to a line or sitting on top of them. */
+.device-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); padding: var(--space-1) 0; color: var(--text-secondary); }
 .device-row > .icon { color: var(--accent-primary); }
-.device-text { flex: 1; min-width: 0; }
-.device-name { color: var(--text-primary); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); }
+.device-text { flex: 1 1 12ch; min-width: 0; }
+.device-row > .pill { margin-left: auto; }
+.device-name { color: var(--text-primary); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); overflow-wrap: anywhere; }
 .device-tag { color: var(--text-secondary); font-weight: var(--type-weight-regular); }
-.device-detail { margin-top: calc(var(--space-1) / 2); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); }
+.device-detail { margin-top: calc(var(--space-1) / 2); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); overflow-wrap: anywhere; }
 .device-registry .device-row { flex-wrap: wrap; padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
 .device-registry .row-actions { margin-left: auto; }
 
