@@ -7,7 +7,7 @@ import { Db } from '../../src/core/db.ts';
 import { Profile } from '../../src/core/profile.ts';
 import { Extensions } from '../../src/core/extensions.ts';
 import {
-  BUILTIN_DIR, CONTENT_RULES, DEFAULT_DESIGN_SYSTEM, Design, TOKENS, TOKEN_NAMES,
+  BUILTIN_DIR, CONTENT_RULES, DEFAULT_DESIGN_SYSTEM, Design, ORB_STATE_VARS, TOKENS, TOKEN_NAMES,
   contrast, cssVar, generateCss, validatePackage,
 } from '../../src/core/design.ts';
 
@@ -181,7 +181,9 @@ test('CSS carries the schema tokens and nothing else: Era 2’s temporary aliase
   for (const mode of ['light', 'dark', 'auto'] as const) {
     const css = generateCss(fixture(), { mode });
     const declared = [...css.matchAll(/(--[\w-]+):/g)].map((m) => m[1]!);
-    const schema = new Set(TOKEN_NAMES.map(cssVar));
+    // The schema's tokens, and the orb's state properties (DESIGN-SYSTEM §1), which only its
+    // .orb[data-state] rules set.
+    const schema = new Set([...TOKEN_NAMES.map(cssVar), ...ORB_STATE_VARS]);
     assert.deepEqual(declared.filter((n) => !schema.has(n)), [], mode);
     assert.doesNotMatch(css, /--bg:|--text-2:|--t-body:|--accent-text:|--shift:/, mode);
   }

@@ -52,7 +52,7 @@ async function stage(page: Page, grey: boolean) {
       css.textContent = '#orb-stage .orb { --orb-c: #8a8a8a !important; --orb-g: rgba(138, 138, 138, 0.45) !important; --orb-hi: #b4b4b4 !important; }';
       document.head.append(css);
     }
-  }, [[...ORB_STATES], grey] as const);
+  }, [[...ORB_STATES] as string[], grey] as [string[], boolean]);
 }
 
 // Every orb's luminance as a GRID×GRID grid of cell means, from one screenshot of the stage.

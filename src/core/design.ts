@@ -191,6 +191,8 @@ const LIGHT_VARS: Readonly<Record<OrbLight, Record<string, string>>> = {
   dim: { 'glow-op': '0.6', 'glow-scale': '1', filter: 'grayscale(1)', fade: '0.7' },
 };
 const MARK_VARS: Readonly<Record<OrbMark, Record<string, string>>> = { none: { mark: 'none' }, ring: { mark: 'solid' }, dashed: { mark: 'dashed' } };
+// Every custom property a state's look sets on the orb (ui/styles/components.css declares each).
+export const ORB_STATE_VARS: readonly string[] = Object.freeze(['c', 'g', 'hi', ...Object.keys(MOTION_VARS.breathe), ...Object.keys(LIGHT_VARS.soft), ...Object.keys(MARK_VARS.none)].map((k) => `--orb-${k}`));
 
 // A state's look, as the channels that aren't hue: with motion, and under reduced motion.
 const moving = (l: OrbLook) => `${l.motion}/${l.light}/${l.mark}`;
