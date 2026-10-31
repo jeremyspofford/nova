@@ -1,6 +1,6 @@
 {
   "id": "aurora",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "kind": "design-system",
   "name": "Aurora",
   "description": "Morning light through frosted glass.",
@@ -107,12 +107,22 @@
     }
   },
   "reduced_motion": {},
+  "orb_states": {
+    "idle": { "color": "orb/core", "motion": "breathe", "light": "soft", "mark": "none", "reduced": { "light": "soft", "mark": "none" } },
+    "listening": { "color": "orb/listening", "motion": "swirl", "light": "full", "mark": "none", "reduced": { "light": "full", "mark": "none" } },
+    "working": { "color": "orb/core", "motion": "pulse", "light": "full", "mark": "none", "reduced": { "light": "full", "mark": "dashed" } },
+    "speaking": { "color": "orb/core", "motion": "ripple", "light": "bright", "mark": "none", "reduced": { "light": "bright", "mark": "none" } },
+    "needs-you": { "color": "orb/attention", "motion": "beckon", "light": "bright", "mark": "dashed", "reduced": { "light": "bright", "mark": "dashed" } },
+    "stopped": { "color": "status/error", "motion": "alarm", "light": "stark", "mark": "ring", "reduced": { "light": "stark", "mark": "ring" } },
+    "offline": { "color": "orb/core", "motion": "still", "light": "dim", "mark": "none", "reduced": { "light": "dim", "mark": "none" } }
+  },
   "components": {
     "orb": {
       "core": "orb/core",
       "glow": "orb/glow",
       "listening": "orb/listening",
-      "attention": "orb/attention"
+      "needs-you": "orb/attention",
+      "stopped": "status/error"
     },
     "app": {
       "background": "bg/base"

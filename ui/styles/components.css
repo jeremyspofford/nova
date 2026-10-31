@@ -233,6 +233,17 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   --orb-c: var(--orb-core);
   --orb-g: var(--orb-glow);
   --orb-hi: var(--orb-listening);
+  /* A state's look (DESIGN-SYSTEM §1): the applied design system sets these for each state, from
+     the motions, lights and marks src/core/design.ts names (ORB_MOTIONS, ORB_LIGHTS, ORB_MARKS);
+     the drawing is here. These are the values for an orb with no state. */
+  --orb-glow-anim: none;
+  --orb-swirl-anim: none;
+  --orb-swirl-op: 0;
+  --orb-glow-op: 1;
+  --orb-glow-scale: 1;
+  --orb-filter: none;
+  --orb-fade: 1;
+  --orb-mark: none;
   position: relative;
   display: inline-block;
   flex: none;
@@ -240,6 +251,12 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   height: var(--orb-size);
   border-radius: 50%;
   isolation: isolate;
+  filter: var(--orb-filter);
+  opacity: var(--orb-fade);
+  /* The mark: a ring around the orb, solid or dashed, in the state's own light drawn toward the
+     text colour, so it stands out from any page by its brightness, not only its hue. */
+  outline: calc(var(--orb-size) * 0.08) var(--orb-mark) color-mix(in srgb, var(--orb-hi) 55%, var(--text-primary));
+  outline-offset: calc(var(--orb-size) * 0.14);
 }
 .orb-rail { --orb-size: calc(var(--space-6) + var(--space-3)); }
 .orb-avatar { --orb-size: var(--space-6); }
@@ -254,7 +271,9 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   inset: -60%;
   z-index: -1;
   background: radial-gradient(circle closest-side, var(--orb-g) 0%, var(--orb-g) 40%, color-mix(in srgb, var(--orb-g) 50%, transparent) 56%, color-mix(in srgb, var(--orb-g) 16%, transparent) 76%, transparent 100%);
-  animation: orb-breathe var(--motion-breathe) var(--motion-ease) infinite alternate;
+  opacity: var(--orb-glow-op);
+  scale: var(--orb-glow-scale);
+  animation: var(--orb-glow-anim);
 }
 .orb-core {
   background: radial-gradient(circle at 36% 30%, color-mix(in srgb, var(--orb-hi) 70%, var(--orb-c)) 0%, var(--orb-c) 34%, var(--orb-c) 100%);
@@ -273,9 +292,10 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   filter: brightness(1.35);
 }
 .orb-swirl {
-  opacity: 0;
+  opacity: var(--orb-swirl-op);
   background: conic-gradient(from 0deg, transparent 0deg, color-mix(in srgb, var(--orb-hi) 55%, transparent) 90deg, transparent 180deg, color-mix(in srgb, var(--orb-hi) 35%, transparent) 270deg, transparent 360deg);
   mix-blend-mode: screen;
+  animation: var(--orb-swirl-anim);
   transition: opacity var(--motion-duration-slow) var(--motion-ease);
 }
 .orb-sheen {
@@ -284,20 +304,17 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   filter: saturate(0.5) brightness(1.8);
   opacity: 0.75;
 }
-.orb[data-state="working"] .orb-glow { animation: orb-pulse var(--motion-pulse) var(--motion-ease) infinite; }
-.orb[data-state="listening"] { --orb-c: var(--orb-listening); }
-.orb[data-state="listening"] .orb-swirl { opacity: 1; animation: orb-swirl var(--motion-breathe) linear infinite; }
-.orb[data-state="speaking"] .orb-glow { animation: none; opacity: 1; scale: 1.08; }
-.orb[data-state="speaking"] .orb-core { filter: brightness(1.15); }
-.orb[data-state="attention"] { --orb-c: var(--orb-attention); --orb-g: color-mix(in srgb, var(--orb-attention) 50%, transparent); --orb-hi: var(--orb-attention); }
-.orb[data-state="alert"] { --orb-c: var(--status-error); --orb-g: color-mix(in srgb, var(--status-error) 45%, transparent); --orb-hi: var(--status-error); }
-.orb[data-state="alert"] .orb-glow { animation: orb-pulse var(--motion-pulse) var(--motion-ease) infinite; }
-/* Offline: the same sphere, grey and dimmed, its glow faint and still. */
-.orb[data-state="offline"] { filter: grayscale(1); opacity: 0.7; }
-.orb[data-state="offline"] .orb-glow { animation: none; opacity: 0.6; }
 
-@keyframes orb-breathe { from { opacity: 0.55; scale: 0.92; } to { opacity: 1; scale: 1.04; } }
-@keyframes orb-pulse { 0%, 100% { opacity: 0.6; scale: 0.96; } 50% { opacity: 1; scale: 1.1; } }
+/* The motions a design system picks from, on the glow (swirl turns the swirl layer). Each keeps to
+   the state's light: the glow's opacity and size scale from --orb-glow-op and --orb-glow-scale.
+   breathe: a slow swell (idle). pulse: a steady beat (working). ripple: light spreading outward
+   (speaking). beckon: two beats, then a rest (needs you). alarm: a hard on-off blink, slower than
+   once a second (stopped; well under the three flashes a second that can trigger seizures). */
+@keyframes orb-breathe { from { opacity: calc(var(--orb-glow-op, 1) * 0.55); scale: calc(var(--orb-glow-scale, 1) * 0.92); } to { opacity: var(--orb-glow-op, 1); scale: calc(var(--orb-glow-scale, 1) * 1.04); } }
+@keyframes orb-pulse { 0%, 100% { opacity: calc(var(--orb-glow-op, 1) * 0.6); scale: calc(var(--orb-glow-scale, 1) * 0.96); } 50% { opacity: var(--orb-glow-op, 1); scale: calc(var(--orb-glow-scale, 1) * 1.1); } }
+@keyframes orb-ripple { from { opacity: var(--orb-glow-op, 1); scale: calc(var(--orb-glow-scale, 1) * 0.9); } to { opacity: calc(var(--orb-glow-op, 1) * 0.35); scale: calc(var(--orb-glow-scale, 1) * 1.25); } }
+@keyframes orb-beckon { 0%, 36%, 100% { opacity: calc(var(--orb-glow-op, 1) * 0.5); scale: calc(var(--orb-glow-scale, 1) * 0.94); } 12%, 28% { opacity: var(--orb-glow-op, 1); scale: calc(var(--orb-glow-scale, 1) * 1.12); } 20% { opacity: calc(var(--orb-glow-op, 1) * 0.7); scale: var(--orb-glow-scale, 1); } }
+@keyframes orb-alarm { 0% { opacity: var(--orb-glow-op, 1); scale: calc(var(--orb-glow-scale, 1) * 1.1); } 50% { opacity: calc(var(--orb-glow-op, 1) * 0.2); scale: calc(var(--orb-glow-scale, 1) * 0.92); } }
 @keyframes orb-swirl { to { rotate: 1turn; } }
 
 /* ---- cards: one job each ----------------------------------------------------------------- */
@@ -756,6 +773,9 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 .toast:not(:has(.toast-btn)) { padding-right: var(--space-5); }
 .toast[data-tone="alert"] { border-color: var(--status-error); }
 .toast[data-tone="alert"]::before { content: ''; flex: none; width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: var(--status-error); }
+/* A problem that needs the person while Nova keeps running: amber, not red (DESIGN-SYSTEM §1). */
+.toast[data-tone="attention"] { border-color: var(--status-attention); }
+.toast[data-tone="attention"]::before { content: ''; flex: none; width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: var(--status-attention); }
 .toast-btn { padding: var(--space-1) var(--space-3); border: 0; border-radius: var(--radius-pill); background: var(--surface-card-hover); font: var(--type-weight-strong) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-primary); white-space: nowrap; }
 .toast-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
 .proactive-banner { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
