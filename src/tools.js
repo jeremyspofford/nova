@@ -273,6 +273,9 @@ export const TOOLS = {
     needsApproval: false,
     available: (ctx) => ctx.coding,
     async run(args, { coding, sessionId }) {
+      // What the agent may change is the person's to widen, never the model's: a chat request gets
+      // the default rule (the review of PR #239, item 3).
+      if (args && Object.hasOwn(args, 'editable')) throw new Error('Only you can widen what the agent may change, through Nova’s API (POST /api/v1/coding with editable); a chat request can’t. Ask again without it, and the agent may change source files but not the tests or their settings.');
       const { run } = await coding.start(args ?? {}, { session: sessionId, origin: { kind: 'user', ref: `session:${sessionId}` } });
       return {
         output: `Started coding run ${run.id}: ${run.agent_name} writes “${run.title}” on Nova’s branch ${run.nova_branch}, from ${run.branch} in ${run.repo}. Nothing in the repository changes until the person confirms the merge. Nova asks them before it runs \`${run.test_command}\`${run.preview_command ? ' and the preview' : ''}, and again before it merges; they follow it in Tasks.`,
