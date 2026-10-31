@@ -19,8 +19,14 @@ for (const [net, bits] of [
   ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24],
   ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
 ]) PRIVATE.addSubnet(net, bits, 'ipv4');
+// IPv6. Besides loopback, link-local, unique-local, documentation, discard and multicast: ranges
+// that carry an IPv4 address or tunnel to one, since the IPv4 address inside could be this machine
+// or the LAN, refused whole: IPv4-compatible (::/96), the local-use NAT64 prefix (64:ff9b:1::/48),
+// Teredo (2001::/32), 6to4 (2002::/16). And the other IETF special ranges under 2001::/23 that are
+// not one host on the public web (benchmarking, ORCHID).
 for (const [net, bits] of [
-  ['::', 128], ['::1', 128], ['100::', 64], ['2001:db8::', 32], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8],
+  ['::', 96], ['::1', 128], ['100::', 64], ['64:ff9b:1::', 48], ['2001::', 32], ['2001:2::', 48], ['2001:10::', 28], ['2001:20::', 28],
+  ['2001:db8::', 32], ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8],
 ]) PRIVATE.addSubnet(net, bits, 'ipv6');
 
 // Names that only ever mean something on the person's own network.

@@ -22,6 +22,19 @@ test('only public, unicast addresses count as the public web', () => {
   }
 });
 
+// IPv6 ranges that carry or tunnel to an IPv4 address (or are otherwise not one host on the public
+// web): 6to4 (2002::/16, whose next 32 bits are an IPv4 address, 2002:7f00:1:: being 127.0.0.1),
+// Teredo (2001::/32), IPv4-compatible (::/96), the local-use NAT64 prefix (64:ff9b:1::/48), ORCHID
+// and the benchmarking range. All are refused, whatever IPv4 address they carry.
+test('IPv6 addresses that carry an IPv4 address, or tunnel to one, are never the public web', () => {
+  for (const a of ['2002:7f00:1::', '2002:7f00:0001::1', '2002:0a00:0001::1', '2002:5db8:d70e::1', '2001:0:4136:e378:8000:63bf:3fff:fdd2', '2001::1',
+    '::127.0.0.1', '::7f00:1', '::10.0.0.1', '0:0:0:0:0:ffff:7f00:1', '64:ff9b:1::1', '2001:10::1', '2001:20::1', '2001:2::1']) {
+    assert.equal(publicAddress(a), false, a);
+  }
+  // Other 2001: space is the public web (2001:4860:: is a public resolver's).
+  for (const a of ['2001:4860:4860::8888', '2606:4700::1111', '2a00:1450:4001::1']) assert.equal(publicAddress(a), true, a);
+});
+
 test('web_fetch refuses Nova’s own console and anything on this machine or the private network', async () => {
   const { server, port } = await serve((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('[{"content":"a private note"}]'); });
   try {
