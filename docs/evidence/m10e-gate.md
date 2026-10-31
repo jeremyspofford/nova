@@ -8,7 +8,7 @@ the console under the in-process supervisor is the stand-in server of `tests/sup
 Kubernetes, Helm or Flux was installed or run. This machine has a real `kubectl` at
 `/usr/local/bin/kubectl`; the tripwire shadows it for the whole suite, and it was never called.
 
-The branch was rebased onto main at `61bcb042` (M10d merged) before the review's fixes, then onto `a79ab31c` (#248 and #250 merged) after them, onto `844a1271` (#249, the eval harness), onto `736e80ce` (#254 and #255), onto `43c41be4` (#256), and onto `a49e366d` (#251, docs only) last.
+The branch was rebased onto main at `61bcb042` (M10d merged) before the review's fixes, then onto `a79ab31c` (#248 and #250 merged) after them, onto `844a1271` (#249, the eval harness), onto `736e80ce` (#254 and #255), onto `43c41be4` (#256), `a49e366d` (#251, docs only), and onto `9073f381` (#260, docs only) last.
 
 **Deferred, said plainly: the `service` change kind is not built.** The ADR's Order lists it in
 M10e, but its artifact is "the definition plus the rendered values" and its gate is GitOps
@@ -20,7 +20,7 @@ the supervisor with typed confirmations, as console releases are.
 `npm run check` passes: the token lint, themes, typecheck, and **1296 tests: 1285 pass, 0 fail, 11 skipped** (61 of them M10e's; at `43c41be4`). One earlier full run, before the second rebase, failed two M10c tests (`coding.test.ts`, `coding-review.test.ts`) on a port race under the load (a preview's free port taken first: EADDRINUSE); both files pass alone, 27 of 27, and the next full run was green. The 9 skips are the
 existing opt-in real-service tests.
 
-`scripts/ui-test.sh` (Chromium in the Playwright container, under the tripwire): at `736e80ce`, **90 tests: 89 pass, 1 fail**: `tests/ui/ux-review-1.test.ts` (new on main) couldn't load `axe-core`, a dev dependency main added that this checkout hadn't installed. After `npm ci`, that file passes, 5 of 5. #256 changed nothing under `ui/` or `tests/ui/`. CI's UI gate at the head: see the PR.
+`scripts/ui-test.sh` (Chromium in the Playwright container, under the tripwire): at `736e80ce`, **90 tests: 89 pass, 1 fail**: `tests/ui/ux-review-1.test.ts` (new on main) couldn't load `axe-core`, a dev dependency main added that this checkout hadn't installed. After `npm ci`, that file passes, 5 of 5. #256 changed nothing under `ui/` or `tests/ui/`. CI's UI gate at `a49e366d`: 94 of 94, tripwire armed and never fired.
 
 The run's log, start and end (`npm test` and the UI gate both say it):
 

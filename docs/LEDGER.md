@@ -287,7 +287,7 @@ M10e phase.
     rendered Helm values and its gate is GitOps; the brief for this phase excluded Helm. Not built:
     deferred to M10j/M10k, to be confirmed by the owner.
   - M10e was to start after M10d (PR #241) merged. It was first built on main before that, as
-    instructed, then rebased onto main at `61bcb042` (M10d merged), then `a79ab31c`, `844a1271`, `736e80ce`, `43c41be4` and `a49e366d` (docs only) as main moved.
+    instructed, then rebased onto main at `61bcb042` (M10d merged), then `a79ab31c`, `844a1271`, `736e80ce`, `43c41be4`, `a49e366d` and `9073f381` (the last two docs only) as main moved.
   - "Both drivers' tests" and "one definition rendered by both drivers": only one driver exists. The
     contract suite (`tests/support/service-driver-contract.ts`) is ready for M10j.
   - The supervisor driver doesn't run image-only services (the ADR's "Docker where present" needs image
