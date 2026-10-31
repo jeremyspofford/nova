@@ -203,6 +203,65 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10d: infrastructure, networking and accounts through chat).** Branch `m10d/infra`.
+The ADR is `docs/plans/M10.md` (M10d), the plan `docs/plans/M10d.md`, the evidence
+`docs/evidence/m10d-gate.md`. Stand-ins only: a stand-in `tofu`, a loopback network target over a file,
+a loopback account site; nothing real was installed, provisioned, changed or paid.
+1. **Infrastructure and networking are chains of internal ledger tasks,** as coding runs and the
+   change pipeline are: plan (tier 1) → apply (tier 3); prepare (tier 1) → apply (tier 3) → revert.
+   **Why:** each step gets its own tier, evidence Nova checks itself, recovery and record, and the
+   apply task doesn't exist until the plan is verified and inside the budget.
+2. **The budget guardrail is the person's price sheet against a monthly budget,** both set outside
+   chat. A plan with a resource type the sheet can't price is never offered; one that would go over is
+   never offered; the apply checks again as it runs. **Rejected:** a cost estimate from the tool (it
+   has none) or a billing API (none is connected, and the build reaches no cloud). **Cost:** the
+   guardrail is only as right as the sheet, and spend Nova didn't provision isn't seen.
+3. **The apply applies exactly the saved plan the person read** (`tofu apply <file>`, its sha256 checked
+   first), after `Checkpoints.auto` and a copy of the state file. The checkpoint is Nova's home;
+   `workers/` (plan files, state copies) is outside checkpoints by design, so the state copy is kept
+   beside them, with its hash in the record. **Limit:** neither is a rollback of infrastructure.
+4. **A network change is a JSON merge patch over an adapter's JSON configuration** (`http-config`:
+   ETag and If-Match, a bearer token from the vault, plain http only to this machine). The apply is a
+   compare-and-swap on the snapshot's version; a revert writes the snapshot back only over Nova's own
+   change, never over someone else's later one (it stops and says so). **Rejected:** driving router web
+   pages with Nova Browser (vendor-specific, and a page can't do a compare-and-swap).
+5. **"Contact confirmed" is a new request on the mesh listener under the session of a phone, browser
+   or computer that was trusted at the apply,** started after the switch was armed. It is the access
+   policy's own check: `Devices.touch` now emits `heard` before its 30-second write throttle, and the
+   switch listens. The console never counts (it proves nothing about the network), nor does an event
+   stream opened before the change, nor a device paired after it. No such device paired: no change.
+   **Trade-off:** a phone asleep with the PWA closed makes no request, and a good change reverts; that is
+   the safe way to fail.
+6. **The window is the ADR's proposed 5 minutes as a setting** (`mesh.contact_window_s`, 60 to 3600 s),
+   while the owner's open question 2 stays open. The deadline and any contact are in the database, so a
+   restart past the deadline reverts at start (and the heartbeat sweeps too).
+7. **The switch's revert runs by itself at tier 1:** it was confirmed with the change, and it puts back
+   what was there. A revert the person asks for later is a network change of its own: tier 3.
+8. **Secrets in a configuration are masked in every view, and a patch that sets one is refused** (keys
+   that look like a password, key or token). The snapshot has to keep the real values to be written
+   back, so it is sealed on disk with a per-change key in the vault. **Found by the gate's secret
+   search:** the first build kept the snapshot in clear in `workers/network/`.
+9. **Account steps are Nova Browser steps, not a new worker:** `new_password`, `create_account`,
+   `code`, and the plan's `account` declaration. Tier 3 always. The new password is made in Nova's
+   process, typed by the same `SECRET` function as a sign-in, kept aside in the vault before the form is
+   sent (the commit point) and made the site's password only when the page shows it took. **"With the
+   person present"** is built as: the run starts within 10 minutes of the confirmation or stops before
+   a browser opens and asks again, and a code is typed by the person through takeover; Nova never reads
+   or types one. A `fill` into a password or code field is refused by the validator, and a password
+   field refuses a plan's value in the page too.
+10. **Accounts through connectors and OAuth are as M5b built them** (secrets into the vault from
+    Settings, never chat); M10d adds no connector.
+11. **Chat** gets `infra_plan`, `infra_status`, `network_change`, `network_status`, `account_change`,
+    each a guarded step of the ingest gate and seen by the outbound check. Projects, targets, budgets,
+    prices and tokens are the person's, set through the API; the system prompt says never to ask for a
+    password or a code in chat.
+- **Alerts:** a blocked plan (over budget, unpriced) is a problem and a message; a plan past 80 % is a
+  message and says so in the ask; a project whose own level rises is a problem and a message, once per
+  level.
+- **Known limits:** no Settings page yet for projects, targets or a pending password (API only); one
+  adapter each; prices aren't a bill; the tool runs on this computer with its provider's reach (a
+  project declares `egress`, and local-only refuses a remote one).
+
 **2026-10-31 (capture data path, spoke to hub: orchestration ADR open question 1 resolved).** The owner-approved design `nova-capture-data-path-design-2026-10-31.md` (v3) was added to the packet exactly as given (sha256 `059921b7…`). It resolves open question 1 in `docs/plans/M10-orchestration.md`, which now records the resolution.
 - **The path:** derived capture syncs continuously over the mesh. Raw media archives to one target configured on the hub, and a spoke prunes it only after verified archival, keeping a local 48-hour window.
 - **Cloud targets:** encrypted on the hub first, forbidden in local-only mode, with 90-day cold tiering. Tombstones reach every tier.
