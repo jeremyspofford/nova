@@ -66,8 +66,17 @@ export function loginRefusal(pageUrl: string): string | null {
 export class Redactor {
   #values = new Set<string>();
 
+  // The value, and the forms it travels in (review of PR #241): base64 (and base64url), hex and
+  // URL-encoding.
   add(v: string | null | undefined): void {
-    if (typeof v === 'string' && v.length >= 3) this.#values.add(v);
+    if (typeof v !== 'string' || v.length < 3) return;
+    this.#values.add(v);
+    // Encoded forms of short values would mask ordinary text (a hash, a word): from 8 characters.
+    if (v.length < 8) return;
+    const b = Buffer.from(v, 'utf8');
+    for (const f of [v, b.toString('base64'), b.toString('base64').replace(/=+$/, ''), b.toString('base64url'), b.toString('hex'), encodeURIComponent(v), encodeURIComponent(v).replace(/%20/g, '+')]) {
+      if (f.length >= 3) this.#values.add(f);
+    }
   }
 
   get size(): number { return this.#values.size; }

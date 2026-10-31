@@ -55,7 +55,9 @@ export const STEP_KINDS = ['navigate', 'fill', 'click', 'select', 'wait', 'read'
 export const ACCOUNT_CHANGES = ['create', 'password', 'mfa'] as const;
 export type AccountChange = (typeof ACCOUNT_CHANGES)[number];
 // A field a password or a code goes into: never filled from a plan.
-export const SECRET_FIELD = /pass(word|wd|code|phrase)|\bpass\b|\bpin\b|\botp\b|one[-_ ]?time[-_ ]?(code|pass)|\b2fa\b|\bmfa\b|\btotp\b|verif(y|ication)[-_ ]?code|security[-_ ]?code|auth(entication)?[-_ ]?code/i;
+export const SECRET_FIELD = /pass(word|wd|code|phrase)|\bpass\b|\bpin\b|\botp\b|one[-_ ]?time[-_ ]?(code|pass)|\b2fa\b|\bmfa\b|\btotp\b|verif(y|ication)[-_ ]?code|security[-_ ]?code|auth(entication)?[-_ ]?code|\btoken\b/i;
+// In an account plan, any field that names a code at all (review of PR #241): "#mfa-code", "code".
+export const ACCOUNT_CODE_FIELD = /code|\botp|token|\bpin|mfa|2fa|totp|one[-_ ]?time/i;
 export const NO_SECRET_FILL = 'Nova never types a password or a code from a plan: a saved sign-in comes from the vault (a login or new_password step), and a code is typed by the person (a code step).';
 
 // `profile`: Nova's own persistent profile (the default), or a throwaway one for this task alone.
@@ -321,7 +323,8 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
             need(!PAY_TOKENS.test(sel) && !words.some((w) => PAY_WORDS.test(w)), `${at} would pay or place an order. ${PAY_REFUSAL}`);
           } else {
             need(!CARD_FIELD.test(sel) && !CARD_FIELD.test(name), `${at} would type card details. Nova never types card details; paying is yours.`);
-            need(!SECRET_FIELD.test(sel) && !SECRET_FIELD.test(name) && !(typeof s.label === 'string' && SECRET_FIELD.test(s.label)) && !(typeof s.intent === 'string' && SECRET_FIELD.test(s.intent)), `${at} would type into a password or code field. ${NO_SECRET_FILL}`);
+            const fieldWords = [sel, name, typeof s.label === 'string' ? s.label : '', typeof s.intent === 'string' ? s.intent : ''];
+            need(!fieldWords.some((w) => SECRET_FIELD.test(w)) && !(o.account !== undefined && fieldWords.some((w) => ACCOUNT_CODE_FIELD.test(w))), `${at} would type into a password or code field. ${NO_SECRET_FILL}`);
             need(!(typeof s.value === 'string' && looksLikeCard(s.value)), `${at}.value looks like a card number. Nova never types card details; paying is yours.`);
           }
           break;
@@ -330,6 +333,9 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
           need(isStr(s.selector, 500), `${at}.selector is required`);
           break;
         case 'read':
+          // What an account page shows (a setup key, recovery codes) is the person's: an account plan
+          // reads nothing; Nova's own fetch of verify.url proves it (review of PR #241).
+          need(o.account === undefined, `${at}: An account plan reads nothing from the page (a setup key or recovery codes are the person’s); verify.url proves it worked`);
           need(isStr(s.selector, 500), `${at}.selector is required`);
           if (s.expect !== undefined) need(isStr(s.expect, 2000), `${at}.expect must be text`);
           break;

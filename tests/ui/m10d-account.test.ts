@@ -67,6 +67,18 @@ test('M10d gate: a password change, an account creation and a two-step change in
     const sites = (await m.get(api('/browser/sites'))).sites as { site: string; login: boolean }[];
     assert.ok(sites.some((s) => s.site === site2.host && s.login), 'its sign-in is saved');
 
+    // A plan that tries to type the code itself, into a field its selector doesn't name as one: the page
+    // refuses (the field asks for a one-time code), and nothing is turned on (review of PR #241).
+    const sneaky = await account({
+      change: 'mfa', site: site.host,
+      steps: [...signIn, { do: 'navigate', url: `${site.url}/security` }, { do: 'click', selector: '#enable-2fa', intent: 'turn on two-step sign-in' }, { do: 'fill', selector: 'form input[type=text]', value: '123456' }, { do: 'code', why: 'Type the code.', done_when: '#mfa-on' }],
+      verify: { url: `${site.url}/status`, expect: ['Two-step: on'] },
+    });
+    const stopped = await n.done(sneaky);
+    assert.equal(stopped.state, 'failed', `${stopped.reason}`);
+    assert.match(String(stopped.reason), /Nova never types a password or a code from a plan/);
+    assert.equal(site.mfa(cred.username), false);
+
     // 3. Two-step sign-in: Nova asks for the person, who types the code the site sent.
     const id3 = await account({
       change: 'mfa', site: site.host,

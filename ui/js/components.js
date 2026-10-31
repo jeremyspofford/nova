@@ -442,7 +442,8 @@ export function infraSheet(t, run) {
   return `<form class="approval-sheet infra-sheet" data-tier="3" data-task="${esc(t.id)}" data-infra="${esc(run.id)}" method="dialog">
   <p class="sheet-kicker">${status('needs-you')}</p>
   <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
-  <p class="sheet-line">Nova planned “${esc(run.project?.name ?? '')}” with OpenTofu. Nothing has changed yet.</p>
+  <p class="sheet-line">Nova planned “${esc(run.project?.name ?? '')}” with OpenTofu. No infrastructure has changed yet.</p>
+  ${run.planning ? `<p class="sheet-line infra-planning">${esc(run.planning)}</p>` : ''}
   <p class="sheet-line">${esc(run.apply ?? '')}</p>
   <h3 class="sheet-heading">What it changes</h3>
   <ul class="checks infra-changes">${lines}</ul>
@@ -475,7 +476,7 @@ export function networkSheet(t, change) {
     : `<p class="sheet-line">Nova took a snapshot of ${esc(name)} and worked out this change. Nothing has changed yet.</p>
   <p class="sheet-line network-switch"><strong>After the change, if Nova can’t hear from one of your devices within ${esc(minutesOf(change.window_s))}, it puts the snapshot back by itself.</strong></p>`}
   ${revert ? '' : diff}
-  <dl class="facts"><dt>Target</dt><dd>${esc(name)} · ${esc(change.target?.kind ?? '')}</dd>${snap ? `<dt>Snapshot</dt><dd>${snap}</dd>` : ''}<dt>Before it</dt><dd>Nova takes a checkpoint of itself.</dd><dt>Why it asks</dt><dd>A network change can cut your devices off: Nova asks every time.</dd></dl>
+  <dl class="facts"><dt>Target</dt><dd>${esc(name)} · ${esc(change.target?.kind ?? '')}</dd>${snap ? `<dt>Snapshot</dt><dd>${snap}</dd>` : ''}${!revert && change.counts?.length ? `<dt>Keeps the change</dt><dd class="network-counts">A request from ${esc(change.counts.join(' or '))}, not from this computer</dd>` : ''}<dt>Before it</dt><dd>Nova takes a checkpoint of itself.</dd><dt>Why it asks</dt><dd>A network change can cut your devices off: Nova asks every time.</dd></dl>
   <label class="confirm"><input type="checkbox" name="confirm" required> ${revert ? `Put ${esc(name)} back.` : `I’ve read the diff. Change ${esc(name)}.`}</label>
   <div class="sheet-actions">
     <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>${revert ? 'Put it back' : 'Apply'}</button>

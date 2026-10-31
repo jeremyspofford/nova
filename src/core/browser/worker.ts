@@ -396,7 +396,9 @@ export class Browser extends EventEmitter {
     if (isAccount(plan)) {
       const t = this.#ledger?.get(id);
       const at = t?.approved_at ? Date.parse(t.approved_at) : Number.NaN;
-      if (!(this.#now().getTime() - at <= ACCOUNT_PRESENT_MS)) {
+      const since = this.#now().getTime() - at;
+      // A clock that went backwards since the confirmation counts as past the 10 minutes.
+      if (!(since >= 0 && since <= ACCOUNT_PRESENT_MS)) {
         return report('blocked', `Nova changes an account only while you’re here, within ${ACCOUNT_PRESENT_MS / 60_000} minutes of your OK, so you can type any code. It didn’t open a browser. Retry when you’re ready: it asks you again.`);
       }
     }
@@ -456,7 +458,8 @@ export class Browser extends EventEmitter {
       const record: FinalRead = { task_id: id, url: verifyUrl, final_url: finalUrl, at: this.#now().toISOString(), reads: [] };
       // Read afresh, two ways: Nova fetches the page again itself, and reads the final DOM.
       if (allowed(verifyUrl, plan.allowed_hosts)) record.reads.push(await refetch(verifyUrl, plan.allowed_hosts));
-      if (verifyUrl === finalUrl) {
+      // An account page's own text (a setup key, recovery codes) is never kept (review of PR #241).
+      if (verifyUrl === finalUrl && !isAccount(plan)) {
         const dom: Read = { source: 'dom', url: finalUrl, text: '' };
         try { dom.text = await s.text(); } catch (e) { dom.error = (e as Error).message; }
         record.reads.push(dom);
@@ -553,7 +556,7 @@ export class Browser extends EventEmitter {
         const to = this.#sendsOf(s, step, step.do === 'click' && !hasCheckout(plan) ? el : null);
         s.allowSends(i + 1, to);
         try {
-          const r = await this.#act(s, loc, fn, step.do === 'click' ? [] : [step.value]);
+          const r = await this.#act(s, loc, fn, step.do === 'click' ? [] : step.do === 'fill' ? [step.value, isAccount(plan)] : [step.value]);
           if (r === 'covered') throw new Stop(`Something on the page covers ${whereOf(step)}; Nova won’t click through it.${run.blocked ? ' A dialog Nova blocked is open.' : ''}`);
           if (r !== 'ok') throw new Error(stepProblem(step, r));
           if (step.do === 'click' || to.length) await s.settle();
