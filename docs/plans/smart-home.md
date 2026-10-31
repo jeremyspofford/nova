@@ -34,6 +34,43 @@
 
 **Tier numbers** follow NOVA-SPEC §6: 0 act silently, 1 act and report with undo, 2 ask first, 3 explicit confirmation every time.
 
+## Owner decisions (2026-10-31)
+
+The owner decided this ADR's open questions the same day. These govern wherever the text below proposed otherwise.
+1. **Who acts decides the approval: direct versus Nova-initiated.**
+   - **A tap on a tile is the person acting directly,** not Nova acting for them. Direct control at tiers 0–2 gets no approval sheet: a light switch that asks first is broken.
+   - **A direct tap on a tier-3 action** (unlock, opening a garage door or gate, turning a camera or its recording off) gets ONE lightweight confirm on the tile itself (a confirm state, or a long press), not a full sheet.
+   - **Nova-initiated actions** (chat, automations, schedules) follow the tier table: tier 2 asks first, and tier 3 confirms every time.
+   - **The ledger records which it was:** "you, directly" or Nova with its approval.
+2. **The approval table, with three refinements:**
+   - **Locks:** locking is **tier 1** (done and logged), because it's the safe direction. Unlocking stays tier 3.
+   - **Garage doors and gates:** opening is tier 3; closing is tier 2 (risk of hitting something); the direct-tap confirm applies to opening.
+   - **Heating:** starting heating **within** the comfort range is tier 2. Tier 3 is for a target **above** the range, and for turning heating **off** entirely (risk of freezing). The comfort range is a setting; its default is setpoints of **60–75 °F**.
+   - **The rest stands as proposed:**
+     - lights and media: tier 2 when Nova starts them;
+     - live viewing of your own cameras: tier 0;
+     - clip download: tier 1;
+     - clip sharing: tier 2;
+     - camera or recording off: tier 3.
+3. **The connect flow, adopted.** In order:
+   1. the card, with no credential asked;
+   2. sign-in;
+   3. a read-only preview with counts by room, before any import.
+
+   Cancelling at the preview revokes the token. The input doc assumed counts could be shown before sign-in; that was wrong, because Home Assistant and Scrypted reveal nothing without a credential.
+4. **Plain `http` to Home Assistant, approved.**
+   - Only to an address confirmed to be on the person's network or tailnet, with a plain notice.
+   - The exception is scoped to that connector and recorded in Settings.
+   - The vault broker's `https` rule stands for everything else.
+5. **Box in local-only mode: never to a cloud provider.**
+   - "Cameras stay local" wins, and the rule is "no cloud in local-only", not "no Box in local-only".
+   - In local-only mode, frames may go to a **local** decision provider (Tev1-class) with the Box opt-in on.
+   - The Decision Service ADR keeps "opt-in, every mode", with this seat restriction stated. Today no local seat reads images, so in local-only mode Box is unavailable until one does.
+6. **The camera view log, yes.** Who viewed which camera, and when, is recorded in the Work Ledger, kept local like all ledger data.
+7. **Face recognition is ruled out, a non-goal.** Detection is by class only: person, vehicle, animal, package. No face identification and no named-person recognition, in any mode, in this milestone.
+8. **The milestone is M11 — Home,** with phases S1–S3. The sequence stands: after the M10 chain and the QA harness milestone.
+9. **Still open, and proceeding on its proposed default:** the class of a home token. It is standard class, so reads run at standing consent and every command asks at its own tier.
+
 ## Decision
 
 Nova gets a **Smart Home** surface built on one **device model**.
@@ -139,10 +176,10 @@ The model can only **raise** a tier, never lower one, as `run` already enforces 
 |---|---|---|---|
 | light | on, brightness, colour | `turn_on`, `turn_off`, `set_brightness`, `set_color` | 2 |
 | switch | on, level | `turn_on`, `turn_off`, `set_level` | 2 |
-| climate | mode, current, target, action, humidity | `set_target` lower, or within the comfort band; `set_mode` to `off`, `cool`, `fan_only` or `dry` | 2 |
-| climate | | `set_mode` to `heat`, `heat_cool` or `auto` from `off`; `set_target` above the comfort band's top | **3** (owner to confirm, Conflicts row 9) |
+| climate | mode, current, target, action, humidity | `set_target` lower, or within the comfort range; start heating with a target within the range; `set_mode` to `cool`, `fan_only` or `dry` | 2 |
+| climate | | `set_target` above the comfort range's top; `set_mode` to `off` while heating (turning heating off entirely) | **3** (owner decision 2) |
 | lock | state | `unlock` | **3** |
-| lock | | `lock` | 3 today (the domain rule); Open question 4 asks whether it drops to 2 |
+| lock | | `lock` | **1**: done and logged, the safe direction (owner decision 2) |
 | sensor | value | none | — |
 | cover (blind, curtain, shade, window, other) | state, position | `open`, `close`, `set_position` | 2 |
 | cover (garage, gate, door) | | `open` | **3** (the Decision Service ADR's "unlock, disarm, open" rule) |
@@ -153,10 +190,12 @@ The model can only **raise** a tier, never lower one, as `run` already enforces 
 | camera | | `ptz` (pan, tilt, zoom, presets), where supported | 2 |
 | camera | | `talk` (two-way audio), where supported | 2 |
 | camera | | turn the camera, its detection or its recording off at the backend | **3**: it weakens the home's security |
+
+**Direct taps versus Nova-initiated actions (owner decision 1):** the tiers above apply to what Nova starts. A direct tap on a tile by the person needs no approval at tiers 0–2, and one on-tile confirm at tier 3.
 | camera | | Section 5's clip actions | per Section 5 |
 | scene | | run | the highest tier among its commands. A backend scene whose members Nova can't read is tier 2, or 3 if any member it can read is tier 3 |
 
-- **The comfort band** is a setting: a low and a high setpoint. Its default is neutral (18–23 °C, or 64–74 °F), set and shown at setup. Widening it is tier 3, and narrowing it is immediate.
+- **The comfort range** is a setting: a low and a high setpoint. Its default is setpoints of 60–75 °F (owner decision 2), shown at setup. Widening it is tier 3, and narrowing it is immediate.
 - **The tiers are profile settings** (NOVA-SPEC §6: the mechanism is core, the settings are the person's), as `tier3_domains` already is. Loosening any of them needs `confirm`, as `PUT /settings` does today.
 
 ### The adapter interface
@@ -295,7 +334,7 @@ Out of scope. A Matter controller (commissioning, fabrics, Thread border routing
 
 **The page while a command is pending,** under DESIGN-SYSTEM §1's progress rules:
 - **At once (within 0.1 s):** the tile marks the request and names it: "Turning on…". The tile never shows the target state as if it were real.
-- **Waiting for the person:** at tier 2 and 3, the tile says "Waiting for your OK" and the approval sheet opens. The sheet names the device, the room and the exact change, with the tier's standing-out primary action. Until the owner decides Conflicts row 1, a tier-2 tap opens the sheet: nothing is loosened by this ADR.
+- **Waiting for the person (Nova-initiated commands only):** at tier 2 and 3, the tile says "Waiting for your OK" and the approval sheet opens. A direct tap skips this at tiers 0–2, and asks one on-tile confirm at tier 3 (owner decision 1). The sheet names the device, the room and the exact change, with the tier's standing-out primary action. Until the owner decides Conflicts row 1, a tier-2 tap opens the sheet: nothing is loosened by this ADR.
 - **Running:**
   - Under 1 s: no indicator.
   - 2–10 s: a spinner in the tile only.
@@ -541,10 +580,10 @@ Each phase is its own PR or set of PRs, with its own gate, an independent review
 
 **Proposed:**
 1. **This ADR** lands now, as a docs PR. Nothing in it is built until its phase comes.
-2. **The Smart Home milestone (S1–S3) comes after QA Stage 2 on the critical path,** and after Amendment B Part 7, which already follows Stage 2.
+2. **M11 — Home (S1–S3) comes after QA Stage 2 on the critical path,** and after Amendment B Part 7, which already follows Stage 2.
    - It displaces nothing.
    - The page is a large new surface, and the QA harness's change-aware flows then cover it from its first PR.
-   - It is a new milestone, which the owner's input asks for ("likely a new milestone after the M10 chain"). It is named "Smart Home", with phases S1–S3 as the input names them. Numbering it M11 is the owner's choice (Open question 8).
+   - It is a new milestone, which the owner's input asks for ("likely a new milestone after the M10 chain"). The owner named it **M11 — Home**, with phases S1–S3 as the input names them (owner decision 8). The page itself is labelled "Smart Home".
 3. **What it needs first:**
 
    | Phase | Needs | If not ready |
@@ -602,7 +641,7 @@ Each place where the inputs pull against each other or the packet, with its reso
 | 13 | DESIGN-SYSTEM's "Devices" card means Nova's own mesh devices | Smart-home things are "home devices" in code and are shown only in Smart Home. The Devices card is unchanged | No decision needed |
 | 14 | The phone is the primary design target, and the phone's bottom tabs are fixed | The Smart Home card on Home is the phone's way in, one tap away. The tabs don't change | No decision needed |
 
-**Open questions for the owner.** Each has a proposed default, and the build follows the default unless the owner decides otherwise.
+**Open questions for the owner.** Decided on 2026-10-31 (see Owner decisions at the top); only question 3, the class of a home token, stays open, on its proposed default. The proposals are kept below for the record.
 1. **A tap is the approval** (Conflicts row 1). *Proposed:* yes for tier 2 on the page, never for tier 3 or for anything Nova starts itself. *Default until decided:* today's ask-first sheet.
 2. **Camera frames to Box in local-only** (row 2). *Proposed:* no; the camera rule wins.
 3. **The class of a home token.** A Home Assistant token can unlock doors. *Proposed:* standard class, so reads run at standing consent and every command asks at its own tier. *Alternative:* sensitive, so every use asks first, including reads, which would make the page unusable.
