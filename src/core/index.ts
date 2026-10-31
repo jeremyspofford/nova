@@ -45,6 +45,8 @@ import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './model
 import { wireIngest, type ScreenInput } from './ingest/index.ts';
 import { NovaComputer, type ComputerOptions } from './computer/index.ts';
 import { computerRoutes } from './computer/routes.ts';
+import { Coding, type CodingOptions } from './coding/index.ts';
+import { codingRoutes } from './coding/routes.ts';
 import { secretName } from './providers/types.ts';
 import { Resilience } from './resilience/index.ts';
 import { FactoryReset } from './resilience/reset.ts';
@@ -155,6 +157,9 @@ export interface CoreOptions {
   // never be, which addresses the egress proxy counts as public, smaller disk caps, and a label
   // for the containers.
   computer?: Pick<ComputerOptions, 'computer' | 'userHome' | 'egressAllow' | 'limits' | 'labels'>;
+  // Coding through chat (M10c), for tests: whose home folder a repository may never be, and shorter
+  // timeouts for the test run and the preview.
+  coding?: Pick<CodingOptions, 'userHome' | 'testTimeoutS' | 'previewTimeoutS'>;
   // The ports of Nova's own listeners (console and mesh), which a browser task never reaches.
   hubPorts?: () => number[];
   // How the browser worker starts a browser: Chromium, or a stand-in in tests.
@@ -350,6 +355,15 @@ export function createCore(o: CoreOptions) {
     ...(o.computer ?? {}),
   });
   ledger.workers.set(computer.worker.id, computer.worker);
+  // Coding through chat (M10c): a coding request as a run of ledger tasks (write, check, merge),
+  // its agent through the provider registry, its worktree Nova's own, its merge tier 3. The person is
+  // told as a proactive message, through the trigger engine.
+  const coding = new Coding({
+    db, log, home: o.home, ledger, verifier, providers, now, privacy: () => profile.privacyDefault(),
+    ...(o.coding ?? {}),
+    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'coding', name: 'Coding', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('coding', 'Nova couldn’t tell you about a coding run.', { error: (e as Error).message })); },
+  });
+  ledger.workers.set(coding.worker.id, coding.worker);
   const enroll = new Enrollment({ db, log, devices, identity: meshIdentity, now, publicUrl });
   const access = new Access({ devices, mesh: meshInfo });
   // Hub, standby and sync (M4 plan §3).
@@ -997,6 +1011,8 @@ export function createCore(o: CoreOptions) {
     },
     // ---- Nova Computer (M10a) ----
     ...computerRoutes(computer),
+    // ---- coding through chat (M10c) ----
+    ...codingRoutes(coding),
     // ---- browser work with takeover (M5 plan §3) ----
     ...browserRoutes(browser, {
       home: o.home,
@@ -1034,6 +1050,7 @@ export function createCore(o: CoreOptions) {
   function startHub() {
     const recovered = ledger.recover();
     providers.recover();
+    coding.recover();
     // A sandbox copy reaches nothing outside itself and keeps no clock of its own: the pipeline
     // drives it.
     if (o.sandbox) return recovered;
@@ -1094,7 +1111,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     self,
-    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding,
     ingest, vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
@@ -1156,6 +1173,7 @@ export function createCore(o: CoreOptions) {
       // Browsers close first and their tasks stay as they are: the next start runs them again.
       await browser.close();
       computer.close();
+      coding.close();
       await capture.stop();
       await Promise.race([ticking.then(() => ledger.idle()), new Promise((r) => setTimeout(r, 2000).unref())]);
       db.close();
