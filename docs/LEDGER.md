@@ -6,6 +6,29 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #248 · Tev1, a local safety screener, built and tested: it failed, so it only advises**
+- What changed: Nova can use Tev1, a small decision model running in your own Ollama, to score outside content for prompt-injection tricks. Its 99-case safety test was fixed before it ran. Both sizes failed: they flagged every harmless case too.
+- What you can now do: nothing changes in how Nova screens. Tev1's scores are only logged; Nova's fixed checks, plus holding back anything unsure, still decide.
+- Still unfinished: rewritten questions and a fresh test (v2, per the Decision Service design). Wiring it into the screen, with every piece of long content screened, comes in a follow-up.
+
+**2026-10-31 · #250 · Design: one Decision Service for every quick judgment Nova makes**
+- What changed: the plan for a single "Decision Service" is filed with your decisions. Every quick yes/no, pick-one, score or find-in-image judgment goes through named, versioned question sets. Each decision is logged with the exact model that answered. Screening content goes to Jev in cloud mode, with an off-by-default switch for local-only; Box in local-only stays on your machine.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: nothing is built. The local model (Tev1) failed its first safety test and stays advisory until a rewritten version passes. Choosing providers and models in Settings is designed, not built.
+
+**2026-10-31 · #253 · Smart Home and cameras: the design, with your decisions**
+- What changed: the plan for a Smart Home page (lights, locks, climate, cameras by room) is filed with your eight decisions. Tapping a tile acts at once, with one quick confirm for unlocking and similar. Anything Nova starts itself asks as before.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: nothing is built. It is milestone M11 — Home, after the M10 chain and the QA harness. The real Home Assistant and Scrypted checks will be your step when its first phase arrives.
+
+**2026-10-31 · #241 · Infrastructure, network changes and account steps through chat**
+- What changed:
+  - Nova can plan cloud infrastructure with a monthly budget, and applies a plan only with your confirmation. Over-budget and unpriced plans are never offered.
+  - It can change a router or similar device's settings: you see the diff first, and the change undoes itself if your phone or browser doesn't reach Nova within 5 minutes.
+  - Account steps (a new password, a new account, a one-time code) always ask, and you type any code yourself.
+- What you can now do: through chat, ask for a plan, a network change or an account step. Each ends at a confirmation that shows exactly what will happen; secret values are never shown or stored in the open.
+- Still unfinished: tested only against stand-ins (a fake infrastructure tool, a simulated router, a pretend site): nothing real, by design. Projects and network targets are set up through Nova's programming interface; there's no Settings page yet. Your choices on a provider and the 5-minute window are still open.
+
 **2026-10-31 · #252 · The decision log now says what changed, in plain language**
 - What changed: this section, with one entry for every merge since 30 October and a short summary of each earlier milestone.
 - What you can now do: Nothing in the app changed: paperwork only. From now on every merge gets an entry here, in the same pull request.
@@ -202,6 +225,162 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31: Amendment B Part 1, Tev1 as the local decision provider and the injection eval (PR #248, Track 2).**
+- **The API as found:** `POST /v1/systemone` with named Noul questions (1 to 64), P(true) answers, a 64 KiB cap on text and schema, and context overflow as a 400 that is never truncated.
+  - The published Tev1 builds require Ollama 0.40.4; the amendment said 0.35, which is when the endpoint arrived. The provider is unavailable below 0.40.4, in plain words (Track 1's decision).
+  - `num_ctx` is 8192. The chunk budget uses the card's and the amendment's ~2,000 tokens.
+- **What was built:** `src/core/jev/`: the client, `Tev1Provider` (one request per piece with the whole battery; every piece screened; worst score per question; split and retry on overflow; `tev1:4b` by default, `tev1:0.8b` only where memory requires), and the verdict-driven switch.
+- **The eval:** 99 cases, 53 attack and 46 benign. The attack half is the merged corpus plus code transforms of its exact payloads; no new attack text was written. The cases, bounds and scoring were fixed in `6d8a8e97` before any run.
+- **The run:** 2026-10-31 on Ollama 0.40.13, `tev1:4b` `7954dce2…`, `tev1:0.8b` `abc31fdb…`.
+  - **Both FAIL**, with detection 100%, false positives 100%, and ECE 0.106 (4B) and 0.286 (0.8B).
+  - The `impersonation` question sits at about 0.25 to 0.45 on benign content, so every case crosses 0.2.
+  - **Both sizes are ADVISORY:** scores are logged, and the deterministic layer plus quarantine-on-uncertain decide. Not tuned.
+- **Unchanged:** the deterministic layer and taint tracking (no file under `src/core/ingest/` changed).
+- **Gate patches proposed for Track 1:** in `docs/plans/tev1.md` NOTES.
+
+**2026-10-31 (Decision Service ADR; extends Amendment B Part 1).** Owner input `nova-jev-decision-layer-2026-10-31.md` (copied unchanged).
+- **The decision:** ADR `docs/plans/decision-service.md`. Every System One judgment goes through one Decision Service:
+  - a registry of versioned templates (Noul, Choice, Score and Box questions; declared state; a policy as a truth table mapped onto tiers; pinned models; pre-registered evals);
+  - one provider interface with three seats (cloud Jev; Tev1 through Ollama; the stub, which is deterministic-only), routed by privacy mode as Part 1 says: local-only and local-first never use Jev;
+  - every decision logged to the Work Ledger with the template version, the pinned model that answered, the full probabilities and the policy outcome;
+  - no ad hoc provider calls (seats not exported from core; a boundary test).
+- **Part 1's eval** (#248: both Tev1 sizes failed, advisory) stands. `ingest-screen` is re-authored as v2 under the vendor's question rules, with a fresh pre-registered eval.
+- **Phases DS1–DS3** are side PRs and don't displace M10e–M10k.
+- **CONTRACTS §3:** gains Box, and a companion-Noul escape as an alternative to `unknown/other`.
+- **Owner decisions, the same day:**
+  - The ingest screen goes to Jev in cloud mode, with an off-by-default local-only toggle that says plainly that content leaves the machine.
+  - The person chooses providers and models, with Nova's recommendation, a notice for anything it doesn't recommend, and scorecards.
+  - The sorting-model screener is retired per template once a decision model passes its eval.
+  - Box on camera and screen frames is opt-in per feature, off by default, in every mode, with a plain notice. Refined the same day: in local-only mode Box never goes to a cloud provider, only to a local seat that reads images (none yet). Each feature returns to local once a local model passes.
+
+**2026-10-31 (owner input: Smart Home and cameras; the ADR, with the owner's decisions).** The owner-approved design `nova-smart-home-design-2026-10-31.md` was added to the packet exactly as given, including the owner's same-day change on camera paths (sha256 `5c28dd8d…`). Designed in `docs/plans/smart-home.md`.
+- **The design:**
+  - a device model by capability, fed by connector adapters;
+  - a phone-first Smart Home page that is a view over the model;
+  - control through the existing tiered service-call path, with read-back.
+- **Backends, in order:** Home Assistant (cameras through its stream proxy), then Scrypted, then direct and vendor connectors by demand. Matter is out of scope.
+- **Cameras:**
+  - bridge-fed streams go through the hub;
+  - vendor-cloud and remote cloud paths are allowed outside local-only;
+  - kept clips follow the capture data path.
+- **Owner decisions, the same day:**
+  1. Direct taps need no approval at tiers 0–2 and one on-tile confirm at tier 3; Nova-initiated commands follow the tier table.
+  2. Locking is tier 1. Garage or gate: opening is tier 3, closing tier 2. Heating within the comfort range (default 60–75 °F, a setting) is tier 2; above it, or turning heating off, is tier 3.
+  3. The connect flow: card, then sign-in, then a read-only preview by room before import; cancelling revokes the token.
+  4. Plain `http` to Home Assistant only on a confirmed local or tailnet address, scoped to that connector.
+  5. Box in local-only only to a local seat, never a cloud provider.
+  6. Camera views are logged in the Work Ledger.
+  7. No face recognition.
+  8. The milestone is M11 — Home, after the M10 chain and QA Stage 2.
+- **Still open:** the home token's class, on its proposed default (standard).
+
+**2026-10-31 (M10d: the adversarial review of PR #241).** Same branch and PR, rebased onto main at
+ccc58b5e. The review's probes were read and re-run; each item became a failing test first in
+`tests/core/m10d-review.test.ts` (evidence: "The adversarial review of PR #241", with what failed when
+each fix was reverted).
+1. **B1, secrets in a network change (reproduced).** A secret set inside a list got through, and the
+   diff, taken over masked text on both sides, came out empty. **Choice:** a patch that sets a secret at
+   any depth, or a secret-looking value, is refused; a change that alters a secret value anywhere is
+   never offered, and says where; a change whose diff would show nothing is never offered. The patch,
+   the snapshot, the new configuration and the diff are sealed; the database keeps the patch's shape.
+2. **B2, the budget beaten by an unrecorded resource (reproduced).** **Choice:** the month is priced
+   from the plan's whole before and after (OpenTofu's prior state and planned values), not as a
+   delta on Nova's records; a plan ending over budget is blocked unless every change only takes cost
+   away. Nova's records after an apply are the whole state, priced.
+3. **S1 (reproduced):** prices are own properties and finite; everything after the apply is priced
+   before it runs, from the saved plan, so recording can't fail after the effect.
+4. **S2 (reproduced):** the mask fails closed (keys naming a password, key, token, community, cert,
+   hash, seed; values that look like PEM, long base64 or hex, crypt hashes). **Trade-off:** public keys
+   and some ordinary names are masked and can't be patched from chat. What still escapes it is visible
+   only in the sealed diff the person reviews.
+5. **S3 (reproduced):** the switch retries a failed revert (15 s, doubling, at most 10 minutes) while
+   contact is lost; contact meanwhile keeps the change. The problem stays open until the snapshot is
+   back, or the person settles the change (tier 3, `POST /network/changes/{id}/settle`); until then
+   the target takes no new change.
+6. **S4 (reproduced):** fields the target sets itself on a write are learnt from the read-back (a path
+   Nova didn't change that differs) and left out of every comparison of that change. **Rejected:**
+   declaring them per target (the probe's router had no declaration, and the person wouldn't know).
+7. **S5 (reproduced):** contact is a successful request (below 400), from off the hub's machine, from a
+   device of a kind the person counts: phones and browsers by default (`mesh.contact_kinds` may add
+   computers). This replaces decision 5 of the M10d entry (`Devices.touch` no longer emits anything;
+   the core reports finished requests). **Not built:** requiring the very device the person approved
+   from (the ledger doesn't record which device approved).
+8. **S6 (reproduced):** a run keeps no resource values; sensitive markers are honoured where values
+   are read; the state copy is sealed. **Limit:** the saved plan file holds what OpenTofu puts in it
+   until the run ends.
+9. **S7 (reproduced):** a revert writes the snapshot's own bytes; a configuration with numbers JSON
+   can't carry exactly is never changed. The stand-in target now keeps a PUT's bytes, so the
+   byte-for-byte test means what it says.
+10. **Minor:** a plan too large to show is never offered; a kept change's snapshot goes after 30 days;
+    a clock that went backwards counts as past the switch's deadline and the 10-minute account window;
+    the redactor masks base64, hex and URL-encoded forms (values of 8 characters and more); account
+    plans fill no code-like field and read nothing, and a one-time-code field refuses a plan's value in
+    the page; the verifier reads Nova's own read-back record instead of running `tofu show` for up to
+    60 s; planning's wording says it runs providers and data sources.
+- **Did not reproduce as stated:** none. P-N5's router coming back is retried on the default 15 s wait,
+  longer than the probe's 1.5 s of sweeps; with a short wait (the test) the revert lands.
+
+**2026-10-31 (M10d: infrastructure, networking and accounts through chat).** Branch `m10d/infra`.
+The ADR is `docs/plans/M10.md` (M10d), the plan `docs/plans/M10d.md`, the evidence
+`docs/evidence/m10d-gate.md`. Stand-ins only: a stand-in `tofu`, a loopback network target over a file,
+a loopback account site; nothing real was installed, provisioned, changed or paid.
+1. **Infrastructure and networking are chains of internal ledger tasks,** as coding runs and the
+   change pipeline are: plan (tier 1) → apply (tier 3); prepare (tier 1) → apply (tier 3) → revert.
+   **Why:** each step gets its own tier, evidence Nova checks itself, recovery and record, and the
+   apply task doesn't exist until the plan is verified and inside the budget.
+2. **The budget guardrail is the person's price sheet against a monthly budget,** both set outside
+   chat. A plan with a resource type the sheet can't price is never offered; one that would go over is
+   never offered; the apply checks again as it runs. **Rejected:** a cost estimate from the tool (it
+   has none) or a billing API (none is connected, and the build reaches no cloud). **Cost:** the
+   guardrail is only as right as the sheet, and spend Nova didn't provision isn't seen.
+3. **The apply applies exactly the saved plan the person read** (`tofu apply <file>`, its sha256 checked
+   first), after `Checkpoints.auto` and a copy of the state file. The checkpoint is Nova's home;
+   `workers/` (plan files, state copies) is outside checkpoints by design, so the state copy is kept
+   beside them, with its hash in the record. **Limit:** neither is a rollback of infrastructure.
+4. **A network change is a JSON merge patch over an adapter's JSON configuration** (`http-config`:
+   ETag and If-Match, a bearer token from the vault, plain http only to this machine). The apply is a
+   compare-and-swap on the snapshot's version; a revert writes the snapshot back only over Nova's own
+   change, never over someone else's later one (it stops and says so). **Rejected:** driving router web
+   pages with Nova Browser (vendor-specific, and a page can't do a compare-and-swap).
+5. **"Contact confirmed" is a new request on the mesh listener under the session of a phone, browser
+   or computer that was trusted at the apply,** started after the switch was armed. It is the access
+   policy's own check: `Devices.touch` now emits `heard` before its 30-second write throttle, and the
+   switch listens. The console never counts (it proves nothing about the network), nor does an event
+   stream opened before the change, nor a device paired after it. No such device paired: no change.
+   **Trade-off:** a phone asleep with the PWA closed makes no request, and a good change reverts; that is
+   the safe way to fail.
+6. **The window is the ADR's proposed 5 minutes as a setting** (`mesh.contact_window_s`, 60 to 3600 s),
+   while the owner's open question 2 stays open. The deadline and any contact are in the database, so a
+   restart past the deadline reverts at start (and the heartbeat sweeps too). The deadline is written **before** the write
+   and contact counts only after it, so a Nova stopped mid-write still has its switch (found in review
+   of my own build: the first version armed it only after the write returned).
+7. **The switch's revert runs by itself at tier 1:** it was confirmed with the change, and it puts back
+   what was there. A revert the person asks for later is a network change of its own: tier 3.
+8. **Secrets in a configuration are masked in every view, and a patch that sets one is refused** (keys
+   that look like a password, key or token). The snapshot has to keep the real values to be written
+   back, so it is sealed on disk with a per-change key in the vault. **Found by the gate's secret
+   search:** the first build kept the snapshot in clear in `workers/network/`.
+9. **Account steps are Nova Browser steps, not a new worker:** `new_password`, `create_account`,
+   `code`, and the plan's `account` declaration. Tier 3 always. The new password is made in Nova's
+   process, typed by the same `SECRET` function as a sign-in, kept aside in the vault before the form is
+   sent (the commit point) and made the site's password only when the page shows it took. **"With the
+   person present"** is built as: the run starts within 10 minutes of the confirmation or stops before
+   a browser opens and asks again, and a code is typed by the person through takeover; Nova never reads
+   or types one. A `fill` into a password or code field is refused by the validator, and a password
+   field refuses a plan's value in the page too.
+10. **Accounts through connectors and OAuth are as M5b built them** (secrets into the vault from
+    Settings, never chat); M10d adds no connector.
+11. **Chat** gets `infra_plan`, `infra_status`, `network_change`, `network_status`, `account_change`,
+    each a guarded step of the ingest gate and seen by the outbound check. Projects, targets, budgets,
+    prices and tokens are the person's, set through the API; the system prompt says never to ask for a
+    password or a code in chat.
+- **Alerts:** a blocked plan (over budget, unpriced) is a problem and a message; a plan past 80 % is a
+  message and says so in the ask; a project whose own level rises is a problem and a message, once per
+  level.
+- **Known limits:** no Settings page yet for projects, targets or a pending password (API only); one
+  adapter each; prices aren't a bill; the tool runs on this computer with its provider's reach (a
+  project declares `egress`, and local-only refuses a remote one).
 
 **2026-10-31 (capture data path, spoke to hub: orchestration ADR open question 1 resolved).** The owner-approved design `nova-capture-data-path-design-2026-10-31.md` (v3) was added to the packet exactly as given (sha256 `059921b7…`). It resolves open question 1 in `docs/plans/M10-orchestration.md`, which now records the resolution.
 - **The path:** derived capture syncs continuously over the mesh. Raw media archives to one target configured on the hub, and a spoke prunes it only after verified archival, keeping a local 48-hour window.

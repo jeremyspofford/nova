@@ -51,12 +51,23 @@ export const CLICK = `function () {
   return 'ok';
 }`;
 
-export const FILL = `function (value) {
+// \`strict\` (an account plan, M10d review): a field that looks like it takes a code refuses too.
+export const FILL = `function (value, strict) {
   const el = this;
   if (!el || !el.tagName) return 'missing';
   if (el.disabled || el.readOnly) return 'disabled';
   const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : el instanceof HTMLInputElement ? HTMLInputElement.prototype : null;
   if (!proto) { if (el.isContentEditable) { el.focus(); el.textContent = value; el.dispatchEvent(new Event('input', { bubbles: true })); el.setAttribute('data-nova-set', '1'); return 'ok'; } return 'not-a-field'; }
+  // A password field never takes a value from a plan (M10d): the vault's, through a login or account
+  // step, or the person's own.
+  if (el instanceof HTMLInputElement && (el.getAttribute('type') || '').toLowerCase() === 'password') return 'secret-field';
+  // A one-time code's field is the person's too, however it is named.
+  if ((el.getAttribute('autocomplete') || '').toLowerCase().includes('one-time-code')) return 'secret-field';
+  if (strict) {
+    const words = [el.name, el.id, el.getAttribute('aria-label') || '', el.getAttribute('placeholder') || '', (el.labels && el.labels[0] ? el.labels[0].textContent : '') || ''].join(' ');
+    const max = Number(el.getAttribute('maxlength') || 0);
+    if (/code|otp|token|pin|mfa|2fa|totp/i.test(words) || ((el.getAttribute('inputmode') || '') === 'numeric' && max > 0 && max <= 10)) return 'secret-field';
+  }
   el.scrollIntoView({ block: 'center' });
   el.focus();
   Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);

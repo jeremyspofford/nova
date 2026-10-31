@@ -199,3 +199,35 @@ test('the coding sheets: the check says it runs the agent’s code; the merge sh
   assert.match(stopped, /Stopped \(Nova restarted\)/);
   assert.doesNotMatch(stopped, /<a class="link" href="http:\/\/127/);
 });
+
+// M10d: an infrastructure apply's sheet and a network change's.
+test('the apply and network sheets: the plan in full and the budget, the diff and the switch; Apply waits for the box', async () => {
+  const { infraSheet, networkSheet } = await import('../ui/js/components.js');
+  const run = {
+    id: 'i0123456789', project: { id: 'p1', name: 'Example' }, folder: '/srv-placeholder/infra', plan_text: 'Plan: 1 to add <x>, 0 to change, 0 to destroy.',
+    changes: [{ address: 'standin_server.web', type: 'standin_server', action: 'create', delta_usd: 5 }, { address: 'standin_server.old', type: 'standin_server', action: 'delete', delta_usd: -40 }],
+    budget: { level: 'warn', words: '$5.00 a month of the $6.00 budget (83 %)' }, planning: 'Planning changes no infrastructure, but OpenTofu runs the project’s providers and data sources.', apply: 'Applying runs OpenTofu’s apply of exactly this saved plan.',
+  };
+  const t = { id: 't-apply', title: 'Apply: Example', approval_tier: 3, state: 'waiting', brief: { inputs: { step: 'apply', run_id: run.id } } };
+  const a = infraSheet(t, run);
+  assert.match(a, /class="approval-sheet infra-sheet" data-tier="3"/);
+  assert.match(a, /standin_server\.web<\/strong> · add · \+\$5\.00 a month/);
+  assert.match(a, /standin_server\.old<\/strong> · destroy · −\$40\.00 a month/);
+  assert.match(a, /That is past 80 % of the budget\./);
+  assert.match(a, /<p class="sheet-line infra-planning">Planning changes no infrastructure, but OpenTofu runs/);
+  assert.match(a, /<details class="raw infra-plan" open>/);
+  assert.match(a, /1 to add &lt;x&gt;/, 'the plan is escaped');
+  assert.match(a, /<button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Apply<\/button>/);
+  assert.match(a, /name="confirm" required/);
+  assert.match(a, /data-action="decline-change" data-path="\/infra\/runs\/i0123456789\/decline"/);
+  const change = { id: 'c1', title: 'Let the VPN in', target: { name: 'Example router', kind: 'router' }, window_s: 300, diff: '-  "web"\n+  "vpn"\n', snapshot: { sha256: 'abcdef0123456789', at: null }, counts: ['Example phone'] };
+  const n = networkSheet({ id: 't-n', title: 'Apply to Example router', approval_tier: 3, brief: { inputs: { step: 'apply', change_id: 'c1' } } }, change);
+  assert.match(n, /within 5 minutes, it puts the snapshot back by itself/);
+  assert.match(n, /Keeps the change<\/dt><dd class="network-counts">A request from Example phone, not from this computer/);
+  assert.match(n, /<details class="raw network-diff" open>/);
+  assert.match(n, /disabled>Apply<\/button>/);
+  assert.match(n, /data-path="\/network\/changes\/c1\/decline"/);
+  const r = networkSheet({ id: 't-r', title: 'Put Example router back', approval_tier: 3, brief: { inputs: { step: 'revert', change_id: 'c1', by: 'person' } } }, change);
+  assert.match(r, /disabled>Put it back<\/button>/);
+  assert.doesNotMatch(r, /network-diff/);
+});

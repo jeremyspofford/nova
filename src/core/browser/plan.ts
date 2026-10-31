@@ -19,6 +19,17 @@ import type { Egress } from '../workers.ts';
 //   use. The step names fields, never values.
 // - `checkout`: reads the itemised lines and the total, checks them, and is where Nova stops: it
 //   names the pay control so that nothing may ever click it.
+//
+// M10d adds account steps (docs/plans/M10d.md, "Accounts"), tier 3 always, with the person present:
+// - `new_password`: Nova makes a new password itself, types the saved one into `current` and the new
+//   one into `password` and `confirm`, sends the form and keeps the new one in the vault once
+//   `done_when` shows. The step names fields, never values.
+// - `create_account`: Nova types `name` (an email address or a user name: not a secret) and a new
+//   password it makes itself, sends the form, and saves both as the site's sign-in once `done_when`
+//   shows.
+// - `code`: a code only the person has (a text message, an authenticator app). Nova asks for them and
+//   they type it themselves; Nova never reads or types a code.
+// A plan with any of these declares `account: {change, site}`.
 export interface Target { role: string; name: string }
 export interface Expect { url?: string; shows?: string }
 // `sends`: where the step may send something that isn't a GET (a path on the page's own site, or an
@@ -35,9 +46,19 @@ export type Step =
   // waits. `done_when`: a selector that shows on the page once the step is done.
   | { do: 'person'; why: string; done_when?: string; label?: string }
   | { do: 'login'; username: string; password: string; submit: string; done_when?: string; label?: string; timeout_ms?: number; sends?: string | string[] }
-  | { do: 'checkout'; lines: string; total: string; pay: string; quoted?: string; label?: string; timeout_ms?: number };
+  | { do: 'checkout'; lines: string; total: string; pay: string; quoted?: string; label?: string; timeout_ms?: number }
+  | { do: 'new_password'; password: string; confirm?: string; current?: string; submit: string; done_when: string; label?: string; timeout_ms?: number; sends?: string | string[] }
+  | { do: 'create_account'; username: string; name: string; password: string; confirm?: string; submit: string; done_when: string; label?: string; timeout_ms?: number; sends?: string | string[] }
+  | { do: 'code'; why: string; done_when: string; label?: string };
 
-export const STEP_KINDS = ['navigate', 'fill', 'click', 'select', 'wait', 'read', 'person', 'login', 'checkout'] as const;
+export const STEP_KINDS = ['navigate', 'fill', 'click', 'select', 'wait', 'read', 'person', 'login', 'checkout', 'new_password', 'create_account', 'code'] as const;
+export const ACCOUNT_CHANGES = ['create', 'password', 'mfa'] as const;
+export type AccountChange = (typeof ACCOUNT_CHANGES)[number];
+// A field a password or a code goes into: never filled from a plan.
+export const SECRET_FIELD = /pass(word|wd|code|phrase)|\bpass\b|\bpin\b|\botp\b|one[-_ ]?time[-_ ]?(code|pass)|\b2fa\b|\bmfa\b|\btotp\b|verif(y|ication)[-_ ]?code|security[-_ ]?code|auth(entication)?[-_ ]?code|\btoken\b/i;
+// In an account plan, any field that names a code at all (review of PR #241): "#mfa-code", "code".
+export const ACCOUNT_CODE_FIELD = /code|\botp|token|\bpin|mfa|2fa|totp|one[-_ ]?time/i;
+export const NO_SECRET_FILL = 'Nova never types a password or a code from a plan: a saved sign-in comes from the vault (a login or new_password step), and a code is typed by the person (a code step).';
 
 // `profile`: Nova's own persistent profile (the default), or a throwaway one for this task alone.
 // `learn`: the name a flow that ends verified is kept under, as a site template (flows.ts).
@@ -51,6 +72,8 @@ export interface Plan {
   profile?: 'nova' | 'fresh';
   learn?: string;
   flow?: { name: string; version: number; site: string };
+  // M10d: an account step's plan, and the site whose account it changes.
+  account?: { change: AccountChange; site: string };
 }
 
 const MAX_STEPS = 100;
@@ -180,16 +203,20 @@ export function hostEgress(raw: string): Egress {
 // Steps that can change something outside: typing into a page, choosing, clicking, signing in,
 // and a step the person does by hand. A plan with any of them may have sent something by the time
 // it fails.
-const ACTING: readonly Step['do'][] = ['fill', 'select', 'click', 'person', 'login'];
+const ACTING: readonly Step['do'][] = ['fill', 'select', 'click', 'person', 'login', 'new_password', 'create_account', 'code'];
 export const hasEffects = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => ACTING.includes(s.do));
 // Steps that send something on Nova's own initiative (typing, choosing, clicking, signing in):
 // sending or sharing data outside asks first (NOVA-SPEC §6, tier 2). A person's own step is theirs.
-export const sends = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => s.do === 'fill' || s.do === 'select' || s.do === 'click' || s.do === 'login');
+export const sends = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => s.do === 'fill' || s.do === 'select' || s.do === 'click' || s.do === 'login' || s.do === 'new_password' || s.do === 'create_account');
+// The steps that change an account (M10d): each marks its own commit point, just before it sends.
+const ACCOUNT_STEPS: readonly Step['do'][] = ['new_password', 'create_account'];
+export const isAccount = (p: Pick<Plan, 'steps'> & { account?: unknown }): boolean => p.account !== undefined || p.steps.some((s) => ACCOUNT_STEPS.includes(s.do) || s.do === 'code');
 // Whether the plan marks the step where its outside effect happens.
-export const marksCommit = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => 'commits' in s && s.commits === true);
+export const marksCommit = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => ('commits' in s && s.commits === true) || ACCOUNT_STEPS.includes(s.do));
 export const hasCheckout = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => s.do === 'checkout');
-// The least tier a plan runs at: checkout (and so payment) is tier 3, always; sending is tier 2.
-export const minTierOf = (p: Pick<Plan, 'steps'>): 0 | 2 | 3 => (hasCheckout(p) ? 3 : sends(p) ? 2 : 0);
+// The least tier a plan runs at: checkout (and so payment) is tier 3, always, and so is a change to an
+// account (M10d); sending is tier 2.
+export const minTierOf = (p: Pick<Plan, 'steps'> & { account?: unknown }): 0 | 2 | 3 => (hasCheckout(p) || isAccount(p) ? 3 : sends(p) ? 2 : 0);
 
 export function planEgress(p: Plan): Egress {
   return p.allowed_hosts.some((h) => hostEgress(h) === 'remote') ? 'remote' : 'local';
@@ -296,6 +323,8 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
             need(!PAY_TOKENS.test(sel) && !words.some((w) => PAY_WORDS.test(w)), `${at} would pay or place an order. ${PAY_REFUSAL}`);
           } else {
             need(!CARD_FIELD.test(sel) && !CARD_FIELD.test(name), `${at} would type card details. Nova never types card details; paying is yours.`);
+            const fieldWords = [sel, name, typeof s.label === 'string' ? s.label : '', typeof s.intent === 'string' ? s.intent : ''];
+            need(!fieldWords.some((w) => SECRET_FIELD.test(w)) && !(o.account !== undefined && fieldWords.some((w) => ACCOUNT_CODE_FIELD.test(w))), `${at} would type into a password or code field. ${NO_SECRET_FILL}`);
             need(!(typeof s.value === 'string' && looksLikeCard(s.value)), `${at}.value looks like a card number. Nova never types card details; paying is yours.`);
           }
           break;
@@ -304,6 +333,9 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
           need(isStr(s.selector, 500), `${at}.selector is required`);
           break;
         case 'read':
+          // What an account page shows (a setup key, recovery codes) is the person's: an account plan
+          // reads nothing; Nova's own fetch of verify.url proves it (review of PR #241).
+          need(o.account === undefined, `${at}: An account plan reads nothing from the page (a setup key or recovery codes are the person’s); verify.url proves it worked`);
           need(isStr(s.selector, 500), `${at}.selector is required`);
           if (s.expect !== undefined) need(isStr(s.expect, 2000), `${at}.expect must be text`);
           break;
@@ -317,6 +349,21 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
           if (s.done_when !== undefined) need(isStr(s.done_when, 500), `${at}.done_when must be a selector`);
           sendsOk(s, at, need, canon);
           break;
+        case 'new_password':
+        case 'create_account': {
+          const fields = s.do === 'new_password' ? ['password', 'submit', 'done_when'] as const : ['username', 'password', 'submit', 'done_when'] as const;
+          for (const k of fields) need(isStr(s[k], 500), `${at}.${k} must be the selector of the ${k === 'submit' ? 'button that sends the form' : k === 'done_when' ? 'element that shows once the change went through' : `${k} field`}`);
+          for (const k of ['confirm', 'current'] as const) if (s[k] !== undefined) need(isStr(s[k], 500) && (s.do === 'new_password' || k === 'confirm'), `${at}.${k} must be the selector of the ${k === 'confirm' ? 'field that repeats the new password' : 'current password field'}`);
+          if (s.do === 'create_account') need(isStr(s.name, 200) && !/\s/.test(String(s.name)), `${at}.name is the account’s name to create: an email address or a user name (it isn’t a secret; the password is made by Nova)`);
+          need(!['value', 'values', 'new_password', 'password_value', 'secret', 'credentials', 'old_password'].some((k) => k in s), `${at} names the fields, never a value: Nova makes the new password itself and keeps it in the vault`);
+          need(o.account !== undefined && (o.account as { change?: unknown })?.change === (s.do === 'new_password' ? 'password' : 'create'), `${at} changes an account: the plan must declare account: {change: "${s.do === 'new_password' ? 'password' : 'create'}", site}`);
+          sendsOk(s, at, need, canon);
+          break;
+        }
+        case 'code':
+          need(isStr(s.why, 500), `${at}.why must say, in plain words, which code the person types (from a text message, an authenticator app, an email)`);
+          need(isStr(s.done_when, 500), `${at}.done_when must be a selector that shows once the code was taken`);
+          break;
         case 'checkout':
           for (const k of ['lines', 'total'] as const) need(isStr(s[k], 500), `${at}.${k} must be the selector of the ${k === 'lines' ? 'itemised lines' : 'total'}`);
           need(isStr(s.pay, 500), `${at}.pay must be the selector of the pay control, so that nothing may click it`);
@@ -324,6 +371,24 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
           break;
       }
     });
+  }
+  // M10d: an account plan says which change and which site; one account change per plan.
+  let account: Plan['account'] | undefined;
+  if (o.account !== undefined) {
+    const a = (typeof o.account === 'object' && o.account !== null ? o.account : {}) as Record<string, unknown>;
+    const site = typeof a.site === 'string' ? canonicalHost(a.site) : null;
+    if (need(ACCOUNT_CHANGES.includes(a.change as never) && !!site && HOST.test(site) && !site.startsWith('*.') && Object.keys(a).every((k) => k === 'change' || k === 'site'), `inputs.account is {change: ${ACCOUNT_CHANGES.join(' | ')}, site}: the account change and the site (host or host:port) it is on`)) {
+      need(canon.includes(site!), `inputs.account.site (${site}) must be one of the allowed hosts`);
+      account = { change: a.change as AccountChange, site: site! };
+      const list = Array.isArray(steps) ? steps as Record<string, unknown>[] : [];
+      const changing = list.filter((x) => x?.do === 'new_password' || x?.do === 'create_account');
+      need(changing.length <= 1, 'inputs.steps may change an account once: one new_password or create_account step');
+      if (account.change === 'mfa') need(list.some((x) => x?.do === 'code'), 'An MFA change needs a code step: the person types the code from their app or message themselves');
+      else need(changing.length === 1, `An account change (${account.change}) needs its ${account.change === 'create' ? 'create_account' : 'new_password'} step`);
+      need(o.learn === undefined, 'An account plan isn’t learnt as a site template: each account change is asked for, and confirmed, on its own');
+    }
+  } else if (Array.isArray(steps) && (steps as Record<string, unknown>[]).some((x) => x?.do === 'code')) {
+    need(false, 'A code step belongs to an account change: the plan must declare account: {change, site}');
   }
   if (o.profile !== undefined) need(o.profile === 'nova' || o.profile === 'fresh', 'inputs.profile is "nova" (Nova’s own browser profile, the default) or "fresh" (a throwaway one)');
   if (o.learn !== undefined) need(typeof o.learn === 'string' && FLOW_NAME.test(o.learn), 'inputs.learn must be a short name for the flow: lowercase letters, digits and dashes');
@@ -342,6 +407,7 @@ export function validatePlan(inputs: unknown, hub: Hub = NO_HUB): Plan {
     profile: o.profile === 'fresh' ? 'fresh' : 'nova',
     ...(typeof o.learn === 'string' ? { learn: o.learn } : {}),
     ...(isObj(o.flow) ? { flow: o.flow as Plan['flow'] } : {}),
+    ...(account ? { account } : {}),
   };
 }
 
@@ -381,6 +447,9 @@ export function describe(s: Step): string {
     case 'person': return s.why;
     case 'login': return 'Sign in with the saved sign-in for this site';
     case 'checkout': return 'Read the itemised total, and stop before paying';
+    case 'new_password': return 'Change the password: Nova makes a new one, types it, and keeps it in the vault';
+    case 'create_account': return `Create the account ${s.name}, with a password Nova makes and keeps in the vault`;
+    case 'code': return s.why;
   }
 }
 

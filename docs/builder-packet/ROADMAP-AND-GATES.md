@@ -154,6 +154,20 @@ Spec: AMENDMENT-2026-10-31-A. A local harness with two modes: change-aware PR te
 - **Assertions come from the spec,** never from observed behaviour, and UX findings are always advisory.
 - **Amendment 2026-10-31-B:** Parts 7 and 8 extend it.
 
+## M11 — Home: Smart Home and cameras (owner input 2026-10-31)
+Spec: `nova-smart-home-design-2026-10-31.md`, with the owner's same-day change on camera stream paths; designed in `docs/plans/smart-home.md`, with the owner's eight decisions recorded there.
+- **Placement:** after QA Stage 2 and Amendment B Part 7. It displaces nothing in M10e–M10k or Stage 2.
+- **S1:**
+  - S1a: the device model and the Smart Home page over Home Assistant (areas and entities, cameras through its stream proxy), the Smart Home card, discovery and the connect card;
+  - S1b: the Scrypted connector, camera-first, on the Credential Broker.
+  - **Gate:** the ADR's stand-in list, plus the owner-assisted real Home Assistant and real Scrypted checks, flagged as the owner's step.
+- **S2:** camera event classification through the Decision Service (after DS1), by class only; kept clips into the capture archive (after M10h's archive); scenes and automations; two-way talk.
+- **S3:** direct local and vendor-cloud connectors, by demand. Vendor clouds are opt-in and never in local-only. Matter gets its own ADR.
+- **Rules from the owner's decisions:**
+  - a direct tap needs no approval at tiers 0–2, and one on-tile confirm at tier 3, while Nova-initiated commands follow the tier table;
+  - no face recognition;
+  - no cloud in local-only, Box included.
+
 ## Launch readiness — Amendment 2026-10-31-B (eight parts)
 Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-31. No new milestone: nothing displaces in-flight work or the M10e–M10k order. Where each part lands:
 1. **Tev1, the local decision provider, plus the injection eval:** a side PR, as soon as a slot is free. The eval is a real gate: if Tev1 misses the bounds, it stays advisory and the deterministic layer decides.
@@ -165,6 +179,13 @@ Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-3
 7. **A fault matrix and a soak run:** extend the QA harness under Amendment 2026-10-31-A.
 8. **QA Stage 2 integration with the Service Manager:** the recorded design, applied when Stage 2 is built, so the harness isn't built for the supervisor alone.
 - **Closing rule:** no capability is claimed in onboarding, docs or the UI that the Part 4 eval suite can't demonstrate.
+- **Decision Service (owner input 2026-10-31, extends Part 1):** `nova-jev-decision-layer-2026-10-31.md`, designed in `docs/plans/decision-service.md`.
+  - Built as side PRs:
+    - DS1: the service (registry, seats, decision log, boundary test);
+    - DS2: ingest and chat guardrails, model routing, the memory gate, retrieval scoring, trigger triage;
+    - DS3: browser verification, with M10b.
+  - Smart home, camera and knowledge-graph alignment come later. Nothing here displaces M10e–M10k.
+  - Gate per template: a pre-registered eval passing on the exact model version, or the template ships advisory.
 
 ## Sequencing rules
 - Relay stabilization may run parallel to M1–M2 (it is independent), integration only at M8.

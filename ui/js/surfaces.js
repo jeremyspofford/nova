@@ -2,7 +2,7 @@
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
-import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
+import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
@@ -175,6 +175,11 @@ export async function openTask(id) {
     // A coding run's check or merge (M10c): what was changed, tested and previewed, before the OK.
     const run = t.owner === 'coding' && t.brief?.inputs?.run_id ? await api('GET', `/coding/runs/${encodeURIComponent(t.brief.inputs.run_id)}`).catch(() => null) : null;
     if (run) { openSheet(codingSheet(t, run), { label: 'Needs your OK' }); return; }
+    // An infrastructure apply or a network change (M10d): the plan in full, or the diff, first.
+    const infra = t.owner === 'infra' && t.brief?.inputs?.step === 'apply' && t.brief?.inputs?.run_id ? await api('GET', `/infra/runs/${encodeURIComponent(t.brief.inputs.run_id)}`).catch(() => null) : null;
+    if (infra) { openSheet(infraSheet(t, infra), { label: 'Needs your OK' }); return; }
+    const change = t.owner === 'network' && t.brief?.inputs?.change_id ? await api('GET', `/network/changes/${encodeURIComponent(t.brief.inputs.change_id)}`).catch(() => null) : null;
+    if (change) { openSheet(networkSheet(t, change), { label: 'Needs your OK' }); return; }
     const worker = store.workers.find((w) => w.id === t.owner) ?? null;
     openSheet(approvalSheet(t, { worker }), { label: 'Needs your OK' });
     return;
@@ -262,6 +267,16 @@ export async function declineMerge(run) {
     await api('POST', `/coding/runs/${encodeURIComponent(run)}/decline`, {});
     closeSheet();
     toast('Not merged. Your branch is as it was.');
+    await load(['tasks']);
+  } catch (e) { toast(e.message); }
+}
+
+// Don't apply (M10d): an infrastructure run's or a network change's apply is cancelled; nothing changes.
+export async function declineChange(path, said) {
+  try {
+    await api('POST', path, {});
+    closeSheet();
+    toast(said || 'Not applied.');
     await load(['tasks']);
   } catch (e) { toast(e.message); }
 }
