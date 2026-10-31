@@ -164,3 +164,15 @@ test('the precheck is what the template uses, end to end, and returns nothing fo
   assert.equal(p.final, false);
   assert.equal((p.fields as { text: string }).text, 'wifi [redacted: password]');
 });
+
+test('the committed verdicts: trusted on exactly tev1:4b@7954…, and on nothing else', async () => {
+  const { fileVerdicts } = await import('../../src/core/decision-service/verdicts.ts');
+  const v = fileVerdicts();
+  const four = v.lookup('capture-sensitive', 1, 'tev1', 'tev1:4b@7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740');
+  assert.equal(four.trusted, true, four.why);
+  assert.equal(v.lookup('capture-sensitive', 1, 'tev1', 'tev1:0.8b@abc31fdb0bf52506cc47091145ac19c4cfb509b73a6841789324f9e32200c099').trusted, false);
+  assert.equal(v.lookup('capture-sensitive', 1, 'tev1', 'tev1:4b@some-other-build').trusted, false, 'a different build is untrusted until the eval runs again');
+  assert.equal(v.lookup('capture-sensitive', 1, 'jev', 'jev-1.14.0').trusted, false, 'no verdict for the cloud seat');
+  assert.equal(v.passed('capture-sensitive', 1), true);
+  assert.equal(v.passed('ingest-screen', 2), false, 'the ingest screen is unaffected');
+});

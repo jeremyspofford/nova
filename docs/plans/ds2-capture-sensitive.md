@@ -105,6 +105,109 @@
 
 **The default when no model is trusted.** Index after the deterministic checks (as built: today's behaviour plus app exclusion and redaction), or hold everything until a decision model passes this template's eval (safer for the archive, but it switches capture indexing off for now)?
 
+## The result (2026-10-31)
+
+The template and its rule were fixed at `727b7509`. The eval was fixed at `9cb2ca0a` before the run. The run was on Ollama 0.40.13. It ran twice, with identical results, because push protection refused the first history; see the evidence.
+
+| Size | Digest | Detection | False holds | ECE | Deterministic | Leaks | Verdict |
+|---|---|---:|---:|---:|---:|---:|---|
+| `tev1:4b` | `7954dce2…0740` | 97.4% (38/39) | 2.5% (1/40) | 0.032 | 16/16 | 0 | **pass: trusted on this build** |
+| `tev1:0.8b` | `abc31fdb…c099` | **79.5% (31/39)** | 12.5% (5/40) | 0.023 | 16/16 | 0 | **fail: evidence only** |
+
+**The caveats,** in full in `docs/evidence/capture-sensitive-eval.md`:
+- 39 grey cases; the detection interval is 86.8–99.6%;
+- 11 of the 40 labelled judgments were caught through the "unsettled → hold" row;
+- one author wrote the questions and the cases (questions first);
+- an independent case set is the stronger test.
+
 ## NOTES for Track 1
 
-Filled in when the results are in, at the end of this file.
+Track 2 changed no capture code, no consumer and no shared file. These are what the template needs to be used.
+
+### 1. Call the template where captured text is indexed or archived (`src/core/capture/capture.ts`)
+
+Job 1 runs "before they are indexed into memory or archived".
+- **Today's nearest point** is promotion (`#triage`, before `capture-promote`).
+- **The archive** is the `capture_event` row itself.
+
+The calls:
+
+```ts
+// After an event is stored (the archive) and before any promotion or index (memory):
+const d = await decisions.ask('capture-sensitive', { kind: ev.kind === 'audio' ? 'transcript' : 'ocr', app: ev.app ?? '', url: ev.url ?? '', text: ev.text }, { subsystem: 'capture', capture_source: ev.source_id });
+switch (d?.outcome ?? 'index') {
+  case 'index':   /* as today */ break;
+  case 'redact':  // store and index the redacted text: replace each finding's span with "[redacted: <kind>]"
+                  // (d.findings has kind/start/end on ev.text); keep the original only in the event row if
+                  // the person's retention allows, or drop it there too (owner's call; the safe default is drop).
+                  break;
+  case 'hold':    // keep the event under capture retention only; never promote or index it; mark it sensitive.
+                  break;
+  case 'exclude': // clear capture_event.text (keep the row: time, app, source), never promote or index it;
+                  // mark it excluded with the reason.
+                  break;
+}
+```
+
+- **Nothing is deleted silently** (the decision). Every outcome other than index is visible in the timeline (item 3).
+- **A migration** adds `capture_event.sensitivity` (`index` | `redact` | `hold` | `exclude`), `sensitivity_decision` (the decision record's id) and `sensitivity_why`.
+- **The content-hash cache** from Part 3 applies: the same text from the same source is decided once.
+
+### 2. Deterministic first, at intake (`src/core/capture/rules.ts`)
+
+Capture has no built-in sensitive-app list; exclusions are only the ones the person sets. The owner's decision puts known sensitive apps and windows ahead of any model. **Drop them at intake**, as private windows are dropped, using the template's own list so the two can't drift.
+- Export `sensitiveApp(app, url)` from `decision-service/index.ts` (one line), or move the list to `rules.ts` and import it into the template.
+- Then in `#take` (or wherever `isPrivate` is checked): `if (sensitiveApp(f.app ?? '', f.url ?? '')) drop('a sensitive app')`, counted and shown in Settings › Capture like private windows.
+- The template keeps its own check too, as a second wall, for anything stored before this lands.
+
+### 3. The timeline shows the verdict (shared UI)
+
+In the Capture view, an item that isn't `index` shows a small label with its reason:
+- "Sensitive: held, not added to memory";
+- "Sensitive: excluded, text not kept";
+- "Redacted: a password and a card number".
+
+The item opens to the decision record (template version, provider, scores), as the decision requires. Use no model text in the label; use the template's outcome action words.
+
+### 4. Logging with the item's provenance
+
+Every call passes `capture_source`, and the decision record's id is stored on the event (item 1). The record already holds the template version, seat, pinned model, full probabilities, findings (kinds and positions only) and outcome.
+
+### 5. The cloud opt-in per source (later)
+
+The template never goes to a cloud seat in local-first or local-only. In cloud mode it goes there only when `captureCloud(source)` is true, which the service takes from its options. Until a per-source setting exists, pass nothing: cloud is then never used. When it is built:
+- it is a per-source switch, off by default;
+- its words are the decision's: "Screen text from this capture source may be sent to the decision provider for safety checks";
+- wire it as `captureCloud: (id) => capture.source(id)?.cloud_screening === true`.
+
+### 6. The open owner question
+
+The default when no model is trusted. As built, that means index after the deterministic checks. With `tev1:4b` now trusted on this build, it applies only on devices running another size or build, or with no Tev1. **Ask the owner** whether those devices should hold everything instead.
+
+### 7. The records
+
+**`docs/LEDGER.md`, under `## Decisions`:**
+
+> **2026-10-31 (capture screening, job 1: capture-sensitive).** Owner decision `INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`; plan `docs/plans/ds2-capture-sensitive.md`; evidence `docs/evidence/capture-sensitive-eval.md`; PR #⟨n⟩.
+> - **The template:** `capture-sensitive` v1.
+>   - **Deterministic first:** known password-manager and banking apps and sites are excluded with no model call; pattern detectors (keys, tokens, private keys, passwords, Luhn cards, mod-97 IBANs, SSNs, high-entropy secrets) redact before the model sees the text.
+>   - **Four Nouls for the grey area:** password, secret_key, financial_details, health_details.
+>   - **The rule** (0.7/0.3, not tuned, for a privacy screen): a password or secret excludes; finances or health hold; unsure holds; all no indexes.
+>   - **Routing:** never to a cloud seat in local-first or local-only; in cloud mode only with a per-source opt-in (not built: never).
+>   - The template and rule were fixed at `727b7509`, before any case.
+> - **The eval,** fixed at `9cb2ca0a` before the run: 95 synthetic cases (39 grey, 12 structured, 4 app, 40 harmless look-alikes).
+> - **Bounds:** detection ≥ 95%, false holds ≤ 20%, ECE ≤ 0.10; the deterministic layer 100%, with no caught value reaching a model.
+> - **Result, on Ollama 0.40.13:**
+>   - tev1:4b `7954dce2…`: 97.4%, 2.5%, 0.032, deterministic 16/16. **Pass**: trusted on that build.
+>   - tev1:0.8b: detection 79.5%. **Fail**, evidence only.
+>
+>   **Caveats:** 39 grey cases (interval 86.8–99.6%); 11 of the 40 labelled judgments caught via "unsure → hold"; one author for the questions and the cases.
+> - **Pending Track 1:** the consumers (indexing and archiving, timeline, intake drop of sensitive apps, migration).
+
+**The plain-language entry:**
+
+> Nova can now check text it captured from your screen or a recording for passwords, keys, and other people's money or health details before keeping it in memory. Its own rules come first: password managers and banking apps are never kept, and things shaped like keys and card numbers are blanked out. A small local model handles the rest. On this computer's model, it caught 38 of 39 sensitive test notes and wrongly held back only 1 of 40 harmless ones, so it passed its test. It isn't switched on anywhere yet, and nothing it reads ever leaves your machine.
+
+**`docs/builder-packet/CAPABILITY-INVENTORY.md`, on the Decision Service row** (or the capture row):
+
+> **Capture screening, job 1:** `capture-sensitive` v1 (`templates/capture-sensitive.ts`). The deterministic app exclusion and pattern redaction come first; four Nouls for the grey area. **Passed** its pre-registered eval on tev1:4b `7954dce2…` (detection 97.4%, false holds 2.5%, ECE 0.032; 39 grey cases, one author), so it is trusted on that build; tev1:0.8b failed (79.5%). Never routed to a cloud seat in local modes. **Gaps:** no consumer yet (capture indexing and archiving, the timeline label, the intake drop of sensitive apps); no per-source cloud opt-in; an independent case set would strengthen the pass.
