@@ -345,7 +345,9 @@ export class Browser extends EventEmitter {
     const found = this.chromium();
     if (!found.path) return report('failed', found.detail);
     const own = plan.profile !== 'fresh';
-    if (own && this.#profileUser) return report('failed', 'Nova’s browser is busy. This task will need to run again.');
+    // Forget may hold Nova's profile for a moment (tasks on it run one at a time by their lane).
+    for (let i = 0; own && this.#profileUser && i < 300 && !signal.aborted; i++) await new Promise((r) => setTimeout(r, 100));
+    if (own && this.#profileUser) return report('failed', 'Nova’s browser stayed busy with something else for 30 s. This task needs to run again.');
 
     this.sessions.get(id)?.close('replaced');
     const s = new Session({
