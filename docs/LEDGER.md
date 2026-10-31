@@ -277,8 +277,8 @@ M10e phase.
   SHA-256; `full`, `shadow`, `copy`, `none`; a stable port forwarded on 127.0.0.1; canary with
   automatic rollback; the old slot kept for `soak_s` (absent: until the next promotion) and removed
   after; services get none of the supervisor's environment, run in their own process group, and are
-  ended whole. A supervisor killed outright leaves them running; the next one ends them, found by
-  their working folder in `/proc` (Linux only).
+  ended whole. A supervisor killed outright leaves them running; the next one ends them, known by
+  pid and start time in `/proc` (Linux only).
 - **The no-Kubernetes tripwire** (`scripts/tripwire.sh`) wraps `npm test`, `npm run test:ui` and
   `scripts/ui-test.sh`: stand-in `kubectl`, `helm`, `flux`, `k3s` first on PATH, `KUBECONFIG` unset, any
   call fails the run. This machine has a real `kubectl`; the tripwire shadows it.
@@ -286,15 +286,37 @@ M10e phase.
   - The ADR's Order puts the `service` change kind in M10e, but its artifact is the definition plus
     rendered Helm values and its gate is GitOps; the brief for this phase excluded Helm. Not built:
     deferred to M10j/M10k, to be confirmed by the owner.
-  - M10e was to start after M10d (PR #241) merged; it was built on main as instructed. Shared files
-    with #241: `src/core/index.ts`, `src/core/README.md`, this LEDGER, the inventory.
+  - M10e was to start after M10d (PR #241) merged. It was first built on main before that, as
+    instructed, then rebased onto main at `61bcb042`, M10d merged.
   - "Both drivers' tests" and "one definition rendered by both drivers": only one driver exists. The
     contract suite (`tests/support/service-driver-contract.ts`) is ready for M10j.
   - The supervisor driver doesn't run image-only services (the ADR's "Docker where present" needs image
     pulls the hard limits forbid), hand out secrets, download `https:` artifacts or place on other
     devices. Each is refused in plain words.
   - `scripts/preview.sh` doesn't use the supervisor at all, so the preview is unaffected.
-- **Not proven by its test:** the forwarder closing both sides together (see the evidence).
+- **The review of PR #247** (fixed on the same branch; one test per finding, each seen failing with
+  its fix reverted; the evidence has the table):
+  - **What runs is the pinned program.** A command starts the artifact itself, or Nova's own Node
+    with the artifact as its script; never another program, a shell, an absolute or `../` path, or an
+    interpreter option or inline code before it. Checked by the validator, the driver's plan and at
+    every start (a regular file in the slot, the pinned SHA-256). The plan shows the exact argv, and
+    deploying a command no approved version has run asks first, typed (tier 2, or 3).
+  - **A failed switch tells the truth.** The live version's stable ports are untouched until the new
+    version passes, and every failure path puts them back; if the old version doesn't start again,
+    the service is held with a problem.
+  - **One queue per service** for changes, restarts and soak ends: nothing is refused, dropped or
+    raced. Health restarts count toward holding. `service recover` restarts a held service (tier 1).
+  - **Processes are known by pid and start time** (`/proc`), recorded at spawn with their group's
+    members; a group is signalled only while it is provably still ours.
+  - **Also:** soaks past one timer are chained; the program is lstat'ed, capped at 256 MB and read
+    asynchronously; ports below 1024 and Nova's own (from its configuration) are refused; half-close
+    and resets pass through the forwarder; ports are keyed by number; SIGHUP stops the supervisor;
+    shadow is one writer at the switch; a version is registered only once it passed.
+  - **Not proven separately:** each of the two S1 guards (each alone is enough), the leader check of
+    S5 (the leader is also among the recorded members), recording at spawn, the cleared forwarder
+    during a restart wait, the per-version health interval.
+  - **Limits stated, not fixed:** a process that leaves its group (`setsid`) outlives everything; the
+    tripwire sees PATH lookups only (a test reads the code for Kubernetes tools named as commands).
 
 **2026-10-31 (owner decision: screening capture-derived text).** Verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`, recorded in `docs/plans/decision-service.md` §2.1 and owner decision 5.
 - **Capture-derived text** (OCR and transcripts) is a screened class with two jobs:

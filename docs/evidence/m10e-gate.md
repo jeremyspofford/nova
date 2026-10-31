@@ -8,14 +8,19 @@ the console under the in-process supervisor is the stand-in server of `tests/sup
 Kubernetes, Helm or Flux was installed or run. This machine has a real `kubectl` at
 `/usr/local/bin/kubectl`; the tripwire shadows it for the whole suite, and it was never called.
 
+The branch was rebased onto main at `61bcb042` (M10d merged) before the review's fixes.
+
+**Deferred, said plainly: the `service` change kind is not built.** The ADR's Order lists it in
+M10e, but its artifact is "the definition plus the rendered values" and its gate is GitOps
+(`services.git`, M10j/M10k); this phase's brief excluded Helm. In M10e a service is deployed through
+the supervisor with typed confirmations, as console releases are.
+
 ## Suite
 
-`npm run check` passes: the token lint, themes, typecheck, and **1114 tests: 1105 pass, 0 fail, 9 skipped** (31 of them new). The 9 skips are the
-existing opt-in real-service tests. Before M10e, main's suite was 1083 tests (1072 pass, 9 skipped,
-2 failing in `tests/core/computer-egress-bounds.test.ts` under the full run's load on this machine;
-that file passes alone, 8 of 8, and is untouched here).
+`npm run check` passes: the token lint, themes, typecheck, and **@@TESTS@@**. The 9 skips are the
+existing opt-in real-service tests.
 
-`scripts/ui-test.sh` (Chromium in the Playwright container, under the tripwire): **87 tests: 87 pass, 0 fail**. CI on PR #247: both jobs green, and both logs show the tripwire armed and never fired (`checks`: 1114 tests, 1105 pass, 9 skipped; `UI gate`: 87 of 87).
+`scripts/ui-test.sh` (Chromium in the Playwright container, under the tripwire): **@@UI@@**.
 
 The run's log, start and end (`npm test` and the UI gate both say it):
 
@@ -29,12 +34,13 @@ The new tests:
 
 | File | Tests | What it proves |
 |---|---|---|
-| `tests/core/services-definition.test.ts` | 8 | The format; one test per refusal the ADR names; every other malformed field; the console's definition; the promotion tier |
-| `tests/core/services-manager.test.ts` | 6 | The manager's own rules against a recording driver: validation first, the first driver that can run it, each version registered once, typed promotion at its tier, only a ready version offered, rollback asked |
+| `tests/core/services-definition.test.ts` | 10 | The format; one test per refusal the ADR names; the command rule; ports below 1024; every other malformed field; the console's definition; the promotion tier |
+| `tests/core/services-manager.test.ts` | 8 | The manager's own rules against a recording driver: validation first, the first driver that can run it, each version registered once and only once it passed, typed promotion at its tier, only a ready version offered, a new command asks before it runs, rollback asked |
 | `tests/support/service-driver-contract.ts` | (shared) | What every driver must do; run by the supervisor driver now and by the K3s driver in M10j |
 | `tests/supervisor/services-contract.test.ts` | 2 | The contract suite on the supervisor driver |
 | `tests/supervisor/services.test.ts` | 10 | The gate's lifecycle, each failure path, crash rules, alongside modes, a supervisor restart, the plan snapshot and refusals, the console from its definition |
-| `tests/supervisor/services-cli.test.ts` | 2 | The command line on a real supervisor process; a supervisor killed outright |
+| `tests/supervisor/services-review.test.ts` | 23 | One test per finding of the review of PR #247 (below) |
+| `tests/supervisor/services-cli.test.ts` | 5 | The command line on a real supervisor process; supervisors killed outright (three cases); SIGHUP |
 | `tests/acceptance/no-kubernetes.test.ts` | 3 | The tripwire is armed for the run, it fires, and Nova running a service leaves no `~/.kube` |
 
 The existing supervisor tests are unchanged (`git diff origin/main -- tests/supervisor/{checkpoints,guards,releases,rollback-mark,record-problem}.test.ts tests/supervisor/{fake,support}.ts tests/chaos/hub.test.ts` is empty) and green, and so is `tests/acceptance/fresh-user.test.ts`.
@@ -43,96 +49,105 @@ The existing supervisor tests are unchanged (`git diff origin/main -- tests/supe
 
 ### 1. The console runs from its definition, through the supervisor driver, with today's tests unchanged and green
 
-- `tests/supervisor/services.test.ts` › "the console runs from its definition: its command and its
-  health check are the definition's": a console definition naming another script (`src/console.js`)
-  and another health path (`/console-health`), which the stand-in console alone answers. The console
-  starts from that script, its health checks pass, and it is never restarted. The driver's status
-  lists `nova-console` live at `base`, healthy.
+- `services.test.ts` › "the console runs from its definition: its command and its health check are
+  the definition's": a console definition naming another script (`src/console.js`) and another
+  health path (`/console-health`), which the stand-in console alone answers. The console starts from
+  that script, its health checks pass, and it is never restarted.
 - The console's deploy path is the supervisor's own, unchanged: `Supervisor.deploy` and
   `Supervisor.rollback`, which the driver's `switch` and `rollback` call for `nova-console`. Today's
   restart, safe-mode, canary, migration and checkpoint tests (`tests/supervisor/*.test.ts`,
   `tests/chaos/hub.test.ts`) are unchanged and pass.
-- The console's plan (snapshot): prepare, tests, sandbox, smoke, approval (tier 3), switch, canary,
-  promote.
 
 ### 2. A second, plain-program service is deployed, promoted, soaked and rolled back
 
-`tests/supervisor/services.test.ts`:
-- "deployed alongside with no traffic, promoted on the typed word, soaked, and the old slot removed
-  after the soak": 1.0.0 is installed (SHA-256 checked) and passes its contract test and three health
-  checks; nothing answers on the stable port until it is promoted. 2.0.0 runs alongside on its own
-  port while the stable port still answers 1.0.0. After promotion the stable port answers 2.0.0, 1.0.0
-  is kept and stopped, its whole process group too: the child it started was asked to stop
-  (SIGTERM) and then made to (SIGKILL). A client that kept its connection open reaches 2.0.0. After
-  `soak_s` (2 s) the 1.0.0 slot is removed and the record says “Its soak ended with 2.0.0 healthy, so
-  its slot was removed.” The service's `HOME` is its own folder.
-- "a version that fails its contract tests is never offered": `Stopped at tests: http:/contract:
-  /contract answered 404`; the version is `failed`, stopped, and promotion is refused (“isn’t ready to
-  promote”); the problem `service-stopped` says “never offered. 1.0.0 keeps running”.
-- "a version whose health fails in its canary is rolled back by itself": `Rolled back: /health
-  answered 500`; the stable port answers 1.0.0, the same process throughout; `service-rolled-back` is
-  told.
-- "a version that fails during its soak goes back in one step, with nothing installed or
-  downloaded": 1.0.0's source file is deleted after the promotion; 2.0.0 turns sick in its soak; after
-  two failed health checks 1.0.0 runs again from its kept slot, byte for byte as installed.
-- "a crash is restarted with a growing wait; three within the window and the service is held": the
-  console is untouched by it.
-- "a rollback the person asks for wants the word, and goes back to the kept version".
-- "copy runs the new version on a copy of the state, then on the real one after the switch; none
-  starts only at the switch".
-- "the services run again after the supervisor restarts, on the same stable port".
-- `tests/supervisor/services-cli.test.ts`: the same through `node src/supervisor/main.ts` (plan,
-  deploy, promote refused without the typed `stand-in@1.0.0`, `services`, rollback refused without
-  the word), and the service stops with the supervisor. A supervisor killed with SIGKILL leaves its
-  service and that service's child running; the next supervisor ends that process group (its working
-  folder is the version's slot) before starting its own instance.
+`services.test.ts`: the lifecycle (alongside with no traffic: with 1.0.0 live, deploying 2.0.0
+leaves the stable port on 1.0.0; promoted on the typed word; the old version stopped with its whole
+process group, asked with SIGTERM and then made with SIGKILL; a kept-alive client reaches the new
+version; the old slot removed after the soak, and the record says so); a contract failure never
+offered; the canary's automatic rollback; the soak's one-step rollback from the kept slot with the
+source file deleted; crash restarts and holding; an asked rollback; `copy` and `none`; a supervisor
+restart. `services-cli.test.ts`: the same through `node src/supervisor/main.ts`, deploy refused
+until its command is approved, and the service stops with the supervisor.
 
 ### 3. The driver interface is exercised by the driver's tests
 
-`tests/support/service-driver-contract.ts`, run by `tests/supervisor/services-contract.test.ts`:
-available; a plan in the stages' order with its tier; apply gives no traffic; only a ready version
-switches (a version failing its contract tests is refused by `switch` itself); rollback is one step
-and then there is nothing kept. **Only one driver exists in M10e**, so "both drivers' tests" is half
-met: the K3s driver (M10j) must run this same suite.
+`tests/support/service-driver-contract.ts`, run by `services-contract.test.ts`. **Only one driver
+exists in M10e**, so "both drivers' tests" is half met: the K3s driver (M10j) must run this suite.
 
 ### 4. The definition: a validator test per refusal, and the supervisor's plan as a snapshot
 
-`tests/core/services-definition.test.ts`: "refused: a floating service that has state"; "refused: an
-image-only service pinned to a macOS or a Windows device"; "refused: a placement no device's roles
-allow"; "refused: a secret written as a value instead of a secret:// name" (the value is never
-repeated back). `tests/supervisor/services.test.ts` › "the supervisor driver's plan, as a snapshot,
-and what it refuses in plain words": the full plan, step by step, and the driver's refusals (image
-only, secrets, pinned elsewhere, replicas, memory, a web address, a program whose SHA-256 isn't the
-pinned one: “Nothing was installed”). The values-file snapshot and the chart lint are M10j's: no Helm
-code exists.
+`services-definition.test.ts`: one test per ADR refusal (floating with state; image-only on macOS or
+Windows; no device's roles allow it; a secret as a value). `services.test.ts` › "the supervisor
+driver's plan, as a snapshot": every step, with the exact argv (Nova's own Node, the program in its
+slot, its own arguments). The values-file snapshot and the chart lint are M10j's: no Helm code exists.
 
 ### 5. No Kubernetes anywhere, and the tripwire shown to work
 
-- `npm test` (`scripts/test.sh`), `npm run test:ui` (CI's UI gate) and `scripts/ui-test.sh` run
-  through `scripts/tripwire.sh`.
-- `tests/acceptance/no-kubernetes.test.ts` › "the tripwire is armed for this run": `command -v` finds
-  each of `kubectl`, `helm`, `flux` and `k3s` in the tripwire's folder (on this machine, ahead of the
-  real `/usr/local/bin/kubectl`), and `KUBECONFIG` is unset. › "the tripwire fires": each tool called
-  in a run whose command succeeds makes the run fail with `tripwire: FIRED` and the call
-  (`helm rollback nova-service 1` included); a clean run passes with its own result. › "Nova running a
-  service … leaves no ~/.kube": no `.kube` anywhere in its homes, and nothing called.
-- By hand: a throwaway test that calls `kubectl version --client` and passes, run through
-  `scripts/test.sh`: the test passed, the run exited 1 with “FIRED. Called during the run: kubectl
-  version --client”.
+`npm test`, `npm run test:ui` (CI's UI gate) and `scripts/ui-test.sh` run through
+`scripts/tripwire.sh`; `no-kubernetes.test.ts` shows it armed, firing, and Nova leaving no
+`~/.kube`. The tripwire sees PATH lookups only (see Limits); `services-review.test.ts` › "no code in
+Nova or its scripts names a Kubernetes tool to run" covers the rest, by reading the code.
 
 ### 6. Services bind 127.0.0.1 on free ports and are stopped in teardown, process groups included
 
-Every supervisor test ends with `stop()` (`tests/supervisor/services-support.ts`), which records every
-pid the supervisor started (console and services) while it ran and fails unless all are gone after
-`close()`. Stable ports are picked below the ephemeral range (see "Mistakes" below).
+Every supervisor test ends with `stop()` (`services-support.ts`), which records every pid the
+supervisor started while it ran and fails unless all are gone after `close()`. Tests that make
+orphans on purpose (a killed supervisor) end them in `finally`, whatever the outcome.
 
 ### 7. The fresh-user test
 
 `tests/acceptance/fresh-user.test.ts` passes unchanged in the suite.
 
-## Seen failing
+## The review of PR #247
 
-Each guard was removed in turn and its test run against it (`--test-name-pattern`), then put back:
+Each finding was checked with the reviewer's probe (`m10e-probes/p1`–`p13`) against the code before
+the fixes. For each, a test was written, the fix made, and then the fix was reverted on its own and
+the test run against that (`--test-name-pattern`), then put back. **Order, plainly:** the fixes and
+their tests were written together, not test-first; the revert runs below are what shows each test
+catches its finding.
+
+| Finding | Reproduced? | Fix | Test | With the fix reverted |
+|---|---|---|---|---|
+| B1 the command needn't run the pinned program | Yes (p1: a `../` path ran the stand-in from outside the slot; `node -e` wrote its marker) | The command rule (plan § "What runs"): the artifact itself, or Nova's own Node with the artifact as its script; no options or inline code before it; checked by the validator, the driver's plan, and at every start (regular file in the slot, the pinned SHA-256) | definition › "the command runs the pinned program and nothing else"; review › "B1: the driver itself refuses…" | fails (the `../` command accepted; the driver's refusal missing) |
+| B1 checked again at every start | — | `#verify` before each start | review › "B1: a program changed or replaced by a link in its slot is never started again" | fails (timed out waiting for held: the link ran) |
+| B1 the plan shows the argv | Yes (p1: the plan never named the command) | `plan.command`, and "It runs exactly: …" | services › "the supervisor driver's plan, as a snapshot" | fails |
+| B1 a changed command asks | — | Deploying a command no approved version ran asks, typed, tier 2 (3 with secrets or OS permissions), showing the argv | manager › "deploying a command no approved version has run asks first…"; cli › deploy refused until confirmed | fails |
+| B2 the restore's result ignored | Yes (p10: "1.0.0 is running again", nothing served, no problem) | Every failure path checks it; if the old version doesn't start, the service is held, a problem raised, and the words say so | review › "B2: when the old version doesn't start again either…" | fails (the message claimed it ran) |
+| B2 old forwarder closed before the new version is checked | Yes (p2: old port refused, new port reset) | New ports open beside the old; the live version's are untouched until the new one passes; failure closes only new ones | review › "B2: … moves its stable port and fails its canary while the old one still runs" (and four more B2 tests: start failure, held, port moved, `none`, `copy` canary) | fails (the old port stopped answering) |
+| S1 the soak's end races a rollback | Yes (p3: the kept slot removed mid-rollback; held) | A rollback clears the soak first, and the soak's end waits its turn in the service's queue | review › "S1: …" | fails with both guards removed; **each guard alone is enough**, so each removed alone, the test still passes |
+| S2 a crash collides with a deploy | Yes (p4a: held "already running"; p4b: the crash ignored) | One queue per service: every change, restart and soak end waits its turn; a crash is counted the moment it happens | review › "S2: a crash, then a deploy during the restart wait…"; "S2: a crash during a deploy is never dropped…" | both fail (timed out waiting for 1.0.0) |
+| S3 no way back from held | Yes (p4c) | `service recover <name>` (tier 1: the same approved version) | review › "S3: …" | fails |
+| S4 soak_s past 24.8 days | Yes (p9: TimeoutOverflowWarning, the slot removed in 200 ms) | Chained timers (`MAX_TIMER_MS`); the validator's 30 days stand | review › "S4: …" (a chain of 400 ms timers ends a 2 s soak on time; a 28-day soak keeps its slot) | fails |
+| S5 leftovers missed | Yes (p5a: leader dead, child alive; p5b: leader moved to `/`) | Each instance recorded at spawn with its pid, start time and group members (Linux `/proc`), and the boot id; the next supervisor ends what still matches | cli › "S5: the leftover's leader died since…"; "S5: the leftover moved its working folder…" | (a) fails with the members removed; (b) **passes with the leader check removed**, because the leader is itself among the recorded members: the leader check is a second path, not proven separately |
+| S6 a late SIGKILL can hit a reused group | Yes (p13: `kill(-pid)` with `/proc/<pid>` gone) | A group is signalled only while its leader is unreaped, or while `/proc` shows a member of it; an exit watcher clears a dead alongside version | review › "S6: a stopped program's group number is never signalled…"; "S6: a version that dies alongside is cleared…" | both fail |
+| S7 the program read blocks the supervisor | Yes (p6: the event loop stopped) | lstat (a regular file only), a 256 MB cap, an asynchronous read | review › "S7: …" | fails (hangs on the pipe; killed after 180 s) |
+| S8 ports below 1024 and Nova's own | Yes (p1: 22, 80, 4317–4322 all passed) | The validator refuses < 1024; the driver refuses the console's configured port, the one it answers on, and the device door's, from Nova's configuration | definition › "ports below 1024…"; review › "S8: no service may take Nova's own ports, even while the console is restarting"; "S8: the console's configured port is refused even when the console answers elsewhere" | all fail |
+| S9 health restarts never count | Not probed; reproduced by the test | Each health restart is counted in the crash window | review › "S9: …" | fails (never held) |
+| minor: tripwire is PATH-only | Yes (p11) | A test reads `src/` and `scripts/` for a Kubernetes tool named as a command; the limit is stated | review › "no code … names a Kubernetes tool…" | fails (a planted `'kubectl'` is found) |
+| minor: half-close | Yes (p7: "(nothing)") | `allowHalfOpen` on both sides; each end passed on | review › "the stable port answers a client that half-closes, and passes a reset on at once" | fails |
+| minor: a reset | (the close-both guard was unproven) | A reset on either side ends both at once; a clean end is passed on | same test (`/reset` answered at once) | fails (the client waits for its timeout) |
+| minor: renamed port | Yes (p2b: EADDRINUSE) | Stable ports keyed by number | review › "B2 (minor): a version that renames its port…" | fails |
+| minor: setsid escapes | Yes (p12) | Not fixed: stated as a limit | — | — |
+| minor: SIGHUP | — | Handled as SIGTERM | cli › "the supervisor stops on SIGHUP…" | fails (killed by the signal) |
+| minor: processes recorded late | — | Recorded at spawn | covered by the S5 tests | not proven separately |
+| minor: a failed install burns the name | — | Registered only after `apply` passes; a failed version's slot is removed | manager › "a version is registered only once it has passed…" | fails |
+| minor: wrong comment (forwarder) | — | Rewritten | — | — |
+| minor: forwarder points at a dead port | — | Targets cleared at the exit; connections refused at once until the restart | — | not proven by a test |
+| minor: a program named `definition.json` | — | The program lives in `bin/`; the validator refuses the name | definition › "the rest of the shape…" | — |
+| minor: health interval and overlap | — | The interval follows the live version; one check at a time | — | not proven by a test |
+| minor: shadow on the real state twice | — | Shadow is one writer at the switch | review › "minor: shadow is one writer at the switch" | fails (exit 5: another copy) |
+| minor: trivially true assertions | — | "No traffic" is checked where there is traffic to move | services, contract suite | — |
+| p8 (a command not found) | No: refused in about 350 ms | — | — | — |
+
+A probe run after the fixes: p1 refused at validation and plan; p2 old port answers, new port closed,
+rename promotes; p3 rollback succeeds, 1.0.0 live; p4 not held, restarted; p6 refused in 352 ms; p7
+200 through the stable port; p9 the slot kept; p10 held, truthful, two problems raised; p13 no group
+kill. p5's own script reads the old record format and stopped; the S5 tests cover it.
+
+One process left from a run with a fix reverted (a `--chdir` stand-in) was found afterwards and
+ended; its cause wasn't pinned down. Runs of the real code leave none (checked after each).
+
+## Seen failing (the first round)
 
 | Guard removed | Test | Failed? |
 |---|---|---|
@@ -140,58 +155,39 @@ Each guard was removed in turn and its test run against it (`--test-name-pattern
 | The manager offers only a ready version | manager › only a version that passed… | yes |
 | Promotion wants `<service>@<version>` typed | manager › promotion asks every time… | yes |
 | The canary points back by itself | services › health fails in its canary | yes |
-| Failed health in the soak goes back | services › fails during its soak | yes (timed out waiting for the rollback) |
-| The group's SIGKILL after the stop | services › deployed alongside… | yes (the child outlived it) |
-| The stop's SIGTERM to the whole group | services › deployed alongside… | yes (the child was never asked) |
+| Failed health in the soak goes back | services › fails during its soak | yes |
+| The group's SIGKILL after the stop | services › deployed alongside… | yes |
+| The stop's SIGTERM to the whole group | services › deployed alongside… | yes |
 | The program's SHA-256 check | services › plan, as a snapshot… | yes |
-| The console's health path from its definition | services › console runs from its definition | yes |
-| The console's command from its definition | services › console runs from its definition | yes |
-| A restart keeps the crash count | services › crash is restarted… | yes (never held) |
+| The console's health path / command from its definition | services › console runs from its definition | yes |
+| A restart keeps the crash count | services › crash is restarted… | yes |
 | A killed supervisor's leftovers ended | cli › killed outright | yes |
 | `copy` on a copy of the state | services › copy runs… | yes |
-| Validator: floating with state | definition › floating service that has state | yes |
-| Validator: image-only on macOS or Windows | definition › image-only service pinned | yes |
-| Validator: no device's roles allow it | definition › placement no device's roles allow | yes |
-| Validator: a secret as a value | definition › secret written as a value | yes |
+| The four validator refusals | definition › each | yes |
 | `npm test` under the tripwire | no-kubernetes › armed | yes |
-| The forwarder closes both sides together | services › deployed alongside… | **no**: see below |
-
-**Not proven by its test:** the forwarder destroying the client side when the upstream side closes
-(and the reverse). With it removed, the kept-alive client still reached the new version, because the
-stream's own end already reaches the client. It is kept as a defence against an upstream that resets
-rather than ends; no test shows that case.
-
-## Mistakes found and fixed during the build
-
-- The first restart after a crash reset the crash count (the restart shared the rollback's code), so
-  a crash loop was never held. Caught by the crash test; the count now resets only on promotion and
-  rollback.
-- The first full run failed once: another test's `listen(0)` took a stand-in's stable port between
-  choosing it and the promotion that binds it. Test stable ports now come from below the ephemeral
-  range, and the driver tries a start that ends at once again on new ports (twice at most).
-- An early helper reused kept-alive connections and saw a closed one after a switch; the helper now
-  opens a new connection per request, and a separate assertion checks the kept-alive case.
 
 ## Limits, plainly
 
-- **The `service` change kind and `services.git` are not built.** The ADR's Order lists the change
-  kind in M10e, but its artifact is "the definition plus the rendered values", its stages commit to
-  `services.git`, and every gate item for it is GitOps (M10j/M10k). Services are deployed through the
-  supervisor's command line with typed confirmations, as console releases are.
-- **M10d (PR #241) is not merged.** The ADR has M10e wait for it; this was built on main as instructed.
-  It shares `src/core/index.ts`, `src/core/README.md`, `docs/LEDGER.md` and the inventory with #241:
-  expect small merge conflicts there.
-- **Not run by the supervisor driver yet, and refused in plain words:** image-only services (no Docker
-  runs, per the image-pull limit), services with secrets (no vault hand-off), `https:` artifacts (no
-  downloads), other devices (M10f, M10h), more than one replica.
+- **The `service` change kind and `services.git` are not built** (deferred; see the top).
+- **What runs:** a single file per program (no archives); Node is the only interpreter allowed before
+  a program (Nova's own). A program may itself start anything it likes, as the person.
+- **A process that leaves its group** (`setsid`, `detached: true`) is outside everything here: it
+  outlives the service and the supervisor (the reviewer's p12).
+- **The tripwire sees PATH lookups only:** a call by absolute path (`/usr/local/bin/kubectl`), or with
+  PATH rebuilt from a fallback (`coding/git.ts`, `providers/checks.ts` use `/usr/local/bin:/usr/bin:/bin`
+  when PATH is empty) isn't seen. A test reads the code for any Kubernetes tool named as a command.
+- **Leftovers of a killed supervisor** are known through `/proc`: Linux only. Elsewhere they are left,
+  and said so. A member that joined the group after the last record (health checks refresh it) and
+  outlived its leader is ended only through the group.
+- **Not run by the supervisor driver yet, and refused in plain words:** image-only services, services
+  with secrets, `https:` artifacts, other devices, more than one replica.
 - **Declared, not enforced:** `egress` and `os_permissions` for a plain program, which runs as the
-  person, like the console. `resources.memory_mb` is checked against this machine's total memory only.
-- **Tier 2 asks by typing**, the same mechanism as tier 3; only the words differ.
-- **No `soak_s`** means the previous version is kept until the next promotion, and failed health
-  goes back to it for that whole time.
-- **Leftovers of a killed supervisor** are found through `/proc` (the process's working folder is the
-  slot): Linux only. Elsewhere they are left and said so.
-- **No UI or API:** Settings › Services and the map are M10i/M10k. The console doesn't show services
-  yet; the state file and `services` do.
+  person, like the console. `resources.memory_mb` is checked against total memory only.
+- **Tier 2 asks by typing**, as tier 3 does; only the words differ. `recover` is tier 1.
+- **No `soak_s`** means the previous version is kept until the next promotion, and failed health goes
+  back to it for that whole time.
+- **`full`** runs the old and the new version on the real state until the old one stops (by design:
+  both serve). `shadow`, `copy` and `none` are one writer at the switch.
+- **No UI or API:** Settings › Services and the map are M10i/M10k.
 - **The preview** (`scripts/preview.sh`) runs `src/server.js` directly, not under the supervisor, so
   nothing in it changes; it wasn't touched or restarted.
