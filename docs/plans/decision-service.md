@@ -330,12 +330,11 @@ The input's use-case map is phased below as the record. **These are side PRs. Th
    - No live call is made until the person has set a route up.
 3. **The transitional local model: decided, retire it per template.** Today's screener is the local chat model assigned as the "sorting model". It answers Nouls as a general chat model, with no eval behind it. It is retired for a template once Tev1 or Jev passes that template's eval.
 
-## Open questions for the owner
-
-1. **Frames to the cloud.** May camera and screen frames be sent to cloud Jev for Box questions at all? Box needs images, and Tev1 takes none, so Box only works through TypeSafe's cloud. The proposal:
-   - never in local-only mode;
-   - otherwise not until the smart-home and camera phase;
-   - then only per source, with an explicit yes.
+4. **Box and images: decided, opt-in to cloud Jev in every mode.** Tev1 doesn't yet work well enough (Part 1's eval), and it takes no images. So Jev is an opt-in for what the local seat can't do, even in local-only mode. That includes Box on camera and screen frames, sent to TypeSafe's cloud.
+   - **Off by default.** Each feature is switched on on its own (screening; Box on images), so turning one on doesn't turn on the others.
+   - **A plain notice** says what leaves the machine, images included, and that local-only isn't strictly local for that feature while it is on.
+   - **Box stays labelled preview** while TypeSafe labels it so.
+   - **The local seat stays the goal:** Tev1 is re-authored and re-evaluated (v2), and each feature returns to local once a local model passes that template's eval.
 
 ## NOTES for Track 1
 
@@ -349,7 +348,7 @@ The input's use-case map is phased below as the record. **These are side PRs. Th
 >   - no ad hoc provider calls (seats not exported from core; a boundary test).
 > - **Part 1's eval** (#248: both Tev1 sizes failed, advisory) stands. `ingest-screen` is re-authored as v2 under the vendor's question rules, with a fresh pre-registered eval.
 > - **Phases DS1–DS3** are side PRs and don't displace M10e–M10k.
-> - **Owner decisions:** the ingest screen goes to Jev in cloud mode, with an off-by-default toggle for local-only; the person chooses providers and models, with recommendations and notices; the sorting-model screener is retired per template once a decision model passes its eval. **Open:** frames to the cloud for Box.
+> - **Owner decisions:** the ingest screen goes to Jev in cloud mode, with an off-by-default toggle for local-only; the person chooses providers and models, with recommendations and notices; the sorting-model screener is retired per template once a decision model passes its eval. Box on camera and screen frames may go to cloud Jev as a separate opt-in, in every mode, until a local model can do it.
 
 **`docs/builder-packet/ROADMAP-AND-GATES.md`:** a line in the Amendment B section, or after "Ingest security gate":
 

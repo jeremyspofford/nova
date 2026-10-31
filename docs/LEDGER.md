@@ -229,7 +229,7 @@ built-ins only.
   - The ingest screen goes to Jev in cloud mode, with an off-by-default local-only toggle that says plainly that content leaves the machine.
   - The person chooses providers and models, with Nova's recommendation, a notice for anything it doesn't recommend, and scorecards.
   - The sorting-model screener is retired per template once a decision model passes its eval.
-- **Open:** whether camera or screen frames may go to the cloud for Box.
+  - Box on camera and screen frames may go to cloud Jev, opt-in per feature and off by default, in every mode including local-only, with a plain notice. Local Tev1 doesn't yet pass its eval and takes no images; each feature returns to local once a local model passes.
 
 **2026-10-31 (owner input: Smart Home and cameras; the ADR, with the owner's decisions).** The owner-approved design `nova-smart-home-design-2026-10-31.md` was added to the packet exactly as given, including the owner's same-day change on camera paths (sha256 `5c28dd8d…`). Designed in `docs/plans/smart-home.md`.
 - **The design:**
