@@ -271,6 +271,14 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (owner decision: the unproven claims, split by audience).** Plan and the full list in `docs/plans/honest-claims.md`, branch `copy/honest-claims`.
+- **What a person can see is softened now:** UI copy, onboarding, the system prompt, briefing and tool docs the model repeats, the README, and the connector and skill files. Each claim says only what the evidence supports. The Amendment B closing rule is not deferred.
+- **The false claim is fixed.** "Every shell command waits for the person's approval" now reads: a command asks unless permissions.md lets commands run, and a command after outside content asks even then. Its cousin in the briefing ("anything that can't be undone always asks") is fixed too.
+- **Every softened claim stays in the register** (`tests/evals/claims.ts`) with three things: its old strong words, a named eval case (`claim.<slug>`, 35 cases for Track 3's backlog) and a priority. When an eval passes, the strong words may return, citing it.
+- **The register now holds 71 claims:** 16 backed, 54 softened, 1 instruction to the model kept as it is, and 0 unbacked. That includes 42 other places found saying the same things in other words.
+- **The closing rule is on for user-facing copy.** CI fails on an unbacked claim in user-facing text, and on a softened claim's strong words in any user-facing file.
+- **Internal design docs keep their claims,** marked **UNPROVEN** inline (13 marks in the inventory and the M5, M7 and vault-broker plans). The owner's verbatim inputs are untouched.
+
 **2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
 - **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
   - Six Nouls: instructs_ai, override, fake_message, link_slot (decisive); wants_private_data, keep_from_user (supporting).
