@@ -85,6 +85,20 @@ export const PAY_GUARD = 'A request that would pay: Nova never pays. Paying is y
 export const SENDS_UNASKED = 'The page tried to send something no step of the plan sends (a script, a beacon, a form sending itself): refused.';
 export const SENDS_ELSEWHERE = 'The step sends only where the plan says it does; this went somewhere else: refused.';
 export const SENDS_LOCKED = 'Nova stopped at the checkout: nothing more is sent from this page.';
+// Forget's own pages (session.ts clearSite), served by Nova itself through CDP.
+export const FORGET_PAGE = '/__nova_forget';
+export const FORGET_TOP = '/__nova_forget_top';
+export const FORGET_DONE = '/__nova_forget_done';
+export const FORGET_SCRIPT = `(async () => {
+  try { localStorage.clear(); } catch {}
+  try { sessionStorage.clear(); } catch {}
+  try { for (const d of await indexedDB.databases()) await new Promise((r) => { const q = indexedDB.deleteDatabase(d.name); q.onsuccess = q.onerror = q.onblocked = r; }); } catch {}
+  try { for (const k of await caches.keys()) await caches.delete(k); } catch {}
+  try { const d = await navigator.storage.getDirectory(); const names = []; for await (const [n] of d.entries()) names.push(n); for (const n of names) await d.removeEntry(n, { recursive: true }); } catch {}
+  try { for (const r of (await navigator.serviceWorker?.getRegistrations?.()) ?? []) await r.unregister(); } catch {}
+  try { for (const c of document.cookie.split(';')) { const n = c.split('=')[0].trim(); if (n) { document.cookie = n + '=; Max-Age=0; Path=/'; document.cookie = n + '=; Max-Age=0; Path=/; Secure; SameSite=None; Partitioned'; } } } catch {}
+  try { await fetch('${FORGET_DONE}'); } catch {}
+})();`;
 export const SENDS_PAUSED = 'Paused, or waiting for you: nothing that isn’t a GET leaves the page.';
 export const HELD_SCRIPT = 'While you hold the browser, a pay address, or anything after the checkout stop, goes only when you start it yourself: the page’s own script tried, and was refused.';
 // Sockets that go around Fetch, gone from a frame or a worker before its own scripts run.
@@ -139,7 +153,9 @@ export class Session extends EventEmitter {
   #personInput = 0;
   #locked = false;
   #refusals = 0;
-  #local = new Set<string>();
+  // Forget's own pages, by origin: the origins being forgotten (clearSite).
+  #local = new Map<string, string[]>();
+  #forgetDone = 0;
 
   constructor(o: SessionOptions) {
     super();
@@ -265,8 +281,13 @@ export class Session extends EventEmitter {
     if (!cdp) return;
     const url = p.request.url;
     // Forget (clearSite): the site's own origin, answered here with an empty page; nothing goes out.
-    if (this.#local.size && (() => { try { return this.#local.has(new URL(url).origin); } catch { return false; } })()) {
-      await cdp.send('Fetch.fulfillRequest', { requestId: p.requestId, responseCode: 200, responseHeaders: [{ name: 'content-type', value: 'text/html' }, { name: 'cache-control', value: 'no-store' }], body: Buffer.from('<!doctype html><title>Nova forgets this site</title>').toString('base64') }, sid).catch(() => {});
+    const local = this.#local.size ? (() => { try { const u = new URL(url); const f = this.#local.get(u.origin); return f ? { u, forget: f } : null; } catch { return null; } })() : null;
+    if (local) {
+      let body = '<!doctype html><title>Nova forgets this site</title>';
+      if (local.u.pathname === FORGET_DONE) { this.#forgetDone++; body = ''; }
+      else if (local.u.pathname === FORGET_PAGE) body = `<!doctype html><title>Nova forgets this site</title><script>${FORGET_SCRIPT}</script>`;
+      else if (local.u.pathname === FORGET_TOP) body = `<!doctype html><title>Nova forgets a site</title>${local.forget.map((o) => `<iframe src="${o}${FORGET_PAGE}"></iframe>`).join('')}`;
+      await cdp.send('Fetch.fulfillRequest', { requestId: p.requestId, responseCode: 200, responseHeaders: [{ name: 'content-type', value: 'text/html' }, { name: 'cache-control', value: 'no-store' }], body: Buffer.from(body).toString('base64') }, sid).catch(() => {});
       return;
     }
     if (/^(data|blob|about):/.test(url)) {
@@ -756,50 +777,47 @@ export class Session extends EventEmitter {
 
   // Forget a site in this profile (M10b): its cookies (the host name's, and its parent domains'),
   // and every kind of storage for its origins. Returns how many cookies went.
-  async clearSite(host: string): Promise<number> {
+  async clearSite(host: string, tops: string[] = []): Promise<number> {
     const cdp = this.#cdp;
     if (!cdp) throw new Error('The browser isn’t open.');
     const name = host.replace(/:\d{1,5}$/, '');
-    const { cookies } = await cdp.send<{ cookies: { name: string; domain: string; path: string }[] }>('Storage.getCookies', {});
-    const mine = cookies.filter((c) => { const d = c.domain.replace(/^\./, ''); return d === name || name.endsWith(`.${d}`); });
-    for (const c of mine) await this.#send('Network.deleteCookies', { name: c.name, domain: c.domain, path: c.path });
-    // Every kind of storage, every way CDP offers: by origin, by storage key, and (found by the review
-    // of PR #238: local storage and IndexedDB outlived clearDataForOrigin alone) through the
-    // DOMStorage and IndexedDB domains themselves.
-    await this.#send('DOMStorage.enable').catch(() => {});
-    await this.#send('IndexedDB.enable').catch(() => {});
+    const ofSite = (d: string) => { const x = d.replace(/^\./, ''); return x === name || name.endsWith(`.${x}`); };
+    const siteOf = (u: string) => { try { return new URL(u).hostname; } catch { return ''; } };
+    // Cookies: the site's own, partitioned ones (CHIPS) with their partition key (the second review
+    // of PR #238, 8: deleting without the key leaves them), and every cookie kept under it as a
+    // top-level site.
+    type Cookie = { name: string; domain: string; path: string; partitionKey?: { topLevelSite?: string } | string };
+    const { cookies } = await cdp.send<{ cookies: Cookie[] }>('Storage.getCookies', {});
+    const top = (c: Cookie) => (typeof c.partitionKey === 'string' ? c.partitionKey : c.partitionKey?.topLevelSite ?? '');
+    const mine = cookies.filter((c) => ofSite(c.domain) || (top(c) && ofSite(siteOf(top(c)))));
+    for (const c of mine) await this.#send('Network.deleteCookies', { name: c.name, domain: c.domain, path: c.path, ...(c.partitionKey ? { partitionKey: c.partitionKey } : {}) }).catch(() => {});
+    // Every kind of storage CDP can clear by origin and storage key.
     for (const origin of new Set([`http://${host}`, `https://${host}`, `http://${name}`, `https://${name}`])) {
       await cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' }).catch(() => {});
       await cdp.send('Storage.clearDataForStorageKey', { storageKey: `${origin}/`, storageTypes: 'all' }).catch(() => {});
-      for (const storageKey of [`${origin}/`]) {
-        await this.#send('DOMStorage.clear', { storageId: { storageKey, isLocalStorage: true } }).catch(() => {});
-        await this.#send('DOMStorage.clear', { storageId: { securityOrigin: origin, isLocalStorage: true } }).catch(() => {});
-        const names = await this.#send<{ databaseNames: string[] }>('IndexedDB.requestDatabaseNames', { storageKey }).catch(() => this.#send<{ databaseNames: string[] }>('IndexedDB.requestDatabaseNames', { securityOrigin: origin })).catch(() => ({ databaseNames: [] as string[] }));
-        for (const databaseName of names.databaseNames ?? []) {
-          await this.#send('IndexedDB.deleteDatabase', { storageKey, databaseName }).catch(() => this.#send('IndexedDB.deleteDatabase', { securityOrigin: origin, databaseName })).catch(() => {});
-        }
-      }
     }
-    // And from inside the origin itself, with the web's own APIs: Nova opens it here, answered locally
-    // (nothing reaches the site), and clears every store a page can use.
-    for (const origin of new Set([`http://${host}`, `https://${host}`])) {
-      this.#local.add(origin);
-      try {
-        await this.navigate(`${origin}/`, 10_000).catch(() => {});
-        await this.evaluate<string>(`(async () => {
-          try { localStorage.clear(); } catch {}
-          try { sessionStorage.clear(); } catch {}
-          try { for (const d of await indexedDB.databases()) await new Promise((r) => { const q = indexedDB.deleteDatabase(d.name); q.onsuccess = q.onerror = q.onblocked = r; }); } catch {}
-          try { if (self.caches) for (const k of await caches.keys()) await caches.delete(k); } catch {}
-          try { for (const r of (await navigator.serviceWorker?.getRegistrations?.()) ?? []) await r.unregister(); } catch {}
-          return 'ok';
-        })()`).catch(() => '');
-      } finally {
-        this.#local.delete(origin);
-      }
+    // And from inside the site itself, with the web's own APIs, first-party and as a frame under
+    // every other site Nova's browser has visited (where its storage is partitioned): a page Nova
+    // serves itself, answered by CDP, so nothing reaches either site.
+    const origins = [`http://${host}`, `https://${host}`];
+    const others = [...new Set(tops.filter((t) => t && t !== host).slice(0, 50))].flatMap((t) => [`http://${t}`, `https://${t}`]);
+    for (const o of [...origins, ...others]) this.#local.set(o, origins);
+    try {
+      for (const o of origins) await this.#forgetVisit(`${o}${FORGET_PAGE}`, 1);
+      for (const t of others) await this.#forgetVisit(`${t}${FORGET_TOP}`, origins.length);
+    } finally {
+      this.#local.clear();
     }
     await this.navigate('about:blank', 5000).catch(() => {});
     return mine.length;
+  }
+
+  // Opens one of Forget's own pages and waits until its clearing scripts say they are done.
+  async #forgetVisit(url: string, frames: number): Promise<void> {
+    const before = this.#forgetDone;
+    await this.navigate(url, 10_000).catch(() => {});
+    const end = Date.now() + 8000;
+    while (this.#forgetDone - before < frames && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
   }
 
   async screenshot(): Promise<Buffer> {

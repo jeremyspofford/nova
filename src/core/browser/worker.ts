@@ -311,7 +311,9 @@ export class Browser extends EventEmitter {
       const s = new Session({ taskId: 'forget-site', chromium: found.path, hosts: [], sandbox: this.#sandbox(), now: this.#now, hub: () => this.#hub(), profile: profileDir(this.#o.home), ...(this.#o.launch ? { launch: this.#o.launch } : {}) });
       try {
         await s.open();
-        cookies = await s.clearSite(site);
+        // Where the site may be kept partitioned: under every other site Nova's browser visited.
+        const tops = w.db.all<{ host: string }>('SELECT host FROM browser_site').map((r) => r.host);
+        cookies = await s.clearSite(site, tops);
       } finally {
         await s.close('forgot a site');
         this.#profileUser = null;

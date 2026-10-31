@@ -241,6 +241,43 @@ addEventListener('unload', () => { document.getElementById('f').submit(); });</s
       if (!(v in pages)) { res.writeHead(404); return res.end(); }
       return html(200, 'Review', `<h1>Review</h1>${pages[v]}`);
     }
+    // Forget's probe (second review, 8): writes (with write=1) and reads back every store, first-party
+    // or embedded under another site, and reports what it found to /r2-report (in the log).
+    if (req.method === 'GET' && p === '/r2store') {
+      const write = url.searchParams.get('write') === '1';
+      const label = url.searchParams.get('label') ?? 'x';
+      return html(200, 'Store', `<h1>Store</h1><script>(async () => {
+  const found = {};
+  try {
+    if (${write}) { document.cookie = 'part=yes; Secure; SameSite=None; Partitioned; Path=/; Max-Age=86400'; document.cookie = 'plain=yes; SameSite=Lax; Path=/; Max-Age=86400'; localStorage.setItem('kept', 'yes'); }
+    found.part = /part=yes/.test(document.cookie) ? 'yes' : 'no';
+    found.plain = /plain=yes/.test(document.cookie) ? 'yes' : 'no';
+    found.local = localStorage.getItem('kept') ?? 'no';
+  } catch (e) { found.err = String(e && e.name); }
+  try {
+    const db = await new Promise((ok) => { const r = indexedDB.open('example-db', 1); r.onupgradeneeded = () => r.result.createObjectStore('s'); r.onsuccess = () => ok(r.result); r.onerror = () => ok(null); });
+    if (${write}) await new Promise((ok) => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put('yes', 'kept'); tx.oncomplete = ok; tx.onerror = ok; });
+    found.idb = await new Promise((ok) => { const g = db.transaction('s').objectStore('s').get('kept'); g.onsuccess = () => ok(g.result ?? 'no'); g.onerror = () => ok('no'); });
+    db.close();
+  } catch { found.idb = 'error'; }
+  try {
+    const c = await caches.open('example-cache');
+    if (${write}) await c.put('/kept-cache', new Response('yes'));
+    found.cache = (await c.match('/kept-cache')) ? 'yes' : 'no';
+  } catch { found.cache = 'error'; }
+  try {
+    const d = await navigator.storage.getDirectory();
+    if (${write}) { const f = await d.getFileHandle('kept.txt', { create: true }); const w = await f.createWritable(); await w.write('yes'); await w.close(); }
+    found.opfs = 'no'; for await (const [n] of d.entries()) if (n === 'kept.txt') found.opfs = 'yes';
+  } catch { found.opfs = 'error'; }
+  new Image().src = '/r2-report?label=${encodeURIComponent(label)}&' + new URLSearchParams(found);
+  const i = document.createElement('p'); i.id = 'done'; i.textContent = 'Done'; document.body.append(i);
+})();</script>`);
+    }
+    if (req.method === 'GET' && p === '/r2embed') {
+      return html(200, 'Embed', `<h1>Embed</h1><iframe src="${esc(url.searchParams.get('src') ?? '')}" width="300" height="100"></iframe><script>setTimeout(() => { const i = document.createElement('p'); i.id = 'done'; i.textContent = 'Done'; document.body.append(i); }, 2500);</script>`);
+    }
+    if (p === '/r2-report') { res.writeHead(204); return res.end(); }
     if (p === '/r2-shared.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end("fetch('/api/commit-shared', { method: 'POST', body: 'x' }).catch(() => {}); onconnect = () => {};"); }
     if (p === '/r2-sw.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end("self.addEventListener('install', () => { self.skipWaiting(); fetch('/api/commit-sw-install', { method: 'POST', body: 'x' }).catch(() => {}); }); self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim())); self.addEventListener('fetch', (e) => { fetch('/api/commit-sw-fetch', { method: 'POST', body: 'x' }).catch(() => {}); });"); }
     if (p === '/es') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('data: hi\n\n'); return setTimeout(() => res.end(), 200); }
