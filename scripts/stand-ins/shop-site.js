@@ -31,7 +31,7 @@
 //   /race            a field that reports every fill (GET /saw-input), and a form to /cart/add.
 //   /steal           what an injected dialog asks for. A test asserts it is never called.
 import { createServer } from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -179,16 +179,74 @@ ${Object.entries(ITEMS).map(([id, it]) => `<form method="post" action="/cart/add
       return html(200, 'Paint', `<h1>Paint</h1><div id="form"><label for="username">Username</label><input type="text" id="username"><label for="password">Password</label><input type="password" id="password"><button type="button" id="signin">Sign in</button></div>
 <p id="done" hidden>Signed in</p>
 <canvas id="c" width="600" height="120" style="display:block"></canvas>
-<p id="echo" data-v=""></p><div id="host"></div>
+<p id="echo" data-v=""></p><div id="host"></div><div id="split" style="display:flex;flex-direction:row-reverse;justify-content:flex-end;letter-spacing:6px;color:#ff0000;font-size:40px"></div>
 <style>#echo::after { content: attr(data-v); color: #ff0000; font-size: 40px; }</style>
 <script>
 const shadow = document.getElementById('host').attachShadow({ mode: 'closed' });
 const span = document.createElement('span'); span.style.cssText = 'color:#ff0000;font-size:40px'; shadow.append(span);
-const paint = (e) => { const v = e.target.value; const g = document.getElementById('c').getContext('2d'); g.fillStyle = '#ff0000'; g.fillRect(0, 0, 600, 120); g.fillStyle = '#ffffff'; g.font = '40px sans-serif'; g.fillText(v, 10, 70); document.getElementById('echo').dataset.v = v; span.textContent = v; };
+const paint = (e) => { const v = e.target.value; const g = document.getElementById('c').getContext('2d'); g.fillStyle = '#ff0000'; g.fillRect(0, 0, 600, 120); g.fillStyle = '#ffffff'; g.font = '40px sans-serif'; g.fillText(v, 10, 70); document.getElementById('echo').dataset.v = v; span.textContent = v; const sp = document.getElementById('split'); sp.replaceChildren(...[...v].reverse().map((ch) => { const x = document.createElement('span'); x.textContent = ch; return x; })); };
 for (const id of ['username', 'password']) for (const k of ['input', 'change']) document.getElementById(id).addEventListener(k, paint);
 document.getElementById('signin').addEventListener('click', () => { document.getElementById('form').style.display = 'none'; document.getElementById('done').hidden = false; });
 </script>`);
     }
+    // ---- the second review of PR #238: pages that send by ways the first guard didn't see ----
+    if (req.method === 'GET' && p.startsWith('/r2/')) {
+      const v = p.slice(4);
+      const later = (ms, js) => `<script>setTimeout(() => { ${js} }, ${ms});</script>`;
+      const done = (ms) => `<script>setTimeout(() => { const i = document.createElement('p'); i.id = 'done'; i.textContent = 'Done'; document.body.append(i); }, ${ms});</script>`;
+      const pages = {
+        // A WebSocket to its own host, an event stream, and a WebRTC data channel through a TURN
+        // server on its own host and port.
+        'ws': later(400, `try { const w = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws?order=1'); w.onopen = () => w.send('order: tok_example_123'); } catch {}
+          try { new EventSource('/es?order=1'); } catch {}
+          try { const pc = new RTCPeerConnection({ iceServers: [{ urls: 'turn:' + location.hostname + ':' + location.port + '?transport=tcp', username: 'u', credential: 'c' }] }); const ch = pc.createDataChannel('order'); pc.createOffer().then((o) => pc.setLocalDescription(o)); } catch {}
+          // The same, with constructors taken from a fresh blank frame, and from a worker.
+          try { const f = document.createElement('iframe'); document.body.append(f); const W = f.contentWindow.WebSocket; const w2 = new W('ws://' + location.host + '/ws?from=frame'); w2.onopen = () => w2.send('order'); const P = f.contentWindow.RTCPeerConnection; const pc2 = new P({ iceServers: [{ urls: 'turn:' + location.hostname + ':' + location.port + '?transport=tcp', username: 'u', credential: 'c' }] }); pc2.createDataChannel('o'); pc2.createOffer().then((o) => pc2.setLocalDescription(o)); } catch {}
+          try { const src = "const w = new WebSocket('ws://" + location.host + "/ws?from=worker'); w.onopen = () => w.send('order');"; new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' }))); } catch {}
+          try { const t = new WebTransport('https://' + location.host + '/wt'); } catch {}`) + done(2500),
+        // One click, the form's own POST, and three more bodies to the same path, by a timer, a
+        // microtask and an animation frame.
+        'multi': `<form method="post" action="/cart/add" id="f"><input type="hidden" name="item" value="mug"><button type="submit" id="go">Add</button></form>
+<script>document.getElementById('go').addEventListener('click', () => {
+  const extra = () => fetch('/cart/add', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'item=tea' }).catch(() => {});
+  setTimeout(extra, 0); queueMicrotask(extra); requestAnimationFrame(extra);
+});</script>`,
+        // Posts on its own, every 100 ms.
+        'loop': `<script>setInterval(() => fetch('/api/commit', { method: 'POST', body: 'tick' }).catch(() => {}), 100);</script>`,
+        // Workers: a worker that starts a worker that posts; a SharedWorker that posts; a service
+        // worker that posts when it is installed and on every fetch it sees.
+        'workers': later(200, `
+          const inner = "fetch('/api/commit-nested', { method: 'POST', body: 'x' }).catch(() => {});";
+          const outer = "const b = new Blob([" + JSON.stringify(inner) + "], { type: 'text/javascript' }); new Worker(URL.createObjectURL(b)); fetch('/api/commit-worker', { method: 'POST', body: 'x' }).catch(() => {});";
+          try { new Worker(URL.createObjectURL(new Blob([outer], { type: 'text/javascript' }))); } catch {}
+          try { new SharedWorker('/r2-shared.js'); } catch {}
+          try { navigator.serviceWorker.register('/r2-sw.js').catch(() => {}); } catch {}`) + done(2000),
+        // A page that leaves: a beacon and a keepalive fetch on pagehide, a form sent on unload.
+        'leave': `<form method="post" action="/api/leave-form" id="f"><input type="hidden" name="x" value="1"></form><script>
+addEventListener('pagehide', () => { navigator.sendBeacon('/api/leave-beacon', 'x'); fetch('/api/leave-keepalive', { method: 'POST', body: 'x', keepalive: true }).catch(() => {}); });
+addEventListener('unload', () => { document.getElementById('f').submit(); });</script>`,
+        // A POST form into a new window.
+        'popup-post': `<form method="post" action="/api/popup-post" target="_blank" id="f"><input type="hidden" name="x" value="1"></form>` + later(200, `document.getElementById('f').submit();`) + done(1500),
+        // A meta refresh to a pay address.
+        'meta': `<meta http-equiv="refresh" content="0;url=/pay?token=tok_example_123">`,
+        // After the checkout stop: payloads in GETs (an image, a prefetch), and one to a pay address.
+        'gets': later(300, `new Image().src = '/collect-get?payload=tok_example_123'; const l = document.createElement('link'); l.rel = 'prefetch'; l.href = '/collect-prefetch?payload=tok_example_123'; document.head.append(l); new Image().src = '/pay?token=tok_example_123';`) + done(1500),
+        // A form whose POST is redirected (307 and 308) to a pay address and elsewhere.
+        'redirect': `<form method="post" action="/r307" id="f"><button type="submit" id="go">Continue</button></form><form method="post" action="/r308" id="g"><button type="submit" id="go2">Continue</button></form>`,
+        // While the person holds the browser: the page's own script posts to /pay every 200 ms; the
+        // pay button (at 20 to 420 px across, 20 to 60 down) is the person's.
+        'payloop': `<form method="post" action="/pay" id="f"><button type="submit" id="pay" style="position:fixed;top:20px;left:20px;width:400px;height:40px">Pay $9.00</button></form>
+<script>setInterval(() => fetch('/pay', { method: 'POST', body: 'from-script' }).catch(() => {}), 200);</script>`,
+      };
+      if (!(v in pages)) { res.writeHead(404); return res.end(); }
+      return html(200, 'Review', `<h1>Review</h1>${pages[v]}`);
+    }
+    if (p === '/r2-shared.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end("fetch('/api/commit-shared', { method: 'POST', body: 'x' }).catch(() => {}); onconnect = () => {};"); }
+    if (p === '/r2-sw.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end("self.addEventListener('install', () => { self.skipWaiting(); fetch('/api/commit-sw-install', { method: 'POST', body: 'x' }).catch(() => {}); }); self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim())); self.addEventListener('fetch', (e) => { fetch('/api/commit-sw-fetch', { method: 'POST', body: 'x' }).catch(() => {}); });"); }
+    if (p === '/es') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('data: hi\n\n'); return setTimeout(() => res.end(), 200); }
+    if (p === '/r307') { res.writeHead(307, { location: '/pay?via=307' }); return res.end(); }
+    if (p === '/r308') { res.writeHead(308, { location: '/api/commit?via=308' }); return res.end(); }
+    if (p.startsWith('/api/') || p.startsWith('/collect-')) { res.writeHead(204); return res.end(); }
     // ---- hostile pages for the review of PR #238, 6 ----
     const loginForm = (action = '/login') => `<form method="post" action="${esc(action)}" id="form"><label for="username">Username</label><input type="text" id="username" name="username"><label for="password">Password</label><input type="password" id="password" name="password"><button type="submit" id="signin">Sign in</button></form>`;
     if (req.method === 'GET' && p === '/exfil') {
@@ -296,6 +354,21 @@ document.getElementById('save').addEventListener('click', async () => {
     res.end('Not here.');
   });
 
+  // WebSockets (second review of PR #238, 1): every upgrade and every frame is logged; anything that
+  // isn't HTTP at all (a TURN client, say) is logged as RAW.
+  const upgraded = new Set();
+  server.on('upgrade', (req, socket) => {
+    upgraded.add(socket);
+    socket.on('close', () => upgraded.delete(socket));
+    const u = new URL(req.url, 'http://stand-in');
+    log.push({ method: 'UPGRADE', path: u.pathname, query: u.search, at: new Date().toISOString() });
+    const key = String(req.headers['sec-websocket-key'] ?? '');
+    const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    socket.on('data', () => log.push({ method: 'WSFRAME', path: u.pathname, query: '', at: new Date().toISOString() }));
+    socket.on('error', () => {});
+  });
+  server.on('clientError', (_e, socket) => { log.push({ method: 'RAW', path: '', query: '', at: new Date().toISOString() }); socket.destroy(); });
   return new Promise((ok, fail) => {
     server.once('error', fail);
     server.listen(o.port ?? 0, '127.0.0.1', () => {
@@ -307,7 +380,7 @@ document.getElementById('save').addEventListener('click', async () => {
         solved: () => solved,
         cart: () => [...cart],
         set: (x) => Object.assign(state, x),
-        close: () => new Promise((r) => { server.closeAllConnections(); server.close(() => r()); }),
+        close: () => new Promise((r) => { for (const sk of upgraded) sk.destroy(); server.closeAllConnections(); server.close(() => r()); }),
       });
     });
   });

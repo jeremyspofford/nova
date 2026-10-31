@@ -38,13 +38,14 @@ test('review 4: a page that paints the typed value onto a canvas, CSS content an
     const done = await n.done(id!);
     assert.equal(done.state, 'done', `${done.reason}`);
     const png = readFileSync(join(m.home, 'workers', 'browser', id!, 'final.png'));
-    assert.equal(red(png), 0, 'no pure-red pixel: the canvas, the CSS content and the shadow root are covered');
+    assert.equal(red(png), 0, 'no pure-red pixel: nothing the page painted shows');
     const img = decodePng(png);
     assert.ok(img.width >= 1000, 'a real screenshot, decoded');
-    // Covered region by region, not the whole screen: most of the picture is the page.
+    // After a sign-in the picture is covered whole: the canvas, the CSS content, the shadow root
+    // and the value split one letter per element, reversed and spaced, all under it.
     let grey = 0;
     for (let i = 0; i < img.width * img.height; i++) { const o = i * img.channels; if (img.data[o] === 96 && img.data[o + 1] === 96 && img.data[o + 2] === 96) grey++; }
-    assert.ok(grey > 600 * 120 && grey < (img.width * img.height) / 3, `covered: ${grey} of ${img.width * img.height} pixels`);
+    assert.equal(grey, img.width * img.height, 'every pixel covered');
     assert.deepEqual(filesHolding(m.dir, [cred.password, cred.username]), []);
   } finally {
     await n.close();

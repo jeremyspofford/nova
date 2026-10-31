@@ -85,6 +85,14 @@ export const PAY_GUARD = 'A request that would pay: Nova never pays. Paying is y
 export const SENDS_UNASKED = 'The page tried to send something no step of the plan sends (a script, a beacon, a form sending itself): refused.';
 export const SENDS_ELSEWHERE = 'The step sends only where the plan says it does; this went somewhere else: refused.';
 export const SENDS_LOCKED = 'Nova stopped at the checkout: nothing more is sent from this page.';
+export const SENDS_PAUSED = 'Paused, or waiting for you: nothing that isn’t a GET leaves the page.';
+export const HELD_SCRIPT = 'While you hold the browser, a pay address, or anything after the checkout stop, goes only when you start it yourself: the page’s own script tried, and was refused.';
+// Sockets that go around Fetch, gone from a frame or a worker before its own scripts run.
+export const NO_SOCKETS = `(() => { const no = function () { throw new DOMException('Nova’s browser opens no sockets of its own: no WebSocket, WebTransport or WebRTC.', 'NotSupportedError'); };
+  for (const k of ['WebSocket', 'WebSocketStream', 'WebTransport', 'RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel', 'RTCIceTransport', 'RTCSctpTransport', 'RTCDtlsTransport']) {
+    try { Object.defineProperty(globalThis, k, { value: no, writable: false, configurable: false, enumerable: false }); } catch {}
+  }
+})();`;
 // Where a request goes, for the send guard: origin and path.
 export const sendKey = (url: string): string => { try { const u = new URL(url); return `${u.origin}${u.pathname}`; } catch { return ''; } };
 
@@ -126,7 +134,9 @@ export class Session extends EventEmitter {
   // potential commit: it goes out only while a declared step is acting, and only to where that step
   // accounts for (`allowSends`); after the checkout stop, none at all (`lockSends`). Pay addresses
   // are refused whatever the method. The person holding the browser may send anything.
-  #sends: { step: number; to: Set<string> } | null = null;
+  #sends: { step: number; to: Map<string, { left: number; doc: boolean }> } | null = null;
+  // When the person's own input last reached the page, while they hold it (second review, 4).
+  #personInput = 0;
   #locked = false;
   #refusals = 0;
   #local = new Set<string>();
@@ -208,7 +218,21 @@ export class Session extends EventEmitter {
       if (['page', 'iframe', 'worker', 'shared_worker', 'service_worker'].includes(type)) {
         await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] }, sid).catch(() => {});
       }
-      if (type === 'page' || type === 'iframe') await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid).catch(() => {});
+      // Every kind of target attaches what it starts (a worker's own workers included).
+      if (['page', 'iframe', 'worker', 'shared_worker', 'service_worker'].includes(type)) {
+        await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid).catch(() => {});
+      }
+      // WebSockets, WebTransport and WebRTC go around Fetch, and a declared host's traffic around the
+      // refusing proxy (second review of PR #238, 1; Network.setBlockedURLs doesn't stop a
+      // WebSocket, and Chromium decides a WebSocket's proxy as http's). So Nova's browser has none:
+      // gone from every frame before its scripts run, and from every worker before it runs (it is
+      // held at the debugger until then). The person holding the browser has none either.
+      if (type === 'page' || type === 'iframe') {
+        await cdp.send('Page.enable', {}, sid).catch(() => {});
+        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: NO_SOCKETS, runImmediately: true }, sid).catch(() => {});
+      } else if (['worker', 'shared_worker', 'service_worker'].includes(type)) {
+        await cdp.send('Runtime.evaluate', { expression: NO_SOCKETS }, sid).catch(() => {});
+      }
       if (type === 'page' && !this.#page) {
         this.#page = sid;
         await cdp.send('Page.enable', {}, sid);
@@ -236,7 +260,7 @@ export class Session extends EventEmitter {
   // task's mark (BROWSER_TASK_HEADER), set here, beneath the page: a page can't remove it, and
   // Nova treats anything carrying it as nobody in particular (mesh/access.ts), so a page that
   // got to Nova anyway would get no more than a stranger would.
-  async #paused(p: { requestId: string; request: { url: string; method?: string; headers?: Record<string, string> }; resourceType?: string }, sid?: string): Promise<void> {
+  async #paused(p: { requestId: string; request: { url: string; method?: string; headers?: Record<string, string> }; resourceType?: string; frameId?: string }, sid?: string): Promise<void> {
     const cdp = this.#cdp;
     if (!cdp) return;
     const url = p.request.url;
@@ -257,7 +281,9 @@ export class Session extends EventEmitter {
       return;
     }
     const nova = await this.#reachesHub(url);
-    const why = !nova && this.mode !== 'taken_over' ? this.#sendRefusal(url, (p.request.method ?? 'GET').toUpperCase()) : null;
+    const method = (p.request.method ?? 'GET').toUpperCase();
+    const from = { type: kind, main: sid === this.#page && (!this.#mainFrame || p.frameId === this.#mainFrame) };
+    const why = nova ? null : this.mode === 'taken_over' ? this.#heldRefusal(url, method, from) : this.#sendRefusal(url, method, from);
     if (why) {
       this.#block(hostOf(url), by, 'fetch', kind, why.why);
       if (this.#refusals++ < 50) this.emit(why.pay ? 'pay_refused' : 'send_refused', { host: hostOf(url), method: (p.request.method ?? 'GET').toUpperCase(), kind, why: why.why });
@@ -275,20 +301,52 @@ export class Session extends EventEmitter {
   }
 
   // Why a request may not go out while Nova drives, or null.
-  #sendRefusal(url: string, method: string): { why: string; pay: boolean } | null {
+  #sendRefusal(url: string, method: string, from: { type: string; main: boolean }): { why: string; pay: boolean } | null {
     if (this.#paysAt(url)) return { why: PAY_GUARD, pay: true };
     if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return null;
     try { if (ORDER_PATH.test(new URL(url).pathname)) return { why: PAY_GUARD, pay: true }; } catch { /* not an address */ }
     if (this.#locked) return { why: SENDS_LOCKED, pay: true };
+    // Paused, or waiting for the person: nothing that isn't a GET, window or not (second review, 5).
+    if (this.mode === 'paused' || this.mode === 'needs_person') return { why: SENDS_PAUSED, pay: false };
     if (!this.#sends) return { why: SENDS_UNASKED, pay: false };
-    if (!this.#sends.to.has(sendKey(url))) return { why: SENDS_ELSEWHERE, pay: false };
+    // One send per declared address, from the page's own main frame (not a worker or a frame), and
+    // a form's own submission only as the navigation it is (second review, 3).
+    const slot = this.#sends.to.get(sendKey(url));
+    if (!slot || slot.left <= 0) return { why: SENDS_ELSEWHERE, pay: false };
+    if (!from.main || (slot.doc && from.type !== 'document')) return { why: SENDS_ELSEWHERE, pay: false };
+    slot.left--;
     return null;
+  }
+
+  // While the person holds the browser, what they send is theirs; but a pay address, or anything
+  // after the checkout stop, goes only when their own input just started it: a navigation of the
+  // page's main frame (a form they submitted, a link they followed) within 2 s of their click or key.
+  // The page's own scripts get nothing of the sort (second review, 4).
+  #heldRefusal(url: string, method: string, from: { type: string; main: boolean }): { why: string; pay: boolean } | null {
+    const nonGet = !(method === 'GET' || method === 'HEAD' || method === 'OPTIONS');
+    let orders = false;
+    try { orders = nonGet && ORDER_PATH.test(new URL(url).pathname); } catch { /* not an address */ }
+    const guarded = this.#paysAt(url) || orders || (nonGet && this.#locked);
+    if (!guarded) return null;
+    const theirs = from.main && from.type === 'document' && Date.now() - this.#personInput < 2000;
+    return theirs ? null : { why: HELD_SCRIPT, pay: true };
   }
 
   // The step now acting, and where it may send (absolute addresses; the query doesn't count), or
   // null once it is done.
-  allowSends(step: number | null, to: string[] = []): void {
-    this.#sends = step === null ? null : { step, to: new Set(to.map(sendKey).filter(Boolean)) };
+  // Each address takes one send; `doc`: only as a navigation (a form's own submission).
+  allowSends(step: number | null, to: (string | { url: string; doc?: boolean })[] = []): void {
+    if (step === null) { this.#sends = null; return; }
+    const map = new Map<string, { left: number; doc: boolean }>();
+    for (const t of to) {
+      const url = typeof t === 'string' ? t : t.url;
+      const k = sendKey(url);
+      if (!k) continue;
+      const doc = typeof t === 'string' ? false : t.doc === true;
+      const had = map.get(k);
+      map.set(k, { left: (had?.left ?? 0) + 1, doc: (had ? had.doc : true) && doc });
+    }
+    this.#sends = { step, to: map };
   }
 
   // The checkout stop: from now on nothing that isn't a GET leaves this browser while Nova drives.
@@ -484,6 +542,7 @@ export class Session extends EventEmitter {
     const cdp = this.#cdp;
     const sid = this.#page;
     if (!cdp || !sid) throw new CoreError('conflict', 'The browser isn’t open.');
+    if (e.type === 'click' || e.type === 'key' || e.type === 'text') this.#personInput = Date.now();
     const at = (x: number, y: number) => ({ x: Math.round(clamp(x) * this.#meta.width), y: Math.round(clamp(y) * this.#meta.height) });
     switch (e.type) {
       case 'click': {
@@ -741,31 +800,6 @@ export class Session extends EventEmitter {
     }
     await this.navigate('about:blank', 5000).catch(() => {});
     return mine.length;
-  }
-
-  // Where the page hosts shadow roots of its own, closed ones included (CDP sees through them), in
-  // viewport pixels: what they show can't be read from the page, so it is covered in a picture
-  // taken after a sign-in (review of PR #238, 4).
-  async shadowRects(): Promise<{ x: number; y: number; w: number; h: number }[]> {
-    type N = { backendNodeId: number; children?: N[]; shadowRoots?: (N & { shadowRootType?: string })[] };
-    const { root } = await this.#send<{ root: N }>('DOM.getDocument', { depth: -1, pierce: true });
-    const hosts: number[] = [];
-    const walk = (n: N, depth = 0) => {
-      if (depth > 200 || hosts.length >= 200) return;
-      if ((n.shadowRoots ?? []).some((r) => r.shadowRootType !== 'user-agent')) hosts.push(n.backendNodeId);
-      for (const c of n.children ?? []) walk(c, depth + 1);
-      for (const r of n.shadowRoots ?? []) if (r.shadowRootType !== 'user-agent') walk(r, depth + 1);
-    };
-    walk(root);
-    const out: { x: number; y: number; w: number; h: number }[] = [];
-    for (const id of hosts) {
-      const m = await this.#send<{ model: { border: number[] } }>('DOM.getBoxModel', { backendNodeId: id }).catch(() => null);
-      if (!m) continue;
-      const xs = [m.model.border[0]!, m.model.border[2]!, m.model.border[4]!, m.model.border[6]!];
-      const ys = [m.model.border[1]!, m.model.border[3]!, m.model.border[5]!, m.model.border[7]!];
-      out.push({ x: Math.min(...xs) - 2, y: Math.min(...ys) - 2, w: Math.max(...xs) - Math.min(...xs) + 4, h: Math.max(...ys) - Math.min(...ys) + 4 });
-    }
-    return out;
   }
 
   async screenshot(): Promise<Buffer> {

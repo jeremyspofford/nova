@@ -29,8 +29,8 @@ import {
   BAD, COPILOT_QUESTIONS, QUESTION_WORDS, STEP_TEMPLATE, checkTotals, clip, intentMatches, isPayControl, judge, obstacles, showMoney, upsells,
   type CopilotQuestion, type Totals,
 } from './copilot.ts';
-import { CHECKOUT_READ, CLICK, ELEMENT_FACTS, FILL, MASK, PAGE_FACTS, SECRET, SECRET_RECTS, SELECT, type ElementFacts, type PageFacts } from './facts.ts';
-import { cover, type Rect } from './png.ts';
+import { CHECKOUT_READ, CLICK, ELEMENT_FACTS, FILL, PAGE_FACTS, SECRET, SELECT, type ElementFacts, type PageFacts } from './facts.ts';
+import { cover } from './png.ts';
 import { FLOW_PREFIX, FLOW_RULE, dryRuns, flowDef, flowTemplateId, markerOf, stepsOf, type LearntStep } from './flows.ts';
 import { LOGIN_PREFIX, Redactor, loginHost, loginName, loginRefusal, siteHost } from './logins.ts';
 import { profileDir } from './profile.ts';
@@ -802,38 +802,28 @@ export class Browser extends EventEmitter {
     if (d.answers.next !== 'continue') throw new Stop(`The site no longer matches the flow “${run.plan.flow!.name}” v${t.version} Nova learnt: ${d.why} It stopped.`);
   }
 
-  // A picture of the page. After a sign-in, saved values are masked in the page's text and fields
-  // first, then every region that could show one (a canvas, CSS content, a shadow root…) is measured
-  // before and after the capture and painted over in the PNG itself, in Nova's process, where the
-  // page can't take the cover away (review of PR #238, 4).
+  // A picture of the page. After a sign-in in this task, the whole picture is covered, in the PNG
+  // itself, in Nova's own process (second review of PR #238, 7): a page can paint what it read
+  // anywhere and any way (one letter per element, reversed, spaced, moving), so measuring regions
+  // can't be made sure. The picture then proves the page was reached, never what it shows; Nova's
+  // own reads of the page are the evidence of what it says.
   async #shot(run: Run): Promise<Buffer> { return this.#picture(run.s); }
 
   async #picture(s: Session): Promise<Buffer> {
     const red = this.#reds.get(s.taskId);
-    if (!red || !red.size) return s.screenshot();
-    const values = red.values();
-    await s.inspect<number>({ selector: 'html' }, MASK, [values]).catch(() => 0);
-    const measure = async (): Promise<{ all: boolean; rects: Rect[] }> => {
-      const r = await s.inspect<{ all: boolean; rects: Rect[] }>({ selector: 'html' }, SECRET_RECTS, [values]).catch(() => null);
-      const sh = await s.shadowRects().catch(() => null);
-      return r && sh ? { all: r.all, rects: [...r.rects, ...sh] } : { all: true, rects: [] };
-    };
-    const before = await measure();
     const png = await s.screenshot();
-    const after = await measure();
-    // Anything that couldn't be measured is covered whole.
-    const rects = before.all || after.all ? [{ x: 0, y: 0, w: 1e6, h: 1e6 }] : [...before.rects, ...after.rects];
-    return cover(png, rects);
+    if (!red || !red.size) return png;
+    return cover(png, [{ x: 0, y: 0, w: 1e6, h: 1e6 }]);
   }
 
   // Where a step may send: its `sends` (paths on the page's own site), and the form the element
   // submits, when it is a submit button and one is given.
-  #sendsOf(s: Session, step: Step, el: ElementFacts | null): string[] {
-    const out: string[] = [];
+  #sendsOf(s: Session, step: Step, el: ElementFacts | null): { url: string; doc: boolean }[] {
+    const out: { url: string; doc: boolean }[] = [];
     const declared = 'sends' in step && step.sends ? (Array.isArray(step.sends) ? step.sends : [step.sends]) : [];
-    for (const x of declared) { try { out.push(new URL(x, s.url).href); } catch { /* checked by the validator */ } }
+    for (const x of declared) { try { out.push({ url: new URL(x, s.url).href, doc: false }); } catch { /* checked by the validator */ } }
     const submits = !!el && !!el.formAction && ((el.tag === 'button' && (el.type || 'submit').toLowerCase() === 'submit') || (el.tag === 'input' && /^(submit|image)$/i.test(el.type)));
-    if (submits) out.push(el!.formAction);
+    if (submits) out.push({ url: el!.formAction, doc: true });
     return out;
   }
 

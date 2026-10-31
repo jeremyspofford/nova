@@ -38,6 +38,9 @@ function merge(into: Record<string, unknown>, from: Record<string, unknown>): Re
 // Makes the profile folder (0700) and sets its Preferences, keeping whatever else Chromium wrote.
 export function prepareProfile(dir: string): void {
   mkdirSync(join(dir, 'Default'), { recursive: true, mode: 0o700 });
+  // A service worker registered in an earlier task would start before Nova attaches to it (second
+  // review of PR #238, 6): none is carried from one task to the next.
+  for (const f of ['Service Worker']) { try { rmSync(join(dir, 'Default', f), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* next time */ } }
   const file = join(dir, 'Default', 'Preferences');
   let prefs: Record<string, unknown> = {};
   try { prefs = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>; } catch { /* first launch, or unreadable: start from Nova's */ }
@@ -48,7 +51,7 @@ export function prepareProfile(dir: string): void {
 // favicons keep page titles and addresses. All go when the browser closes; cookies and site storage
 // stay. (A cache in the profile itself is only one made before the cache had a folder of its own,
 // chromium.ts.)
-const GONE = ['Sessions', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs', 'Cache', 'Code Cache', 'History', 'History-journal', 'Top Sites', 'Top Sites-journal', 'Favicons', 'Favicons-journal', 'Visited Links', 'Shortcuts', 'Shortcuts-journal', 'Network Action Predictor', 'Network Action Predictor-journal'];
+const GONE = ['Service Worker', 'Sessions', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs', 'Cache', 'Code Cache', 'History', 'History-journal', 'Top Sites', 'Top Sites-journal', 'Favicons', 'Favicons-journal', 'Visited Links', 'Shortcuts', 'Shortcuts-journal', 'Network Action Predictor', 'Network Action Predictor-journal'];
 export function afterClose(dir: string): void {
   for (const f of GONE) {
     const p = join(dir, 'Default', f);

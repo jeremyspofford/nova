@@ -141,6 +141,8 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
     '--no-pings', '--metrics-recording-only', '--disable-breakpad', '--disable-crash-reporter', '--password-store=basic', '--use-mock-keychain',
     '--disable-component-extensions-with-background-pages', '--disable-field-trial-config', '--disable-search-engine-choice-screen', '--no-service-autorun',
     '--disable-features=Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,InterestFeedContentSuggestions,CertificateTransparencyComponentUpdater,SafeBrowsing,NetworkTimeServiceQuerying,PrivacySandboxSettings4,DialMediaRouteProvider',
+    // No QUIC (WebTransport and HTTP/3 would go around the proxy's TCP walls).
+    '--disable-quic',
     '--mute-audio', '--hide-scrollbars', `--window-size=${width},${height}`,
     // A second wall behind the request interception: what CDP Fetch can't see (WebSockets, for
     // one) goes to a proxy that refuses it, unless its host is one the task declared. WebRTC may
