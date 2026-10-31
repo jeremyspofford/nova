@@ -129,6 +129,7 @@ export class Session extends EventEmitter {
   #sends: { step: number; to: Set<string> } | null = null;
   #locked = false;
   #refusals = 0;
+  #local = new Set<string>();
 
   constructor(o: SessionOptions) {
     super();
@@ -239,6 +240,11 @@ export class Session extends EventEmitter {
     const cdp = this.#cdp;
     if (!cdp) return;
     const url = p.request.url;
+    // Forget (clearSite): the site's own origin, answered here with an empty page; nothing goes out.
+    if (this.#local.size && (() => { try { return this.#local.has(new URL(url).origin); } catch { return false; } })()) {
+      await cdp.send('Fetch.fulfillRequest', { requestId: p.requestId, responseCode: 200, responseHeaders: [{ name: 'content-type', value: 'text/html' }, { name: 'cache-control', value: 'no-store' }], body: Buffer.from('<!doctype html><title>Nova forgets this site</title>').toString('base64') }, sid).catch(() => {});
+      return;
+    }
     if (/^(data|blob|about):/.test(url)) {
       await cdp.send('Fetch.continueRequest', { requestId: p.requestId }, sid).catch(() => {});
       return;
@@ -698,9 +704,42 @@ export class Session extends EventEmitter {
     const { cookies } = await cdp.send<{ cookies: { name: string; domain: string; path: string }[] }>('Storage.getCookies', {});
     const mine = cookies.filter((c) => { const d = c.domain.replace(/^\./, ''); return d === name || name.endsWith(`.${d}`); });
     for (const c of mine) await this.#send('Network.deleteCookies', { name: c.name, domain: c.domain, path: c.path });
+    // Every kind of storage, every way CDP offers: by origin, by storage key, and (found by the review
+    // of PR #238: local storage and IndexedDB outlived clearDataForOrigin alone) through the
+    // DOMStorage and IndexedDB domains themselves.
+    await this.#send('DOMStorage.enable').catch(() => {});
+    await this.#send('IndexedDB.enable').catch(() => {});
     for (const origin of new Set([`http://${host}`, `https://${host}`, `http://${name}`, `https://${name}`])) {
       await cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' }).catch(() => {});
+      await cdp.send('Storage.clearDataForStorageKey', { storageKey: `${origin}/`, storageTypes: 'all' }).catch(() => {});
+      for (const storageKey of [`${origin}/`]) {
+        await this.#send('DOMStorage.clear', { storageId: { storageKey, isLocalStorage: true } }).catch(() => {});
+        await this.#send('DOMStorage.clear', { storageId: { securityOrigin: origin, isLocalStorage: true } }).catch(() => {});
+        const names = await this.#send<{ databaseNames: string[] }>('IndexedDB.requestDatabaseNames', { storageKey }).catch(() => this.#send<{ databaseNames: string[] }>('IndexedDB.requestDatabaseNames', { securityOrigin: origin })).catch(() => ({ databaseNames: [] as string[] }));
+        for (const databaseName of names.databaseNames ?? []) {
+          await this.#send('IndexedDB.deleteDatabase', { storageKey, databaseName }).catch(() => this.#send('IndexedDB.deleteDatabase', { securityOrigin: origin, databaseName })).catch(() => {});
+        }
+      }
     }
+    // And from inside the origin itself, with the web's own APIs: Nova opens it here, answered locally
+    // (nothing reaches the site), and clears every store a page can use.
+    for (const origin of new Set([`http://${host}`, `https://${host}`])) {
+      this.#local.add(origin);
+      try {
+        await this.navigate(`${origin}/`, 10_000).catch(() => {});
+        await this.evaluate<string>(`(async () => {
+          try { localStorage.clear(); } catch {}
+          try { sessionStorage.clear(); } catch {}
+          try { for (const d of await indexedDB.databases()) await new Promise((r) => { const q = indexedDB.deleteDatabase(d.name); q.onsuccess = q.onerror = q.onblocked = r; }); } catch {}
+          try { if (self.caches) for (const k of await caches.keys()) await caches.delete(k); } catch {}
+          try { for (const r of (await navigator.serviceWorker?.getRegistrations?.()) ?? []) await r.unregister(); } catch {}
+          return 'ok';
+        })()`).catch(() => '');
+      } finally {
+        this.#local.delete(origin);
+      }
+    }
+    await this.navigate('about:blank', 5000).catch(() => {});
     return mine.length;
   }
 
