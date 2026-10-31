@@ -89,7 +89,7 @@ test('chat: a work-trail entry says how long it took and when it finished', () =
 
 test('settings: one structure, grouped by task, one level deep, every part in exactly one place', () => {
   const parts = CATEGORIES.flatMap((c) => c.parts);
-  assert.deepEqual([...parts].sort(), ['capture', 'changes', 'checkpoints', 'connections', 'danger', 'devices', 'look', 'models', 'perms', 'privacy', 'providers', 'you']);
+  assert.deepEqual([...parts].sort(), ['capture', 'changes', 'checkpoints', 'connections', 'danger', 'devices', 'look', 'models', 'perms', 'privacy', 'providers', 'sites', 'you']);
   assert.equal(new Set(parts).size, parts.length);
   for (const c of CATEGORIES) {
     assert.ok(c.label && c.summary && GROUPS.some((g) => g.cats.includes(c.id)), c.id);
@@ -97,6 +97,8 @@ test('settings: one structure, grouped by task, one level deep, every part in ex
   }
   assert.equal(CATEGORIES.at(-1).id, 'danger', 'starting over stays last, set apart');
   for (const e of ENTRIES) assert.ok(CATEGORIES.some((c) => c.id === e.cat), e.label);
+  // M10b: Nova Browser's sign-ins, found by the words people use.
+  for (const q of ['site sign-ins', 'saved passwords', 'logins', 'cookies', 'browser']) assert.equal(searchSettings(q)[0]?.target, 'browser-sites', q);
 });
 
 test('settings search knows people’s words, not just labels, and shows the path', () => {

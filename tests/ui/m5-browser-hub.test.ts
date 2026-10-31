@@ -151,6 +151,9 @@ test('declared names still resolve under the resolver rules; the profile names i
   const ours = () => readdirSync(tmpdir()).filter((n) => n.startsWith('nova-browser-')).map((n) => join(tmpdir(), n))
     .filter((p) => { try { return readFileSync(join(p, '.nova-owner'), 'utf8') === String(process.pid); } catch { return false; } });
   const before = new Set(ours());
+  // Closed in `finally`: a failed assertion must not leave the server holding this file's process
+  // open (the 90-minute UI-gate run of PR #236 was exactly that).
+  try {
   for (const [hosts, url] of [
     [[`localhost:${site.port}`], `http://localhost:${site.port}/`],
     [[`*.localhost:${site.port}`], `http://app.localhost:${site.port}/`],
@@ -169,7 +172,9 @@ test('declared names still resolve under the resolver rules; the profile names i
       await s.close();
     }
   }
-  await site.close();
+  } finally {
+    await site.close();
+  }
 });
 
 // The review's egress probe: a page on a declared host reaches for an undeclared listener every

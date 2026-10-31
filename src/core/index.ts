@@ -331,6 +331,17 @@ export function createCore(o: CoreOptions) {
     secrets: () => { try { return vault.list().map((n) => vault.get(n)).filter((v): v is string => typeof v === 'string'); } catch { return []; } },
     memory: () => memory.active().map((r) => r.content),
   });
+  // Nova Browser (M10b): sign-ins from the vault, the co-pilot on the local sorting model (Noul,
+  // through the decision stack, forced local-only), site templates through the template path, and
+  // the ingest screen for every dialog and every co-pilot input.
+  browser.wire({
+    db, vault, templates, rules, decisions,
+    screen: async (text, origin, ref) => {
+      const r = await ingest.screen({ text, source: { kind: 'web', origin, ref } });
+      return { id: r.id, verdict: r.verdict, flags: r.flags, extract: r.extract };
+    },
+    copilotReady: () => models!.decidesWithModel(false), providerId: LOCAL_MODEL_PROVIDER,
+  });
   // Nova Computer (M10a): workspaces as containers on this machine, each action a ledger task; a
   // command's output is screened by the ingest gate as tool output.
   const computer = new NovaComputer({
@@ -990,6 +1001,12 @@ export function createCore(o: CoreOptions) {
     ...browserRoutes(browser, {
       home: o.home,
       holder: (w) => (w.principal.kind === 'device' ? { key: `device:${w.principal.device.id}`, label: w.principal.device.name } : { key: 'console', label: 'The hub’s own screen' }),
+      // Stop (M10b): the task is cancelled; its browser closes with it.
+      stop: (id, why) => {
+        const t = ledger.get(id);
+        if (t.owner !== browser.worker.id) throw new CoreError('validation', 'That isn’t a browser task.');
+        return ledger.cancel(id, why);
+      },
     }),
   ];
 

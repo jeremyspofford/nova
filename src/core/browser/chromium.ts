@@ -9,6 +9,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import { Cdp, pipeTransport } from './cdp.ts';
+import { afterClose, prepareProfile } from './profile.ts';
 
 const KNOWN = [
   '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/lib/chromium/chromium', '/snap/bin/chromium',
@@ -68,6 +69,9 @@ export interface LaunchOptions {
   height?: number;
   // Chromium's own sandbox. Off only when asked (a container without user namespaces, root).
   sandbox?: boolean;
+  // Nova's own persistent profile (profile.ts), kept when the browser closes. Without it, a fresh
+  // throwaway profile in the temp folder, removed when the browser closes (M5c).
+  profile?: string;
 }
 
 export interface Launched { cdp: Cdp; proc: ChildProcess; profile: string; stderr: () => string; close: () => Promise<void> }
@@ -118,12 +122,18 @@ export function resolverRules(hosts: readonly string[]): string {
 }
 
 export async function launch(o: LaunchOptions): Promise<Launched> {
-  const profile = mkdtempSync(join(tmpdir(), PROFILE_PREFIX));
-  writeFileSync(join(profile, OWNER), String(process.pid));
+  const kept = typeof o.profile === 'string' && o.profile.length > 0;
+  const profile = kept ? o.profile! : mkdtempSync(join(tmpdir(), PROFILE_PREFIX));
+  if (kept) prepareProfile(profile); else writeFileSync(join(profile, OWNER), String(process.pid));
+  // Nova's own profile keeps sign-ins (cookies), never page bodies: its HTTP cache is a throwaway
+  // folder for this browser alone, removed when it closes (a page that says who is signed in must
+  // not stay on disk).
+  const cache = kept ? mkdtempSync(join(tmpdir(), `${PROFILE_PREFIX}cache-`)) : null;
+  if (cache) writeFileSync(join(cache, OWNER), String(process.pid));
   const width = o.width ?? 1280;
   const height = o.height ?? 800;
   const args = [
-    '--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`,
+    '--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`, ...(cache ? [`--disk-cache-dir=${cache}`] : []),
     '--no-first-run', '--no-default-browser-check', '--disable-default-apps', '--disable-extensions', '--disable-sync',
     // Chromium's own calls home (updates, safe browsing, metrics, translation) stay off: the only
     // traffic is the pages the task opens.
@@ -131,6 +141,8 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
     '--no-pings', '--metrics-recording-only', '--disable-breakpad', '--disable-crash-reporter', '--password-store=basic', '--use-mock-keychain',
     '--disable-component-extensions-with-background-pages', '--disable-field-trial-config', '--disable-search-engine-choice-screen', '--no-service-autorun',
     '--disable-features=Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,InterestFeedContentSuggestions,CertificateTransparencyComponentUpdater,SafeBrowsing,NetworkTimeServiceQuerying,PrivacySandboxSettings4,DialMediaRouteProvider',
+    // No QUIC (WebTransport and HTTP/3 would go around the proxy's TCP walls).
+    '--disable-quic',
     '--mute-audio', '--hide-scrollbars', `--window-size=${width},${height}`,
     // A second wall behind the request interception: what CDP Fetch can't see (WebSockets, for
     // one) goes to a proxy that refuses it, unless its host is one the task declared. WebRTC may
@@ -152,13 +164,23 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
   const cdp = new Cdp(pipeTransport(proc.stdio[3] as Writable, proc.stdio[4] as Readable));
   const close = async () => {
     try { if (!cdp.closed) await Promise.race([cdp.send('Browser.close', {}, undefined, { timeoutMs: 2000 }), new Promise((r) => setTimeout(r, 2000))]); } catch { /* it may be gone already */ }
+    // Nova's own profile: Chromium writes its cookies out as it shuts down, so it is given time to
+    // finish by itself before anything stops it.
+    if (kept && proc.exitCode === null && proc.signalCode === null) await Promise.race([new Promise((r) => proc.once('exit', r)), new Promise((r) => setTimeout(r, 8000))]);
     cdp.close();
     if (proc.exitCode === null && proc.signalCode === null) {
       proc.kill('SIGTERM');
       await Promise.race([new Promise((r) => proc.once('exit', r)), new Promise((r) => setTimeout(r, 3000))]);
       if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
     }
-    try { rmSync(profile, { recursive: true, force: true }); } catch { /* best effort: it is in the temp folder */ }
+    // Nova's own profile stays, without its session-restore files. A throwaway one goes; Chromium's
+    // helper processes may still be writing as it goes, so removing retries a few times.
+    if (kept) {
+      afterClose(profile);
+      if (cache) { try { rmSync(cache, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* swept at the next start */ } }
+      return;
+    }
+    try { rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* best effort: it is in the temp folder */ }
   };
   try {
     await Promise.race([cdp.send('Browser.getVersion', {}, undefined, { timeoutMs: 20_000 }), failed]);

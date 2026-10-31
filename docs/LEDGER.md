@@ -17,6 +17,125 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10b: the second review of PR #238).** Same branch and PR. The review read the code;
+each item was first written as a live Chromium test on stand-in variants and run against the code
+as it was (evidence: "The second review of PR #238").
+1. **WebSockets and WebRTC went around the send guard** (reproduced: an upgrade, a frame, a TURN
+   connection after the checkout stop). `Network.setBlockedURLs` didn't stop the WebSocket, and
+   Chromium decides a WebSocket's proxy as http's, so neither CDP blocking nor the proxy could tell.
+   **Choice:** Nova's browser has no sockets of its own: the constructors are removed from every
+   frame before its scripts run and from every worker before it runs; QUIC is off. **Trade-off:**
+   sites that need WebSockets or WebRTC don't work, even for the person; the wall is in JavaScript,
+   set first.
+2. The evidence's wording now matches: GETs carry what they carry (the known limit).
+3. **One send per declared address** (reproduced: four bodies to one path), from the main frame; a
+   form's own submission only as a navigation.
+4. **Takeover** (reproduced: the page's script posted to /pay while the person held it). **Choice:**
+   a pay-like address or a post-stop non-GET goes only as a main-frame navigation within 2 s of the
+   person's click or key; the sheet says so. **Limit:** a script navigating the main frame to pay in
+   that window passes.
+5. **Pause** (reproduced: 13 posts): no non-GET while paused or waiting for the person.
+6. **Workers** (partly reproduced: a service worker from an earlier task). **Choice:** no service
+   worker is carried between tasks. **Side effect:** first-party Cache Storage, kept with service
+   workers, doesn't outlive a task.
+7. **Pictures** (reproduced: a value split one letter per element). **Choice:** after a sign-in the
+   whole picture is covered, as the review suggested: it fails closed. The region measuring is gone.
+8. **Forget** (reproduced: partitioned cookie, OPFS, and storage partitioned under another site
+   stayed). Cookies are deleted with their partition key; Nova serves itself, through CDP, a page
+   that clears every store first-party and as a frame under every site its browser visited.
+- Did not reproduce, kept as guards: 307/308 redirects into a POST, pagehide beacons and keepalive
+  fetches, a form sent on unload, a POST form into a new window, a meta refresh to pay.
+
+**2026-10-31 (M10b: the adversarial review of PR #238).** Same branch and PR. All seven items
+answered, test-first, on loopback stand-ins with fake per-test credentials; evidence in
+`docs/evidence/m10b-gate.md`, "The adversarial review of PR #238", with what failed when each fix
+was removed.
+1. **A pause didn't stop a pending selector action** (reproduced in a real browser). One check,
+   `#mustWait()`, now guards `act`, `actOn` and `clickAt`.
+2. **The pay guard was a word list.** **Choice:** a structural send guard in the session. While
+   Nova drives, a request that isn't a GET leaves only while a declared step acts and only to where
+   it accounts for (a new `sends` on fill, select, click and login, validated and never a pay
+   address); outside a checkout flow a click's own submit form also counts, and a sign-in's always;
+   on a checkout flow only `sends`; after the itemised-total stop, nothing. GETs to pay addresses
+   are refused; a stopped browser fails every request. The lists are a signal on top. **Trade-off:**
+   a site that sends by script on a click needs `sends` in the plan; a GET that pays at an address
+   no list names isn't stopped.
+3. **Declared hosts** are canonicalised with the WHATWG URL parser before every check, and kept so.
+4. **Screenshots after a sign-in**: the regions that could show a value are measured before and
+   after the capture and painted over in the PNG in Nova's own process (`png.ts`, node:zlib, no
+   dependency). **Choice:** cover over re-render: a picture taken before any re-render would still
+   miss what the page painted while Nova typed. Limits written down: unnamed regions, and the
+   person's live view.
+5. **Sign-ins over plain http** only to loopback; link-local hosts refused outright.
+6. **Live tests** for the reviewer's read-only findings. Two failed and were fixed: Forget left
+   local storage and IndexedDB (it now also clears from inside the origin, opened locally with
+   CDP answering, nothing reaching the site), and a field that swapped itself on focus got the
+   value (checked before and after focus now). **Choice:** Nova's page runs with focus emulation, as
+   a real window does, so pages' focus handlers fire in front of Nova's checks.
+7. Docs: this entry, the evidence and the known limits.
+
+**2026-10-31 (M10b: Nova Browser).** Branch `m10b/browser`. The plan is `docs/plans/M10b.md`, the
+evidence `docs/evidence/m10b-gate.md`. Nova Browser is the M5c browser worker grown, not forked:
+one worker, one CDP client, the same plans, declared hosts, walls, takeover and evidence.
+- **The profile (the owner's open question 3, unanswered):** the ADR's proposed default is what is
+  built, and is written down here: one persistent Chromium profile owned by Nova at
+  `<home>/workers/browser-profile`, never the person's own; sign-ins kept per site between tasks;
+  each site deletable from Settings › Connections › Site sign-ins (tier 3, confirmed every time).
+  Tasks use it by default; `inputs.profile: "fresh"` keeps M5c's throwaway profile. If the owner
+  prefers "every task starts logged out", that is one default to change.
+  - **Found by the gate, fixed:** made adversarial (its account page names who is signed in, in a
+    cacheable response and its title), the stand-in put the fake username into Chromium's HTTP cache
+    inside the profile. **Choice:** the profile keeps only cookies and site storage. Its cache is a
+    throwaway folder per launch; history saving is off; history, top sites, favicons and the
+    session-restore files go when it closes; password manager and autofill are off. With those
+    preferences removed, the gate found Chromium had saved the fake password in the profile's
+    `Login Data`: they are load-bearing, and tested.
+  - Chromium is given up to 8 s to exit by itself when Nova's profile closes: killed sooner, it
+    didn't write its cookies out (found by the gate's "kept per site" check).
+- **Logins** are saved by host in the vault (`browser/login/<host>/…`), never in chat. A `login`
+  step names fields, never values. **Choice:** the worker sets the values through
+  `Runtime.callFunctionOn` *arguments* in Nova's isolated world, only when the page's own
+  `location.host` is the host they were saved for, only into that document's own fields, rather
+  than `Input.insertText` into whatever has focus (a page could move focus to another frame between
+  the focus and the typing). Fields are masked on the page (`-webkit-text-security`), so frames and
+  screenshots show discs; before a screenshot or a final read any echo of a value is masked; and a
+  redactor holding the session's values covers every file, event, report and co-pilot input.
+- **Driving:** selectors (DOM) or `{role, name}` targets (the accessibility tree). **Choice:** the
+  selector path keeps M5c's one `Runtime.evaluate` expression per action (so the M5c race test still
+  tests what it did); targets and sign-in values go through element handles. Vision is a hook only
+  (`BrowserOptions.locate`), marked `via: vision, fallback: true`; no vision model ships.
+- **The co-pilot:** `browser-step` v1, six Noul questions, asked of the local sorting model only, with
+  screened extracts only, before and after each acting step. **Ground truth** (DOM, URL, parsed
+  totals) decides whenever it exists; a model sure of the opposite (p ≥ 0.8 against a no, ≤ 0.2
+  against a yes) stops the step. Where only the model speaks and is sure of a problem, the person is
+  asked. **Choices:** a login form is a wall only when the plan doesn't fill it in itself; a dialog
+  is an injection when its screen blocks it *or* flags instruction-shaped text or Nova's own tags
+  (so it is blocked even with no model, when the screen alone would only quarantine it); a
+  pre-ticked extra is flagged and the person asked to untick or keep it (Nova never decides it), and
+  one unticked and ticked again on a later page is asked about again.
+- **Site templates** go through the existing template path. **Choice:** the template's dry runs *are*
+  the flow (each step as JSON, with the path and the next step's selector seen after it), plus
+  negative controls, so the flow is replicated with the template and re-checked by Nova at
+  activation; its rule is one prefix rule (`RulesProvider.addPrefix`, new). A flow plan names its
+  version (`flow: {name, site, version}`), so the plan the person approves is the plan that runs.
+- **Checkout:** a plan with a `checkout` step is tier 3 and ends there (only a read or wait after).
+  **Deviation from my own first plan:** no automatic tier-3 "pay" hand-off task. The ADR says Nova
+  "shows the itemised total and stops"; a hand-off that opens the checkout for the person would be
+  a second, unasked browser task. The report and `checkout.json` show the lines and total. The pay
+  control is refused by the validator (whatever a template says), at the click (by the element's
+  name, id, class, its form's action or card fields), and in the browser (a non-GET to a pay form's
+  action, or a pay path, unless the person holds the browser).
+- **Pause, resume and stop** are new beside takeover; the takeover sheet keeps one standout.
+- **The UI-gate hang (PR #236, attempt 1, 90 minutes):** `m5-browser-hub`'s profile test failed an
+  assertion before `site.close()`; the open server kept its test file's process alive and nothing
+  timed out. Fixed: cleanup in `finally`; `test:ui` and `scripts/ui-test.sh` run with
+  `--test-force-exit` and `--test-timeout=900000` (15 minutes: the M9 contrast test takes about 5 on CI; a first try at 5 minutes cancelled it); both CI jobs have `timeout-minutes`; a throwaway
+  profile's removal retries. Reproduced first: a test file that fails before closing a server hangs
+  `node --test` (killed at 20 s) and exits 1 with `--test-force-exit`.
+- **Known limits:** no vision model; the co-pilot is tested with a stand-in model only; intent ground
+  truth is a word match; learnt flows replay recorded values; cookies are forgotten per host name,
+  not per port; no real site, login, CAPTCHA or purchase was tried (Hard limits).
+
 **2026-10-31 (M10a hardening, round two: the second review of PR #236).** Same branch and PR. The
 review ran probes against Docker and found three things to fix before merge, plus five follow-ups;
 all are fixed, each with a test seen failing on `bf488fe4` (10 of 10 failed there). Evidence:

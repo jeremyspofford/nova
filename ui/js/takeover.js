@@ -101,6 +101,21 @@ async function takeOver() {
   } catch (e) { toast(e.message); }
 }
 
+// M10b: pause, carry on, stop.
+async function control(what) {
+  if (!live) return;
+  try {
+    if (what === 'stop') {
+      await api('POST', path(live.id, '/stop'));
+      toast('Stopped. Nova closed the browser.');
+      return;
+    }
+    live.view = await api('POST', path(live.id, what === 'pause' ? '/pause' : '/resume'));
+    render();
+    toast(what === 'pause' ? 'Paused. Nova does nothing until you let it carry on.' : 'Nova carries on.');
+  } catch (e) { toast(e.message); }
+}
+
 async function handBack() {
   if (!live) return;
   try {
@@ -122,6 +137,9 @@ document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-action]');
   if (b?.dataset.action === 'take-over') { e.preventDefault(); takeOver(); return; }
   if (b?.dataset.action === 'hand-back') { e.preventDefault(); handBack(); return; }
+  if (b?.dataset.action === 'pause-browser') { e.preventDefault(); control('pause'); return; }
+  if (b?.dataset.action === 'resume-browser') { e.preventDefault(); control('resume'); return; }
+  if (b?.dataset.action === 'stop-browser') { e.preventDefault(); control('stop'); return; }
   if (b?.dataset.action === 'takeover-key') { e.preventDefault(); if (holding()) send({ type: 'key', key: b.dataset.key }); return; }
   const img = e.target.closest('.takeover-frame');
   if (img && holding()) {

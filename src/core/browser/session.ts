@@ -13,8 +13,11 @@ import { lookup } from 'node:dns/promises';
 import { BROWSER_TASK_HEADER } from '../mesh/access.ts';
 import { HUB_REFUSAL, NO_HUB, allowed, hostOf, reachesHub, target, thisMachine, type Hub } from './plan.ts';
 import type { Cdp } from './cdp.ts';
+import type { Target } from './plan.ts';
+import { ORDER_PATH, PAY_PATH } from './copilot.ts';
 
-export type Mode = 'starting' | 'working' | 'needs_person' | 'taken_over' | 'finishing' | 'closed';
+// `paused`: the person paused the worker (M10b); it waits at its next gate, with nobody driving.
+export type Mode = 'starting' | 'working' | 'paused' | 'needs_person' | 'taken_over' | 'finishing' | 'closed';
 
 // Who holds the browser: `key` is the console or `device:<id>`; `label` is what the person reads.
 export interface Holder { key: string; label: string }
@@ -69,7 +72,43 @@ export interface SessionOptions {
   hub?: () => Hub;
   // How the browser is started: Chromium, or a stand-in in tests.
   launch?: (o: LaunchOptions) => Promise<Launched>;
+  // Nova's own persistent profile (profile.ts); without it, a throwaway one (M5c).
+  profile?: string;
 }
+
+// Where an element is: a CSS selector (the DOM), or an accessibility target (role and name).
+export interface Locator { selector?: string; target?: Target }
+// A dialog a page opened with alert, confirm or prompt (dismissed at once, as in M5c).
+export interface JsDialog { type: string; message: string; url: string }
+
+export const PAY_GUARD = 'A request that would pay: Nova never pays. Paying is yours (tier 3).';
+export const SENDS_UNASKED = 'The page tried to send something no step of the plan sends (a script, a beacon, a form sending itself): refused.';
+export const SENDS_ELSEWHERE = 'The step sends only where the plan says it does; this went somewhere else: refused.';
+export const SENDS_LOCKED = 'Nova stopped at the checkout: nothing more is sent from this page.';
+// Forget's own pages (session.ts clearSite), served by Nova itself through CDP.
+export const FORGET_PAGE = '/__nova_forget';
+export const FORGET_TOP = '/__nova_forget_top';
+export const FORGET_DONE = '/__nova_forget_done';
+export const FORGET_SCRIPT = `(async () => {
+  try { localStorage.clear(); } catch {}
+  try { sessionStorage.clear(); } catch {}
+  try { for (const d of await indexedDB.databases()) await new Promise((r) => { const q = indexedDB.deleteDatabase(d.name); q.onsuccess = q.onerror = q.onblocked = r; }); } catch {}
+  try { for (const k of await caches.keys()) await caches.delete(k); } catch {}
+  try { const d = await navigator.storage.getDirectory(); const names = []; for await (const [n] of d.entries()) names.push(n); for (const n of names) await d.removeEntry(n, { recursive: true }); } catch {}
+  try { for (const r of (await navigator.serviceWorker?.getRegistrations?.()) ?? []) await r.unregister(); } catch {}
+  try { for (const c of document.cookie.split(';')) { const n = c.split('=')[0].trim(); if (n) { document.cookie = n + '=; Max-Age=0; Path=/'; document.cookie = n + '=; Max-Age=0; Path=/; Secure; SameSite=None; Partitioned'; } } } catch {}
+  try { await fetch('${FORGET_DONE}'); } catch {}
+})();`;
+export const SENDS_PAUSED = 'Paused, or waiting for you: nothing that isn’t a GET leaves the page.';
+export const HELD_SCRIPT = 'While you hold the browser, a pay address, or anything after the checkout stop, goes only when you start it yourself: the page’s own script tried, and was refused.';
+// Sockets that go around Fetch, gone from a frame or a worker before its own scripts run.
+export const NO_SOCKETS = `(() => { const no = function () { throw new DOMException('Nova’s browser opens no sockets of its own: no WebSocket, WebTransport or WebRTC.', 'NotSupportedError'); };
+  for (const k of ['WebSocket', 'WebSocketStream', 'WebTransport', 'RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel', 'RTCIceTransport', 'RTCSctpTransport', 'RTCDtlsTransport']) {
+    try { Object.defineProperty(globalThis, k, { value: no, writable: false, configurable: false, enumerable: false }); } catch {}
+  }
+})();`;
+// Where a request goes, for the send guard: origin and path.
+export const sendKey = (url: string): string => { try { const u = new URL(url); return `${u.origin}${u.pathname}`; } catch { return ''; } };
 
 export class Session extends EventEmitter {
   readonly taskId: string;
@@ -100,6 +139,23 @@ export class Session extends EventEmitter {
   #casting = false;
   #handedBack: (() => void)[] = [];
   #closedWhy: string | null = null;
+  #dialogs: JsDialog[] = [];
+  #pausedBy: (Holder & { since: number }) | null = null;
+  // Where a pay form sends (origin and path), found by the worker on the pages it reads: a request
+  // there that isn't a GET is refused unless the person holds the browser.
+  readonly payTargets = new Set<string>();
+  // What may send (review of PR #238, 2). While Nova drives, every request that isn't a GET is a
+  // potential commit: it goes out only while a declared step is acting, and only to where that step
+  // accounts for (`allowSends`); after the checkout stop, none at all (`lockSends`). Pay addresses
+  // are refused whatever the method. The person holding the browser may send anything.
+  #sends: { step: number; to: Map<string, { left: number; doc: boolean }> } | null = null;
+  // When the person's own input last reached the page, while they hold it (second review, 4).
+  #personInput = 0;
+  #locked = false;
+  #refusals = 0;
+  // Forget's own pages, by origin: the origins being forgotten (clearSite).
+  #local = new Map<string, string[]>();
+  #forgetDone = 0;
 
   constructor(o: SessionOptions) {
     super();
@@ -130,7 +186,7 @@ export class Session extends EventEmitter {
     const width = this.#o.width ?? 1280;
     const height = this.#o.height ?? 800;
     this.#meta = { width, height };
-    this.#browser = await (this.#o.launch ?? launch)({ path: this.#o.chromium, bypass: this.hosts, refuser: `http://127.0.0.1:${port}`, sandbox: this.#o.sandbox, width, height });
+    this.#browser = await (this.#o.launch ?? launch)({ path: this.#o.chromium, bypass: this.hosts, refuser: `http://127.0.0.1:${port}`, sandbox: this.#o.sandbox, width, height, ...(this.#o.profile ? { profile: this.#o.profile } : {}) });
     const cdp = this.#browser.cdp;
     this.#cdp = cdp;
     cdp.on('close', (why: string) => { if (this.mode !== 'closed') this.#closeNow(`the browser stopped (${why})`); });
@@ -147,8 +203,13 @@ export class Session extends EventEmitter {
     });
     cdp.on('Page.frameStartedLoading', (p: { frameId: string }, sid?: string) => { if (sid === this.#page && (!this.#mainFrame || p.frameId === this.#mainFrame)) this.#loading++; });
     cdp.on('Page.frameStoppedLoading', (p: { frameId: string }, sid?: string) => { if (sid === this.#page && (!this.#mainFrame || p.frameId === this.#mainFrame)) this.#loading = Math.max(0, this.#loading - 1); this.emit('loaded'); });
-    // A page's alert or confirm would stop it; nobody can answer it from a picture.
-    cdp.on('Page.javascriptDialogOpening', (_p: unknown, sid?: string) => { void cdp.send('Page.handleJavaScriptDialog', { accept: false }, sid).catch(() => {}); });
+    // A page's alert or confirm would stop it; nobody can answer it from a picture. What it said is
+    // kept for the worker, which screens it (M10b: a dialog may be an injection), and never followed.
+    cdp.on('Page.javascriptDialogOpening', (p: { type?: string; message?: string; url?: string }, sid?: string) => {
+      if (this.#dialogs.length < 20) this.#dialogs.push({ type: String(p?.type ?? 'alert'), message: String(p?.message ?? '').slice(0, 4000), url: String(p?.url ?? this.url) });
+      this.emit('dialog');
+      void cdp.send('Page.handleJavaScriptDialog', { accept: false }, sid).catch(() => {});
+    });
     await cdp.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => {});
     await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     // The first page may already exist; attach to it if auto-attach didn't.
@@ -173,12 +234,29 @@ export class Session extends EventEmitter {
       if (['page', 'iframe', 'worker', 'shared_worker', 'service_worker'].includes(type)) {
         await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] }, sid).catch(() => {});
       }
-      if (type === 'page' || type === 'iframe') await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid).catch(() => {});
+      // Every kind of target attaches what it starts (a worker's own workers included).
+      if (['page', 'iframe', 'worker', 'shared_worker', 'service_worker'].includes(type)) {
+        await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid).catch(() => {});
+      }
+      // WebSockets, WebTransport and WebRTC go around Fetch, and a declared host's traffic around the
+      // refusing proxy (second review of PR #238, 1; Network.setBlockedURLs doesn't stop a
+      // WebSocket, and Chromium decides a WebSocket's proxy as http's). So Nova's browser has none:
+      // gone from every frame before its scripts run, and from every worker before it runs (it is
+      // held at the debugger until then). The person holding the browser has none either.
+      if (type === 'page' || type === 'iframe') {
+        await cdp.send('Page.enable', {}, sid).catch(() => {});
+        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: NO_SOCKETS, runImmediately: true }, sid).catch(() => {});
+      } else if (['worker', 'shared_worker', 'service_worker'].includes(type)) {
+        await cdp.send('Runtime.evaluate', { expression: NO_SOCKETS }, sid).catch(() => {});
+      }
       if (type === 'page' && !this.#page) {
         this.#page = sid;
         await cdp.send('Page.enable', {}, sid);
         await cdp.send('Page.setLifecycleEventsEnabled', { enabled: true }, sid).catch(() => {});
         await cdp.send('Emulation.setDeviceMetricsOverride', { width: this.#meta.width, height: this.#meta.height, deviceScaleFactor: 1, mobile: false }, sid);
+        // The page behaves as a focused window does (focus events fire), as in a real browser: a
+        // page that reacts to focus does so in front of Nova's checks, not only for a person.
+        await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }, sid).catch(() => {});
       } else if (type === 'page') {
         // A second window (a popup): the task has one page, so it is closed. Its requests were
         // already held to the declared hosts.
@@ -198,17 +276,41 @@ export class Session extends EventEmitter {
   // task's mark (BROWSER_TASK_HEADER), set here, beneath the page: a page can't remove it, and
   // Nova treats anything carrying it as nobody in particular (mesh/access.ts), so a page that
   // got to Nova anyway would get no more than a stranger would.
-  async #paused(p: { requestId: string; request: { url: string; headers?: Record<string, string> }; resourceType?: string }, sid?: string): Promise<void> {
+  async #paused(p: { requestId: string; request: { url: string; method?: string; headers?: Record<string, string> }; resourceType?: string; frameId?: string }, sid?: string): Promise<void> {
     const cdp = this.#cdp;
     if (!cdp) return;
     const url = p.request.url;
+    // Forget (clearSite): the site's own origin, answered here with an empty page; nothing goes out.
+    const local = this.#local.size ? (() => { try { const u = new URL(url); const f = this.#local.get(u.origin); return f ? { u, forget: f } : null; } catch { return null; } })() : null;
+    if (local) {
+      let body = '<!doctype html><title>Nova forgets this site</title>';
+      if (local.u.pathname === FORGET_DONE) { this.#forgetDone++; body = ''; }
+      else if (local.u.pathname === FORGET_PAGE) body = `<!doctype html><title>Nova forgets this site</title><script>${FORGET_SCRIPT}</script>`;
+      else if (local.u.pathname === FORGET_TOP) body = `<!doctype html><title>Nova forgets a site</title>${local.forget.map((o) => `<iframe src="${o}${FORGET_PAGE}"></iframe>`).join('')}`;
+      await cdp.send('Fetch.fulfillRequest', { requestId: p.requestId, responseCode: 200, responseHeaders: [{ name: 'content-type', value: 'text/html' }, { name: 'cache-control', value: 'no-store' }], body: Buffer.from(body).toString('base64') }, sid).catch(() => {});
+      return;
+    }
     if (/^(data|blob|about):/.test(url)) {
       await cdp.send('Fetch.continueRequest', { requestId: p.requestId }, sid).catch(() => {});
       return;
     }
     const by = this.mode === 'taken_over' ? 'person' : 'page';
     const kind = (p.resourceType ?? 'request').toLowerCase();
+    // Stopped: nothing lands afterwards.
+    if (this.mode === 'closed') {
+      await cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'Aborted' }, sid).catch(() => {});
+      return;
+    }
     const nova = await this.#reachesHub(url);
+    const method = (p.request.method ?? 'GET').toUpperCase();
+    const from = { type: kind, main: sid === this.#page && (!this.#mainFrame || p.frameId === this.#mainFrame) };
+    const why = nova ? null : this.mode === 'taken_over' ? this.#heldRefusal(url, method, from) : this.#sendRefusal(url, method, from);
+    if (why) {
+      this.#block(hostOf(url), by, 'fetch', kind, why.why);
+      if (this.#refusals++ < 50) this.emit(why.pay ? 'pay_refused' : 'send_refused', { host: hostOf(url), method: (p.request.method ?? 'GET').toUpperCase(), kind, why: why.why });
+      await cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }, sid).catch(() => {});
+      return;
+    }
     if (!nova && allowed(url, this.hosts)) {
       const headers = Object.entries(p.request.headers ?? {}).filter(([k]) => k.toLowerCase() !== BROWSER_TASK_HEADER).map(([name, value]) => ({ name, value }));
       headers.push({ name: BROWSER_TASK_HEADER, value: this.taskId });
@@ -217,6 +319,69 @@ export class Session extends EventEmitter {
     }
     this.#block(hostOf(url), by, 'fetch', kind, nova ? HUB_REFUSAL : undefined);
     await cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }, sid).catch(() => {});
+  }
+
+  // Why a request may not go out while Nova drives, or null.
+  #sendRefusal(url: string, method: string, from: { type: string; main: boolean }): { why: string; pay: boolean } | null {
+    if (this.#paysAt(url)) return { why: PAY_GUARD, pay: true };
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return null;
+    try { if (ORDER_PATH.test(new URL(url).pathname)) return { why: PAY_GUARD, pay: true }; } catch { /* not an address */ }
+    if (this.#locked) return { why: SENDS_LOCKED, pay: true };
+    // Paused, or waiting for the person: nothing that isn't a GET, window or not (second review, 5).
+    if (this.mode === 'paused' || this.mode === 'needs_person') return { why: SENDS_PAUSED, pay: false };
+    if (!this.#sends) return { why: SENDS_UNASKED, pay: false };
+    // One send per declared address, from the page's own main frame (not a worker or a frame), and
+    // a form's own submission only as the navigation it is (second review, 3).
+    const slot = this.#sends.to.get(sendKey(url));
+    if (!slot || slot.left <= 0) return { why: SENDS_ELSEWHERE, pay: false };
+    if (!from.main || (slot.doc && from.type !== 'document')) return { why: SENDS_ELSEWHERE, pay: false };
+    slot.left--;
+    return null;
+  }
+
+  // While the person holds the browser, what they send is theirs; but a pay address, or anything
+  // after the checkout stop, goes only when their own input just started it: a navigation of the
+  // page's main frame (a form they submitted, a link they followed) within 2 s of their click or key.
+  // The page's own scripts get nothing of the sort (second review, 4).
+  #heldRefusal(url: string, method: string, from: { type: string; main: boolean }): { why: string; pay: boolean } | null {
+    const nonGet = !(method === 'GET' || method === 'HEAD' || method === 'OPTIONS');
+    let orders = false;
+    try { orders = nonGet && ORDER_PATH.test(new URL(url).pathname); } catch { /* not an address */ }
+    const guarded = this.#paysAt(url) || orders || (nonGet && this.#locked);
+    if (!guarded) return null;
+    const theirs = from.main && from.type === 'document' && Date.now() - this.#personInput < 2000;
+    return theirs ? null : { why: HELD_SCRIPT, pay: true };
+  }
+
+  // The step now acting, and where it may send (absolute addresses; the query doesn't count), or
+  // null once it is done.
+  // Each address takes one send; `doc`: only as a navigation (a form's own submission).
+  allowSends(step: number | null, to: (string | { url: string; doc?: boolean })[] = []): void {
+    if (step === null) { this.#sends = null; return; }
+    const map = new Map<string, { left: number; doc: boolean }>();
+    for (const t of to) {
+      const url = typeof t === 'string' ? t : t.url;
+      const k = sendKey(url);
+      if (!k) continue;
+      const doc = typeof t === 'string' ? false : t.doc === true;
+      const had = map.get(k);
+      map.set(k, { left: (had?.left ?? 0) + 1, doc: (had ? had.doc : true) && doc });
+    }
+    this.#sends = { step, to: map };
+  }
+
+  // The checkout stop: from now on nothing that isn't a GET leaves this browser while Nova drives.
+  lockSends(): void { this.#locked = true; this.#sends = null; }
+
+  #paysAt(url: string): boolean {
+    try {
+      const u = new URL(url);
+      return this.payTargets.has(`${u.origin}${u.pathname}`) || PAY_PATH.test(u.pathname);
+    } catch { return false; }
+  }
+
+  addPayTarget(url: string): void {
+    try { const u = new URL(url); if (this.payTargets.size < 50) this.payTargets.add(`${u.origin}${u.pathname}`); } catch { /* not an address */ }
   }
 
   // Whether a URL would reach Nova itself: by its address or this machine's names, or by a name
@@ -302,7 +467,7 @@ export class Session extends EventEmitter {
   // time the person had it.
   async gate(): Promise<number> {
     const started = Date.now();
-    while (this.mode === 'taken_over' || this.mode === 'needs_person') {
+    while (this.mode === 'taken_over' || this.mode === 'needs_person' || this.mode === 'paused') {
       await new Promise<void>((r) => this.#handedBack.push(r));
     }
     if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
@@ -324,7 +489,32 @@ export class Session extends EventEmitter {
 
   // ---- takeover ---------------------------------------------------------------------------
 
+  // ---- pause (M10b) -------------------------------------------------------------------------
+
+  // The person pauses the worker: it stops at its next gate and waits, with nobody driving.
+  pause(h: Holder): SessionView {
+    if (this.mode === 'closed' || this.mode === 'finishing' || this.mode === 'starting') throw new CoreError('conflict', this.mode === 'starting' ? 'The browser is still starting. Try again in a moment.' : 'This task’s browser work is over; there’s nothing to pause.');
+    if (this.mode === 'paused' || this.mode === 'taken_over' || this.mode === 'needs_person') return this.view();
+    this.#pausedBy = { ...h, since: Date.now() };
+    this.mode = 'paused';
+    this.emit('paused', { holder: h });
+    this.emit('change');
+    return this.view();
+  }
+
+  resume(h: Holder): SessionView {
+    if (this.mode !== 'paused') throw new CoreError('conflict', 'This task isn’t paused.');
+    const by = this.#pausedBy;
+    this.#pausedBy = null;
+    this.mode = 'working';
+    this.emit('resumed', { holder: h, duration_ms: by ? Date.now() - by.since : 0 });
+    this.emit('change');
+    for (const fn of this.#handedBack.splice(0)) fn();
+    return this.view();
+  }
+
   takeOver(h: Holder): SessionView {
+    if (this.mode === 'paused' && !this.holder) this.#pausedBy = null;
     if (this.mode === 'closed' || this.mode === 'finishing' || this.mode === 'starting') throw new CoreError('conflict', this.mode === 'starting' ? 'The browser is still starting. Try again in a moment.' : 'This task’s browser work is over; there’s nothing to take over.');
     if (this.holder && this.holder.key !== h.key) throw new CoreError('conflict', `${this.holder.label} has already taken over.`);
     if (this.holder) return this.view();
@@ -363,6 +553,9 @@ export class Session extends EventEmitter {
     for (const fn of this.#handedBack.splice(0)) fn();
   }
 
+  // The dialogs pages opened since the last call, for the worker to screen.
+  takeDialogs(): JsDialog[] { return this.#dialogs.splice(0); }
+
   // The person's pointer and keys, only from whoever holds the browser.
   async input(h: Holder, e: Input): Promise<void> {
     if (!this.holder) throw new CoreError('conflict', 'Take over first: Nova is working in this browser.');
@@ -370,6 +563,7 @@ export class Session extends EventEmitter {
     const cdp = this.#cdp;
     const sid = this.#page;
     if (!cdp || !sid) throw new CoreError('conflict', 'The browser isn’t open.');
+    if (e.type === 'click' || e.type === 'key' || e.type === 'text') this.#personInput = Date.now();
     const at = (x: number, y: number) => ({ x: Math.round(clamp(x) * this.#meta.width), y: Math.round(clamp(y) * this.#meta.height) });
     switch (e.type) {
       case 'click': {
@@ -456,11 +650,21 @@ export class Session extends EventEmitter {
     for (;;) {
       await this.gate();
       const world = await this.#world();
-      if (this.mode === 'taken_over' || this.mode === 'needs_person') continue;
-      if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
+      if (this.#mustWait()) continue;
       return this.#run<T>(world, expression);
     }
   }
+
+  // The one check every action makes after its last wait and right before the call that acts goes
+  // out, with nothing awaited in between (review of PR #238, 1): someone holds the browser, the
+  // worker is waiting for them, or it is paused, so it waits and looks again; or it was stopped.
+  #mustWait(): boolean {
+    if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
+    return this.mode === 'taken_over' || this.mode === 'needs_person' || this.mode === 'paused';
+  }
+
+  // Gives the page a moment and returns what is pending; for tests and the worker's own waits.
+  get dialogsPending(): number { return this.#dialogs.length; }
 
   async #world(): Promise<number> {
     const tree = await this.#send<{ frameTree: { frame: { id: string } } }>('Page.getFrameTree');
@@ -474,6 +678,64 @@ export class Session extends EventEmitter {
     });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] ?? r.exceptionDetails.text ?? 'The page threw an error.');
     return r.result.value as T;
+  }
+
+  // ---- elements, by the DOM or the accessibility tree (M10b) ----------------------------------
+
+  // The element in Nova's world, or null. A selector is asked of the DOM; a target of the
+  // accessibility tree (CDP Accessibility.queryAXTree, by role and accessible name), first match
+  // that isn't ignored.
+  async #resolve(world: number, loc: Locator): Promise<string | null> {
+    if (loc.selector) {
+      const r = await this.#send<{ result: { objectId?: string; subtype?: string } ; exceptionDetails?: { exception?: { description?: string }; text?: string } }>('Runtime.evaluate', { expression: `document.querySelector(${JSON.stringify(loc.selector)})`, contextId: world, returnByValue: false });
+      if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] ?? r.exceptionDetails.text ?? 'The selector failed.');
+      return r.result.subtype === 'null' ? null : r.result.objectId ?? null;
+    }
+    if (loc.target) {
+      const doc = await this.#send<{ result: { objectId?: string } }>('Runtime.evaluate', { expression: 'document', contextId: world, returnByValue: false });
+      if (!doc.result.objectId) return null;
+      const q = await this.#send<{ nodes: { backendDOMNodeId?: number; ignored?: boolean; role?: { value?: string }; name?: { value?: string } }[] }>('Accessibility.queryAXTree', { objectId: doc.result.objectId, accessibleName: loc.target.name, role: loc.target.role });
+      const node = q.nodes.find((n) => !n.ignored && typeof n.backendDOMNodeId === 'number');
+      if (!node) return null;
+      const o = await this.#send<{ object: { objectId?: string } }>('DOM.resolveNode', { backendNodeId: node.backendDOMNodeId, executionContextId: world });
+      return o.object.objectId ?? null;
+    }
+    return null;
+  }
+
+  async #callOn<T>(objectId: string, fn: string, args: unknown[] = []): Promise<T> {
+    const r = await this.#send<{ result: { value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } }>('Runtime.callFunctionOn', {
+      objectId, functionDeclaration: fn, arguments: args.map((value) => ({ value })), returnByValue: true, awaitPromise: true,
+    });
+    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] ?? r.exceptionDetails.text ?? 'The page threw an error.');
+    return r.result.value as T;
+  }
+
+  // Whether the element is on the page now.
+  async exists(loc: Locator): Promise<boolean> {
+    const world = await this.#world();
+    return (await this.#resolve(world, loc)) !== null;
+  }
+
+  // Runs `fn` (a function's source; `this` is the element) on the element, read-only.
+  async inspect<T>(loc: Locator, fn: string, args: unknown[] = []): Promise<T | null> {
+    const world = await this.#world();
+    const id = await this.#resolve(world, loc);
+    return id ? this.#callOn<T>(id, fn, args) : null;
+  }
+
+  // Runs `fn` on the element to act on it, never while someone holds the browser: as act(), the
+  // hold is checked after the last wait and before the call that acts goes out. `args` reach the
+  // function as values, never as source (a sign-in's value goes this way).
+  async actOn<T>(loc: Locator, fn: string, args: unknown[] = []): Promise<T | 'missing'> {
+    for (;;) {
+      await this.gate();
+      const world = await this.#world();
+      const id = await this.#resolve(world, loc);
+      if (this.#mustWait()) continue;
+      if (!id) return 'missing';
+      return this.#callOn<T>(id, fn, args);
+    }
   }
 
   async navigate(url: string, timeoutMs = 30_000): Promise<void> {
@@ -498,6 +760,64 @@ export class Session extends EventEmitter {
       if (state === 'complete') return;
       await new Promise((r) => setTimeout(r, 100));
     }
+  }
+
+  // A click at a point of the page (the vision fallback), never while someone holds the browser.
+  async clickAt(x: number, y: number): Promise<void> {
+    for (;;) {
+      await this.gate();
+      if (this.#mustWait()) continue;
+      const p = { x: Math.round(x), y: Math.round(y) };
+      void this.#send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...p });
+      void this.#send('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'left', buttons: 1, clickCount: 1 });
+      await this.#send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button: 'left', buttons: 0, clickCount: 1 });
+      return;
+    }
+  }
+
+  // Forget a site in this profile (M10b): its cookies (the host name's, and its parent domains'),
+  // and every kind of storage for its origins. Returns how many cookies went.
+  async clearSite(host: string, tops: string[] = []): Promise<number> {
+    const cdp = this.#cdp;
+    if (!cdp) throw new Error('The browser isn’t open.');
+    const name = host.replace(/:\d{1,5}$/, '');
+    const ofSite = (d: string) => { const x = d.replace(/^\./, ''); return x === name || name.endsWith(`.${x}`); };
+    const siteOf = (u: string) => { try { return new URL(u).hostname; } catch { return ''; } };
+    // Cookies: the site's own, partitioned ones (CHIPS) with their partition key (the second review
+    // of PR #238, 8: deleting without the key leaves them), and every cookie kept under it as a
+    // top-level site.
+    type Cookie = { name: string; domain: string; path: string; partitionKey?: { topLevelSite?: string } | string };
+    const { cookies } = await cdp.send<{ cookies: Cookie[] }>('Storage.getCookies', {});
+    const top = (c: Cookie) => (typeof c.partitionKey === 'string' ? c.partitionKey : c.partitionKey?.topLevelSite ?? '');
+    const mine = cookies.filter((c) => ofSite(c.domain) || (top(c) && ofSite(siteOf(top(c)))));
+    for (const c of mine) await this.#send('Network.deleteCookies', { name: c.name, domain: c.domain, path: c.path, ...(c.partitionKey ? { partitionKey: c.partitionKey } : {}) }).catch(() => {});
+    // Every kind of storage CDP can clear by origin and storage key.
+    for (const origin of new Set([`http://${host}`, `https://${host}`, `http://${name}`, `https://${name}`])) {
+      await cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' }).catch(() => {});
+      await cdp.send('Storage.clearDataForStorageKey', { storageKey: `${origin}/`, storageTypes: 'all' }).catch(() => {});
+    }
+    // And from inside the site itself, with the web's own APIs, first-party and as a frame under
+    // every other site Nova's browser has visited (where its storage is partitioned): a page Nova
+    // serves itself, answered by CDP, so nothing reaches either site.
+    const origins = [`http://${host}`, `https://${host}`];
+    const others = [...new Set(tops.filter((t) => t && t !== host).slice(0, 50))].flatMap((t) => [`http://${t}`, `https://${t}`]);
+    for (const o of [...origins, ...others]) this.#local.set(o, origins);
+    try {
+      for (const o of origins) await this.#forgetVisit(`${o}${FORGET_PAGE}`, 1);
+      for (const t of others) await this.#forgetVisit(`${t}${FORGET_TOP}`, origins.length);
+    } finally {
+      this.#local.clear();
+    }
+    await this.navigate('about:blank', 5000).catch(() => {});
+    return mine.length;
+  }
+
+  // Opens one of Forget's own pages and waits until its clearing scripts say they are done.
+  async #forgetVisit(url: string, frames: number): Promise<void> {
+    const before = this.#forgetDone;
+    await this.navigate(url, 10_000).catch(() => {});
+    const end = Date.now() + 8000;
+    while (this.#forgetDone - before < frames && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
   }
 
   async screenshot(): Promise<Buffer> {

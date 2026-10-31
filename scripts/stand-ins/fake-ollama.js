@@ -54,12 +54,18 @@ function entry(m, now) {
 // a stand-in with no model behind it says what a model reading ordinary content would: unlikely.
 // A test that needs a screen to fire gives its own `reply`.
 const SCREEN_QUESTIONS = ['direct_instruction', 'hidden_instruction', 'exfiltration', 'impersonation', 'unrequested_action'];
+const COPILOT = ['element_matches_intent', 'page_changed_as_expected', 'obstacle', 'dark_pattern', 'total_matches', 'dialog_injection'];
 
 export function fromSchema(s) {
   if (!s || typeof s !== 'object') return null;
   const asked = s.properties?.answers?.properties;
   if (asked && SCREEN_QUESTIONS.every((q) => q in asked)) {
     return { answers: Object.fromEntries(Object.keys(asked).map((q) => [q, 0.05])), confidence: 0.9, why: 'stand-in: ordinary content' };
+  }
+  // Nova Browser's co-pilot (src/core/browser/copilot.ts): what a model would say of an ordinary
+  // step on an ordinary page. A test that needs the co-pilot to see something gives its own `reply`.
+  if (asked && COPILOT.every((q) => q in asked)) {
+    return { answers: { element_matches_intent: 0.9, page_changed_as_expected: 0.9, obstacle: 0.05, dark_pattern: 0.05, total_matches: 0.9, dialog_injection: 0.05 }, confidence: 0.9, why: 'stand-in: an ordinary step' };
   }
   if (Array.isArray(s.enum)) return s.enum.find((v) => v !== 'unknown') ?? s.enum[0];
   if (s.type === 'object') return Object.fromEntries(Object.entries(s.properties ?? {}).map(([k, v]) => [k, fromSchema(v)]));
