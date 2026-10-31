@@ -56,6 +56,7 @@ Each change is required by a note.
 - `tests/ingest/tev1-eval.test.ts`: the assertion marked "NOTES for Track 1, item 4" is flipped (Tev1 4).
 - `tests/ingest/tev1-eval/harness.ts` asks the Tev1 seat through `ask`, still unbound (DS1 1).
 - `tests/core/evals.test.ts`: the pinned default path (evals 5).
+- `tests/core/tev1.test.ts:52` (DS1's seat test) expects `tev1:4b@aaaa4b`: since review item 4 the seat answers as the build it re-read after answering.
 
 ## Safety rules, with the evidence
 
