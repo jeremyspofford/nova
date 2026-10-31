@@ -17,6 +17,17 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (Decision Service ADR; extends Amendment B Part 1).** Owner input `nova-jev-decision-layer-2026-10-31.md` (copied unchanged).
+- **The decision:** ADR `docs/plans/decision-service.md`. Every System One judgment goes through one Decision Service:
+  - a registry of versioned templates (Noul, Choice, Score and Box questions; declared state; a policy as a truth table mapped onto tiers; pinned models; pre-registered evals);
+  - one provider interface with three seats (cloud Jev; Tev1 through Ollama; the stub, which is deterministic-only), routed by privacy mode as Part 1 says: local-only and local-first never use Jev;
+  - every decision logged to the Work Ledger with the template version, the pinned model that answered, the full probabilities and the policy outcome;
+  - no ad hoc provider calls (seats not exported from core; a boundary test).
+- **Part 1's eval** (#248: both Tev1 sizes failed, advisory) stands. `ingest-screen` is re-authored as v2 under the vendor's question rules, with a fresh pre-registered eval.
+- **Phases DS1–DS3** are side PRs and don't displace M10e–M10k.
+- **CONTRACTS §3:** gains Box, and a companion-Noul escape as an alternative to `unknown/other`.
+- **Open for the owner:** the ingest screen in cloud mode; the cloud route and budget (no live calls until then); retiring the transitional local model; frames to the cloud.
+
 **2026-10-31 (capture data path, spoke to hub: orchestration ADR open question 1 resolved).** The owner-approved design `nova-capture-data-path-design-2026-10-31.md` (v3) was added to the packet exactly as given (sha256 `059921b7…`). It resolves open question 1 in `docs/plans/M10-orchestration.md`, which now records the resolution.
 - **The path:** derived capture syncs continuously over the mesh. Raw media archives to one target configured on the hub, and a spoke prunes it only after verified archival, keeping a local 48-hour window.
 - **Cloud targets:** encrypted on the hub first, forbidden in local-only mode, with 90-day cold tiering. Tombstones reach every tier.

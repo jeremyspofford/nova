@@ -165,6 +165,13 @@ Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-3
 7. **A fault matrix and a soak run:** extend the QA harness under Amendment 2026-10-31-A.
 8. **QA Stage 2 integration with the Service Manager:** the recorded design, applied when Stage 2 is built, so the harness isn't built for the supervisor alone.
 - **Closing rule:** no capability is claimed in onboarding, docs or the UI that the Part 4 eval suite can't demonstrate.
+- **Decision Service (owner input 2026-10-31, extends Part 1):** `nova-jev-decision-layer-2026-10-31.md`, designed in `docs/plans/decision-service.md`.
+  - Built as side PRs:
+    - DS1: the service (registry, seats, decision log, boundary test);
+    - DS2: ingest and chat guardrails, model routing, the memory gate, retrieval scoring, trigger triage;
+    - DS3: browser verification, with M10b.
+  - Smart home, camera and knowledge-graph alignment come later. Nothing here displaces M10e–M10k.
+  - Gate per template: a pre-registered eval passing on the exact model version, or the template ships advisory.
 
 ## Sequencing rules
 - Relay stabilization may run parallel to M1–M2 (it is independent), integration only at M8.
