@@ -14,6 +14,18 @@ export const SAFE_CONFIG: readonly string[] = Object.freeze([
   'core.untrackedCache=false',
   // Local paths only: `file` covers a path as well as a file:// URL; ssh, git, http(s) and ext are off.
   'protocol.allow=never',
+  // A repository's own protocol.<name>.allow outranks protocol.allow, so each transport git knows is
+  // named here as well (the review of PR #239, item 6). An insteadOf in the person's config can
+  // still rewrite a path into a URL; then it is refused. Nova never runs a fetch in their repository
+  // anyway: the merge carries objects as a pack (coding/index.ts).
+  'protocol.http.allow=never',
+  'protocol.https.allow=never',
+  'protocol.ftp.allow=never',
+  'protocol.ftps.allow=never',
+  'protocol.ssh.allow=never',
+  'protocol.git.allow=never',
+  'protocol.ext.allow=never',
+  'protocol.fd.allow=never',
   'protocol.file.allow=always',
   'credential.helper=',
   'core.sshCommand=false',

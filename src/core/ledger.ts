@@ -96,7 +96,10 @@ export interface Lane { key: string; max: number }
 // `internal`: a worker whose tasks only its own module makes (the change pipeline, the foundry).
 // Anyone else asking — the API, a device, a connector, a trigger — is refused with `why`, so a
 // brief can't be forged to drive it past the person's OK.
-export type LanedWorker = Worker & { lane?(brief: Brief): Lane; minTier?(input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier; internal?: { key: symbol; why: string } };
+// `uncancellable`: why a running task can't be cancelled now (it is part way through a step that
+// can't be stopped half done, such as moving a branch), or null. A cancel then is refused, so the
+// record never says "cancelled" over work that went ahead.
+export type LanedWorker = Worker & { lane?(brief: Brief): Lane; minTier?(input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier; internal?: { key: symbol; why: string }; uncancellable?(t: Task): string | null };
 const DEFAULT_LANE: Lane = { key: 'default', max: 1 };
 
 export interface LedgerOptions {
@@ -315,6 +318,9 @@ export class Ledger extends EventEmitter {
   cancel(id: string, reason = 'Cancelled.'): Task {
     const t = this.get(id);
     if (TERMINAL.includes(t.state)) throw new CoreError('conflict', `This task is already ${t.state}.`);
+    let no: string | null = null;
+    try { no = this.workers.get(t.owner)?.uncancellable?.(t) ?? null; } catch { /* it can't say: cancellable */ }
+    if (no) throw new CoreError('conflict', no);
     this.#running.get(id)?.abort(new Error('cancelled'));
     return this.#move(id, 'cancelled', reason, 'cancelled');
   }
