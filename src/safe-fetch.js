@@ -26,6 +26,11 @@ for (const [net, bits] of [
 // Names that only ever mean something on the person's own network.
 const PRIVATE_NAME = /(^|\.)(localhost|local|internal|intranet|lan|home|arpa|ts\.net)\.?$/i;
 
+// Whether a host name is one of those (Nova Computer's egress proxy applies the same rule).
+export function privateName(host) {
+  return PRIVATE_NAME.test(String(host));
+}
+
 // Whether an address is one a page may send the agent to: public, unicast.
 export function publicAddress(address) {
   const kind = isIP(address);
