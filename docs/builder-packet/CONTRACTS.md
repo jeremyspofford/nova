@@ -14,7 +14,7 @@ Rules: a worker never talks to the user directly; Nova verifies evidence before 
 For every System-2 call: `task_id`, `provider/model`, `context_items[]` (what memory/files/history were included, as references + hashes), `purpose`, `privacy_mode`, `egress` (local / named remote). Receipts are stored, user-visible, and are the audit answer to "what did Nova tell that model about me, and why?"
 
 ## 3. Decision template (System 1)
-A versioned, cached schema for a recurring decision: `template_id`, `version`, `situation`, `inputs` (typed), `questions[]` (typed: Choice ≤255 options / Score / Noul), **mandatory `unknown/other` escape on every Choice**, `escalation` (confidence floor → System 2), `stats` (uses, agreement with outcomes, calibration drift).
+A versioned, cached schema for a recurring decision: `template_id`, `version`, `situation`, `inputs` (typed), `questions[]` (typed: Choice ≤255 options / Score / Noul / Box), **mandatory escape on every Choice: an `unknown/other` option, or a companion Noul asking whether any option fits (preferred for Jev 1.14)**, `escalation` (confidence floor → System 2), `stats` (uses, agreement with outcomes, calibration drift).
 Rules: templates are authored **on cache miss only**, by a cheap authoring model or a human, then validated (schema check + dry runs) before activation. Never generate a schema per-request. Templates whose calibration drifts beyond threshold are retired and re-authored. Template creation is itself a ledger task with evidence.
 
 ## 4. Extension manifest
