@@ -20,6 +20,22 @@ test('working: Nova says which step; Take over is the one standout, for those al
   assert.doesNotMatch(takeoverActions(phone, { canTake: false }), /btn primary/);
 });
 
+test('M10b: Pause and Stop beside Take over, quiet; paused, Carry on is the one standout', () => {
+  const html = takeoverActions(takeoverState(view()));
+  assert.match(html, /data-action="pause-browser">Pause</);
+  assert.match(html, /data-action="stop-browser">Stop</);
+  assert.equal((html.match(/btn primary/g) ?? []).length, 1, 'Take over stays the one standout');
+  const paused = takeoverState(view({ mode: 'paused' }));
+  assert.deepEqual([paused.status, paused.line, paused.action], ['waiting', 'Paused. Nova does nothing until you let it carry on.', 'resume']);
+  const ph = takeoverActions(paused);
+  assert.match(ph, /class="btn primary" data-action="resume-browser">Carry on</);
+  assert.match(ph, /data-action="stop-browser">Stop</);
+  assert.doesNotMatch(ph, /pause-browser/);
+  // Someone who may not take over may not pause or stop either.
+  const phone = takeoverActions(takeoverState(view(), { me: 'device:p1', canTake: false }), { canTake: false });
+  assert.doesNotMatch(phone, /pause-browser|stop-browser/);
+});
+
 test('asked for: Needs you, in the words the worker used', () => {
   const st = takeoverState(view({ mode: 'needs_person', asked: 'Type the code shown in the picture.' }));
   assert.deepEqual([st.status, st.line, st.action], ['needs-you', 'Needs you: Type the code shown in the picture.', 'take-over']);

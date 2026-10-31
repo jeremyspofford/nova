@@ -395,6 +395,8 @@ export function takeoverState(v, { me = 'console', canTake = true } = {}) {
     return { status: 'waiting', line, action, held, mine };
   }
   if (v.mode === 'needs_person') return { status: 'needs-you', line: `Needs you: ${v.asked ?? 'a step only a person can do.'}`, action: canTake ? 'take-over' : null, held, mine };
+  // M10b: the person paused it; Carry on is theirs.
+  if (v.mode === 'paused') return { status: 'waiting', line: 'Paused. Nova does nothing until you let it carry on.', action: canTake ? 'resume' : null, held, mine };
   if (v.mode === 'starting') return { status: 'working', line: 'Nova is opening a browser.', action: null, held, mine };
   if (v.mode === 'finishing') return { status: 'working', line: 'Nova has finished the steps and is taking its evidence.', action: null, held, mine };
   return { status: 'working', line: `Nova is working. ${stepLine(v)}`.trim(), action: canTake ? 'take-over' : null, held, mine };
@@ -403,9 +405,14 @@ export function takeoverState(v, { me = 'console', canTake = true } = {}) {
 export function takeoverActions(st, { canTake = true } = {}) {
   const primary = st.action === 'take-over'
     ? '<button type="button" class="btn primary" data-action="take-over">Take over</button>'
-    : st.action === 'hand-back' ? `<button type="button" class="btn primary" data-action="hand-back">${st.mine ? 'Hand back' : 'End their takeover'}</button>` : '';
+    : st.action === 'hand-back' ? `<button type="button" class="btn primary" data-action="hand-back">${st.mine ? 'Hand back' : 'End their takeover'}</button>`
+      : st.action === 'resume' ? '<button type="button" class="btn primary" data-action="resume-browser">Carry on</button>' : '';
   const why = !canTake && !st.held && st.status !== 'quiet' ? `<p class="sheet-line takeover-only">${esc(TAKE_OVER_ONLY)}</p>` : '';
-  return `${why}${primary}<button type="button" class="btn quiet" data-action="close-sheet">Close</button>`;
+  // M10b: the person in control can pause the worker or stop the task, quietly beside the standout.
+  const live = canTake && st.status !== 'quiet' && !st.held;
+  const pause = live && st.action === 'take-over' && st.status === 'working' ? '<button type="button" class="btn quiet" data-action="pause-browser">Pause</button>' : '';
+  const stopBtn = live ? '<button type="button" class="btn quiet" data-action="stop-browser">Stop</button>' : '';
+  return `${why}${primary}${pause}${stopBtn}<button type="button" class="btn quiet" data-action="close-sheet">Close</button>`;
 }
 
 export function takeoverRefused(v) {

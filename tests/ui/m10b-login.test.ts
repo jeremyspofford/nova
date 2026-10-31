@@ -38,7 +38,7 @@ test('M10b gate 1: a login from the vault leaves the fake secret in no transcrip
     const ev = await n.events(id!);
     assert.ok(ev.some((e) => e.kind === 'signed_in_with' && e.detail.fields === 2), 'the worker signed in');
     assert.ok(ev.some((e) => e.kind === 'copilot' && e.detail.model === true), 'the co-pilot was asked, on the local model');
-    assert.equal(shop.hits('/login').filter((h) => h.method === 'POST').length, 1, 'the stand-in got exactly one sign-in');
+    assert.equal(shop.hits('/login').filter((h: { method: string }) => h.method === 'POST').length, 1, 'the stand-in got exactly one sign-in');
 
     // The search: nothing Nova wrote holds the username or the password.
     const secrets = [cred.password, cred.username];

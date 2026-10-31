@@ -14,6 +14,7 @@ import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js
 import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
 import { bindConnections, loadConnections, renderConnections } from './connections.js';
+import { bindSites, loadSites, renderSites } from './sites.js';
 import { bindCapture, captureChanged, loadCapture, loadCaptureView, renderCaptureSettings, renderCaptureView } from './capture.js';
 import { bindModels, loadModels, renderModels } from './models.js';
 import { bindChanges, loadChanges, renderChanges } from './changes.js';
@@ -1626,7 +1627,7 @@ function showSettings() {
   settingsUi.touched = false;
   selectSettings(settingsTarget(location.hash).cat);
   const opened = location.hash;
-  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadReset()]).then(() => {
+  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadReset()]).then(() => {
     renderSettingsView({ only: 'you' });
     renderSettingsView({ only: 'privacy' });
     // The person has moved on since (typed in search, opened something): leave them be.
@@ -1645,6 +1646,7 @@ const PARTS = {
   perms: () => (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" id="perms" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
 <p class="memory-lede">${permissionsError}</p><button type="button" class="btn set-retry" data-action="retry-settings">Try again</button></section>` : ''),
   connections: () => renderConnections(),
+  sites: () => renderSites(),
   capture: () => renderCaptureSettings(),
   models: () => renderModels(),
   changes: () => renderChanges(),
@@ -1874,6 +1876,7 @@ el.capture.addEventListener('click', (e) => { followLink(e); });
 // The indicator opens the Capture view in place, from any page.
 $('capture-ind').addEventListener('click', (e) => { followLink(e); });
 bindConnections(el.settings, () => { if (state.view === 'settings' && $('settings-connections')) renderSettingsView({ only: 'connections' }); });
+bindSites(el.settings, () => { if (state.view === 'settings' && $('settings-sites')) renderSettingsView({ only: 'sites' }); });
 // Settings › Models (M6b): hardware, roles, downloads with live progress, budgets.
 bindModels(el.settings, () => { if (state.view === 'settings' && $('settings-models')) renderSettingsView({ only: 'models' }); });
 // Settings › Changes (M7a): the change pipeline, the one waiting for you, canaries, roll back.
