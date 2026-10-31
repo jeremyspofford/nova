@@ -62,7 +62,9 @@ export function audit(page: Page): Promise<FoldAudit> {
         if (cs.clipPath === 'inset(50%)' || /^rect\(0/.test(cs.clip)) return true;
       }
       const r = e.getBoundingClientRect();
-      return r.width <= 1 || r.height <= 1;
+      // A box crushed to nothing across is not hidden: its text still shows, spilling (F8's
+      // device names were in a 1px column). Only a box that is nothing both ways is.
+      return r.width <= 1 && r.height <= 1;
     };
     const scrolls = (v: string) => v === 'auto' || v === 'scroll';
     const cuts = (v: string) => v === 'hidden' || v === 'clip';
