@@ -34,9 +34,6 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* It scrolls up and down only: a phone Home's breathing orb glow, wider than the screen at its
-     fullest, must not make the view pan sideways (tables and code scroll sideways in their own box). */
-  overflow-x: hidden;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
 }

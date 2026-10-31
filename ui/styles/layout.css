@@ -69,6 +69,9 @@ body[data-layout="phone"] .shell {
   grid-template: "main" minmax(0, 1fr) "tabs" auto / minmax(0, 1fr);
 }
 body[data-layout="phone"] .tabs { display: flex; }
+/* A phone's view scrolls up and down only: Home's breathing orb glow, wider than the screen at its
+   fullest, must not make it pan sideways (tables and code scroll sideways in their own box). */
+body[data-layout="phone"] .scroller { overflow-x: hidden; }
 
 /* tablet, foldable inner screen: the rail and one column. The three-column band isn't reached,
    so there is no right column to crush; its cards are on Home. */
