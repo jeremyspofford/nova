@@ -353,7 +353,8 @@ export class Setup extends EventEmitter {
       }
       case 'roles': {
         const rec: Purpose[] = recommendedHubPurposes(this.#deviceFacts(s)).filter((p) => p !== 'hub-candidate');
-        const others = HUB_CHOICES.filter((p) => !rec.includes(p)).map((p) => `${PURPOSE_WORDS[p].label.toLowerCase()} (${PURPOSE_WORDS[p].note.replace(/\.$/, '').toLowerCase()})`);
+        const note = (p: Purpose) => { const n = PURPOSE_WORDS[p].note.replace(/\.$/, '').replace(/\. /g, '; '); return n.charAt(0).toLowerCase() + n.slice(1); };
+        const others = HUB_CHOICES.filter((p) => !rec.includes(p)).map((p) => `${PURPOSE_WORDS[p].label.toLowerCase()} (${note(p)})`);
         return `What is this computer for, besides being the hub? I recommend ${purposeWords(rec).toLowerCase()}${rec.includes('compute') ? ', since its GPU can run models' : ''}. The others: ${others.join('; ')}. (“Yes” for what I recommend, or say which.)`;
       }
       case 'backend': {

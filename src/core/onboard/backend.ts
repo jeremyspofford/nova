@@ -15,15 +15,15 @@ export interface BackendOption { id: Backend; label: string; available: boolean;
 export interface BackendSummary { os: OsFamily; recommended: 'supervisor'; options: BackendOption[]; gets: string; misses: string; switching: string; words: string }
 
 export const SUPERVISOR_WORDS = 'Ordinary programs, under Nova’s supervisor';
-export const SWITCH_LATER = 'You can see this in Settings › Services, where switching will be. Switching to K3s isn’t available yet; when it is, it won’t need a reinstall, and it will ask for your explicit confirmation.';
+export const SWITCH_LATER = 'You can see this in Settings › Services. Switching to K3s will be there once it is available: it won’t need a reinstall, and it will ask for your explicit confirmation.';
 export const RUNS_TODAY = 'Everything Nova does today runs this way; nothing in Nova needs Kubernetes.';
 
 export function backendFor(os: OsFamily): BackendSummary {
   const supervisor: BackendOption = { id: 'supervisor', label: SUPERVISOR_WORDS, available: true, recommended: true, note: 'Lighter, and needs nothing extra.' };
   if (os === 'linux') {
     const k3s: BackendOption = { id: 'k3s', label: 'K3s, a small Kubernetes', available: false, recommended: false, note: 'Not available yet in this version. It would add side-by-side deploys and one-step rollback for container services, and use more memory and disk.' };
-    const gets = `Recommended: ${SUPERVISOR_WORDS.toLowerCase()}. It’s lighter and needs nothing extra. ${RUNS_TODAY}`;
-    const misses = 'K3s, for container services, isn’t available in this version yet, so there is nothing to choose today.';
+    const gets = `Recommended: ordinary programs, under Nova’s supervisor. It’s lighter and needs nothing extra. ${RUNS_TODAY}`;
+    const misses = 'K3s, for container services, isn’t available in this version yet.';
     return { os, recommended: 'supervisor', options: [supervisor, k3s], gets, misses, switching: SWITCH_LATER, words: `${gets} ${misses} ${SWITCH_LATER}` };
   }
   const where = os === 'wsl2'
