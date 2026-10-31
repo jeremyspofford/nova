@@ -27,6 +27,8 @@ test('M10b gate 1: a login from the vault leaves the fake secret in no transcrip
         { do: 'navigate', url: `${shop.url}/login` },
         { do: 'login', username: '#username', password: '#password', submit: '#signin', done_when: '#account' },
         { do: 'read', selector: '#account', expect: 'Signed in' },
+        // The page says who is signed in; the read is kept as evidence, redacted.
+        { do: 'read', selector: 'main', expect: 'Welcome back' },
       ],
       verify: { url: `${shop.url}/signins`, expect: ['Signed in: 1'] },
     };

@@ -9,7 +9,7 @@
 // succeeded, and the checkout stop: Nova never presses pay.
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { ENVELOPE_VERSION, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
@@ -300,7 +300,9 @@ export class Browser extends EventEmitter {
     if (this.#profileUser) throw new CoreError('conflict', 'Nova’s browser is busy with a task. Try again when it has finished.');
     const found = this.chromium();
     let cookies = 0;
-    if (found.path) {
+    // No profile yet: nothing of the site's to clear, and no browser to start for it.
+    if (existsSync(profileDir(this.#o.home))) {
+      if (!found.path) throw new CoreError('conflict', `Nova can’t open its browser to forget ${site}: ${found.detail}`);
       this.#profileUser = 'forget';
       const s = new Session({ taskId: 'forget-site', chromium: found.path, hosts: [], sandbox: this.#sandbox(), now: this.#now, hub: () => this.#hub(), profile: profileDir(this.#o.home), ...(this.#o.launch ? { launch: this.#o.launch } : {}) });
       try {

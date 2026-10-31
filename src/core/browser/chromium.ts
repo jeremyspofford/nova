@@ -125,10 +125,15 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
   const kept = typeof o.profile === 'string' && o.profile.length > 0;
   const profile = kept ? o.profile! : mkdtempSync(join(tmpdir(), PROFILE_PREFIX));
   if (kept) prepareProfile(profile); else writeFileSync(join(profile, OWNER), String(process.pid));
+  // Nova's own profile keeps sign-ins (cookies), never page bodies: its HTTP cache is a throwaway
+  // folder for this browser alone, removed when it closes (a page that says who is signed in must
+  // not stay on disk).
+  const cache = kept ? mkdtempSync(join(tmpdir(), `${PROFILE_PREFIX}cache-`)) : null;
+  if (cache) writeFileSync(join(cache, OWNER), String(process.pid));
   const width = o.width ?? 1280;
   const height = o.height ?? 800;
   const args = [
-    '--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`,
+    '--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`, ...(cache ? [`--disk-cache-dir=${cache}`] : []),
     '--no-first-run', '--no-default-browser-check', '--disable-default-apps', '--disable-extensions', '--disable-sync',
     // Chromium's own calls home (updates, safe browsing, metrics, translation) stay off: the only
     // traffic is the pages the task opens.
@@ -168,7 +173,11 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
     }
     // Nova's own profile stays, without its session-restore files. A throwaway one goes; Chromium's
     // helper processes may still be writing as it goes, so removing retries a few times.
-    if (kept) { afterClose(profile); return; }
+    if (kept) {
+      afterClose(profile);
+      if (cache) { try { rmSync(cache, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* swept at the next start */ } }
+      return;
+    }
     try { rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* best effort: it is in the temp folder */ }
   };
   try {

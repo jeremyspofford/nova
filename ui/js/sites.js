@@ -27,7 +27,7 @@ const when = (iso) => { try { return new Date(iso).toLocaleDateString(undefined,
 function row(s) {
   const what = [s.login ? 'A sign-in is saved' : '', s.last_at ? `used ${when(s.last_at)}` : ''].filter(Boolean).join(', ');
   return `<li class="conn" data-site="${esc(s.site)}">
-  <div class="conn-head"><p class="settings-label">${esc(s.site)}</p><span class="pill ${s.login ? 'is-on' : ''}">${s.login ? 'Signed in' : 'Kept data'}</span></div>
+  <div class="conn-head"><p class="settings-label">${esc(s.site)}</p><span class="pill ${s.login ? 'is-on' : ''}">${s.login ? 'Sign-in saved' : 'Kept data'}</span></div>
   <p class="settings-note">${esc(what ? `${what.charAt(0).toUpperCase()}${what.slice(1)}.` : 'Nova’s browser keeps cookies for it.')}</p>
   <div class="sheet-actions"><button type="button" class="btn small quiet" data-action="forget-site" data-site="${esc(s.site)}">Forget</button></div>
 </li>`;

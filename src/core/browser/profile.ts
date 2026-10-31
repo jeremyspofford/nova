@@ -21,6 +21,8 @@ export const PREFS = {
   autofill: { enabled: false, profile_enabled: false, credit_card_enabled: false },
   password_manager: { leak_detection: false },
   session: { restore_on_startup: 5 },
+  // No history: page titles and addresses can say who is signed in.
+  history: { saving_disabled: true, deleting_enabled: true },
   safebrowsing: { enabled: false },
   translate: { enabled: false },
 };
@@ -42,10 +44,13 @@ export function prepareProfile(dir: string): void {
   writeFileSync(file, JSON.stringify(merge(prefs, PREFS)), { mode: 0o600 });
 }
 
-// Session restore keeps the last pages and what was typed into their forms.
-const RESTORE = ['Sessions', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs'];
+// Session restore keeps the last pages and what was typed into their forms; history, top sites and
+// favicons keep page titles and addresses. All go when the browser closes; cookies and site storage
+// stay. (A cache in the profile itself is only one made before the cache had a folder of its own,
+// chromium.ts.)
+const GONE = ['Sessions', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs', 'Cache', 'Code Cache', 'History', 'History-journal', 'Top Sites', 'Top Sites-journal', 'Favicons', 'Favicons-journal', 'Visited Links', 'Shortcuts', 'Shortcuts-journal', 'Network Action Predictor', 'Network Action Predictor-journal'];
 export function afterClose(dir: string): void {
-  for (const f of RESTORE) {
+  for (const f of GONE) {
     const p = join(dir, 'Default', f);
     if (existsSync(p)) { try { rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* next time */ } }
   }

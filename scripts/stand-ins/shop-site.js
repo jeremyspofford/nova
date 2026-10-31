@@ -124,7 +124,10 @@ ${Object.entries(ITEMS).map(([id, it]) => `<form method="post" action="/cart/add
     }
     if (req.method === 'GET' && p === '/account') {
       if (!signedIn(req)) return go('/login');
-      return html(200, 'Your account', '<h1 id="account">Signed in</h1><p>Welcome back.</p>');
+      // As real sites do, it says who is signed in: Nova must keep that out of what it writes.
+      // Cacheable, with the name in its title too: what a browser keeps (cache, history) must not
+      // keep it either.
+      return html(200, `Your account: ${state.username}`, `<h1 id="account">Signed in</h1><p id="who" title="${esc(state.username)}">Welcome back, ${esc(state.username)}.</p>`, '', { 'cache-control': 'private, max-age=3600' });
     }
     if (p === '/signins') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end(`Signed in: ${signins}`); }
     if (req.method === 'GET' && p === '/captcha') {
