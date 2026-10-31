@@ -49,7 +49,7 @@ test('M6b: Settings › Models — device map, recommendation, roles, a download
     await page.waitForFunction(() => document.querySelectorAll('#models .model-role .pill.is-on').length === 3);
     assert.equal(await section.locator('.btn.primary').count(), 0, 'nothing left to recommend: no standout');
     assert.match((await reasoner.textContent()) ?? '', /example-deep:32b on .*\./);
-    assert.match(await text(), /No cloud model is set, so everything runs on your devices/);
+    assert.match(await text(), /No cloud model is set here/);
 
     // A download: asked for, then it waits for the OK, which is the view's standout.
     await section.locator('details.model-more summary').click();

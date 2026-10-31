@@ -36,7 +36,7 @@ test('approving a device is tier 3: the digits, who it is and what it may do, a 
   const html = joinRequestSheet({ id: 'r1', name: 'Desk computer', kind: 'computer', platform: 'linux', capabilities: ['shell.run'], fingerprint: 'ABCD-EFGH-JKMN-PQRS-TVWX-YZ01-2345-6789', confirmation: '042917' });
   assert.match(html, /data-tier="3" data-request="r1"/);
   assert.match(html, /<p class="digits" aria-label="0 4 2 9 1 7">042 917<\/p>/);
-  assert.match(html, /can’t read your conversations/);
+  assert.match(html, /isn’t given your conversations/);
   assert.match(html, /shell\.run/);
   assert.match(html, /ABCD-EFGH-JKMN/);
   assert.match(html, /name="confirm" required/);

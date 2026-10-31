@@ -889,7 +889,7 @@ export class Capture extends EventEmitter {
   }
 
   #refuseRemote(url: string): void {
-    if (!permits(this.#o.privacy(), this.#egress(url))) throw new CoreError('forbidden', `${url} is outside your devices. Your privacy setting is local-only, and capture stays on your own devices, so Nova won’t pull from it.`);
+    if (!permits(this.#o.privacy(), this.#egress(url))) throw new CoreError('forbidden', `${url} is outside your devices. Your privacy setting is local-only, so Nova won’t pull capture from outside your devices.`);
   }
 
   #url(v: unknown): string {

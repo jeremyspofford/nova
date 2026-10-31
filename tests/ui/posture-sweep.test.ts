@@ -15,11 +15,17 @@ const ALL = ['activity', 'automations', 'chat', 'health', 'home', 'memory', 'set
 // The orb's parts. Anything else inside it (eyes, a mouth, an image) would be a face.
 const ORB_PARTS = ['orb-core', 'orb-glow', 'orb-sheen', 'orb-swirl'];
 
-function expected(width: number, posture: string) {
+// The bands start where their regions fit (UX review 2026-10-31, F8/F9): the widths layout.css
+// derives from the applied design system, as the page measures them.
+function expected(width: number, posture: string, bands: { two: number; three: number }) {
   if (posture === 'folded') return 'phone';
   if (posture.startsWith('half-open')) return 'tablet';
-  return width < 600 ? 'phone' : width < 1024 ? 'tablet' : 'desktop';
+  return width < bands.two ? 'phone' : width < bands.three ? 'tablet' : 'desktop';
 }
+const bandsOf = (page: Page) => page.evaluate(() => {
+  const w = (b: string) => document.querySelector(`.band-probe[data-band="${b}"]`)!.getBoundingClientRect().width;
+  return { two: w('two'), three: w('three') };
+});
 
 const visible = (page: Page, sel: string) => page.$$eval(sel, (els) => els.filter((e) => (e as HTMLElement).checkVisibility()).map((e) => (e as HTMLElement).dataset.dest!));
 
@@ -61,7 +67,8 @@ test('M3 gate: posture sweep — layout, no overflow, the same destinations ever
         await ready(d.page);
         const body = await d.page.evaluate(() => ({ layout: document.body.dataset.layout, posture: document.body.dataset.posture }));
         assert.equal(body.posture, posture, `${at}: posture`);
-        assert.equal(body.layout, expected(width, posture), `${at}: layout`);
+        const bands = await bandsOf(d.page);
+        assert.equal(body.layout, expected(width, posture, bands), `${at}: layout (bands ${Math.round(bands.two)}/${Math.round(bands.three)})`);
         const overflow = await d.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         assert.ok(overflow <= 0, `${at}: ${overflow}px of sideways scrolling`);
         // Home draws its hero orb once its data arrives; on a busy machine that can trail "ready".
@@ -75,7 +82,7 @@ test('M3 gate: posture sweep — layout, no overflow, the same destinations ever
         if (shots) await shoot(d.page, join(shots, `sweep-${width}-${posture}.png`));
         assert.deepEqual(await reachable(d.page), ALL, `${at}: every destination is reachable`);
         assert.deepEqual(d.errors, [], `${at}: no errors in the page`);
-        rows.push(`${String(width).padStart(4)}px  ${posture.padEnd(21)} ${body.layout}`);
+        rows.push(`${String(width).padStart(4)}px  ${posture.padEnd(21)} ${body.layout} (bands ${Math.round(bands.two)}/${Math.round(bands.three)})`);
         await d.ctx.close();
       }
     }

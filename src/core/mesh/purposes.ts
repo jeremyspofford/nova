@@ -16,7 +16,7 @@ export type Purpose = (typeof PURPOSES)[number];
 export const WORKLOAD_PURPOSES: readonly Purpose[] = Object.freeze(['compute', 'storage', 'capture-source', 'general-server']);
 
 export const PURPOSE_WORDS: Readonly<Record<Purpose, { label: string; note: string }>> = Object.freeze({
-  'thin-client': { label: 'Thin client', note: 'A screen onto Nova. It never runs anything for Nova.' },
+  'thin-client': { label: 'Thin client', note: 'A screen onto Nova, for using it.' },
   'hub-candidate': { label: 'Hub candidate', note: 'It could become the hub one day. Its key is pinned for that, so this is confirmed every time.' },
   compute: { label: 'Compute', note: 'Runs models and other heavy work.' },
   storage: { label: 'Storage', note: 'Keeps models and data.' },

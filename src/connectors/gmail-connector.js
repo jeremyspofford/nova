@@ -62,7 +62,7 @@ export function gmailConnector(gmail, { pollMs = 5 * 60_000 } = {}) {
       can: [
         'Search and read your mail when you ask.',
         'Save drafts; you review and send them from Gmail.',
-        'Archive, label and mark messages read or unread, after asking.',
+        'Archive, label and mark messages read or unread, after asking, unless you turn that off in Settings.',
         'Notice new mail, for the rules you set up.',
       ],
       never: ['Send email.', 'Delete email.'],

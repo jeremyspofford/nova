@@ -1,10 +1,20 @@
 // Which layout to show, from the viewport and the device's posture (DESIGN-SYSTEM §5), never
-// from a device name. The widths themselves live only in ui/styles/layout.css: it sets
-// --viewport (narrow | medium | wide), --aside-room (yes | no) and --segments (none |
-// horizontal | vertical) on :root, and this module turns those, plus the posture, into
-// <body data-layout data-posture data-aside>. These functions are pure, so they are unit-tested.
+// from a device name. The widths themselves live only in ui/styles/layout.css: it derives
+// --band-two and --band-three from the regions' minimums (UX review 2026-10-31, F8/F9) and sets
+// --segments (none | horizontal | vertical) on :root; shell.js measures the bands, and this
+// module turns the width, the bands and the posture into <body data-layout data-posture
+// data-aside>. These functions are pure, so they are unit-tested.
 
 export const LAYOUTS = Object.freeze(['phone', 'tablet', 'desktop']);
+
+// The band a width is in, from the derived widths in px: narrow (one column), medium (the rail
+// and one column), wide (the three-column band: rail, centre and right column all at their
+// minimums or more). Never a round number: the bands are where the regions fit.
+export function viewportOf(width, { two, three }) {
+  if (width >= three) return 'wide';
+  if (width >= two) return 'medium';
+  return 'narrow';
+}
 
 // Postures, in Nova's words:
 //   continuous            a flat screen, or a foldable fully open (the default);
@@ -35,10 +45,12 @@ export function layoutOf({ viewport = 'narrow', posture = 'continuous' } = {}) {
   return 'phone';
 }
 
-// The second column of quiet cards: always the context pane on a tablet; on a desktop, only
-// when there is room, unless the person closed it; never on a phone.
-export function asideOf({ layout, room = 'no', closed = false }) {
-  if (layout === 'tablet') return 'on';
+// The second column of quiet cards: on a desktop, when there is room, unless the person closed
+// it; on a half-open tablet, the second pane its posture gives (beside the conversation where
+// both fit, below it otherwise); never on a flat tablet, which is under the three-column band
+// (its cards are on Home), and never on a phone.
+export function asideOf({ layout, posture = 'continuous', room = 'no', closed = false }) {
+  if (layout === 'tablet') return posture.startsWith('half-open') ? 'on' : 'off';
   return layout === 'desktop' && room === 'yes' && !closed ? 'on' : 'off';
 }
 
@@ -46,5 +58,5 @@ export function asideOf({ layout, room = 'no', closed = false }) {
 export function resolve({ viewport, room, segments, devicePosture, orientation, override, closed }) {
   const posture = postureOf({ override, segments, devicePosture, orientation });
   const layout = layoutOf({ viewport, posture });
-  return { layout, posture, aside: asideOf({ layout, room, closed }) };
+  return { layout, posture, aside: asideOf({ layout, posture, room, closed }) };
 }

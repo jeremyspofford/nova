@@ -1004,7 +1004,7 @@ async function decideCandidate(b) {
   const keep = b.dataset.action === 'keep-candidate';
   try {
     await post(`/api/memory/candidates/${encodeURIComponent(id)}/${keep ? 'keep' : 'drop'}`);
-    toast(keep ? 'Kept.' : 'Dropped. Nova never saw it.');
+    toast(keep ? 'Kept.' : 'Dropped. It isn’t in Memory.');
     loadMemory();
   } catch (e) { toast(e.message); }
 }
@@ -1106,7 +1106,7 @@ async function removeSkill(item) {
     };
     await loadSkills();
     (next && $(next.id) || el.skills.querySelector('.skill') || el.skills).focus({ preventScroll: true });
-    toast(`Removed ${name}. Nothing of it is left.`, { undo: true });
+    toast(`Removed ${name}.`, { undo: true });
   } catch (e) {
     item.classList.remove('is-leaving');
     toast(e.message);

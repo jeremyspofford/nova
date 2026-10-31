@@ -227,16 +227,19 @@ opening the page to Nova finding the kept note; its step times are in
 `onboard.test.ts` › "the closing rule…": every first action's tags are demonstrated by regression
 tasks (`evals.demonstrated(TASKS)`), and every `onboard.*` claim in `tests/evals/claims.ts` is in its
 file and either backed (`import`, `memory-review`, `first-run`) or carries a note naming the test or
-evidence it is worded to. The register's own check (`tests/core/evals.test.ts`) finds no drift.
+evidence it is worded to. Since #265 merged, its closing-rule test (`tests/core/evals.test.ts`) fails
+on any unbacked claim, so the three that only unit tests show were softened the way #265 does: the new
+words in `text`, the old ones in `strong` (which must stay out of every user-facing file), an eval
+slug and a priority.
 
 | Claim | Words | Backing |
 |---|---|---|
 | `onboard.import-waits-for-ok` | “then waits in Memory for your OK: none of it is remembered until you keep it” | `memory.import-waits-for-ok` (regression) |
 | `onboard.first-action-review` | “It waits in Memory for your OK. Keep what is right; nothing is remembered until you do.” | `memory.import-waits-for-ok` |
 | `onboard.first-action-import-folder` | “… in ~/workspace/import/, then tell Nova. They wait in Memory for your OK.” | `grounding.fresh-start`, `memory.import-waits-for-ok` |
-| `onboard.discovery-finds-only` | “Looking only finds them: nothing is connected, and nothing is read.” | Worded to `tests/core/onboard.test.ts`; no golden task |
-| `onboard.backend-runs-today` | “Everything Nova does today runs this way; nothing in Nova needs Kubernetes.” | Worded to M10e's tripwire evidence; not an agent outcome |
-| `onboard.thin-client-runs-nothing` | “A screen onto Nova. It never runs anything for Nova.” | Worded to `tests/core/services-placement.test.ts`; no golden task |
+| `onboard.discovery-finds-only` | “Looking lists what answers; connecting any of it is a separate step, yours to take.” | Softened under #265's closing rule (it was “Looking only finds them: nothing is connected, and nothing is read.”; unit tests show it, no golden task); eval `claim.discovery-connects-nothing`, priority 1 |
+| `onboard.backend-runs-today` | “This is how Nova runs its services here.” | Softened (it was “Everything Nova does today runs this way; nothing in Nova needs Kubernetes.”; M10e's tripwire is a suite fact, not an agent outcome); eval `claim.supervisor-runs-everything`, priority 3 |
+| `onboard.thin-client-runs-nothing` | “A screen onto Nova, for using it.” | Softened (it was “A screen onto Nova. It never runs anything for Nova.”; unit tests show it, no golden task); eval `claim.thin-client-runs-nothing`, priority 1 |
 
 ## The review of #268
 

@@ -25,7 +25,7 @@ import type { Profile } from './profile.ts';
 
 // What capture can and can't do on each kind of device, said once in setup (M6a; Settings › Capture
 // says it in full). Capture starts off, whatever the answers above.
-export const CAPTURE_NOTE = 'I see nothing on your devices unless you turn capture on in Settings › Capture. A computer can share a lot, under its own permissions; Android needs accessibility and notification access; an iPhone or iPad allows no passive capture of other apps at all.';
+export const CAPTURE_NOTE = 'Capture is off until you turn a source on in Settings › Capture. A computer can share a lot, under its own permissions; Android needs accessibility and notification access; an iPhone or iPad allows no passive capture of other apps at all.';
 
 export const STEPS = ['device', 'roles', 'backend', 'user_name', 'timezone', 'nova_name', 'directness', 'privacy', 'discover', 'import', 'first_task', 'done'] as const;
 export type Step = (typeof STEPS)[number];
@@ -129,8 +129,8 @@ export function privacyFrom(text: string): PrivacyMode | null {
 }
 
 const PRIVACY_WORDS: Record<PrivacyMode, string> = {
-  'local-only': 'everything stays on your devices',
-  'local-preferred': 'local first, cloud only when local can’t do it, and I’ll always say when',
+  'local-only': 'my model calls stay on your devices',
+  'local-preferred': 'local first, cloud only when local can’t do it, and each cloud call is recorded',
   'cloud-allowed': 'I may use cloud models when they’re the better tool, within your budget',
 };
 
@@ -196,7 +196,7 @@ export class Setup extends EventEmitter {
     await this.ready();
     const s = this.#state();
     if (!s.transcript.length) s.transcript.push(this.#turn('nova', this.#ask(s.step, s)));
-    if (s.step === 'done') throw new CoreError('conflict', 'Setup is already finished. You can change anything by telling me.');
+    if (s.step === 'done') throw new CoreError('conflict', 'Setup is already finished. You can change most of it in Settings.');
     s.transcript.push(this.#turn('person', text));
 
     const { reply, next, task } = await this.#handle(s.step, text, s);
@@ -329,9 +329,9 @@ export class Setup extends EventEmitter {
       }
       case 'first_task': {
         if (NO.test(text)) return { reply: this.#closing('No first task, then.'), next: 'done' };
-        if (!YES.test(text)) return { reply: 'Yes or no: shall I write the welcome note and check it?', next: step };
+        if (!YES.test(text)) return { reply: 'Yes or no: shall I write the welcome note?', next: step };
         const task = this.#firstTask();
-        return { reply: this.#closing('Started. I’ll check the note myself before I call it done.'), next: 'done', task };
+        return { reply: this.#closing('Started. It’s in Tasks.'), next: 'done', task };
       }
       case 'done':
         throw new CoreError('conflict', 'Setup is already finished.');
@@ -354,7 +354,7 @@ export class Setup extends EventEmitter {
     switch (step) {
       case 'device': {
         const f = this.#deviceFacts(s);
-        return `Hi, I’m ${me.name}. A few quick questions to set things up; you can change any answer later just by telling me, and "skip" keeps my default. The first three are about this computer: its roles you change later in Settings › Devices, and Settings › Services shows how it runs services.\n\nThis is ${factsWords(f)}. I’d make it the hub of a new Nova network: your phone and other computers join it later. Or, if you already have a Nova hub, this computer can join that instead. (New, or join?)`;
+        return `Hi, I’m ${me.name}. A few quick questions to set things up; you can change most answers later in Settings, and "skip" keeps my default. The first three are about this computer: its roles you change later in Settings › Devices, and Settings › Services shows how it runs services.\n\nThis is ${factsWords(f)}. I’d make it the hub of a new Nova network: your phone and other computers join it later. Or, if you already have a Nova hub, this computer can join that instead. (New, or join?)`;
       }
       case 'roles': {
         const rec: Purpose[] = recommendedHubPurposes(this.#deviceFacts(s)).filter((p) => p !== 'hub-candidate');
@@ -373,19 +373,19 @@ export class Setup extends EventEmitter {
       case 'nova_name':
         return `I go by ${me.name}. Want to call me something else? (A name, or "keep".)`;
       case 'directness':
-        return 'How direct should I be? I’ll always tell you when I think something’s wrong; that part isn’t adjustable. But I can say it gently, plainly, or bluntly.';
+        return 'How direct should I be? Telling you when I think something’s wrong isn’t adjustable. But I can say it gently, plainly, or bluntly.';
       case 'privacy': {
         // Truthful about the one thing that would leave: the chat model, if it's a cloud one.
         const chat = this.#chat?.egress === 'remote'
-          ? ` One thing to know: chat is set up to use ${this.#chat.program}, which runs in the cloud. With local-only, chat stays off until you add a local model; everything else works.`
+          ? ` One thing to know: chat is set up to use ${this.#chat.program}, which runs in the cloud. With local-only, chat stays off until you add a local model.`
           : '';
-        return `Last setting: privacy. Local-only means nothing leaves this machine.${chat} I’d keep it local unless you want cloud help when local isn’t enough. Keep it local-only, or allow cloud when needed?`;
+        return `Last setting: privacy. Local-only means my model calls stay on your own devices.${chat} I’d keep it local unless you want cloud help when local isn’t enough. Keep it local-only, or allow cloud when needed?`;
       }
       case 'discover': {
         if (s.onboarding?.network_pending) return 'Looking on the network sends one short query to the devices on it, beyond this machine, with nothing about you in it. You chose local-only, so I ask first: go ahead? (Yes, “this computer only”, or no.)';
         // Looking on the network sends a query onto it: under local-only, that is said before asking.
         const local = this.#profile.privacyDefault() === 'local-only' ? ' You chose local-only: looking on the network sends one short query to the devices on it, with nothing about you in it, so say “network too” only if that’s fine.' : '';
-        return `Shall I look for things Nova could work with? On this computer: a local model runtime, Screenpipe or Home Assistant, and notes, calendar files or browser bookmarks I could bring in. On your network too: a home hub, and other computers that could join. Looking only finds them: nothing is connected, and nothing is read.${local} (This computer, network too, or no?)`;
+        return `Shall I look for things Nova could work with? On this computer: a local model runtime, Screenpipe or Home Assistant, and notes, calendar files or browser bookmarks I could bring in. On your network too: a home hub, and other computers that could join. Looking lists what answers; connecting any of it is a separate step, yours to take.${local} (This computer, network too, or no?)`;
       }
       case 'import': {
         const sources = s.onboarding?.sources ?? [];
@@ -393,7 +393,7 @@ export class Setup extends EventEmitter {
         return `I could bring in, from this computer: ${shown}. Nothing has been read yet. What you pick is checked first as outside content, then waits in Memory for your OK: none of it is remembered until you keep it. Which? (Say which, “all”, or “none”.)`;
       }
       case 'first_task':
-        return `${this.#summary()}\n\nWant a first task to prove the plumbing works? I’ll write a short welcome note into your workspace and check it myself. (Yes or no.)`;
+        return `${this.#summary()}\n\nWant a first task to prove the plumbing works? I’ll write a short welcome note into your workspace. (Yes or no.)`;
       case 'done':
         return '';
     }
@@ -460,12 +460,12 @@ export class Setup extends EventEmitter {
   }
 
   #closing(lead: string): string {
-    return `${lead} That’s setup done. ${CAPTURE_NOTE} Ask me anything, or tell me to change any of this.`;
+    return `${lead} That’s setup done. ${CAPTURE_NOTE} Ask me anything; you can change most of this in Settings.`;
   }
 
   #firstTask(): Task {
     const me = identityOf(this.#profile);
-    const content = `# Welcome\n\n${me.user_name ? `Hello, ${me.user_name}.` : 'Hello.'} This note was written by ${me.name}'s workspace worker during setup, then read back and checked before the task was marked done.\n\nYour settings: ${this.#summary().replace(/^Here’s what I have: /, '')}\n`;
+    const content = `# Welcome\n\n${me.user_name ? `Hello, ${me.user_name}.` : 'Hello.'} This note was written by ${me.name}'s workspace worker during setup, as a first task.\n\nYour settings: ${this.#summary().replace(/^Here’s what I have: /, '')}\n`;
     return this.#ledger.create({
       title: 'Write a welcome note',
       owner: 'workspace',

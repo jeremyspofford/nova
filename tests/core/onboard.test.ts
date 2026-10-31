@@ -38,7 +38,7 @@ test('the backend, per OS: the supervisor pre-selected everywhere; K3s never off
     assert.deepEqual(b.options.filter((o) => o.available).map((o) => o.id), ['supervisor'], `${os}: only what is built is offered`);
     assert.equal(b.options.find((o) => o.recommended)?.id, 'supervisor');
     assert.match(b.words, /Settings › Services/);
-    assert.match(b.words, /nothing in Nova needs Kubernetes/);
+    assert.match(b.words, /This is how Nova runs its services here/);
   }
   assert.deepEqual(backendFor('linux').options.map((o) => [o.id, o.available]), [['supervisor', true], ['k3s', false]]);
   assert.match(backendFor('linux').options[1]!.note, /Not available yet/);

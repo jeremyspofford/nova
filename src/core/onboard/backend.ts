@@ -6,8 +6,8 @@
 //
 // The words are cut to the evidence (Amendment 2026-10-31-B, closing rule). The ADR's draft named
 // capture on every device and services on other devices; those come with M10h, so they aren't said.
-// What is said is true now: everything Nova does runs under the supervisor, and nothing in Nova needs
-// Kubernetes (the M10e suite runs with a tripwire on every Kubernetes tool, docs/evidence/m10e-gate.md).
+// The claim that everything runs this way is softened (honest claims, #265) until an eval shows it
+// (tests/evals/claims.ts, onboard.backend-runs-today).
 import type { OsFamily } from './detect.ts';
 
 export type Backend = 'supervisor' | 'k3s';
@@ -18,7 +18,7 @@ export const SUPERVISOR_WORDS = 'Ordinary programs, under Nova’s supervisor';
 // Switching is said only where K3s could come (Linux), and promises nothing unbuilt (review 9).
 export const SWITCH_LATER = 'You can see this in Settings › Services. Switching to K3s will be there once it is available, and it will ask for your explicit confirmation.';
 export const SEE_SETTINGS = 'You can see this in Settings › Services.';
-export const RUNS_TODAY = 'Everything Nova does today runs this way; nothing in Nova needs Kubernetes.';
+export const RUNS_TODAY = 'This is how Nova runs its services here.';
 
 export function backendFor(os: OsFamily): BackendSummary {
   const supervisor: BackendOption = { id: 'supervisor', label: SUPERVISOR_WORDS, available: true, recommended: true, note: 'Lighter, and needs nothing extra.' };

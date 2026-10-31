@@ -73,8 +73,8 @@ export function renderConnections() {
   const rest = all.filter((c) => !c.connected && !c.broken && c !== pick);
   const vault = data.vault;
   const lede = on.length
-    ? 'The services Nova works with for you. Their passwords and tokens stay in Nova’s vault, encrypted.'
-    : 'Nothing is connected yet. Connect a service and Nova can work with it for you; its passwords and tokens stay in Nova’s vault, encrypted.';
+    ? 'The services Nova works with for you. Their passwords and tokens are kept in Nova’s vault.'
+    : 'Nothing is connected yet. Connect a service and Nova can work with it for you; its passwords and tokens are kept in Nova’s vault.';
   return `${head}
 <p class="memory-lede">${esc(lede)}</p>
 ${vault?.notice ? `<p class="settings-note conn-notice">${esc(vault.notice)}</p>` : ''}

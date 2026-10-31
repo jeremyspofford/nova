@@ -3,14 +3,16 @@
 // rules every golden task must meet. The suites run end to end in tests/acceptance/evals-*.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { evals } from '../../src/core/index.ts';
 import { CAPABILITY, REGRESSION, TASKS } from '../evals/tasks/index.ts';
-import { CLAIMS } from '../evals/claims.ts';
+import { CLAIMS, USER_FACING } from '../evals/claims.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
+// Every text file under a folder (the closing rule's user-facing folders).
+const walk = (d: string): string[] => readdirSync(d).flatMap((n) => { const p = join(d, n); return statSync(p).isDirectory() ? walk(p) : /\.(js|ts|html|md)$/.test(n) ? [p] : []; });
 type T = evals.Trace;
 const trace = (reply: string, tools: Partial<evals.ToolStep>[] = [], sent: string[] = []): T => ({
   turns: [{ said: 'q', reply, tools: tools.map((t) => ({ name: 'x', args: {}, ok: true, output: '', asked: false, decision: null, ...t })), errors: [] }], sent,
@@ -196,25 +198,59 @@ test('the core’s regression manifest is the task files’ (bump a version in b
   assert.equal(evals.REGRESSION_FINGERPRINT, evals.fingerprintOf(evals.manifestOf(REGRESSION)));
 });
 
-test('the claims register: every quoted claim is still in its file, every tag is a task’s; unbacked claims are reported', () => {
+test('the claims register: every quoted claim is still in its file, every tag is a task’s; softened claims keep their strong words and name an eval', () => {
   const known = new Set(TASKS.flatMap((t) => t.demonstrates));
   const read = (f: string) => { try { return readFileSync(join(ROOT, f), 'utf8'); } catch { return null; } };
   const report = evals.checkClaims(CLAIMS, evals.demonstrated(TASKS), { read, knownTags: known });
   assert.deepEqual(report.drift.map((d) => `${d.claim.id}: ${d.why}`), []);
   assert.equal(new Set(CLAIMS.map((c) => c.id)).size, CLAIMS.length);
-  assert.ok(report.backed.length > 0 && report.unbacked.length > 0);
+  assert.ok(report.backed.length > 0);
+  // Each softened claim (and each instruction waiting for its eval) names the eval case that would
+  // prove it, as claim.<slug>, and a priority.
+  for (const c of CLAIMS.filter((x) => x.strong || x.kind === 'instruction')) {
+    assert.match(c.eval ?? '', /^claim\.[a-z0-9]+(?:-[a-z0-9]+)*$/, `${c.id}: eval`);
+    assert.ok([1, 2, 3].includes(c.priority ?? 0), `${c.id}: priority`);
+  }
   // Capability tasks back nothing: a tag only they carry leaves a claim unbacked.
   const capOnly = evals.checkClaims([{ id: 'x', where: 'README.md', text: 'Nova', needs: ['profile-pack'] }], evals.demonstrated(TASKS), { read, knownTags: known });
   assert.equal(capOnly.unbacked.length, 1);
   // A claim whose words left the file is drift, so the register can't go stale quietly.
   const gone = evals.checkClaims([{ id: 'y', where: 'README.md', text: 'a sentence that is not in the readme', needs: [] }], new Map(), { read, knownTags: known });
   assert.equal(gone.drift.length, 1);
+  // Strong words back in the file without an eval are drift too.
+  const back = evals.checkClaims([{ id: 'z', where: 'README.md', text: 'Nova', strong: 'Nova', needs: [], eval: 'claim.z', priority: 3 }], new Map(), { read, knownTags: known });
+  assert.match(back.drift[0]?.why ?? '', /strong words .* are back/);
   if (process.env.NOVA_EVALS_CLAIMS) {
     const line = (c: evals.Claim) => `| \`${c.id}\` | ${c.where} | “${c.text}” |`;
+    const soft = (c: evals.Claim) => `| \`${c.id}\` | ${c.priority} | ${c.where} | “${c.strong}” | “${c.text}” | \`${c.eval}\` |`;
+    const byPriority = (a: { claim: evals.Claim }, b: { claim: evals.Claim }) => (a.claim.priority ?? 9) - (b.claim.priority ?? 9);
     writeFileSync(process.env.NOVA_EVALS_CLAIMS, [
+      `${CLAIMS.length} claims: ${report.backed.length} backed, ${report.softened.length} softened, ${report.instructions.length} instruction${report.instructions.length === 1 ? '' : 's'}, ${report.unbacked.length} unbacked in user-facing text.`, '',
       '### Backed', '', '| claim | where | words | by |', '|---|---|---|---|', ...report.backed.map((b) => `${line(b.claim)} ${b.by.map((x) => `\`${x}\``).join(', ')} |`), '',
-      '### Not backed by the suite', '', '| claim | where | words | why |', '|---|---|---|---|', ...report.unbacked.map((u) => `${line(u.claim)} ${u.claim.note ?? (u.claim.needs.length ? `needs ${u.missing.join(', ')}` : 'no task demonstrates it')} |`), '',
+      '### Softened, waiting for an eval (Track 3’s backlog)', '', '| claim | priority | where | was | now | eval |', '|---|---|---|---|---|---|', ...[...report.softened].sort(byPriority).map((x) => soft(x.claim)), '',
+      '### Instructions to the model, waiting for an eval', '', '| claim | priority | where | words | eval |', '|---|---|---|---|---|', ...report.instructions.map((x) => `| \`${x.claim.id}\` | ${x.claim.priority} | ${x.claim.where} | “${x.claim.text}” | \`${x.claim.eval}\` |`), '',
+      '### Not backed by the suite, in user-facing text', '', report.unbacked.length ? report.unbacked.map((u) => `- \`${u.claim.id}\``).join('\n') : 'None.', '',
       '### What the suite demonstrates', '', ...[...evals.demonstrated(TASKS)].map(([tag, ids]) => `- \`${tag}\`: ${ids.map((x) => `\`${x}\``).join(', ')}`), '',
     ].join('\n'));
   }
+});
+
+// The closing rule, turned on for user-facing copy (owner decision 2026-10-31; docs/plans/evals.md
+// NOTES §4): a capability claim in user-facing text that no passing regression eval backs fails
+// CI. It is softened (with its strong words and eval kept in the register) or an eval backs it.
+// The strong words of every softened claim stay out of every user-facing file, not only their own.
+test('the closing rule: no unbacked claim in user-facing text, and no softened claim’s strong words anywhere a person reads', () => {
+  const known = new Set(TASKS.flatMap((t) => t.demonstrates));
+  const read = (f: string) => { try { return readFileSync(join(ROOT, f), 'utf8'); } catch { return null; } };
+  const report = evals.checkClaims(CLAIMS, evals.demonstrated(TASKS), { read, knownTags: known });
+  assert.deepEqual(report.unbacked.map((u) => `${u.claim.id} (${u.claim.where}): “${u.claim.text}”`), [], 'soften these to what the evidence supports, or back them with a regression eval');
+  const files = USER_FACING.flatMap((f) => (f.endsWith('/') ? walk(join(ROOT, f)) : [join(ROOT, f)]));
+  const flat = (x: string) => x.replace(/\s+/g, ' ');
+  const texts = files.map((f) => [f.slice(ROOT.length + 1), flat(readFileSync(f, 'utf8'))] as const);
+  const backed = new Set(report.backed.map((b) => b.claim.id));
+  const found: string[] = [];
+  for (const c of CLAIMS.filter((x) => x.strong && !backed.has(x.id))) {
+    for (const [f, t] of texts) if (t.includes(flat(c.strong!))) found.push(`${c.id}: “${c.strong}” is in ${f}`);
+  }
+  assert.deepEqual(found, []);
 });

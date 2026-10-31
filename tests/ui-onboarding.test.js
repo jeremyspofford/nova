@@ -22,7 +22,7 @@ test('the approval sheet shows what a device asked to be for, to confirm or chan
   assert.doesNotMatch(computer, /value="storage" checked/);
   assert.match(computer, /name="confirm_candidate"[\s\S]*Its key is pinned for that/, 'a hub candidacy has its own confirmation');
   const phone = joinRequestSheet({ id: 'r2', name: 'Phone', kind: 'phone', platform: 'iPhone', capabilities: [], purposes: ['thin-client'], allowed: ['thin-client'], fixed: ['thin-client'], fingerprint: 'fp', confirmation: '123456' });
-  assert.match(phone, /Thin client\. A screen onto Nova\. It never runs anything for Nova\./);
+  assert.match(phone, /Thin client\. A screen onto Nova, for using it\./);
   assert.doesNotMatch(phone, /type="checkbox" name="purpose"/);
   assert.doesNotMatch(phone, /confirm_candidate/);
 });

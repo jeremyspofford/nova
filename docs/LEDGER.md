@@ -6,6 +6,21 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #265 · Nova's words now promise only what its tests show**
+- What changed: Nova's screens, setup questions and help text were reworded to promise only what its own tests can show. For example, Settings now says model calls stay on your devices under local-only, rather than "nothing leaves this machine". Two sentences were simply wrong and are fixed: Nova told itself every command waits for your OK, and that anything that can't be undone always asks. In fact a command runs without asking if you've switched that on; a command that comes after Nova reads something from outside still asks.
+- What you can now do: trust that what Nova tells you about itself has evidence behind it. Nothing works differently; only the words changed.
+- Still unfinished: each stronger promise is written down with the test that would prove it, and comes back when that test passes. A check now blocks any new unproven promise in what you read.
+
+**2026-10-31 · #267 · The layout no longer crushes columns on a folding phone, tablet or narrow window**
+- What changed: on a folding phone's inner screen, a tablet held upright, or any window between a phone and a laptop, Nova no longer squeezes three columns in. Each column has a smallest width, and the side column with your tasks, devices and health only appears when all three fit; until then those cards are on Home. No text is squeezed to a few letters a line, the Online/Offline labels no longer sit on top of device names, and the side column scrolls instead of running off the screen. On an installed app, nothing sits under the camera cutout or the home bar any more.
+- What you can now do: use Nova on the fold's inner screen in either direction, in any of the six designs, and read every card.
+- Still unfinished: checking it on your real phone (the tests use the iPhone's engine, but not as an installed app). Whether the app should draw behind the iPhone's status bar, which would remove the empty band at the top but makes the time and battery white on the light designs, is your call.
+
+**2026-10-31 · #266 · Pairing a phone no longer fails now and then for no reason**
+- What changed: the browser engine behind every iPhone (WebKit) sometimes refuses a security key it has just made. Nova's pairing page took that as "this browser can't pair". Now it quietly makes another key of the same strength and carries on. A browser that really can't make these keys is still told so plainly.
+- What you can now do: pair a phone without the occasional unexplained failure. It was also the cause of a pairing test that failed every so often.
+- Still unfinished: whether a real iPhone ever does this is unknown; Apple's WebKit uses a different crypto engine from the test browser.
+
 **2026-10-31 · #258 · The safety screen now asks Nova's decision service, and checks every part of a long page**
 - What changed: Nova's screen for outside content (pages, mail, files, tool output) now asks the new decision service. It checks every part of a long document, not a sample, and the parts overlap, so a trick split across a boundary is still seen. Every decision is recorded, without the content.
 - What you can now do: in Settings › Models › Decision model, you can choose Jev (TypeSafe's cloud model) or a Tev1 size, and see each model's test results before you switch. Two separate switches let Jev screen outside content (Screening) or images (Box, a preview) even in local modes. Both are off, and each says plainly what leaves your machine. Health shows how outside content is being screened.
@@ -334,6 +349,21 @@ phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in
 - **The first win** is measured at machine speed (the API path, and a browser path in Chromium) with
   each step's time recorded; the human path is an estimate (words read, answers, clicks), said so.
 
+**2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
+- **The bands are derived, not round numbers:**
+  - each region has a minimum, computed from the design system's own tokens: the main column is 45ch plus its padding and scrollbar gutters; a card is 20ch plus its padding; the right column is one card plus its padding and scrollbar; the rail is `layout/rail-width`;
+  - the three-column band (rail, centre, right column) starts at their sum, and the two-column band at `max(600px, rail + main)`;
+  - they are `ui/`-declared custom properties in `layout.css`, not schema tokens, so no package changes. `shell.js` measures them at run time and again on a live swap or a text-size change.
+  - In the container, Orb Teal and Companion Light enter three columns at 851.6 px, Paper at 832.1, Aurora at 770.2, Nova at 752.2–793.1 and Obsidian at 734.1–773.6.
+- **Under the three-column band,** a flat tablet is the rail and one column, with the right column's cards on Home. Half-open postures keep their second pane: side by side where both fit or on a real hinge, stacked otherwise.
+- **M9's second-pane rule** ("every expanded width gives its extra room to a second pane") now applies from the three-column band, and Settings keeps its sidebar from 840 px. Between 840 px and the band, the centre keeps `layout/content-max`, so it never stretches.
+- **Cards** stack below the card minimum, never squeeze. A device row moves its pill under the words rather than over them.
+- **Safe area:** the shell keeps each inset clear once (`viewport-fit=cover`). No excess padding was found: the empty band at the top of the owner's screenshot is the iOS status bar above Nova's top bar.
+  - Drawing under the status bar (`black-translucent`) is left to the owner, because it turns the status text white over the light designs.
+- **The gate:**
+  - `tests/ui/fold-postures.test.ts` runs in the UI gate, in Chromium and WebKit: the review's 10 postures × 9 views, every design system at 560–1440 px, 20 screenshot baselines (2% tolerance) and the safe area.
+  - The posture sweep and M9 foldable 2 follow the derived bands.
+
 **2026-10-31 (capture screening, job 1: capture-sensitive).** Owner decision `INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`; plan `docs/plans/ds2-capture-sensitive.md`; evidence `docs/evidence/capture-sensitive-eval.md`; PR #264.
 - **The template:** `capture-sensitive` v1.
   - **Deterministic first:** known password-manager and banking apps and sites are excluded with no model call; pattern detectors (keys, tokens, private keys, passwords, Luhn cards, mod-97 IBANs, SSNs, high-entropy secrets) redact before the model sees the text.
@@ -350,6 +380,14 @@ phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in
   **Caveats:** 39 grey cases (interval 86.8–99.6%); 11 of the 40 labelled judgments caught via "unsure → hold"; one author for the questions and the cases.
 - **Pending Track 1:** the consumers (indexing and archiving, timeline, intake drop of sensitive apps, migration).
 
+**2026-10-31 (owner decision: the unproven claims, split by audience).** Plan and the full list in `docs/plans/honest-claims.md`, branch `copy/honest-claims`.
+- **What a person can see is softened now:** UI copy, onboarding, the system prompt, briefing and tool docs the model repeats, the README, and the connector and skill files. Each claim says only what the evidence supports. The Amendment B closing rule is not deferred.
+- **The false claim is fixed.** "Every shell command waits for the person's approval" now reads: a command asks unless permissions.md lets commands run, and a command after outside content asks even then. Its cousin in the briefing ("anything that can't be undone always asks") is fixed too.
+- **Every softened claim stays in the register** (`tests/evals/claims.ts`) with three things: its old strong words, a named eval case (`claim.<slug>`, 35 cases for Track 3's backlog) and a priority. When an eval passes, the strong words may return, citing it.
+- **The register now holds 71 claims:** 16 backed, 54 softened, 1 instruction to the model kept as it is, and 0 unbacked. That includes 42 other places found saying the same things in other words.
+- **The closing rule is on for user-facing copy.** CI fails on an unbacked claim in user-facing text, and on a softened claim's strong words in any user-facing file.
+- **Internal design docs keep their claims,** marked **UNPROVEN** inline (13 marks in the inventory and the M5, M7 and vault-broker plans). The owner's verbatim inputs are untouched.
+
 **2026-10-31 (Amendment B Part 6: the diagnostics bundle, PR #259, Track 3).** Plan `docs/plans/diagnostics.md`.
 - **The builder:** `src/core/diagnostics/`.
 - **The rule:** counts and states, never content.
@@ -363,6 +401,34 @@ phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in
   - the route, Era 2's counts, and the Health "Download diagnostics" link (NOTES §1–3, a Track 1 follow-up);
   - the integrity scrub, which is Track 1's Health work.
 - **Limits:** a raw secret Nova never stored and not shaped like one can't be recognised. Hostnames and names the person gave stay in the bundle.
+
+**2026-10-31 (the flaky WebKit pairing test, M4a).** Branch `fix/webkit-pairing-flake`. The UI
+gate's "M4a in WebKit" test timed out waiting for the join screen three times in a day (main run
+41205581247; both runs of PR #257), after 40 clean runs.
+- **Root cause, an app defect:** WebKit sometimes turns down a key it has just made.
+  `crypto.subtle.generateKey` throws `OperationError` for about one Ed25519 key in 150 and one
+  X25519 key in 500 in Playwright's WebKit; the rate was the same at full speed and on half a CPU,
+  so it is per key, not timing. `/pair`'s check that the browser can pair took any error as "This
+  browser can't pair" and stopped there, with no form, so the test waited for `#join` until it
+  timed out. A test run makes six keys, so roughly one run in 20 to 35 failed. When the device's
+  own key was the one refused, the page said "That didn't work" instead. The failure comes before
+  any signed time, so the logged pairing-clock defect is not involved. Whether a real iPhone's
+  WebKit does this too is not known.
+- **Fix:** `ui/js/device-key.js` makes each key through one helper that tries again on
+  `OperationError`, up to five times. Each try is a new key of the same kind, never a weaker one.
+  Any other error, such as `NotSupportedError`, is final, so a browser with no Ed25519 is still
+  told plainly.
+- **A second, smaller race in the same test:** it chose the mesh port from the ephemeral range,
+  where the hub's own port-0 listener can be handed the same port first (`EADDRINUSE`, 1 run in
+  100). It now uses the shared `freePort`, which picks below that range.
+- **Gate:** two new tests in `tests/ui/m4a-webkit-pair.test.ts`. In one, a browser fails every
+  first try at a key and still pairs to Home; it failed first, with CI's timeout. In the other, a
+  browser with no Ed25519 still sees "This browser can't pair".
+- **Evidence:**
+  - The real test file, run 100 times (four in parallel): 3 failures before (two `#join`
+    timeouts matching CI, and one `EADDRINUSE`), none after.
+  - The same flow 150 times in one container on one CPU: 8 failures before, every one a refused
+    key, and none after.
 
 **2026-10-31 (DS2: ingest-screen v2 and its fresh eval).** Plan `docs/plans/ds2-ingest-v2.md`; evidence `docs/evidence/ingest-v2-eval.md`; PR #257.
 - **Re-authored under TypeSafe's question rules:** no preamble; one observable judgment per question; boundary cases in the criteria; no fence in the state.
