@@ -158,7 +158,8 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
       await Promise.race([new Promise((r) => proc.once('exit', r)), new Promise((r) => setTimeout(r, 3000))]);
       if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
     }
-    try { rmSync(profile, { recursive: true, force: true }); } catch { /* best effort: it is in the temp folder */ }
+    // Chromium's helper processes may still be writing as it goes: removing retries a few times.
+    try { rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* best effort: it is in the temp folder */ }
   };
   try {
     await Promise.race([cdp.send('Browser.getVersion', {}, undefined, { timeoutMs: 20_000 }), failed]);
