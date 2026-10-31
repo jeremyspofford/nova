@@ -90,6 +90,8 @@ test('refusals: no workload role, a missing role, hardware not reported, too lit
   assert.match(why({ placement: { mode: 'floating', roles: ['compute'] }, artifact: { image: `registry.example/x@sha256:${'b'.repeat(64)}` } }, MAC), /containers run only on Linux/);
   assert.match(why(inference({ needs: { tpu_count: 1 } }), GPU), /can’t check tpu_count/);
   assert.match(why(def({ mode: 'floating' }), { ...HUB, trust: 'revoked' }), /was revoked/);
+  // A phone or browser runs no agent: refused whatever its record says (a record can't say more, but the resolver doesn't rely on that).
+  assert.match(why(def({ mode: 'floating', roles: ['compute'] }), { ...PHONE, purposes: ['compute'] }), /phone: a thin client, which never receives workloads/);
   const nowhere = resolvePlacement(def({ mode: 'preferred', roles: ['storage'] }), [HUB, PHONE], { now: NOW });
   assert.ok(!nowhere.ok && !nowhere.down);
   assert.match(nowhere.why, /No device may run it/);
