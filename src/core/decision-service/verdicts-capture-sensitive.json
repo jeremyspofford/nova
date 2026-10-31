@@ -1,0 +1,33 @@
+{
+  "bounds": {
+    "detection_min": 0.95,
+    "false_hold_max": 0.2,
+    "ece_max": 0.1,
+    "bins": 10,
+    "deterministic_min": 1
+  },
+  "pre_run_commit": "9cb2ca0af0d61cfbf6a9858385b3082f686a7f5b",
+  "cases_sha256": "3e3a899886605d3c4ffd1f0aabd597a3090e9cb1e6f92e375dc20f2c9f421773",
+  "records": [
+    {
+      "template_id": "capture-sensitive",
+      "version": 1,
+      "seat": "tev1",
+      "model": "tev1:4b@7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740",
+      "status": "pass",
+      "why": "all three model bounds met",
+      "run_at": "2026-10-31T19:48:32.317Z",
+      "ref": "capture-sensitive-eval.json#tev1:4b@9cb2ca0af0d61cfbf6a9858385b3082f686a7f5b"
+    },
+    {
+      "template_id": "capture-sensitive",
+      "version": 1,
+      "seat": "tev1",
+      "model": "tev1:0.8b@abc31fdb0bf52506cc47091145ac19c4cfb509b73a6841789324f9e32200c099",
+      "status": "fail",
+      "why": "detection 79.5% is below 95%",
+      "run_at": "2026-10-31T19:48:49.455Z",
+      "ref": "capture-sensitive-eval.json#tev1:0.8b@9cb2ca0af0d61cfbf6a9858385b3082f686a7f5b"
+    }
+  ]
+}

@@ -9,7 +9,7 @@ import type { Hardware } from '../models/hardware.ts';
 import { ALIASES, modelProblem, RECOMMENDED_MODEL, RECOMMENDED_URL } from './seats/jev.ts';
 import { chooseSize, SIZES, type Size } from './seats/tev1.ts';
 import type { VerdictStore } from './verdicts.ts';
-import type { Feature, ServiceTemplate } from './types.ts';
+import type { OptIn, ServiceTemplate } from './types.ts';
 
 export interface DecisionSettings {
   // Cloud Jev: the route (base URL), a versioned model, and whether a key is stored (the key itself
@@ -18,7 +18,7 @@ export interface DecisionSettings {
   // Tev1 in the person's Ollama: a size, or "auto" (chosen from the hardware).
   tev1: { model: 'auto' | Size } | null;
   // Cloud Jev in local-first / local-only, per feature. Off by default.
-  opt_in: Record<Feature, boolean>;
+  opt_in: Record<OptIn, boolean>;
 }
 
 // The settings as the person sends them (Settings › Models), checked: a versioned Jev model (never
@@ -61,7 +61,7 @@ export function recommend(h: Hardware | null): Recommendation {
 }
 
 // What each opt-in means, in plain words, shown beside the switch and whenever it is on.
-export const OPT_IN_WORDS: Record<Feature, string> = {
+export const OPT_IN_WORDS: Record<OptIn, string> = {
   screening: 'While this is on, outside content Nova screens (pages, mail, files, tool output) is sent to TypeSafe’s cloud (Jev) to be judged, even in local-first and local-only. Local-only isn’t strictly local for screening while it is on.',
   box: 'While this is on, images Nova is asked to judge, including camera and screen frames from sources you have allowed, are sent to TypeSafe’s cloud (Jev) in cloud and local-first modes. In local-only they never go to a cloud provider. TypeSafe labels images and Box a preview.',
 };
