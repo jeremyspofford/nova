@@ -280,7 +280,8 @@ test('the claim backlog covers every case the register names, in priority order;
       assert.ok(c, `${b.case} is built`);
       assert.ok(b.claims.includes(c!.claim!), `${b.case} names one of its claims`);
       assert.ok(c!.demonstrates.includes(b.case), `${b.case} demonstrates its own tag`);
-      assert.ok(c!.suite === 'capability', 'a claim case starts in capability and graduates in its own PR');
+      assert.equal(c!.suite, b.graduated ? 'regression' : 'capability', 'a claim case starts in capability and graduates, in its own PR, to regression');
+      if (b.graduated) { assert.ok(evals.REGRESSION_MANIFEST.includes(`${c!.id}@${c!.version}`), `${b.case} is in the regression manifest`); for (const id of b.claims) assert.ok(CLAIMS.find((x) => x.id === id)!.needs.includes(b.case), `${id} needs ${b.case}`); }
       if (b.covers === 'partial') assert.ok((b.why ?? '').length > 20, `${b.case}: says what it doesn’t cover`);
     } else {
       assert.ok(!c, `${b.case} is ${b.status}, so it isn’t in the suite`);

@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #273 · Four promises Nova can now prove are back in its own words**
+- What changed: four things Nova says about itself now have permanent tests behind them, so a change that breaks one can't merge. Those are that scheduled work runs on its own, that Nova recommends a model for each job, that nothing is marked done until Nova has checked the evidence, and that a chat reply served by the cloud says so. Three screens got their stronger wording back.
+- What you can now do: rely on those four statements; each is checked on every change.
+- Still unfinished: setup still says "each cloud call is recorded" rather than "I'll always say when", because some background cloud work isn't announced yet. Remembering across conversations needs more real-model trials before it counts.
+
 **2026-11-01 · #261 · Every promise Nova toned down now has a test waiting to prove it**
 - What changed: each of the 38 claims Nova softened in its own words has a named test that would prove the stronger version. 20 tests are built. Some already pass, such as saying when the cloud answered, schedules running on their own, and recommending a model for each job. Six fail because the stronger promise isn't true today: for example, every command waiting for your OK even when you've allowed commands, or Nova writing its own notes without asking.
 - What you can now do: nothing changes in the app; this is the list of what Nova can and can't yet prove about itself.
@@ -322,6 +327,18 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-11-01 (claim cases graduated, PR #273, Track 3).** Four model-independent claim cases moved from CAPABILITY to REGRESSION after 5 consecutive stand-in passes before the move and 5 after:
+- `claim.local-first-says-when-cloud`;
+- `claim.schedule-runs-unattended`;
+- `claim.model-recommendation-fits-job`;
+- `claim.verified-only-with-evidence`.
+
+Their claims now count as backed, and a drop blocks merge.
+- **Strong wording restored:** three lines, each citing its case: Schedules, Settings › Models, and Tasks' "Nothing is done until Nova has checked the evidence".
+- **Kept softened:** setup's cloud line stays "each cloud call is recorded". Background cloud work (sorting decisions, the foundry) is recorded but not said, so "always say when" isn't shown.
+- **Still capability:** `claim.memory-recalled-next-conversation` needs 3 trials on at least two local models, every one passing.
+- **Suite size:** the golden suite is now at 50 tasks, the top of its enforced range; the next task needs that bound raised.
 
 **2026-11-01 (claim cases, the backlog, PR #261, Track 3).** The register's eval cases (`tests/evals/claims.ts`, from #265 and M10f) are in `tests/evals/tasks/claim-backlog.ts`.
 - **38 cases:**
