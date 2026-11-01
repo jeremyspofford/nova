@@ -77,7 +77,7 @@ test('BLOCKER 1: a private window is never stored, whatever the title’s length
     assert.deepEqual(await texts(h), ['kept']);
 
     // The same through a paired computer's inbox.
-    const { dev, token } = await enroll(h, { kind: 'computer', name: 'Test computer' });
+    const { dev, token } = await enroll(h, { kind: 'computer', name: 'Test computer', purposes: ['capture-source'] });
     await call(h.mesh, 'POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: ['heartbeat', 'queue', 'capture.app-activity'] }, bearer(token));
     await on(h, `device:${dev.deviceId}:app-activity`);
     const send = await call(h.mesh, 'POST', '/api/v1/mesh/inbox', {
@@ -145,7 +145,7 @@ test('SHOULD-FIX 4: a site in a browser with no address, a fully qualified host,
     for (const w of ['SITE-NO-URL', 'SITE-TRAILING-DOT', 'APP-EXE', 'APP-BETA']) nowhere(h, w);
 
     // Audio has no app; a time window keeps it out over its whole stretch, not only its start.
-    const { dev, token } = await enroll(h, { kind: 'computer', name: 'Test computer' });
+    const { dev, token } = await enroll(h, { kind: 'computer', name: 'Test computer', purposes: ['capture-source'] });
     await call(h.mesh, 'POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: ['heartbeat', 'queue', 'capture.audio'] }, bearer(token));
     await on(h, `device:${dev.deviceId}:audio`);
     const send = await call(h.mesh, 'POST', '/api/v1/mesh/inbox', {
@@ -206,7 +206,7 @@ test('events triage skipped because no provider could answer are looked at once 
 test('a device’s time with no zone is refused, never read in the server’s zone; a revoked device’s sources go off', async () => {
   const h = await hub();
   try {
-    const { dev, token } = await enroll(h, { kind: 'computer', name: 'Test computer' });
+    const { dev, token } = await enroll(h, { kind: 'computer', name: 'Test computer', purposes: ['capture-source'] });
     await call(h.mesh, 'POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: ['heartbeat', 'queue', 'capture.app-activity'] }, bearer(token));
     const sid = `device:${dev.deviceId}:app-activity`;
     await on(h, sid);

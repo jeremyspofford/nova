@@ -191,6 +191,9 @@ test('F8/F9 gate: the fold postures match their baselines (Chromium and WebKit)'
     for (const [engine, b] of bs) {
       for (const [posture, size, views] of SHOTS) {
         const d = await folded(b, { ...size, touch: true });
+        // The review conversation is dated 2026-10-31 (axe-support.ts): the page's clock is held on
+        // that day, so a run on a later day draws no "today" divider the baselines don't have.
+        await d.page.clock.setFixedTime(new Date('2026-10-31T12:00:00.000Z'));
         for (const view of views) {
           await open(d.page, `${m.base}${view}`);
           const file = join(BASELINES, `${engine}-${posture}-${view === '/' ? 'home' : view.slice(1)}.png`);

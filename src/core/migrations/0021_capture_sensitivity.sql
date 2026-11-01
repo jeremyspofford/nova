@@ -16,7 +16,7 @@
 --
 -- capture_event is replicated (0009), so its triggers are made again with the new columns. A standby
 -- a release behind gets rows without them: the hub leaves out what the standby's schema doesn't have
--- (mesh/sync.ts ADDED_COLUMNS).
+-- (mesh/sync.ts ADDED_COLUMNS[21]).
 ALTER TABLE capture_event ADD COLUMN sensitivity TEXT NOT NULL DEFAULT 'unscreened' CHECK (sensitivity IN ('unscreened', 'held', 'index', 'redact', 'hold', 'exclude'));
 ALTER TABLE capture_event ADD COLUMN sensitivity_why TEXT;
 ALTER TABLE capture_event ADD COLUMN sensitivity_decision TEXT;

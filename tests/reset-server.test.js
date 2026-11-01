@@ -58,7 +58,7 @@ test('after a reset, the first-run page and setup tell the browser to clear what
     assert.equal((await fetch(`${base}/`, { headers: { cookie } })).headers.get('clear-site-data'), null);
     assert.equal((await fetch(`${base}/api/v1/setup`, { headers: { cookie } })).headers.get('clear-site-data'), null);
     assert.equal(await header('/api/v1/setup'), '"cache", "storage"');
-    for (const text of ['Hi, I am Alex.', 'yes', 'keep', 'plainly', 'keep everything on this machine', 'no']) nova.core.setup.answer(text);
+    for (const text of ['new', 'yes', 'yes', 'Hi, I am Alex.', 'yes', 'keep', 'plainly', 'keep everything on this machine', 'no', 'no']) await nova.core.setup.answer(text);
     assert.equal(await header('/'), null, 'once setup is done, never again');
   } finally {
     nova.server.close();

@@ -65,11 +65,11 @@
 
 ## The migration
 
-**`0022_capture_sensitivity.sql`** (the next free number when this merged: M10f's 0020 and the orb's 0021 came first). It adds `capture_event.sensitivity` (`unscreened | held | index | redact | hold | exclude`, default `unscreened`), `sensitivity_why`, `sensitivity_decision`, `sensitivity_detail`, `sensitivity_at`, and an index on `(sensitivity, at)`.
+**`0021_capture_sensitivity.sql`**: the next free number on main when the PR opened, after M10f's 0020. If the orb's migration lands first, this one moves to 0022 and its `ADDED_COLUMNS` entry with it. It adds `capture_event.sensitivity` (`unscreened | held | index | redact | hold | exclude`, default `unscreened`), `sensitivity_why`, `sensitivity_decision`, `sensitivity_detail`, `sensitivity_at`, and an index on `(sensitivity, at)`.
 - **Older rows** become `unscreened`, so the next pass checks them, rules first.
 - **Replication:**
   - `capture_event` replicates, so its insert and update triggers are made again with the new columns.
-  - The five columns are registered in `ADDED_COLUMNS[22]` (`mesh/sync.ts`, M10f's mechanism), so a hub leaves them out for a standby a release behind.
+  - The five columns are registered in `ADDED_COLUMNS[21]` (`mesh/sync.ts`, M10f's mechanism), so a hub leaves them out for a standby a release behind.
   - `capture_event` is in the sync-skew test's table list.
 
 ## Routing
@@ -97,6 +97,8 @@
 - **Retention:** a held event is swept with the rest of capture.
 - **No cloud seat in local modes,** or in cloud mode without the opt-in.
 - **A capture tick screens** before triage.
+
+**`tests/core/sync-skew.test.ts`:** `capture_event` is in the registry check, and a 0020 standby gets capture events from a 0021 hub without the five columns, while a 0021 standby gets them.
 
 **`tests/ui/capture-screening.test.ts`** (the UI gate, Chromium, real server):
 - **With a trusted check:** the four verdicts in the timeline, each label and reason; the held words behind a tap; no Remember on held or excluded items; no card number on the page; "How this was checked" with `capture-sensitive v1`, `tev1:4b@7954dce2…`, the scores and the source.

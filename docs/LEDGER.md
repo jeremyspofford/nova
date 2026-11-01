@@ -6,6 +6,18 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #268 · Devices say what they're for, and setup shows what Nova found**
+- What changed: when you add a device, you now say what it's for (a screen only, a possible future hub, running models, storage, capture, other services), and you confirm it on the hub. Nova sends a screen-only device no model work and no capture. Setup now starts with this computer: what it is, that it's your hub, and how Nova runs its services here. Then, if you say so, it looks for things on this computer and your network (finding, not connecting), offers to bring in your notes, bookmarks and calendar (each checked first, then waiting for your OK), and ends on a page showing what it found and one thing to do next.
+- What you can now do: pick a device's roles when you add it, and change them in Settings › Devices (adding asks for your explicit confirmation; removing asks first and says what would stop). A computer runs local models for Nova only if it is set for compute, and captures only if it is a capture source; computers already doing either keep the role. See how Nova runs services on this computer in Settings › Services.
+- Still unfinished: Nova doesn't run its own services on other devices yet (models and capture on a computer now need it to have that role), and Kubernetes isn't available. Making a device the hub is a later step. Looking on your network hasn't been tried on a real network yet.
+
+**2026-10-31 · #269 · Two of your decisions recorded: capture holds back when it can't check, and dark designs fill the iPhone's top edge**
+- What changed:
+  - On a device without a trusted model to check captured text for private details, that text will be held, visible in the capture timeline, instead of kept.
+  - In the installed iPhone app, dark designs will draw right up to the top edge; light designs keep the iPhone's own status strip so the time stays readable.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: both are being built. The status bar change will need a look on your phone.
+
 **2026-10-31 · #265 · Nova's words now promise only what its tests show**
 - What changed: Nova's screens, setup questions and help text were reworded to promise only what its own tests can show. For example, Settings now says model calls stay on your devices under local-only, rather than "nothing leaves this machine". Two sentences were simply wrong and are fixed: Nova told itself every command waits for your OK, and that anything that can't be undone always asks. In fact a command runs without asking if you've switched that on; a command that comes after Nova reads something from outside still asks.
 - What you can now do: trust that what Nova tells you about itself has evidence behind it. Nothing works differently; only the words changed.
@@ -321,7 +333,7 @@ built-ins only.
   - A "Held, not kept" card shows the count, the notice and a Settings › Models link.
   - Every item opens to how it was checked: template version, seat and pinned model, scores, decision id, capture source.
 - **Provenance:** `capture_event.sensitivity_detail` (JSON) and `sensitivity_decision` (the `decision_record` id).
-- **Migration 0022:** `capture_event.sensitivity` (default `unscreened`, so older rows are checked, rules first), `_why`, `_decision`, `_detail` and `_at`. The sync triggers are remade, and the columns are registered in `ADDED_COLUMNS[22]`.
+- **Migration 0021:** `capture_event.sensitivity` (default `unscreened`, so older rows are checked, rules first), `_why`, `_decision`, `_detail` and `_at`. The sync triggers are remade, and the columns are registered in `ADDED_COLUMNS[21]`.
 - **Routing unchanged:** never a cloud seat in local-first or local-only; in cloud mode only with the per-source opt-in, which is still absent (always off). Tested with Jev set up, opted in and even holding a passing verdict.
 - **Tests (stand-ins only):** `tests/core/capture-screening.test.ts` (10) and `tests/ui/capture-screening.test.ts` (2). The existing capture tests run with a trusted stand-in check: the Tev1 stand-in, or `fake-ollama.js`'s new optional `/v1/systemone`, at the passed build's digest.
 - **Limits:**
@@ -330,6 +342,58 @@ built-ins only.
   - `capture.stream` readers get events before the check;
   - no content-hash cache;
   - job 2 (recall-path screening) is separate.
+
+**2026-10-31 (M10f: device roles, placement, and onboarding, supervisor only).** Branch `m10f/roles-onboarding`.
+Plan `docs/plans/M10f.md`, evidence `docs/evidence/m10f-gate.md`, built from the orchestration ADR's M10f
+phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in.
+- **Roles are `purposes`, beside the mesh `role`** (migration 0020; the device table's replication
+  triggers made again with the column). A phone or browser runs no agent, so it is a thin client only;
+  a standby is always a hub candidate; the hub always holds hub candidate and general server; a thin
+  client can't also hold a workload role or a candidacy. Widening is tier 3 (`confirm`), narrowing
+  tier 2 (`approved`), and adding hub candidate to a computer needs `confirm_candidate` on top, at
+  pairing and in Settings (Decision 2: "each candidacy itself tier 3"). **A standby's tier-3
+  approval is its candidacy**, as the ADR says for standbys paired before; no second box for it.
+- **The roster lists every other hub candidate** (`candidates`, only when there is one, so a
+  roster without them reads as before). **Device agents keep pinning only the hub's and the
+  standby's keys** (`trust.ts rosterKeys` unchanged): those keys also sign runtime bundles, so
+  trusting a candidate's key before M10g's fencing covers candidates would widen what a computer
+  accepts. "Pinned in the next roster" is met as the roster naming it; device-side trust is M10g's.
+- **The placement resolver is pure.** Today it is checked by `POST /services/placement` (tier 0,
+  advisory) and the device agent; the real proposal path (the supervisor's command line) keeps M10e's
+  "this hub only" rule, and its Service Manager isn't given devices until M10h (corrected after the
+  review: the first draft claimed a hub-side Service Manager check that wasn't wired). The device
+  agent's `assignmentAllowed` refuses against the roles it keeps in `device.json` (from the approval
+  and every heartbeat answer, over its own session).
+- **After the review of #268:** roles now bound the work that already reaches a computer (model roles,
+  downloads, inference: compute; capture: capture source), and the migration gives computers already
+  doing either the role; consent in setup fails closed (`onboard/consent.ts`); a promoted standby
+  gains the hub's roles; one mechanism for a standby a release behind (`ADDED_COLUMNS` in
+  `mesh/sync.ts`, which #258's receipt.opt_in now uses too); mDNS work bounded; import checks each
+  record and reads only plain files; `PATCH /mesh/devices` changes one thing per call.
+- **Onboarding is setup's conversation, not a new flow:** `device`, `roles`, `backend` before the
+  person's questions (the ADR's order), `discover` and `import` after privacy (so the local-only
+  answer is known before anything looks at the network), then the first task. `answer()` is now
+  async (discovery and import run before the reply), one answer at a time. The tests' fixed
+  answer lists gained the four new answers.
+- **The backend words are cut to the evidence** (the closing rule): the ADR's draft named capture on
+  every device and services on other devices (M10h) and K3s's minimums next to this computer's
+  (M10k). Onboarding says what is true now; K3s is shown on Linux as not available yet, offered
+  nowhere as working. Settings › Services exists, minimal, and says there is nothing to switch to.
+- **Discovery** follows the smart-home ADR: asked for, tier 1, found and never connected, an
+  injected transport; tests use stand-ins on 127.0.0.1 only. Under local-only it says, before
+  asking, that looking on the network sends one query onto it. The real multicast path has not run
+  on a real network.
+- **Import reuses `importPack`'s path** (screen the file, then candidates waiting for the person's
+  OK); notes, `.ics` files and Chromium-family and Firefox bookmarks, listed without reading.
+- **The first view's one action** comes from intents carrying eval tags; a test fails if a tag isn't
+  demonstrated by a regression task. Six onboarding claims are registered in `tests/evals/claims.ts`:
+  three backed (`import`, `memory-review`, `first-run`), three worded to named test evidence.
+- **The first win** is measured at machine speed (the API path, and a browser path in Chromium) with
+  each step's time recorded; the human path is an estimate (words read, answers, clicks), said so.
+
+**2026-10-31 (owner decisions: capture with no trusted model; the iOS status bar).**
+1. **Capture, option B:** on a device with no trusted model for `capture-sensitive`, captured text is held, not kept, after the deterministic rules. It shows in the capture timeline, with a plain notice of the fix, until a trusted model can check it or retention ends. This is recorded in the Decision Service ADR §2.1, and is built with the capture-screening consumers (a Track 1 follow-up).
+2. **Status bar, option C:** design packages declare whether they draw behind the iOS status bar. Dark designs do (`black-translucent`); light designs keep iOS's strip. This is recorded in DESIGN-SYSTEM §5 and built as a small Track 1 PR. It needs a real-iPhone check.
 
 **2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
 - **The bands are derived, not round numbers:**

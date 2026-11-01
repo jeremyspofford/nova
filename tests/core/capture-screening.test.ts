@@ -89,7 +89,7 @@ test('Nova’s own rules first: password managers and banking apps and sites are
     assert.equal(r.check.seen().length, 1, 'only the ordinary note reached the model');
     assert.ok(!r.check.seen().some((s) => /SENSITIVE-/.test(s)));
     // A device's capture through the inbox is dropped the same way.
-    const { dev, token } = await enroll(r.h, { kind: 'computer', name: 'Test computer' });
+    const { dev, token } = await enroll(r.h, { kind: 'computer', name: 'Test computer', purposes: ['capture-source'] });
     const auth = { authorization: `Bearer ${token}` };
     assert.equal((await call(r.h.mesh, 'POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: ['heartbeat', 'queue', 'capture.screen'] }, auth)).status, 200);
     await r.h.c('POST', `/capture/sources/${encodeURIComponent(`device:${dev.deviceId}:screen`)}/enable`);
