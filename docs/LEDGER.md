@@ -328,6 +328,41 @@ built-ins only.
 
 ## Decisions
 
+**2026-11-01 (M10g, after the adversarial review of #272: split-brain and data loss closed).** Branch
+`m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The review of #272"). Two blocking findings
+and seven should-fix, each reproduced from the reviewer's probe as a test (`tests/acceptance/m10g-review.test.ts`
+R1–R9, or a drill case), fixed, and seen failing again with the fix undone. Under the owner's rules: one
+active hub, private keys never move, epochs only rise, nothing lost or deleted silently.
+- **No automatic roll-back without positive evidence.** The old hub probes the new one over a request
+  signed by its key, and the answer (the new hub's health) is signed by the new hub's key. Nova takes
+  the role back by itself only when the new hub says it is failing three times running and then
+  acknowledges, signed, that it stood down. A link that doesn't answer (or a clock too far off) is
+  `unknown`: no move, a problem said once, and a tier-3 "take the hub back" that says the risk.
+- **A node that steps down keeps what it took:** whatever the winning hub never copied goes into a
+  named checkpoint on that node first, and the problem lists it by kind and key; if it can't be set
+  aside, the node keeps it and doesn't copy over it. Problems are written after the copy starts, as a
+  standby's own, so the copy can't overwrite them.
+- **Transfer outcomes are settled by the candidate's signed word** (`transfer-status`): taken, the old
+  hub follows; declined, it carries on and the candidate never takes that hand-over; nothing, it keeps
+  holding until then, or the person cancels at tier 3 and it carries on two epochs higher. A restart
+  while holding restores the hold before the ledger resumes or recovers anything.
+- **The hold** waits for requests already past the gate, keeps the sync log recording (device sessions
+  stop writing last-seen while held), and stops Era 2's running work, so nothing lands uncopied and
+  unsaid.
+- **Epochs:** an emergency promotion takes max + 1 over the rosters devices showed it too (`POST
+  /mesh/seen`, signed by a key it trusts to be hub); fencing breaks an equal-epoch tie to the smaller
+  device id; devices follow another hub only at a strictly higher epoch, at most 3 past what they know
+  unless the current hub signed it, never past 2^31 − 1; heartbeat answers carry the roster's digest so
+  a changed roster (a revoked candidate) reaches agents within a heartbeat. Chosen over raising the
+  epoch on every revocation, which would make a live standby copy everything afresh.
+- **Words:** the connector sentence no longer says Nova keeps no copy of the vault key (a standby and
+  checkpoints do, by design); its claims-register case is blocked as false by design; the sheet says
+  what a restore can't know and where its epoch comes from.
+- **Clamps and minor:** the window and probe pace are shortened only in a test or the drill on a temp
+  home; the name driver needs a token and https or loopback; an automatic failover doesn't move the
+  name; the tap runs only in tests and the drill and writes the vault key as a digest; the emergency
+  sheet is bound to the backup it showed.
+
 **2026-10-31 (M10g: hub promotion, planned and emergency, and the promotion drill).** Branch `m10g/hub-promotion`.
 Plan `docs/plans/M10g.md`, evidence `docs/evidence/m10g-gate.md`, built from the orchestration ADR's M10g
 phase (Point 10; Decisions 2 and 5). No migration: nothing new is replicated.
