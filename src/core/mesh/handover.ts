@@ -631,7 +631,7 @@ export class Promotions {
         return;
       }
       if (i === 0) r = this.#tell(this.record()!, 'unknown', `Nova couldn’t tell whether “${to?.name ?? 'the candidate'}” took the hub’s role (${why}), so this node keeps refusing changes until “${to?.name ?? 'it'}” says. If “${to?.name ?? 'it'}” is gone for good, you can cancel the promotion here (Settings › Devices); Nova then says what it can’t know.`);
-      await new Promise((res) => setTimeout(res, Math.min(10_000, 500 * 2 ** Math.min(i, 5))));
+      await new Promise((res) => { const t = setTimeout(res, Math.min(10_000, 500 * 2 ** Math.min(i, 5))); t.unref?.(); });
     }
   }
 
@@ -1218,7 +1218,7 @@ export class Promotions {
     const end = Date.now() + ms;
     while (!this.#closed && Date.now() < end) {
       try { if (done()) return true; } catch { /* closing */ }
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => { const t = setTimeout(r, 100); t.unref?.(); });
     }
     try { return done(); } catch { return false; }
   }
