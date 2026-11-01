@@ -348,6 +348,55 @@ built-ins only.
 
 ## Decisions
 
+**2026-11-01 (M10h: native workloads on devices, and the capture pilot).** Branch `m10h/native-workloads`.
+Plan `docs/plans/M10h.md`, evidence `docs/evidence/m10h-gate.md`, built from the orchestration ADR's M10h
+phase (Point 6, Decisions 1 and 4) and the capture data path design's gate list. Migration 0023.
+- **Who holds the mesh key and carries the sync (the ADR's resolution note): the boot agent**, in a
+  data channel of its own (`src/device/carrier.ts`), not a verb. It already held the device's key and
+  session; no key moves, and the runtime has no part in the capture data path. The carrier starts
+  nothing (a test reads its source) and reaches only the hub and the live capture workload's loopback
+  port from its signed manifest. **The runtime's no-network rule is kept, not amended:**
+  `RUNTIME_CALLS` is unchanged, and the M4b sandbox test, run again, covers the new folders.
+- **Decision 1 as code:** `WORKLOAD_VERBS` is exactly install, start, stop, switch, probe, frozen. A
+  request is `{verb, service, version}`; any other key (a command, arguments, an environment, a port)
+  refuses it. `install` fetches the manifest itself over the boot agent's session. A manifest is taken
+  only when signed by a key the roster lets sign bundles (`bundleKeys`), for this device and platform,
+  with a command that starts one of its own files (or Nova's Node with it). Every file is checked by
+  SHA-256 before the slot exists, and again at every start. Never as root. The runtime decides each
+  step (`src/device/rollout.ts`, shipped in the signed runtime bundle) and reports in its heartbeat.
+- **6(b) on a device:** alongside `full` or `shadow` is a rehearsal on a preview port (a shadow is told
+  so and its output is never read); `none` starts at the switch. A switch is a restart onto the stable
+  ports, since a device has no forwarder. Failed health after a switch goes back to the kept slot by
+  itself (tier 1), downloading nothing; the hub's assignment follows the device back, and a problem
+  says so. **"Refused" and "waiting" are told apart:** a refusal is reported and not retried; capture
+  being off is waiting.
+- **One driver per device:** `DeviceWorkloads.driver(deviceId)` implements M10e's interface, and the
+  core keeps a Service Manager per device, so Screenpipe can run on several devices with their own
+  versions. The hub's own services stay with the supervisor's manager (another process). **Guard
+  removed:** `ServiceManager.plan` refused any placement away from the hub. It now hands one to its
+  `remote` driver; a manager without one (the supervisor's) still refuses, in new words.
+  `/services/placement` and the role-narrowing route no longer say nothing runs on devices.
+  Narrowing a device's roles now lists and stops its workloads that need a removed role.
+- **Placement:** an image-only service goes to no device until the K3s driver (and never to macOS or
+  Windows). A capture permission (`screen-recording`, `microphone`, `accessibility`) must place by
+  `capture-source`: a new validator refusal, so `tests/core/services-manager.test.ts`'s tier-3 case
+  now uses a non-capture permission. No secrets go to a device (owner decision Q5: the vault broker
+  isn't built), and no `https:` artifact. **Decision 4:** Screenpipe's definition
+  (`services/screenpipe.ts`, alongside `none`, tier 3) on a stand-in. The hub signs the manifest that
+  pins the artifact's hash and serves the bytes unchanged.
+- **The capture data path:** batches signed with the device's key and verified against the enrolled
+  record and the session; each item through `Capture.ingest`, so consent and screening are checked
+  again at the hub; provenance as a new replicated column (`capture_event.provenance`,
+  `ADDED_COLUMNS[23]`). Replicated tables: `device_workload`, `capture_batch` (no per-item checksums
+  kept, so a forgotten item leaves no hash) and `capture_device_tombstone`. Not replicated:
+  `device_workload_report`, `device_workload_event`, `capture_device_sync`, `capture_raw_fetch` (the
+  raw fetch's ledger task replicates). The forget's answer gains `elsewhere`, `everywhere` and `said`;
+  an event view's provenance gains `transfer` (`tests/core/capture.test.ts` updated). A cloud site is
+  `NOVA_MESH_SITE=cloud`; "local-first" in the design is `local-preferred` in code.
+- **Changed tests, why:** the runtime bundle carries `rollout.ts` (`device-agent`, `mesh-spokes`,
+  `device-sandbox`); the device tar lists the new device files; the supervisor's manager wording
+  (`services-placement`).
+
 **2026-11-01 (M10g, after the second adversarial review of #272: replays, evidence, ties, the name, long jumps).**
 Branch `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The second review of #272"). Five
 findings and four minor at `53058d93`, each reproduced from the reviewer's probe (p10–p15) as a test

@@ -899,8 +899,8 @@ export class Boot {
   }
 
   // The second check on an assignment (M10f): the hub checked it when it was proposed; this agent
-  // refuses one its own roles don't allow, whatever the hub sent. Native workloads (M10h) call this
-  // before installing anything.
+  // refuses one its own roles don't allow, whatever the hub sent. Native workloads (M10h) are checked
+  // the same way (workloads.ts verifyWorkload, with assignmentAllowed) at install and at every start.
   mayRun(workload: { service: string; roles?: readonly string[] }): Verdict {
     const v = assignmentAllowed(this.d.purposes, workload);
     if (!v.ok) this.say(v.reason);

@@ -106,7 +106,16 @@ export class Rollout {
     let st = state;
     const key = `${a.service}@${a.version}#${a.assigned_at}`;
     const s = () => st.find((x) => x.service === a.service);
-    const run = async (verb: WorkloadVerb, version = a.version) => { const r = await this.#o.verb(verb, a.service, version); st = r.state ?? st; return r; };
+    const once = async (verb: WorkloadVerb, version: string) => { const r = await this.#o.verb(verb, a.service, version); st = r.state ?? st; return r; };
+    // A slot the boot agent refuses to start (changed since it was installed, or signed by a key the
+    // roster no longer accepts after a promotion) is installed again from the hub, verified afresh,
+    // and tried once more.
+    const run = async (verb: WorkloadVerb, version = a.version) => {
+      const r = await once(verb, version);
+      if (r.ok || !r.refused || (verb !== 'start' && verb !== 'switch')) return r;
+      const again = await once('install', version);
+      return again.ok ? once(verb, version) : r;
+    };
     const running = (version: string) => s()?.running.some((r) => r.version === version && !r.failed) ?? false;
 
     if (a.want === 'stopped') {

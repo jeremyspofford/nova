@@ -80,6 +80,16 @@ test('in-process: shadow, health, switch; a version that can’t run twice start
     verbs.length = 0;
     await r.step([assign('3.0.0', 'live', 'none', 6, '2.0.0')], w.state());
     assert.deepEqual(verbs, []);
+    // The live slot changed on disk while stopped: the boot agent refuses to start it; the runtime has
+    // it installed again from the hub (verified afresh) and started.
+    await w.perform({ verb: 'stop', service: 'stand-in', version: '2.0.0' });
+    writeFileSync(join(home, 'workloads', 'stand-in', 'v', '2.0.0', STAND_IN_NAME), 'process.exit(1)\n');
+    const d0 = downloads.length;
+    verbs.length = 0;
+    await r.step([assign('2.0.0', 'live', 'none', 7, '3.0.0')], w.state());
+    assert.deepEqual((verbs as string[]).filter((v) => !v.startsWith('probe')), ['start 2.0.0', 'install 2.0.0', 'start 2.0.0']);
+    assert.equal(downloads.length, d0 + 1, 'fetched again, once');
+    assert.equal((await until(() => getJson(`http://127.0.0.1:${port}/health`), (h) => h.body?.version === '2.0.0', 5000)).body.version, '2.0.0');
     // What it reported survives a restart of the runtime.
     assert.equal(new Rollout({ verb: async () => { throw new Error('unused'); }, file: join(home, 'rollout.json') }).reports().find((x) => x.version === '3.0.0')?.status, 'rolled_back');
   } finally {
