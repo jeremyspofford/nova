@@ -576,10 +576,10 @@ export class Broker {
   }
 
   // A revocation (a binding removed, a consent withdrawn, details changed) re-keys the vault, so an
-  // item file rolled back to before it doesn't open (S5). Grants for the item go too.
-  #revoked(id: string): void {
-    this.store.rotateRoot();
-    this.#forgetGrants(id);
+  // item file rolled back to before it doesn't open (S5). Grants for every changed item go too.
+  #revoked(...ids: string[]): void {
+    if (ids.length) this.store.rotateRoot();
+    for (const id of ids) this.#forgetGrants(id);
     this.#reindex();
   }
   #forgetGrants(id: string): void { for (const g of [...this.#grants]) if (g.startsWith(`${id}|`)) this.#grants.delete(g); }
@@ -718,7 +718,7 @@ export class Broker {
       for (const b of x.bindings) if (b.consent) b.consent.approval_id = approval;
       this.store.setMeta(x.id, stripIndex({ ...x.m, origin: x.origin, class: x.cls, bindings: [...x.m.bindings.filter((b) => !x.bindings.some((n) => n.target === b.target)), ...x.bindings] }));
     }
-    this.#reindex();
+    this.#revoked(...plan.map((x) => x.id));
     return { refs: plan.map((x) => this.#refMeta(x.id)) };
   }
 }
