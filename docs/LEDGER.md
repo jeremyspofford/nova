@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #274 · The Memory page says "Nova reads this before every reply" again**
+- What changed: a permanent test now shows that something you tell Nova in one conversation, it knows in the next. Two local models passed it every time (3 of 3 each), and so did the stand-ins. It runs on every change to Nova, so the stronger wording is back.
+- What you can now do: rely on Nova carrying what you've told it into new conversations, with the models tested.
+- Still unfinished: helpers (Nova's background workers) get no memory by design; the wording covers the replies you get.
+
 **2026-11-01 · #263 · The orb has seven fixed states, and red now only means "something stopped"**
 - What changed: red is reserved for problems that stop Nova, such as a failed task, a safety switch that fired, or a request refused for your security. Anything that needs you while Nova keeps running is amber, such as an approval waiting or a Health item to look at. Each state differs in movement and brightness as well as colour, with a still version for reduced motion. Every design must show all seven, and can't redefine them.
 - What you can now do: tell at a glance whether Nova is stopped (red) or just needs you (amber). Health labels each problem "Failed" or "Needs you". Note that a failed task, including a failed "Backup now", counts as stopped, so it shows red.
@@ -379,6 +384,11 @@ built-ins only.
   - an older standby promoted to hub would triage held events (#272);
   - nobody can override a hold yet (the owner's question; the code has one place for it);
   - job 2 (recall-path screening) is separate.
+
+**2026-11-01 (memory recall graduates, PR #274, Track 3).**
+- **The move:** `claim.memory-recalled-next-conversation` is now REGRESSION. It passed 3/3 trials on gemma4:12b (`4eb23ef1…`) and 3/3 on qwen3.8:27b (`aaee06c3…`), with digests in `docs/evidence/evals.md`, and 5/5 with stand-ins.
+- **Wording:** the Memory page's strong words return ("Nova reads this before every reply."), citing the case. A helper's report gets no memory by design and isn't a reply to the person.
+- **The suite bound:** the golden suite may now hold up to 200 tasks, up from 50.
 
 **2026-11-01 (claim cases graduated, PR #273, Track 3).** Four model-independent claim cases moved from CAPABILITY to REGRESSION after 5 consecutive stand-in passes before the move and 5 after:
 - `claim.local-first-says-when-cloud`;

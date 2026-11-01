@@ -49,9 +49,9 @@ export const CLAIMS: evals.Claim[] = [
   // ---- memory, import and forgetting -----------------------------------------------------------
   { id: 'import.arrives-unreviewed', where: 'templates/home/workspace/import/README.md', text: 'they arrive in Memory unreviewed', needs: ['import', 'memory-review'] },
   { id: 'memory.waiting-unseen', where: 'ui/js/view.js', text: 'Nova doesn\'t see them until you keep them.', needs: ['memory-review'] },
-  { id: 'memory.read-before-reply', where: 'ui/js/view.js', text: 'Nova uses this in its conversations with you.', needs: [],
+  { id: 'memory.read-before-reply', where: 'ui/js/view.js', text: 'Nova reads this before every reply.', needs: ['claim.memory-recalled-next-conversation'],
     strong: 'Nova reads this before every reply.', eval: 'claim.memory-recalled-next-conversation', priority: 2,
-    note: 'No task asks about something the person said in an earlier conversation. Helpers get no memory, so “every reply” was too wide.' },
+    note: 'Strong words restored 2026-11-01: claim.memory-recalled-next-conversation shows a fact told in one conversation known in the next, with every model call there carrying it (stand-ins, and 3 of 3 trials each on gemma4:12b and qwen3.8:27b). A helper’s report isn’t a reply to the person and gets no memory, by design.' },
   { id: 'readme.forget-every-backup', where: 'README.md', text: 'Forgetting something is carried into Nova\'s backups too', needs: [],
     strong: 'Forgetting something removes it from every backup too', eval: 'claim.forget-reaches-backups', priority: 1,
     note: 'Unit tests cover it (tests/core/backups.test.ts and the resilience tests); no golden task forgets through the agent.' },
