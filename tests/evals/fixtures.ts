@@ -59,3 +59,27 @@ export function allow(w: World, ids: string[]) {
 }
 
 export const html = (title: string, body: string) => ({ type: 'text/html; charset=utf-8', body: `<html><head><title>${title}</title></head><body>${body}</body></html>` });
+
+// Records (and refuses) every request Nova makes to hosts matching `host`: a stand-in for "the
+// cloud", which a case may need to show was never reached. Restored when the case ends.
+// With `answer`, it answers an OpenAI-compatible chat call itself (a stand-in cloud that works),
+// still without anything leaving this process.
+export function spyFetch(cleanup: World['cleanup'], host: RegExp, o: { answer?: string } = {}): string[] {
+  const calls: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (host.test(new URL(url).hostname)) {
+      calls.push(url);
+      if (o.answer !== undefined && /\/chat\/completions$/.test(new URL(url).pathname)) {
+        const ev = (x: unknown) => `data: ${JSON.stringify(x)}\n\n`;
+        const body = ev({ choices: [{ index: 0, delta: { content: o.answer }, finish_reason: null }] }) + ev({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + ev({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 5 } }) + 'data: [DONE]\n\n';
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+      }
+      throw new TypeError('fetch failed (the eval’s stand-in cloud refuses every call)');
+    }
+    return real(input, init);
+  }) as typeof fetch;
+  cleanup.push(() => { globalThis.fetch = real; });
+  return calls;
+}

@@ -54,6 +54,7 @@ const TOPICS: Topic[] = [
   { match: /theme|dark mode|appearance|design system/i, tool: 'nova_settings', args: { part: 'appearance' }, labels: ['Appearance'], way: /the look/ },
   { match: /phone|device|paired|laptop|tablet/i, tool: 'nova_devices', labels: ['Devices'], way: /a device in/ },
   { match: /gmail|e-?mail|\bmail\b|home assistant|calendar/i, tool: 'nova_instance', labels: ['Connections'], way: /a connection in/ },
+  { match: /sign (?:me )?in|log (?:me )?in|password|account on/i, tool: null, labels: ['Connections'], way: /a connection in/ },
   { match: /set up (?:right|here|on)|what.?s set up|configuration|everything (?:ok|right|set)/i, tool: 'nova_instance', labels: ['Chat model (you)', 'Model providers', 'Local models', 'Connections', 'Capture', 'Devices', 'Schedules and automations', 'Appearance', 'Open problems'] },
   { match: /about me|who am i|what do you know/i, tool: null, labels: ['Person', 'First run'] },
 ];
@@ -99,6 +100,10 @@ export const grounded: Reply = (b) => {
     return [`I won’t take a key here. ${br.rule}`, ...ways.map((w) => `For this one: ${w}.`)].join(' ').trim();
   }
 
+  // "Remember that …": kept with the memory protocol the system prompt gives (when it does).
+  const keep = /^(?:please )?remember (?:that )?(.+?)[.!]?$/i.exec(s.user);
+  if (keep && s.system.includes('<remember')) return `I'll keep that.\n<remember kind="fact">${keep[1]!.replace(/^my /i, 'The person’s ')}</remember>`;
+
   // Imports: list what waits (names come from outside, so through the tool), then load an export.
   if (topics[0]?.tool === 'import_files') {
     const listed = s.results.find((r) => r.name === 'import_files');
@@ -134,6 +139,14 @@ export const grounded: Reply = (b) => {
     if (keep.length) parts.push(`From ${r.name}: ${keep.join(' ')}`);
   }
   for (const t of topics) if (t.way) for (const w of br.ways.filter((x) => t.way!.test(x))) if (!parts.some((p) => p.includes(w))) parts.push(`To add or change it: ${w}.`);
+  // What Nova keeps in memory (MEMORY.md, in the system prompt), where it shares words with the
+  // question.
+  const words = new Set((s.user.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((x) => !['what', 'where', 'when', 'which', 'about', 'there', 'have', 'does', 'your', 'that', 'this', 'with'].includes(x)));
+  const memory = /<file path="~\/MEMORY\.md">\n([\s\S]*?)\n<\/file>/.exec(s.system)?.[1] ?? '';
+  for (const line of memory.split('\n').filter((l) => /^- /.test(l.trim()))) {
+    const hits = (line.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((x) => words.has(x)).length;
+    if (hits >= 2) parts.push(`From memory: ${line.trim().replace(/^- /, '')}`);
+  }
   return parts.length ? parts.join('\n') : 'Nothing in Nova’s state speaks to that.';
 };
 
