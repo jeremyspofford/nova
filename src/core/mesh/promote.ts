@@ -6,6 +6,10 @@
 //  - Promotion makes a standby the hub: the epoch goes up by one, it signs a new roster with its
 //    own key (the one devices pinned as the standby's), starts the scheduler, triggers and workers,
 //    recovers the ledger, and records the promotion as a verified ledger task.
+//  - M10g: a planned promotion (mesh/handover.ts) hands the role over from the hub itself: the old
+//    hub holds writes, the standby promotes with the old hub as its standby (`planned`), and the old
+//    hub follows it as a live copy (`follow`). A roll-back is the same swap in reverse, at a higher
+//    epoch still. Fencing covers every hub candidate the roster pins, and asks the stable mesh name.
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -23,8 +27,14 @@ import type { MeshIdentity } from './identity.ts';
 import { ask, readRole, Replica, SYNC_AAD, writeRole, type ResetNotice, type RoleFile, type SyncPayload } from './replica.ts';
 import type { SyncLog } from './sync.ts';
 import { sessionMessage, verifyRoster, type SignedRoster } from './wire.ts';
+import { tap } from './tap.ts';
 
 export type NodeRole = 'hub' | 'standby';
+// Which of two hubs wins (M10g review, finding 2): the higher epoch; at an equal epoch, the smaller
+// device id. Every node applies the same rule, so equal epochs settle to one hub. Devices never follow
+// another hub at an equal epoch at all (src/device/trust.ts epochVerdict).
+export const outranks = (a: { epoch: number; id: string }, b: { epoch: number; id: string }): boolean => a.epoch > b.epoch || (a.epoch === b.epoch && a.id !== b.id && a.id < b.id);
+export const EPOCH_CEILING = 2 ** 31 - 1;
 export const FENCE_EVERY_MS = 30_000;
 export const CONFIRMATION_SYSTEM = 'nova-mesh';
 const LAG_EVERY_MS = 15_000;
@@ -46,6 +56,8 @@ export function nodeRole(db: Db, home: string): { role: NodeRole; file: RoleFile
 
 export interface MeshRoleOptions {
   db: Db; log: Log; home: string; now: () => Date; publicUrl: () => string | null;
+  // This node's own mesh address, where other nodes reach it directly (not the stable name).
+  address?: () => string | null;
   identity: MeshIdentity; devices: Devices; access: Access; sync: SyncLog; ledger: Ledger; verifier: Verifier;
   file: RoleFile | null;
   // Turns the hub's own work on or off: the heartbeat (triggers) and, through events, Era 2's scheduler.
@@ -73,6 +85,11 @@ export class MeshRole extends EventEmitter {
   #promoting: Promise<unknown> | null = null;
   #owing: ReturnType<typeof setInterval> | null = null;
   #lastTime = 0;
+  // Writes held while the hub is handed over (M10g): the reason every refused change gives. `#heldFence`:
+  // fencing still runs while held (a new hub asked to stand down during a roll-back steps down when it
+  // sees the old one back at the higher epoch); a forward hand-over settles who is hub itself.
+  #held: string | null = null;
+  #heldFence = false;
 
   constructor(o: MeshRoleOptions) {
     super();
@@ -109,19 +126,52 @@ export class MeshRole extends EventEmitter {
     const name = hub?.name ?? this.#file?.hub.name ?? null;
     const url = (this.#file && this.#file.hub.id === s.hub_id ? this.#file.hub.url : null) ?? hub?.address ?? null;
     const label = `${name ? `“${name}”` : 'another node'}${url ? ` at ${url}` : ''}`;
-    // The role file is the enrollment; a hub that stepped down has none of its own.
-    const demoted = !this.#file || this.#file.device_id !== this.#o.identity.id;
+    // The role file is the enrollment; a hub that stepped down has none of its own, or one that still
+    // says hub (it was a standby once, then promoted): either way it copies nothing (M10g: before, the
+    // second case read as a live standby).
+    const demoted = !this.#file || this.#file.device_id !== this.#o.identity.id || this.#file.role !== 'standby';
     const reason = demoted
       ? `This node isn’t the hub any more: ${label} became the hub (epoch ${s.epoch}) while it was away, so this one only reads. ${label} is the hub.`
       : `This is the standby; ${label} is the hub.`;
     return { reason, hub: { id: s.hub_id, name, url }, demoted };
   }
 
+  // While a planned promotion hands the role over (M10g step 3), every change is refused here with
+  // this reason; the mesh's own calls (sessions, the standby's acknowledgements, the promotion's
+  // steps) still pass. Null when nothing is held.
+  held(): { reason: string; held: true } | null {
+    return this.#held && this.role() === 'hub' ? { reason: this.#held, held: true } : null;
+  }
+
+  // A hub cancelling a hand-over it can't settle (handover.ts cancel): its epoch goes up by `by`, so a
+  // candidate that did take the role at the next epoch steps down when they meet. Epochs only rise.
+  raiseEpoch(by: number): number {
+    if (this.role() !== 'hub' || !Number.isInteger(by) || by < 1 || by > 3) throw new CoreError('conflict', 'Only the hub raises its epoch, by 1 to 3.');
+    if (this.#o.devices.state().epoch + by > EPOCH_CEILING) throw new CoreError('conflict', `The epoch would pass ${EPOCH_CEILING}, the highest Nova uses.`);
+    this.#o.db.run('UPDATE mesh_state SET epoch = epoch + ?, updated_at = ? WHERE id = 1', by, this.#o.now().toISOString());
+    const epoch = this.#o.devices.state().epoch;
+    if (this.#file) { this.#file = { ...this.#file, epoch }; writeRole(this.#o.home, this.#file); }
+    this.emit('change', this.status());
+    return epoch;
+  }
+
+  hold(reason: string, o: { fence?: boolean } = {}): void {
+    this.#held = reason;
+    this.#heldFence = !!o.fence;
+    this.emit('change', this.status());
+  }
+
+  release(): void {
+    this.#held = null;
+    this.#heldFence = false;
+    this.emit('change', this.status());
+  }
+
   status() {
     const s = this.#o.devices.state();
     if (s.role === 'hub') {
       const standby = s.standby_id ? this.#o.devices.find(s.standby_id) : null;
-      return { role: s.role, epoch: s.epoch, standby: standby && standby.trust === 'trusted' ? { id: standby.id, name: standby.name, address: standby.address, lag: this.lag() } : null, replica: null };
+      return { role: s.role, epoch: s.epoch, standby: standby && standby.trust === 'trusted' ? { id: standby.id, name: standby.name, address: standby.address, lag: this.lag() } : null, replica: null, ...(this.#held ? { held: this.#held } : {}) };
     }
     return { role: s.role, epoch: s.epoch, standby: null, replica: { ...this.replica()!, sync: this.#replica?.status() ?? null } };
   }
@@ -237,31 +287,58 @@ export class MeshRole extends EventEmitter {
 
   // ---- fencing --------------------------------------------------------------------------------------
 
-  // Asks every roster peer who is hub. If one is hub at a higher epoch, with a roster signed by the
-  // key this node has for it, this node was replaced and steps down. Peers that don't answer are
-  // left alone: an unreachable peer is not proof of anything.
+  // Asks every roster peer who is hub, and the stable mesh name (M10g: after a promotion it leads to
+  // the new hub, wherever that is). If one is hub at a higher epoch, with a roster signed by the key
+  // this node has for it, this node was replaced and steps down. Peers that don't answer are left
+  // alone: an unreachable peer is not proof of anything.
   async fence(): Promise<{ demoted: boolean; checked: string[] }> {
     const checked: string[] = [];
-    if (this.role() !== 'hub' || this.#closed) return { demoted: false, checked };
+    // While writes are held for a hand-over, the promotion itself settles who is hub (handover.ts).
+    if (this.role() !== 'hub' || this.#closed || (this.#held && !this.#heldFence)) return { demoted: false, checked };
     const me = this.#o.identity.id;
     const peers = new Map<string, string>();
     for (const d of this.#o.devices.list()) if (d.id !== me && d.trust === 'trusted' && d.address) peers.set(d.address.replace(/\/+$/, ''), d.id);
     if (this.#file && this.#file.hub.id !== me) peers.set(this.#file.hub.url, this.#file.hub.id);
+    const name = this.#o.publicUrl()?.replace(/\/+$/, '') ?? null;
+    const own = this.#o.address?.()?.replace(/\/+$/, '') ?? null;
+    // Only when this node knows its own address apart from the name, so it never mistakes its own
+    // answer, through the name, for a peer's (and never looks a name up for nothing).
+    if (name && own && name !== own && !peers.has(name)) peers.set(name, '');
     const answers = await Promise.all([...peers.keys()].map(async (url) => {
       checked.push(url);
       try { return { url, res: await ask(`${url}/api/v1/mesh/hello`, { timeoutMs: 3000, caFile: this.#file?.ca_file ?? null }) }; } catch { return null; }
     }));
-    // Who may have taken over: the standby this hub has now, the only node it ever handed the role
-    // to; and, for a node that was itself a standby, the hub its role file names. Any other
-    // trusted device (an old standby that was replaced, say) proving its key at a higher epoch is
-    // a machine that shouldn't be claiming the role, not a reason to step down.
+    // Who may have taken over: the standby this hub has now; for a node that was itself a standby,
+    // the hub its role file names; and every trusted hub candidate (M10g, Decision 2: the roster
+    // pins each one's key, so any of them may be promoted cold from a backup). Any other trusted
+    // device proving its key at a higher epoch is a machine that shouldn't be claiming the role, not
+    // a reason to step down.
     const state = this.#o.devices.state();
-    const successors = new Set([state.standby_id, this.#file && this.#file.hub.id !== me ? this.#file.hub.id : null].filter((x): x is string => !!x));
+    const candidates = this.#o.devices.list().filter((d) => d.id !== me && d.trust === 'trusted' && d.purposes.includes('hub-candidate')).map((d) => d.id);
+    const successors = new Set([state.standby_id, this.#file && this.#file.hub.id !== me ? this.#file.hub.id : null, ...candidates].filter((x): x is string => !!x));
     for (const a of answers) {
       if (!a || a.res.status !== 200 || this.role() !== 'hub') continue;
       const h = a.res.body as { id?: string; role?: string; epoch?: number; name?: string; roster?: SignedRoster };
+      tap('hello', h);
+      // This node's own answer, through the stable name.
+      if (h?.id === me) continue;
       const mine = this.#o.devices.state().epoch;
-      if (h?.role !== 'hub' || !Number.isInteger(h.epoch) || h.epoch! <= mine || typeof h.id !== 'string') continue;
+      // A peer still acting as hub at a lower epoch (one that came back while this node was away from
+      // it) is asked to check now, rather than at its next round: it finds this node and steps down.
+      if (h?.role === 'hub' && Number.isSafeInteger(h.epoch) && typeof h.id === 'string' && !outranks({ epoch: h.epoch!, id: h.id }, { epoch: mine, id: me }) && this.#o.devices.find(h.id)?.trust === 'trusted') {
+        // A tie this node wins (review N3): devices never follow another hub at an equal epoch, so the
+        // computers that followed the other one would follow neither. This node goes one epoch higher
+        // at once, so they follow it; then the other is asked to check, and steps down.
+        const peer = this.#o.devices.find(h.id)!;
+        if (h.epoch === mine && h.roster && verifyRoster(h.roster, [peer.public_key]) && h.roster.roster.hub.id === peer.id && mine < EPOCH_CEILING) {
+          const up = this.raiseEpoch(1);
+          this.#o.log.problem('mesh', `“${peer.name}” at ${a.url} was also the hub at epoch ${mine}. A fixed rule picks this node, so it took epoch ${up}, which devices follow; “${peer.name}” steps down when it sees that, and keeps what it took meanwhile.`);
+        }
+        void ask(`${a.url}/api/v1/mesh/promotion/fence`, { method: 'POST', headers: { 'x-nova': '1' }, body: {}, timeoutMs: 3000, caFile: this.#file?.ca_file ?? null }).catch(() => {});
+      }
+      // A higher epoch wins; at an equal epoch (two hubs, say one promoted from a backup while the other
+      // lived on), a fixed rule picks one, the same on every node, so the tie always settles.
+      if (h?.role !== 'hub' || !Number.isSafeInteger(h.epoch) || h.epoch! > EPOCH_CEILING || typeof h.id !== 'string' || !outranks({ epoch: h.epoch!, id: h.id }, { epoch: mine, id: me })) continue;
       const peer = this.#o.devices.find(h.id);
       const r = h.roster?.roster;
       // Only a node this hub already trusted, proving it with its own key, can take the role.
@@ -270,7 +347,7 @@ export class MeshRole extends EventEmitter {
         continue;
       }
       if (!successors.has(peer.id)) {
-        this.#warn(`${a.url}|${h.epoch}|${peer.id}`, `“${peer.name}” at ${a.url} says it is the hub at epoch ${h.epoch}, signed with its own key, but it isn’t this hub’s standby, so this hub carries on. If that machine is no longer yours, revoke it.`);
+        this.#warn(`${a.url}|${h.epoch}|${peer.id}`, `“${peer.name}” at ${a.url} says it is the hub at epoch ${h.epoch}, signed with its own key, but it isn’t this hub’s standby or a hub candidate, so this hub carries on. If that machine is no longer yours, revoke it.`);
         continue;
       }
       this.demote(peer, h.epoch!, a.url);
@@ -301,6 +378,8 @@ export class MeshRole extends EventEmitter {
       this.#o.db.run('DELETE FROM device_session');
     });
     this.#stopHub();
+    this.#held = null;
+    this.#heldFence = false;
     this.#o.becameStandby();
     for (const d of this.#o.devices.list()) this.#o.access.close(d.id);
     const why = `“${hub.name}” at ${url} became the hub (epoch ${epoch}) while this node was away. This node stepped down so there is only one hub: it reads, but refuses changes, and every device session here has ended.`;
@@ -314,6 +393,53 @@ export class MeshRole extends EventEmitter {
     }
     this.emit('demoted', { hub: hub.id, epoch, reason: why });
     this.emit('change', this.status());
+  }
+
+  // M10g step 5, and a roll-back's reverse: this node, the hub until now (or a hub that just stepped
+  // down), becomes the live standby of `hub`, not a read-only node. `cursor` is the last sequence
+  // both hold (a planned hand-over's last sequence), and copying goes on after it; its own log
+  // entries past it (none, when writes were held) are dropped, since the new hub numbers its own
+  // from there. Null when this node's copy may hold what the new hub never had (a roll-back): it
+  // copies afresh. Every device session here ends; devices find the hub through the stable name.
+  follow(hub: { id: string; name?: string | null; url: string; public_key: string; x25519_public_key: string }, o: { epoch: number; cursor: number | null; roster?: SignedRoster | null }): { dropped: number; fresh: boolean } {
+    if (this.#closed) throw new CoreError('conflict', 'Nova is stopping.');
+    const me = this.#o.identity.id;
+    const at = this.#o.now().toISOString();
+    const wasHub = this.role() === 'hub';
+    let dropped = 0;
+    if (wasHub) this.#stopHub();
+    this.#held = null;
+    this.#o.db.tx(() => {
+      this.#o.sync.setLogging(false);
+      this.#o.db.run(`UPDATE mesh_state SET role = 'standby', epoch = MAX(epoch, ?), hub_id = ?, standby_id = ?, updated_at = ? WHERE id = 1`, o.epoch, hub.id, me, at);
+      this.#o.db.run('DELETE FROM device_session');
+      if (o.cursor !== null) {
+        dropped = this.#o.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM sync_log WHERE seq > ?', o.cursor)!.n;
+        this.#o.db.run('DELETE FROM sync_log WHERE seq > ?', o.cursor);
+        this.#o.db.run('UPDATE sync_state SET cursor = ?, acked_seq = 0, acked_at = NULL, behind_since = NULL WHERE id = 1', o.cursor);
+      }
+    });
+    if (o.cursor === null) this.#o.sync.fresh();
+    if (wasHub) this.#o.becameStandby();
+    for (const d of this.#o.devices.list()) this.#o.access.close(d.id);
+    const prev = this.#file;
+    const { promoted_at: _p, ...raw } = (prev?.raw ?? {}) as Record<string, unknown>;
+    const file: RoleFile = {
+      version: 1, role: 'standby', device_id: me,
+      hub: { id: hub.id, url: hub.url.replace(/\/+$/, ''), public_key: hub.public_key, x25519_public_key: hub.x25519_public_key, ...(hub.name ? { name: hub.name } : {}) },
+      epoch: Math.max(o.epoch, this.#o.devices.state().epoch), ...(o.roster ? { roster: o.roster } : {}),
+      address: this.#o.address?.() ?? prev?.address ?? null, ca_file: prev?.ca_file ?? null,
+      raw: { ...raw, followed_at: at },
+    };
+    writeRole(this.#o.home, file);
+    this.#file = file;
+    void this.#replica?.stop();
+    this.#replica = null;
+    this.#startStandby();
+    this.#o.log.info('mesh', `This node is now the standby of “${hub.name ?? hub.id}”, copying it.`, { hub: hub.id, epoch: o.epoch, cursor: o.cursor, dropped });
+    this.emit('followed', { hub: hub.id, epoch: o.epoch });
+    this.emit('change', this.status());
+    return { dropped, fresh: o.cursor === null };
   }
 
   // ---- forgets owed to the new hub --------------------------------------------------------------
@@ -380,7 +506,11 @@ export class MeshRole extends EventEmitter {
 
   // ---- promotion ------------------------------------------------------------------------------------
 
-  async promote(o: { confirm: boolean; by: string; auto?: boolean }): Promise<{ epoch: number; roster: SignedRoster; task: Task; recovered: { requeued: string[]; reverified: string[] } }> {
+  // `planned` (M10g): the role is handed over rather than taken. The node it comes from stays this
+  // hub's standby (`previous`, reached at `address`), its row a standby's, so it can copy this one
+  // live; the task joins the promotion's chain (`parent`) under its own title. A roll-back is the
+  // same, the other way.
+  async promote(o: { confirm: boolean; by: string; auto?: boolean; planned?: { previous: string; address: string | null; parent?: string | null; title: string; goal: string } }): Promise<{ epoch: number; roster: SignedRoster; task: Task; recovered: { requeued: string[]; reverified: string[] } }> {
     if (!o.confirm) throw new CoreError('validation', 'Making this node the hub needs an explicit confirmation: send confirm: true.');
     if (this.#promoting) throw new CoreError('conflict', 'This node is already becoming the hub.');
     const s = this.#o.devices.state();
@@ -398,17 +528,24 @@ export class MeshRole extends EventEmitter {
       await this.#replica?.stop();
       this.#replica = null;
       const epoch = s.epoch + 1;
+      // Epochs are made no higher than any node or device accepts (review, minor).
+      if (epoch > EPOCH_CEILING) throw new CoreError('conflict', `The epoch would pass ${EPOCH_CEILING}, the highest Nova uses.`);
+      // What this node holds when it becomes hub: its own changes as hub come after (handover.ts keeps
+      // them, and only them, if it ever has to step down).
+      const since = this.#o.sync.head();
       const at = this.#o.now().toISOString();
-      const previous = s.hub_id;
+      const previous = o.planned?.previous ?? s.hub_id;
       this.#o.db.tx(() => {
         this.#o.sync.setLogging(true);
-        this.#o.db.run(`UPDATE mesh_state SET epoch = ?, role = 'hub', hub_id = ?, standby_id = NULL, updated_at = ? WHERE id = 1`, epoch, me, at);
+        this.#o.db.run(`UPDATE mesh_state SET epoch = ?, role = 'hub', hub_id = ?, standby_id = ?, updated_at = ? WHERE id = 1`, epoch, me, o.planned && previous !== me ? previous : null, at);
         // The hub always holds hub candidate and general server (mesh/purposes.ts): it runs Nova and its
         // services. Promotion, confirmed at tier 3, is what makes it the hub, so it gains them here,
         // and placement keeps one rule (roles) rather than a special case for whichever node is hub.
         this.#o.db.run(`UPDATE device SET role = 'hub', purposes = ? WHERE id = ?`, JSON.stringify(sortPurposes([...self.purposes, ...fixedPurposes('computer', { hub: true })])), me);
-        // The old hub is still the person's computer, trusted as before, but not hub or standby.
-        if (previous && previous !== me) this.#o.db.run(`UPDATE device SET role = 'spoke' WHERE id = ? AND role = 'hub'`, previous);
+        // The old hub is still the person's computer, trusted as before, but not hub or standby; or,
+        // handed over (M10g), this hub's standby, copying it.
+        if (o.planned && previous && previous !== me) this.#o.db.run(`UPDATE device SET role = 'standby', kind = 'standby', address = COALESCE(?, address) WHERE id = ? AND trust = 'trusted'`, o.planned.address, previous);
+        else if (previous && previous !== me) this.#o.db.run(`UPDATE device SET role = 'spoke' WHERE id = ? AND role = 'hub'`, previous);
       });
       if (this.#file) {
         this.#file = { ...this.#file, role: 'hub', epoch, promoted_at: at };
@@ -419,15 +556,16 @@ export class MeshRole extends EventEmitter {
       this.#startHub();
       const recovered = this.#o.becameHub();
       const how = o.auto ? 'automatically, after the hub was unreachable' : 'by you, on its own screen';
-      this.#o.log.info('mesh', 'Standby promoted to hub.', { epoch, previous, by: o.by, auto: !!o.auto });
+      this.#o.log.info('mesh', o.planned ? o.planned.title : 'Standby promoted to hub.', { epoch, previous, by: o.by, auto: !!o.auto, planned: !!o.planned });
       const task = this.#o.ledger.create({
-        title: 'Standby promoted to hub', owner: this.worker.id, origin: o.auto ? { kind: 'trigger', ref: 'mesh:auto-failover' } : { kind: 'user', ref: 'mesh:promote' },
-        goal: `Make this node the hub at epoch ${epoch} (promoted ${how}), with a roster signed by its own key.`,
+        title: o.planned?.title ?? 'Standby promoted to hub', owner: this.worker.id, origin: o.auto ? { kind: 'trigger', ref: 'mesh:auto-failover' } : o.planned ? { kind: 'user', ref: 'mesh:promotion' } : { kind: 'user', ref: 'mesh:promote' },
+        ...(o.planned?.parent ? { parent_id: o.planned.parent } : {}),
+        goal: o.planned ? `${o.planned.goal} This node is the hub at epoch ${epoch}, with a roster signed by its own key.` : `Make this node the hub at epoch ${epoch} (promoted ${how}), with a roster signed by its own key.`,
         evidence_required: [{ kind: 'confirmation', note: 'This node is hub at the new epoch, and the roster is signed by its key.' }],
         privacy_mode: 'local-only', approval_tier: 0, idempotency_key: `mesh:promote:${me}:${epoch}`, user_visibility: 'attention',
-        inputs: { epoch, roster, previous_hub: previous, by: o.by, auto: !!o.auto, requeued: recovered.requeued.length },
+        inputs: { epoch, roster, previous_hub: previous, by: o.by, auto: !!o.auto, requeued: recovered.requeued.length, ...(o.planned ? { planned: true } : {}) },
       });
-      this.emit('promoted', { epoch, roster, task: task.id, auto: !!o.auto });
+      this.emit('promoted', { epoch, roster, task: task.id, auto: !!o.auto, planned: !!o.planned, since });
       this.emit('change', this.status());
       // The record runs in its own lane, so recovered work doesn't hold it up; give it a moment.
       for (let i = 0; i < 100 && !this.#closed && !TERMINAL.includes(this.#o.ledger.get(task.id).state); i++) await new Promise((r) => setTimeout(r, 20));
@@ -488,6 +626,7 @@ export class MeshRole extends EventEmitter {
           if (s.role !== 'hub') throw new CoreError('conflict', this.replica()!.reason);
           this.#o.sync.ack(Number(body.seq));
           this.checkLag();
+          this.emit('acked', { standby: who.principal.device.id, seq: Number(body.seq) });
           return this.lag();
         },
       },

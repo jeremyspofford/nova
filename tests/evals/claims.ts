@@ -46,6 +46,35 @@ export const CLAIMS: evals.Claim[] = [
     strong: 'A screen onto Nova. It never runs anything for Nova.', eval: 'claim.thin-client-runs-nothing', priority: 1,
     note: 'Unit tests show it (tests/core/services-placement.test.ts, tests/core/roles-bound-work.test.ts); no golden task does.' },
 
+  // ---- hub promotion (M10g): the sheets' words, worded to what the tests show -----------------------
+  // Unit and drill tests show each of these (tests/core/mesh-promotion.test.ts,
+  // tests/acceptance/m10g-drill.test.ts); no golden task does, so none claims more than the person
+  // will see happen, and each keeps its stronger words for the eval that would prove them.
+  { id: 'promotion.old-hub-live-copy', where: 'src/core/mesh/handover.ts', text: 'This hub becomes its standby, keeping a live copy.', needs: [],
+    strong: 'Nothing is lost and nothing runs twice.', eval: 'claim.promotion-loses-nothing', priority: 1,
+    note: 'The drill compares content hashes across a planned promotion and the core test copies after it; no golden task promotes a hub.' },
+  { id: 'promotion.no-pairing-again', where: 'src/core/mesh/handover.ts', text: 'None is paired again.', needs: [],
+    strong: 'Every device follows by itself, wherever it is.', eval: 'claim.promotion-devices-follow', priority: 2,
+    note: 'The drill’s stand-in computer and phone follow through the stand-in stable name; no real device has.' },
+  { id: 'promotion.keys-stay', where: 'src/core/mesh/handover.ts', text: 'Each computer keeps its own keys. The new hub signs a new roster with the key you pinned when you made it a candidate.', needs: [],
+    strong: 'No private key ever leaves its device.', eval: 'claim.promotion-keys-never-move', priority: 1,
+    note: 'The drill hashes every key file before and after and scans every tapped message, backup and home for each private key.' },
+  { id: 'promotion.rolls-back', where: 'src/core/mesh/handover.ts', text: 'If the new hub says it is failing and stops taking changes, Nova makes this hub the hub again by itself and tells you. If it just can’t be reached, it stays the hub, and you can take the hub back here yourself.', needs: [],
+    strong: 'A failed promotion is always undone, with nothing lost.', eval: 'claim.promotion-rolls-back', priority: 1,
+    note: 'The core test and the drill make the new hub report a failing check (the stable name stuck) and see the roll-back at epoch + 2 only after it stands down; the review tests cut the link and see no roll-back (M10g review, finding 1).' },
+  { id: 'promotion.lost-after-backup', where: 'src/core/mesh/handover.ts', text: 'changes, conversations, memories and tasks from then on are not in the backup.', needs: [],
+    strong: 'Everything before the backup comes back exactly.', eval: 'claim.cold-promotion-restores-backup', priority: 1,
+    note: 'The restore drill runs on the backup first; the drill finds what was written after it absent.' },
+  { id: 'promotion.connectors-no-escrow', where: 'src/core/mesh/handover.ts', text: 'Connectors need signing in again. Backups never hold the key to your saved secrets, so they can’t be opened from this backup. The key stays only where it already was: on the old hub, on a standby that copied it, and in their own checkpoints, which never leave those computers.', needs: [],
+    strong: 'Nova keeps no copy of that key anywhere.', eval: 'claim.no-vault-key-escrow', priority: 1,
+    note: 'Decision 5. The drill scans every backup and every tapped message for the vault’s key. The strong words were false (M10g review, finding 9): a standby and the checkpoints hold the key, by design.' },
+  { id: 'promotion.devices-no-pairing', where: 'src/core/mesh/handover.ts', text: 'Devices paired before the backup find this node without pairing again: its key is in the roster they hold.', needs: [],
+    strong: 'Every device finds the new hub by itself.', eval: 'claim.promotion-devices-follow', priority: 2,
+    note: 'The drill’s stand-in computer and phone, paired before the backup, follow after an emergency promotion.' },
+  { id: 'promotion.old-hub-steps-down', where: 'src/core/mesh/handover.ts', text: 'when the two meet, the lower one steps down (at an equal epoch, a fixed rule picks one)', needs: [],
+    strong: 'There is never a second hub.', eval: 'claim.never-two-hubs', priority: 1,
+    note: 'Fencing tests (the tie-break included) and the drill’s write probe; a hub cut off from every peer still acts alone until it hears of the other one (a limit).' },
+
   // ---- memory, import and forgetting -----------------------------------------------------------
   { id: 'import.arrives-unreviewed', where: 'templates/home/workspace/import/README.md', text: 'they arrive in Memory unreviewed', needs: ['import', 'memory-review'] },
   { id: 'memory.waiting-unseen', where: 'ui/js/view.js', text: 'Nova doesn\'t see them until you keep them.', needs: ['memory-review'] },

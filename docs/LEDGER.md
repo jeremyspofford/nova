@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #272 · You can move the hub to another computer, and recover it from a backup**
+- What changed: in Settings › Devices, a computer that can become the hub now has "Promote to hub". Nova checks first that it is ready (it copies everything, has room, runs the same version, and there is a recent backup that passed its test), and tells you plainly if not. Then it hands over: the last changes are copied, running work finishes or moves along, new changes wait for a moment, and the other computer becomes the hub. The old hub keeps a live copy. For a while afterwards it checks the new hub. If the new hub says it isn't working, it takes the role back by itself and tells you; if it simply can't reach the new hub, it doesn't guess: it tells you, and you can take the role back yourself. Nothing either computer saved is thrown away; anything that couldn't be carried over is kept on that computer and listed for you. If your hub is gone for good, a computer that could be the hub can take over from your latest backup: Nova says first when that backup was made, that anything after it is lost, and that your connections (like email) need signing in again. Your devices find the new hub without pairing again.
+- What you can now do: move Nova to a better computer without starting over, and recover from losing the hub. Each step shows up in Tasks.
+- Still unfinished: if your two computers lose sight of each other mid-way, both can take changes for a short while; when they reconnect, one stays the hub and the other's changes are kept and listed for you, never mixed in by themselves (whether to add a third vote to prevent that is your decision). The computer must already be your standby to be promoted (adding it as the standby is a separate step); moving your real network name (DNS or Tailscale) isn't done for you; this has only been tried on test computers on one machine, not on your real ones.
+
 **2026-11-01 · #271 · Captured screen text is now checked for private details before Nova keeps it**
 - What changed: before anything captured from your screen or a recording is kept, Nova's own rules run first. Known password managers, banking and payment apps, password vaults and banks' websites are not kept (best effort). Text shaped like a key, a password or a card number is blanked out, in the words, the window title and the web address. Then the trusted local model checks the rest for passwords, keys, and money or health details. Flagged items are held back from memory, or their words aren't kept, and the Capture page says which and why. Nothing is deleted without showing you. On a device with no trusted model, captured text is held, not added to memory, and the page says what fixes it.
 - What you can now do: open any captured item to see how it was checked. Let a wrongly dropped app back in from Settings › Capture. Review "Memories to look at again": memories made from capture before this check that turn out to hold a private detail, to forget or keep.
@@ -342,6 +347,118 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-11-01 (M10g, after the second adversarial review of #272: replays, evidence, ties, the name, long jumps).**
+Branch `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The second review of #272"). Five
+findings and four minor at `53058d93`, each reproduced from the reviewer's probe (p10–p15) as a test
+(`tests/acceptance/m10g-review2.test.ts` R10–R15, a device-agent test, or the drill's new case 11),
+fixed, and seen failing again with the fix undone.
+- **What M10g guarantees during a split, stated exactly:** during a split, two hubs can briefly accept
+  writes; when contact returns, it settles to one, and the loser's changes are kept and named, never
+  merged automatically. ADR-11's "one active hub" holds only while the nodes can reach each other.
+  Whether ADR-11 is reworded or a lease or third vote is added is the owner's decision (open); no lease
+  is built.
+- **Signed answers are bound to their request** (its nonce and time), so a forwarder can drop or delay
+  them but not replay one; the nonces a node took survive its restart.
+- **Devices' roster reports** (`/mesh/seen`) count only when signed by a paired device's own key; the
+  highest epoch seen only rises; one a second per device, after the checks; devices are counted, not
+  reports.
+- **A tie** is settled with the winner going one epoch higher at once, so devices follow it; every
+  step-down keeps what that node took as hub in a named checkpoint, listing only its own changes.
+- **The stable name** is pointed at whichever node is hub once it settles (every step-down, a cancel,
+  and a periodic check on the hub), and a move that didn't take is said plainly.
+- **Long jumps:** each planned hand-over adds a link signed by the hub handing over; a device follows
+  a jump of any size along that chain back to the hub it knows. Chosen over raising the +3 limit, which
+  would let any pinned key jump far ahead. Emergency promotions add no link.
+- **Minor:** safe mode takes a changed roster; the name token never reaches the agent and is a
+  diagnostics secret; the epoch ceiling is enforced where epochs are made.
+
+**2026-11-01 (M10g, after the adversarial review of #272: split-brain and data loss closed).** Branch
+`m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The review of #272"). Two blocking findings
+and seven should-fix, each reproduced from the reviewer's probe as a test (`tests/acceptance/m10g-review.test.ts`
+R1–R9, or a drill case), fixed, and seen failing again with the fix undone. Under the owner's rules: one
+active hub, private keys never move, epochs only rise, nothing lost or deleted silently.
+- **No automatic roll-back without positive evidence.** The old hub probes the new one over a request
+  signed by its key, and the answer (the new hub's health) is signed by the new hub's key. Nova takes
+  the role back by itself only when the new hub says it is failing three times running and then
+  acknowledges, signed, that it stood down. A link that doesn't answer (or a clock too far off) is
+  `unknown`: no move, a problem said once, and a tier-3 "take the hub back" that says the risk.
+- **A node that steps down keeps what it took:** whatever the winning hub never copied goes into a
+  named checkpoint on that node first, and the problem lists it by kind and key; if it can't be set
+  aside, the node keeps it and doesn't copy over it. Problems are written after the copy starts, as a
+  standby's own, so the copy can't overwrite them.
+- **Transfer outcomes are settled by the candidate's signed word** (`transfer-status`): taken, the old
+  hub follows; declined, it carries on and the candidate never takes that hand-over; nothing, it keeps
+  holding until then, or the person cancels at tier 3 and it carries on two epochs higher. A restart
+  while holding restores the hold before the ledger resumes or recovers anything.
+- **The hold** waits for requests already past the gate, keeps the sync log recording (device sessions
+  stop writing last-seen while held), and stops Era 2's running work, so nothing lands uncopied and
+  unsaid.
+- **Epochs:** an emergency promotion takes max + 1 over the rosters devices showed it too (`POST
+  /mesh/seen`, signed by a key it trusts to be hub); fencing breaks an equal-epoch tie to the smaller
+  device id; devices follow another hub only at a strictly higher epoch, at most 3 past what they know
+  unless the current hub signed it, never past 2^31 − 1; heartbeat answers carry the roster's digest so
+  a changed roster (a revoked candidate) reaches agents within a heartbeat. Chosen over raising the
+  epoch on every revocation, which would make a live standby copy everything afresh.
+- **Words:** the connector sentence no longer says Nova keeps no copy of the vault key (a standby and
+  checkpoints do, by design); its claims-register case is blocked as false by design; the sheet says
+  what a restore can't know and where its epoch comes from.
+- **Clamps and minor:** the window and probe pace are shortened only in a test or the drill on a temp
+  home; the name driver needs a token and https or loopback; an automatic failover doesn't move the
+  name; the tap runs only in tests and the drill and writes the vault key as a digest; the emergency
+  sheet is bound to the backup it showed.
+
+**2026-10-31 (M10g: hub promotion, planned and emergency, and the promotion drill).** Branch `m10g/hub-promotion`.
+Plan `docs/plans/M10g.md`, evidence `docs/evidence/m10g-gate.md`, built from the orchestration ADR's M10g
+phase (Point 10; Decisions 2 and 5). No migration: nothing new is replicated.
+- **Trust widened, then fenced:** device agents now pin every hub candidate the roster lists
+  (`trust.ts rosterKeys`) and look at their addresses (`boot.ts candidates`); runtime bundles stay
+  signed by the hub or the standby only (`bundleKeys`), which is why M10f held this back. Fencing
+  (`promote.ts fence`) treats every trusted hub candidate as a possible successor (Decision 2) and
+  also asks the stable mesh name; a key that isn't pinned still can't take the role, and a peer still
+  acting as hub at a lower epoch is asked to check at once. **Guard removed:** a replaced standby (a
+  hub candidate) proving a higher epoch used to be refused; it is a successor now
+  (`tests/core/mesh-sync.test.ts` changed accordingly: a computer that is no candidate stays refused).
+- **Planned promotion is the hub's, over signed calls:** the hub drives its live standby with
+  requests signed by its identity key (step, both ids, epoch, time, nonce, body hash; used once), and
+  takes nothing from the candidate on trust but its own signed roster. **Step 0 is a refusal with
+  directions**, not an automatic re-enrollment: enrolling a standby is a pairing made on that
+  machine. Steps 1–6 are ledger tasks in one chain (`parent_id`), worker `mesh-promotion`,
+  confirmation system `nova-promotion`; the transfer and the roll-back are M4's own promotion task,
+  under the chain.
+- **The drain** is a new `ledger.drain()` (nothing new starts but the promotion's own records; the
+  bound, then running work is stopped and left active for the next hub's recovery; work past its
+  commit point is waited for and, if still running, the promotion stops) and `ledger.resume()`; a node
+  that becomes hub always resumes its queue (`startHub`). **Writes are held** by the same gate as a
+  standby's (409 with the reason), with the mesh's own calls passing; the hold is written down, so a
+  restart while holding starts holding.
+- **The old hub follows the new one live** (`MeshRole.follow`): its cursor starts at the hand-over's
+  last sequence, its own log past it dropped (none, since writes were held and logging stopped).
+  A roll-back is the same swap the other way at epoch + 2; the node that took over steps down when
+  fencing shows it the old hub at the higher epoch, and copies it afresh (`sync.fresh()`). M4's
+  `replica().demoted` now also counts a role file that says hub (a node once a standby, promoted,
+  then fenced): before, that node read as a live standby that could be promoted with a stale copy.
+- **The verification window is watched by the old hub**, now the standby (a failed new hub can't be
+  relied on to undo itself): hello as hub at the new epoch with a roster signed by its key; the stable
+  name leading to it, when Nova moves the name; the copy arriving. Three failures in a row roll back
+  (tier 1, a problem). 30 minutes by default; `NOVA_PROMOTION_WINDOW_S` sets another (the drill and the
+  tests use seconds). There is no setting for the person yet.
+- **The stable name's dead-man's switch is that window,** not M10d's change chain: M10d's targets
+  aren't replicated, and its switch watches device contact on the node that applied the change, which
+  stops being hub mid-step. Nova moves the name only through `NOVA_MESH_NAME_CONTROL` (in this build,
+  only the drill's loopback stand-in); without it the sheet says the person moves it.
+- **Emergency promotion from the latest backup** reuses the checkpoint restore's staging and swap
+  (`stageCold`, a `cold` marker; `carryOver` keeps this node's `mesh/`, so its keys and role) after the
+  restore drill passes on the backup; this node takes max + 1 of every epoch it knows. Offered only
+  where no hub answers anywhere and this node holds no live copy (a live standby uses M4's "Make
+  this the hub"). **No escrow (Decision 5):** the backup's vault is set aside unopened (its key was
+  never in a backup); a new vault holds only Nova's own keys when this node has them; the sheet and a
+  problem say connectors sign in again. The vault's key does still reach a live standby, sealed to
+  it, as since M5b: that is how a planned promotion keeps connectors working.
+- **The drill** (`tests/acceptance/m10g-drill.ts`, `scripts/promotion-drill.ts`) proves no private key
+  crosses by tapping what each node received (`NOVA_DRILL_TAP`, off unless set) and scanning it, every
+  backup and every home for each private key in three encodings, with the key files hashed before and
+  after.
 
 **2026-10-31 (capture screening, job 1, switched on: rules first, capture-sensitive on indexing, hold without a trusted model; Track 1).** Owner decision `INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md` and option B (ADR §2.1, PR #269); plan `docs/plans/capture-screening-consumers.md`; template `capture-sensitive` v1 (#264), unchanged.
 - **Rules first, at intake, with no model call:**

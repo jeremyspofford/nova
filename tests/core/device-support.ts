@@ -57,6 +57,8 @@ export class FakeNode {
   hubReset: { id: string; said: string } | null = null;
   hubResetKey: DeviceKeys | null = null;
   reports: Array<Record<string, unknown>> = [];
+  // Added to every heartbeat reply (a roster digest, say).
+  heartbeatExtra: Record<string, unknown> = {};
   sessionsStarted = 0;
   url = '';
   #server: Server | null = null;
@@ -124,7 +126,7 @@ export class FakeNode {
     if (path === '/mesh/runtime') return this.bundle ? send(200, this.bundle) : send(404, { error: 'none' });
     if (path === '/mesh/devices/me/heartbeat') {
       this.heartbeats.push(body);
-      return send(200, { ok: true, epoch: this.epoch, runtime: { version: this.bundle?.manifest.version ?? 'none' }, ...(this.hubReset ? { hub_reset: { ...this.hubReset, signature: signMessage((this.hubResetKey ?? this.keys).ed25519.privateKey, hubResetMessage(device, this.hubReset.id)), signer: (this.hubResetKey ?? this.keys).ed25519.publicKey } } : {}) });
+      return send(200, { ok: true, epoch: this.epoch, runtime: { version: this.bundle?.manifest.version ?? 'none' }, ...this.heartbeatExtra, ...(this.hubReset ? { hub_reset: { ...this.hubReset, signature: signMessage((this.hubResetKey ?? this.keys).ed25519.privateKey, hubResetMessage(device, this.hubReset.id)), signer: (this.hubResetKey ?? this.keys).ed25519.publicKey } } : {}) });
     }
     if (path === '/mesh/devices/me/report') { this.reports.push(body); return send(200, { ok: true }); }
     if (path === '/mesh/inbox') {

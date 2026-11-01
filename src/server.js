@@ -60,7 +60,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   const chatRun = new ChatRun({ program, egress: config.agentEgress, privacy: () => core.profile.privacyDefault() });
   // Shared with the core by reference: with port 0 in NOVA_MESH_URL, the real port is filled in
   // once the mesh listener is bound (tests use that, so no other process can take the port first).
-  const meshInfo = config.mesh ? { publicUrl: config.mesh.publicUrl, transport: config.mesh.transport } : null;
+  const meshInfo = config.mesh ? { publicUrl: config.mesh.publicUrl, transport: config.mesh.transport, address: config.mesh.address ?? null } : null;
   const core = createCore({
     home: config.home, version, instance: config.instance, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
     mesh: meshInfo,
@@ -644,7 +644,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     nova.chatRun.recover();
     nova.scheduler.start();
   };
-  const hub = !role.replica() && !sandbox;
+  // A hub that stopped while it held writes to hand over (M10g) runs no work until that is settled.
+  const hub = !role.replica() && !sandbox && !nova.core.mesh.promotions.holdPending();
   if (hub) nova.helpers.recover();
   const recovered = nova.core.start();
   if (hub) {
@@ -655,6 +656,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (!hub && !sandbox) console.log(role.replica().reason);
   role.on('promoted', ({ epoch }) => { runWork(); console.log(`This node is the hub now (epoch ${epoch}).`); });
   role.on('demoted', ({ reason }) => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); console.log(reason); });
+  // A planned promotion (M10g): the scheduler pauses while the hub drains, starts again if nothing was
+  // handed over, and stops when this node becomes the new hub's standby.
+  // Era 2's running work stops too (its runs are ledger tasks the drain hands over: M10g review, 5).
+  role.on('draining', () => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); });
+  role.on('resumed', () => { if (!role.replica()) runWork(); });
+  role.on('followed', ({ hub }) => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); console.log(`This node is the standby now, copying the hub (${hub}).`); });
   nova.server.listen(config.port, config.host, () => {
     const ms = Math.round(performance.now() - nova.started);
     // Who is running this home, so tools that must only run while Nova is stopped (replacing the
@@ -685,6 +692,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (pub.port === '0') {
         pub.port = String(port);
         nova.meshInfo.publicUrl = config.mesh.publicUrl = pub.origin;
+      }
+      // The same for this node's own address (M10g), when it is the one it listens on.
+      if (nova.meshInfo.address) {
+        const own = new URL(nova.meshInfo.address);
+        if (own.port === '0') { own.port = String(port); nova.meshInfo.address = config.mesh.address = own.origin; }
       }
       console.log(`Devices pair and connect at ${nova.meshInfo.publicUrl} (listening on ${m.bindHost}:${port}, ${how}).`);
     });

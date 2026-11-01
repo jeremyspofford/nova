@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import jsQR from 'jsqr';
-import { addDeviceSheet, deviceDetail, deviceMeshCard, deviceRow, joinRequestSheet, promoteSheet, revokeSheet } from '../ui/js/components.js';
+import { addDeviceSheet, coldPromotionSheet, deviceDetail, deviceMeshCard, deviceRow, joinRequestSheet, promoteSheet, promotionSheet, revokeSheet } from '../ui/js/components.js';
 import { qrEncode } from '../ui/js/qr.js';
 
 const now = new Date('2026-10-29T10:00:00Z');
@@ -82,4 +82,30 @@ test('M4c: roles in the registry, and making the standby the hub is tier 3', () 
   assert.match(sheet, /<input type="checkbox" name="confirm" required>/);
   assert.match(sheet, /data-action="approve" value="approve" disabled>Make this the hub</);
   assert.match(sheet, /If “Hub” comes back/);
+});
+
+// M10g: promoting a hub candidate (tier 3, the pre-checks first), and becoming the hub from a backup
+// (tier 3, the backup's time, what was lost and connectors first). The words are the hub's.
+test('the promotion sheets: tier 3, the pre-checks or the backup said first; a refused one has no button', () => {
+  const spare = { id: 's', name: 'Spare', kind: 'standby' };
+  const checks = [{ name: 'role', ok: true, said: '“Spare” is a hub candidate and the standby.' }, { name: 'backup', ok: true, said: 'A backup from today, and its restore drill passed.' }];
+  const sheet = [{ label: 'What happens', text: 'Nova copies the last changes to “Spare”.' }, { label: 'Why it asks', text: 'Tier 3.' }];
+  const ok = promotionSheet(spare, { ok: true, checks, sheet });
+  assert.match(ok, /data-tier="3" data-promotion="s"/);
+  assert.match(ok, /Make “Spare” the hub\?/);
+  assert.match(ok, /<dt>What happens<\/dt><dd>Nova copies the last changes to “Spare”\.<\/dd>/);
+  assert.match(ok, /name="confirm" required/);
+  assert.match(ok, /Promote to hub<\/button>/);
+  assert.ok(ok.indexOf('The pre-checks') < ok.indexOf('name="confirm"'), 'said before the confirmation');
+  const no = promotionSheet(spare, { ok: false, checks: [{ name: 'backup', ok: false, said: 'There is no backup.' }], sheet });
+  assert.match(no, /There is no backup\./);
+  assert.match(no, /data-ok="false"/);
+  assert.doesNotMatch(no, /Promote to hub<\/button>/);
+  assert.doesNotMatch(no, /name="confirm"/);
+  const cold = coldPromotionSheet({ eligible: true, sheet: [{ label: 'The backup', text: 'Backup 4, made 2026-10-31T03:00:00.000Z.' }, { label: 'What is lost', text: 'Everything written after 2026-10-31T03:00:00.000Z.' }, { label: 'Connectors', text: 'Connectors need signing in again.' }] });
+  assert.match(cold, /data-tier="3" data-cold-promotion="1"/);
+  for (const w of ['The backup', 'What is lost', 'Connectors need signing in again']) assert.ok(cold.indexOf(w) < cold.indexOf('name="confirm"'), `${w} before the confirmation`);
+  const notHere = coldPromotionSheet({ eligible: false, reasons: ['A hub answers at http://127.0.0.1:1 (epoch 3).'], sheet: [] });
+  assert.match(notHere, /Not here: A hub answers/);
+  assert.doesNotMatch(notHere, /name="confirm"/);
 });

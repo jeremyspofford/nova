@@ -566,7 +566,9 @@ const sealOf = (m: Manifest, key: Buffer) => {
   return createHmac('sha256', key).update(JSON.stringify(rest)).digest('hex');
 };
 
-const sealed = (m: Manifest, key: Buffer) => {
+// Exported for an emergency promotion (mesh/handover.ts), which picks the latest backup in a folder
+// without this node's record of making it.
+export const sealed = (m: Manifest, key: Buffer) => {
   if (typeof m.seal !== 'string' || !/^[0-9a-f]{64}$/.test(m.seal)) return false;
   return timingSafeEqual(Buffer.from(m.seal, 'hex'), Buffer.from(sealOf(m, key), 'hex'));
 };

@@ -452,7 +452,14 @@ export interface RestoreMarker {
   had?: string[];
   // The top-level names the restored home has: the swap's plan.
   names: string[];
+  // An emergency promotion (M10g, mesh/handover.ts): what is staged is a backup, not a checkpoint,
+  // and this node becomes the hub with it, keeping its own keys.
+  cold?: ColdStage;
 }
+
+// What an emergency promotion stages with the backup: this node's id (it becomes the hub), the epoch
+// it takes at least (max + 1 of every epoch it knew at staging), and the backup.
+export interface ColdStage { node: string; floor: number; promotion: string; backup: { id: string; seq: number; at: string; path: string }; by: string }
 
 export interface Carried {
   revoked: { id: string; name: string }[];
@@ -600,7 +607,8 @@ export function finishStaged(home: string, o: FinishOptions = {}): { restored: R
   if (m.state === 'staged') {
     if (!Array.isArray(m.files) || !same(listing(neu), m.files)) return refuse('what it had staged was incomplete or had changed since.');
     try {
-      m.carried = carryNow(home, neu, o);
+      m.carried = carryNow(home, neu, o, m.cold?.node ?? null);
+      if (m.cold) applyCold(home, neu, m.cold, m.carried, o);
       m.ready = listing(neu);
       m.names = readdirSync(neu).filter(isNovaEntry).sort();
       m.state = 'carried';
@@ -682,18 +690,72 @@ function putBack(home: string, m: RestoreMarker, neu: string, old: string): void
 }
 
 // What is kept from now, read from the outgoing home just before the swap.
-function carryNow(home: string, staged: string, o: FinishOptions): Carried {
+function carryNow(home: string, staged: string, o: FinishOptions, node: string | null = null): Carried {
   const vaultAt = o.vaultAt ?? ((h: string) => new Vault({ home: h }));
   const dbFile = join(home, 'nova.db');
   if (!existsSync(dbFile)) throw new Error('the home has no database to keep things from');
   const live = new Db(dbFile);
   try {
-    let hubId = live.get<{ hub_id: string | null }>('SELECT hub_id FROM mesh_state WHERE id = 1')?.hub_id ?? null;
+    // An emergency promotion: this node becomes the hub, so its own record is the one kept from now.
+    let hubId = node ?? live.get<{ hub_id: string | null }>('SELECT hub_id FROM mesh_state WHERE id = 1')?.hub_id ?? null;
     if (!hubId) { try { hubId = (JSON.parse(readFileSync(join(home, 'mesh', 'identity.json'), 'utf8')) as { id: string }).id; } catch { hubId = ''; } }
     return carryOver({ home, staged, live, hubId, now: o.now?.() ?? new Date(), vault: vaultAt(home), vaultAt });
   } finally {
     live.close();
   }
+}
+
+// An emergency promotion's part of the swap (M10g), after what every restore keeps from now: this
+// node is the hub, at the higher of the epoch the restore set and the floor staged with it; the old
+// hub and any standby of then are spokes (the old hub steps down when it comes back: fencing); the
+// backup's sessions end (devices sign in again with their own keys, nothing is paired again). The
+// backup's vault can't open (its key was never in a backup, Decision 5): it is set aside, and a new
+// one holds only Nova's own keys, when this node's vault has them.
+function applyCold(home: string, staged: string, c: ColdStage, carried: Carried, o: FinishOptions): void {
+  const d = new DatabaseSync(join(staged, 'nova.db'));
+  const at = (o.now?.() ?? new Date()).toISOString();
+  let epoch = 0;
+  try {
+    d.exec('BEGIN');
+    const now = (d.prepare('SELECT epoch FROM mesh_state WHERE id = 1').get() as { epoch: number } | undefined)?.epoch ?? 1;
+    epoch = Math.max(now, c.floor, carried.epoch.restored);
+    d.prepare(`INSERT OR REPLACE INTO mesh_state (id, epoch, role, hub_id, standby_id, updated_at) VALUES (1, ?, 'hub', ?, NULL, ?)`).run(epoch, c.node, at);
+    const row = d.prepare('SELECT purposes FROM device WHERE id = ?').get(c.node) as { purposes: string | null } | undefined;
+    let purposes: string[] = [];
+    try { purposes = JSON.parse(row?.purposes ?? '[]') as string[]; } catch { /* none */ }
+    for (const p of ['hub-candidate', 'general-server']) if (!purposes.includes(p)) purposes.push(p);
+    d.prepare(`UPDATE device SET role = 'hub', purposes = ? WHERE id = ?`).run(JSON.stringify(purposes), c.node);
+    d.prepare(`UPDATE device SET role = 'spoke' WHERE id != ? AND role IN ('hub', 'standby')`).run(c.node);
+    d.exec('DELETE FROM device_session');
+    d.exec('UPDATE sync_state SET logging = 1 WHERE id = 1');
+    d.exec('COMMIT');
+  } catch (e) {
+    try { d.exec('ROLLBACK'); } catch { /* nothing open */ }
+    throw e;
+  } finally {
+    d.close();
+  }
+  carried.epoch.restored = epoch;
+  carried.standby_resync = false;
+  // Its role file (now's, carried with mesh/) says it is the hub, at that epoch.
+  const roleFile = join(staged, 'mesh', 'role.json');
+  if (existsSync(roleFile)) {
+    try {
+      const r = JSON.parse(readFileSync(roleFile, 'utf8')) as Record<string, unknown>;
+      writeFileSync(`${roleFile}.tmp`, `${JSON.stringify({ ...r, role: 'hub', epoch, promoted_at: at }, null, 2)}\n`, { mode: 0o600 });
+      renameSync(`${roleFile}.tmp`, roleFile);
+    } catch { /* a role file Nova can't read: mesh_state decides */ }
+  }
+  const vaultAt = o.vaultAt ?? ((h: string) => new Vault({ home: h }));
+  let own: string[] = [];
+  try {
+    const live = vaultAt(home);
+    own = live.status().ok ? live.list('nova/') : [];
+    const v = vaultAt(staged);
+    v.reset(true);
+    for (const n of own) { const val = live.get(n); if (val !== null) v.put(n, val); }
+  } catch { own = []; }
+  carried.vault = `The backup’s saved secrets can’t be opened: backups never hold their key, so they can’t be opened from it. Sign in to each connector again. (The key stays only where it already was: on the old hub, a standby that copied it, and their own checkpoints.)${own.length ? ` Nova’s own keys (${own.join(', ')}) came from this node.` : ''}`;
 }
 
 export function restoreRecord(home: string, id: string): (RestoreMarker & { finished_at: string }) | null {
@@ -846,6 +908,46 @@ export class Checkpoints {
     return { restoring: true, id: marker.id, checkpoint: v, before, verified: marker.verified, dropped, restart };
   }
 
+  // An emergency promotion (M10g, mesh/handover.ts) stages a backup folder the way a restore stages
+  // a checkpoint (the same layout: nova.db, files/, manifest.json), after a checkpoint of now, with
+  // the cold marker; the next start applies it. Its tier-3 confirmation and its checks (the backup's
+  // restore drill) are the caller's. Returns the restore's id.
+  stageCold(backupDir: string, cold: ColdStage): string {
+    if (stagedPending(this.#o.home)) throw new CoreError('conflict', 'A restore is already waiting for Nova to restart.');
+    if (!this.#o.restarter.available) throw new CoreError('conflict', 'Nova couldn’t restart itself here (no supervisor, and no server to restart it), so nothing was staged.');
+    const bm = JSON.parse(readFileSync(join(backupDir, 'manifest.json'), 'utf8')) as { id: string; at: string; db: ManifestFile; files: ManifestFile[]; schema_version: number; seal?: string };
+    if (bm.schema_version > this.#o.schema()) throw new CoreError('conflict', `The backup was made by a newer Nova (database version ${bm.schema_version}); this one can’t open it.`);
+    const total = bm.db.bytes + bm.files.reduce((n, f) => n + f.bytes, 0);
+    const f = { path: backupDir, manifest: { files: bm.files, total_bytes: total } as unknown as CheckpointManifest };
+    try {
+      stageCopy(this.#o.home, f, this.#o.free ? { free: this.#o.free } : {});
+      // The node's own copy as it is now, kept on this machine: nothing it had is lost by this.
+      const before = this.auto('Before an emergency promotion from a backup');
+      const marker = writeStaged(this.#o.home, {
+        id: newRestoreId(), at: this.#o.now().toISOString(),
+        checkpoint: { id: bm.id, label: `the backup of ${bm.at}`, at: bm.at, kind: 'auto' },
+        verified: { db: bm.db.sha256, files: bm.files.length, bytes: total, seal: bm.seal ?? '' }, before: before.id, cold,
+      });
+      this.#o.log.info('resilience', 'Emergency promotion staged.', { id: marker.id, backup: bm.id, before: before.id });
+      return marker.id;
+    } catch (e) {
+      try { dropStaged(this.#o.home); } catch { /* nothing staged */ }
+      throw e;
+    }
+  }
+
+  // Restarts to apply what was staged; drops it when the restart doesn't happen.
+  async restartStaged(why: string, failed: (e: Error) => void): Promise<{ said: string }> {
+    const drop = (e: Error) => { try { dropStaged(this.#o.home); } catch { /* reported */ } failed(e); };
+    try {
+      const r = await this.#o.restarter.restartInPlace(why, { failed: drop });
+      return { said: r.said };
+    } catch (e) {
+      try { dropStaged(this.#o.home); } catch { /* nothing staged */ }
+      throw e;
+    }
+  }
+
   // Restores finished at this start: each becomes a ledger task with its evidence (once).
   recordFinished(): Task[] {
     const out: Task[] = [];
@@ -853,14 +955,16 @@ export class Checkpoints {
       out.push(this.#o.ledger.create({
         title: `Restore to “${r.checkpoint.label}”`,
         owner: WORKER_ID,
-        goal: `Put Nova back to the checkpoint “${r.checkpoint.label}” (${r.checkpoint.at}), keeping revocations, forgets, problems and the mesh epoch from now.`,
+        goal: r.cold
+          ? `Restore ${r.checkpoint.label} for an emergency promotion: this node becomes the hub with its own keys, keeping revocations, forgets and problems from now.`
+          : `Put Nova back to the checkpoint “${r.checkpoint.label}” (${r.checkpoint.at}), keeping revocations, forgets, problems and the mesh epoch from now.`,
         origin: { kind: 'user' },
         evidence_required: [{ kind: 'confirmation', note: 'the checkpoint’s hashes, verified before applying, and what was carried over' }],
         approval_tier: 0,
         privacy_mode: 'local-only',
         user_visibility: 'attention',
         idempotency_key: `restore:${r.id}`,
-        inputs: { action: 'restore', restore_id: r.id, checkpoint: r.checkpoint, verified: r.verified, before: r.before, carried: r.carried, confirmed: 'tier 3, on the hub’s own screen' },
+        inputs: { action: 'restore', restore_id: r.id, checkpoint: r.checkpoint, verified: r.verified, before: r.before, carried: r.carried, confirmed: r.cold ? 'tier 3, on this node’s own screen (an emergency promotion)' : 'tier 3, on the hub’s own screen', ...(r.cold ? { cold: r.cold } : {}) },
       }));
     }
     if (out.length) void this.#o.ledger.pump();
