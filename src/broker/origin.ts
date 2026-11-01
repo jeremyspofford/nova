@@ -58,7 +58,8 @@ export function requestPath(p: unknown): { path: string; bare: string } {
   const bare = p.split('?')[0]!;
   let decoded: string;
   try { decoded = decodeURIComponent(bare); } catch { throw new Error('not a request path'); }
-  if (decoded.split('/').some((s) => s === '..' || s === '.') || decoded.includes('\\') || /%2f/i.test(bare)) throw new Error('a request path can’t climb out of its scope');
+  // `..;x` and `.;x` are dot segments to servers that strip path parameters (Tomcat, Spring).
+  if (decoded.split('/').some((s) => /^\.\.?(;|$)/.test(s)) || decoded.includes('\\') || /%2f/i.test(bare)) throw new Error('a request path can’t climb out of its scope');
   return { path: p, bare };
 }
 
@@ -111,14 +112,16 @@ export function addressClass(addr: string): 'loopback' | 'private' | 'public' {
   if (v === 4) {
     const [a, b] = addr.split('.').map(Number) as [number, number];
     if (a === 127) return 'loopback';
-    if (a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) || a >= 224) return 'private';
+    if (a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)) || a >= 224) return 'private';
     return 'public';
   }
   if (v === 6) {
     const x = addr.toLowerCase();
     if (x === '::1') return 'loopback';
     if (x.startsWith('::ffff:')) return addressClass(x.slice(7));
-    if (x === '::' || /^f[cd]/.test(x) || /^fe[89ab]/.test(x) || x.startsWith('ff')) return 'private';
+    // ULA, link-local, site-local (fec0::/10), multicast, NAT64 (64:ff9b::/96) and 6to4 (2002::/16),
+    // whose embedded IPv4 address could be anything: all treated as not public.
+    if (x === '::' || /^f[cd]/.test(x) || /^fe[89a-f]/.test(x) || x.startsWith('ff') || x.startsWith('64:ff9b:') || x.startsWith('2002:')) return 'private';
     return 'public';
   }
   return 'private';

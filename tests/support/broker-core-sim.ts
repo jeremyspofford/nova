@@ -18,17 +18,6 @@ process.on('message', async (msg: { seq: number; op: string; [k: string]: any })
     if (msg.op === 'init') { client = new BrokerClient({ socket: msg.socket, token: msg.token }); return send(msg.seq, true); }
     const c = client!;
     if (msg.op === 'call') return send(msg.seq, await c.call(msg.m, msg.f ?? {}));
-    if (msg.op === 'stage') return send(msg.seq, await c.migrateStage(msg.home));
-    if (msg.op === 'finish') return send(msg.seq, await c.migrateFinish(msg.home, msg.ticket));
-    if (msg.op === 'run') {
-      const child = c.launch(msg.ticket, msg.program, { env: { PATH: process.env.PATH ?? '' } });
-      let stdout = '';
-      let stderr = '';
-      child.stdout!.setEncoding('utf8').on('data', (x: string) => { stdout += x; });
-      child.stderr!.setEncoding('utf8').on('data', (x: string) => { stderr += x; });
-      child.on('close', (code) => send(msg.seq, { code, stdout, stderr }));
-      return;
-    }
     if (msg.op === 'heap') { c.close(); return send(msg.seq, writeHeapSnapshot(msg.path)); }
   } catch (e) { send(msg.seq, { error: 'sim', words: (e as Error).message }); }
 });

@@ -31,6 +31,10 @@ export interface Meta {
   name: string; aliases: string[]; kind: string; origin: string | null; username: string | null;
   class: 'standard' | 'sensitive'; per_use: boolean; created_at: string; last_used: string | null; last_rotated: string | null;
   bindings: Binding[]; policy: { length: number; alphabet: string };
+  // Where the value came from, for health flags that must answer no guess of core's (§8): generated
+  // here, migrated by the broker's own launcher, sealed with a passkey approval, or sealed through
+  // core's relay (a value core could have chosen). Older items have none: treated as `sealed`.
+  provenance?: 'generated' | 'migrated' | 'sealed-passkey' | 'sealed'; migrated_from?: string;
 }
 interface ItemFile { v: 1; id: string; gen: number; version: number; key: Sealed; meta: Sealed; value: Sealed; pending?: { version: number; key: Sealed; value: Sealed } }
 export interface Passkey { public_key: string; rp_id: string; origins: string[]; sign_count: number; registered_at: string }
@@ -41,6 +45,8 @@ export interface Header {
   holders: Record<string, Holder>; passkeys: Record<string, Passkey>;
   // On a holder: the signing key of the hub it adopted from, pinned at the first adoption.
   hub_signer?: string;
+  // Made on this device (`local`) or adopted from a hub. A local vault never adopts another.
+  origin?: 'local' | 'adopted';
 }
 // What travels to holders: device wraps, and every factor's public key (so a holder's broker can
 // seal the root key to the same factors itself). No passphrase, recovery or passkey wrap moves.
@@ -164,7 +170,7 @@ export class Store {
     const root = randomBytes(32);
     let dev: { id: string; public: string };
     try { dev = this.device(); } catch { const d = this.#renewDevice(); dev = { id: d.id, public: d.factor.pub }; }
-    const h: Header = { v: 1, id, created_at: this.#now(), kdf, unlock_mode: o.unlock_mode ?? 'auto', gen: 1, wraps: {}, holders: {}, passkeys: {} };
+    const h: Header = { v: 1, id, created_at: this.#now(), kdf, unlock_mode: o.unlock_mode ?? 'auto', gen: 1, wraps: {}, holders: {}, passkeys: {}, origin: 'local' };
     const add = (name: string, f: Factor) => { h.wraps[name] = sealTo(f.pub, root, wrapInfo(id, name, 1)); };
     add('passphrase', passphraseFactor(o.passphrase, kdf));
     if (o.recovery) add('recovery', recoveryFactor(o.recovery));
@@ -446,12 +452,15 @@ export class Store {
   adopt(inbox: OutboxHeader, items: Record<string, string>): void {
     const dev = this.device();
     const name = `device:${dev.id}`;
-    // Only a header its hub signed, and once adopted, only that hub's (pinned at the first adoption).
+    // A vault made here never adopts another. A holder adopts only a header signed by the hub it
+    // was enrolled for (pinned at tier 3, pinHub), only for the vault it holds, and only newer.
+    if (this.#h && this.#h.origin !== 'adopted') throw new Error('This device’s vault was made here; it doesn’t take another.');
     const { sig, ...body } = inbox;
     if (typeof inbox.signer !== 'string' || !verifyText(inbox.signer, canonical(body), sig)) throw new Error('The vault that arrived isn’t signed by a hub’s broker, so it isn’t adopted.');
-    const pinned = this.#h?.hub_signer;
-    if ((pinned && pinned !== inbox.signer) || (this.#h && this.#h.id !== inbox.id)) throw new Error('The vault that arrived isn’t from the hub this device holds a vault for, so it isn’t adopted.');
-    if (this.#h && inbox.gen < this.#h.gen) throw new Error('The vault that arrived is older than the one held here.');
+    const pinned = this.#h?.hub_signer ?? this.hubPin();
+    if (!pinned) throw new Error('This device isn’t enrolled to hold a hub’s vault (tier 3), so nothing is adopted.');
+    if (pinned !== inbox.signer || (this.#h && this.#h.id !== inbox.id)) throw new Error('The vault that arrived isn’t from the hub this device holds a vault for, so it isn’t adopted.');
+    if (this.#h && inbox.gen <= this.#h.gen) throw new Error('The vault that arrived isn’t newer than the one held here.');
     const w = inbox.device_wraps?.[name];
     if (!w || !UUID.test(inbox.id)) throw new Error('The hub’s vault has no wrap for this device. Enrol it as a holder on the hub first (tier 3).');
     const root = openWrap(this.#device!.factor, w, wrapInfo(inbox.id, name, inbox.gen));
@@ -469,10 +478,19 @@ export class Store {
     if (inbox.unlock_mode === 'auto') wraps[name] = sealTo(this.#device!.factor.pub, root, wrapInfo(inbox.id, name, inbox.gen));
     for (const id of this.ids()) if (!items[id]) rmSync(this.#itemPath(id), { force: true });
     for (const f of files) this.#write(f);
-    this.#h = { v: 1, id: inbox.id, created_at: this.#now(), kdf: inbox.kdf, unlock_mode: inbox.unlock_mode, gen: inbox.gen, wraps, holders: inbox.holders, passkeys: inbox.passkeys, hub_signer: inbox.signer };
+    this.#h = { v: 1, id: inbox.id, created_at: this.#now(), kdf: inbox.kdf, unlock_mode: inbox.unlock_mode, gen: inbox.gen, wraps, holders: inbox.holders, passkeys: inbox.passkeys, hub_signer: inbox.signer, origin: 'adopted' };
     this.#writeHeader();
     zero(this.#root);
     this.#root = root;
+  }
+
+  // The hub this device will hold a vault for: its broker's signing key, pinned at enrolment.
+  hubPin(): string | null {
+    try { const p = JSON.parse(readFileSync(join(this.dir, 'hub.json'), 'utf8')) as { signer?: unknown }; return typeof p.signer === 'string' ? p.signer : null; } catch { return null; }
+  }
+  pinHub(signer: string, name: string): void {
+    if (this.#h) throw new Error('This device already holds a vault.');
+    writeAtomic(join(this.dir, 'hub.json'), `${JSON.stringify({ signer, name, pinned_at: this.#now() })}\n`);
   }
 
   // ---- passkeys (approvals) -------------------------------------------------------------------

@@ -6,11 +6,20 @@
 - Nova's Credential Broker: the TypeScript in `src/broker/`, run by Node 26 with type stripping and no dependencies;
 - the core client that talks to it, `src/core/broker/client.ts`.
 
-**What's here:** the whole of both, 17 files and 2703 lines, at the end of this document.
+**What's here:** the whole of both, 17 files and 2765 lines, at the end of this document.
 
 **What comes back:** your findings go to the owner, who triages them like any review. A finding that reproduces gets a failing test first.
 
 This document is self-contained: you need nothing else to review the code. Paths are in the repository `jeremyspofford/nova`, branch `vault/broker-phase1`.
+
+**This is the second version.** An in-house adversarial review of the first (`0b7457da`) found five blocking problems:
+- a run ticket core could redeem;
+- the migration answering guesses and moving without approval;
+- scrubbed echoes of core's own text;
+- a hub adopting a planted inbox;
+- guessable health flags.
+
+They are fixed, each with a failing test first (`tests/core/broker-review-1.test.ts`). Please look hardest at whether the fixes hold.
 
 ## How to review
 
@@ -39,27 +48,29 @@ Don't report what §5 already states as a limit, unless you think the limit is w
 ```
 person ── console (served by core) ──┐  sealed values, approvals (ciphertext through core)
 models ── core: refs and metadata ───┼── local socket (0600) ──▶ broker ──▶ the bound target only
-           supervisor (start, tokens)┘                              │
-                                                                    └── store: item blobs (ciphertext)
-core ──spawns──▶ broker's launcher ──redeems a ticket──▶ broker; launcher ──env/file──▶ program
+           supervisor (start, tokens)┘                              │  │
+                                                                    │  └── store: item blobs (ciphertext)
+                                       broker ──spawns, value by pipe──▶ launcher ──env/file──▶ program
 ```
 
 **Processes:**
 - **The broker** (`main.ts`): started by Nova's supervisor, never by core. It runs under Node's permission model, with reads limited to its code and its folder and writes to its folder. It has an empty environment, no inspector, and `--disable-sigusr1`. It listens only on a Unix socket.
-- **The launcher** (`launch.ts`): broker code that core starts as a child, with a one-time ticket on file descriptor 3. It has three jobs:
+- **The launcher** (`launch.ts`): broker code that the broker itself starts as a child, one per job, with its request on a pipe (file descriptor 3). It never touches the socket. It has three jobs:
   - start a program with a credential in its environment or in a 0600 file, scrubbing the program's output;
-  - read the old vault and stream it to the broker (migrate);
-  - take what moved out of the old vault (migrate-finish).
-- **Core:** holds only `BrokerClient`.
+  - read the old vault in the broker's own home and hand it over (migrate);
+  - take what moved out of the old vault (finish).
+
+  Node carries the broker's permission model into the launcher, and each job adds exactly what it needs. The program runs through `env -u NODE_OPTIONS`, so it runs as itself.
+- **Core:** holds only `BrokerClient`. A `process` use answers with the program's exit code and its scrubbed output.
 
 **The protocol** (`protocol.ts`):
 - newline-delimited JSON, one id per request, frames up to 2 MiB, unknown messages and fields refused;
 - `hello` (a token in, a role out), `unlock` (a sealed factor), `lock`;
 - seven verbs: `list_refs`, `use`, `create`, `update`, `rotate`, `bind`, `share_scope`;
-- two launcher-only messages, `redeem` and `migrate_item`, accepted only on a connection that never said hello;
+- nothing else (every connection says hello with a token within 10 seconds);
 - a fixed list of nine refusals.
 
-Every answer to core is checked against an allow-list of keys (`ANSWER_KEYS`), then scrubbed of every value the broker holds, before it is written.
+Every answer is checked against an allow-list of keys (`ANSWER_KEYS`) before it is written. Text core sent is never echoed back, and answers aren't scrubbed as a whole. Only what a target sent back is scrubbed, of the value that use injected.
 
 **Targets** (`origin.ts`): a binding ties one item to one target, and matching is exact on the canonical form.
 - `http`: an origin (`https://` and a lowercase A-label host, with a port only when it isn't the default; `http` only for loopback), plus a scope of methods and path prefixes.
@@ -75,7 +86,7 @@ Every answer to core is checked against an allow-list of keys (`ANSWER_KEYS`), t
 | `list_refs` | 0 (silent) |
 | `use`: a standard-class item inside its binding's standing consent | 1 (act and report) |
 | `use`: outside the consent, or a sensitive-class item | 2 (ask first). The approval covers that task; with `per_use`, every use asks |
-| `create`, `update`, `rotate` begin and commit, `bind` add, `share_scope` add | 3 (explicit confirmation) |
+| `create`, `update`, `rotate` begin and commit, `bind` add, `share_scope` add, a migration's commit and proposal | 3 (explicit confirmation). With a passkey registered, the passkey is required for all of these, and for a sensitive use |
 | `bind` remove, consent revoke, rotate abandon, holder remove | At once |
 | A sensitive item with a standing consent | Refused (`class_policy`) |
 
@@ -83,8 +94,9 @@ Every answer to core is checked against an allow-list of keys (`ANSWER_KEYS`), t
 
 The honest-claims rule: Nova never says "Nova can never read your passwords". It says exactly C1.
 
-- **C1.** Within Nova, the capability to read a credential's value exists only inside the broker: the broker process, and its launcher for a program it hands a credential to.
+- **C1.** Within Nova, the capability to read a credential's value exists only inside the broker: the broker process, and the launcher the broker itself starts for a program it hands a credential to, or to read the old vault. (Phase 1 runs as the person's own OS account; see the threat model.)
 - **C2.** A value leaves the broker only toward the bound target it is used on: a request to the bound origin, or a program's environment or file at spawn. No answer to core or the supervisor carries a value, a part of one, its length, any encoding of one, or a hash or HMAC of one.
+  - No answer depends on whether text core sent equals a held value. The one exception is stated (limit 2): a target that echoes core's text back, scrubbed.
 - **C3.** Origin binding is enforced by the broker, on what it computes itself. A credential bound to A is refused for B, even when the request comes from core with a valid token and a valid approval made for a use at A. B may be:
   - another host, a subdomain or parent of A, a homograph, or A with an extra label;
   - another port, or `http` instead of `https`;
@@ -100,12 +112,18 @@ The honest-claims rule: Nova never says "Nova can never read your passwords". It
 - **C6.** Audit records carry ref, target, outcome, tier, approval, task and role, never values, headers, bodies or query strings. The broker's audit log is hash-chained and 0600.
 - **C7.** The store: Argon2id at RFC 9106's second setting or above; per-item AES-256-GCM; associated data that ties each blob to its vault, item, version and kind.
   - A tampered item fails on its own. A swapped or moved item is refused.
-  - A deleted item doesn't open from an older copy of `items/` with any key that still exists: the root key rotates, and this device's key is renewed.
+  - A deleted item doesn't open from an older copy of the *item files* (a backup, a stale sync entry): the root key rotates.
+  - An older *header*, with the person's own factor or with a holder's unrenewed key, still opens what it held. Headers never leave holder devices.
+  - A revocation (a binding removed, a consent withdrawn, details changed) also rotates the root key, so a rolled-back item file doesn't undo it.
 - **C8.** No escrow:
   - Backups carry item blobs only, never the header, a wrap, a device key or a factor.
   - Sync to a holder carries ciphertext, device wraps sealed to each holder's own key, and factors' *public* keys. No passphrase, recovery or passkey wrap travels.
-  - A holder adopts only a header its pinned hub signed.
-- **C9.** The migration from today's vault (`vault.ts`) passes no value through core. The launcher reads the old store; the broker makes the items, unbound; every item is read back before anything is removed from the old vault; Nova's own keys stay in it.
+  - A vault made on a device never adopts another. A holder adopts only a header signed by the hub it was pinned to at tier 3, for the vault it holds, at a strictly newer generation.
+- **C9.** The migration from today's vault (`vault.ts`) passes no value through core, and gives core no yes-or-no answer about a value.
+  - The broker's launcher reads the broker's own home.
+  - The commit is tier 3, and makes the items unbound.
+  - Every item is read back before anything leaves the old vault. Nova's own keys stay in it.
+  - A name already held is decided by metadata, never by comparing values.
 - **C10.** The broker's code imports nothing from core and no package, and is at most 3,000 lines.
 
 ## 3. The threat model
@@ -154,30 +172,34 @@ The honest-claims rule: Nova never says "Nova can never read your passwords". It
   - the broker has a per-boot P-256 entry key;
   - the client derives an ECDH key, then HKDF (salt: the action's digest), then AES-GCM (associated data: the digest);
   - for an approval, the digest is the approval's; for an unlock, it is `sha256(vault id | factor | boot id)`.
+- **Health flags:** `reused` only among values with a provenance core couldn't choose (generated, migrated, sealed under a passkey). No `weak` flag in answers.
 - **Approvals** (`policy.ts`):
   - the broker issues a challenge: an id, the digest of the canonical action (sorted-key JSON), an expiry, and single use;
   - the caller repeats the call with `{ id, digest, mode }`, and the broker recomputes the digest from the call it was given;
-  - `passkey` mode verifies a WebAuthn ES256 assertion over `sha256(id | digest)`: the origin is one registered, the rpIdHash matches, user presence and verification are set, the counter is monotonic;
+  - `passkey` mode verifies a WebAuthn ES256 assertion over `sha256(id | digest | sha256(envelope))`: the origin is one registered, the rpIdHash matches, user presence and verification are set, the counter is monotonic;
   - `core` mode is accepted only when no passkey is required.
-- **Tickets:** `use` on a `process` target returns a random ticket that lives 60 seconds, bound to the ref, the version, the path, the SHA-256 and the argv. The launcher redeems it with the path and the SHA-256 it computed. A second redemption is refused, and raises an alarm.
+- **Programs:** `use` on a `process` target makes the broker start its launcher with the value, the bound path and SHA-256, and the argv (also in a tier-2 approval's digest). It also passes a working folder, stdin, a time limit, and an allow-list of environment variables (no loader, interpreter or config paths). The launcher hashes the binary and refuses a mismatch.
 - **Scrubbing** (`scrub.ts`):
-  - every value the broker holds, in eight forms: raw, base64 (padded and not), base64url, hex (both cases), URL-encoded and JSON-escaped;
+  - only target-sent text: the value that use injected (and basic auth's `user:value`), in eleven forms: raw, base64 (padded and not), base64url, hex (both cases), URL-encoded (both cases), form-encoded, JSON-escaped, and JSON with `\/`;
+  - a body cut at 4 MiB loses its tail too, so no prefix of a value is left;
   - values under 6 characters aren't hunted;
   - the launcher's output scrubber holds back a tail, so a value split across two chunks is still caught.
 
 ## 5. Stated limits (challenge them if you think they're worse than stated)
 
-1. **No peer credentials.** Node's standard library exposes no `SO_PEERCRED`, so a same-user process that obtains a token speaks as that role, and one that obtains a run ticket can redeem it once. A native peer-credential helper is proposed for later.
-2. **An old header copy with the person's passphrase** still opens what that copy held. Headers never go into backups, and the outbox carries no factor wrap.
-3. **Rollback** of one item's file within a root generation isn't detected.
+1. **No peer credentials.** Node's standard library exposes no `SO_PEERCRED`, so a same-user process that obtains a token speaks as that role. Nothing on the socket hands out a value, a ticket or a staging slot. A native peer-credential helper is proposed for later.
+2. **An echoing target is an oracle.** A target that echoes text core sent it lets core see whether its guess about the injected value came back scrubbed. Rate-capped; it matters only for low-entropy values.
+3. **An old header copy**, with the person's passphrase or a holder's unrenewed key, still opens what that copy held. Headers never go into backups, and the outbox carries no factor wrap. A file-system attacker who rolls back the header and the items together restores the older state.
 4. **The launcher** hashes the program, then starts it by path (a time-of-check to time-of-use gap).
 5. **JavaScript strings:** values that become strings stay in the broker's heap until collected.
-6. **The first adoption is trust-on-first-use.** A holder can't detect items dropped from, or rolled back in, the hub's outbox within one generation.
+6. **Holder enrolment pins the hub's signing key at tier 3.** That approval is core-relayed on a device with no vault yet, so the person must check the key's fingerprint the card shows. A holder can't detect items dropped from, or rolled back in, the hub's outbox within one generation.
 7. **Public-host TLS** uses Node's defaults. The tests reach only pinned loopback certificates.
 8. **This PR doesn't yet move core's consumers onto the broker.** Core still reads the old vault until PR 2. These claims are about the broker and its client.
 9. **macOS Touch ID gating** of the keychain item isn't possible through the `security` CLI. Windows is untested.
-10. **What an approval covers:** a tier-2 approval covers one request's method and path, for one task: what its card shows. It doesn't cover its headers or body (core supplies those; they carry no value). A standing consent covers its scope's methods and path prefixes.
-11. **The owner's reveal** (showing a value on the device's own screen, tier 3, gated by passkey or biometric) isn't built.
+10. **Programs:** a program does what its arguments, working folder and project files (all core's) steer it to, including sending its credential elsewhere. Node's permission model doesn't stop the broker's child processes; the narrowing is defence in depth.
+11. **Checkpoints** taken before the migration still hold the old vault with its key, and Era 2's files.
+12. **What an approval covers:** a tier-2 approval covers one request's method and path, for one task: what its card shows. It doesn't cover its headers or body (core supplies those; they carry no value). A standing consent covers its scope's methods and path prefixes.
+13. **The owner's reveal** (showing a value on the device's own screen, tier 3, gated by passkey or biometric) isn't built.
 
 ## 6. What we most want attacked
 
@@ -186,14 +208,24 @@ The honest-claims rule: Nova never says "Nova can never read your passwords". It
 3. **C4, the approval digest:** does it cover everything that changes what the broker does? Look at `#approve`, and each verb's `action` object. Can a caller get an approval for action X and use it for Y by changing a field that isn't digested (`request.headers`, `request.body`, `inject`, `consent`, `lan`, `pin`)?
 4. **Tier logic in `#use`:** grants per task, `per_use`, sensitive class, standing consent and `version: 'pending'`. Can a model reach tier 1 for something that should ask?
 5. **The store:** AEAD associated data, the rotation's crash safety (`rotateRoot`, `#finishRotation`), `adopt` (with the signature check and pinning), and `remove`. Can a file-system attacker without a factor make the broker accept attacker-chosen keys or items, or make a deleted item reappear?
-6. **The launcher protocol:** `redeem`, `migrate_item`, tickets and staging. Can core, or a token holder, redeem or stage anything that yields a value to core?
-7. **The migration:** `#migrate`, `groupStaged`, `oldvault.ts`. Is any value left where it shouldn't be, or removed before read-back?
+6. **The launcher path:** `#runProgram`, `#launch`, `programRequest` and `launch.ts`. Can core steer what the launcher reads or runs beyond the bound program and the broker's own home (arguments, working folder, the environment allow-list, stdin)? Can anything get a value back over the socket?
+7. **The migration:** `#migrate`, `groupStaged`, `oldvault.ts`. Is any value left where it shouldn't be, or removed before read-back? Does any answer, or effect, still depend on a value core chose?
 8. **The cryptography:** the X25519 factor derivation from Argon2id or HKDF output, wrap info strings, HKDF salts, nonces (random, 96-bit), the P-256 sealed-entry KDF, and the WebAuthn verification (`checkAssertion`).
 9. **The process:** `spawn.ts`'s flags and environment, and anything that would let core influence the broker's process (argv, environment, files it reads).
 
 ## 7. Evidence so far
 
-There are 36 tests in `tests/core/broker-*.test.ts`. On Linux (WSL2), Node 26.3.1, they show:
+There are 45 tests in `tests/core/broker-*.test.ts`. On Linux (WSL2), Node 26.3.1, they show:
+- **The first review's findings,** each reproduced first:
+  - B1: no ticket reaches core, and a second socket can redeem nothing;
+  - B2: the same answer and effect whatever core guessed, and commit at tier 3;
+  - B3: frames carrying a held value answer exactly as frames carrying other text;
+  - B4: a hub keeps its vault against a planted inbox, and a holder needs the pin and a newer generation;
+  - B5: no reuse flag from core's guesses, and no `weak`;
+  - S1: basic auth and the cut;
+  - S2 and S3: file tools, reset and checkpoints;
+  - S5: rollback after a revocation;
+  - minor: passkeys, `..;`, address ranges.
 - **Argon2id:** RFC 9106's test vector, and the floor enforced.
 - **Factors:** every factor opens the vault, and a wrong one doesn't.
 - **Tamper and swap:** each refused.
@@ -206,12 +238,12 @@ There are 36 tests in `tests/core/broker-*.test.ts`. On Linux (WSL2), Node 26.3.
 - **The process:** Node's permission model, an empty environment, a 0600 socket in a 0700 folder.
 - **No network surface:** `/proc` shows no inet socket at idle, and no inet listener after every verb. A positive control sees the test's own listeners.
 - **Fuzzing:** 69 verb names refused; unknown fields, bad frames and frames too large refused.
-- **The launcher:** the wrong binary, or another path, gets nothing; output is scrubbed; a 0600 file is removed on exit; a second redemption is refused with an alarm.
+- **The launcher:** a binary swapped after binding gets nothing; loader and config variables from core are refused; output is scrubbed; nothing of Node's reaches the program's environment; a 0600 file is removed on exit.
 - **Canaries:**
   - planted by sealed entry, generation, rotation and migration;
   - searched in eight forms in core's heap snapshot (core's stand-in keeps everything it received, and positive controls are found), every answer, the audit log, the broker's own output and folder, the backup set, Nova's diagnostics bundle and the launcher's output;
   - zero hits.
-- **Migration:** resumes after a cut-short run.
+- **Migration:** resumes by metadata, and leaves only Nova's own keys in the old vault.
 
 ## 8. The code
 
@@ -220,22 +252,19 @@ There are 36 tests in `tests/core/broker-*.test.ts`. On Linux (WSL2), Node 26.3.
 ```ts
 // The Credential Broker's wire protocol (docs/plans/vault-broker.md §3–§4). Newline-delimited JSON
 // over local IPC, one id per request, a size cap, and unknown fields refused. The broker answers
-// seven fixed verbs and three protocol messages; two more messages exist only for the broker's own
-// launcher (broker code, §3), and are refused on any connection that didn't open with a ticket.
-// No answer to core carries a value, a part of one, its length, or a hash of it: every answer is
-// checked against ANSWER_KEYS before it is written (checkAnswer), and scrubbed of every value the
-// broker holds besides.
+// seven fixed verbs and three protocol messages, and nothing else: its launcher is its own child,
+// spoken to over a pipe, never over this socket. No answer to core carries a value, a part of one,
+// its length, or a hash of it: every answer is checked against ANSWER_KEYS before it is written
+// (checkAnswer). Text core sent is never echoed back, and answers aren't scrubbed as a whole: only
+// what a target sent back (a response, a program's output) is, of the value that use injected.
 //
 // This file imports nothing; the core client imports its types only.
 
 export const VERBS = ['list_refs', 'use', 'create', 'update', 'rotate', 'bind', 'share_scope'] as const;
 export const MESSAGES = ['hello', 'unlock', 'lock'] as const;
-// The launcher's two (§3 "The launcher", §10 "Moving from today's vault"): redeeming a ticket, and
-// streaming the old vault's items in migrate mode. Accepted only with a ticket, never with a token.
-export const LAUNCHER = ['redeem', 'migrate_item'] as const;
 export type Verb = (typeof VERBS)[number];
-export type Message = Verb | (typeof MESSAGES)[number] | (typeof LAUNCHER)[number];
-export type Role = 'core' | 'supervisor' | 'launcher';
+export type Message = Verb | (typeof MESSAGES)[number];
+export type Role = 'core' | 'supervisor';
 
 // The fixed refusal list (§4), each with plain words.
 export const REFUSALS = {
@@ -277,9 +306,7 @@ export const FIELDS: Record<Message, readonly string[]> = {
   update: [...COMMON, 'ref', 'change'],
   rotate: [...COMMON, 'ref', 'phase'],
   bind: [...COMMON, 'ref', 'add', 'remove'],
-  share_scope: [...COMMON, 'device', 'backend'],
-  redeem: ['ticket', 'path', 'sha256'],
-  migrate_item: ['ticket', 'name', 'value', 'done'],
+  share_scope: [...COMMON, 'device', 'backend', 'hub'],
 };
 
 // Every key that may appear anywhere in an answer to core or the supervisor. A schema check over
@@ -290,12 +317,12 @@ export const ANSWER_KEYS: ReadonlySet<string> = new Set([
   // vault state
   'state', 'locked', 'exists', 'vault_id', 'unlock_mode', 'approval_mode', 'factors', 'entry_key', 'boot', 'device_id', 'device_key', 'holders', 'kdf', 'alg', 'm', 't', 'p', 'safe_mode',
   // refs and metadata
-  'refs', 'ref', 'aliases', 'name', 'kind', 'origin', 'username', 'class', 'suggested_class', 'per_use', 'created_at', 'last_used', 'last_rotated', 'health', 'weak', 'reused', 'old', 'backend', 'version', 'pending', 'bindings',
+  'refs', 'ref', 'aliases', 'name', 'kind', 'origin', 'username', 'class', 'suggested_class', 'per_use', 'created_at', 'last_used', 'last_rotated', 'health', 'reused', 'old', 'backend', 'version', 'pending', 'bindings',
   'target', 'scope', 'methods', 'paths', 'consent', 'rate_per_hour', 'granted_at', 'approval_id', 'inject', 'how', 'header', 'prefix', 'format', 'lan', 'pin', 'embed_on', 'env', 'file', 'argv',
   // approvals
-  'challenge', 'digest', 'expires_at', 'card', 'tier', 'verb', 'what', 'flags', 'task', 'title', 'caller', 'approving', 'items', 'passkey',
+  'challenge', 'digest', 'expires_at', 'card', 'tier', 'verb', 'what', 'flags', 'task', 'approving', 'items', 'passkey',
   // outcomes
-  'outcome', 'status', 'headers', 'body', 'truncated', 'valid', 'ticket', 'migrated', 'skipped', 'staged', 'read_back', 'removed', 'device', 'outbox', 'text',
+  'outcome', 'status', 'headers', 'body', 'truncated', 'valid', 'exit', 'stdout', 'stderr', 'migrated', 'kept', 'moved', 'staged', 'read_back', 'removed', 'device', 'outbox', 'text', 'hub', 'signer',
   // audit records
   'seq', 'at', 'prev', 'hash', 'scope_item',
 ]);
@@ -353,9 +380,11 @@ export interface Binding { target: string; kind: TargetKind; scope: Scope; injec
 export interface RefMeta {
   ref: string; aliases: string[]; name: string; kind: string; origin: string | null; username: string | null;
   class: 'standard' | 'sensitive'; per_use: boolean; created_at: string; last_used: string | null; last_rotated: string | null;
-  health: { weak: boolean; reused: boolean; old: boolean }; backend: 'nova'; version: number; pending: boolean; bindings: Binding[];
+  health: { reused: boolean; old: boolean }; backend: 'nova'; version: number; pending: boolean; bindings: Binding[];
 }
-export interface Card { argv?: string[]; verb: string; what: string; name?: string; origin?: string | null; username?: string | null; target?: string; scope?: Scope; class?: string; flags?: string[]; task?: { id: string; title: string } | null; caller?: string | null; tier: number; approving: string; expires_at: string; items?: unknown[] }
+// The card shows stored metadata and what the broker computed; never text from the frame that asked
+// (core shows the task and who asked from its own records).
+export interface Card { argv?: string[]; verb: string; what: string; name?: string; origin?: string | null; username?: string | null; target?: string; scope?: Scope; class?: string; flags?: string[]; tier: number; approving: string; expires_at: string; items?: unknown[] }
 export interface Challenge { id: string; digest: string; expires_at: string; card: Card; tier: number }
 export interface AuditRecord { seq: number; at: string; device: string; verb: string; ref: string | null; target: string | null; scope_item: string | null; outcome: string; tier: number | null; approval_id: string | null; task: string | null; role: Role; prev: string; hash: string }
 ```
@@ -367,21 +396,23 @@ export interface AuditRecord { seq: number; at: string; device: string; verb: st
 // messages, each checked on the broker's own authority. Whoever asks (core, with a valid token and
 // even a valid approval for something else) gets refused when the target isn't bound exactly, the
 // request is outside the binding's scope, or the class, consent or approval doesn't allow it.
-// No answer carries a value; every verb writes one audit record, which comes back in the answer
-// for core to copy into the Work Ledger.
+// No answer carries a value, and none repeats text core sent in a way that could depend on one;
+// every verb writes one audit record, which comes back in the answer for core to copy into the
+// Work Ledger.
+import { spawn } from 'node:child_process';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Audit, type Entry } from './audit.ts';
 import { entryKey, openEnvelope, type Envelope, type Kdf } from './crypto.ts';
 import { send, EgressError, type Resolver } from './http.ts';
 import { chooseStore, FILE_NOTICE, type KeyStore } from './keystore.ts';
 import { BUILT, canonicalTarget, checkScope, inScope, lookalikes, requestPath, suggestClass } from './origin.ts';
-import { Approvals, Rates, digestOf, generate, weak, DEFAULT_POLICY, USES_PER_REF_HOUR, type ApprovalIn } from './policy.ts';
-import { REFUSALS, type Binding, type Card, type Frame, type Inject, type Refusal, type Role, type Scope } from './protocol.ts';
+import { Approvals, Rates, digestOf, generate, DEFAULT_POLICY, USES_PER_REF_HOUR, type ApprovalIn } from './policy.ts';
+import { REFUSALS, canonical, type Binding, type Card, type Frame, type Inject, type Refusal, type Role } from './protocol.ts';
 import { Scrubber } from './scrub.ts';
 import { Store, sameBytes, type Meta, type OutboxHeader } from './store.ts';
-import { OWN_KEYS } from './oldvault.ts';
 
 export interface BrokerOptions {
   dir: string;
@@ -393,11 +424,19 @@ export interface BrokerOptions {
 }
 
 type Answer = Record<string, unknown>;
-interface Ticket { kind: 'run' | 'migrate' | 'finish'; id?: string; version?: 'current' | 'pending'; target?: string; path?: string; sha256?: string; argv?: string[]; inject?: Inject; expires: number; redeemed: boolean; staged?: Map<string, Buffer>; done?: boolean; migrated?: string[] }
 
 const NAME = /^[a-z0-9][a-z0-9._-]*(\/[A-Za-z0-9._-]+)*$/;
 const ALIAS = 'secret://';
-const TICKET_MS = 60_000;
+const LAUNCH = join(dirname(fileURLToPath(import.meta.url)), 'launch.ts');
+const MAX_OUTPUT = 4 * 1024 * 1024;
+const MAX_STAGED = 1000;
+// Under Node's permission model the launcher inherits the broker's grants (Node writes them into a
+// child's NODE_OPTIONS) and gets these on top; without it, these flags would stop it starting.
+const grantsIf = (flags: string[]) => ((process as { permission?: unknown }).permission ? flags : []);
+// What a program's environment may carry from core: no loader, interpreter or config-path
+// variables (LD_PRELOAD, NODE_OPTIONS, BASH_ENV, TF_CLI_CONFIG_FILE…). PATH and HOME are the
+// launcher's own.
+const PROGRAM_ENV = /^(LANG|LC_[A-Z]+|TZ|TERM|NO_COLOR|TF_IN_AUTOMATION|TF_INPUT|TF_VAR_[A-Za-z0-9_]+)$/;
 const CONSENT_SENSITIVE = 'A sensitive credential always asks first (once per task, or on every use): it can’t have a standing consent.';
 const KINDS = new Set(['api_key', 'token', 'login', 'secret', 'oauth', 'signing_key']);
 const str = (v: unknown, max = 300): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
@@ -414,19 +453,19 @@ export class Broker {
   readonly store: Store;
   readonly audit: Audit;
   readonly boot = randomBytes(12).toString('hex');
-  readonly scrubber = new Scrubber();
   #o: BrokerOptions;
   #entry = entryKey();
   #approvals: Approvals;
   #rates: Rates;
-  #tickets = new Map<string, Ticket>();
+  #staged: { vaultId: string | null; items: Map<string, Buffer> } | null = null;
+  #running = 0;
   #grants = new Set<string>();
   #index = new Map<string, Meta & { version: number; pending: boolean }>();
-  #health = new Map<string, { weak: boolean; reused: boolean; old: boolean }>();
+  #health = new Map<string, { reused: boolean; old: boolean }>();
   #broken: string[] = [];
   #pendingId = randomUUID();
   #failedUnlocks: number[] = [];
-  // A problem raised on the broker's own authority (flood control, a scrubbed answer).
+  // A problem raised on the broker's own authority (flood control, a schema refusal).
   problem: string | null = null;
 
   constructor(o: BrokerOptions) {
@@ -451,27 +490,27 @@ export class Broker {
     }
   }
 
-  // ---- the index, the scrubber, health flags (in memory only) ---------------------------------
+  // ---- the index and health flags (in memory only) -------------------------------------------
 
+  // `reused` is worked out only among values core couldn't have chosen (generated, migrated by the
+  // launcher, or sealed under a passkey approval), so it answers no guess of core's. There is no
+  // `weak` flag in answers: it would tell core a value's length band and character classes.
   #reindex(): void {
     const { items, broken } = this.store.metas();
     this.#index = items;
     this.#broken = broken;
-    const values = new Map<string, string>();
     const seen = new Map<string, string[]>();
     this.#health.clear();
     for (const [id, m] of items) {
+      const old = Date.parse(m.last_rotated ?? m.created_at) < this.#now().getTime() - 365 * 86400_000;
+      this.#health.set(id, { reused: false, old });
+      if (!m.provenance || m.provenance === 'sealed') continue;
       const v = this.store.value(id);
-      const s = v.toString('utf8');
-      values.set(id, s);
-      seen.set(s, [...(seen.get(s) ?? []), id]);
-      const old = !!m.last_rotated ? Date.parse(m.last_rotated) < this.#now().getTime() - 365 * 86400_000 : Date.parse(m.created_at) < this.#now().getTime() - 365 * 86400_000;
-      this.#health.set(id, { weak: m.kind === 'login' && weak(v), reused: false, old });
+      const k = createHash('sha256').update(v).digest('hex');
       zero(v);
-      if (m.pending) { const p = this.store.value(id, 'pending'); values.set(`${id}#p`, p.toString('utf8')); zero(p); }
+      seen.set(k, [...(seen.get(k) ?? []), id]);
     }
     for (const ids of seen.values()) if (ids.length > 1) for (const id of ids) this.#health.get(id)!.reused = true;
-    this.scrubber.set(values.values());
   }
 
   #resolve(ref: unknown): string {
@@ -485,7 +524,7 @@ export class Broker {
     const m = this.#index.get(id)!;
     return {
       ref: id, aliases: m.aliases, name: m.name, kind: m.kind, origin: m.origin, username: m.username, class: m.class, per_use: m.per_use,
-      created_at: m.created_at, last_used: m.last_used, last_rotated: m.last_rotated, health: this.#health.get(id) ?? { weak: false, reused: false, old: false },
+      created_at: m.created_at, last_used: m.last_used, last_rotated: m.last_rotated, health: this.#health.get(id) ?? { reused: false, old: false },
       backend: 'nova', version: m.version, pending: m.pending, bindings: m.bindings,
     };
   }
@@ -507,11 +546,12 @@ export class Broker {
   // ---- dispatch -------------------------------------------------------------------------------
 
   async handle(role: Role, f: Frame): Promise<Answer> {
-    const task = f.task && typeof f.task === 'object' && str((f.task as { id?: unknown }).id, 80) ? { id: (f.task as { id: string }).id, title: String((f.task as { title?: unknown }).title ?? '').slice(0, 200) } : null;
-    const caller = str(f.caller, 40) ? f.caller : null;
+    // The task's id ties records and grants to it. Its title and the caller's name are core's to
+    // show; they aren't repeated back.
+    const task = f.task && typeof f.task === 'object' && str((f.task as { id?: unknown }).id, 80) ? { id: (f.task as { id: string }).id } : null;
     const rec: Entry = { verb: f.m, ref: null, target: null, scope_item: null, outcome: 'ok', tier: null, approval_id: null, task: task?.id ?? null, role };
     try {
-      const out = await this.#dispatch(role, f, rec, task, caller);
+      const out = await this.#dispatch(role, f, rec, task);
       return { ok: true, ...out, record: this.audit.write(rec) };
     } catch (e) {
       if (e instanceof Refused) {
@@ -523,13 +563,15 @@ export class Broker {
     }
   }
 
-  async #dispatch(role: Role, f: Frame, rec: Entry, task: { id: string; title: string } | null, caller: string | null): Promise<Answer> {
+  async #dispatch(role: Role, f: Frame, rec: Entry, task: { id: string } | null): Promise<Answer> {
     if (f.m === 'lock') { this.lock(); return { state: this.state() }; }
     if (f.m === 'list_refs') return this.#list(f.filter);
     if (role !== 'core' && f.m !== 'unlock') throw new Failed('Only core asks the broker for that.');
     if (f.m === 'unlock') { if (role !== 'core') throw new Failed('Only core relays an unlock.'); this.#unlock(f); return { state: this.state() }; }
+    const ctx = { rec, task, approval: f.approval as ApprovalIn | undefined };
+    // A holder-to-be pins its hub before it has a vault (B4).
+    if (f.m === 'share_scope' && f.hub !== undefined) return this.#pinHub(f, ctx);
     if (!this.store.unlocked) throw new Refused('locked');
-    const ctx = { rec, task, caller, approval: f.approval as ApprovalIn | undefined };
     switch (f.m) {
       case 'use': return this.#use(f, ctx);
       case 'create': return this.#create(f, ctx);
@@ -543,9 +585,9 @@ export class Broker {
 
   lock(): void {
     this.store.lock();
-    this.scrubber.set([]);
     this.#index.clear();
-    this.#tickets.clear();
+    for (const b of this.#staged?.items.values() ?? []) zero(b);
+    this.#staged = null;
     this.#grants.clear();
     this.#approvals.clear();
   }
@@ -554,21 +596,28 @@ export class Broker {
 
   // Either the approval checks out for exactly this action (returns its id), or the answer is a
   // challenge for it (needs_approval), or the approval is refused.
-  #approve(ctx: Ctx, action: Record<string, unknown>, card: Omit<Card, 'expires_at' | 'task' | 'caller'>, passkey = false): string {
-    const h = this.store.header!;
-    const needsPasskey = passkey && Object.keys(h.passkeys).length > 0;
+  // `bound` is the SHA-256 of a sealed value's envelope: a passkey approval signs it too, so the value
+  // is the one the person's client sealed, not one core swapped in.
+  #approve(ctx: Ctx, action: Record<string, unknown>, card: Omit<Card, 'expires_at'>, passkey = false, bound = ''): { id: string; passkey: boolean } {
+    const passkeys = this.store.header?.passkeys ?? {};
+    const needsPasskey = passkey && Object.keys(passkeys).length > 0;
     const full = { ...action, task: ctx.task?.id ?? null };
     if (!ctx.approval) {
-      const c = this.#approvals.issue(full, { ...card, task: ctx.task, caller: ctx.caller }, ctx.task?.id ?? null, needsPasskey);
+      const c = this.#approvals.issue(full, card, ctx.task?.id ?? null, needsPasskey);
       if (!c) { this.problem = 'Something keeps asking to use your credentials: approval requests are refused for now.'; throw new Refused('rate'); }
       ctx.rec.tier = card.tier;
       throw new Refused('needs_approval', undefined, { challenge: c });
     }
-    const r = this.#approvals.check(ctx.approval, full, h.passkeys, (id, n) => this.store.bumpSignCount(id, n));
-    ctx.rec.approval_id = typeof ctx.approval.id === 'string' ? ctx.approval.id.slice(0, 40) : null;
+    const r = this.#approvals.check(ctx.approval, full, passkeys, (id, n) => this.store.bumpSignCount(id, n), bound);
+    ctx.rec.approval_id = typeof ctx.approval.id === 'string' && /^ap_[0-9a-f]{24}$/.test(ctx.approval.id) ? ctx.approval.id : null;
     ctx.rec.tier = card.tier;
     if (!r.ok) throw new Refused('approval_invalid', `${REFUSALS.approval_invalid} (${r.why})`);
-    return r.id;
+    return { id: r.id, passkey: r.passkey };
+  }
+
+  #envelopeHash(src: unknown): string {
+    const e = src && typeof src === 'object' && 'sealed' in src ? (src as { sealed: unknown }).sealed : null;
+    return e ? createHash('sha256').update(canonical(e)).digest('hex') : '';
   }
 
   #sealed(e: unknown, digest: string): Buffer {
@@ -620,8 +669,11 @@ export class Broker {
   #adoptInbox(): void {
     const dir = join(this.store.dir, 'inbox');
     if (!existsSync(join(dir, 'header.json'))) return;
+    // A vault made here never adopts; a holder takes only a newer generation (store.adopt checks
+    // the signature, the pin and the vault id).
+    if (this.store.header && this.store.header.origin !== 'adopted') return;
     const header = JSON.parse(readFileSync(join(dir, 'header.json'), 'utf8')) as OutboxHeader;
-    if (this.store.header && this.store.header.id === header.id && this.store.header.gen >= header.gen && this.store.unlocked) return;
+    if (this.store.header && header.gen <= this.store.header.gen) return;
     const items: Record<string, string> = {};
     for (const n of readdirSync(join(dir, 'items')).filter((x) => x.endsWith('.json'))) items[n.slice(0, -5)] = readFileSync(join(dir, 'items', n), 'utf8');
     this.store.adopt(header, items);
@@ -649,7 +701,7 @@ export class Broker {
     const b = m.bindings.find((x) => x.kind === t.kind && x.target === t.target);
     if (!b) throw new Refused('not_bound');
     if (!BUILT.has(b.kind)) throw new Refused('wrong_target_kind', `Using a credential on a ${b.kind} target isn’t built yet (Phase 1, later PRs).`);
-    const req = (f.request ?? {}) as { method?: unknown; path?: unknown; headers?: unknown; body?: unknown; verify?: unknown; argv?: unknown };
+    const req = (f.request ?? {}) as { method?: unknown; path?: unknown; headers?: unknown; body?: unknown; verify?: unknown; argv?: unknown; cwd?: unknown; env?: unknown; stdin?: unknown; timeout_ms?: unknown };
     const which = f.version === 'pending' ? 'pending' : 'current';
     if (which === 'pending' && !m.pending) throw new Refused('out_of_scope', 'There is no pending version to use.');
     // What is asked for, in the binding's terms.
@@ -667,6 +719,7 @@ export class Broker {
     } else ctx.rec.scope_item = 'RUN';
     const argv = b.kind === 'process' ? (Array.isArray(req.argv) ? req.argv : []) : null;
     if (argv && (argv.length > 64 || !argv.every((x) => typeof x === 'string' && x.length <= 4096))) throw new Refused('out_of_scope', 'A program’s arguments are up to 64 strings.');
+    const run = b.kind === 'process' ? programRequest(req) : null;
     // Class, consent, approval.
     const key = `${id}|${b.target}`;
     // A tier-2 approval covers this request (method and path, or a program's exact arguments) for
@@ -681,18 +734,13 @@ export class Broker {
       this.#approve(ctx, { verb: 'use', ref: id, target: b.target, scope_item: ctx.rec.scope_item, class: m.class, version: which, ...(argv ? { argv } : {}) }, {
         verb: 'use', what: `Use your ${m.kind === 'login' ? 'sign-in' : 'credential'} “${m.name}” for ${b.target}`, name: m.name, origin: m.origin, username: m.username, target: b.target,
         scope: b.scope, class: m.class, tier: 2, approving: m.per_use ? 'Allows this one use.' : 'Allows uses like this one for this task.', ...(argv ? { argv: argv as string[] } : {}),
-      });
+      }, m.class === 'sensitive');
       if (!m.per_use) this.#grants.add(grant);
     } else ctx.rec.tier = 2;
     if (!this.#rates.take(`r|${id}`, USES_PER_REF_HOUR)) throw new Refused('rate');
     this.store.touch(id);
     m.last_used = this.#now().toISOString();
-    if (b.kind === 'process') {
-      const ticket = `tk_${randomBytes(24).toString('base64url')}`;
-      const [path_, sha] = b.target.split('#sha256:') as [string, string];
-      this.#tickets.set(ticket, { kind: 'run', id, version: which, target: b.target, path: path_, sha256: sha, argv: argv as string[], inject: b.inject, expires: this.#now().getTime() + TICKET_MS, redeemed: false });
-      return { outcome: { ticket, expires_at: new Date(this.#now().getTime() + TICKET_MS).toISOString() } };
-    }
+    if (b.kind === 'process') return { outcome: await this.#runProgram(b, id, which, argv as string[], run!) };
     const value = this.store.value(id, which);
     try {
       if (b.inject.how === 'verify') {
@@ -707,15 +755,52 @@ export class Broker {
       if (req.body !== undefined && req.body !== null && !body) throw new Refused('out_of_scope', 'A request body is text.');
       if (body && body.length > 1024 * 1024) throw new Refused('out_of_scope', 'A request body is up to 1 MiB.');
       inject(headers, b.inject, value, m.username, body);
-      const res = await send({ origin: b.target, method, path, headers, body, lan: !!b.lan, pin: b.pin ?? null }, this.#o.resolve);
-      const one = new Scrubber([value.toString('utf8')]);
-      return { outcome: { status: res.status, headers: one.any(res.headers), body: one.text(res.body), truncated: res.truncated } };
+      const res = await send({ origin: b.target, method, path, headers, body, lan: !!b.lan, pin: b.pin ?? null, maxBytes: MAX_OUTPUT }, this.#o.resolve);
+      // What the target sent back, scrubbed of the value this use sent (and basic auth's user:value).
+      const one = new Scrubber([value.toString('utf8'), ...(b.inject.how === 'basic' ? [`${m.username ?? ''}:${value.toString('utf8')}`] : [])]);
+      // A body cut at the cap may end in part of a value: the tail that could hold one goes too.
+      const text = res.truncated ? res.body.slice(0, Math.max(0, res.body.length - one.longest)) : res.body;
+      return { outcome: { status: res.status, headers: one.any(res.headers), body: one.text(text), truncated: res.truncated } };
     } finally { zero(value); }
+  }
+
+  // ---- programs, through the broker's own launcher (§3) -----------------------------------------
+
+  // The broker starts the launcher itself and hands it the value over a pipe: no ticket exists for
+  // anyone else to redeem. The launcher hashes the binary, runs the program and scrubs its output;
+  // the answer is the exit code and that output (up to 4 MiB each).
+  #runProgram(b: Binding, id: string, which: 'current' | 'pending', argv: string[], r: ReturnType<typeof programRequest>): Promise<Answer> {
+    if (this.#running >= 4) throw new Refused('rate', 'Four programs are running with credentials already.');
+    const [path, sha256] = b.target.split('#sha256:') as [string, string];
+    const value = this.store.value(id, which);
+    this.#running++;
+    return new Promise((ok) => {
+      // Node carries the broker's permission model into the launcher; it gets exactly what this job
+      // needs on top: to read the program it hashes, and to write under the broker's run folder.
+      const run = join(this.store.dir, 'run');
+      mkdirSync(run, { recursive: true, mode: 0o700 });
+      const child = spawn(process.execPath, [...grantsIf([`--allow-fs-read=${path}`, `--allow-fs-write=${run}/`]), '--disable-sigusr1', '--disable-warning=ExperimentalWarning', '--disable-warning=SecurityWarning', LAUNCH, 'run'], { env: { TZ: 'UTC' }, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+      const grant = JSON.stringify({ path, sha256, argv, cwd: r.cwd, env: r.env, stdin: r.stdin, inject: b.inject, tmp: run, value: value.toString('utf8') });
+      zero(value);
+      child.stdio[3]!.on('error', () => { /* the launcher stopped before reading it */ });
+      (child.stdio[3] as NodeJS.WritableStream).end(grant);
+      const take = (s: NodeJS.ReadableStream) => { const c: Buffer[] = []; let n = 0; s.on('data', (x: Buffer) => { if (n < MAX_OUTPUT) c.push(x.subarray(0, MAX_OUTPUT - n)); n += x.length; }); return () => ({ text: Buffer.concat(c).toString('utf8'), cut: n > MAX_OUTPUT }); };
+      const out = take(child.stdout!);
+      const err = take(child.stderr!);
+      const timer = setTimeout(() => { child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000).unref(); }, r.timeout);
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        this.#running--;
+        const o = out();
+        const e = err();
+        ok({ exit: code ?? (signal ? 128 : 1), stdout: o.text, stderr: e.text, truncated: o.cut || e.cut });
+      });
+    });
   }
 
   // ---- create (tier 3) ------------------------------------------------------------------------
 
-  #create(f: Frame, ctx: Ctx): Answer {
+  #create(f: Frame, ctx: Ctx): Answer | Promise<Answer> {
     const src = f.source as unknown;
     if (src && typeof src === 'object' && 'migrate' in src) return this.#migrate(src as { migrate: unknown; proposals?: unknown }, ctx);
     const mi = (f.meta ?? {}) as Record<string, unknown>;
@@ -737,8 +822,9 @@ export class Broker {
     const meta: Meta = { name: mi.name, aliases: [alias], kind: mi.kind, origin, username: str(mi.username, 300) ? mi.username : null, class: cls, per_use: mi.per_use === true, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings, policy };
     const action = { verb: 'create', name: meta.name, kind: meta.kind, origin, username: meta.username, class: cls, per_use: meta.per_use, bindings: bindings.map(cardBinding), source: kind };
     const flags = bindings.flatMap((b) => this.#flags(b.target, b.kind));
-    const approval = this.#approve(ctx, action, { verb: 'create', what: kind === 'generate' ? `Make a new password for ${origin ?? meta.name}` : `Save a credential for ${origin ?? meta.name}`, name: meta.name, origin, username: meta.username, class: cls, flags, tier: 3, approving: `Saves it in Nova Vault${bindings.length ? `, usable only on ${bindings.map((b) => b.target).join(', ')}` : ', unbound (usable nowhere until you bind it)'}. Suggested class: ${suggested}.` }, bindings.length > 0);
+    const { id: approval, passkey } = this.#approve(ctx, action, { verb: 'create', what: kind === 'generate' ? `Make a new password for ${origin ?? meta.name}` : `Save a credential for ${origin ?? meta.name}`, name: meta.name, origin, username: meta.username, class: cls, flags, tier: 3, approving: `Saves it in Nova Vault${bindings.length ? `, usable only on ${bindings.map((b) => b.target).join(', ')}` : ', unbound (usable nowhere until you bind it)'}. Suggested class: ${suggested}.` }, true, this.#envelopeHash(src));
     for (const b of meta.bindings) if (b.consent) b.consent.approval_id = approval;
+    meta.provenance = kind === 'generate' ? 'generated' : passkey ? 'sealed-passkey' : 'sealed';
     const value = kind === 'generate' ? generate(policy) : this.#sealed((src as { sealed: unknown }).sealed, this.#digest(action, ctx));
     try {
       if (!value.length || value.length > 64 * 1024) throw new Failed('A value is 1 byte to 64 KiB.');
@@ -760,8 +846,9 @@ export class Broker {
     const m = this.#index.get(id)!;
     const ch = f.change as unknown;
     if (ch === 'remove') {
-      this.#approve(ctx, { verb: 'update', ref: id, change: 'remove' }, { verb: 'update', what: `Delete “${m.name}” for good`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: 'Destroys it, and re-keys the vault so no older copy opens it.' });
+      this.#approve(ctx, { verb: 'update', ref: id, change: 'remove' }, { verb: 'update', what: `Delete “${m.name}” for good`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: 'Destroys it, and re-keys the vault so no older copy of the item files opens it.' }, true);
       this.store.remove(id);
+      this.#forgetGrants(id);
       this.#reindex();
       return { ref: id, removed: true };
     }
@@ -770,23 +857,25 @@ export class Broker {
     if (c.meta) {
       const next: Meta = { ...m };
       const mm = c.meta;
-      for (const k of Object.keys(mm)) if (!['name', 'username', 'class', 'per_use'].includes(k)) throw new Failed(`${k} isn’t metadata an update changes.`);
+      for (const k of Object.keys(mm)) if (!['name', 'username', 'class', 'per_use'].includes(k)) throw new Failed('An update changes name, username, class or per_use only.');
       if (mm.name !== undefined) { if (!str(mm.name, 200) || !NAME.test(mm.name)) throw new Failed('not a name'); next.name = mm.name; next.aliases = [...new Set([...m.aliases, `${ALIAS}${mm.name}`])]; }
       if (mm.username !== undefined) next.username = str(mm.username, 300) ? mm.username : null;
       if (mm.class !== undefined) { if (mm.class !== 'standard' && mm.class !== 'sensitive') throw new Failed('not a class'); next.class = mm.class; }
       if (mm.per_use !== undefined) next.per_use = mm.per_use === true;
-      this.#approve(ctx, { verb: 'update', ref: id, meta: { name: next.name, username: next.username, class: next.class, per_use: next.per_use } }, { verb: 'update', what: `Change the details of “${m.name}”${next.class !== m.class ? ` (class ${m.class} → ${next.class})` : ''}`, name: next.name, origin: m.origin, username: next.username, class: next.class, tier: 3, approving: 'Saves the new details.' });
+      this.#approve(ctx, { verb: 'update', ref: id, meta: { name: next.name, username: next.username, class: next.class, per_use: next.per_use } }, { verb: 'update', what: `Change the details of “${m.name}”${next.class !== m.class ? ` (class ${m.class} → ${next.class})` : ''}`, name: next.name, origin: m.origin, username: next.username, class: next.class, tier: 3, approving: 'Saves the new details.' }, true);
       this.store.setMeta(id, stripIndex(next));
-      this.#reindex();
+      this.#revoked(id);
       return this.#refMeta(id);
     }
     const kind = c.value === 'generate' ? 'generate' : c.value === 'sealed' || (c.value && typeof c.value === 'object' && 'sealed' in c.value) ? 'sealed' : null;
     if (!kind) throw new Failed('A new value comes from generate or sealed entry.');
     const action = { verb: 'update', ref: id, value: kind };
-    this.#approve(ctx, action, { verb: 'update', what: kind === 'generate' ? `Make a new value for “${m.name}”` : `Replace the value of “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: 'Replaces the value inside the broker. The site itself isn’t changed by this.' });
+    const { passkey } = this.#approve(ctx, action, { verb: 'update', what: kind === 'generate' ? `Make a new value for “${m.name}”` : `Replace the value of “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: 'Replaces the value inside the broker. The site itself isn’t changed by this.' }, true, this.#envelopeHash(c.value));
     const value = kind === 'generate' ? generate(m.policy) : this.#sealed((c.value as { sealed: unknown }).sealed, this.#digest(action, ctx));
     try {
       const version = this.store.setValue(id, value);
+      this.store.setMeta(id, stripIndex({ ...this.store.meta(id), provenance: kind === 'generate' ? 'generated' : passkey ? 'sealed-passkey' : 'sealed' }));
+      this.#forgetGrants(id);
       this.#reindex();
       return { ref: id, version };
     } finally { zero(value); }
@@ -798,13 +887,14 @@ export class Broker {
     const id = this.#resolve(f.ref);
     ctx.rec.ref = id;
     const m = this.#index.get(id)!;
-    if (f.phase === 'abandon') { if (m.pending) this.store.dropPending(id); this.#reindex(); return { ref: id, version: m.version, pending: false }; }
+    if (f.phase === 'abandon') { if (m.pending) this.store.dropPending(id); this.#forgetGrants(id); this.#reindex(); return { ref: id, version: m.version, pending: false }; }
     if (f.phase !== 'begin' && f.phase !== 'commit') throw new Failed('A rotation begins, then commits or is abandoned.');
     if (f.phase === 'commit' && !m.pending) throw new Failed('There is no rotation to commit.');
-    this.#approve(ctx, { verb: 'rotate', ref: id, phase: f.phase }, { verb: 'rotate', what: f.phase === 'begin' ? `Make a new password for “${m.name}”, kept aside until the site takes it` : `Keep the new password for “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: f.phase === 'begin' ? 'Generates it inside the broker. Typing it into the site’s change form is a separate, visible step.' : 'The new value replaces the old one.' });
+    this.#approve(ctx, { verb: 'rotate', ref: id, phase: f.phase }, { verb: 'rotate', what: f.phase === 'begin' ? `Make a new password for “${m.name}”, kept aside until the site takes it` : `Keep the new password for “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: f.phase === 'begin' ? 'Generates it inside the broker. Typing it into the site’s change form is a separate, visible step.' : 'The new value replaces the old one.' }, true);
+    this.#forgetGrants(id);
     let version: number;
     if (f.phase === 'begin') { const v = generate(m.policy); try { version = this.store.setPending(id, v); } finally { zero(v); } }
-    else version = this.store.commitPending(id);
+    else { version = this.store.commitPending(id); this.store.setMeta(id, stripIndex({ ...this.store.meta(id), provenance: 'generated' })); }
     this.#reindex();
     return { ref: id, version, pending: f.phase === 'begin' };
   }
@@ -859,8 +949,7 @@ export class Broker {
       ctx.rec.target = t;
       const next = { ...m, bindings: r.consent_only === true ? m.bindings.map((b) => (b.target === t ? { ...b, consent: null } : b)) : m.bindings.filter((b) => b.target !== t) };
       this.store.setMeta(id, stripIndex(next));
-      for (const g of [...this.#grants]) if (g.startsWith(`${id}|${t}|`)) this.#grants.delete(g);
-      this.#reindex();
+      this.#revoked(id);
       return { ref: id, bindings: this.#index.get(id)!.bindings };
     }
     const b = this.#binding(f.add);
@@ -868,17 +957,39 @@ export class Broker {
     if (b.consent && m.class === 'sensitive') throw new Refused('class_policy', CONSENT_SENSITIVE);
     const flags = this.#flags(b.target, b.kind);
     const before = m.bindings.find((x) => x.target === b.target);
-    const id_ = this.#approve(ctx, { verb: 'bind', ref: id, binding: cardBinding(b) }, {
+    const { id: id_ } = this.#approve(ctx, { verb: 'bind', ref: id, binding: cardBinding(b) }, {
       verb: 'bind', what: `${before ? 'Change' : 'Allow'} “${m.name}” ${before ? 'on' : 'to be used on'} ${b.target}`, name: m.name, origin: m.origin, username: m.username, target: b.target, scope: b.scope, class: m.class, flags, tier: 3,
       approving: `${b.consent ? `Standing consent: requests inside ${b.consent.scope.methods.join(', ')} ${b.consent.scope.paths.join(', ')} go ahead without asking, up to ${b.consent.rate_per_hour} an hour. ` : 'Every use asks first. '}Nothing else is covered: no other host, subdomain or port.`,
     }, true);
     if (b.consent) b.consent.approval_id = id_;
     this.store.setMeta(id, stripIndex({ ...m, bindings: [...m.bindings.filter((x) => x.target !== b.target), b] }));
+    this.#forgetGrants(id);
     this.#reindex();
     return { ref: id, bindings: this.#index.get(id)!.bindings };
   }
 
+  // A revocation (a binding removed, a consent withdrawn, details changed) re-keys the vault, so an
+  // item file rolled back to before it doesn't open (S5). Grants for the item go too.
+  #revoked(id: string): void {
+    this.store.rotateRoot();
+    this.#forgetGrants(id);
+    this.#reindex();
+  }
+  #forgetGrants(id: string): void { for (const g of [...this.#grants]) if (g.startsWith(`${id}|`)) this.#grants.delete(g); }
+
   // ---- share_scope (tier 3) -------------------------------------------------------------------
+
+  // On a device that will hold a hub's vault: the hub broker's signing key, pinned at tier 3 before
+  // anything is adopted (B4). Only before this device holds a vault.
+  #pinHub(f: Frame, ctx: Ctx): Answer {
+    const h = (f.hub ?? {}) as { signer?: unknown; name?: unknown };
+    if (!str(h.signer, 60) || !/^[A-Za-z0-9+/=]+$/.test(h.signer) || !str(h.name, 80)) throw new Failed('A hub is pinned by its broker’s signing key and a name.');
+    if (this.store.exists) throw new Failed('This device already holds a vault; it can’t be pinned to a hub.');
+    const fp = createHash('sha256').update(h.signer).digest('hex').slice(0, 16);
+    this.#approve(ctx, { verb: 'share_scope', hub: h.signer, name: h.name }, { verb: 'share_scope', what: `Hold the vault of the hub “${h.name}” (key ${fp})`, tier: 3, approving: 'This device will take that hub’s vault, and only that hub’s, from now on. Check the key matches the one the hub shows.' }, true);
+    this.store.pinHub(h.signer, h.name);
+    return { hub: { signer: fp } };
+  }
 
   #share(f: Frame, ctx: Ctx): Answer {
     if (f.backend !== undefined) throw new Refused('wrong_target_kind', 'External password managers come in Phase 2; Nova Vault is the only backend now.');
@@ -899,66 +1010,100 @@ export class Broker {
 
   // ---- migration from vault.ts (§10, "Moving from today's vault") ------------------------------
 
-  // Three steps, so core never opens the old vault while it holds credentials:
-  //  - stage: a ticket for the launcher, which reads the old vault itself and streams it here;
-  //  - commit: each staged entry becomes an item, unbound (usable nowhere, so no capability is
-  //    granted), with its old name as an alias; every item is read back; a finish ticket lets the
-  //    launcher take what moved out of the old vault. Idempotent by name: an item already moved
-  //    with the same value counts as moved, one that differs stays in the old vault and is said.
-  //  - propose: one tier-3 card listing every moved item with its proposed binding and class,
-  //    metadata only; approving it binds them. Items left out stay unbound.
-  #migrate(src: { migrate: unknown; proposals?: unknown }, ctx: Ctx): Answer {
-    if (src.migrate === 'stage') {
-      const ticket = `mg_${randomBytes(24).toString('base64url')}`;
-      this.#tickets.set(ticket, { kind: 'migrate', expires: this.#now().getTime() + 10 * 60_000, redeemed: false, staged: new Map(), done: false });
-      return { outcome: { ticket, expires_at: new Date(this.#now().getTime() + 10 * 60_000).toISOString() } };
-    }
+  // Core never opens the old vault, and no answer depends on a value core chose (B2):
+  //  - stage: the broker starts its own launcher on its own home (never a folder core names), which
+  //    reads vault.ts's file and key and Era 2's Gmail files, and sends them to the broker by pipe.
+  //    The answer is a count.
+  //  - commit (tier 3, one card of names and kinds): each staged entry whose name is free becomes an
+  //    unbound item (usable nowhere), marked as migrated from that old vault, and is read back. A
+  //    name already taken by an item migrated from the same old vault counts as moved (a resumed
+  //    run); a name taken by any other item stays in the old vault. Neither looks at a value. Then
+  //    the launcher takes what moved out of the old vault.
+  //  - propose (tier 3): one card of bindings and classes, metadata only.
+  async #migrate(src: { migrate: unknown; proposals?: unknown }, ctx: Ctx): Promise<Answer> {
     if (src.migrate === 'propose') return this.#propose(src.proposals, ctx);
-    if (src.migrate !== 'commit') throw new Failed('A migration stages, commits, then proposes bindings.');
-    const tk = [...this.#tickets.entries()].find(([, t]) => t.kind === 'migrate' && t.done);
-    if (!tk) throw new Failed('Nothing is staged: run the migrate launcher first.');
-    const [tname, t] = tk;
-    this.#tickets.delete(tname);
-    const migrated: string[] = [];
-    const skipped: string[] = [];
-    const moved: string[] = [];
-    for (const [name, g] of groupStaged(t.staged!)) {
-      const alias = `${ALIAS}${name}`;
-      let id = [...this.#index.entries()].find(([, x]) => x.aliases.includes(alias))?.[0] ?? null;
-      if (!id) {
-        const meta: Meta = { name, aliases: [alias], kind: g.kind, origin: g.origin, username: g.username, class: suggestClass(g.origin, g.kind), per_use: false, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings: [], policy: DEFAULT_POLICY };
-        id = this.store.add(meta, g.value).id;
-        if (g.pending) this.store.setPending(id, g.pending);
-        migrated.push(name);
+    const home = dirname(this.store.dir);
+    if (src.migrate === 'stage') {
+      const out = await this.#launch(['migrate', home], null);
+      const items = new Map<string, Buffer>();
+      let vaultId: string | null = null;
+      for (const line of out.split('\n')) {
+        if (!line) continue;
+        let x: { vault_id?: unknown; name?: unknown; value?: unknown };
+        try { x = JSON.parse(line); } catch { continue; }
+        if ('vault_id' in x) { vaultId = typeof x.vault_id === 'string' ? x.vault_id : null; continue; }
+        if (items.size < MAX_STAGED && str(x.name, 200) && NAME.test(x.name) && typeof x.value === 'string' && x.value.length > 0 && x.value.length <= 64 * 1024) items.set(x.name, Buffer.from(x.value, 'utf8'));
       }
-      // Read-back, from disk: only what opens with the staged value counts as moved.
-      const v = this.store.value(id);
-      if (sameBytes(v, g.value)) moved.push(...g.names); else skipped.push(name);
-      zero(v);
+      for (const b of this.#staged?.items.values() ?? []) zero(b);
+      this.#staged = { vaultId, items };
+      return { outcome: { staged: items.size } };
     }
-    for (const b of t.staged!.values()) zero(b);
+    if (src.migrate !== 'commit') throw new Failed('A migration stages, commits, then proposes bindings.');
+    const st = this.#staged;
+    if (!st) throw new Failed('Nothing is staged.');
+    const from = st.vaultId ?? 'era2';
+    const plan = [...groupStaged(st.items)].map(([name, g]) => {
+      const owner = [...this.#index.values()].find((x) => x.aliases.includes(`${ALIAS}${name}`));
+      return { name, g, status: !owner ? 'move' : owner.migrated_from === from ? 'moved' : 'kept' };
+    });
+    this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ name: x.name, kind: x.g.kind, status: x.status })) }, { verb: 'create', what: `Move ${plan.filter((x) => x.status === 'move').length} credential(s) from the old vault into Nova Vault`, tier: 3, items: plan.map((x) => ({ name: x.name, kind: x.g.kind, origin: x.g.origin, status: x.status })), approving: 'Each is moved inside the broker, unbound (usable nowhere until you bind it), read back, and only then removed from the old vault. A name already taken by another credential stays in the old vault.' });
+    this.#staged = null;
+    const moved: string[] = [];
+    let readBack = true;
+    for (const x of plan) {
+      if (x.status === 'kept') continue;
+      if (x.status === 'move') {
+        const meta: Meta = { name: x.name, aliases: [`${ALIAS}${x.name}`], kind: x.g.kind, origin: x.g.origin, username: x.g.username, class: suggestClass(x.g.origin, x.g.kind), per_use: false, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings: [], policy: DEFAULT_POLICY, provenance: 'migrated', migrated_from: from };
+        const { id } = this.store.add(meta, x.g.value);
+        if (x.g.pending) this.store.setPending(id, x.g.pending);
+        const v = this.store.value(id);
+        if (!sameBytes(v, x.g.value)) readBack = false;
+        zero(v);
+      }
+      moved.push(...x.g.names);
+    }
+    for (const b of st.items.values()) zero(b);
     this.#reindex();
     ctx.rec.scope_item = `moved ${moved.length}`;
-    const finish = `mf_${randomBytes(24).toString('base64url')}`;
-    this.#tickets.set(finish, { kind: 'finish', expires: this.#now().getTime() + 10 * 60_000, redeemed: false, migrated: moved });
-    return { outcome: { migrated, skipped, read_back: skipped.length === 0, ticket: finish } };
+    if (!readBack) throw new Failed('An item didn’t read back from the new store; nothing was removed from the old vault.');
+    const fin = await this.#launch(['finish', home], JSON.stringify({ vault_id: st.vaultId, names: moved }));
+    let removed = 0;
+    try { removed = Number(JSON.parse(fin.trim().split('\n').at(-1) ?? '{}').removed) || 0; } catch { removed = 0; }
+    return { outcome: { migrated: plan.filter((x) => x.status === 'move').map((x) => x.name), moved: moved.length, kept: plan.filter((x) => x.status === 'kept').map((x) => x.name), read_back: true, removed } };
+  }
+
+  // The launcher for a migration step: started by the broker, on its own home, output by pipe, with
+  // the old vault's folders added to what it may read (and, to finish, write).
+  #launch(args: string[], input: string | null): Promise<string> {
+    const home = args[1]!;
+    const dirs = [join(home, 'vault'), join(home, 'connectors')];
+    const grants = grantsIf([...dirs.map((d) => `--allow-fs-read=${d}/`), ...(args[0] === 'finish' ? dirs.map((d) => `--allow-fs-write=${d}/`) : [])]);
+    return new Promise((ok, fail) => {
+      const child = spawn(process.execPath, [...grants, '--disable-sigusr1', '--disable-warning=ExperimentalWarning', LAUNCH, ...args], { env: { TZ: 'UTC', ...(this.#o.keyMode === 'file' ? { NOVA_VAULT_KEY: 'file' } : {}) }, stdio: ['ignore', 'pipe', 'ignore', 'pipe'] });
+      child.stdio[3]!.on('error', () => { /* the launcher stopped before reading it */ });
+      (child.stdio[3] as NodeJS.WritableStream).end(input ?? '');
+      const chunks: Buffer[] = [];
+      let n = 0;
+      child.stdout!.on('data', (x: Buffer) => { n += x.length; if (n <= 80 * 1024 * 1024) chunks.push(x); });
+      child.on('close', (code) => (code === 0 ? ok(Buffer.concat(chunks).toString('utf8')) : fail(new Failed('The old vault couldn’t be read or changed; nothing was moved or removed.'))));
+    });
   }
 
   #propose(p: unknown, ctx: Ctx): Answer {
     const proposals = (p && typeof p === 'object' ? p : {}) as Record<string, { origin?: unknown; class?: unknown; bind?: unknown }>;
     const plan = Object.entries(proposals).slice(0, 200).map(([name, x]) => {
       const id = [...this.#index.entries()].find(([, m]) => m.aliases.includes(`${ALIAS}${name}`))?.[0];
-      if (!id) throw new Refused('unknown_ref', `“${name}” isn’t a moved item.`);
+      if (!id) throw new Refused('unknown_ref');
       const m = this.#index.get(id)!;
       let origin = m.origin;
-      if (x.origin !== undefined && x.origin !== null) { try { origin = canonicalTarget({ kind: 'http', origin: x.origin }).target; } catch { throw new Failed(`${name}: the site isn’t a canonical https origin.`); } }
+      if (x.origin !== undefined && x.origin !== null) { try { origin = canonicalTarget({ kind: 'http', origin: x.origin }).target; } catch { throw new Failed('A proposed site isn’t a canonical https origin.'); } }
       const cls = x.class === 'standard' || x.class === 'sensitive' ? x.class : suggestClass(origin, m.kind);
       const bindings = Array.isArray(x.bind) ? x.bind.slice(0, 5).map((b) => this.#binding(b)) : [];
-      if (cls === 'sensitive' && bindings.some((b) => b.consent)) throw new Refused('class_policy', `${name}: ${CONSENT_SENSITIVE}`);
+      if (cls === 'sensitive' && bindings.some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
       return { id, m, origin, cls, bindings };
     });
     const items = plan.map((x) => ({ name: x.m.name, kind: x.m.kind, origin: x.origin, username: x.m.username, class: x.cls, target: x.bindings.map((b) => b.target).join(', ') || 'unbound', flags: x.bindings.flatMap((b) => this.#flags(b.target, b.kind)) }));
-    const approval = this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ ref: x.id, origin: x.origin, class: x.cls, bindings: x.bindings.map(cardBinding) })) }, { verb: 'create', what: `Bind ${plan.length} credential(s) moved from the old vault`, tier: 3, items, approving: 'Each is usable only on the target shown. Items left unbound can’t be used until you bind them.' }, true);
+    const { id: approval } = this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ ref: x.id, origin: x.origin, class: x.cls, bindings: x.bindings.map(cardBinding) })) }, { verb: 'create', what: `Bind ${plan.length} credential(s) moved from the old vault`, tier: 3, items, approving: 'Each is usable only on the target shown. Items left unbound can’t be used until you bind them.' }, true);
     for (const x of plan) {
       for (const b of x.bindings) if (b.consent) b.consent.approval_id = approval;
       this.store.setMeta(x.id, stripIndex({ ...x.m, origin: x.origin, class: x.cls, bindings: [...x.m.bindings.filter((b) => !x.bindings.some((n) => n.target === b.target)), ...x.bindings] }));
@@ -966,39 +1111,27 @@ export class Broker {
     this.#reindex();
     return { refs: plan.map((x) => this.#refMeta(x.id)) };
   }
-
-  // ---- the launcher's messages (broker code on the other end; §3) ------------------------------
-
-  // Redeeming a ticket. A run ticket gives the launcher the value to start the program with, after
-  // the program's own SHA-256 (hashed by the launcher) matches the binding. A ticket redeemed twice
-  // is refused, and the refusal is an alarm in the audit log.
-  launcher(f: Frame): Answer {
-    // A redeemed ticket is kept until it expires, so a second redemption is seen as an alarm.
-    for (const [k, x] of this.#tickets) if (x.expires < this.#now().getTime() - TICKET_MS) this.#tickets.delete(k);
-    const name = typeof f.ticket === 'string' ? f.ticket : '';
-    const t = this.#tickets.get(name);
-    const rec: Entry = { verb: f.m, ref: t?.id ?? null, target: t?.target ?? null, scope_item: null, outcome: 'ok', tier: null, approval_id: null, task: null, role: 'launcher' };
-    const refuse = (code: Refusal, words: string) => { rec.outcome = `refused:${code}`; return { refused: code, words, record: this.audit.write(rec) }; };
-    if (!t || t.expires < this.#now().getTime()) return refuse('approval_invalid', 'That ticket isn’t valid (expired, or never issued).');
-    if (f.m === 'migrate_item') {
-      if (t.kind !== 'migrate' || t.done) return refuse('approval_invalid', 'Not a migration ticket.');
-      if (f.done === true) { t.done = true; rec.outcome = `ok:staged ${t.staged!.size}`; this.audit.write(rec); return { ok: true, staged: t.staged!.size }; }
-      if (!str(f.name, 200) || !NAME.test(f.name) || typeof f.value !== 'string' || f.value.length > 64 * 1024 || OWN_KEYS.some((r) => r.test(f.name as string))) return refuse('out_of_scope', 'Not an item the migration moves.');
-      t.staged!.set(f.name, Buffer.from(f.value, 'utf8'));
-      return { ok: true };
-    }
-    if (t.redeemed) { rec.outcome = 'refused:approval_invalid:alarm'; this.problem = 'A credential ticket was redeemed twice: something may have copied it.'; this.audit.write(rec); return { refused: 'approval_invalid', words: 'That ticket was already used. This is recorded as an alarm.' }; }
-    t.redeemed = true;
-    if (t.kind === 'finish') { this.audit.write(rec); return { ok: true, migrated: t.migrated }; }
-    if (t.kind !== 'run' || f.path !== t.path || f.sha256 !== t.sha256) { rec.outcome = 'refused:not_bound'; this.audit.write(rec); return { refused: 'not_bound', words: 'The program isn’t the one this credential is bound to (its SHA-256 differs).' }; }
-    if (!this.store.unlocked) return refuse('locked', REFUSALS.locked);
-    const value = this.store.value(t.id!, t.version);
-    this.audit.write(rec);
-    try { return { ok: true, grant: { path: t.path, argv: t.argv, inject: t.inject, value: value.toString('utf8') } }; } finally { zero(value); }
-  }
 }
 
-interface Ctx { rec: Entry; task: { id: string; title: string } | null; caller: string | null; approval: ApprovalIn | undefined }
+interface Ctx { rec: Entry; task: { id: string } | null; approval: ApprovalIn | undefined }
+
+// A program's request from core: its arguments (checked by #use), a working folder, environment
+// variables from a narrow allow-list, stdin, and a time limit. Anything else is refused.
+function programRequest(req: { cwd?: unknown; env?: unknown; stdin?: unknown; timeout_ms?: unknown }) {
+  if (req.cwd !== undefined && (typeof req.cwd !== 'string' || !req.cwd.startsWith('/') || req.cwd.length > 500)) throw new Refused('out_of_scope', 'A working folder is an absolute path.');
+  const env: Record<string, string> = {};
+  if (req.env !== undefined) {
+    if (!req.env || typeof req.env !== 'object' || Object.keys(req.env).length > 32) throw new Refused('out_of_scope', 'A program’s environment is a small map.');
+    for (const [k, v] of Object.entries(req.env)) {
+      if (!PROGRAM_ENV.test(k) || typeof v !== 'string' || v.length > 4096) throw new Refused('out_of_scope', 'Only plain settings go into a program’s environment (no loader, interpreter or configuration paths).');
+      env[k] = v;
+    }
+  }
+  if (req.stdin !== undefined && (typeof req.stdin !== 'string' || req.stdin.length > 1024 * 1024)) throw new Refused('out_of_scope', 'A program’s input is text, up to 1 MiB.');
+  const t = req.timeout_ms === undefined ? 600_000 : Number(req.timeout_ms);
+  if (!Number.isInteger(t) || t < 1000 || t > 3_600_000) throw new Refused('out_of_scope', 'A program’s time limit is 1 second to 1 hour.');
+  return { cwd: req.cwd as string | undefined, env, stdin: typeof req.stdin === 'string' ? req.stdin : '', timeout: t };
+}
 
 // An unlock factor is sealed to the vault, the factor and this boot (seal.ts, unlockDigest).
 const unlockDigest = (vid: string, factor: string, boot: string) => createHash('sha256').update(`nova-broker-unlock|${vid}|${factor}|${boot}`).digest('hex');
@@ -1012,7 +1145,7 @@ function callerHeaders(h: unknown, inj: Inject): Record<string, string> {
   if (h === undefined || h === null) return out;
   if (typeof h !== 'object' || Array.isArray(h) || Object.keys(h).length > 32) throw new Refused('out_of_scope', 'Request headers are a small map of names to text.');
   for (const [k, v] of Object.entries(h)) {
-    if (!/^[A-Za-z0-9-]{1,60}$/.test(k) || typeof v !== 'string' || v.length > 4096 || /[\r\n]/.test(v) || REFUSED_HEADERS.test(k) || (inj.header && k.toLowerCase() === inj.header.toLowerCase())) throw new Refused('out_of_scope', `The header “${k}” isn’t one a caller sets.`);
+    if (!/^[A-Za-z0-9-]{1,60}$/.test(k) || typeof v !== 'string' || v.length > 4096 || /[\r\n]/.test(v) || REFUSED_HEADERS.test(k) || (inj.header && k.toLowerCase() === inj.header.toLowerCase())) throw new Refused('out_of_scope', 'A request carries a header a caller doesn’t set.');
     out[k.toLowerCase()] = v;
   }
   return out;
@@ -1059,27 +1192,30 @@ function groupStaged(staged: Map<string, Buffer>) {
 // The broker's IPC endpoint (§3 "IPC"): a Unix-domain socket in a 0700 folder (a named pipe on
 // Windows, untested there). It is the only thing the broker listens on: no port, no HTTP server, no
 // inspector. Frames are newline-delimited JSON with a size cap and an id per request; unknown
-// messages and unknown fields are refused.
+// messages and unknown fields are refused. Every connection says hello with a token within 10
+// seconds, or is closed.
 //
 // Who is calling (Phase 1): the socket's permissions decide who can connect, and a 256-bit token
 // per boot says which role (core or the supervisor), given to each by the supervisor over Node's
 // IPC channel, never argv or the environment. Node's standard library exposes no peer credentials
 // (SO_PEERCRED, getpeereid), so a process running as the same OS account that obtains a token can
 // speak as that role: it can make only the uses that role could, inside bindings, scopes, consents
-// and rate caps. A connection that says no hello may only redeem a ticket (the launcher).
+// and rate caps. Nothing on this socket hands out a value: the broker's launcher is its own child,
+// reached by pipe.
 //
-// Every answer to core or the supervisor is checked against the answer schema (no field that can
-// carry a value) and scrubbed of every value the broker holds, in every encoding, before it is
-// written. A hit means a bug upstream: it is scrubbed, recorded and raised as a problem.
+// Every answer is checked against the answer schema (no field that can carry a value) before it is
+// written. Answers aren't scrubbed as a whole: scrubbing text core wrote would tell core whether it
+// guessed a value. Only what a target sent back is scrubbed, in the verb that used it.
 import { timingSafeEqual } from 'node:crypto';
 import { chmodSync, mkdirSync, rmSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
 import type { Broker } from './broker.ts';
-import { ERRORS, LAUNCHER, MAX_FRAME, checkAnswer, parseFrame, type ProtocolError, type Role } from './protocol.ts';
+import { ERRORS, MAX_FRAME, checkAnswer, parseFrame, type ProtocolError, type Role } from './protocol.ts';
 
 export interface Tokens { core: string; supervisor: string }
 const MAX_CONNECTIONS = 32;
+const HELLO_MS = 10_000;
 
 const same = (a: string, b: string) => { const x = Buffer.from(a); const y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 
@@ -1094,7 +1230,8 @@ export function serve(broker: Broker, path: string, tokens: Tokens): Promise<Ser
     chmodSync(dirname(path), 0o700);
     rmSync(path, { force: true });
   }
-  const server = createServer({ allowHalfOpen: false }, (sock) => connection(broker, sock, tokens, server));
+  const badHellos: number[] = [];
+  const server = createServer({ allowHalfOpen: false }, (sock) => connection(broker, sock, tokens, badHellos));
   server.maxConnections = MAX_CONNECTIONS;
   return new Promise((ok, fail) => {
     server.once('error', fail);
@@ -1105,28 +1242,22 @@ export function serve(broker: Broker, path: string, tokens: Tokens): Promise<Ser
   });
 }
 
-function connection(broker: Broker, sock: Socket, tokens: Tokens, _server: Server) {
+function connection(broker: Broker, sock: Socket, tokens: Tokens, badHellos: number[]) {
   let role: Role | null = null;
   let buf = '';
   let chain = Promise.resolve();
   sock.setEncoding('utf8');
+  const hello = setTimeout(() => { if (!role) sock.destroy(); }, HELLO_MS);
+  hello.unref();
   const write = (a: Record<string, unknown>) => { if (!sock.destroyed) sock.write(`${JSON.stringify(a)}\n`); };
   const err = (id: string | number | null, e: ProtocolError) => write({ id, error: e, words: ERRORS[e] });
-  // To core and the supervisor: the schema check, then the scrub.
   const answer = (a: Record<string, unknown>) => {
-    const bad = checkAnswer(a);
-    if (bad) {
+    if (checkAnswer(a)) {
       broker.problem = 'The broker refused to send an answer that had a field it doesn’t allow. This is a bug; nothing was sent.';
       broker.audit.write({ verb: 'answer', ref: null, target: null, scope_item: null, outcome: 'refused:schema', tier: null, approval_id: null, task: null, role: role ?? 'core' });
       return write({ id: a.id, error: 'failed', words: ERRORS.failed });
     }
-    const before = broker.scrubber.hits;
-    const clean = broker.scrubber.any(a);
-    if (broker.scrubber.hits !== before) {
-      broker.problem = 'An answer carried a value the broker holds; it was scrubbed before it was sent. This is a bug.';
-      broker.audit.write({ verb: 'answer', ref: null, target: null, scope_item: null, outcome: 'scrubbed', tier: null, approval_id: null, task: null, role: role ?? 'core' });
-    }
-    write(clean);
+    write(a);
   };
   const handle = async (line: string) => {
     const p = parseFrame(line);
@@ -1136,17 +1267,19 @@ function connection(broker: Broker, sock: Socket, tokens: Tokens, _server: Serve
       if (role) return err(f.id, 'not_allowed');
       const t = typeof f.token === 'string' ? f.token : '';
       role = same(t, tokens.core) ? 'core' : same(t, tokens.supervisor) ? 'supervisor' : null;
-      if (!role) { broker.audit.write({ verb: 'hello', ref: null, target: null, scope_item: null, outcome: 'refused:token', tier: null, approval_id: null, task: null, role: 'core' }); err(f.id, 'unauthenticated'); return void sock.end(); }
+      if (!role) {
+        // Recorded, a few a minute at most: a flood of bad hellos can't fill the audit log.
+        const now = Date.now();
+        while (badHellos.length && badHellos[0]! < now - 60_000) badHellos.shift();
+        if (badHellos.length < 10) { badHellos.push(now); broker.audit.write({ verb: 'hello', ref: null, target: null, scope_item: null, outcome: 'refused:token', tier: null, approval_id: null, task: null, role: 'core' }); }
+        err(f.id, 'unauthenticated');
+        return void sock.end();
+      }
+      clearTimeout(hello);
       return answer({ id: f.id, ok: true, role });
     }
-    if ((LAUNCHER as readonly string[]).includes(f.m)) {
-      // Only on a connection that never said hello: core's own connection can't redeem.
-      if (role) return err(f.id, 'not_allowed');
-      return write({ id: f.id, ...broker.launcher(f) });
-    }
     if (!role) return err(f.id, 'unauthenticated');
-    const a = await broker.handle(role, f);
-    answer({ id: f.id, ...a });
+    answer({ id: f.id, ...(await broker.handle(role, f)) });
   };
   sock.on('data', (chunk: string) => {
     buf += chunk;
@@ -1160,6 +1293,7 @@ function connection(broker: Broker, sock: Socket, tokens: Tokens, _server: Serve
     }
   });
   sock.on('error', () => sock.destroy());
+  sock.on('close', () => clearTimeout(hello));
 }
 ```
 
@@ -1199,6 +1333,10 @@ export interface Meta {
   name: string; aliases: string[]; kind: string; origin: string | null; username: string | null;
   class: 'standard' | 'sensitive'; per_use: boolean; created_at: string; last_used: string | null; last_rotated: string | null;
   bindings: Binding[]; policy: { length: number; alphabet: string };
+  // Where the value came from, for health flags that must answer no guess of core's (§8): generated
+  // here, migrated by the broker's own launcher, sealed with a passkey approval, or sealed through
+  // core's relay (a value core could have chosen). Older items have none: treated as `sealed`.
+  provenance?: 'generated' | 'migrated' | 'sealed-passkey' | 'sealed'; migrated_from?: string;
 }
 interface ItemFile { v: 1; id: string; gen: number; version: number; key: Sealed; meta: Sealed; value: Sealed; pending?: { version: number; key: Sealed; value: Sealed } }
 export interface Passkey { public_key: string; rp_id: string; origins: string[]; sign_count: number; registered_at: string }
@@ -1209,6 +1347,8 @@ export interface Header {
   holders: Record<string, Holder>; passkeys: Record<string, Passkey>;
   // On a holder: the signing key of the hub it adopted from, pinned at the first adoption.
   hub_signer?: string;
+  // Made on this device (`local`) or adopted from a hub. A local vault never adopts another.
+  origin?: 'local' | 'adopted';
 }
 // What travels to holders: device wraps, and every factor's public key (so a holder's broker can
 // seal the root key to the same factors itself). No passphrase, recovery or passkey wrap moves.
@@ -1332,7 +1472,7 @@ export class Store {
     const root = randomBytes(32);
     let dev: { id: string; public: string };
     try { dev = this.device(); } catch { const d = this.#renewDevice(); dev = { id: d.id, public: d.factor.pub }; }
-    const h: Header = { v: 1, id, created_at: this.#now(), kdf, unlock_mode: o.unlock_mode ?? 'auto', gen: 1, wraps: {}, holders: {}, passkeys: {} };
+    const h: Header = { v: 1, id, created_at: this.#now(), kdf, unlock_mode: o.unlock_mode ?? 'auto', gen: 1, wraps: {}, holders: {}, passkeys: {}, origin: 'local' };
     const add = (name: string, f: Factor) => { h.wraps[name] = sealTo(f.pub, root, wrapInfo(id, name, 1)); };
     add('passphrase', passphraseFactor(o.passphrase, kdf));
     if (o.recovery) add('recovery', recoveryFactor(o.recovery));
@@ -1614,12 +1754,15 @@ export class Store {
   adopt(inbox: OutboxHeader, items: Record<string, string>): void {
     const dev = this.device();
     const name = `device:${dev.id}`;
-    // Only a header its hub signed, and once adopted, only that hub's (pinned at the first adoption).
+    // A vault made here never adopts another. A holder adopts only a header signed by the hub it
+    // was enrolled for (pinned at tier 3, pinHub), only for the vault it holds, and only newer.
+    if (this.#h && this.#h.origin !== 'adopted') throw new Error('This device’s vault was made here; it doesn’t take another.');
     const { sig, ...body } = inbox;
     if (typeof inbox.signer !== 'string' || !verifyText(inbox.signer, canonical(body), sig)) throw new Error('The vault that arrived isn’t signed by a hub’s broker, so it isn’t adopted.');
-    const pinned = this.#h?.hub_signer;
-    if ((pinned && pinned !== inbox.signer) || (this.#h && this.#h.id !== inbox.id)) throw new Error('The vault that arrived isn’t from the hub this device holds a vault for, so it isn’t adopted.');
-    if (this.#h && inbox.gen < this.#h.gen) throw new Error('The vault that arrived is older than the one held here.');
+    const pinned = this.#h?.hub_signer ?? this.hubPin();
+    if (!pinned) throw new Error('This device isn’t enrolled to hold a hub’s vault (tier 3), so nothing is adopted.');
+    if (pinned !== inbox.signer || (this.#h && this.#h.id !== inbox.id)) throw new Error('The vault that arrived isn’t from the hub this device holds a vault for, so it isn’t adopted.');
+    if (this.#h && inbox.gen <= this.#h.gen) throw new Error('The vault that arrived isn’t newer than the one held here.');
     const w = inbox.device_wraps?.[name];
     if (!w || !UUID.test(inbox.id)) throw new Error('The hub’s vault has no wrap for this device. Enrol it as a holder on the hub first (tier 3).');
     const root = openWrap(this.#device!.factor, w, wrapInfo(inbox.id, name, inbox.gen));
@@ -1637,10 +1780,19 @@ export class Store {
     if (inbox.unlock_mode === 'auto') wraps[name] = sealTo(this.#device!.factor.pub, root, wrapInfo(inbox.id, name, inbox.gen));
     for (const id of this.ids()) if (!items[id]) rmSync(this.#itemPath(id), { force: true });
     for (const f of files) this.#write(f);
-    this.#h = { v: 1, id: inbox.id, created_at: this.#now(), kdf: inbox.kdf, unlock_mode: inbox.unlock_mode, gen: inbox.gen, wraps, holders: inbox.holders, passkeys: inbox.passkeys, hub_signer: inbox.signer };
+    this.#h = { v: 1, id: inbox.id, created_at: this.#now(), kdf: inbox.kdf, unlock_mode: inbox.unlock_mode, gen: inbox.gen, wraps, holders: inbox.holders, passkeys: inbox.passkeys, hub_signer: inbox.signer, origin: 'adopted' };
     this.#writeHeader();
     zero(this.#root);
     this.#root = root;
+  }
+
+  // The hub this device will hold a vault for: its broker's signing key, pinned at enrolment.
+  hubPin(): string | null {
+    try { const p = JSON.parse(readFileSync(join(this.dir, 'hub.json'), 'utf8')) as { signer?: unknown }; return typeof p.signer === 'string' ? p.signer : null; } catch { return null; }
+  }
+  pinHub(signer: string, name: string): void {
+    if (this.#h) throw new Error('This device already holds a vault.');
+    writeAtomic(join(this.dir, 'hub.json'), `${JSON.stringify({ signer, name, pinned_at: this.#now() })}\n`);
   }
 
   // ---- passkeys (approvals) -------------------------------------------------------------------
@@ -1814,9 +1966,10 @@ export function openEnvelope(priv: KeyObject, e: Envelope, digest: string): Buff
 // expiry of 5 minutes, single use). The caller calls again with the answer. The broker recomputes
 // the digest from the call it is actually given, so an approval made for one action never covers
 // another (another target, another scope, another ref).
-//  - passkey: a WebAuthn assertion (ES256, user verification) over sha256(id | digest), from a
-//    passkey registered with the broker at vault setup. The client computes the digest from what
-//    it shows; what the person approves is what the broker does.
+//  - passkey: a WebAuthn assertion (ES256, user verification) over sha256(id | digest | bound),
+//    from a passkey registered with the broker at vault setup. The client computes the digest from
+//    what it shows; what the person approves is what the broker does. `bound` is the SHA-256 of a
+//    sealed value's envelope when the action carries one, so core can't swap in a value of its own.
 //  - core: where no passkey is registered, the approval is relayed by core (the way tier-3
 //    confirmations work today). The broker still checks the digest, the expiry, single use and
 //    every binding rule; the approval's authenticity rests on core, and Settings says so.
@@ -1830,7 +1983,7 @@ export const APPROVALS_PER_HOUR = 30;
 export const USES_PER_REF_HOUR = 3600;
 
 export const digestOf = (action: unknown) => createHash('sha256').update(canonical(action)).digest('hex');
-export const challengeBytes = (id: string, digest: string) => createHash('sha256').update(`${id}|${digest}`).digest();
+export const challengeBytes = (id: string, digest: string, bound = '') => createHash('sha256').update(`${id}|${digest}|${bound}`).digest();
 
 interface Pending { digest: string; expires: number; used: boolean; task: string | null; passkey: boolean }
 export interface ApprovalIn { id?: unknown; digest?: unknown; mode?: unknown; credential_id?: unknown; authenticator_data?: unknown; client_data_json?: unknown; signature?: unknown }
@@ -1866,7 +2019,7 @@ export class Approvals {
 
   // Checks an approval against the action the broker is about to do. Single use: a valid approval
   // is spent here, and a replay is refused.
-  check(a: ApprovalIn, action: unknown, passkeys: Record<string, Passkey>, onCount: (id: string, n: number) => void): { ok: true; id: string } | { ok: false; why: string } {
+  check(a: ApprovalIn, action: unknown, passkeys: Record<string, Passkey>, onCount: (id: string, n: number) => void, bound = ''): { ok: true; id: string; passkey: boolean } | { ok: false; why: string } {
     if (!a || typeof a.id !== 'string' || typeof a.digest !== 'string') return { ok: false, why: 'no approval id' };
     const p = this.#pending.get(a.id);
     if (!p) return { ok: false, why: 'unknown or already used' };
@@ -1875,11 +2028,11 @@ export class Approvals {
     const digest = digestOf(action);
     if (!eq(a.digest, p.digest) || !eq(digest, p.digest)) return { ok: false, why: 'made for another action' };
     if (a.mode === 'passkey') {
-      const why = checkAssertion(a, challengeBytes(a.id, digest), passkeys, onCount);
+      const why = checkAssertion(a, challengeBytes(a.id, digest, bound), passkeys, onCount);
       if (why) return { ok: false, why };
     } else if (a.mode !== 'core' || p.passkey) return { ok: false, why: p.passkey ? 'this action needs your passkey' : 'not an approval mode' };
     p.used = true;
-    return { ok: true, id: a.id };
+    return { ok: true, id: a.id, passkey: a.mode === 'passkey' };
   }
 
   clear() { this.#pending.clear(); }
@@ -1951,13 +2104,6 @@ export function generate(policy: { length: number; alphabet: string } = DEFAULT_
   }
   return out;
 }
-
-// Health flags, worked out in memory at unlock; never stored, never logged (§8).
-export function weak(v: Buffer): boolean {
-  const s = v.toString('utf8');
-  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((r) => r.test(s)).length;
-  return s.length < 12 || (s.length < 20 && classes < 3);
-}
 ```
 
 ### `src/broker/origin.ts`
@@ -2023,7 +2169,8 @@ export function requestPath(p: unknown): { path: string; bare: string } {
   const bare = p.split('?')[0]!;
   let decoded: string;
   try { decoded = decodeURIComponent(bare); } catch { throw new Error('not a request path'); }
-  if (decoded.split('/').some((s) => s === '..' || s === '.') || decoded.includes('\\') || /%2f/i.test(bare)) throw new Error('a request path can’t climb out of its scope');
+  // `..;x` and `.;x` are dot segments to servers that strip path parameters (Tomcat, Spring).
+  if (decoded.split('/').some((s) => /^\.\.?(;|$)/.test(s)) || decoded.includes('\\') || /%2f/i.test(bare)) throw new Error('a request path can’t climb out of its scope');
   return { path: p, bare };
 }
 
@@ -2076,14 +2223,16 @@ export function addressClass(addr: string): 'loopback' | 'private' | 'public' {
   if (v === 4) {
     const [a, b] = addr.split('.').map(Number) as [number, number];
     if (a === 127) return 'loopback';
-    if (a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) || a >= 224) return 'private';
+    if (a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)) || a >= 224) return 'private';
     return 'public';
   }
   if (v === 6) {
     const x = addr.toLowerCase();
     if (x === '::1') return 'loopback';
     if (x.startsWith('::ffff:')) return addressClass(x.slice(7));
-    if (x === '::' || /^f[cd]/.test(x) || /^fe[89ab]/.test(x) || x.startsWith('ff')) return 'private';
+    // ULA, link-local, site-local (fec0::/10), multicast, NAT64 (64:ff9b::/96) and 6to4 (2002::/16),
+    // whose embedded IPv4 address could be anything: all treated as not public.
+    if (x === '::' || /^f[cd]/.test(x) || /^fe[89a-f]/.test(x) || x.startsWith('ff') || x.startsWith('64:ff9b:') || x.startsWith('2002:')) return 'private';
     return 'public';
   }
   return 'private';
@@ -2204,11 +2353,14 @@ export async function send(o: Outbound, resolve: Resolver = systemResolver): Pro
 ### `src/broker/scrub.ts`
 
 ```ts
-// Exact-value scrubbing at the broker's edges (§8): every value the broker used or holds, and its
-// base64, base64url, hex, URL-encoded and JSON-escaped forms, is replaced before anything leaves
-// for core: a target's response, a program's output through the launcher, an error's words.
-// Values shorter than 6 characters aren't hunted (they would match ordinary text); policy keeps
-// generated values long.
+// Exact-value scrubbing at the broker's edges (§8): the value a use injected (and, for basic auth,
+// the user:value pair it sent), in its raw, base64, base64url, hex, URL-encoded (either case, and
+// form-encoded), and JSON-escaped forms, is replaced in what the target sent back: a response, or a
+// program's output through the launcher. Only target-sent text is scrubbed, never text core wrote:
+// scrubbing core's own text would tell core whether it guessed a value.
+// Stated limits: values shorter than 6 characters aren't hunted (they would match ordinary text);
+// HTML entities, UTF-16 and other encodings a target might use aren't; and a target that echoes
+// text core sent it can, by being scrubbed, confirm a guess about the value used (rate-capped).
 
 export const MARK = '[redacted by the broker]';
 
@@ -2218,6 +2370,8 @@ export function formsOf(value: string): string[] {
   const forms = new Set([
     value, b.toString('base64'), b.toString('base64').replace(/=+$/, ''), b.toString('base64url'),
     b.toString('hex'), b.toString('hex').toUpperCase(), encodeURIComponent(value), JSON.stringify(value).slice(1, -1),
+    encodeURIComponent(value).replace(/%[0-9A-F]{2}/g, (x) => x.toLowerCase()), encodeURIComponent(value).replace(/%20/g, '+'),
+    JSON.stringify(value).slice(1, -1).replace(/\//g, '\\/'),
   ]);
   return [...forms].filter((f) => f.length >= 6).sort((x, y) => y.length - x.length);
 }
@@ -2441,144 +2595,105 @@ export function chooseStore(service: string, account: string, file: string, o: {
 ### `src/broker/launch.ts`
 
 ```ts
-// The broker's launcher (§3 "The launcher", §10 "Moving from today's vault"). Broker code that runs
-// as a separate process, so a program can be given a credential, and the old vault read, without
-// the value passing through core or the supervisor. The caller starts it with a ticket on fd 3
-// (one line), never on argv or in the environment.
+// The broker's launcher (§3 "The launcher", §10 "Moving from today's vault"). Broker code that the
+// broker itself starts as its own child, outside Node's permission model, for the two jobs the
+// broker's narrowed process can't do: run a program with a credential, and read the old vault in
+// the home. It talks to the broker over its pipes only: never the socket, never a ticket. Core
+// never starts it and never holds anything that would let another process act as it.
 //
-//   node src/broker/launch.ts run <socket> <program> [args are the ticket's]
-//     Hashes <program> itself, redeems the ticket (the broker checks the path and SHA-256 against
-//     the binding, and refuses a ticket redeemed twice), then starts the program with the value in
-//     its environment, or in a 0600 file in a 0700 folder named by that variable and removed on
-//     exit. It stays the program's parent: it scrubs stdout and stderr of the value (and its
-//     encodings) before passing them on, forwards signals, and exits with the program's code.
-//   node src/broker/launch.ts migrate <socket> <home>
-//     Reads the old vault (vault.ts's file and key) and Era 2's Gmail files itself and streams the
-//     items to the broker, which stages them. Nova's own keys are not sent.
-//   node src/broker/launch.ts migrate-finish <socket> <home>
-//     After the broker's read-back: takes what moved out of the old vault (new key, or no file and
-//     no key) and removes Era 2's files. Prints names only.
+//   launch.ts run              fd 3: { path, sha256, argv, cwd, env, inject, tmp, value, stdin }
+//     Hashes the program itself and refuses one that isn't the bound binary, then starts it with
+//     the value in its environment, or in a 0600 file in a 0700 folder named by that variable and
+//     removed on exit. It scrubs stdout and stderr of the value (and its encodings), passes on
+//     signals, and exits with the program's code.
+//   launch.ts migrate <home>   stdout: { vault_id }, then { name, value } per credential
+//     Reads vault.ts's file and key and Era 2's Gmail files. Nova's own keys aren't sent.
+//   launch.ts finish <home>    fd 3: { vault_id, names }
+//     Takes the names that moved out of the old vault (a new key, or no file and no key) and removes
+//     Era 2's files for them; prints counts only.
 //
-// A stated limit: a program is hashed, then started by path, so a binary swapped between the two
-// would run with the credential. Its folder should be one only an administrator writes.
+// Stated limits: a program is hashed, then started by path, so a binary swapped between the two
+// would run with the credential; and a program can do what it likes with its own credential,
+// including what its arguments, working folder and project files (core's) steer it to.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { Socket, connect } from 'node:net';
+import { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OWN_KEYS, readGmailFiles, readOldVault, removeFromOldVault, removeGmailFiles } from './oldvault.ts';
 import { fileSha256 } from './origin.ts';
 import { Scrubber, StreamScrubber } from './scrub.ts';
 
-function readTicket(): Promise<string> {
+function fromParent(): Promise<Record<string, any>> {
   return new Promise((ok, fail) => {
     let s = '';
     const r = new Socket({ fd: 3, readable: true, writable: false });
     r.setEncoding('utf8');
-    r.on('data', (c: string) => { s += c; if (s.includes('\n')) { r.destroy(); ok(s.split('\n')[0]!.trim()); } });
-    r.on('end', () => ok(s.trim()));
+    r.on('data', (c: string) => { s += c; });
+    r.on('end', () => { try { ok(JSON.parse(s)); } catch { fail(new Error('not a request from the broker')); } });
     r.on('error', fail);
   });
 }
-
-// One request at a time over the broker's socket.
-function channel(path: string) {
-  const sock = connect(path);
-  sock.setEncoding('utf8');
-  let buf = '';
-  const waiting: ((a: Record<string, unknown>) => void)[] = [];
-  sock.on('data', (c: string) => {
-    buf += c;
-    let i: number;
-    while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); waiting.shift()?.(JSON.parse(line)); }
-  });
-  let n = 0;
-  return {
-    ask: (m: string, f: Record<string, unknown>) => new Promise<Record<string, unknown>>((ok, fail) => {
-      waiting.push(ok);
-      sock.once('error', fail);
-      sock.write(`${JSON.stringify({ id: ++n, m, ...f })}\n`);
-    }),
-    close: () => sock.end(),
-  };
-}
-
 const fail = (words: string, code = 1): never => { process.stderr.write(`nova broker launcher: ${words}\n`); process.exit(code); };
+const line = (x: unknown) => process.stdout.write(`${JSON.stringify(x)}\n`);
 
-async function run(socket: string, program: string) {
-  const ticket = await readTicket();
-  const sha256 = fileSha256(program);
-  const ch = channel(socket);
-  const a = await ch.ask('redeem', { ticket, path: program, sha256 });
-  ch.close();
-  if (!a.ok) fail(String(a.words ?? a.refused ?? 'the ticket was refused'), 126);
-  const g = a.grant as { path: string; argv: string[]; inject: { how: 'env' | 'file'; env: string }; value: string };
-  const scrub = new Scrubber([g.value]);
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  let dir: string | null = null;
+async function run() {
+  const g = await fromParent();
+  let sha = '';
+  try { sha = fileSha256(g.path); } catch { fail('the bound program isn’t there', 126); }
+  if (sha !== g.sha256) fail('the program isn’t the one this credential is bound to (its SHA-256 differs)', 126);
+  const scrub = new Scrubber([String(g.value)]);
+  const home = mkdtempSync(join(typeof g.tmp === 'string' ? g.tmp : tmpdir(), 'nova-run-'));
+  const env: NodeJS.ProcessEnv = { ...g.env, PATH: '/usr/local/bin:/usr/bin:/bin', HOME: home };
   if (g.inject.how === 'file') {
-    dir = mkdtempSync(join(tmpdir(), 'nova-cred-'));
-    const file = join(dir, 'credential');
-    writeFileSync(file, g.value, { mode: 0o600 });
+    const file = join(home, 'credential');
+    writeFileSync(file, String(g.value), { mode: 0o600 });
     env[g.inject.env] = file;
-  } else env[g.inject.env] = g.value;
+  } else env[g.inject.env] = String(g.value);
   g.value = '';
-  a.grant = null;
-  const child = spawn(g.path, g.argv, { env, stdio: ['inherit', 'pipe', 'pipe'], shell: false });
+  // Node writes the broker's permission flags into every child's NODE_OPTIONS, whatever env it is
+  // given; env(1) takes them out, so the program runs as itself and sees nothing of the broker's.
+  const viaEnv = process.platform !== 'win32';
+  const child = spawn(viaEnv ? '/usr/bin/env' : g.path, viaEnv ? ['-u', 'NODE_OPTIONS', '--', g.path, ...g.argv] : g.argv, { env, cwd: g.cwd ?? home, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
   delete env[g.inject.env];
+  child.stdin!.on('error', () => { /* the program didn't read it */ });
+  child.stdin!.end(typeof g.stdin === 'string' ? g.stdin : '');
   const out = new StreamScrubber(scrub);
   const err = new StreamScrubber(scrub);
   child.stdout!.setEncoding('utf8').on('data', (c: string) => process.stdout.write(out.push(c)));
   child.stderr!.setEncoding('utf8').on('data', (c: string) => process.stderr.write(err.push(c)));
   for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(s, () => child.kill(s));
-  child.on('error', (e) => { if (dir) rmSync(dir, { recursive: true, force: true }); fail(`couldn’t start the program: ${scrub.text(e.message)}`, 127); });
+  child.on('error', () => { rmSync(home, { recursive: true, force: true }); fail('couldn’t start the program', 127); });
   child.on('close', (code, signal) => {
     process.stdout.write(out.end());
     process.stderr.write(err.end());
-    if (dir) rmSync(dir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
     process.exitCode = code ?? (signal ? 128 + (({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1, SIGKILL: 9 } as Record<string, number>)[signal] ?? 1) : 1);
   });
 }
 
-async function migrate(socket: string, home: string) {
-  const ticket = await readTicket();
+function migrate(home: string) {
   const old = readOldVault(home);
   const items = new Map<string, string>([...readGmailFiles(home)]);
   // The vault's copy wins over an Era 2 file (the file is then a leftover), as gmail.js does.
   for (const [k, v] of old?.map ?? []) items.set(k, v);
-  const ch = channel(socket);
-  let sent = 0;
-  for (const [name, value] of items) {
-    if (OWN_KEYS.some((r) => r.test(name))) continue;
-    const a = await ch.ask('migrate_item', { ticket, name, value });
-    if (!a.ok) fail(`the broker refused ${name}: ${String(a.words)}`);
-    sent++;
-  }
-  const done = await ch.ask('migrate_item', { ticket, done: true });
-  ch.close();
-  if (!done.ok) fail(String(done.words));
-  process.stdout.write(`${JSON.stringify({ staged: sent })}\n`);
+  line({ vault_id: old?.id ?? null });
+  for (const [name, value] of items) if (!OWN_KEYS.some((r) => r.test(name))) line({ name, value });
 }
 
-async function finish(socket: string, home: string) {
-  const ticket = await readTicket();
-  const ch = channel(socket);
-  const a = await ch.ask('redeem', { ticket });
-  ch.close();
-  if (!a.ok) fail(String(a.words ?? 'the ticket was refused'));
-  const names = a.migrated as string[];
+async function finish(home: string) {
+  const f = await fromParent();
+  const names = Array.isArray(f.names) ? (f.names as unknown[]).filter((n): n is string => typeof n === 'string') : [];
   const old = readOldVault(home);
+  if (old && old.id !== f.vault_id) fail('the old vault changed since it was read; nothing was removed');
   const removed = old ? removeFromOldVault(home, old, names) : [];
   removeGmailFiles(home, names);
-  process.stdout.write(`${JSON.stringify({ removed: removed.length, kept: old?.map.size ?? 0 })}\n`);
+  line({ removed: removed.length, kept: old?.map.size ?? 0 });
 }
 
-const [mode, socket, arg] = process.argv.slice(2);
-if (!socket || !arg) fail('usage: launch.ts run|migrate|migrate-finish <socket> <program|home>', 2);
-else if (mode === 'run') run(socket, arg).catch((e) => fail((e as Error).message));
-else if (mode === 'migrate') migrate(socket, arg).catch((e) => fail((e as Error).message));
-else if (mode === 'migrate-finish') finish(socket, arg).catch((e) => fail((e as Error).message));
-else fail('usage: launch.ts run|migrate|migrate-finish <socket> <program|home>', 2);
+const [mode, home] = process.argv.slice(2);
+const go = mode === 'run' ? run() : mode === 'migrate' && home ? Promise.resolve(migrate(home)) : mode === 'finish' && home ? finish(home) : Promise.reject(new Error('usage: launch.ts run | migrate <home> | finish <home>'));
+go.catch((e) => fail(e instanceof SyntaxError ? 'a file couldn’t be read' : (e as Error).message));
 ```
 
 ### `src/broker/oldvault.ts`
@@ -2591,10 +2706,17 @@ else fail('usage: launch.ts run|migrate|migrate-finish <socket> <program|home>',
 // from core: the format is small and fixed, and reimplemented here.
 //
 // After a migration, the names that moved are taken out: the file is rewritten without them under
-// a new key (so an older backup's copy opens with no key that still exists), or deleted with its
-// key when nothing is left. Nova's own keys (§9 row 15) stay in it.
+// a new key (so an older backup's copy, which never holds the key, opens with no key that still
+// exists), or deleted with its key when nothing is left. Nova's own keys (§9 row 15) stay in it.
+// A stated limit: checkpoints (resilience/checkpoints.ts) copy vault/ with its key file and
+// connectors/; the copies taken before the migration still hold the old entries until they age out
+// (NOTES for Track 1).
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+
+// Under Node's permission model a folder that doesn't exist can't be granted, so asking about a
+// path in it throws instead of answering false: either way there is nothing there.
+const there = (p: string) => { try { return existsSync(p); } catch { return false; } };
 import { join } from 'node:path';
 import { chooseStore, fileKeyStore, type KeyStore } from './keystore.ts';
 
@@ -2615,8 +2737,10 @@ function keyMode(env: NodeJS.ProcessEnv): 'auto' | 'file' | 'keychain' {
 
 export function readOldVault(home: string, o: { env?: NodeJS.ProcessEnv; store?: (id: string) => KeyStore } = {}): OldVault | null {
   const file = join(home, 'vault', 'secrets.json');
-  if (!existsSync(file)) return null;
-  const f = JSON.parse(readFileSync(file, 'utf8')) as VaultFile;
+  if (!there(file)) return null;
+  let f: VaultFile;
+  // A parse error's message can quote the file; it never leaves this function.
+  try { f = JSON.parse(readFileSync(file, 'utf8')) as VaultFile; } catch { throw new Error('The old vault’s file can’t be read.'); }
   if (f?.v !== 1 || f.alg !== 'aes-256-gcm' || !UUID.test(f.id)) throw new Error('The old vault isn’t one the broker knows.');
   const env = o.env ?? process.env;
   const disk = fileKeyStore(join(home, 'vault', 'key'));
@@ -2628,8 +2752,9 @@ export function readOldVault(home: string, o: { env?: NodeJS.ProcessEnv; store?:
     const d = createDecipheriv('aes-256-gcm', key, Buffer.from(f.nonce, 'base64'));
     d.setAAD(AAD(f.id));
     d.setAuthTag(Buffer.from(f.tag, 'base64'));
-    const plain = Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8');
-    return { id: f.id, map: new Map(Object.entries(JSON.parse(plain) as Record<string, string>)), key, store: s };
+    let map: Map<string, string>;
+    try { map = new Map(Object.entries(JSON.parse(Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8')) as Record<string, string>)); } catch { throw new Error('The old vault doesn’t open with its key.'); }
+    return { id: f.id, map, key, store: s };
   }
   throw new Error('The old vault’s key isn’t where it should be, so nothing can be moved from it.');
 }
@@ -2666,7 +2791,7 @@ export function readGmailFiles(home: string): Map<string, string> {
   const out = new Map<string, string>();
   for (const [file, name] of Object.entries(GMAIL_FILES)) {
     const p = join(home, 'connectors', 'gmail', file);
-    if (!existsSync(p)) continue;
+    if (!there(p)) continue;
     const text = readFileSync(p, 'utf8');
     if (!text.trim()) continue;
     let v = text;
@@ -2676,7 +2801,7 @@ export function readGmailFiles(home: string): Map<string, string> {
   return out;
 }
 export function removeGmailFiles(home: string, names: string[]): void {
-  for (const [file, name] of Object.entries(GMAIL_FILES)) if (names.includes(name)) rmSync(join(home, 'connectors', 'gmail', file), { force: true });
+  for (const [file, name] of Object.entries(GMAIL_FILES)) if (names.includes(name) && there(join(home, 'connectors', 'gmail', file))) rmSync(join(home, 'connectors', 'gmail', file), { force: true });
 }
 ```
 
@@ -2767,8 +2892,10 @@ process.once('message', async (msg: { tokens?: Tokens; key_mode?: 'auto' | 'file
 // follows the runtime agent's (device/boot.ts): Node's permission model with reads narrowed to the
 // broker's own code and folder and writes to its folder, no inspector, --disable-sigusr1,
 // diagnostics confined to its folder, and an empty environment (no NODE_OPTIONS, no proxy
-// variables). Network access stays allowed, because `use` needs it; child processes only when the
-// device key is in the OS keychain, whose CLIs it runs.
+// variables). Network access stays allowed, because `use` needs it, and so do child processes:
+// the broker starts its own launcher (programs, the old vault) and, with a keychain, its CLIs.
+// A stated limit: Node's permission model doesn't follow a child, so the file-system narrowing is
+// defence in depth against a bug in the broker, not a wall against code that runs as it.
 //
 // The supervisor makes the two 256-bit tokens and hands each child its own: the broker gets both
 // over this IPC channel, and core gets its own the same way from the supervisor.
@@ -2781,10 +2908,9 @@ import type { Tokens } from './server.ts';
 
 export const BROKER_SRC = dirname(fileURLToPath(import.meta.url));
 
-export function brokerCommand(dir: string, o: { keychain?: boolean } = {}): string[] {
+export function brokerCommand(dir: string): string[] {
   return [
-    '--permission', `--allow-fs-read=${BROKER_SRC}/`, `--allow-fs-read=${dir}/`, `--allow-fs-write=${dir}/`, '--allow-net',
-    ...(o.keychain ? ['--allow-child-process'] : []),
+    '--permission', `--allow-fs-read=${BROKER_SRC}/`, `--allow-fs-read=${dir}/`, `--allow-fs-write=${dir}/`, '--allow-net', '--allow-child-process',
     '--no-experimental-sqlite', '--no-experimental-webstorage', '--disable-sigusr1', `--diagnostic-dir=${dir}`,
     '--disable-warning=ExperimentalWarning', join(BROKER_SRC, 'main.ts'), dir,
   ];
@@ -2800,7 +2926,7 @@ export function startBroker(dir: string, o: { keyMode?: 'auto' | 'file' | 'keych
   // Only what the keychain CLIs need to reach a desktop session; nothing else of the parent's.
   const childEnv: NodeJS.ProcessEnv = { TZ: env.TZ ?? 'UTC', ...(keychain && env.DBUS_SESSION_BUS_ADDRESS ? { DBUS_SESSION_BUS_ADDRESS: env.DBUS_SESSION_BUS_ADDRESS } : {}), ...(keychain && env.PATH ? { PATH: env.PATH } : {}) };
   const tokens: Tokens = { core: randomBytes(32).toString('hex'), supervisor: randomBytes(32).toString('hex') };
-  const child = spawn(process.execPath, brokerCommand(dir, { keychain }), { cwd: dir, env: childEnv, stdio: ['ignore', o.pipe ? 'pipe' : 'inherit', o.pipe ? 'pipe' : 'inherit', 'ipc'] });
+  const child = spawn(process.execPath, brokerCommand(dir), { cwd: dir, env: childEnv, stdio: ['ignore', o.pipe ? 'pipe' : 'inherit', o.pipe ? 'pipe' : 'inherit', 'ipc'] });
   return new Promise((ok, fail) => {
     const timer = setTimeout(() => { child.kill(); fail(new Error('The broker didn’t start in time.')); }, o.timeoutMs ?? 20_000);
     child.once('exit', (code) => { clearTimeout(timer); fail(new Error(`The broker exited at start (code ${code}).`)); });
@@ -2826,13 +2952,12 @@ export function startBroker(dir: string, o: { keyMode?: 'auto' | 'file' | 'keych
 // What core does with a credential:
 //  - list_refs, for names, sites, usernames, bindings, classes and health flags;
 //  - use, for an http request the broker sends itself, a check of a callback's signature, or a
-//    ticket for a program, which `launch` hands to the broker's launcher (never to the program);
+//    program the broker runs through its own launcher (the answer is its exit code and its output,
+//    scrubbed of the value);
 //  - create, update, rotate, bind and share_scope, each answering needs_approval with a challenge
 //    first; the person's client approves it, and seals any value it types (src/broker/seal.ts);
-//  - the migration from vault.ts, through the launcher, so no old value is read in core either.
-import { spawn, type ChildProcess } from 'node:child_process';
+//  - the migration from vault.ts, through the broker's launcher, so no old value is read in core.
 import { connect, type Socket } from 'node:net';
-import { fileURLToPath } from 'node:url';
 import type { AuditRecord, Challenge, Refusal, RefMeta, Target } from '../../broker/protocol.ts';
 
 export type { AuditRecord, Challenge, Refusal, RefMeta, Target };
@@ -2849,8 +2974,6 @@ export interface Answer {
 }
 export interface Approval { id: string; digest: string; mode: 'core' | 'passkey'; credential_id?: string; authenticator_data?: string; client_data_json?: string; signature?: string }
 export interface Ask { task?: { id: string; title: string }; caller?: string; approval?: Approval }
-
-export const LAUNCHER = fileURLToPath(new URL('../../broker/launch.ts', import.meta.url));
 
 export class BrokerError extends Error {
   readonly answer: Answer;
@@ -2932,45 +3055,16 @@ export class BrokerClient {
   bind(ref: string, change: { add?: unknown; remove?: unknown }, ask: Ask = {}) { return this.call('bind', { ref, ...change, ...ask }); }
   shareScope(scope: { device?: unknown; backend?: unknown }, ask: Ask = {}) { return this.call('share_scope', { ...scope, ...ask }); }
 
-  // ---- the launcher ---------------------------------------------------------------------------
+  // ---- the migration from vault.ts (§10) -----------------------------------------------------
 
-  // Starts the broker's launcher for a program ticket (from `use` on a process target). The ticket
-  // goes in on fd 3. Core gets a child whose output the launcher has already scrubbed.
-  launch(ticket: string, program: string, o: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): ChildProcess {
-    const child = spawn(process.execPath, ['--disable-sigusr1', '--disable-warning=ExperimentalWarning', LAUNCHER, 'run', this.socket, program], { cwd: o.cwd, env: o.env ?? { PATH: process.env.PATH ?? '' }, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
-    (child.stdio[3] as NodeJS.WritableStream).end(`${ticket}\n`);
-    return child;
-  }
-
-  // The migration from vault.ts (§10): stage (the launcher reads the old vault and streams it to
-  // the broker), commit (each entry becomes an unbound item and is read back), finish (the launcher
-  // takes what moved out of the old vault), then propose (one tier-3 card of bindings and classes).
-  // Core only ever sees names, counts and the card; it never opens the old vault itself.
-  async migrateStage(home: string, ask: Ask = {}): Promise<{ staged: number } | Answer> {
-    const a = await this.create({}, { migrate: 'stage' }, ask);
-    if (!a.ok) return a;
-    const out = await this.#runLauncher('migrate', home, (a.outcome as { ticket: string }).ticket);
-    return out.code === 0 ? (JSON.parse(out.stdout) as { staged: number }) : { id: -1, error: 'failed', words: out.stderr.trim() };
-  }
+  // Stage (the broker's own launcher reads the old vault in the broker's home and hands it over by
+  // pipe; the answer is a count), commit (tier 3: each entry becomes an unbound item, is read back,
+  // and leaves the old vault), then propose (tier 3: one card of bindings and classes). Core never
+  // opens the old vault, and names no folder for the broker to read.
+  migrateStage(ask: Ask = {}) { return this.create({}, { migrate: 'stage' }, ask); }
   migrateCommit(ask: Ask = {}) { return this.create({}, { migrate: 'commit' }, ask); }
   migratePropose(proposals: Record<string, { origin?: string; class?: string; bind?: unknown[] }>, ask: Ask = {}) {
     return this.create({}, { migrate: 'propose', proposals }, ask);
-  }
-  async migrateFinish(home: string, ticket: string): Promise<{ removed: number; kept: number } | Answer> {
-    const out = await this.#runLauncher('migrate-finish', home, ticket);
-    return out.code === 0 ? (JSON.parse(out.stdout) as { removed: number; kept: number }) : { id: -1, error: 'failed', words: out.stderr.trim() };
-  }
-
-  #runLauncher(mode: string, home: string, ticket: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
-    return new Promise((ok) => {
-      const child = spawn(process.execPath, ['--disable-sigusr1', '--disable-warning=ExperimentalWarning', LAUNCHER, mode, this.socket, home], { env: { PATH: process.env.PATH ?? '', ...(process.env.NODE_TEST_CONTEXT ? { NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT } : {}), ...(process.env.NOVA_VAULT_KEY ? { NOVA_VAULT_KEY: process.env.NOVA_VAULT_KEY } : {}), ...(process.env.DBUS_SESSION_BUS_ADDRESS ? { DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS } : {}) }, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout!.setEncoding('utf8').on('data', (c: string) => { stdout += c; });
-      child.stderr!.setEncoding('utf8').on('data', (c: string) => { stderr += c; });
-      (child.stdio[3] as NodeJS.WritableStream).end(`${ticket}\n`);
-      child.on('close', (code) => ok({ code, stdout, stderr }));
-    });
   }
 }
 

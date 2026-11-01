@@ -1,8 +1,11 @@
-// Exact-value scrubbing at the broker's edges (§8): every value the broker used or holds, and its
-// base64, base64url, hex, URL-encoded and JSON-escaped forms, is replaced before anything leaves
-// for core: a target's response, a program's output through the launcher, an error's words.
-// Values shorter than 6 characters aren't hunted (they would match ordinary text); policy keeps
-// generated values long.
+// Exact-value scrubbing at the broker's edges (§8): the value a use injected (and, for basic auth,
+// the user:value pair it sent), in its raw, base64, base64url, hex, URL-encoded (either case, and
+// form-encoded), and JSON-escaped forms, is replaced in what the target sent back: a response, or a
+// program's output through the launcher. Only target-sent text is scrubbed, never text core wrote:
+// scrubbing core's own text would tell core whether it guessed a value.
+// Stated limits: values shorter than 6 characters aren't hunted (they would match ordinary text);
+// HTML entities, UTF-16 and other encodings a target might use aren't; and a target that echoes
+// text core sent it can, by being scrubbed, confirm a guess about the value used (rate-capped).
 
 export const MARK = '[redacted by the broker]';
 
@@ -12,6 +15,8 @@ export function formsOf(value: string): string[] {
   const forms = new Set([
     value, b.toString('base64'), b.toString('base64').replace(/=+$/, ''), b.toString('base64url'),
     b.toString('hex'), b.toString('hex').toUpperCase(), encodeURIComponent(value), JSON.stringify(value).slice(1, -1),
+    encodeURIComponent(value).replace(/%[0-9A-F]{2}/g, (x) => x.toLowerCase()), encodeURIComponent(value).replace(/%20/g, '+'),
+    JSON.stringify(value).slice(1, -1).replace(/\//g, '\\/'),
   ]);
   return [...forms].filter((f) => f.length >= 6).sort((x, y) => y.length - x.length);
 }

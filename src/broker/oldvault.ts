@@ -5,10 +5,17 @@
 // from core: the format is small and fixed, and reimplemented here.
 //
 // After a migration, the names that moved are taken out: the file is rewritten without them under
-// a new key (so an older backup's copy opens with no key that still exists), or deleted with its
-// key when nothing is left. Nova's own keys (§9 row 15) stay in it.
+// a new key (so an older backup's copy, which never holds the key, opens with no key that still
+// exists), or deleted with its key when nothing is left. Nova's own keys (§9 row 15) stay in it.
+// A stated limit: checkpoints (resilience/checkpoints.ts) copy vault/ with its key file and
+// connectors/; the copies taken before the migration still hold the old entries until they age out
+// (NOTES for Track 1).
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+
+// Under Node's permission model a folder that doesn't exist can't be granted, so asking about a
+// path in it throws instead of answering false: either way there is nothing there.
+const there = (p: string) => { try { return existsSync(p); } catch { return false; } };
 import { join } from 'node:path';
 import { chooseStore, fileKeyStore, type KeyStore } from './keystore.ts';
 
@@ -29,8 +36,10 @@ function keyMode(env: NodeJS.ProcessEnv): 'auto' | 'file' | 'keychain' {
 
 export function readOldVault(home: string, o: { env?: NodeJS.ProcessEnv; store?: (id: string) => KeyStore } = {}): OldVault | null {
   const file = join(home, 'vault', 'secrets.json');
-  if (!existsSync(file)) return null;
-  const f = JSON.parse(readFileSync(file, 'utf8')) as VaultFile;
+  if (!there(file)) return null;
+  let f: VaultFile;
+  // A parse error's message can quote the file; it never leaves this function.
+  try { f = JSON.parse(readFileSync(file, 'utf8')) as VaultFile; } catch { throw new Error('The old vault’s file can’t be read.'); }
   if (f?.v !== 1 || f.alg !== 'aes-256-gcm' || !UUID.test(f.id)) throw new Error('The old vault isn’t one the broker knows.');
   const env = o.env ?? process.env;
   const disk = fileKeyStore(join(home, 'vault', 'key'));
@@ -42,8 +51,9 @@ export function readOldVault(home: string, o: { env?: NodeJS.ProcessEnv; store?:
     const d = createDecipheriv('aes-256-gcm', key, Buffer.from(f.nonce, 'base64'));
     d.setAAD(AAD(f.id));
     d.setAuthTag(Buffer.from(f.tag, 'base64'));
-    const plain = Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8');
-    return { id: f.id, map: new Map(Object.entries(JSON.parse(plain) as Record<string, string>)), key, store: s };
+    let map: Map<string, string>;
+    try { map = new Map(Object.entries(JSON.parse(Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8')) as Record<string, string>)); } catch { throw new Error('The old vault doesn’t open with its key.'); }
+    return { id: f.id, map, key, store: s };
   }
   throw new Error('The old vault’s key isn’t where it should be, so nothing can be moved from it.');
 }
@@ -80,7 +90,7 @@ export function readGmailFiles(home: string): Map<string, string> {
   const out = new Map<string, string>();
   for (const [file, name] of Object.entries(GMAIL_FILES)) {
     const p = join(home, 'connectors', 'gmail', file);
-    if (!existsSync(p)) continue;
+    if (!there(p)) continue;
     const text = readFileSync(p, 'utf8');
     if (!text.trim()) continue;
     let v = text;
@@ -90,5 +100,5 @@ export function readGmailFiles(home: string): Map<string, string> {
   return out;
 }
 export function removeGmailFiles(home: string, names: string[]): void {
-  for (const [file, name] of Object.entries(GMAIL_FILES)) if (names.includes(name)) rmSync(join(home, 'connectors', 'gmail', file), { force: true });
+  for (const [file, name] of Object.entries(GMAIL_FILES)) if (names.includes(name) && there(join(home, 'connectors', 'gmail', file))) rmSync(join(home, 'connectors', 'gmail', file), { force: true });
 }

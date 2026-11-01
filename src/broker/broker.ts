@@ -2,21 +2,23 @@
 // messages, each checked on the broker's own authority. Whoever asks (core, with a valid token and
 // even a valid approval for something else) gets refused when the target isn't bound exactly, the
 // request is outside the binding's scope, or the class, consent or approval doesn't allow it.
-// No answer carries a value; every verb writes one audit record, which comes back in the answer
-// for core to copy into the Work Ledger.
+// No answer carries a value, and none repeats text core sent in a way that could depend on one;
+// every verb writes one audit record, which comes back in the answer for core to copy into the
+// Work Ledger.
+import { spawn } from 'node:child_process';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Audit, type Entry } from './audit.ts';
 import { entryKey, openEnvelope, type Envelope, type Kdf } from './crypto.ts';
 import { send, EgressError, type Resolver } from './http.ts';
 import { chooseStore, FILE_NOTICE, type KeyStore } from './keystore.ts';
 import { BUILT, canonicalTarget, checkScope, inScope, lookalikes, requestPath, suggestClass } from './origin.ts';
-import { Approvals, Rates, digestOf, generate, weak, DEFAULT_POLICY, USES_PER_REF_HOUR, type ApprovalIn } from './policy.ts';
-import { REFUSALS, type Binding, type Card, type Frame, type Inject, type Refusal, type Role, type Scope } from './protocol.ts';
+import { Approvals, Rates, digestOf, generate, DEFAULT_POLICY, USES_PER_REF_HOUR, type ApprovalIn } from './policy.ts';
+import { REFUSALS, canonical, type Binding, type Card, type Frame, type Inject, type Refusal, type Role } from './protocol.ts';
 import { Scrubber } from './scrub.ts';
 import { Store, sameBytes, type Meta, type OutboxHeader } from './store.ts';
-import { OWN_KEYS } from './oldvault.ts';
 
 export interface BrokerOptions {
   dir: string;
@@ -28,11 +30,19 @@ export interface BrokerOptions {
 }
 
 type Answer = Record<string, unknown>;
-interface Ticket { kind: 'run' | 'migrate' | 'finish'; id?: string; version?: 'current' | 'pending'; target?: string; path?: string; sha256?: string; argv?: string[]; inject?: Inject; expires: number; redeemed: boolean; staged?: Map<string, Buffer>; done?: boolean; migrated?: string[] }
 
 const NAME = /^[a-z0-9][a-z0-9._-]*(\/[A-Za-z0-9._-]+)*$/;
 const ALIAS = 'secret://';
-const TICKET_MS = 60_000;
+const LAUNCH = join(dirname(fileURLToPath(import.meta.url)), 'launch.ts');
+const MAX_OUTPUT = 4 * 1024 * 1024;
+const MAX_STAGED = 1000;
+// Under Node's permission model the launcher inherits the broker's grants (Node writes them into a
+// child's NODE_OPTIONS) and gets these on top; without it, these flags would stop it starting.
+const grantsIf = (flags: string[]) => ((process as { permission?: unknown }).permission ? flags : []);
+// What a program's environment may carry from core: no loader, interpreter or config-path
+// variables (LD_PRELOAD, NODE_OPTIONS, BASH_ENV, TF_CLI_CONFIG_FILE…). PATH and HOME are the
+// launcher's own.
+const PROGRAM_ENV = /^(LANG|LC_[A-Z]+|TZ|TERM|NO_COLOR|TF_IN_AUTOMATION|TF_INPUT|TF_VAR_[A-Za-z0-9_]+)$/;
 const CONSENT_SENSITIVE = 'A sensitive credential always asks first (once per task, or on every use): it can’t have a standing consent.';
 const KINDS = new Set(['api_key', 'token', 'login', 'secret', 'oauth', 'signing_key']);
 const str = (v: unknown, max = 300): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
@@ -49,19 +59,19 @@ export class Broker {
   readonly store: Store;
   readonly audit: Audit;
   readonly boot = randomBytes(12).toString('hex');
-  readonly scrubber = new Scrubber();
   #o: BrokerOptions;
   #entry = entryKey();
   #approvals: Approvals;
   #rates: Rates;
-  #tickets = new Map<string, Ticket>();
+  #staged: { vaultId: string | null; items: Map<string, Buffer> } | null = null;
+  #running = 0;
   #grants = new Set<string>();
   #index = new Map<string, Meta & { version: number; pending: boolean }>();
-  #health = new Map<string, { weak: boolean; reused: boolean; old: boolean }>();
+  #health = new Map<string, { reused: boolean; old: boolean }>();
   #broken: string[] = [];
   #pendingId = randomUUID();
   #failedUnlocks: number[] = [];
-  // A problem raised on the broker's own authority (flood control, a scrubbed answer).
+  // A problem raised on the broker's own authority (flood control, a schema refusal).
   problem: string | null = null;
 
   constructor(o: BrokerOptions) {
@@ -86,27 +96,27 @@ export class Broker {
     }
   }
 
-  // ---- the index, the scrubber, health flags (in memory only) ---------------------------------
+  // ---- the index and health flags (in memory only) -------------------------------------------
 
+  // `reused` is worked out only among values core couldn't have chosen (generated, migrated by the
+  // launcher, or sealed under a passkey approval), so it answers no guess of core's. There is no
+  // `weak` flag in answers: it would tell core a value's length band and character classes.
   #reindex(): void {
     const { items, broken } = this.store.metas();
     this.#index = items;
     this.#broken = broken;
-    const values = new Map<string, string>();
     const seen = new Map<string, string[]>();
     this.#health.clear();
     for (const [id, m] of items) {
+      const old = Date.parse(m.last_rotated ?? m.created_at) < this.#now().getTime() - 365 * 86400_000;
+      this.#health.set(id, { reused: false, old });
+      if (!m.provenance || m.provenance === 'sealed') continue;
       const v = this.store.value(id);
-      const s = v.toString('utf8');
-      values.set(id, s);
-      seen.set(s, [...(seen.get(s) ?? []), id]);
-      const old = !!m.last_rotated ? Date.parse(m.last_rotated) < this.#now().getTime() - 365 * 86400_000 : Date.parse(m.created_at) < this.#now().getTime() - 365 * 86400_000;
-      this.#health.set(id, { weak: m.kind === 'login' && weak(v), reused: false, old });
+      const k = createHash('sha256').update(v).digest('hex');
       zero(v);
-      if (m.pending) { const p = this.store.value(id, 'pending'); values.set(`${id}#p`, p.toString('utf8')); zero(p); }
+      seen.set(k, [...(seen.get(k) ?? []), id]);
     }
     for (const ids of seen.values()) if (ids.length > 1) for (const id of ids) this.#health.get(id)!.reused = true;
-    this.scrubber.set(values.values());
   }
 
   #resolve(ref: unknown): string {
@@ -120,7 +130,7 @@ export class Broker {
     const m = this.#index.get(id)!;
     return {
       ref: id, aliases: m.aliases, name: m.name, kind: m.kind, origin: m.origin, username: m.username, class: m.class, per_use: m.per_use,
-      created_at: m.created_at, last_used: m.last_used, last_rotated: m.last_rotated, health: this.#health.get(id) ?? { weak: false, reused: false, old: false },
+      created_at: m.created_at, last_used: m.last_used, last_rotated: m.last_rotated, health: this.#health.get(id) ?? { reused: false, old: false },
       backend: 'nova', version: m.version, pending: m.pending, bindings: m.bindings,
     };
   }
@@ -142,11 +152,12 @@ export class Broker {
   // ---- dispatch -------------------------------------------------------------------------------
 
   async handle(role: Role, f: Frame): Promise<Answer> {
-    const task = f.task && typeof f.task === 'object' && str((f.task as { id?: unknown }).id, 80) ? { id: (f.task as { id: string }).id, title: String((f.task as { title?: unknown }).title ?? '').slice(0, 200) } : null;
-    const caller = str(f.caller, 40) ? f.caller : null;
+    // The task's id ties records and grants to it. Its title and the caller's name are core's to
+    // show; they aren't repeated back.
+    const task = f.task && typeof f.task === 'object' && str((f.task as { id?: unknown }).id, 80) ? { id: (f.task as { id: string }).id } : null;
     const rec: Entry = { verb: f.m, ref: null, target: null, scope_item: null, outcome: 'ok', tier: null, approval_id: null, task: task?.id ?? null, role };
     try {
-      const out = await this.#dispatch(role, f, rec, task, caller);
+      const out = await this.#dispatch(role, f, rec, task);
       return { ok: true, ...out, record: this.audit.write(rec) };
     } catch (e) {
       if (e instanceof Refused) {
@@ -158,13 +169,15 @@ export class Broker {
     }
   }
 
-  async #dispatch(role: Role, f: Frame, rec: Entry, task: { id: string; title: string } | null, caller: string | null): Promise<Answer> {
+  async #dispatch(role: Role, f: Frame, rec: Entry, task: { id: string } | null): Promise<Answer> {
     if (f.m === 'lock') { this.lock(); return { state: this.state() }; }
     if (f.m === 'list_refs') return this.#list(f.filter);
     if (role !== 'core' && f.m !== 'unlock') throw new Failed('Only core asks the broker for that.');
     if (f.m === 'unlock') { if (role !== 'core') throw new Failed('Only core relays an unlock.'); this.#unlock(f); return { state: this.state() }; }
+    const ctx = { rec, task, approval: f.approval as ApprovalIn | undefined };
+    // A holder-to-be pins its hub before it has a vault (B4).
+    if (f.m === 'share_scope' && f.hub !== undefined) return this.#pinHub(f, ctx);
     if (!this.store.unlocked) throw new Refused('locked');
-    const ctx = { rec, task, caller, approval: f.approval as ApprovalIn | undefined };
     switch (f.m) {
       case 'use': return this.#use(f, ctx);
       case 'create': return this.#create(f, ctx);
@@ -178,9 +191,9 @@ export class Broker {
 
   lock(): void {
     this.store.lock();
-    this.scrubber.set([]);
     this.#index.clear();
-    this.#tickets.clear();
+    for (const b of this.#staged?.items.values() ?? []) zero(b);
+    this.#staged = null;
     this.#grants.clear();
     this.#approvals.clear();
   }
@@ -189,21 +202,28 @@ export class Broker {
 
   // Either the approval checks out for exactly this action (returns its id), or the answer is a
   // challenge for it (needs_approval), or the approval is refused.
-  #approve(ctx: Ctx, action: Record<string, unknown>, card: Omit<Card, 'expires_at' | 'task' | 'caller'>, passkey = false): string {
-    const h = this.store.header!;
-    const needsPasskey = passkey && Object.keys(h.passkeys).length > 0;
+  // `bound` is the SHA-256 of a sealed value's envelope: a passkey approval signs it too, so the value
+  // is the one the person's client sealed, not one core swapped in.
+  #approve(ctx: Ctx, action: Record<string, unknown>, card: Omit<Card, 'expires_at'>, passkey = false, bound = ''): { id: string; passkey: boolean } {
+    const passkeys = this.store.header?.passkeys ?? {};
+    const needsPasskey = passkey && Object.keys(passkeys).length > 0;
     const full = { ...action, task: ctx.task?.id ?? null };
     if (!ctx.approval) {
-      const c = this.#approvals.issue(full, { ...card, task: ctx.task, caller: ctx.caller }, ctx.task?.id ?? null, needsPasskey);
+      const c = this.#approvals.issue(full, card, ctx.task?.id ?? null, needsPasskey);
       if (!c) { this.problem = 'Something keeps asking to use your credentials: approval requests are refused for now.'; throw new Refused('rate'); }
       ctx.rec.tier = card.tier;
       throw new Refused('needs_approval', undefined, { challenge: c });
     }
-    const r = this.#approvals.check(ctx.approval, full, h.passkeys, (id, n) => this.store.bumpSignCount(id, n));
-    ctx.rec.approval_id = typeof ctx.approval.id === 'string' ? ctx.approval.id.slice(0, 40) : null;
+    const r = this.#approvals.check(ctx.approval, full, passkeys, (id, n) => this.store.bumpSignCount(id, n), bound);
+    ctx.rec.approval_id = typeof ctx.approval.id === 'string' && /^ap_[0-9a-f]{24}$/.test(ctx.approval.id) ? ctx.approval.id : null;
     ctx.rec.tier = card.tier;
     if (!r.ok) throw new Refused('approval_invalid', `${REFUSALS.approval_invalid} (${r.why})`);
-    return r.id;
+    return { id: r.id, passkey: r.passkey };
+  }
+
+  #envelopeHash(src: unknown): string {
+    const e = src && typeof src === 'object' && 'sealed' in src ? (src as { sealed: unknown }).sealed : null;
+    return e ? createHash('sha256').update(canonical(e)).digest('hex') : '';
   }
 
   #sealed(e: unknown, digest: string): Buffer {
@@ -255,8 +275,11 @@ export class Broker {
   #adoptInbox(): void {
     const dir = join(this.store.dir, 'inbox');
     if (!existsSync(join(dir, 'header.json'))) return;
+    // A vault made here never adopts; a holder takes only a newer generation (store.adopt checks
+    // the signature, the pin and the vault id).
+    if (this.store.header && this.store.header.origin !== 'adopted') return;
     const header = JSON.parse(readFileSync(join(dir, 'header.json'), 'utf8')) as OutboxHeader;
-    if (this.store.header && this.store.header.id === header.id && this.store.header.gen >= header.gen && this.store.unlocked) return;
+    if (this.store.header && header.gen <= this.store.header.gen) return;
     const items: Record<string, string> = {};
     for (const n of readdirSync(join(dir, 'items')).filter((x) => x.endsWith('.json'))) items[n.slice(0, -5)] = readFileSync(join(dir, 'items', n), 'utf8');
     this.store.adopt(header, items);
@@ -284,7 +307,7 @@ export class Broker {
     const b = m.bindings.find((x) => x.kind === t.kind && x.target === t.target);
     if (!b) throw new Refused('not_bound');
     if (!BUILT.has(b.kind)) throw new Refused('wrong_target_kind', `Using a credential on a ${b.kind} target isn’t built yet (Phase 1, later PRs).`);
-    const req = (f.request ?? {}) as { method?: unknown; path?: unknown; headers?: unknown; body?: unknown; verify?: unknown; argv?: unknown };
+    const req = (f.request ?? {}) as { method?: unknown; path?: unknown; headers?: unknown; body?: unknown; verify?: unknown; argv?: unknown; cwd?: unknown; env?: unknown; stdin?: unknown; timeout_ms?: unknown };
     const which = f.version === 'pending' ? 'pending' : 'current';
     if (which === 'pending' && !m.pending) throw new Refused('out_of_scope', 'There is no pending version to use.');
     // What is asked for, in the binding's terms.
@@ -302,6 +325,7 @@ export class Broker {
     } else ctx.rec.scope_item = 'RUN';
     const argv = b.kind === 'process' ? (Array.isArray(req.argv) ? req.argv : []) : null;
     if (argv && (argv.length > 64 || !argv.every((x) => typeof x === 'string' && x.length <= 4096))) throw new Refused('out_of_scope', 'A program’s arguments are up to 64 strings.');
+    const run = b.kind === 'process' ? programRequest(req) : null;
     // Class, consent, approval.
     const key = `${id}|${b.target}`;
     // A tier-2 approval covers this request (method and path, or a program's exact arguments) for
@@ -316,18 +340,13 @@ export class Broker {
       this.#approve(ctx, { verb: 'use', ref: id, target: b.target, scope_item: ctx.rec.scope_item, class: m.class, version: which, ...(argv ? { argv } : {}) }, {
         verb: 'use', what: `Use your ${m.kind === 'login' ? 'sign-in' : 'credential'} “${m.name}” for ${b.target}`, name: m.name, origin: m.origin, username: m.username, target: b.target,
         scope: b.scope, class: m.class, tier: 2, approving: m.per_use ? 'Allows this one use.' : 'Allows uses like this one for this task.', ...(argv ? { argv: argv as string[] } : {}),
-      });
+      }, m.class === 'sensitive');
       if (!m.per_use) this.#grants.add(grant);
     } else ctx.rec.tier = 2;
     if (!this.#rates.take(`r|${id}`, USES_PER_REF_HOUR)) throw new Refused('rate');
     this.store.touch(id);
     m.last_used = this.#now().toISOString();
-    if (b.kind === 'process') {
-      const ticket = `tk_${randomBytes(24).toString('base64url')}`;
-      const [path_, sha] = b.target.split('#sha256:') as [string, string];
-      this.#tickets.set(ticket, { kind: 'run', id, version: which, target: b.target, path: path_, sha256: sha, argv: argv as string[], inject: b.inject, expires: this.#now().getTime() + TICKET_MS, redeemed: false });
-      return { outcome: { ticket, expires_at: new Date(this.#now().getTime() + TICKET_MS).toISOString() } };
-    }
+    if (b.kind === 'process') return { outcome: await this.#runProgram(b, id, which, argv as string[], run!) };
     const value = this.store.value(id, which);
     try {
       if (b.inject.how === 'verify') {
@@ -342,15 +361,52 @@ export class Broker {
       if (req.body !== undefined && req.body !== null && !body) throw new Refused('out_of_scope', 'A request body is text.');
       if (body && body.length > 1024 * 1024) throw new Refused('out_of_scope', 'A request body is up to 1 MiB.');
       inject(headers, b.inject, value, m.username, body);
-      const res = await send({ origin: b.target, method, path, headers, body, lan: !!b.lan, pin: b.pin ?? null }, this.#o.resolve);
-      const one = new Scrubber([value.toString('utf8')]);
-      return { outcome: { status: res.status, headers: one.any(res.headers), body: one.text(res.body), truncated: res.truncated } };
+      const res = await send({ origin: b.target, method, path, headers, body, lan: !!b.lan, pin: b.pin ?? null, maxBytes: MAX_OUTPUT }, this.#o.resolve);
+      // What the target sent back, scrubbed of the value this use sent (and basic auth's user:value).
+      const one = new Scrubber([value.toString('utf8'), ...(b.inject.how === 'basic' ? [`${m.username ?? ''}:${value.toString('utf8')}`] : [])]);
+      // A body cut at the cap may end in part of a value: the tail that could hold one goes too.
+      const text = res.truncated ? res.body.slice(0, Math.max(0, res.body.length - one.longest)) : res.body;
+      return { outcome: { status: res.status, headers: one.any(res.headers), body: one.text(text), truncated: res.truncated } };
     } finally { zero(value); }
+  }
+
+  // ---- programs, through the broker's own launcher (§3) -----------------------------------------
+
+  // The broker starts the launcher itself and hands it the value over a pipe: no ticket exists for
+  // anyone else to redeem. The launcher hashes the binary, runs the program and scrubs its output;
+  // the answer is the exit code and that output (up to 4 MiB each).
+  #runProgram(b: Binding, id: string, which: 'current' | 'pending', argv: string[], r: ReturnType<typeof programRequest>): Promise<Answer> {
+    if (this.#running >= 4) throw new Refused('rate', 'Four programs are running with credentials already.');
+    const [path, sha256] = b.target.split('#sha256:') as [string, string];
+    const value = this.store.value(id, which);
+    this.#running++;
+    return new Promise((ok) => {
+      // Node carries the broker's permission model into the launcher; it gets exactly what this job
+      // needs on top: to read the program it hashes, and to write under the broker's run folder.
+      const run = join(this.store.dir, 'run');
+      mkdirSync(run, { recursive: true, mode: 0o700 });
+      const child = spawn(process.execPath, [...grantsIf([`--allow-fs-read=${path}`, `--allow-fs-write=${run}/`]), '--disable-sigusr1', '--disable-warning=ExperimentalWarning', '--disable-warning=SecurityWarning', LAUNCH, 'run'], { env: { TZ: 'UTC' }, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+      const grant = JSON.stringify({ path, sha256, argv, cwd: r.cwd, env: r.env, stdin: r.stdin, inject: b.inject, tmp: run, value: value.toString('utf8') });
+      zero(value);
+      child.stdio[3]!.on('error', () => { /* the launcher stopped before reading it */ });
+      (child.stdio[3] as NodeJS.WritableStream).end(grant);
+      const take = (s: NodeJS.ReadableStream) => { const c: Buffer[] = []; let n = 0; s.on('data', (x: Buffer) => { if (n < MAX_OUTPUT) c.push(x.subarray(0, MAX_OUTPUT - n)); n += x.length; }); return () => ({ text: Buffer.concat(c).toString('utf8'), cut: n > MAX_OUTPUT }); };
+      const out = take(child.stdout!);
+      const err = take(child.stderr!);
+      const timer = setTimeout(() => { child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000).unref(); }, r.timeout);
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        this.#running--;
+        const o = out();
+        const e = err();
+        ok({ exit: code ?? (signal ? 128 : 1), stdout: o.text, stderr: e.text, truncated: o.cut || e.cut });
+      });
+    });
   }
 
   // ---- create (tier 3) ------------------------------------------------------------------------
 
-  #create(f: Frame, ctx: Ctx): Answer {
+  #create(f: Frame, ctx: Ctx): Answer | Promise<Answer> {
     const src = f.source as unknown;
     if (src && typeof src === 'object' && 'migrate' in src) return this.#migrate(src as { migrate: unknown; proposals?: unknown }, ctx);
     const mi = (f.meta ?? {}) as Record<string, unknown>;
@@ -372,8 +428,9 @@ export class Broker {
     const meta: Meta = { name: mi.name, aliases: [alias], kind: mi.kind, origin, username: str(mi.username, 300) ? mi.username : null, class: cls, per_use: mi.per_use === true, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings, policy };
     const action = { verb: 'create', name: meta.name, kind: meta.kind, origin, username: meta.username, class: cls, per_use: meta.per_use, bindings: bindings.map(cardBinding), source: kind };
     const flags = bindings.flatMap((b) => this.#flags(b.target, b.kind));
-    const approval = this.#approve(ctx, action, { verb: 'create', what: kind === 'generate' ? `Make a new password for ${origin ?? meta.name}` : `Save a credential for ${origin ?? meta.name}`, name: meta.name, origin, username: meta.username, class: cls, flags, tier: 3, approving: `Saves it in Nova Vault${bindings.length ? `, usable only on ${bindings.map((b) => b.target).join(', ')}` : ', unbound (usable nowhere until you bind it)'}. Suggested class: ${suggested}.` }, bindings.length > 0);
+    const { id: approval, passkey } = this.#approve(ctx, action, { verb: 'create', what: kind === 'generate' ? `Make a new password for ${origin ?? meta.name}` : `Save a credential for ${origin ?? meta.name}`, name: meta.name, origin, username: meta.username, class: cls, flags, tier: 3, approving: `Saves it in Nova Vault${bindings.length ? `, usable only on ${bindings.map((b) => b.target).join(', ')}` : ', unbound (usable nowhere until you bind it)'}. Suggested class: ${suggested}.` }, true, this.#envelopeHash(src));
     for (const b of meta.bindings) if (b.consent) b.consent.approval_id = approval;
+    meta.provenance = kind === 'generate' ? 'generated' : passkey ? 'sealed-passkey' : 'sealed';
     const value = kind === 'generate' ? generate(policy) : this.#sealed((src as { sealed: unknown }).sealed, this.#digest(action, ctx));
     try {
       if (!value.length || value.length > 64 * 1024) throw new Failed('A value is 1 byte to 64 KiB.');
@@ -395,8 +452,9 @@ export class Broker {
     const m = this.#index.get(id)!;
     const ch = f.change as unknown;
     if (ch === 'remove') {
-      this.#approve(ctx, { verb: 'update', ref: id, change: 'remove' }, { verb: 'update', what: `Delete “${m.name}” for good`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: 'Destroys it, and re-keys the vault so no older copy opens it.' });
+      this.#approve(ctx, { verb: 'update', ref: id, change: 'remove' }, { verb: 'update', what: `Delete “${m.name}” for good`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: 'Destroys it, and re-keys the vault so no older copy of the item files opens it.' }, true);
       this.store.remove(id);
+      this.#forgetGrants(id);
       this.#reindex();
       return { ref: id, removed: true };
     }
@@ -405,23 +463,25 @@ export class Broker {
     if (c.meta) {
       const next: Meta = { ...m };
       const mm = c.meta;
-      for (const k of Object.keys(mm)) if (!['name', 'username', 'class', 'per_use'].includes(k)) throw new Failed(`${k} isn’t metadata an update changes.`);
+      for (const k of Object.keys(mm)) if (!['name', 'username', 'class', 'per_use'].includes(k)) throw new Failed('An update changes name, username, class or per_use only.');
       if (mm.name !== undefined) { if (!str(mm.name, 200) || !NAME.test(mm.name)) throw new Failed('not a name'); next.name = mm.name; next.aliases = [...new Set([...m.aliases, `${ALIAS}${mm.name}`])]; }
       if (mm.username !== undefined) next.username = str(mm.username, 300) ? mm.username : null;
       if (mm.class !== undefined) { if (mm.class !== 'standard' && mm.class !== 'sensitive') throw new Failed('not a class'); next.class = mm.class; }
       if (mm.per_use !== undefined) next.per_use = mm.per_use === true;
-      this.#approve(ctx, { verb: 'update', ref: id, meta: { name: next.name, username: next.username, class: next.class, per_use: next.per_use } }, { verb: 'update', what: `Change the details of “${m.name}”${next.class !== m.class ? ` (class ${m.class} → ${next.class})` : ''}`, name: next.name, origin: m.origin, username: next.username, class: next.class, tier: 3, approving: 'Saves the new details.' });
+      this.#approve(ctx, { verb: 'update', ref: id, meta: { name: next.name, username: next.username, class: next.class, per_use: next.per_use } }, { verb: 'update', what: `Change the details of “${m.name}”${next.class !== m.class ? ` (class ${m.class} → ${next.class})` : ''}`, name: next.name, origin: m.origin, username: next.username, class: next.class, tier: 3, approving: 'Saves the new details.' }, true);
       this.store.setMeta(id, stripIndex(next));
-      this.#reindex();
+      this.#revoked(id);
       return this.#refMeta(id);
     }
     const kind = c.value === 'generate' ? 'generate' : c.value === 'sealed' || (c.value && typeof c.value === 'object' && 'sealed' in c.value) ? 'sealed' : null;
     if (!kind) throw new Failed('A new value comes from generate or sealed entry.');
     const action = { verb: 'update', ref: id, value: kind };
-    this.#approve(ctx, action, { verb: 'update', what: kind === 'generate' ? `Make a new value for “${m.name}”` : `Replace the value of “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: 'Replaces the value inside the broker. The site itself isn’t changed by this.' });
+    const { passkey } = this.#approve(ctx, action, { verb: 'update', what: kind === 'generate' ? `Make a new value for “${m.name}”` : `Replace the value of “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: 'Replaces the value inside the broker. The site itself isn’t changed by this.' }, true, this.#envelopeHash(c.value));
     const value = kind === 'generate' ? generate(m.policy) : this.#sealed((c.value as { sealed: unknown }).sealed, this.#digest(action, ctx));
     try {
       const version = this.store.setValue(id, value);
+      this.store.setMeta(id, stripIndex({ ...this.store.meta(id), provenance: kind === 'generate' ? 'generated' : passkey ? 'sealed-passkey' : 'sealed' }));
+      this.#forgetGrants(id);
       this.#reindex();
       return { ref: id, version };
     } finally { zero(value); }
@@ -433,13 +493,14 @@ export class Broker {
     const id = this.#resolve(f.ref);
     ctx.rec.ref = id;
     const m = this.#index.get(id)!;
-    if (f.phase === 'abandon') { if (m.pending) this.store.dropPending(id); this.#reindex(); return { ref: id, version: m.version, pending: false }; }
+    if (f.phase === 'abandon') { if (m.pending) this.store.dropPending(id); this.#forgetGrants(id); this.#reindex(); return { ref: id, version: m.version, pending: false }; }
     if (f.phase !== 'begin' && f.phase !== 'commit') throw new Failed('A rotation begins, then commits or is abandoned.');
     if (f.phase === 'commit' && !m.pending) throw new Failed('There is no rotation to commit.');
-    this.#approve(ctx, { verb: 'rotate', ref: id, phase: f.phase }, { verb: 'rotate', what: f.phase === 'begin' ? `Make a new password for “${m.name}”, kept aside until the site takes it` : `Keep the new password for “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: f.phase === 'begin' ? 'Generates it inside the broker. Typing it into the site’s change form is a separate, visible step.' : 'The new value replaces the old one.' });
+    this.#approve(ctx, { verb: 'rotate', ref: id, phase: f.phase }, { verb: 'rotate', what: f.phase === 'begin' ? `Make a new password for “${m.name}”, kept aside until the site takes it` : `Keep the new password for “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: f.phase === 'begin' ? 'Generates it inside the broker. Typing it into the site’s change form is a separate, visible step.' : 'The new value replaces the old one.' }, true);
+    this.#forgetGrants(id);
     let version: number;
     if (f.phase === 'begin') { const v = generate(m.policy); try { version = this.store.setPending(id, v); } finally { zero(v); } }
-    else version = this.store.commitPending(id);
+    else { version = this.store.commitPending(id); this.store.setMeta(id, stripIndex({ ...this.store.meta(id), provenance: 'generated' })); }
     this.#reindex();
     return { ref: id, version, pending: f.phase === 'begin' };
   }
@@ -494,8 +555,7 @@ export class Broker {
       ctx.rec.target = t;
       const next = { ...m, bindings: r.consent_only === true ? m.bindings.map((b) => (b.target === t ? { ...b, consent: null } : b)) : m.bindings.filter((b) => b.target !== t) };
       this.store.setMeta(id, stripIndex(next));
-      for (const g of [...this.#grants]) if (g.startsWith(`${id}|${t}|`)) this.#grants.delete(g);
-      this.#reindex();
+      this.#revoked(id);
       return { ref: id, bindings: this.#index.get(id)!.bindings };
     }
     const b = this.#binding(f.add);
@@ -503,17 +563,39 @@ export class Broker {
     if (b.consent && m.class === 'sensitive') throw new Refused('class_policy', CONSENT_SENSITIVE);
     const flags = this.#flags(b.target, b.kind);
     const before = m.bindings.find((x) => x.target === b.target);
-    const id_ = this.#approve(ctx, { verb: 'bind', ref: id, binding: cardBinding(b) }, {
+    const { id: id_ } = this.#approve(ctx, { verb: 'bind', ref: id, binding: cardBinding(b) }, {
       verb: 'bind', what: `${before ? 'Change' : 'Allow'} “${m.name}” ${before ? 'on' : 'to be used on'} ${b.target}`, name: m.name, origin: m.origin, username: m.username, target: b.target, scope: b.scope, class: m.class, flags, tier: 3,
       approving: `${b.consent ? `Standing consent: requests inside ${b.consent.scope.methods.join(', ')} ${b.consent.scope.paths.join(', ')} go ahead without asking, up to ${b.consent.rate_per_hour} an hour. ` : 'Every use asks first. '}Nothing else is covered: no other host, subdomain or port.`,
     }, true);
     if (b.consent) b.consent.approval_id = id_;
     this.store.setMeta(id, stripIndex({ ...m, bindings: [...m.bindings.filter((x) => x.target !== b.target), b] }));
+    this.#forgetGrants(id);
     this.#reindex();
     return { ref: id, bindings: this.#index.get(id)!.bindings };
   }
 
+  // A revocation (a binding removed, a consent withdrawn, details changed) re-keys the vault, so an
+  // item file rolled back to before it doesn't open (S5). Grants for the item go too.
+  #revoked(id: string): void {
+    this.store.rotateRoot();
+    this.#forgetGrants(id);
+    this.#reindex();
+  }
+  #forgetGrants(id: string): void { for (const g of [...this.#grants]) if (g.startsWith(`${id}|`)) this.#grants.delete(g); }
+
   // ---- share_scope (tier 3) -------------------------------------------------------------------
+
+  // On a device that will hold a hub's vault: the hub broker's signing key, pinned at tier 3 before
+  // anything is adopted (B4). Only before this device holds a vault.
+  #pinHub(f: Frame, ctx: Ctx): Answer {
+    const h = (f.hub ?? {}) as { signer?: unknown; name?: unknown };
+    if (!str(h.signer, 60) || !/^[A-Za-z0-9+/=]+$/.test(h.signer) || !str(h.name, 80)) throw new Failed('A hub is pinned by its broker’s signing key and a name.');
+    if (this.store.exists) throw new Failed('This device already holds a vault; it can’t be pinned to a hub.');
+    const fp = createHash('sha256').update(h.signer).digest('hex').slice(0, 16);
+    this.#approve(ctx, { verb: 'share_scope', hub: h.signer, name: h.name }, { verb: 'share_scope', what: `Hold the vault of the hub “${h.name}” (key ${fp})`, tier: 3, approving: 'This device will take that hub’s vault, and only that hub’s, from now on. Check the key matches the one the hub shows.' }, true);
+    this.store.pinHub(h.signer, h.name);
+    return { hub: { signer: fp } };
+  }
 
   #share(f: Frame, ctx: Ctx): Answer {
     if (f.backend !== undefined) throw new Refused('wrong_target_kind', 'External password managers come in Phase 2; Nova Vault is the only backend now.');
@@ -534,66 +616,100 @@ export class Broker {
 
   // ---- migration from vault.ts (§10, "Moving from today's vault") ------------------------------
 
-  // Three steps, so core never opens the old vault while it holds credentials:
-  //  - stage: a ticket for the launcher, which reads the old vault itself and streams it here;
-  //  - commit: each staged entry becomes an item, unbound (usable nowhere, so no capability is
-  //    granted), with its old name as an alias; every item is read back; a finish ticket lets the
-  //    launcher take what moved out of the old vault. Idempotent by name: an item already moved
-  //    with the same value counts as moved, one that differs stays in the old vault and is said.
-  //  - propose: one tier-3 card listing every moved item with its proposed binding and class,
-  //    metadata only; approving it binds them. Items left out stay unbound.
-  #migrate(src: { migrate: unknown; proposals?: unknown }, ctx: Ctx): Answer {
-    if (src.migrate === 'stage') {
-      const ticket = `mg_${randomBytes(24).toString('base64url')}`;
-      this.#tickets.set(ticket, { kind: 'migrate', expires: this.#now().getTime() + 10 * 60_000, redeemed: false, staged: new Map(), done: false });
-      return { outcome: { ticket, expires_at: new Date(this.#now().getTime() + 10 * 60_000).toISOString() } };
-    }
+  // Core never opens the old vault, and no answer depends on a value core chose (B2):
+  //  - stage: the broker starts its own launcher on its own home (never a folder core names), which
+  //    reads vault.ts's file and key and Era 2's Gmail files, and sends them to the broker by pipe.
+  //    The answer is a count.
+  //  - commit (tier 3, one card of names and kinds): each staged entry whose name is free becomes an
+  //    unbound item (usable nowhere), marked as migrated from that old vault, and is read back. A
+  //    name already taken by an item migrated from the same old vault counts as moved (a resumed
+  //    run); a name taken by any other item stays in the old vault. Neither looks at a value. Then
+  //    the launcher takes what moved out of the old vault.
+  //  - propose (tier 3): one card of bindings and classes, metadata only.
+  async #migrate(src: { migrate: unknown; proposals?: unknown }, ctx: Ctx): Promise<Answer> {
     if (src.migrate === 'propose') return this.#propose(src.proposals, ctx);
-    if (src.migrate !== 'commit') throw new Failed('A migration stages, commits, then proposes bindings.');
-    const tk = [...this.#tickets.entries()].find(([, t]) => t.kind === 'migrate' && t.done);
-    if (!tk) throw new Failed('Nothing is staged: run the migrate launcher first.');
-    const [tname, t] = tk;
-    this.#tickets.delete(tname);
-    const migrated: string[] = [];
-    const skipped: string[] = [];
-    const moved: string[] = [];
-    for (const [name, g] of groupStaged(t.staged!)) {
-      const alias = `${ALIAS}${name}`;
-      let id = [...this.#index.entries()].find(([, x]) => x.aliases.includes(alias))?.[0] ?? null;
-      if (!id) {
-        const meta: Meta = { name, aliases: [alias], kind: g.kind, origin: g.origin, username: g.username, class: suggestClass(g.origin, g.kind), per_use: false, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings: [], policy: DEFAULT_POLICY };
-        id = this.store.add(meta, g.value).id;
-        if (g.pending) this.store.setPending(id, g.pending);
-        migrated.push(name);
+    const home = dirname(this.store.dir);
+    if (src.migrate === 'stage') {
+      const out = await this.#launch(['migrate', home], null);
+      const items = new Map<string, Buffer>();
+      let vaultId: string | null = null;
+      for (const line of out.split('\n')) {
+        if (!line) continue;
+        let x: { vault_id?: unknown; name?: unknown; value?: unknown };
+        try { x = JSON.parse(line); } catch { continue; }
+        if ('vault_id' in x) { vaultId = typeof x.vault_id === 'string' ? x.vault_id : null; continue; }
+        if (items.size < MAX_STAGED && str(x.name, 200) && NAME.test(x.name) && typeof x.value === 'string' && x.value.length > 0 && x.value.length <= 64 * 1024) items.set(x.name, Buffer.from(x.value, 'utf8'));
       }
-      // Read-back, from disk: only what opens with the staged value counts as moved.
-      const v = this.store.value(id);
-      if (sameBytes(v, g.value)) moved.push(...g.names); else skipped.push(name);
-      zero(v);
+      for (const b of this.#staged?.items.values() ?? []) zero(b);
+      this.#staged = { vaultId, items };
+      return { outcome: { staged: items.size } };
     }
-    for (const b of t.staged!.values()) zero(b);
+    if (src.migrate !== 'commit') throw new Failed('A migration stages, commits, then proposes bindings.');
+    const st = this.#staged;
+    if (!st) throw new Failed('Nothing is staged.');
+    const from = st.vaultId ?? 'era2';
+    const plan = [...groupStaged(st.items)].map(([name, g]) => {
+      const owner = [...this.#index.values()].find((x) => x.aliases.includes(`${ALIAS}${name}`));
+      return { name, g, status: !owner ? 'move' : owner.migrated_from === from ? 'moved' : 'kept' };
+    });
+    this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ name: x.name, kind: x.g.kind, status: x.status })) }, { verb: 'create', what: `Move ${plan.filter((x) => x.status === 'move').length} credential(s) from the old vault into Nova Vault`, tier: 3, items: plan.map((x) => ({ name: x.name, kind: x.g.kind, origin: x.g.origin, status: x.status })), approving: 'Each is moved inside the broker, unbound (usable nowhere until you bind it), read back, and only then removed from the old vault. A name already taken by another credential stays in the old vault.' });
+    this.#staged = null;
+    const moved: string[] = [];
+    let readBack = true;
+    for (const x of plan) {
+      if (x.status === 'kept') continue;
+      if (x.status === 'move') {
+        const meta: Meta = { name: x.name, aliases: [`${ALIAS}${x.name}`], kind: x.g.kind, origin: x.g.origin, username: x.g.username, class: suggestClass(x.g.origin, x.g.kind), per_use: false, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings: [], policy: DEFAULT_POLICY, provenance: 'migrated', migrated_from: from };
+        const { id } = this.store.add(meta, x.g.value);
+        if (x.g.pending) this.store.setPending(id, x.g.pending);
+        const v = this.store.value(id);
+        if (!sameBytes(v, x.g.value)) readBack = false;
+        zero(v);
+      }
+      moved.push(...x.g.names);
+    }
+    for (const b of st.items.values()) zero(b);
     this.#reindex();
     ctx.rec.scope_item = `moved ${moved.length}`;
-    const finish = `mf_${randomBytes(24).toString('base64url')}`;
-    this.#tickets.set(finish, { kind: 'finish', expires: this.#now().getTime() + 10 * 60_000, redeemed: false, migrated: moved });
-    return { outcome: { migrated, skipped, read_back: skipped.length === 0, ticket: finish } };
+    if (!readBack) throw new Failed('An item didn’t read back from the new store; nothing was removed from the old vault.');
+    const fin = await this.#launch(['finish', home], JSON.stringify({ vault_id: st.vaultId, names: moved }));
+    let removed = 0;
+    try { removed = Number(JSON.parse(fin.trim().split('\n').at(-1) ?? '{}').removed) || 0; } catch { removed = 0; }
+    return { outcome: { migrated: plan.filter((x) => x.status === 'move').map((x) => x.name), moved: moved.length, kept: plan.filter((x) => x.status === 'kept').map((x) => x.name), read_back: true, removed } };
+  }
+
+  // The launcher for a migration step: started by the broker, on its own home, output by pipe, with
+  // the old vault's folders added to what it may read (and, to finish, write).
+  #launch(args: string[], input: string | null): Promise<string> {
+    const home = args[1]!;
+    const dirs = [join(home, 'vault'), join(home, 'connectors')];
+    const grants = grantsIf([...dirs.map((d) => `--allow-fs-read=${d}/`), ...(args[0] === 'finish' ? dirs.map((d) => `--allow-fs-write=${d}/`) : [])]);
+    return new Promise((ok, fail) => {
+      const child = spawn(process.execPath, [...grants, '--disable-sigusr1', '--disable-warning=ExperimentalWarning', LAUNCH, ...args], { env: { TZ: 'UTC', ...(this.#o.keyMode === 'file' ? { NOVA_VAULT_KEY: 'file' } : {}) }, stdio: ['ignore', 'pipe', 'ignore', 'pipe'] });
+      child.stdio[3]!.on('error', () => { /* the launcher stopped before reading it */ });
+      (child.stdio[3] as NodeJS.WritableStream).end(input ?? '');
+      const chunks: Buffer[] = [];
+      let n = 0;
+      child.stdout!.on('data', (x: Buffer) => { n += x.length; if (n <= 80 * 1024 * 1024) chunks.push(x); });
+      child.on('close', (code) => (code === 0 ? ok(Buffer.concat(chunks).toString('utf8')) : fail(new Failed('The old vault couldn’t be read or changed; nothing was moved or removed.'))));
+    });
   }
 
   #propose(p: unknown, ctx: Ctx): Answer {
     const proposals = (p && typeof p === 'object' ? p : {}) as Record<string, { origin?: unknown; class?: unknown; bind?: unknown }>;
     const plan = Object.entries(proposals).slice(0, 200).map(([name, x]) => {
       const id = [...this.#index.entries()].find(([, m]) => m.aliases.includes(`${ALIAS}${name}`))?.[0];
-      if (!id) throw new Refused('unknown_ref', `“${name}” isn’t a moved item.`);
+      if (!id) throw new Refused('unknown_ref');
       const m = this.#index.get(id)!;
       let origin = m.origin;
-      if (x.origin !== undefined && x.origin !== null) { try { origin = canonicalTarget({ kind: 'http', origin: x.origin }).target; } catch { throw new Failed(`${name}: the site isn’t a canonical https origin.`); } }
+      if (x.origin !== undefined && x.origin !== null) { try { origin = canonicalTarget({ kind: 'http', origin: x.origin }).target; } catch { throw new Failed('A proposed site isn’t a canonical https origin.'); } }
       const cls = x.class === 'standard' || x.class === 'sensitive' ? x.class : suggestClass(origin, m.kind);
       const bindings = Array.isArray(x.bind) ? x.bind.slice(0, 5).map((b) => this.#binding(b)) : [];
-      if (cls === 'sensitive' && bindings.some((b) => b.consent)) throw new Refused('class_policy', `${name}: ${CONSENT_SENSITIVE}`);
+      if (cls === 'sensitive' && bindings.some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
       return { id, m, origin, cls, bindings };
     });
     const items = plan.map((x) => ({ name: x.m.name, kind: x.m.kind, origin: x.origin, username: x.m.username, class: x.cls, target: x.bindings.map((b) => b.target).join(', ') || 'unbound', flags: x.bindings.flatMap((b) => this.#flags(b.target, b.kind)) }));
-    const approval = this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ ref: x.id, origin: x.origin, class: x.cls, bindings: x.bindings.map(cardBinding) })) }, { verb: 'create', what: `Bind ${plan.length} credential(s) moved from the old vault`, tier: 3, items, approving: 'Each is usable only on the target shown. Items left unbound can’t be used until you bind them.' }, true);
+    const { id: approval } = this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ ref: x.id, origin: x.origin, class: x.cls, bindings: x.bindings.map(cardBinding) })) }, { verb: 'create', what: `Bind ${plan.length} credential(s) moved from the old vault`, tier: 3, items, approving: 'Each is usable only on the target shown. Items left unbound can’t be used until you bind them.' }, true);
     for (const x of plan) {
       for (const b of x.bindings) if (b.consent) b.consent.approval_id = approval;
       this.store.setMeta(x.id, stripIndex({ ...x.m, origin: x.origin, class: x.cls, bindings: [...x.m.bindings.filter((b) => !x.bindings.some((n) => n.target === b.target)), ...x.bindings] }));
@@ -601,39 +717,27 @@ export class Broker {
     this.#reindex();
     return { refs: plan.map((x) => this.#refMeta(x.id)) };
   }
-
-  // ---- the launcher's messages (broker code on the other end; §3) ------------------------------
-
-  // Redeeming a ticket. A run ticket gives the launcher the value to start the program with, after
-  // the program's own SHA-256 (hashed by the launcher) matches the binding. A ticket redeemed twice
-  // is refused, and the refusal is an alarm in the audit log.
-  launcher(f: Frame): Answer {
-    // A redeemed ticket is kept until it expires, so a second redemption is seen as an alarm.
-    for (const [k, x] of this.#tickets) if (x.expires < this.#now().getTime() - TICKET_MS) this.#tickets.delete(k);
-    const name = typeof f.ticket === 'string' ? f.ticket : '';
-    const t = this.#tickets.get(name);
-    const rec: Entry = { verb: f.m, ref: t?.id ?? null, target: t?.target ?? null, scope_item: null, outcome: 'ok', tier: null, approval_id: null, task: null, role: 'launcher' };
-    const refuse = (code: Refusal, words: string) => { rec.outcome = `refused:${code}`; return { refused: code, words, record: this.audit.write(rec) }; };
-    if (!t || t.expires < this.#now().getTime()) return refuse('approval_invalid', 'That ticket isn’t valid (expired, or never issued).');
-    if (f.m === 'migrate_item') {
-      if (t.kind !== 'migrate' || t.done) return refuse('approval_invalid', 'Not a migration ticket.');
-      if (f.done === true) { t.done = true; rec.outcome = `ok:staged ${t.staged!.size}`; this.audit.write(rec); return { ok: true, staged: t.staged!.size }; }
-      if (!str(f.name, 200) || !NAME.test(f.name) || typeof f.value !== 'string' || f.value.length > 64 * 1024 || OWN_KEYS.some((r) => r.test(f.name as string))) return refuse('out_of_scope', 'Not an item the migration moves.');
-      t.staged!.set(f.name, Buffer.from(f.value, 'utf8'));
-      return { ok: true };
-    }
-    if (t.redeemed) { rec.outcome = 'refused:approval_invalid:alarm'; this.problem = 'A credential ticket was redeemed twice: something may have copied it.'; this.audit.write(rec); return { refused: 'approval_invalid', words: 'That ticket was already used. This is recorded as an alarm.' }; }
-    t.redeemed = true;
-    if (t.kind === 'finish') { this.audit.write(rec); return { ok: true, migrated: t.migrated }; }
-    if (t.kind !== 'run' || f.path !== t.path || f.sha256 !== t.sha256) { rec.outcome = 'refused:not_bound'; this.audit.write(rec); return { refused: 'not_bound', words: 'The program isn’t the one this credential is bound to (its SHA-256 differs).' }; }
-    if (!this.store.unlocked) return refuse('locked', REFUSALS.locked);
-    const value = this.store.value(t.id!, t.version);
-    this.audit.write(rec);
-    try { return { ok: true, grant: { path: t.path, argv: t.argv, inject: t.inject, value: value.toString('utf8') } }; } finally { zero(value); }
-  }
 }
 
-interface Ctx { rec: Entry; task: { id: string; title: string } | null; caller: string | null; approval: ApprovalIn | undefined }
+interface Ctx { rec: Entry; task: { id: string } | null; approval: ApprovalIn | undefined }
+
+// A program's request from core: its arguments (checked by #use), a working folder, environment
+// variables from a narrow allow-list, stdin, and a time limit. Anything else is refused.
+function programRequest(req: { cwd?: unknown; env?: unknown; stdin?: unknown; timeout_ms?: unknown }) {
+  if (req.cwd !== undefined && (typeof req.cwd !== 'string' || !req.cwd.startsWith('/') || req.cwd.length > 500)) throw new Refused('out_of_scope', 'A working folder is an absolute path.');
+  const env: Record<string, string> = {};
+  if (req.env !== undefined) {
+    if (!req.env || typeof req.env !== 'object' || Object.keys(req.env).length > 32) throw new Refused('out_of_scope', 'A program’s environment is a small map.');
+    for (const [k, v] of Object.entries(req.env)) {
+      if (!PROGRAM_ENV.test(k) || typeof v !== 'string' || v.length > 4096) throw new Refused('out_of_scope', 'Only plain settings go into a program’s environment (no loader, interpreter or configuration paths).');
+      env[k] = v;
+    }
+  }
+  if (req.stdin !== undefined && (typeof req.stdin !== 'string' || req.stdin.length > 1024 * 1024)) throw new Refused('out_of_scope', 'A program’s input is text, up to 1 MiB.');
+  const t = req.timeout_ms === undefined ? 600_000 : Number(req.timeout_ms);
+  if (!Number.isInteger(t) || t < 1000 || t > 3_600_000) throw new Refused('out_of_scope', 'A program’s time limit is 1 second to 1 hour.');
+  return { cwd: req.cwd as string | undefined, env, stdin: typeof req.stdin === 'string' ? req.stdin : '', timeout: t };
+}
 
 // An unlock factor is sealed to the vault, the factor and this boot (seal.ts, unlockDigest).
 const unlockDigest = (vid: string, factor: string, boot: string) => createHash('sha256').update(`nova-broker-unlock|${vid}|${factor}|${boot}`).digest('hex');
@@ -647,7 +751,7 @@ function callerHeaders(h: unknown, inj: Inject): Record<string, string> {
   if (h === undefined || h === null) return out;
   if (typeof h !== 'object' || Array.isArray(h) || Object.keys(h).length > 32) throw new Refused('out_of_scope', 'Request headers are a small map of names to text.');
   for (const [k, v] of Object.entries(h)) {
-    if (!/^[A-Za-z0-9-]{1,60}$/.test(k) || typeof v !== 'string' || v.length > 4096 || /[\r\n]/.test(v) || REFUSED_HEADERS.test(k) || (inj.header && k.toLowerCase() === inj.header.toLowerCase())) throw new Refused('out_of_scope', `The header “${k}” isn’t one a caller sets.`);
+    if (!/^[A-Za-z0-9-]{1,60}$/.test(k) || typeof v !== 'string' || v.length > 4096 || /[\r\n]/.test(v) || REFUSED_HEADERS.test(k) || (inj.header && k.toLowerCase() === inj.header.toLowerCase())) throw new Refused('out_of_scope', 'A request carries a header a caller doesn’t set.');
     out[k.toLowerCase()] = v;
   }
   return out;

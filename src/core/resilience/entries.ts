@@ -16,6 +16,7 @@
 //  - extensions/                              extensions.ts, changes/pipeline.ts
 //  - changes/                                 changes/pipeline.ts (released changes)
 //  - vault/                                   vault.ts
+//  - broker/                                  src/broker (the Credential Broker's store)
 //  - mesh/                                    mesh/identity.ts, mesh/replica.ts (role.json), mesh/promote.ts
 //  - logs/                                    core/index.ts (log.ts)
 //  - workers/                                 core/index.ts, browser/evidence.ts, providers/registry.ts, changes/*
@@ -35,7 +36,7 @@ export const NOVA_ENTRIES: readonly string[] = [
   'nova.db', 'nova.db-wal', 'nova.db-shm', 'nova.db-journal',
   'AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md',
   'MEMORY.md', 'memory', 'sessions', 'schedules', 'skills', 'permissions.md', 'connectors',
-  'workspace', 'extensions', 'changes', 'vault', 'mesh',
+  'workspace', 'extensions', 'changes', 'vault', 'broker', 'mesh',
   'logs', 'workers', 'kept', 'exports', 'backups', 'checkpoints', 'nova.pid',
   '.git', '.gitignore',
   'factory-reset.json', 'reset-report.json',

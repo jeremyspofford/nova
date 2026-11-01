@@ -151,7 +151,10 @@ test('holder sync: the standby opens the hub’s vault with its own wrap; the ou
   const items = Object.fromEntries(readdirSync(join(hubDir, 'items')).map((n) => [n.slice(0, -5), readFileSync(join(hubDir, 'items', n), 'utf8')]));
   const travelled = JSON.stringify(out) + Object.values(items).join('');
   for (const v of [C('ha'), PASS, Buffer.alloc(32, 7).toString('base64'), readFileSync(join(hubDir, 'device.key')).toString('base64'), readFileSync(join(sbDir, 'device.key')).toString('base64')]) assert.equal(anyForm(travelled, v), null);
+  assert.throws(() => sb.adopt(out, items), /isn’t enrolled/, 'nothing is adopted before the tier-3 pin');
+  sb.pinHub(out.signer, 'hub');
   sb.adopt(out, items);
+  assert.throws(() => hub.adopt(out, items), /made here/, 'a vault made on a device never takes another');
   assert.equal(sb.value(a.id).toString(), C('ha'));
   // The standby sealed the root key to the person's factors itself: the passphrase opens it there.
   sb.lock();
@@ -162,7 +165,9 @@ test('holder sync: the standby opens the hub’s vault with its own wrap; the ou
   sb2.unlock({ kind: 'device' });
   // A device that isn't a holder can't adopt it.
   const other = store();
-  assert.throws(() => other.adopt(out, items), /no wrap for this device/);
+  assert.throws(() => other.adopt(out, items), /isn’t enrolled/, 'a device that isn’t pinned to this hub');
+  other.pinHub(out.signer, 'hub');
+  assert.throws(() => other.adopt(out, items), /no wrap for this device/, 'pinned, but not a holder');
   // A forged vault, sealed to the standby's public key by anyone who has it (core, say): its
   // header isn't signed by the hub the standby pinned, so it isn't adopted, unsigned or not.
   const forger = store();

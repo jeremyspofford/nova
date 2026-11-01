@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Broker } from '../../src/broker/broker.ts';
 import { KDF_FLOOR, type Kdf } from '../../src/broker/crypto.ts';
-import { checkAnswer } from '../../src/broker/protocol.ts';
+import { canonical, checkAnswer } from '../../src/broker/protocol.ts';
 import { challengeBytes } from '../../src/broker/policy.ts';
 import { sealValue, unlockDigest } from '../../src/broker/seal.ts';
 import type { Resolver } from '../../src/broker/http.ts';
@@ -78,8 +78,10 @@ export class Person {
     if (!a.ok) throw new Error(`setup failed: ${JSON.stringify(a)}`);
     return a;
   }
-  approval(ch: A, mode: 'core' | 'passkey' = this.passkey ? 'passkey' : 'core') {
-    return mode === 'passkey' ? { id: ch.id, digest: ch.digest, mode, ...this.passkey!.assert(challengeBytes(ch.id, ch.digest)) } : { id: ch.id, digest: ch.digest, mode };
+  // A passkey signs the approval id, the digest, and the SHA-256 of any sealed envelope it carries.
+  approval(ch: A, mode: 'core' | 'passkey' = this.passkey ? 'passkey' : 'core', envelope: unknown = null) {
+    const bound = envelope ? createHash('sha256').update(canonical(envelope)).digest('hex') : '';
+    return mode === 'passkey' ? { id: ch.id, digest: ch.digest, mode, ...this.passkey!.assert(challengeBytes(ch.id, ch.digest, bound)) } : { id: ch.id, digest: ch.digest, mode };
   }
   // Calls once, expects needs_approval, approves the card (sealing `value` to it if given), and
   // calls again exactly as before.
@@ -91,7 +93,7 @@ export class Person {
     if (o.seal !== undefined) {
       const st = await this.state();
       const env = await sealValue(st.entry_key, ch.digest, o.seal);
-      next = o.sealAt ? o.sealAt(next, env) : next;
+      next = o.sealAt ? o.sealAt({ ...f, approval: this.approval(ch, o.mode, env) }, env) : next;
     }
     return this.call(m, next);
   }
@@ -150,9 +152,6 @@ export function coreSim(socket: string, token: string) {
   return {
     child, answers, ready,
     call: (async (m: string, f: A = {}) => { await ready; const a = await ask('call', { m, f }); answers.push(a); return a; }) as Call,
-    stage: (home: string) => ask('stage', { home }),
-    finish: (home: string, ticket: string) => ask('finish', { home, ticket }),
-    run: (ticket: string, program: string) => ask('run', { ticket, program }) as Promise<{ code: number; stdout: string; stderr: string }>,
     heap: (path: string) => ask('heap', { path }) as Promise<string>,
     stop: () => { child.kill(); },
   };

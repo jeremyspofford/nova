@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { ERRORS, FIELDS, LAUNCHER, MESSAGES, REFUSALS, VERBS } from '../../src/broker/protocol.ts';
+import { ERRORS, FIELDS, MESSAGES, REFUSALS, VERBS } from '../../src/broker/protocol.ts';
 import { BrokerClient } from '../../src/core/broker/client.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
@@ -50,11 +50,10 @@ test('no network surface in the source: no HTTP server, nothing listens on a por
   for (const f of walk(BROKER).filter((x) => !x.endsWith('http.ts') && !x.endsWith('launch.ts'))) assert.ok(!/from 'node:(tls|https|http|dns)/.test(readFileSync(f, 'utf8')), `${relative(ROOT, f)} reaches the network`);
 });
 
-test('the fixed protocol: seven verbs, three messages, two launcher messages, a fixed refusal list', () => {
+test('the fixed protocol: seven verbs, three messages, a fixed refusal list', () => {
   assert.deepEqual([...VERBS], ['list_refs', 'use', 'create', 'update', 'rotate', 'bind', 'share_scope']);
   assert.deepEqual([...MESSAGES], ['hello', 'unlock', 'lock']);
-  assert.deepEqual([...LAUNCHER], ['redeem', 'migrate_item']);
-  assert.deepEqual(Object.keys(FIELDS).sort(), [...VERBS, ...MESSAGES, ...LAUNCHER].sort());
+  assert.deepEqual(Object.keys(FIELDS).sort(), [...VERBS, ...MESSAGES].sort(), 'nothing else: the launcher is the broker’s child, reached by pipe');
   assert.deepEqual(Object.keys(REFUSALS), ['not_bound', 'out_of_scope', 'needs_approval', 'approval_invalid', 'locked', 'class_policy', 'rate', 'unknown_ref', 'wrong_target_kind']);
   for (const w of [...Object.values(REFUSALS), ...Object.values(ERRORS)]) assert.ok(w.length > 10 && !/undefined|\$\{/.test(w));
   // The honest-claims rule in the broker's own words: nothing claims more than the ADR's sentence.
@@ -64,5 +63,5 @@ test('the fixed protocol: seven verbs, three messages, two launcher messages, a 
 test('the client has no method that returns a value: no get, resolve, reveal or export', () => {
   const methods = Object.getOwnPropertyNames(BrokerClient.prototype);
   for (const m of methods) assert.ok(!/^(get|resolve|reveal|value|export|read|decrypt|secret|show)/i.test(m), `BrokerClient.${m}`);
-  assert.deepEqual(methods.filter((m) => m !== 'constructor').sort(), ['bind', 'call', 'close', 'create', 'launch', 'listRefs', 'lock', 'migrateCommit', 'migrateFinish', 'migratePropose', 'migrateStage', 'rotate', 'shareScope', 'state', 'unlock', 'update', 'use'].sort());
+  assert.deepEqual(methods.filter((m) => m !== 'constructor').sort(), ['bind', 'call', 'close', 'create', 'listRefs', 'lock', 'migrateCommit', 'migratePropose', 'migrateStage', 'rotate', 'shareScope', 'state', 'unlock', 'update', 'use'].sort());
 });

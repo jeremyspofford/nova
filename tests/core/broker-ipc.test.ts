@@ -5,7 +5,7 @@
 // nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, readlinkSync, statSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { join } from 'node:path';
 import { ANSWER_KEYS, VERBS } from '../../src/broker/protocol.ts';
@@ -59,7 +59,7 @@ test('the process: permission model, empty environment, a 0600 socket in a 0700 
   const b = await startBroker(dir, { keyMode: 'file' });
   try {
     assert.ok(b.child.spawnargs.includes('--permission') && b.child.spawnargs.includes('--disable-sigusr1'));
-    assert.ok(!b.child.spawnargs.some((x) => /--inspect|--allow-child-process|--allow-worker|--allow-addons/.test(x)), 'no inspector; no child processes with a file key store');
+    assert.ok(!b.child.spawnargs.some((x) => /--inspect|--allow-worker|--allow-addons|--allow-fs-read=\*|--allow-fs-write=\*/.test(x)), 'no inspector, workers or addons; no file-system wildcard');
     assert.equal(statSync(join(dir, 'run')).mode & 0o777, 0o700);
     assert.equal(statSync(b.socket).mode & 0o777, 0o600);
     assert.equal(statSync(dir).mode & 0o777, 0o700);
@@ -78,10 +78,10 @@ test('the protocol: hello with a token, seven verbs and three messages; everythi
   try {
     const c = raw(b.socket);
     assert.equal((await c.ask({ id: 1, m: 'list_refs' })).error, 'unauthenticated');
-    assert.equal((await c.ask({ id: 2, m: 'redeem', ticket: 'tk_made_up' })).refused, 'approval_invalid', 'a connection without hello may only try a ticket');
+    assert.equal((await c.ask({ id: 2, m: 'redeem', ticket: 'tk_made_up' })).error, 'unknown_message', 'there are no launcher messages on this socket');
     assert.equal((await c.ask({ id: 3, m: 'hello', token: b.tokens.supervisor })).role, 'supervisor');
     assert.equal((await c.ask({ id: 4, m: 'hello', token: b.tokens.core })).error, 'not_allowed', 'one role per connection');
-    assert.equal((await c.ask({ id: 5, m: 'redeem', ticket: 'x' })).error, 'not_allowed', 'a token connection can’t redeem');
+    assert.equal((await c.ask({ id: 5, m: 'migrate_item', ticket: 'x' })).error, 'unknown_message');
     assert.equal((await c.ask({ id: 6, m: 'create', meta: {} })).error, 'failed', 'the supervisor lists and locks only');
     // Fuzzed verb names.
     const names = ['get', 'read', 'reveal', 'show', 'export', 'dump', 'decrypt', 'value', 'get_value', 'resolve', 'list', 'eval', 'exec', 'shell', 'sign', 'encrypt', 'USE', 'Use', 'use ', ' use', 'list_refs\u0000', '__proto__', 'constructor', 'toString', 'hasOwnProperty', 'prototype', '', 'unlock_and_get', 'redeem_value', ...Array.from({ length: 40 }, (_, i) => Buffer.from(`${i}-fuzz-${Math.random()}`).toString('base64url').slice(0, 3 + (i % 12)))];
@@ -140,35 +140,33 @@ test('no network surface: no inet listener after every verb; a use aimed at an u
   } finally { cl.close(); b.child.kill(); await site.close(); await other.close(); }
 });
 
-test('the launcher: a program whose binary or path isn’t the bound one gets nothing; the ticket lives 60 seconds', { timeout: 60_000 }, async () => {
+test('the launcher: the broker runs the bound program itself; a swapped binary gets nothing; no loader variables from core', { timeout: 60_000 }, async () => {
   const dir = join(tmp(), 'broker');
   const b = await startBroker(dir, { keyMode: 'file' });
   const cl = new BrokerClient({ socket: b.socket, token: b.tokens.core });
   const p = new Person((m, f) => cl.call(m, f ?? {}));
   try {
     await p.setup();
-    const program = process.execPath;
+    const program = join(tmp(), 'fake-tofu.sh');
+    writeFileSync(program, '#!/bin/sh\necho "tofu sees $TF_VAR_X [$NODE_OPTIONS] $TF_IN_AUTOMATION"\nexit 3\n', { mode: 0o755 });
     const sha256 = fileSha256(program);
-    const made = await p.approve('create', { meta: { name: 'infra/p/TF_VAR_X', kind: 'secret', class: 'standard' }, source: 'sealed', bind: [{ target: { kind: 'process', path: program, sha256 }, inject: { how: 'env', env: 'TF_VAR_X' }, consent: {} }] }, { seal: C('launcher'), sealAt: (f, e) => ({ ...f, source: { sealed: e } }) });
-    const use = () => cl.use(made.ref, { kind: 'process', path: program, sha256 }, { argv: ['-e', 'console.log(process.env.TF_VAR_X)'] });
-    // Another binary at another path, claiming the ticket.
-    const sh = ['/bin/sh', '/usr/bin/sh'].find((x) => existsSync(x))!;
-    const t1 = ((await use()) as A).outcome.ticket;
-    const wrong = cl.launch(t1, sh);
-    let out = '';
-    wrong.stdout!.on('data', (x) => { out += x; });
-    wrong.stderr!.on('data', (x) => { out += x; });
-    assert.equal(await new Promise((ok) => wrong.on('close', ok)), 126);
-    assert.match(out, /isn’t the one this credential is bound to/);
-    assert.ok(!out.includes(C('launcher')));
+    const target = { kind: 'process', path: program, sha256 } as const;
+    const made = await p.approve('create', { meta: { name: 'infra/p/TF_VAR_X', kind: 'secret', class: 'standard' }, source: 'sealed', bind: [{ target, inject: { how: 'env', env: 'TF_VAR_X' }, consent: {} }] }, { seal: C('launcher'), sealAt: (f, e) => ({ ...f, source: { sealed: e } }) });
+    // The bound program: its output scrubbed, its exit code passed on, nothing of Node's in its env.
+    const ok = await cl.use(made.ref, target, { argv: [], env: { TF_IN_AUTOMATION: '1' } }) as A;
+    assert.equal(ok.outcome.exit, 3);
+    assert.equal(ok.outcome.stdout.trim(), 'tofu sees [redacted by the broker] [] 1');
+    // Loader, interpreter and config variables from core are refused.
+    for (const env of [{ LD_PRELOAD: '/tmp/x.so' }, { NODE_OPTIONS: '--require /tmp/x.js' }, { BASH_ENV: '/tmp/x' }, { TF_CLI_CONFIG_FILE: '/tmp/x' }, { PATH: '/tmp' }]) {
+      assert.equal((await cl.use(made.ref, target, { argv: [], env }) as A).refused, 'out_of_scope', JSON.stringify(env));
+    }
     // A process target with another digest is a different target: not bound.
-    assert.equal((await cl.use(made.ref, { kind: 'process', path: program, sha256: '0'.repeat(64) }, { argv: [] })).refused, 'not_bound');
-    // The right program runs, with its output scrubbed, and its exit code passed on.
-    const t2 = ((await cl.use(made.ref, { kind: 'process', path: program, sha256 }, { argv: ['-e', 'console.log(process.env.TF_VAR_X); process.exit(3)'] })) as A).outcome.ticket;
-    const ok = cl.launch(t2, program);
-    let o2 = '';
-    ok.stdout!.on('data', (x) => { o2 += x; });
-    assert.equal(await new Promise((r) => ok.on('close', r)), 3);
-    assert.equal(o2.trim(), '[redacted by the broker]');
+    assert.equal((await cl.use(made.ref, { ...target, sha256: '0'.repeat(64) }, { argv: [] }) as A).refused, 'not_bound');
+    // The file swapped after binding: the launcher hashes it and refuses; the value goes nowhere.
+    writeFileSync(program, '#!/bin/sh\necho "stolen $TF_VAR_X"\n', { mode: 0o755 });
+    const swapped = await cl.use(made.ref, target, { argv: [] }) as A;
+    assert.equal(swapped.outcome.exit, 126);
+    assert.match(swapped.outcome.stderr, /isn’t the one this credential is bound to/);
+    assert.ok(!JSON.stringify(swapped).includes('stolen') && !JSON.stringify(swapped).includes(C('launcher')));
   } finally { cl.close(); b.child.kill(); }
 });

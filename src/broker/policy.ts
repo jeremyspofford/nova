@@ -4,9 +4,10 @@
 // expiry of 5 minutes, single use). The caller calls again with the answer. The broker recomputes
 // the digest from the call it is actually given, so an approval made for one action never covers
 // another (another target, another scope, another ref).
-//  - passkey: a WebAuthn assertion (ES256, user verification) over sha256(id | digest), from a
-//    passkey registered with the broker at vault setup. The client computes the digest from what
-//    it shows; what the person approves is what the broker does.
+//  - passkey: a WebAuthn assertion (ES256, user verification) over sha256(id | digest | bound),
+//    from a passkey registered with the broker at vault setup. The client computes the digest from
+//    what it shows; what the person approves is what the broker does. `bound` is the SHA-256 of a
+//    sealed value's envelope when the action carries one, so core can't swap in a value of its own.
 //  - core: where no passkey is registered, the approval is relayed by core (the way tier-3
 //    confirmations work today). The broker still checks the digest, the expiry, single use and
 //    every binding rule; the approval's authenticity rests on core, and Settings says so.
@@ -20,7 +21,7 @@ export const APPROVALS_PER_HOUR = 30;
 export const USES_PER_REF_HOUR = 3600;
 
 export const digestOf = (action: unknown) => createHash('sha256').update(canonical(action)).digest('hex');
-export const challengeBytes = (id: string, digest: string) => createHash('sha256').update(`${id}|${digest}`).digest();
+export const challengeBytes = (id: string, digest: string, bound = '') => createHash('sha256').update(`${id}|${digest}|${bound}`).digest();
 
 interface Pending { digest: string; expires: number; used: boolean; task: string | null; passkey: boolean }
 export interface ApprovalIn { id?: unknown; digest?: unknown; mode?: unknown; credential_id?: unknown; authenticator_data?: unknown; client_data_json?: unknown; signature?: unknown }
@@ -56,7 +57,7 @@ export class Approvals {
 
   // Checks an approval against the action the broker is about to do. Single use: a valid approval
   // is spent here, and a replay is refused.
-  check(a: ApprovalIn, action: unknown, passkeys: Record<string, Passkey>, onCount: (id: string, n: number) => void): { ok: true; id: string } | { ok: false; why: string } {
+  check(a: ApprovalIn, action: unknown, passkeys: Record<string, Passkey>, onCount: (id: string, n: number) => void, bound = ''): { ok: true; id: string; passkey: boolean } | { ok: false; why: string } {
     if (!a || typeof a.id !== 'string' || typeof a.digest !== 'string') return { ok: false, why: 'no approval id' };
     const p = this.#pending.get(a.id);
     if (!p) return { ok: false, why: 'unknown or already used' };
@@ -65,11 +66,11 @@ export class Approvals {
     const digest = digestOf(action);
     if (!eq(a.digest, p.digest) || !eq(digest, p.digest)) return { ok: false, why: 'made for another action' };
     if (a.mode === 'passkey') {
-      const why = checkAssertion(a, challengeBytes(a.id, digest), passkeys, onCount);
+      const why = checkAssertion(a, challengeBytes(a.id, digest, bound), passkeys, onCount);
       if (why) return { ok: false, why };
     } else if (a.mode !== 'core' || p.passkey) return { ok: false, why: p.passkey ? 'this action needs your passkey' : 'not an approval mode' };
     p.used = true;
-    return { ok: true, id: a.id };
+    return { ok: true, id: a.id, passkey: a.mode === 'passkey' };
   }
 
   clear() { this.#pending.clear(); }
@@ -140,11 +141,4 @@ export function generate(policy: { length: number; alphabet: string } = DEFAULT_
     }
   }
   return out;
-}
-
-// Health flags, worked out in memory at unlock; never stored, never logged (§8).
-export function weak(v: Buffer): boolean {
-  const s = v.toString('utf8');
-  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((r) => r.test(s)).length;
-  return s.length < 12 || (s.length < 20 && classes < 3);
 }

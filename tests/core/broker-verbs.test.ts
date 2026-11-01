@@ -146,7 +146,7 @@ test('tiers: standing consent at tier 1; outside it, ask first, once per task; s
   const ask = await call('use', svc);
   assert.equal(ask.refused, 'needs_approval');
   assert.equal(ask.challenge.card.tier, 2);
-  assert.equal(ask.challenge.card.task.id, 'task-1');
+  assert.equal('task' in ask.challenge.card, false, 'the card repeats nothing core sent (B3); core shows the task itself');
   assert.equal((await call('use', { ...svc, approval: p.approval(ask.challenge) })).ok, true);
   assert.equal((await call('use', svc)).ok, true, 'the approval covers the task');
   assert.equal((await call('use', { ...svc, request: { method: 'POST', path: '/api/services/lock/unlock', body: '{}' } })).refused, 'needs_approval', 'but only that request');
@@ -270,11 +270,12 @@ test('bind: tier 3 with lookalike flags to add; removing and revoking consent at
   assert.equal((await call('use', { ref, target: { kind: 'http', origin: 'https://example.com' }, request: { method: 'GET', path: '/' } })).refused, 'not_bound');
 });
 
-test('passkey approvals: required for bind and share_scope once a passkey is registered; checked by the broker itself', async () => {
+test('passkey approvals: required for every tier-3 verb once a passkey is registered; checked by the broker itself', async () => {
   const { call, p } = await fresh({ passkey: true });
   assert.equal((await p.state()).approval_mode, 'passkey');
-  const made = await p.approve('create', { meta: { name: 'provider/PK', kind: 'api_key' }, source: 'generate' }, { mode: 'core' });
-  assert.equal(made.ok, true, 'create without bindings may be core-relayed');
+  assert.equal((await p.approve('create', { meta: { name: 'provider/PK', kind: 'api_key' }, source: 'generate' }, { mode: 'core' })).refused, 'approval_invalid', 'every tier-3 verb needs the passkey once one is registered');
+  const made = await p.approve('create', { meta: { name: 'provider/PK', kind: 'api_key' }, source: 'generate' });
+  assert.equal(made.ok, true);
   const add = { ref: made.ref, add: { target: { kind: 'http', origin: 'https://api.example.com' }, scope: { methods: ['GET'], paths: ['/'] }, inject: { how: 'bearer' } } };
   const ch = (await call('bind', add)).challenge;
   assert.equal((await call('bind', { ...add, approval: p.approval(ch, 'core') })).refused, 'approval_invalid', 'core can’t stand in for the passkey');
@@ -332,17 +333,17 @@ test('n8n: sign computes the header inside the broker; verify answers valid or n
   await n8n.close();
 });
 
-test('a program’s approval covers its exact arguments, shown on the card; a ticket carries them', async () => {
+test('a program’s approval covers its exact arguments, shown on the card', async () => {
   const { call, p } = await fresh();
   const { fileSha256 } = await import('../../src/broker/origin.ts');
   const target = { kind: 'process', path: process.execPath, sha256: fileSha256(process.execPath) };
   const made = await p.approve('create', { meta: { name: 'infra/p/TF_VAR_X', kind: 'secret', class: 'standard' }, source: 'generate', bind: [{ target, inject: { how: 'env', env: 'TF_VAR_X' } }] });
-  const plan = { ref: made.ref, target, request: { argv: ['plan'] }, task: { id: 'infra-1', title: 'Plan' } };
+  const plan = { ref: made.ref, target, request: { argv: ['-e', 'void "plan"'] }, task: { id: 'infra-1', title: 'Plan' } };
   const ask = await call('use', plan);
   assert.equal(ask.refused, 'needs_approval');
-  assert.deepEqual(ask.challenge.card.argv, ['plan']);
-  assert.ok((await call('use', { ...plan, approval: p.approval(ask.challenge) })).outcome.ticket);
-  assert.ok((await call('use', plan)).outcome.ticket, 'the same command again in the task');
+  assert.deepEqual(ask.challenge.card.argv, ['-e', 'void "plan"']);
+  assert.equal((await call('use', { ...plan, approval: p.approval(ask.challenge) })).outcome.exit, 0);
+  assert.equal((await call('use', plan)).outcome.exit, 0, 'the same command again in the task');
   assert.equal((await call('use', { ...plan, request: { argv: ['apply', '-auto-approve'] } })).refused, 'needs_approval', 'not another command');
   assert.equal((await call('use', plan)).record.scope_item, 'RUN', 'the arguments stay out of the ledger');
 });

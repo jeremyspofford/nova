@@ -49,15 +49,13 @@ test('canaries planted in the broker appear in no answer, log, ledger record, fi
   try {
     await p.setup({ recovery: true });
 
-    // 2. Migration with no value through core: stage, commit, finish, propose.
-    const staged = await core.stage(home);
-    assert.equal(staged.staged, 5, 'the old vault’s credentials (a login’s two parts) and the Era 2 file; Nova’s own keys aren’t sent');
-    const committed = await core.call('create', { meta: {}, source: { migrate: 'commit' } });
-    assert.equal(committed.outcome.read_back, true);
+    // 2. Migration with no value through core: the broker's own launcher reads the broker's home.
+    const staged = await core.call('create', { meta: {}, source: { migrate: 'stage' } });
+    assert.equal(staged.outcome.staged, 5, 'the old vault’s credentials (a login’s two parts) and the Era 2 file; Nova’s own keys aren’t sent');
+    const committed = await p.approve('create', { meta: {}, source: { migrate: 'commit' } });
+    assert.equal(committed.outcome.read_back, true, JSON.stringify(committed));
     assert.deepEqual(committed.outcome.migrated.sort(), ['browser/login/shop.example/password', 'connector/gmail/GOOGLE_REFRESH_TOKEN', 'connector/home-assistant/HA_TOKEN', 'provider/OLD_PROVIDER']);
-    const fin = await core.finish(home, committed.outcome.ticket);
-    assert.equal(fin.removed, 4, 'from vault.ts: the provider key, the token and both parts of the login (its username is now metadata)');
-    assert.equal(fin.kept, 2);
+    assert.equal(committed.outcome.removed, 4, 'from vault.ts: the provider key, the token and both parts of the login (its username is now metadata)');
     assert.equal(existsSync(join(home, 'connectors', 'gmail', 'token.json')), false, 'Era 2’s file is gone');
     assert.notDeepEqual(readFileSync(join(home, 'vault', 'key')), oldKey, 'the old vault has a new key');
     const after = new Vault({ home, mode: 'file' });
@@ -97,7 +95,8 @@ test('canaries planted in the broker appear in no answer, log, ledger record, fi
       assert.equal(made.ok, true, JSON.stringify(made));
       const script = how === 'env' ? 'console.log("tofu sees", process.env.TF_VAR_TOKEN); console.error("err", process.env.TF_VAR_TOKEN)' : 'const f = process.env.KUBECONFIG; console.log(f, require("fs").readFileSync(f, "utf8"), (require("fs").statSync(f).mode & 0o777).toString(8))';
       const u = await core.call('use', { ref: made.ref, target: { kind: 'process', path: program, sha256 }, request: { argv: ['-e', script] } });
-      const ran = await core.run(u.outcome.ticket, program);
+      assert.equal(JSON.stringify(u).includes('ticket'), false, 'core gets no ticket: the broker runs the program');
+      const ran = { code: u.outcome.exit, stdout: u.outcome.stdout as string, stderr: u.outcome.stderr as string };
       assert.equal(ran.code, 0, ran.stderr);
       assert.ok(ran.stdout.includes('[redacted by the broker]'), ran.stdout);
       if (how === 'file') {
@@ -107,9 +106,7 @@ test('canaries planted in the broker appear in no answer, log, ledger record, fi
         assert.equal(mode, '600');
         assert.equal(existsSync(path), false, 'the file is removed on exit');
       }
-      assert.equal((await core.run(u.outcome.ticket, program)).code, 126, 'a ticket redeemed twice is refused');
     }
-    assert.match(String((await core.call('list_refs')).state.problem), /redeemed twice/, 'and raised as an alarm');
     await core.call('list_refs');
 
     // 4. Search.
@@ -155,7 +152,7 @@ test('canaries planted in the broker appear in no answer, log, ledger record, fi
   }
 });
 
-test('migration resumes: a run cut short after the move finishes on the next run, idempotent by name', { timeout: 60_000 }, async () => {
+test('migration resumes: a name already moved from the same old vault counts as moved; the old vault keeps only Nova’s own keys', { timeout: 60_000 }, async () => {
   const home = tmp('nova-migrate-');
   const v = new Vault({ home, mode: 'file' });
   v.put('provider/A', C('resume-a'));
@@ -163,23 +160,25 @@ test('migration resumes: a run cut short after the move finishes on the next run
   v.put('nova/backup-key', 'own-backup-key-value-1234567890');
   const b = await startBroker(join(home, 'broker'), { keyMode: 'file' });
   const core = coreSim(b.socket, b.tokens.core);
+  const p = new Person(core.call);
   try {
-    await new Person(core.call).setup();
-    assert.equal((await core.stage(home)).staged, 2);
-    const first = await core.call('create', { meta: {}, source: { migrate: 'commit' } });
+    await p.setup();
+    assert.equal((await core.call('create', { meta: {}, source: { migrate: 'commit' } })).error, 'failed', 'nothing staged yet');
+    assert.equal((await core.call('create', { meta: {}, source: { migrate: 'stage' } })).outcome.staged, 2);
+    const first = await p.approve('create', { meta: {}, source: { migrate: 'commit' } });
     assert.deepEqual(first.outcome.migrated.sort(), ['provider/A', 'provider/B']);
-    // Stopped here: the old file still holds both, nothing was removed. A new run picks up.
-    assert.deepEqual(new Vault({ home, mode: 'file' }).list(), ['nova/backup-key', 'provider/A', 'provider/B']);
-    assert.equal((await core.stage(home)).staged, 2);
-    const second = await core.call('create', { meta: {}, source: { migrate: 'commit' } });
+    assert.deepEqual(new Vault({ home, mode: 'file' }).list(), ['nova/backup-key']);
+    // An old vault restored from a copy (a run that stopped before the old file was rewritten):
+    // the names are already moved from that vault, so they leave it again and nothing is made twice.
+    const again = new Vault({ home, mode: 'file' });
+    again.put('provider/A', C('resume-a'));
+    assert.equal((await core.call('create', { meta: {}, source: { migrate: 'stage' } })).outcome.staged, 1);
+    const second = await p.approve('create', { meta: {}, source: { migrate: 'commit' } });
     assert.deepEqual(second.outcome.migrated, [], 'nothing is made twice');
-    assert.equal(second.outcome.read_back, true);
-    assert.equal((await core.finish(home, second.outcome.ticket)).removed, 2);
+    assert.equal(second.outcome.moved, 1);
+    assert.equal(second.outcome.removed, 1);
     assert.deepEqual(new Vault({ home, mode: 'file' }).list(), ['nova/backup-key']);
     assert.equal((await core.call('list_refs')).refs.length, 2);
-    // A commit with nothing staged is refused in plain words; a finish ticket works once.
-    assert.equal((await core.call('create', { meta: {}, source: { migrate: 'commit' } })).error, 'failed');
-    assert.equal((await core.finish(home, second.outcome.ticket)).error, 'failed');
   } finally {
     core.stop();
     b.child.kill();

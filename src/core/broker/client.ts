@@ -6,13 +6,12 @@
 // What core does with a credential:
 //  - list_refs, for names, sites, usernames, bindings, classes and health flags;
 //  - use, for an http request the broker sends itself, a check of a callback's signature, or a
-//    ticket for a program, which `launch` hands to the broker's launcher (never to the program);
+//    program the broker runs through its own launcher (the answer is its exit code and its output,
+//    scrubbed of the value);
 //  - create, update, rotate, bind and share_scope, each answering needs_approval with a challenge
 //    first; the person's client approves it, and seals any value it types (src/broker/seal.ts);
-//  - the migration from vault.ts, through the launcher, so no old value is read in core either.
-import { spawn, type ChildProcess } from 'node:child_process';
+//  - the migration from vault.ts, through the broker's launcher, so no old value is read in core.
 import { connect, type Socket } from 'node:net';
-import { fileURLToPath } from 'node:url';
 import type { AuditRecord, Challenge, Refusal, RefMeta, Target } from '../../broker/protocol.ts';
 
 export type { AuditRecord, Challenge, Refusal, RefMeta, Target };
@@ -29,8 +28,6 @@ export interface Answer {
 }
 export interface Approval { id: string; digest: string; mode: 'core' | 'passkey'; credential_id?: string; authenticator_data?: string; client_data_json?: string; signature?: string }
 export interface Ask { task?: { id: string; title: string }; caller?: string; approval?: Approval }
-
-export const LAUNCHER = fileURLToPath(new URL('../../broker/launch.ts', import.meta.url));
 
 export class BrokerError extends Error {
   readonly answer: Answer;
@@ -112,45 +109,16 @@ export class BrokerClient {
   bind(ref: string, change: { add?: unknown; remove?: unknown }, ask: Ask = {}) { return this.call('bind', { ref, ...change, ...ask }); }
   shareScope(scope: { device?: unknown; backend?: unknown }, ask: Ask = {}) { return this.call('share_scope', { ...scope, ...ask }); }
 
-  // ---- the launcher ---------------------------------------------------------------------------
+  // ---- the migration from vault.ts (§10) -----------------------------------------------------
 
-  // Starts the broker's launcher for a program ticket (from `use` on a process target). The ticket
-  // goes in on fd 3. Core gets a child whose output the launcher has already scrubbed.
-  launch(ticket: string, program: string, o: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): ChildProcess {
-    const child = spawn(process.execPath, ['--disable-sigusr1', '--disable-warning=ExperimentalWarning', LAUNCHER, 'run', this.socket, program], { cwd: o.cwd, env: o.env ?? { PATH: process.env.PATH ?? '' }, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
-    (child.stdio[3] as NodeJS.WritableStream).end(`${ticket}\n`);
-    return child;
-  }
-
-  // The migration from vault.ts (§10): stage (the launcher reads the old vault and streams it to
-  // the broker), commit (each entry becomes an unbound item and is read back), finish (the launcher
-  // takes what moved out of the old vault), then propose (one tier-3 card of bindings and classes).
-  // Core only ever sees names, counts and the card; it never opens the old vault itself.
-  async migrateStage(home: string, ask: Ask = {}): Promise<{ staged: number } | Answer> {
-    const a = await this.create({}, { migrate: 'stage' }, ask);
-    if (!a.ok) return a;
-    const out = await this.#runLauncher('migrate', home, (a.outcome as { ticket: string }).ticket);
-    return out.code === 0 ? (JSON.parse(out.stdout) as { staged: number }) : { id: -1, error: 'failed', words: out.stderr.trim() };
-  }
+  // Stage (the broker's own launcher reads the old vault in the broker's home and hands it over by
+  // pipe; the answer is a count), commit (tier 3: each entry becomes an unbound item, is read back,
+  // and leaves the old vault), then propose (tier 3: one card of bindings and classes). Core never
+  // opens the old vault, and names no folder for the broker to read.
+  migrateStage(ask: Ask = {}) { return this.create({}, { migrate: 'stage' }, ask); }
   migrateCommit(ask: Ask = {}) { return this.create({}, { migrate: 'commit' }, ask); }
   migratePropose(proposals: Record<string, { origin?: string; class?: string; bind?: unknown[] }>, ask: Ask = {}) {
     return this.create({}, { migrate: 'propose', proposals }, ask);
-  }
-  async migrateFinish(home: string, ticket: string): Promise<{ removed: number; kept: number } | Answer> {
-    const out = await this.#runLauncher('migrate-finish', home, ticket);
-    return out.code === 0 ? (JSON.parse(out.stdout) as { removed: number; kept: number }) : { id: -1, error: 'failed', words: out.stderr.trim() };
-  }
-
-  #runLauncher(mode: string, home: string, ticket: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
-    return new Promise((ok) => {
-      const child = spawn(process.execPath, ['--disable-sigusr1', '--disable-warning=ExperimentalWarning', LAUNCHER, mode, this.socket, home], { env: { PATH: process.env.PATH ?? '', ...(process.env.NODE_TEST_CONTEXT ? { NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT } : {}), ...(process.env.NOVA_VAULT_KEY ? { NOVA_VAULT_KEY: process.env.NOVA_VAULT_KEY } : {}), ...(process.env.DBUS_SESSION_BUS_ADDRESS ? { DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS } : {}) }, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout!.setEncoding('utf8').on('data', (c: string) => { stdout += c; });
-      child.stderr!.setEncoding('utf8').on('data', (c: string) => { stderr += c; });
-      (child.stdio[3] as NodeJS.WritableStream).end(`${ticket}\n`);
-      child.on('close', (code) => ok({ code, stdout, stderr }));
-    });
   }
 }
 

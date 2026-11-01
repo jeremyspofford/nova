@@ -1,21 +1,18 @@
 // The Credential Broker's wire protocol (docs/plans/vault-broker.md §3–§4). Newline-delimited JSON
 // over local IPC, one id per request, a size cap, and unknown fields refused. The broker answers
-// seven fixed verbs and three protocol messages; two more messages exist only for the broker's own
-// launcher (broker code, §3), and are refused on any connection that didn't open with a ticket.
-// No answer to core carries a value, a part of one, its length, or a hash of it: every answer is
-// checked against ANSWER_KEYS before it is written (checkAnswer), and scrubbed of every value the
-// broker holds besides.
+// seven fixed verbs and three protocol messages, and nothing else: its launcher is its own child,
+// spoken to over a pipe, never over this socket. No answer to core carries a value, a part of one,
+// its length, or a hash of it: every answer is checked against ANSWER_KEYS before it is written
+// (checkAnswer). Text core sent is never echoed back, and answers aren't scrubbed as a whole: only
+// what a target sent back (a response, a program's output) is, of the value that use injected.
 //
 // This file imports nothing; the core client imports its types only.
 
 export const VERBS = ['list_refs', 'use', 'create', 'update', 'rotate', 'bind', 'share_scope'] as const;
 export const MESSAGES = ['hello', 'unlock', 'lock'] as const;
-// The launcher's two (§3 "The launcher", §10 "Moving from today's vault"): redeeming a ticket, and
-// streaming the old vault's items in migrate mode. Accepted only with a ticket, never with a token.
-export const LAUNCHER = ['redeem', 'migrate_item'] as const;
 export type Verb = (typeof VERBS)[number];
-export type Message = Verb | (typeof MESSAGES)[number] | (typeof LAUNCHER)[number];
-export type Role = 'core' | 'supervisor' | 'launcher';
+export type Message = Verb | (typeof MESSAGES)[number];
+export type Role = 'core' | 'supervisor';
 
 // The fixed refusal list (§4), each with plain words.
 export const REFUSALS = {
@@ -57,9 +54,7 @@ export const FIELDS: Record<Message, readonly string[]> = {
   update: [...COMMON, 'ref', 'change'],
   rotate: [...COMMON, 'ref', 'phase'],
   bind: [...COMMON, 'ref', 'add', 'remove'],
-  share_scope: [...COMMON, 'device', 'backend'],
-  redeem: ['ticket', 'path', 'sha256'],
-  migrate_item: ['ticket', 'name', 'value', 'done'],
+  share_scope: [...COMMON, 'device', 'backend', 'hub'],
 };
 
 // Every key that may appear anywhere in an answer to core or the supervisor. A schema check over
@@ -70,12 +65,12 @@ export const ANSWER_KEYS: ReadonlySet<string> = new Set([
   // vault state
   'state', 'locked', 'exists', 'vault_id', 'unlock_mode', 'approval_mode', 'factors', 'entry_key', 'boot', 'device_id', 'device_key', 'holders', 'kdf', 'alg', 'm', 't', 'p', 'safe_mode',
   // refs and metadata
-  'refs', 'ref', 'aliases', 'name', 'kind', 'origin', 'username', 'class', 'suggested_class', 'per_use', 'created_at', 'last_used', 'last_rotated', 'health', 'weak', 'reused', 'old', 'backend', 'version', 'pending', 'bindings',
+  'refs', 'ref', 'aliases', 'name', 'kind', 'origin', 'username', 'class', 'suggested_class', 'per_use', 'created_at', 'last_used', 'last_rotated', 'health', 'reused', 'old', 'backend', 'version', 'pending', 'bindings',
   'target', 'scope', 'methods', 'paths', 'consent', 'rate_per_hour', 'granted_at', 'approval_id', 'inject', 'how', 'header', 'prefix', 'format', 'lan', 'pin', 'embed_on', 'env', 'file', 'argv',
   // approvals
-  'challenge', 'digest', 'expires_at', 'card', 'tier', 'verb', 'what', 'flags', 'task', 'title', 'caller', 'approving', 'items', 'passkey',
+  'challenge', 'digest', 'expires_at', 'card', 'tier', 'verb', 'what', 'flags', 'task', 'approving', 'items', 'passkey',
   // outcomes
-  'outcome', 'status', 'headers', 'body', 'truncated', 'valid', 'ticket', 'migrated', 'skipped', 'staged', 'read_back', 'removed', 'device', 'outbox', 'text',
+  'outcome', 'status', 'headers', 'body', 'truncated', 'valid', 'exit', 'stdout', 'stderr', 'migrated', 'kept', 'moved', 'staged', 'read_back', 'removed', 'device', 'outbox', 'text', 'hub', 'signer',
   // audit records
   'seq', 'at', 'prev', 'hash', 'scope_item',
 ]);
@@ -133,8 +128,10 @@ export interface Binding { target: string; kind: TargetKind; scope: Scope; injec
 export interface RefMeta {
   ref: string; aliases: string[]; name: string; kind: string; origin: string | null; username: string | null;
   class: 'standard' | 'sensitive'; per_use: boolean; created_at: string; last_used: string | null; last_rotated: string | null;
-  health: { weak: boolean; reused: boolean; old: boolean }; backend: 'nova'; version: number; pending: boolean; bindings: Binding[];
+  health: { reused: boolean; old: boolean }; backend: 'nova'; version: number; pending: boolean; bindings: Binding[];
 }
-export interface Card { argv?: string[]; verb: string; what: string; name?: string; origin?: string | null; username?: string | null; target?: string; scope?: Scope; class?: string; flags?: string[]; task?: { id: string; title: string } | null; caller?: string | null; tier: number; approving: string; expires_at: string; items?: unknown[] }
+// The card shows stored metadata and what the broker computed; never text from the frame that asked
+// (core shows the task and who asked from its own records).
+export interface Card { argv?: string[]; verb: string; what: string; name?: string; origin?: string | null; username?: string | null; target?: string; scope?: Scope; class?: string; flags?: string[]; tier: number; approving: string; expires_at: string; items?: unknown[] }
 export interface Challenge { id: string; digest: string; expires_at: string; card: Card; tier: number }
 export interface AuditRecord { seq: number; at: string; device: string; verb: string; ref: string | null; target: string | null; scope_item: string | null; outcome: string; tier: number | null; approval_id: string | null; task: string | null; role: Role; prev: string; hash: string }

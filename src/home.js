@@ -34,7 +34,9 @@ export function readStanding(home) {
 // Folders in the home that hold secrets: the vault (and its key file), the mesh's device and
 // identity keys, and Era 2's connection secrets. No file tool reads or writes them and no helper
 // is handed them; they are also untracked (UNTRACKED) and not journalled (mesh/sync.ts).
-export const SECRET_DIRS = ['vault', 'mesh', 'connectors'];
+// broker/ is the Credential Broker's store (src/broker): ciphertext, its header and, without a
+// keychain, its device key. No file tool reads it.
+export const SECRET_DIRS = ['vault', 'mesh', 'connectors', 'broker'];
 export const inSecretDir = (rel) => SECRET_DIRS.find((d) => rel === d || rel.startsWith(`${d}/`) || rel.startsWith(`${d}\\`)) ?? null;
 
 // Resolve a tool path inside home. "~/x" and "x" both mean home/x.

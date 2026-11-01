@@ -84,6 +84,7 @@ export class CheckpointError extends CoreError {
 // Top-level names in the home that are never in a checkpoint, and why (shown in every manifest).
 const SKIP_TOP: Record<string, string> = {
   checkpoints: 'checkpoints are never inside each other',
+  broker: 'the Credential Broker keeps its own store; a restore never brings back a deleted credential',
   backups: 'the pre-upgrade copies are kept separately',
   exports: 'exports are copies made on request',
   logs: 'Nova’s logs are for diagnosing this machine',
