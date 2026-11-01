@@ -13,6 +13,18 @@ The branch is `m10f/roles-onboarding`, from main at `c0bae29d` (M10e merged), wi
 `e343026f` (#259, the diagnostics bundle), `4881a2b2` (#264, capture-sensitive) and `572ef193` (#258,
 the gate on the Decision Service, which took migration 0019: M10f's is now **0020**).
 
+Then main at `fc8a4bf5` (#266 the pairing fix, #267 fold postures, #265 honest claims) was merged in:
+#265's honest wording kept everywhere it touched setup, the Tasks lede and the setup header; the three
+onboarding claims only unit tests show were softened the way #265 does (§10), so its closing-rule test
+passes. #267's baseline test held the page's clock on 2026-10-31 (the review conversation's day): run
+after midnight UTC it drew a "today" divider the baselines don't have, on main as well as here.
+At that merge, `npm run check`: **1444 tests: 1427 pass, 4 fail, 13 skipped**, the four being Era 2
+runner tests that timed out under load (`tests/ingest/round2.test.js` N1b ×2, `round3.test.js` X2,
+`skills-api.test.js` "the email summary…"), all of which pass alone (27 of 27); `scripts/ui-test.sh`:
+**107 tests: 106 pass, 1 fail** (#267's matrix: two WebKit "access control checks" page errors on
+duo-cover, which didn't recur in three runs of that file alone); then `fold-postures.test.ts` alone
+with the clock held: 4 of 4. CI is the record.
+
 **Reviewed:** the independent review of #268 at `fa2f73cc` found 11 items (1 blocking, 5 should-fix,
 5 minor). Each is in "The review of #268" below, with its test, its fix, and the test run with the fix
 reverted. The gate items are corrected where the review showed a claim wasn't true (item 2).
