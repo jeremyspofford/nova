@@ -1,43 +1,89 @@
 # DESIGN SYSTEM — foundation
 
-This is the contract between Nova's product design and every line of UI code. It defines (a) the design language, (b) the token schema all packages must implement, (c) the package/hot-swap mechanism. Approved visual references: concepts E–H (round 2) as one language; A for feature set; B/F for conversational warmth; D/E/H for the ambient home.
+This is the contract between Nova's product design and every line of UI code. It defines (0) the art direction, (a) the design language, (b) the token schema all packages must implement, (c) the package/hot-swap mechanism. Approved visual references: concepts E–H (round 2) as one language; A for feature set; B/F for conversational warmth; D/E/H for the ambient home.
 
-## 0. Art direction — one system, one lead
+## 0. Art direction (owner direction, 2026-11-01)
+Source: `INPUT-2026-11-01-DESIGN-QUALITY.md` and its diagnosis, `nova-design-quality-system-2026-11-01.md`. The rest of this document is a schema; this section is the design it serves. Where a later section leaves a choice open, this section decides it.
 
-**Exemplar set: proposed 2026-11-01, owner may amend.** These are references for specific qualities, not templates to copy or external dependencies:
+### 0.1 One lead package: Orb Teal
+- **Orb Teal is the lead.** It is perfected first, and it is the design Nova shows unless the person picks another.
+- **Other packages inherit its structure and re-express values only.** The structure is the designed scales of §2.1; a package chooses colours, fonts and values inside them.
+- **Packages are not equals until each has passed the same bar.** The bar is:
+  - on the designed scales in every look (`check:themes` reports it per package);
+  - and the owner has approved its rendered styleguide (the owner names it in `AT_THE_BAR`, `src/core/design.ts`).
 
-| Surface family | Exemplars | What to carry into Nova |
-|---|---|---|
-| Chat | Best-in-class conversational restraint (ChatGPT and Claude conversation views) | A readable conversation column, quiet chrome, full-width Nova turns, one clear composer. No dashboard around an answer. |
-| Home, Tasks, Health, Activity | Linear / Raycast | Crisp left-aligned lists, clear title → summary → detail hierarchy, compact controls, detail on demand. Density means useful information, never a cockpit. |
-| Settings | macOS Settings / Raycast settings | Named categories, a clear selected location, labelled rows, a quiet explanation beside each consequential control. |
+  Today only Orb Teal is at the bar.
+- **How that is presented:**
+  - *Settings › Appearance* shows Orb Teal as "Nova's design", with its reason. When the device asks for light, the reason says plainly that it is dark because no light design has reached the bar yet.
+  - The other five sit behind *More designs*, marked "not yet at Nova's design bar". They stay installed and usable; none is deleted.
+  - *Onboarding* offers no design choice at all. It applies the default, Orb Teal.
+  - *The styleguide's* design switch marks each package not yet at the bar.
 
-**Anti-references:** generic SaaS dashboards, stock Tailwind/shadcn arrangements, purple-gradient AI branding, equal-weight card-grid monotony, and emoji used as icons. A component library is an implementation tool, never Nova's art direction.
+### 0.2 Exemplars by surface family (proposed 2026-11-01, owner may amend)
+We take qualities from these, never their branding, assets, names or copy. Each quality is written so a screenshot can be checked against it.
 
-**Orb Teal is the lead package.** Perfect its rendered components first. Other packages inherit the same structure, spacing and states and re-express token values only; no package-specific layouts. Only packages that meet §2.1 and pass owner review of their rendered styleguide can become peers. Stage 1 proposes Orb Teal for that review; it does not claim approval has happened. Settings recommends Orb Teal in either system colour scheme while the other packages remain secondary choices. Onboarding uses the lead without asking a new user to choose among six themes.
+**Chat — best-in-class conversational restraint.**
+- One reading column. Nova's prose runs at most about 72 characters to a line.
+- Nova's turns sit on the page, unboxed, with no avatar. The person's turns are tinted bubbles without tails (Amendment C).
+- Per-message actions (copy, regenerate) stay quiet: secondary text, no fill.
+- Live status inside a turn is one line naming the real phase (§1, Progress and waiting).
+- The composer is the only persistent control. Send is the only filled button in the view.
 
-The visual point of view: a luminous sphere is Nova's identity; the rest stays precise and quiet. Deep teal is the base, mint is the actionable accent, amber means needs-you and red means stopped. Type and grouping do the organising; repeated boxes do not. A centred conversational column is useful; centred task rows and settings labels are not.
+**Control surfaces (Home, Tasks, Health, Activity) — Linear/Raycast density and crispness.**
+- A list of like things is a list: one row each, separated by hairline dividers. It is not a grid of cards.
+  - Each row has its title on the left, its status at the right end, and its meta under the title in `type/small`, secondary.
+- Edges are crisp. Separation comes from tone and 1px `border/subtle` lines; shadow is level 1 and barely there.
+  - Orb Teal radii: 12px for containers, 8px for controls.
+- Three type tiers per view: the view title (`type/h1`), group labels (`type/caption`, uppercase, secondary), and row titles. Nothing else on the view rivals the title.
+- Colour carries status, and nothing else. A row has at most one coloured element.
+- Everything is left-aligned. Numbers are tabular.
 
-### Living styleguide and design-first contract
+**Settings — the clarity of macOS Settings and Raycast's settings.**
+- Categories in a sidebar on wide screens, a list on narrow ones; one category open at a time.
+- One setting per row: its label on the left, its control on the right, and at most two lines of note under the label.
+- A caption heading over each group. Destructive settings come last in their group, set apart.
+- Search filters down to the rows themselves.
+- Nova's recommended choice is marked once. Deeper detail sits behind a disclosure, not in paragraphs above the controls.
 
-`/styleguide` is the rendered contract, using the same render functions, token endpoint and CSS as the application, with real Nova tasks, approvals, evidence, failure and empty states. Every entry has a stable `#sg-…` anchor and a direct link in its index. The entry's state labels say what is rendered. Previewing a package or mode changes only that page, never the profile.
+### 0.3 Anti-references (what Nova must never look like)
+- **The generic SaaS dashboard:** a row of KPI tiles, charts for their own sake, a sidebar of a dozen equal items.
+- **The stock Tailwind/shadcn look:**
+  - slate greys;
+  - the same large radius on everything;
+  - default 14px type everywhere;
+  - card › header › title sameness.
+- **The purple-gradient AI aesthetic:** violet-to-blue gradients, sparkle icons, glowing text.
+- **Card-grid monotony:** everything in same-size cards in a grid, whatever its weight.
+- **Emoji as icons.**
 
-A component absent from the styleguide does not ship. For the **next new surface or component after this stage merges**, the first deliverable is its rendered styleguide entry. The owner approves that rendering before app code is written. App code then composes styleguide components; the UI PR compares its posture screenshots with those entries. Existing surfaces conform opportunistically through the UX fix list, not a big-bang rewrite. The owner reviews this initial design PR as screenshots before merge.
+### 0.4 The slop list (scored on every UI PR)
+Each item is scored per surface as **pass**, **fail** or **n/a**, with one line of evidence. The owner-side UX review scores the same list independently, so the wording is the test.
 
-### Measurable AI-slop check (every UI PR)
+1. **Uniform equal-weight card grids.**
+   - *Pass when:* like items are a list with one row each. Cards are used only for different jobs, and the most important one is visibly heavier, by position, size or the view's one standout.
+2. **Everything centered.**
+   - *Pass when:* text and controls align to a left edge. Only the orb hero and a first-run greeting are centered.
+3. **Decorative gradients.**
+   - *Pass when:* gradients appear only as the orb's light and the page's background light. `lint:tokens` enforces this.
+4. **More than one standout per view.**
+   - *Pass when:* at most one filled (primary) control is visible in the view. A sheet is its own view.
+5. **Flat type hierarchy.**
+   - *Pass when:* the view shows at least three distinct tiers from the type scale (title, group label, row), and nothing else competes with the title in size or weight.
+6. **Off-scale spacing.**
+   - *Pass when:* `lint:tokens` passes: no half steps, no sums of steps, no raw lengths.
+7. **Mixed icon styles.**
+   - *Pass when:* every icon comes from the one set (`ICONS`) at its one stroke, and there are no emoji. `lint:tokens` enforces this.
+8. **Placeholder-looking empty states.**
+   - *Pass when:* the empty state says what is true now and what will appear here, in Nova's words, with at most one next step. Never "No data", lorem, a grey box or an illustration placeholder.
 
-Score each row **pass / fail / N/A** with a screenshot or lint result and a one-line reason; N/A must explain why the surface cannot exercise it. A failure is visible review debt, never silently scored as a pass. The owner-side UX review scores the same rows independently.
+**Every UI PR** states its self-check against this list, per surface it touches, beside its posture screenshots and its screenshots matched to the styleguide (OPERATING-RULES, Design quality).
 
-| Check | Pass condition |
-|---|---|
-| Equal-weight card grids | No three or more sibling information cards repeat identical visual weight when their priority differs. Each group has a named primary item or uses quiet rows; the styleguide's comparison catalogue is exempt and labelled. |
-| Everything centred | Reading text, tasks and settings rows are left aligned. Centring is confined to the orb, an empty state or the conversation column itself. |
-| Decorative gradients | Zero gradients on cards, buttons or headings. Gradients only express the page's ambient light or the orb's light (`lint:tokens`). |
-| Competing standouts | At most one primary-action treatment per view in its ordinary state. A necessary approval or destructive confirmation becomes the primary action for that state. |
-| Flat type hierarchy | A surface title, item title and supporting detail use distinct roles from the six-step type scale; headings use strong weight and metadata uses a quieter role. Inspect the screenshot, not just token availability. |
-| Off-scale spacing | Zero lint findings: spacing uses one named 4pt step or its negative. Safe-area and measured layout geometry are explicit exceptions; no half steps or sums to invent new spacing. |
-| Mixed icon styles | Zero emoji icons or mixed stroke weights. The single 24-unit SVG set uses stroke 1.5 throughout (`lint:tokens`). |
-| Placeholder empty states | Each empty state names what is absent and gives a useful next action or explicitly says nothing needs doing; zero lorem ipsum, dummy metrics or simulated work. |
+### 0.5 The living styleguide
+- **Where it is:** `/styleguide` (`ui/styleguide.html`, `ui/js/styleguide.js`). It renders every component of §7 in every state, drawn by the app's own code.
+- **Its content:** realistic Nova content, never lorem, with neutral placeholders only.
+- **One entry at a time:** each entry has its own anchor (`#sg-<entry>`) and its own address (`/styleguide?entry=<entry>`). The owner approves one rendered entry at a time.
+- **Rendering the review shots:** `tests/ui/design-shots.ts` renders each entry on its own, plus the main surfaces at desktop and phone width.
+- **The rule:** a component that isn't in the styleguide doesn't ship. `tests/styleguide-coverage.test.js` fails when an exported component has no entry, and names the known gaps.
 
 ## 1. Design language (applies to every package)
 - **The Orb is Nova's face.** A luminous sphere of abstract light. **No face, no features, ever.** Identity and state are expressed through light: color temperature, brightness, motion (breathing idle, gentle pulse while working, slow swirl while listening, steady bright when speaking, warm amber when it needs you, red only for what stops Nova). Its states are a fixed, semantic set (below, owner decision 2026-10-31). One orb component, token-driven, reused at every size — hero presence on the home, status in the rail. **It appears once per view** (Amendment 2026-10-30-C): never as a per-message avatar in chat.
@@ -106,24 +152,38 @@ Components may reference ONLY these tokens. Raw hex, px, or font names in compon
 
 A package that omits a required token fails validation and cannot be applied (`check:themes`-style completeness gate, extended from the Era 2 scripts).
 
-### 2.1 Designed values and enforcement
+### 2.1 The designed scales (owner direction 2026-11-01)
+**Where the scales live.** Their *structure* belongs to the system (`src/core/design.ts`: `SPACE_SCALE`, `TYPE_STEPS`, `TYPE_RATIO`, `RADIUS_CLASSES`, `ICON_STROKE`, `scaleFindings`). Their *values* belong to the package.
 
-Orb Teal's values are intentional, not browser defaults:
+Why:
+- The direction says the other packages inherit Orb Teal's structure and re-express values only. Putting the structure in the core makes that true by construction rather than by care.
+- Spacing is layout, and §3 forbids a package from changing layout. So the spacing scale's values are structure too, the same in every package. Companion Light and Paper were re-expressed onto it in this pass.
 
-| Family | Values and use |
-|---|---|
-| Spacing | `space/1…8` = **4 / 8 / 12 / 16 / 24 / 32 / 48 / 64 px**: hair / tight / snug / base / roomy / group / section / page. Fixed across every package because spacing is structure. |
-| Type | Body **16 px**, ratio approximately **1.2**, rounded to whole pixels: caption **11**, small **13**, body **16**, h3 **19**, h2 **23**, h1 **28**. Regular **400**, strong **600**; tight line height **1.25**, body **1.5**. Body copy stays readable; hierarchy comes from size, weight and space. |
-| Radius | Control **8 px** (`radius/input`, including a growing composer); container **12 px** (`radius/card`, cards, sheets, bubbles); fixed-height pill **999 px** (`radius/pill`, badges and round icon buttons). Never bind radius to rendered height. |
-| Elevation | Exactly two tokens: card **0 1px 2px** and raised **0 12px 32px**, with teal-black alpha shadows. Raised is for sheets/overlays; do not put it on every card. |
-| Motion | Fast **150 ms**, standard **225 ms**, slow **300 ms**, one `cubic-bezier(0.25, 0.1, 0.25, 1)` curve. Pulse **1800 ms**, breathe **6000 ms** are whole multiples of slow. Reduced motion stops loops and uses **1 ms** transitions. |
-| Icons | `ICONS` in `ui/js/components.js`: a single **24-unit**, **1.5-stroke** SVG vocabulary; no emoji or second set. |
+How it is enforced:
+- **At runtime,** leaving the scales is a warning, never a refusal, so any package, including one made before them, still applies.
+- **`check:themes`** fails a package that is at the bar and leaves the scales. It lists every other package as not yet at the bar; `NOVA_BAR_DETAIL=1` prints why.
+- **`lint:tokens`** holds `ui/` to the scales.
 
-`lint:tokens` checks raw values and off-scale spacing/type/radius in CSS and static inline styles, growing pills, gradients, emoji and icon stroke. Safe areas, measured geometry, hairline compensation and fixed layout dimensions are not invented spacing. `check:themes` checks the lead against the spacing, ratio, radius, elevation and motion rules in every mode. Secondary packages' remaining scale findings are reported, not hidden; they are not promoted until the same checks and rendered review pass. Runtime package validity and contrast remain required for all packages.
+| Scale | Structure (system, same in every package) | Orb Teal's values |
+|---|---|---|
+| **Spacing** | 4pt steps with names: `space/1` hair 4 · `/2` tight 8 · `/3` snug 12 · `/4` base 16 · `/5` roomy 24 · `/6` group 32 · `/7` section 48 · `/8` page 64. `layout/card-gap` is a step. UI spacing takes one step, its negative, or derived geometry (safe-area insets, a hit area); never a half step or a sum. | as the structure |
+| **Type** | Six steps, caption → h1, each body × ratio^n (n = −2…3), whole pixels within 0.75px. Ratio 1.125–1.333; nothing under 11px; strong at least 200 heavier than regular; tight line height under body. UI type takes the scale's own tokens. | body 16, ratio 1.2: 11 · 13 · 16 · 19 · 23 · 28; weights 400/600; lines 1.25/1.5 |
+| **Elevation** | Two levels: `shadow/card` (a card on the page) and `shadow/raised` (sheets, popovers, toasts), each at most two layers, raised visibly above card. | card `0 1px 2px` at 32%, raised `0 12px 32px` at 48% |
+| **Radius** | By component size class, never by rendered height. A *container* (card, sheet, panel, bubble, banner, toast) takes `radius/card`; a *control* (button, field, choice, the composer at any height, a row) takes `radius/input`; only a *token* of fixed height (status pill, chip, dot, round icon button) takes `radius/pill`. Card and input radii are on the 4pt grid, input under card; the pill is 999px. | card 12 · input 8 · pill 999 |
+| **Motion** | One family: `duration-fast` < `transition` < `duration-slow`, within 150–300 ms (M9); the loops `pulse` and `breathe` are whole multiples of slow; one curve, `motion/ease`, that never overshoots. | 150 · 225 · 300; pulse 1800, breathe 6000; `cubic-bezier(0.25, 0.1, 0.25, 1)` |
+| **Icons** | One set (`ICONS`, `ui/js/components.js`), drawn for Nova on a 24-unit grid at one stroke weight, `ICON_STROKE` = 1.5, round caps and joins, no fills, in `currentColor`. No emoji. No third-party set, so nothing to license. | as the structure |
+
+**What `lint:tokens` catches** (`scripts/lint-tokens.js`, tests in `tests/lint-scales.test.js`), in CSS and in the styles scripts write, each as `file:line` with the reason:
+- off-scale spacing;
+- type outside the scale's tokens;
+- a radius that isn't a single radius token, or a pill on something that grows;
+- a gradient outside the orb and the page;
+- an icon at another stroke weight;
+- emoji.
 
 ## 3. Starter packages (ship in core)
 - **Orb Teal** (default, dark): deep teal living gradient background, luminous orb, frosted glass cards, soft green-teal accent. Source: concepts D/E/H.
-- **Companion Light** (secondary, not yet at the rendered-review bar): warm cream surfaces, soft coral-warm accent with teal orb retained, serif display + clean sans body. Source: concepts B/F.
+- **Companion Light**: warm cream surfaces, soft coral-warm accent with teal orb retained, serif display + clean sans body. Source: concepts B/F.
 Both packages must render EVERY layout and component identically in structure — a package changes values, never layout or features. (Historical exception carried from Era 2: a theme may add one signature extra surface — the Stellar Map in the Nova theme — declared in its manifest as an extra, never as a removal.)
 
 ## 4. Package format and hot swap
@@ -155,4 +215,6 @@ Every layout exposes the same features; layouts differ in arrangement only.
 - Numbers that drive decisions (cost, time, stakes) are shown with their basis; no naked percentages without denominators where the package renders decision content.
 
 ## 7. Component inventory (v1 — each specced with states)
+Each is rendered, in every state, in the living styleguide (§0.5). A component that isn't there doesn't ship.
+
 Orb (states, fixed: idle/listening/working/speaking/needs-you/stopped/offline — §1) · BriefCard · HandlingCard (task rows) · TaskRow · VerifiedResultCard (with evidence viewer) · LookingIntoItCard · DeviceRow · DeviceMeshCard · HealthCard · MemoryHighlightCard · ApprovalSheet (tiered, plain-language permissions) · TriggerRow (schedule/event with pause/delete) · ChatBubble set · Composer (text/voice) · Toast/ProactiveBanner · SettingsRow · EmptyState ("Nothing needs you" is a valid, designed state).

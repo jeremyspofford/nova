@@ -926,6 +926,13 @@ kbd {
 .ds-picker { margin-top: var(--space-4); }
 .ds-kicker { margin-bottom: var(--space-2); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
 .ds-reason { margin-top: var(--space-2); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.ds-more { margin-top: var(--space-5); }
+.ds-more-summary { list-style: none; display: flex; align-items: center; gap: var(--space-1); min-height: var(--hit); padding: var(--space-2) 0; cursor: pointer; font: var(--type-weight-strong) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-primary); }
+.ds-more-summary::-webkit-details-marker { display: none; }
+.ds-more-summary .icon { width: var(--space-4); height: var(--space-4); color: var(--text-secondary); transition: rotate var(--motion-duration-fast) var(--motion-ease); }
+.ds-more[open] > .ds-more-summary .icon { rotate: 90deg; }
+.ds-more-note { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.ds-more > .settings-note { margin-bottom: var(--space-2); }
 .ds-others { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--space-8) * 3), 1fr)); gap: var(--space-2); }
 .ds-card .ds-text { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .ds-card.is-big { flex-direction: row; align-items: center; gap: var(--space-4); padding: var(--space-4); border-color: var(--border-strong); }

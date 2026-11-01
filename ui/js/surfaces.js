@@ -468,7 +468,8 @@ export async function saveProfile(section, key, value) {
 
 // `next`: where focus belongs after the last action, kept briefly so a redraw that arrives late
 // (the core's event) doesn't drop it on the page.
-const look = { scope: 'device', pending: null, undo: null, next: null, nextUntil: 0 };
+// `more`: whether the designs not yet at the bar are open.
+const look = { scope: 'device', pending: null, undo: null, next: null, nextUntil: 0, more: false };
 const prefers = () => (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 const designName = (a, id) => a.list.find((d) => d.id === id)?.name ?? id;
 
@@ -519,7 +520,7 @@ const FRAME = `<section class="memory-section" id="appearance" aria-labelledby="
 <div class="contrast-check" id="contrast-check" role="status"></div>
 <div data-sub="mode"></div>
 <p class="settings-note" id="appearance-iphone">On an iPhone with Nova on the Home Screen, a dark design also fills the strip with the time and battery. After you switch to or from a dark design, that strip may only change once you close Nova and open it again.</p>
-<p class="perm-foot"><a class="set-link" href="/styleguide">Style reference</a></p></section>`;
+<p class="perm-foot"><a class="set-link" href="/styleguide">Styleguide</a></p></section>`;
 
 const setHtml = (node, html) => { if (node && node.innerHTML !== html) node.innerHTML = html; };
 
@@ -543,8 +544,16 @@ export function drawAppearance(box) {
       ? `<div class="ds-bar" id="appearance-undo"><p>${esc(designName(a, look.undo))} is on this device now.</p><button type="button" class="btn small" data-action="undo-ds">Undo</button></div>`
       : '';
   setHtml(bar, barHtml);
-  setHtml(box.querySelector('#appearance-design'), `${rec ? `<div class="ds-recommended"><p class="ds-kicker">Recommended</p>${designCard(rec, a, { big: true, showing, want })}<p class="ds-reason">${esc(rec.reason)}</p></div>` : ''}
-${others.length ? `<h3 class="conn-sub">More designs</h3><ul class="ds-others" aria-label="Other designs">${others.map((d) => `<li>${designCard(d, a, { showing, want })}${d.valid ? '' : `<p class="settings-note">${esc(d.problems.slice(0, 2).join(' '))}</p>`}</li>`).join('')}</ul>` : ''}`);
+  // Packages aren't equals (DESIGN-SYSTEM §0): Nova's own design first; the rest are behind
+  // "More designs", said plainly to be not yet at the bar, and open whenever one of them is in use.
+  const inUse = others.some((d) => [showing, a.user, a.device].includes(d.id));
+  const more = look.more || inUse;
+  const kicker = rec?.at_bar ? 'Nova’s design' : 'Recommended';
+  const otherNote = others.some((d) => !d.at_bar) ? '<p class="settings-note">These work, and each says whether it reads well, but none has yet been held to the design bar Nova’s own design meets. They may change as they are brought up to it.</p>' : '';
+  setHtml(box.querySelector('#appearance-design'), `${rec ? `<div class="ds-recommended"><p class="ds-kicker">${kicker}</p>${designCard(rec, a, { big: true, showing, want })}<p class="ds-reason">${esc(rec.reason)}</p></div>` : ''}
+${others.length ? `<details class="ds-more"${more ? ' open' : ''}><summary class="ds-more-summary">${ICONS.chevron}More designs <span class="ds-more-note">· ${others.length}, not yet at Nova’s design bar</span></summary>${otherNote}<ul class="ds-others" aria-label="More designs">${others.map((d) => `<li>${designCard(d, a, { showing, want })}${d.valid ? '' : `<p class="settings-note">${esc(d.problems.slice(0, 2).join(' '))}</p>`}</li>`).join('')}</ul></details>` : ''}`);
+  const details = box.querySelector('.ds-more');
+  if (details && !details.dataset.wired) { details.dataset.wired = '1'; details.addEventListener('toggle', () => { look.more = details.open; }); }
   const check = box.querySelector('#contrast-check');
   const panel = contrastPanel(a);
   if (check.dataset.ok !== panel.ok) check.dataset.ok = panel.ok;

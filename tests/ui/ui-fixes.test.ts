@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Page } from 'playwright-core';
+import type { Locator, Page } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
 import { blank, browser, cssVar, device, finishSetup, ready, shoot, shotsDir } from './support.ts';
 
@@ -316,6 +316,13 @@ test('UI fixes 4: Settings is one structure in two layouts, with a search that k
 
 // ---- 5: Appearance -----------------------------------------------------------------------------------
 
+// The designs not yet at the bar are behind More designs: open it, if it isn't.
+async function openMore(look: Locator) {
+  const more = look.locator('details.ds-more');
+  if (!(await more.evaluate((e) => (e as HTMLDetailsElement).open))) await more.locator('summary').click();
+  await look.locator('.ds-others .ds-card').first().waitFor({ state: 'visible' });
+}
+
 test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, the scope, a contrast check, one recommendation', async (t) => {
   const b = await browser();
   if (typeof b === 'string') return t.skip(b);
@@ -341,10 +348,15 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
         // The embedded preview is gone; swatches stay, as thumbnails on the picker.
         assert.equal(await d.page.locator('#settings-view iframe').count(), 0, `${where}: no preview frame`);
         assert.ok((await look.locator('.ds-card .ds-chips').count()) >= 6, `${where}: each design has its swatch thumbnail`);
-        // One recommendation, with a reason; the rest are secondary.
+        // One recommendation, with a reason: Nova's own design, the lead at the design bar
+        // (DESIGN-SYSTEM §0). The rest are secondary, behind More designs, not yet at the bar.
         assert.equal(await look.locator('.ds-recommended .ds-card').count(), 1, `${where}: one recommended design`);
-        assert.equal(await look.locator('.ds-recommended .ds-card').getAttribute('data-ds'), 'orb-teal', `${where}: Orb Teal leads even on a light system`);
-        assert.match((await look.locator('.ds-reason').textContent()) ?? '', /lead design.*contrast/i, `${where}: with its reason`);
+        assert.equal(await look.locator('.ds-recommended .ds-card').getAttribute('data-ds'), 'orb-teal', `${where}: Nova's own design, on a light system too`);
+        assert.match((await look.locator('.ds-recommended .ds-kicker').textContent()) ?? '', /Nova’s design/, `${where}: said to be Nova's own`);
+        assert.match((await look.locator('.ds-reason').textContent()) ?? '', /design bar.*contrast.*no light design has reached the bar/i, `${where}: with its reason, plainly`);
+        assert.match((await look.locator('.ds-more-summary').textContent()) ?? '', /More designs.*not yet at Nova’s design bar/, `${where}: the others are not presented as equals`);
+        assert.equal(await look.locator('.ds-more').evaluate((e) => (e as HTMLDetailsElement).open), design !== 'orb-teal', `${where}: folded away unless one is in use`);
+        await openMore(look);
         assert.ok(await look.locator('.ds-others .ds-card').count() >= 5, `${where}: the others listed below it`);
         const sizeOf = (sel: string) => look.locator(sel).first().evaluate((e) => e.getBoundingClientRect().height);
         assert.ok(await sizeOf('.ds-recommended .ds-card') > await sizeOf('.ds-others .ds-card'), `${where}: the others are secondary`);
@@ -369,6 +381,7 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
         // All devices: shows here at once, and nothing is kept until Save.
         await look.locator('label.choice:has(input[name="ds-scope"][value="user"])').click();
         await d.page.waitForFunction(() => (document.querySelector('input[name="ds-scope"][value="user"]') as HTMLInputElement)?.checked);
+        await openMore(look);
         await look.locator('.ds-card[data-ds="paper"]').click();
         await showing(d.page, bg.paper);
         const save = look.locator('[data-action="save-ds"]');
@@ -396,6 +409,7 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
       await d.page.goto(`${m.base}/settings#appearance`);
       await ready(d.page);
       const look = d.page.locator('#appearance');
+      await openMore(look);
       await look.locator('.ds-card[data-ds="example.mist"]').click();
       const check = look.locator('#contrast-check');
       await d.page.waitForFunction(() => document.getElementById('contrast-check')?.dataset.ok === 'false');
