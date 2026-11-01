@@ -191,6 +191,7 @@ Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-3
 ## Nova Vault and the Credential Broker (owner input 2026-10-31)
 Spec: `nova-vault-broker-design-2026-10-31.md`, with the owner's instruction and decisions. The design (ADR) is `docs/plans/vault-broker.md`. Each phase is ADR-gated, and nothing displaces in-flight work or the M10e–M10k order.
 - **Phase 1:** the broker and Nova Vault. A side track after M10e, in three PRs, ahead of M10h's spoke credentials and M10j's cluster credentials.
+  - **P1a under review (#275, 2026-11-01):** broker, Nova Vault, fixed verbs and IPC, plus owner findings A regression fixes. Core/supervisor consumer integration remains P1b; complete gate P1c. Independent live review completed with three test-first fixes; owner findings set B and exact-head CI still gate merge. No merge or consumer cutover is claimed.
   - **Gate:** canary values found nowhere Nova writes; the broker refusing a non-bound origin even when core asks; an adversarial review.
 - **Phase 2:** the 1Password connector behind the broker, after Phase 1's gate. A real account needs the owner's OK.
 - **Phase 3:** optional Vaultwarden and further connectors, by demand. Never a default.
