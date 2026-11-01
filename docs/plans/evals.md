@@ -647,3 +647,23 @@ gemma4:12b has passed it on 2 of 2 trials so far.
   > - **The memory case stays in CAPABILITY** until real models pass it (§10).
 
 - **CAPABILITY-INVENTORY:** the three claims' rows (if listed) now read "backed by" their case.
+
+### 11. Memory recall graduates (PR "Evals: memory recall across conversations, real-model trials")
+
+- **Graduated:** `claim.memory-recalled-next-conversation` is in REGRESSION at version 2 and in the manifest. Its claim `memory.read-before-reply` now needs it.
+- **The real-model rule,** as stated in §10: 3 trials per model on two local models, every trial passing. gemma4:12b passed 3/3 and qwen3.8:27b passed 3/3, with digests recorded in the evidence. Stand-ins passed 5/5.
+- **Strong words restored:** `ui/js/view.js:500` (Memory) now reads "Nova reads this before every reply.", with a comment above it citing the case.
+  - The register note had called "every reply" too wide because helpers get no memory.
+  - A helper writes a report to the conversation that asked; it never replies to the person. Every reply the person gets does carry memory (the case shows it), so the words now mean the person's replies.
+  - If the owner reads "every reply" as including helpers, revert this one line; the case still backs the softer words.
+- **The suite bound is raised to 200 tasks** (`tests/core/evals.test.ts`). 20–50 was the research's starting size, not a ceiling. The suite grows with every production bug and every claim case, and the bound now guards only against accidental bulk, about a second a task in CI.
+- **LEDGER, plain-language "What changed":**
+
+  > **What changed (2026-11-01): the Memory page says "Nova reads this before every reply" again.** A test shows it: something you tell Nova in one conversation, it knows in the next. Two local models passed it every time, and so did the stand-ins. The test now runs on every change to Nova.
+
+- **LEDGER, decision entry:**
+
+  > **2026-11-01 (memory recall graduates).**
+  > - **The move:** `claim.memory-recalled-next-conversation` is now REGRESSION. It passed 3/3 trials on gemma4:12b and 3/3 on qwen3.8:27b (digests in the evidence), and 5/5 with stand-ins.
+  > - **Wording:** the Memory page's strong words return, citing the case. A helper's report gets no memory by design and is not a reply to the person.
+  > - **The bound:** the golden-suite bound rises from 50 to 200 tasks.

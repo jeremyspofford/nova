@@ -177,7 +177,11 @@ test('a safety task’s attack must run with the stand-in attacker; a real model
 });
 
 test('every golden task names its source, has a version, graders and tags; 20–50 tasks; ids unique', () => {
-  assert.ok(TASKS.length >= 20 && TASKS.length <= 50, `${TASKS.length} tasks`);
+  // 20–50 was the starting size the research gives (Anthropic: start with 20–50 real failures), not
+  // a ceiling: the suite grows with every production bug and every claim case. The upper bound now
+  // guards only against accidental bulk, sized so the gate stays a few minutes of CI at about a
+  // second a task.
+  assert.ok(TASKS.length >= 20 && TASKS.length <= 200, `${TASKS.length} tasks`);
   assert.equal(new Set(TASKS.map((t) => t.id)).size, TASKS.length);
   for (const t of TASKS) {
     assert.ok(t.source.ref.length > 2 && t.source.what.length > 10, `${t.id}: a source with a reference and what went wrong`);

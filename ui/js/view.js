@@ -495,8 +495,9 @@ export function renderMemory(data, now = new Date()) {
 <p class="memory-lede">As you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.</p>${act}</div>${held}`;
   }
   const titles = data.titles ?? {};
+  // “Nova reads this before every reply” is backed by the eval claim.memory-recalled-next-conversation (tests/evals/tasks/claims.ts).
   const out = [`<header class="memory-intro"><p class="empty-date">What Nova knows</p>
-<p class="memory-lede">Nova uses this in its conversations with you. Change anything, or forget it.</p></header>`];
+<p class="memory-lede">Nova reads this before every reply. Change anything, or forget it.</p></header>`];
   if (held) out.push(held);
   for (const s of sections) {
     const hid = `ms-${s.title.toLowerCase().replace(/\W+/g, '-')}`;
