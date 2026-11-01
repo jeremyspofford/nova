@@ -154,6 +154,131 @@ export function overshoots(easing: string): boolean {
   return [y1!, y2!].some((y) => y < 0 || y > 1);
 }
 
+// ---- the orb's states (DESIGN-SYSTEM §1 and §7; owner decision 2026-10-31) ----------------------
+// The set is fixed and its meanings are the system's: a design system expresses every state in its
+// own visual language (its colours, and which motion, light and mark each state shows), and can't
+// add a state, remove one or give one another meaning. Red is reserved for what stops Nova; amber
+// is for what needs the person while Nova keeps running.
+export const ORB_STATES = Object.freeze(['idle', 'listening', 'working', 'speaking', 'needs-you', 'stopped', 'offline'] as const);
+export type OrbState = (typeof ORB_STATES)[number];
+export const ORB_MEANINGS: Readonly<Record<OrbState, string>> = Object.freeze({
+  idle: 'Nothing is happening; Nova is there.',
+  listening: 'The person is talking to Nova.',
+  working: 'Nova is doing something.',
+  speaking: 'A reply is arriving.',
+  'needs-you': 'Something needs the person while Nova keeps running: an approval waiting, a problem worth a look, capture running degraded. Amber.',
+  stopped: 'Something stopped Nova: work can’t proceed, a dead-man’s switch fired, or a security refusal. Red, and nothing else is.',
+  offline: 'Nova isn’t reachable.',
+});
+// The colour a state must take, where its meaning fixes it: stopped is the status vocabulary's
+// Failed colour, needs-you its Needs you colour. No other state may take status/error.
+export const ORB_STATE_COLORS: Readonly<Partial<Record<OrbState, readonly string[]>>> = Object.freeze({ stopped: ['status/error'], 'needs-you': ['orb/attention', 'status/attention'] });
+// What the renderer can draw, by name. A state's look is one of each: a motion (how it moves), a
+// light (how bright it is) and a mark (a ring around it, or none). Light and mark are its brightness
+// pattern, so they are what is left under reduced motion, where nothing moves.
+export const ORB_MOTIONS = Object.freeze(['breathe', 'swirl', 'pulse', 'ripple', 'beckon', 'alarm', 'still'] as const);
+export const ORB_LIGHTS = Object.freeze(['soft', 'full', 'bright', 'stark', 'dim'] as const);
+export const ORB_MARKS = Object.freeze(['none', 'ring', 'dashed'] as const);
+export type OrbMotion = (typeof ORB_MOTIONS)[number];
+export type OrbLight = (typeof ORB_LIGHTS)[number];
+export type OrbMark = (typeof ORB_MARKS)[number];
+export interface OrbLook { color: string; motion: OrbMotion; light: OrbLight; mark: OrbMark; reduced: { light: OrbLight; mark: OrbMark } }
+
+// Each name as CSS custom properties the orb's layers read (ui/styles/components.css draws them; the
+// keyframes are there too). Only these strings ever reach the CSS: a package picks names, not CSS.
+const GLOW_BREATHE = 'orb-breathe var(--motion-breathe) var(--motion-ease) infinite alternate';
+const MOTION_VARS: Readonly<Record<OrbMotion, Record<string, string>>> = {
+  breathe: { 'glow-anim': GLOW_BREATHE, 'swirl-anim': 'none', 'swirl-op': '0' },
+  swirl: { 'glow-anim': GLOW_BREATHE, 'swirl-anim': 'orb-swirl var(--motion-breathe) linear infinite', 'swirl-op': '1' },
+  pulse: { 'glow-anim': 'orb-pulse var(--motion-pulse) var(--motion-ease) infinite', 'swirl-anim': 'none', 'swirl-op': '0' },
+  ripple: { 'glow-anim': 'orb-ripple var(--motion-pulse) var(--motion-ease) infinite', 'swirl-anim': 'none', 'swirl-op': '0' },
+  beckon: { 'glow-anim': 'orb-beckon calc(var(--motion-pulse) * 2) var(--motion-ease) infinite', 'swirl-anim': 'none', 'swirl-op': '0' },
+  alarm: { 'glow-anim': 'orb-alarm var(--motion-pulse) step-end infinite', 'swirl-anim': 'none', 'swirl-op': '0' },
+  still: { 'glow-anim': 'none', 'swirl-anim': 'none', 'swirl-op': '0' },
+};
+const LIGHT_VARS: Readonly<Record<OrbLight, Record<string, string>>> = {
+  soft: { 'glow-op': '0.7', 'glow-scale': '1', filter: 'brightness(0.92)', fade: '1' },
+  full: { 'glow-op': '1', 'glow-scale': '1', filter: 'brightness(1)', fade: '1' },
+  bright: { 'glow-op': '1', 'glow-scale': '1.08', filter: 'brightness(1.15)', fade: '1' },
+  stark: { 'glow-op': '1', 'glow-scale': '1.12', filter: 'contrast(1.2)', fade: '1' },
+  dim: { 'glow-op': '0.6', 'glow-scale': '1', filter: 'grayscale(1)', fade: '0.7' },
+};
+const MARK_VARS: Readonly<Record<OrbMark, Record<string, string>>> = { none: { mark: 'none' }, ring: { mark: 'solid' }, dashed: { mark: 'dashed' } };
+// Every custom property a state's look sets on the orb (ui/styles/components.css declares each).
+export const ORB_STATE_VARS: readonly string[] = Object.freeze(['c', 'g', 'hi', ...Object.keys(MOTION_VARS.breathe), ...Object.keys(LIGHT_VARS.soft), ...Object.keys(MARK_VARS.none)].map((k) => `--orb-${k}`));
+
+// A state's look, as the channels that aren't hue: with motion, and under reduced motion.
+const moving = (l: OrbLook) => `${l.motion}/${l.light}/${l.mark}`;
+const resting = (l: OrbLook) => `${l.reduced.light}/${l.reduced.mark}`;
+
+// The orb's rules (DESIGN-SYSTEM §1): the seven states, no more, no fewer; each a colour from the
+// schema, a motion, a light and a mark, and a reduced-motion equivalent; no two states the same
+// apart from their colour, with motion or without; stopped unlike every other state in every
+// channel; and the colours their meanings fix.
+export function checkOrbStates(input: unknown): string[] {
+  const out: string[] = [];
+  if (!isObj(input)) return [`orb_states must be an object with the orb’s ${ORB_STATES.length} states: ${ORB_STATES.join(', ')}.`];
+  for (const s of Object.keys(input)) if (!(ORB_STATES as readonly string[]).includes(s)) out.push(`orb_states.${s} isn’t one of the orb’s states (${ORB_STATES.join(', ')}); a design system can’t add one.`);
+  const looks: [OrbState, OrbLook][] = [];
+  for (const s of ORB_STATES) {
+    const l = input[s];
+    if (l === undefined) { out.push(`orb_states.${s} is missing: every design system shows all ${ORB_STATES.length} of the orb’s states.`); continue; }
+    if (!isObj(l)) { out.push(`orb_states.${s} must be an object: color, motion, light, mark and reduced.`); continue; }
+    const before = out.length;
+    for (const k of Object.keys(l)) if (!['color', 'motion', 'light', 'mark', 'reduced'].includes(k)) out.push(`orb_states.${s}.${k} isn’t part of a state’s look (color, motion, light, mark, reduced).`);
+    if (typeof l.color !== 'string' || TOKENS[l.color]?.syntax !== 'color') out.push(`orb_states.${s}.color must name a colour token from the schema; got ${say(l.color)}.`);
+    if (!(ORB_MOTIONS as readonly unknown[]).includes(l.motion)) out.push(`orb_states.${s}.motion must be one of ${ORB_MOTIONS.join(', ')}; got ${say(l.motion)}.`);
+    if (!(ORB_LIGHTS as readonly unknown[]).includes(l.light)) out.push(`orb_states.${s}.light must be one of ${ORB_LIGHTS.join(', ')}; got ${say(l.light)}.`);
+    if (!(ORB_MARKS as readonly unknown[]).includes(l.mark)) out.push(`orb_states.${s}.mark must be one of ${ORB_MARKS.join(', ')}; got ${say(l.mark)}.`);
+    const r = l.reduced;
+    if (!isObj(r)) out.push(`orb_states.${s}.reduced is missing: every state needs a reduced-motion equivalent, a light and a mark.`);
+    else {
+      if (!(ORB_LIGHTS as readonly unknown[]).includes(r.light)) out.push(`orb_states.${s}.reduced.light must be one of ${ORB_LIGHTS.join(', ')}; got ${say(r.light)}.`);
+      if (!(ORB_MARKS as readonly unknown[]).includes(r.mark)) out.push(`orb_states.${s}.reduced.mark must be one of ${ORB_MARKS.join(', ')}; got ${say(r.mark)}.`);
+    }
+    const fixed = ORB_STATE_COLORS[s];
+    if (fixed && typeof l.color === 'string' && !fixed.includes(l.color)) out.push(`orb_states.${s}.color must be ${fixed.join(' or ')}: that colour is what ${s} means.`);
+    if (!fixed && l.color === 'status/error') out.push(`orb_states.${s}.color can’t be status/error: red is reserved for stopped.`);
+    if (out.length === before) looks.push([s, l as unknown as OrbLook]);
+  }
+  // More than hue: with motion, and under reduced motion (where only the brightness pattern is left).
+  for (let i = 0; i < looks.length; i++) {
+    for (let j = i + 1; j < looks.length; j++) {
+      const [a, la] = looks[i]!;
+      const [b, lb] = looks[j]!;
+      if (moving(la) === moving(lb)) out.push(`orb_states: ${a} and ${b} look the same apart from their colour (${moving(la)}); colour alone isn’t a safe channel, so give one a different motion, light or mark.`);
+      if (resting(la) === resting(lb)) out.push(`orb_states: under reduced motion, ${a} and ${b} look the same apart from their colour (${resting(la)}); give one a different reduced light or mark.`);
+    }
+  }
+  // Stopped is unmistakable: no other state shares its motion, its light or its mark, moving or not.
+  const stopped = looks.find(([s]) => s === 'stopped')?.[1];
+  if (stopped) {
+    const others = looks.filter(([s]) => s !== 'stopped');
+    const shared = (get: (l: OrbLook) => string) => others.filter(([, l]) => get(l) === get(stopped)).map(([s]) => s);
+    for (const [what, get] of [['motion', (l: OrbLook) => l.motion], ['light', (l: OrbLook) => l.light], ['mark', (l: OrbLook) => l.mark],
+      ['reduced light', (l: OrbLook) => l.reduced.light], ['reduced mark', (l: OrbLook) => l.reduced.mark]] as const) {
+      const with_ = shared(get);
+      if (with_.length) out.push(`orb_states: stopped must be unmistakable, so no other state shares its ${what} (${get(stopped)}); ${with_.join(', ')} ${with_.length === 1 ? 'does' : 'do'}.`);
+    }
+  }
+  return out;
+}
+
+// One state's look as the custom properties the orb reads, and the reduced-motion part on its own.
+export function orbStateVars(l: OrbLook): { moving: Record<string, string>; resting: Record<string, string> } {
+  const own = l.color === 'orb/core' || l.color === 'orb/listening';
+  return {
+    moving: {
+      c: `var(${cssVar(l.color)})`,
+      // The default glow and highlight suit the orb's own colours; any other colour lights itself.
+      g: own ? 'var(--orb-glow)' : `color-mix(in srgb, var(${cssVar(l.color)}) 50%, transparent)`,
+      hi: own ? 'var(--orb-listening)' : `var(${cssVar(l.color)})`,
+      ...MOTION_VARS[l.motion], ...LIGHT_VARS[l.light], ...MARK_VARS[l.mark],
+    },
+    resting: { ...LIGHT_VARS[l.reduced.light], ...MARK_VARS[l.reduced.mark] },
+  };
+}
+
 // ---- value syntax --------------------------------------------------------------------------
 
 export type Rgba = [number, number, number, number];
@@ -350,6 +475,7 @@ export interface DesignPackage extends Manifest {
   tokens: Record<string, string>;
   modes?: { light?: Record<string, string>; dark?: Record<string, string> };
   reduced_motion?: Record<string, string>;
+  orb_states: Record<OrbState, OrbLook>;
   components?: Record<string, Record<string, string | string[]>>;
   content_rules?: Record<string, number | boolean>;
   extras?: Extra[];
@@ -454,6 +580,9 @@ export function validatePackage(input: unknown): { ok: boolean; problems: string
     else if (ms(v as string) > REDUCED_MOTION_MAX_MS) out.push(`Under reduced motion, ${name} can be at most ${REDUCED_MOTION_MAX_MS}ms; got ${v}.`);
   }
 
+  // The orb's states: all seven, each its own in more than colour, stopped unmistakable.
+  out.push(...checkOrbStates(p.orb_states));
+
   // Content rules: tighten only.
   if (p.content_rules !== undefined && !isObj(p.content_rules)) out.push('content_rules must be an object.');
   for (const [rule, v] of Object.entries(isObj(p.content_rules) ? p.content_rules : {})) {
@@ -554,8 +683,12 @@ export function generateCss(input: unknown, o: { mode?: Mode; nudge?: Record<str
       parts.push(`@media (prefers-color-scheme: ${m}) {\n${block(':root', [`color-scheme: ${scheme(t)};`, ...vars(changed)], '  ')}\n}`);
     }
   }
+  // The orb's states: the package's look for each, as the custom properties the orb's layers read.
+  const orbVars = (v: Record<string, string>) => Object.entries(v).map(([k, x]) => `--orb-${k}: ${x};`);
+  const looksOf = ORB_STATES.map((s) => [s, orbStateVars(pkg.orb_states[s])] as const);
+  for (const [s, v] of looksOf) parts.push(block(`.orb[data-state="${s}"]`, orbVars(v.moving)));
   const reduced = { ...REDUCED_MOTION, ...(pkg.reduced_motion ?? {}) };
-  parts.push(`@media (prefers-reduced-motion: reduce) {\n${block(':root', vars(reduced, false), '  ')}\n}`);
+  parts.push(`@media (prefers-reduced-motion: reduce) {\n${[block(':root', vars(reduced, false), '  '), ...looksOf.map(([s, v]) => block(`.orb[data-state="${s}"]`, orbVars(v.resting), '  '))].join('\n')}\n}`);
   return `${parts.join('\n')}\n`;
 }
 
@@ -654,6 +787,7 @@ export class Design extends EventEmitter {
       contrast: CONTRAST_PAIRS.map(([fg, bg, min, what]) => ({ fg, bg, min, what })),
       live_checks: LIVE_CHECKS.map(([fg, bg, min, kind, what]) => ({ fg, bg, min, kind, what })),
       reduced_motion: { always: REDUCED_MOTION, max_ms: REDUCED_MOTION_MAX_MS },
+      orb_states: { states: ORB_STATES.map((name) => ({ name, meaning: ORB_MEANINGS[name], ...(ORB_STATE_COLORS[name] ? { color: ORB_STATE_COLORS[name] } : {}) })), motions: ORB_MOTIONS, lights: ORB_LIGHTS, marks: ORB_MARKS },
     };
   }
 

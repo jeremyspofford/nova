@@ -6,6 +6,16 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #274 · The Memory page says "Nova reads this before every reply" again**
+- What changed: a permanent test now shows that something you tell Nova in one conversation, it knows in the next. Two local models passed it every time (3 of 3 each), and so did the stand-ins. It runs on every change to Nova, so the stronger wording is back.
+- What you can now do: rely on Nova carrying what you've told it into new conversations, with the models tested.
+- Still unfinished: helpers (Nova's background workers) get no memory by design; the wording covers the replies you get.
+
+**2026-11-01 · #263 · The orb has seven fixed states, and red now only means "something stopped"**
+- What changed: red is reserved for problems that stop Nova, such as a failed task, a safety switch that fired, or a request refused for your security. Anything that needs you while Nova keeps running is amber, such as an approval waiting or a Health item to look at. Each state differs in movement and brightness as well as colour, with a still version for reduced motion. Every design must show all seven, and can't redefine them.
+- What you can now do: tell at a glance whether Nova is stopped (red) or just needs you (amber). Health labels each problem "Failed" or "Needs you". Note that a failed task, including a failed "Backup now", counts as stopped, so it shows red.
+- Still unfinished: a design you made yourself, without the new state list, falls back to the default design until it's updated.
+
 **2026-11-01 · #273 · Four promises Nova can now prove are back in its own words**
 - What changed: four things Nova says about itself now have permanent tests behind them, so a change that breaks one can't merge. Those are that scheduled work runs on its own, that Nova recommends a model for each job, that nothing is marked done until Nova has checked the evidence, and that a chat reply served by the cloud says so. Three screens got their stronger wording back.
 - What you can now do: rely on those four statements; each is checked on every change.
@@ -415,6 +425,11 @@ phase (Point 10; Decisions 2 and 5). No migration: nothing new is replicated.
   backup and every home for each private key in three encodings, with the key files hashed before and
   after.
 
+**2026-11-01 (memory recall graduates, PR #274, Track 3).**
+- **The move:** `claim.memory-recalled-next-conversation` is now REGRESSION. It passed 3/3 trials on gemma4:12b (`4eb23ef1…`) and 3/3 on qwen3.8:27b (`aaee06c3…`), with digests in `docs/evidence/evals.md`, and 5/5 with stand-ins.
+- **Wording:** the Memory page's strong words return ("Nova reads this before every reply."), citing the case. A helper's report gets no memory by design and isn't a reply to the person.
+- **The suite bound:** the golden suite may now hold up to 200 tasks, up from 50.
+
 **2026-11-01 (claim cases graduated, PR #273, Track 3).** Four model-independent claim cases moved from CAPABILITY to REGRESSION after 5 consecutive stand-in passes before the move and 5 after:
 - `claim.local-first-says-when-cloud`;
 - `claim.schedule-runs-unattended`;
@@ -426,6 +441,17 @@ Their claims now count as backed, and a drop blocks merge.
 - **Kept softened:** setup's cloud line stays "each cloud call is recorded". Background cloud work (sorting decisions, the foundry) is recorded but not said, so "always say when" isn't shown.
 - **Still capability:** `claim.memory-recalled-next-conversation` needs 3 trials on at least two local models, every one passing.
 - **Suite size:** the golden suite is now at 50 tasks, the top of its enforced range; the next task needs that bound raised.
+
+**2026-10-31 (owner decision: the orb's fixed semantic states; red stops, amber needs you).** Recorded in DESIGN-SYSTEM §1 ("The orb's semantic states"); plan and evidence `docs/plans/orb-states.md`, branch `ui/orb-states`.
+- **The set is fixed:** idle, listening, working, speaking, needs-you (amber), stopped (red), offline. Themes may not add, remove or re-mean a state. `attention` is now `needs-you` and `alert` is `stopped`.
+- **Red is reserved for problems that stop Nova** (the Failed class: work can't proceed, a dead-man's switch fired, a security refusal). Amber is for whatever needs the person while Nova keeps running: approvals waiting, Health items, degraded capture. This maps 1:1 onto the status vocabulary (Failed, Needs you).
+- **Classified where raised:** a problem now carries `stops` (migration 0021, registered in the sync's `ADDED_COLUMNS` so a standby one release behind takes problems without it, as amber). It is set at 11 raise sites and by 3 supervisor playbooks; the list is in the plan. Every other problem defaults to amber. This settles UX review 1's open question (`docs/plans/ux-review-1.md`): the review's standby-copy problems are amber.
+- **Visual rules in every theme,** enforced by `check:themes` and a UI test across every installed design system, light and dark, with and without reduced motion:
+  - states differ by motion and brightness pattern as well as hue;
+  - stopped is unmistakable;
+  - every state has a reduced-motion equivalent.
+- **Each package expresses the states in its own visual language** through `orb_states{}`. The values and motion are the theme's; the meanings are the system's.
+- **The F3 fix (#254's lit sphere) stays.**
 
 **2026-11-01 (claim cases, the backlog, PR #261, Track 3).** The register's eval cases (`tests/evals/claims.ts`, from #265 and M10f) are in `tests/evals/tasks/claim-backlog.ts`.
 - **38 cases:**

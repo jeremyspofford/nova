@@ -201,6 +201,7 @@ that say the same show once. Different lines, or the same line apart, all stay.
 problems (files too large for the standby's copy) were real but not urgent. Proposed: keep alert for
 problems that stop Nova doing something, and show amber "needs you" for problems that only want a
 look. Not changed in this PR.
+*Decided by the owner, 2026-10-31: red only for what stops Nova, amber for what needs the person while Nova keeps running. The review's problems are amber. Built in `docs/plans/orb-states.md`.*
 
 **Decision recorded:** rail items follow one rule (the rail's width less a margin, labels wrap
 inside); `layout/rail-width` is 84 px in every built-in design system.

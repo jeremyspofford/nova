@@ -20,17 +20,19 @@ export interface PlaybookDef {
   // The repair Nova makes by itself, by name, and what it does in words. None when no repair is safe.
   repair?: string;
   automatic?: string;
+  // The problem stops Nova (DESIGN-SYSTEM §1): the orb is red while it is open. Otherwise amber.
+  stops?: true;
 }
 
 export const PLAYBOOKS: Readonly<Record<string, PlaybookDef>> = {
   // ---- the hub's own process (the supervisor, src/supervisor) ----
   'server-crashed': {
-    id: 'server-crashed', title: 'Nova stopped unexpectedly',
+    id: 'server-crashed', title: 'Nova stopped unexpectedly', stops: true,
     repair: 'restart-server', automatic: 'The supervisor starts Nova again, waiting a little longer after each crash. This closes by itself once Nova is running again.',
     steps: ['Nothing to do if Nova stays up: work that was running is picked up again.', 'If it happens again, open the technical detail: it has the last lines Nova wrote before it stopped.'],
   },
   'safe-mode': {
-    id: 'safe-mode', title: 'Nova is held in safe mode',
+    id: 'safe-mode', title: 'Nova is held in safe mode', stops: true,
     steps: [
       'Nova stopped three times within a minute of starting, so the supervisor stopped trying and is holding it, rather than restart it forever.',
       'If a new release came before this, go back to the last good one: node src/supervisor/main.ts rollback.',
@@ -38,7 +40,7 @@ export const PLAYBOOKS: Readonly<Record<string, PlaybookDef>> = {
     ],
   },
   'server-unresponsive': {
-    id: 'server-unresponsive', title: 'Nova stopped answering',
+    id: 'server-unresponsive', title: 'Nova stopped answering', stops: true,
     repair: 'restart-server', automatic: 'The supervisor stops the process that no longer answers and starts Nova again. This closes by itself once Nova is running again.',
     steps: ['Nothing to do if Nova answers again after the restart.', 'If it keeps happening, the technical detail says what the health check saw.'],
   },
@@ -227,7 +229,7 @@ export class Playbooks extends EventEmitter {
       // The problem and its playbook are one write. A server killed between the two (the
       // supervisor's chaos pass did it) left a problem with no playbook: the next one of its kind
       // couldn't find it and opened a second, and nothing would ever close the first.
-      return this.#db.tx(() => this.#log.problem(source, said, { ...(o.detail ? { detail: o.detail } : {}), ...(o.taskId ? { taskId: o.taskId } : {}) }));
+      return this.#db.tx(() => this.#log.problem(source, said, { ...(o.detail ? { detail: o.detail } : {}), ...(o.taskId ? { taskId: o.taskId } : {}), ...(PLAYBOOKS[playbook]!.stops ? { stops: true } : {}) }));
     } finally {
       this.#log.off('problem', tag);
     }

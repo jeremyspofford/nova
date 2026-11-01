@@ -39,6 +39,9 @@ export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
 export const ADDED_COLUMNS: Readonly<Record<number, Readonly<Record<string, readonly string[]>>>> = Object.freeze({
   19: { receipt: ['opt_in'] },
   20: { device: ['purposes'] },
+  // Whether a problem stops Nova (the orb's red; DESIGN-SYSTEM §1). A standby without it shows every
+  // problem amber, as before.
+  21: { problem: ['stops'] },
 });
 export const UNSTATED_SCHEMA = 19;
 

@@ -10,6 +10,7 @@ export const REGRESSION_MANIFEST: readonly string[] = [
   'capture.screenpipe-0-4@2',
   'capture.unreachable-diagnosis@2',
   'claim.local-first-says-when-cloud@2',
+  'claim.memory-recalled-next-conversation@2',
   'claim.model-recommendation-fits-job@2',
   'claim.schedule-runs-unattended@2',
   'claim.verified-only-with-evidence@2',

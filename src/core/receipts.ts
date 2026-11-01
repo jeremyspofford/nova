@@ -114,6 +114,8 @@ export class Receipts {
       this.#log.problem('receipts', `A model call for "${r.purpose}" was going to send context to ${to} while Nova is set to local-only. It was refused.`, {
         detail: `provider ${r.provider}, model ${r.model}, ${r.context_items.length} context items${r.task_id ? `, task ${r.task_id}` : ''}${r.session_id ? `, session ${r.session_id}` : ''}`,
         ...(known ? { taskId: r.task_id! } : {}),
+        // A security refusal stops Nova (DESIGN-SYSTEM §1).
+        stops: true,
       });
       throw new CoreError('forbidden', `Local-only mode doesn't allow sending context to ${to}. Nothing was recorded as allowed, and it has been noted as a problem.`);
     }

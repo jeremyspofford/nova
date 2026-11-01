@@ -68,7 +68,7 @@ export class Restarter {
       void release().then((env) => this.#exec(env), (e) => {
         this.#pending = false;
         if (o.failed) { try { o.failed(e as Error); } catch { /* reported below */ } return; }
-        try { this.#log.problem('resilience', 'Nova couldn’t restart itself. Stop it and start it again.', { detail: (e as Error)?.stack ?? String(e) }); } catch { /* closed */ }
+        try { this.#log.problem('resilience', 'Nova couldn’t restart itself. Stop it and start it again.', { detail: (e as Error)?.stack ?? String(e), stops: true }); } catch { /* closed */ }
       });
     }, 150).unref?.();
     return { how: 'in-place', said: 'Nova restarts in a moment, on the same address.' };
