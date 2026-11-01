@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #275 · Credential broker groundwork and owner review fixes; not in use yet**
+- What changed: a separate local broker and encrypted vault can hold and use credentials through fixed verbs, exact target bindings and approvals. Owner review findings A now have regression tests and fixes: migration requires a registered passkey, approval digests bind injection details, returned signing output is scrubbed, sensitive credentials cannot retain standing consent, and cooperating old-vault writers serialize with migration so newer data is kept.
+- What you can now do: nothing new in the running app yet. Core still uses the old vault. This is PR 1 of 3, with the broker/client, synthetic test evidence and a refreshed self-contained review packet; the consumer and supervisor wiring remains Track 1 work.
+- Still unfinished: the required independent live review was interrupted by an automated safety filter; the other model's findings remain outstanding. This PR has not merged. Old checkpoints still retain credentials (S4), holders can retain previously received data (S6), and authenticated verification remains a documented, rate-capped guess oracle. Updated broker and legacy writers must be deployed together; older/Gmail file writers require quiescence and stale locks require operator recovery. No owner vault or keychain was accessed.
+
 **2026-11-01 · Handoff · A takeover note for the next builder**
 - What changed: a handoff note (docs/builder-packet/HANDOFF-FROM-BUILDER-2026-11-01.md) records the work in progress, the open questions waiting on you, the next steps, and the quirks of this machine, so a new builder can pick up without losing anything.
 - What you can now do: nothing in the app changed: paperwork only.
@@ -352,6 +357,8 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-11-01 (Vault broker Phase 1, PR 1 of 3, #275).** The broker remains 2,666/3,000 lines, dependency-free and separate from core. Owner findings A are preserved at `docs/builder-packet/nova-vault-second-model-findings-2026-11-01-a.md`; RED→GREEN evidence and limits at `docs/reviews/vault-owner-findings-notes-2026-11-01.md`. SEC-01..05 are addressed by regressions and fixes; SEC-06 documents authenticated verification's boolean oracle instead of removing the n8n operation required by the design; SEC-07 requested no change. Parent targeted verification: 45 passed, one optional keychain skip; full-suite failure and rerun results are not portrayed as a green suite. The self-contained packet is regenerated from source snapshot `40952a88`. Independent live review, the other model's findings and green exact-head CI remain required. The branch's Track 1 NOTES, including consumer/supervisor wiring and checkpoint migration cleanup, are unapplied; no live security guarantee is claimed before that integration.
 
 **2026-11-01 (M10g, after the second adversarial review of #272: replays, evidence, ties, the name, long jumps).**
 Branch `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The second review of #272"). Five

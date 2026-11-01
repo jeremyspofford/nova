@@ -4,15 +4,18 @@
 
 **The artifact:**
 - Nova's Credential Broker: the TypeScript in `src/broker/`, run by Node 26 with type stripping and no dependencies;
-- the core client that talks to it, `src/core/broker/client.ts`.
+- the core client that talks to it, `src/core/broker/client.ts`;
+- the cooperating legacy writer, `src/core/vault.ts`, needed for migration consistency.
 
-**What's here:** the whole of both, 17 files and 2765 lines, at the end of this document.
+**What's here:** the whole broker, client and cooperating legacy writer: 18 files and 3402 source lines, at the end of this document. The broker alone remains 2,666/3,000 lines under its boundary test's counting rule.
+
+**Source snapshot:** `40952a88a9d6edd3779492150486faf3fb5f94f1`, including owner findings A fixes. The coordinated branch merges main without rebasing. The previous reviewed packet remains available in git at `7b39b0c3`.
 
 **What comes back:** your findings go to the owner, who triages them like any review. A finding that reproduces gets a failing test first.
 
 This document is self-contained: you need nothing else to review the code. Paths are in the repository `jeremyspofford/nova`, branch `vault/broker-phase1`.
 
-**This is the second version.** An in-house adversarial review of the first (`0b7457da`) found five blocking problems:
+**This is the third version, incorporating owner findings A.** An in-house adversarial review of the first (`0b7457da`) found five blocking problems:
 - a run ticket core could redeem;
 - the migration answering guesses and moving without approval;
 - scrubbed echoes of core's own text;
@@ -90,7 +93,7 @@ Every answer is checked against an allow-list of keys (`ANSWER_KEYS`) before it 
 | `bind` remove, consent revoke, rotate abandon, holder remove | At once |
 | A sensitive item with a standing consent | Refused (`class_policy`) |
 
-**Owner findings A follow-up (2026-11-01):** the owner supplied SEC-01..07 in `docs/builder-packet/nova-vault-second-model-findings-2026-11-01-a.md`, copied verbatim. The source excerpts below record the reviewed snapshot and predate the follow-up fixes; see `docs/reviews/vault-owner-findings-notes-2026-11-01.md` and the current source for the delta. This follow-up does not complete the interrupted independent adversarial review or the outstanding second-model findings set. Both remain merge gates.
+**Owner findings A follow-up (2026-11-01):** SEC-01..05 were reproduced before fixes; the final owner suite passes 20/20. SEC-06's authenticated-verification exception and limits are explicit below; SEC-07 requested no change. The input is preserved verbatim in `docs/builder-packet/nova-vault-second-model-findings-2026-11-01-a.md`; commands, failures and migration limits are in `docs/reviews/vault-owner-findings-notes-2026-11-01.md`. The source excerpts below are regenerated from the fixed code. The independent adversarial review was interrupted by an automated safety filter and remains INCOMPLETE. The other model's findings are also outstanding. Neither gate is satisfied by this packet or by the regression tests.
 
 ## 2. The claims the code must uphold
 
@@ -126,6 +129,7 @@ The honest-claims rule: Nova never says "Nova can never read your passwords". It
   - The broker's launcher reads the broker's own home.
   - The commit is tier 3, and makes the items unbound.
   - Every item is read back before anything leaves the old vault. Nova's own keys stay in it.
+  - Stage and finish cooperate with the updated legacy writer through an exclusive lock. Finish retains old entries if the staged snapshot changed; a cached writer refreshes under the same lock. Era 2 Gmail writers and older binaries require quiescence (limit 14).
   - A name already held is decided by metadata, never by comparing values.
 - **C10.** The broker's code imports nothing from core and no package, and is at most 3,000 lines.
 
@@ -203,6 +207,7 @@ The honest-claims rule: Nova never says "Nova can never read your passwords". It
 11. **Checkpoints** taken before the migration still hold the old vault with its key, and Era 2's files.
 12. **What an approval covers:** a tier-2 approval covers one request's method and path, for one task: what its card shows. It doesn't cover its headers or body (core supplies those; they carry no value). A standing consent covers its scope's methods and path prefixes.
 13. **The owner's reveal** (showing a value on the device's own screen, tier 3, gated by passkey or biometric) isn't built.
+14. **Cooperating migration writers:** deploy this broker and updated `vault.ts` together. The lock is fail-closed and is never stolen; after a crash, an operator must stop all writers, establish that none remains, and remove the stale lock before retrying. Older binaries/direct filesystem writers do not participate. Era 2 Gmail JavaScript writers do not honor this lock and must be quiesced for file migration. A changed snapshot is retained, possibly alongside an already migrated alias; reconciliation is explicit. Pre-migration provenance without the new private revision is retained on resume.
 
 ## 6. What we most want attacked
 
@@ -218,7 +223,7 @@ The honest-claims rule: Nova never says "Nova can never read your passwords". It
 
 ## 7. Evidence so far
 
-There are 45 tests in `tests/core/broker-*.test.ts`. On Linux (WSL2), Node 26.3.1, they show:
+The original review snapshot had 45 broker tests; their evidence follows. The follow-up owner suite adds 20 regressions, including a real concurrent legacy-writer child, complete injection settings, returned signing output and retained-binding policy checks. Parent read-back of owner/verbs/legacy-vault files passed 45 tests with one optional real-keychain skip. Full-suite failures and valid reruns are recorded in the implementation NOTES, without claiming a green full suite. On Linux (WSL2), Node 26.3.1, the earlier tests showed:
 - **The first review's findings,** each reproduced first:
   - B1: no ticket reaches core, and a second socket can redeem nothing;
   - B2: the same answer and effect whatever core guessed, and commit at tier 3;
@@ -460,7 +465,7 @@ export class Broker {
   #entry = entryKey();
   #approvals: Approvals;
   #rates: Rates;
-  #staged: { vaultId: string | null; items: Map<string, Buffer> } | null = null;
+  #staged: { vaultId: string | null; revision: string; items: Map<string, Buffer> } | null = null;
   #running = 0;
   #grants = new Set<string>();
   #index = new Map<string, Meta & { version: number; pending: boolean }>();
@@ -757,10 +762,10 @@ export class Broker {
       const body = req.body === undefined || req.body === null ? null : typeof req.body === 'string' ? Buffer.from(req.body, 'utf8') : null;
       if (req.body !== undefined && req.body !== null && !body) throw new Refused('out_of_scope', 'A request body is text.');
       if (body && body.length > 1024 * 1024) throw new Refused('out_of_scope', 'A request body is up to 1 MiB.');
-      inject(headers, b.inject, value, m.username, body);
+      const signature = inject(headers, b.inject, value, m.username, body);
       const res = await send({ origin: b.target, method, path, headers, body, lan: !!b.lan, pin: b.pin ?? null, maxBytes: MAX_OUTPUT }, this.#o.resolve);
       // What the target sent back, scrubbed of the value this use sent (and basic auth's user:value).
-      const one = new Scrubber([value.toString('utf8'), ...(b.inject.how === 'basic' ? [`${m.username ?? ''}:${value.toString('utf8')}`] : [])]);
+      const one = new Scrubber([value.toString('utf8'), ...(b.inject.how === 'basic' ? [`${m.username ?? ''}:${value.toString('utf8')}`] : []), ...(signature ? [signature, signature.slice((b.inject.prefix ?? '').length)] : [])]);
       // A body cut at the cap may end in part of a value: the tail that could hold one goes too.
       const text = res.truncated ? res.body.slice(0, Math.max(0, res.body.length - one.longest)) : res.body;
       return { outcome: { status: res.status, headers: one.any(res.headers), body: one.text(text), truncated: res.truncated } };
@@ -825,7 +830,7 @@ export class Broker {
     const meta: Meta = { name: mi.name, aliases: [alias], kind: mi.kind, origin, username: str(mi.username, 300) ? mi.username : null, class: cls, per_use: mi.per_use === true, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings, policy };
     const action = { verb: 'create', name: meta.name, kind: meta.kind, origin, username: meta.username, class: cls, per_use: meta.per_use, bindings: bindings.map(cardBinding), source: kind };
     const flags = bindings.flatMap((b) => this.#flags(b.target, b.kind));
-    const { id: approval, passkey } = this.#approve(ctx, action, { verb: 'create', what: kind === 'generate' ? `Make a new password for ${origin ?? meta.name}` : `Save a credential for ${origin ?? meta.name}`, name: meta.name, origin, username: meta.username, class: cls, flags, tier: 3, approving: `Saves it in Nova Vault${bindings.length ? `, usable only on ${bindings.map((b) => b.target).join(', ')}` : ', unbound (usable nowhere until you bind it)'}. Suggested class: ${suggested}.` }, true, this.#envelopeHash(src));
+    const { id: approval, passkey } = this.#approve(ctx, action, { verb: 'create', what: kind === 'generate' ? `Make a new password for ${origin ?? meta.name}` : `Save a credential for ${origin ?? meta.name}`, name: meta.name, origin, username: meta.username, class: cls, flags, tier: 3, items: bindings.map(cardBinding), approving: `Saves it in Nova Vault${bindings.length ? `, usable only on ${bindings.map((b) => b.target).join(', ')}` : ', unbound (usable nowhere until you bind it)'}. Suggested class: ${suggested}.` }, true, this.#envelopeHash(src));
     for (const b of meta.bindings) if (b.consent) b.consent.approval_id = approval;
     meta.provenance = kind === 'generate' ? 'generated' : passkey ? 'sealed-passkey' : 'sealed';
     const value = kind === 'generate' ? generate(policy) : this.#sealed((src as { sealed: unknown }).sealed, this.#digest(action, ctx));
@@ -865,6 +870,7 @@ export class Broker {
       if (mm.username !== undefined) next.username = str(mm.username, 300) ? mm.username : null;
       if (mm.class !== undefined) { if (mm.class !== 'standard' && mm.class !== 'sensitive') throw new Failed('not a class'); next.class = mm.class; }
       if (mm.per_use !== undefined) next.per_use = mm.per_use === true;
+      if (next.class === 'sensitive' && next.bindings.some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
       this.#approve(ctx, { verb: 'update', ref: id, meta: { name: next.name, username: next.username, class: next.class, per_use: next.per_use } }, { verb: 'update', what: `Change the details of “${m.name}”${next.class !== m.class ? ` (class ${m.class} → ${next.class})` : ''}`, name: next.name, origin: m.origin, username: next.username, class: next.class, tier: 3, approving: 'Saves the new details.' }, true);
       this.store.setMeta(id, stripIndex(next));
       this.#revoked(id);
@@ -961,7 +967,7 @@ export class Broker {
     const flags = this.#flags(b.target, b.kind);
     const before = m.bindings.find((x) => x.target === b.target);
     const { id: id_ } = this.#approve(ctx, { verb: 'bind', ref: id, binding: cardBinding(b) }, {
-      verb: 'bind', what: `${before ? 'Change' : 'Allow'} “${m.name}” ${before ? 'on' : 'to be used on'} ${b.target}`, name: m.name, origin: m.origin, username: m.username, target: b.target, scope: b.scope, class: m.class, flags, tier: 3,
+      verb: 'bind', what: `${before ? 'Change' : 'Allow'} “${m.name}” ${before ? 'on' : 'to be used on'} ${b.target}`, name: m.name, origin: m.origin, username: m.username, target: b.target, scope: b.scope, class: m.class, flags, tier: 3, items: [cardBinding(b)],
       approving: `${b.consent ? `Standing consent: requests inside ${b.consent.scope.methods.join(', ')} ${b.consent.scope.paths.join(', ')} go ahead without asking, up to ${b.consent.rate_per_hour} an hour. ` : 'Every use asks first. '}Nothing else is covered: no other host, subdomain or port.`,
     }, true);
     if (b.consent) b.consent.approval_id = id_;
@@ -1030,15 +1036,17 @@ export class Broker {
       const out = await this.#launch(['migrate', home], null);
       const items = new Map<string, Buffer>();
       let vaultId: string | null = null;
+      let revision = '';
       for (const line of out.split('\n')) {
         if (!line) continue;
-        let x: { vault_id?: unknown; name?: unknown; value?: unknown };
+        let x: { vault_id?: unknown; revision?: unknown; name?: unknown; value?: unknown };
         try { x = JSON.parse(line); } catch { continue; }
-        if ('vault_id' in x) { vaultId = typeof x.vault_id === 'string' ? x.vault_id : null; continue; }
+        if ('vault_id' in x) { vaultId = typeof x.vault_id === 'string' ? x.vault_id : null; revision = typeof x.revision === 'string' ? x.revision : ''; continue; }
         if (items.size < MAX_STAGED && str(x.name, 200) && NAME.test(x.name) && typeof x.value === 'string' && x.value.length > 0 && x.value.length <= 64 * 1024) items.set(x.name, Buffer.from(x.value, 'utf8'));
       }
       for (const b of this.#staged?.items.values() ?? []) zero(b);
-      this.#staged = { vaultId, items };
+      if (!/^[0-9a-f]{64}$/.test(revision)) throw new Failed('The old vault snapshot is incomplete; nothing was staged.');
+      this.#staged = { vaultId, revision, items };
       return { outcome: { staged: items.size } };
     }
     if (src.migrate !== 'commit') throw new Failed('A migration stages, commits, then proposes bindings.');
@@ -1047,16 +1055,17 @@ export class Broker {
     const from = st.vaultId ?? 'era2';
     const plan = [...groupStaged(st.items)].map(([name, g]) => {
       const owner = [...this.#index.values()].find((x) => x.aliases.includes(`${ALIAS}${name}`));
-      return { name, g, status: !owner ? 'move' : owner.migrated_from === from ? 'moved' : 'kept' };
+      const revision = createHash('sha256').update(canonical(g.names.map((n) => [n, st.items.get(n)!.toString('base64')]))).digest('hex');
+      return { name, g, revision, status: !owner ? 'move' : owner.provenance === 'migrated' && owner.migrated_from === from && owner.migrated_revision === revision ? 'moved' : 'kept' };
     });
-    this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ name: x.name, kind: x.g.kind, status: x.status })) }, { verb: 'create', what: `Move ${plan.filter((x) => x.status === 'move').length} credential(s) from the old vault into Nova Vault`, tier: 3, items: plan.map((x) => ({ name: x.name, kind: x.g.kind, origin: x.g.origin, status: x.status })), approving: 'Each is moved inside the broker, unbound (usable nowhere until you bind it), read back, and only then removed from the old vault. A name already taken by another credential stays in the old vault.' });
+    this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ name: x.name, kind: x.g.kind, status: x.status })) }, { verb: 'create', what: `Move ${plan.filter((x) => x.status === 'move').length} credential(s) from the old vault into Nova Vault`, tier: 3, items: plan.map((x) => ({ name: x.name, kind: x.g.kind, origin: x.g.origin, status: x.status })), approving: 'Each is moved inside the broker, unbound (usable nowhere until you bind it), read back, and only then removed from the old vault. A name already taken by another credential stays in the old vault.' }, true);
     this.#staged = null;
     const moved: string[] = [];
     let readBack = true;
     for (const x of plan) {
       if (x.status === 'kept') continue;
       if (x.status === 'move') {
-        const meta: Meta = { name: x.name, aliases: [`${ALIAS}${x.name}`], kind: x.g.kind, origin: x.g.origin, username: x.g.username, class: suggestClass(x.g.origin, x.g.kind), per_use: false, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings: [], policy: DEFAULT_POLICY, provenance: 'migrated', migrated_from: from };
+        const meta: Meta = { name: x.name, aliases: [`${ALIAS}${x.name}`], kind: x.g.kind, origin: x.g.origin, username: x.g.username, class: suggestClass(x.g.origin, x.g.kind), per_use: false, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings: [], policy: DEFAULT_POLICY, provenance: 'migrated', migrated_from: from, migrated_revision: x.revision };
         const { id } = this.store.add(meta, x.g.value);
         if (x.g.pending) this.store.setPending(id, x.g.pending);
         const v = this.store.value(id);
@@ -1069,18 +1078,18 @@ export class Broker {
     this.#reindex();
     ctx.rec.scope_item = `moved ${moved.length}`;
     if (!readBack) throw new Failed('An item didn’t read back from the new store; nothing was removed from the old vault.');
-    const fin = await this.#launch(['finish', home], JSON.stringify({ vault_id: st.vaultId, names: moved }));
+    const fin = await this.#launch(['finish', home], JSON.stringify({ vault_id: st.vaultId, revision: st.revision, names: moved }));
     let removed = 0;
     try { removed = Number(JSON.parse(fin.trim().split('\n').at(-1) ?? '{}').removed) || 0; } catch { removed = 0; }
     return { outcome: { migrated: plan.filter((x) => x.status === 'move').map((x) => x.name), moved: moved.length, kept: plan.filter((x) => x.status === 'kept').map((x) => x.name), read_back: true, removed } };
   }
 
   // The launcher for a migration step: started by the broker, on its own home, output by pipe, with
-  // the old vault's folders added to what it may read (and, to finish, write).
+  // the old vault's folders added to what it may read, plus the writer lock (and finish writes).
   #launch(args: string[], input: string | null): Promise<string> {
     const home = args[1]!;
     const dirs = [join(home, 'vault'), join(home, 'connectors')];
-    const grants = grantsIf([...dirs.map((d) => `--allow-fs-read=${d}/`), ...(args[0] === 'finish' ? dirs.map((d) => `--allow-fs-write=${d}/`) : [])]);
+    const grants = grantsIf([...dirs.map((d) => `--allow-fs-read=${d}/`), ...(args[0] === 'finish' ? dirs : [dirs[0]!]).map((d) => `--allow-fs-write=${d}/`)]);
     return new Promise((ok, fail) => {
       const child = spawn(process.execPath, [...grants, '--disable-sigusr1', '--disable-warning=ExperimentalWarning', LAUNCH, ...args], { env: { TZ: 'UTC', ...(this.#o.keyMode === 'file' ? { NOVA_VAULT_KEY: 'file' } : {}) }, stdio: ['ignore', 'pipe', 'ignore', 'pipe'] });
       child.stdio[3]!.on('error', () => { /* the launcher stopped before reading it */ });
@@ -1102,10 +1111,10 @@ export class Broker {
       if (x.origin !== undefined && x.origin !== null) { try { origin = canonicalTarget({ kind: 'http', origin: x.origin }).target; } catch { throw new Failed('A proposed site isn’t a canonical https origin.'); } }
       const cls = x.class === 'standard' || x.class === 'sensitive' ? x.class : suggestClass(origin, m.kind);
       const bindings = Array.isArray(x.bind) ? x.bind.slice(0, 5).map((b) => this.#binding(b)) : [];
-      if (cls === 'sensitive' && bindings.some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
+      if (cls === 'sensitive' && [...m.bindings.filter((b) => !bindings.some((n) => n.target === b.target)), ...bindings].some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
       return { id, m, origin, cls, bindings };
     });
-    const items = plan.map((x) => ({ name: x.m.name, kind: x.m.kind, origin: x.origin, username: x.m.username, class: x.cls, target: x.bindings.map((b) => b.target).join(', ') || 'unbound', flags: x.bindings.flatMap((b) => this.#flags(b.target, b.kind)) }));
+    const items = plan.map((x) => ({ name: x.m.name, kind: x.m.kind, origin: x.origin, username: x.m.username, class: x.cls, bindings: x.bindings.map(cardBinding), target: x.bindings.map((b) => b.target).join(', ') || 'unbound', flags: x.bindings.flatMap((b) => this.#flags(b.target, b.kind)) }));
     const { id: approval } = this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ ref: x.id, origin: x.origin, class: x.cls, bindings: x.bindings.map(cardBinding) })) }, { verb: 'create', what: `Bind ${plan.length} credential(s) moved from the old vault`, tier: 3, items, approving: 'Each is usable only on the target shown. Items left unbound can’t be used until you bind them.' }, true);
     for (const x of plan) {
       for (const b of x.bindings) if (b.consent) b.consent.approval_id = approval;
@@ -1140,7 +1149,7 @@ function programRequest(req: { cwd?: unknown; env?: unknown; stdin?: unknown; ti
 const unlockDigest = (vid: string, factor: string, boot: string) => createHash('sha256').update(`nova-broker-unlock|${vid}|${factor}|${boot}`).digest('hex');
 
 const stripIndex = (m: Meta & { version?: number; pending?: boolean }): Meta => { const { version: _v, pending: _p, ...rest } = m; return rest; };
-const cardBinding = (b: Binding) => ({ target: b.target, kind: b.kind, scope: b.scope, inject: b.inject.how, consent: b.consent ? { scope: b.consent.scope, rate_per_hour: b.consent.rate_per_hour } : null, lan: !!b.lan, pin: b.pin ?? null, embed_on: b.embed_on ?? [] });
+const cardBinding = (b: Binding) => ({ target: b.target, kind: b.kind, scope: b.scope, inject: b.inject, consent: b.consent ? { scope: b.consent.scope, rate_per_hour: b.consent.rate_per_hour } : null, lan: !!b.lan, pin: b.pin ?? null, embed_on: b.embed_on ?? [] });
 
 const REFUSED_HEADERS = /^(authorization|proxy-authorization|cookie|host|content-length|transfer-encoding|connection|upgrade|te|trailer|expect|keep-alive|proxy-connection)$/i;
 function callerHeaders(h: unknown, inj: Inject): Record<string, string> {
@@ -1162,7 +1171,12 @@ function inject(headers: Record<string, string>, inj: Inject, value: Buffer, use
   if (inj.how === 'bearer') headers.authorization = `Bearer ${v}`;
   else if (inj.how === 'basic') headers.authorization = `Basic ${Buffer.from(`${username ?? ''}:${v}`).toString('base64')}`;
   else if (inj.how === 'header') headers[inj.header!.toLowerCase()] = `${inj.prefix ?? ''}${v}`;
-  else if (inj.how === 'sign') headers[inj.header!.toLowerCase()] = hmac(value, body ?? Buffer.alloc(0), inj);
+  else if (inj.how === 'sign') {
+    const signature = hmac(value, body ?? Buffer.alloc(0), inj);
+    headers[inj.header!.toLowerCase()] = signature;
+    return signature;
+  }
+  return null;
 }
 
 // The old vault's names, grouped into items: a sign-in's username, password and pending parts are
@@ -1186,7 +1200,6 @@ function groupStaged(staged: Map<string, Buffer>) {
   }
   return out;
 }
-
 ```
 
 ### `src/broker/server.ts`
@@ -1340,6 +1353,7 @@ export interface Meta {
   // here, migrated by the broker's own launcher, sealed with a passkey approval, or sealed through
   // core's relay (a value core could have chosen). Older items have none: treated as `sealed`.
   provenance?: 'generated' | 'migrated' | 'sealed-passkey' | 'sealed'; migrated_from?: string;
+  migrated_revision?: string;
 }
 interface ItemFile { v: 1; id: string; gen: number; version: number; key: Sealed; meta: Sealed; value: Sealed; pending?: { version: number; key: Sealed; value: Sealed } }
 export interface Passkey { public_key: string; rp_id: string; origins: string[]; sign_count: number; registered_at: string }
@@ -2609,9 +2623,9 @@ export function chooseStore(service: string, account: string, file: string, o: {
 //     the value in its environment, or in a 0600 file in a 0700 folder named by that variable and
 //     removed on exit. It scrubs stdout and stderr of the value (and its encodings), passes on
 //     signals, and exits with the program's code.
-//   launch.ts migrate <home>   stdout: { vault_id }, then { name, value } per credential
+//   launch.ts migrate <home>   stdout: { vault_id, revision }, then { name, value } per credential
 //     Reads vault.ts's file and key and Era 2's Gmail files. Nova's own keys aren't sent.
-//   launch.ts finish <home>    fd 3: { vault_id, names }
+//   launch.ts finish <home>    fd 3: { vault_id, revision, names }
 //     Takes the names that moved out of the old vault (a new key, or no file and no key) and removes
 //     Era 2's files for them; prints counts only.
 //
@@ -2623,7 +2637,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OWN_KEYS, readGmailFiles, readOldVault, removeFromOldVault, removeGmailFiles } from './oldvault.ts';
+import { OWN_KEYS, removeFromOldVault, removeGmailFiles, withOldVaultLock, migrationSnapshot } from './oldvault.ts';
 import { fileSha256 } from './origin.ts';
 import { Scrubber, StreamScrubber } from './scrub.ts';
 
@@ -2676,22 +2690,29 @@ async function run() {
 }
 
 function migrate(home: string) {
-  const old = readOldVault(home);
-  const items = new Map<string, string>([...readGmailFiles(home)]);
-  // The vault's copy wins over an Era 2 file (the file is then a leftover), as gmail.js does.
-  for (const [k, v] of old?.map ?? []) items.set(k, v);
-  line({ vault_id: old?.id ?? null });
-  for (const [name, value] of items) if (!OWN_KEYS.some((r) => r.test(name))) line({ name, value });
+  return withOldVaultLock(home, () => {
+    const { old, gmail, revision } = migrationSnapshot(home);
+    const items = new Map<string, string>(gmail);
+    for (const [k, v] of old?.map ?? []) items.set(k, v);
+    line({ vault_id: old?.id ?? null, revision });
+    for (const [name, value] of items) if (!OWN_KEYS.some((r) => r.test(name))) line({ name, value });
+    old?.key.fill(0);
+  });
 }
 
 async function finish(home: string) {
   const f = await fromParent();
-  const names = Array.isArray(f.names) ? (f.names as unknown[]).filter((n): n is string => typeof n === 'string') : [];
-  const old = readOldVault(home);
-  if (old && old.id !== f.vault_id) fail('the old vault changed since it was read; nothing was removed');
-  const removed = old ? removeFromOldVault(home, old, names) : [];
-  removeGmailFiles(home, names);
-  line({ removed: removed.length, kept: old?.map.size ?? 0 });
+  withOldVaultLock(home, () => {
+    const names = Array.isArray(f.names) ? (f.names as unknown[]).filter((n): n is string => typeof n === 'string') : [];
+    const { old, revision } = migrationSnapshot(home);
+    try {
+      // A newer value was never read back. Keep all entries on any staged revision mismatch.
+      if (revision !== f.revision || (old && old.id !== f.vault_id)) { line({ removed: 0 }); return; }
+      const removed = old ? removeFromOldVault(home, old, names) : [];
+      removeGmailFiles(home, names);
+      line({ removed: removed.length, kept: old?.map.size ?? 0 });
+    } finally { old?.key.fill(0); }
+  });
 }
 
 const [mode, home] = process.argv.slice(2);
@@ -2715,7 +2736,7 @@ go.catch((e) => fail(e instanceof SyntaxError ? 'a file couldn’t be read' : (e
 // connectors/; the copies taken before the migration still hold the old entries until they age out
 // (NOTES for Track 1).
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 
 // Under Node's permission model a folder that doesn't exist can't be granted, so asking about a
 // path in it throws instead of answering false: either way there is nothing there.
@@ -2805,6 +2826,25 @@ export function readGmailFiles(home: string): Map<string, string> {
 }
 export function removeGmailFiles(home: string, names: string[]): void {
   for (const [file, name] of Object.entries(GMAIL_FILES)) if (names.includes(name) && there(join(home, 'connectors', 'gmail', file))) rmSync(join(home, 'connectors', 'gmail', file), { force: true });
+}
+
+// Shared with vault.ts's writers; never steal a lock left by an interrupted process.
+export function withOldVaultLock<T>(home: string, run: () => T): T {
+  const dir = join(home, 'vault');
+  const lock = join(dir, '.writer-lock');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { mkdirSync(lock, { mode: 0o700 }); }
+  catch { throw new Error('The old vault is busy with a writer or migration; nothing was removed.'); }
+  try { return run(); } finally { rmSync(lock, { recursive: true }); }
+}
+
+// Private to the launcher/broker pipe, never a response or audit field. A changed snapshot is
+// retained wholesale; no secret comparison is exposed through conflict decisions.
+export function migrationSnapshot(home: string) {
+  const old = readOldVault(home);
+  const gmail = readGmailFiles(home);
+  const revision = createHash('sha256').update(JSON.stringify([old?.id ?? null, [...old?.map ?? []], [...gmail]])).digest('hex');
+  return { old, gmail, revision };
 }
 ```
 
@@ -3081,4 +3121,627 @@ export const isOwnKey = (name: string) => OWN_KEY_NAMES.some((r) => r.test(name)
 // audit log never are.
 export const BROKER_DIR = 'broker';
 export const BROKER_BACKUP_ONLY = 'broker/items/';
+```
+
+### `src/core/vault.ts`
+
+```ts
+// The vault (inventory row 58; Era 1's packages/secrets, ported and narrowed). Secrets live here
+// and nowhere else: connectors hold names (`secret://connector/home-assistant/HA_TOKEN`), and the
+// values are read for the moment a call needs them.
+//
+// At rest: one file, home/vault/secrets.json (0600), AES-256-GCM over the JSON map of name → value,
+// with the vault's id as associated data. The 32-byte key lives in the OS keychain when there is one
+// (Linux `secret-tool`, macOS `security`, Windows Credential Locker through PowerShell), otherwise in
+// home/vault/key (0600), and then the person is told plainly that the key sits next to the vault.
+// Values never go on a command line: each keychain CLI reads them from stdin.
+//
+// The vault is untracked in the home's git (home.js), not journalled as a file (mesh/sync.ts), and
+// every value it holds is redacted from logs, problems and receipts (log.ts). A standby gets the
+// ciphertext and the key inside the sync stream, which is sealed to the standby's own key, so
+// connectors work again after a failover.
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { CoreError } from './errors.ts';
+import { addSecretValue } from './log.ts';
+
+export const VAULT_DIR = 'vault';
+export const VAULT_FILE = 'secrets.json';
+export const KEY_FILE = 'key';
+export const SECRET_SCHEME = 'secret://';
+// connector/home-assistant/HA_TOKEN: lowercase path segments, then a name.
+const NAME = /^[a-z0-9][a-z0-9._-]*(\/[A-Za-z0-9._-]+)*$/;
+const AAD = (id: string) => Buffer.from(`nova-vault-v1|${id}`, 'utf8');
+const SERVICE = 'nova-vault';
+
+export const isSecretName = (name: string) => typeof name === 'string' && name.length <= 200 && NAME.test(name);
+export const secretRef = (name: string) => `${SECRET_SCHEME}${checkName(name)}`;
+export function nameOf(ref: string): string {
+  if (typeof ref !== 'string' || !ref.startsWith(SECRET_SCHEME)) throw new CoreError('validation', 'That isn’t a secret:// reference.');
+  return checkName(ref.slice(SECRET_SCHEME.length));
+}
+function checkName(name: string): string {
+  if (!isSecretName(name)) throw new CoreError('validation', `“${String(name)}” isn’t a secret name Nova uses (letters, digits, dots, dashes, slashes).`);
+  return name;
+}
+
+// ---- where the key lives ------------------------------------------------------------------------
+
+export interface CommandResult { code: number | null; stdout: string; stderr: string; error: string | null }
+export type Run = (cmd: string, args: string[], input?: string) => CommandResult;
+
+// Without a shell, with a timeout: a locked keyring can open a prompt nobody will answer.
+export const runCommand: Run = (cmd, args, input) => {
+  const r = spawnSync(cmd, args, { input: input ?? '', encoding: 'utf8', timeout: 10_000, shell: false, windowsHide: true });
+  return { code: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', error: r.error ? r.error.message : null };
+};
+
+export interface KeyStore {
+  kind: 'keychain' | 'file';
+  // In plain words, for Settings and health: “the system keychain (secret-tool)”.
+  name: string;
+  available(): { ok: boolean; detail: string };
+  read(): Buffer | null;
+  write(key: Buffer): void;
+  remove(): void;
+}
+
+function decodeKey(text: string): Buffer | null {
+  const key = Buffer.from(text.trim(), 'base64');
+  return key.length === 32 ? key : null;
+}
+const failure = (cli: string, what: string, r: CommandResult) =>
+  new Error(`The system keychain couldn’t ${what} (${cli}: ${r.error ?? (r.stderr.trim().split('\n')[0] || `exit code ${r.code}`)}).`);
+
+export function fileKeyStore(home: string): KeyStore {
+  const path = join(home, VAULT_DIR, KEY_FILE);
+  return {
+    kind: 'file',
+    name: `a key file next to the vault (${path})`,
+    available: () => ({ ok: true, detail: path }),
+    read: () => {
+      if (!existsSync(path)) return null;
+      const key = readFileSync(path);
+      if (key.length !== 32) throw new CoreError('conflict', `The vault’s key file (${path}) is damaged: it should be 32 bytes.`);
+      return key;
+    },
+    write: (key) => {
+      mkdirSync(join(home, VAULT_DIR), { recursive: true, mode: 0o700 });
+      writeFileSync(`${path}.tmp`, key, { mode: 0o600 });
+      renameSync(`${path}.tmp`, path);
+      chmodSync(path, 0o600);
+    },
+    remove: () => rmSync(path, { force: true }),
+  };
+}
+
+// Linux: the Secret Service, through libsecret's CLI. Exit 1 with nothing on stderr is “no such item”.
+export function secretToolKeyStore(account: string, o: { run?: Run; env?: NodeJS.ProcessEnv; command?: string } = {}): KeyStore {
+  const run = o.run ?? runCommand;
+  const env = o.env ?? process.env;
+  const cmd = o.command ?? 'secret-tool';
+  const attrs = ['service', SERVICE, 'account', account];
+  const lookup = (acct: string) => run(cmd, ['lookup', 'service', SERVICE, 'account', acct]);
+  return {
+    kind: 'keychain',
+    name: 'the system keychain (secret-tool)',
+    available: () => {
+      if (!env.DBUS_SESSION_BUS_ADDRESS) return { ok: false, detail: 'no desktop session to reach the keychain through' };
+      const r = lookup('nova-probe');
+      if (r.code === 0 || (r.code === 1 && !r.stderr.trim())) return { ok: true, detail: 'secret-tool' };
+      return { ok: false, detail: r.error ?? r.stderr.trim().split('\n')[0] ?? `exit code ${r.code}` };
+    },
+    read: () => {
+      const r = lookup(account);
+      if (r.code === 0) return decodeKey(r.stdout);
+      if (r.code === 1 && !r.stderr.trim()) return null;
+      throw failure('secret-tool', 'read the vault’s key', r);
+    },
+    write: (key) => {
+      const r = run(cmd, ['store', `--label=Nova vault key (${account})`, ...attrs], key.toString('base64'));
+      if (r.code !== 0) throw failure('secret-tool', 'store the vault’s key', r);
+    },
+    remove: () => { run(cmd, ['clear', ...attrs]); },
+  };
+}
+
+// macOS: the login keychain. Interactive mode reads the command from stdin, so the key stays off
+// the argument list. Exit 44 is “no such item”.
+export function macKeyStore(account: string, o: { run?: Run; command?: string } = {}): KeyStore {
+  const run = o.run ?? runCommand;
+  const cmd = o.command ?? 'security';
+  return {
+    kind: 'keychain',
+    name: 'the macOS keychain',
+    available: () => {
+      const r = run(cmd, ['default-keychain']);
+      return r.code === 0 ? { ok: true, detail: 'security' } : { ok: false, detail: r.error ?? (r.stderr.trim() || `exit code ${r.code}`) };
+    },
+    read: () => {
+      const r = run(cmd, ['find-generic-password', '-s', SERVICE, '-a', account, '-w']);
+      if (r.code === 0) return decodeKey(r.stdout);
+      if (r.code === 44) return null;
+      throw failure('security', 'read the vault’s key', r);
+    },
+    write: (key) => {
+      const r = run(cmd, ['-i'], `add-generic-password -U -s ${SERVICE} -a ${account} -l "Nova vault key" -w ${key.toString('base64')}\n`);
+      if (r.code !== 0 || r.stderr.trim()) throw failure('security', 'store the vault’s key', r);
+    },
+    remove: () => { run(cmd, ['delete-generic-password', '-s', SERVICE, '-a', account]); },
+  };
+}
+
+// Windows: the Credential Locker (it shows in Credential Manager), through PowerShell's WinRT
+// binding. The key comes in on stdin. Not exercised on a real Windows machine yet (docs/LEDGER.md).
+export function windowsKeyStore(account: string, o: { run?: Run; command?: string } = {}): KeyStore {
+  const run = o.run ?? runCommand;
+  const cmd = o.command ?? 'powershell.exe';
+  const vault = `[void][Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime]; $v = New-Object Windows.Security.Credentials.PasswordVault;`;
+  const find = `try { $c = $v.Retrieve('${SERVICE}', '${account}') } catch { exit 44 };`;
+  const ps = (script: string, input?: string) => run(cmd, ['-NoProfile', '-NonInteractive', '-Command', `& { ${vault} ${script} }`], input);
+  return {
+    kind: 'keychain',
+    name: 'Windows Credential Manager',
+    available: () => {
+      const r = ps('exit 0');
+      return r.code === 0 ? { ok: true, detail: 'PasswordVault' } : { ok: false, detail: r.error ?? (r.stderr.trim() || `exit code ${r.code}`) };
+    },
+    read: () => {
+      const r = ps(`${find} $c.RetrievePassword(); [Console]::Out.Write($c.Password)`);
+      if (r.code === 0) return decodeKey(r.stdout);
+      if (r.code === 44) return null;
+      throw failure('PowerShell', 'read the vault’s key', r);
+    },
+    write: (key) => {
+      const r = ps(`$p = [Console]::In.ReadToEnd().Trim(); $v.Add((New-Object Windows.Security.Credentials.PasswordCredential('${SERVICE}', '${account}', $p)))`, key.toString('base64'));
+      if (r.code !== 0) throw failure('PowerShell', 'store the vault’s key', r);
+    },
+    remove: () => { ps(`${find} $v.Remove($c)`); },
+  };
+}
+
+export function platformKeyStore(account: string, o: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; run?: Run } = {}): KeyStore | null {
+  const platform = o.platform ?? process.platform;
+  if (platform === 'darwin') return macKeyStore(account, o);
+  if (platform === 'win32') return windowsKeyStore(account, o);
+  if (platform === 'linux' || platform === 'freebsd' || platform === 'openbsd') return secretToolKeyStore(account, o);
+  return null;
+}
+
+// file: always the key file. keychain: the OS keychain or nothing. auto: the keychain when one
+// answers, else the file. Under the test runner, auto means file: tests never touch a real keychain.
+export type KeyMode = 'auto' | 'keychain' | 'file';
+export function keyMode(env: NodeJS.ProcessEnv = process.env): KeyMode {
+  const v = env.NOVA_VAULT_KEY;
+  if (v === 'file' || v === 'keychain') return v;
+  return env.NODE_TEST_CONTEXT ? 'file' : 'auto';
+}
+
+// ---- the vault ----------------------------------------------------------------------------------
+
+interface VaultFile { v: 1; id: string; alg: 'aes-256-gcm'; fp: string; nonce: string; tag: string; data: string }
+
+export interface VaultOptions {
+  home: string;
+  mode?: KeyMode;
+  // The keychain to use for a vault id (tests inject one); defaults to this platform's.
+  keychain?: ((account: string) => KeyStore | null) | null;
+}
+
+export interface VaultStatus {
+  ok: boolean;
+  secrets: number;
+  // Where the key is, once there is one: keychain or file.
+  key: 'keychain' | 'file' | null;
+  where: string | null;
+  // Said plainly when the key sits next to the vault on disk.
+  notice: string | null;
+  problem: string | null;
+}
+
+export const FILE_KEY_NOTICE = 'Nova keeps your connection secrets encrypted, but on this computer there is no system keychain it can use, so the key is in a file next to them (vault/key in Nova’s home). Anyone who can read Nova’s home folder can open them. Nova moves the key into the keychain by itself once one is available.';
+
+const START_OVER = 'Saving a secret again (reconnecting a connection, or adding a provider’s key) starts a new vault; the old file is kept aside in vault/ as secrets.json.unopenable-<time>, in case its key turns up.';
+
+const fp = (key: Buffer) => createHash('sha256').update(key).digest('hex').slice(0, 16);
+
+export class Vault extends EventEmitter {
+  readonly dir: string;
+  readonly file: string;
+  #home: string;
+  #mode: KeyMode;
+  #keychainFor: (account: string) => KeyStore | null;
+  #key: Buffer | null = null;
+  #store: KeyStore | null = null;
+  #id: string | null = null;
+  #map: Map<string, string> | null = null;
+  #problem: string | null = null;
+  #writing = false;
+  // Why it won't open: lost for good (no key that fits, or a damaged file), or a keychain that may
+  // still answer later. Only a lost vault is set aside by the next save.
+  #unopenable: 'lost' | 'waiting' | null = null;
+
+  constructor(o: VaultOptions) {
+    super();
+    this.#home = o.home;
+    this.dir = join(o.home, VAULT_DIR);
+    this.file = join(this.dir, VAULT_FILE);
+    this.#mode = o.mode ?? keyMode();
+    this.#keychainFor = o.keychain === null ? () => null : (o.keychain ?? ((account) => platformKeyStore(account)));
+  }
+
+  // ---- reading and writing ------------------------------------------------------------------
+
+  has(name: string): boolean {
+    return this.#open().has(checkName(name));
+  }
+
+  get(name: string): string | null {
+    return this.#open().get(checkName(name)) ?? null;
+  }
+
+  resolve(ref: string): string | null {
+    return this.get(nameOf(ref));
+  }
+
+  put(name: string, value: string): string { return this.#withWrite(() => this.#put(name, value), true); }
+  #put(name: string, value: string): string {
+    checkName(name);
+    if (typeof value !== 'string' || !value.length) throw new CoreError('validation', 'A secret can’t be empty.');
+    // A vault that can never open again would refuse every save forever. Saving starts a new one
+    // instead (reconnecting is how a person saves again), and the old file is kept aside.
+    let map: Map<string, string>;
+    try { map = this.#open(); } catch (e) {
+      if (this.#unopenable !== 'lost') throw e;
+      map = this.#startOver();
+    }
+    const before = map.get(name);
+    map.set(name, value);
+    addSecretValue(value);
+    try {
+      this.#save(map);
+    } catch (e) {
+      // Not saved means not kept: the vault goes on holding what is on disk (a full disk, M7b).
+      if (before === undefined) map.delete(name); else map.set(name, before);
+      rmSync(`${this.file}.tmp`, { force: true });
+      const full = (e as NodeJS.ErrnoException).code === 'ENOSPC';
+      throw new CoreError('conflict', full ? 'Nova couldn’t save the secret: the disk is full. Nothing was changed; free some space and save it again.' : `Nova couldn’t save the secret: ${(e as Error).message}. Nothing was changed.`, [`${(e as NodeJS.ErrnoException).code ?? 'error'}: ${(e as Error).message}`]);
+    }
+    return secretRef(name);
+  }
+
+  // A new key each time something is deleted, so a copy of the file from before (a backup, an old
+  // sync entry) doesn't open with the key in use: the deleted secret stays deleted.
+  delete(name: string): boolean { return this.#withWrite(() => this.#delete(name), true); }
+  #delete(name: string): boolean {
+    const map = this.#open();
+    if (!map.delete(checkName(name))) return false;
+    this.#save(map, true);
+    return true;
+  }
+
+  // Starts a new, empty vault on purpose (tier 3: needs confirm), with the old file kept aside: for
+  // a vault whose key is in a keychain that no longer answers, which saving alone won't replace.
+  reset(confirm: boolean): VaultStatus { return this.#withWrite(() => this.#reset(confirm)); }
+  #reset(confirm: boolean): VaultStatus {
+    if (!confirm) throw new CoreError('validation', 'Starting a new vault leaves every saved secret behind (the old file is kept aside). Send confirm: true to do that.');
+    this.#startOver();
+    this.emit('change', { secrets: 0 });
+    return this.status();
+  }
+
+  // Everything under a prefix (`connector/gmail/`), for revoking an extension's secrets at once.
+  deletePrefix(prefix: string): string[] { return this.#withWrite(() => this.#deletePrefix(prefix), true); }
+  #deletePrefix(prefix: string): string[] {
+    const map = this.#open();
+    const gone = [...map.keys()].filter((k) => k.startsWith(prefix));
+    if (!gone.length) return [];
+    for (const k of gone) map.delete(k);
+    this.#save(map, true);
+    return gone;
+  }
+
+  list(prefix = ''): string[] {
+    return [...this.#open().keys()].filter((k) => k.startsWith(prefix)).sort();
+  }
+
+  status(): VaultStatus {
+    try {
+      const n = this.#open().size;
+      const store = this.#key ? this.#store : null;
+      return { ok: true, secrets: n, key: store?.kind ?? null, where: store?.name ?? null, notice: store?.kind === 'file' && n > 0 ? FILE_KEY_NOTICE : null, problem: null };
+    } catch (e) {
+      return { ok: false, secrets: 0, key: null, where: null, notice: null, problem: (e as Error).message };
+    }
+  }
+
+  // ---- a factory reset (resilience/reset.ts) ---------------------------------------------------
+
+  // The vault ids whose key may be in a keychain: the file's, and the one in use.
+  keyIds(): string[] {
+    const ids = new Set<string>();
+    if (this.#id) ids.add(this.#id);
+    try { ids.add(parseFile(readFileSync(this.file, 'utf8')).id); } catch { /* no file, or one Nova can't read */ }
+    return [...ids];
+  }
+
+  // Removes this vault's key wherever it is: the keychain item of each id (this vault's, and any
+  // given) and the key file. The vault holds nothing after this. Returns where it was removed from,
+  // in plain words; a keychain that isn't answering is said, not guessed at.
+  forgetKeys(ids: string[] = []): { keychain: string | null; file: boolean; problem: string | null } { return this.#withWrite(() => this.#forgetKeys(ids)); }
+  #forgetKeys(ids: string[] = []): { keychain: string | null; file: boolean; problem: string | null } {
+    let keychain: string | null = null;
+    let problem: string | null = null;
+    if (this.#mode !== 'file') {
+      for (const id of new Set([...this.keyIds(), ...ids].filter((i) => UUID.test(i)))) {
+        const kc = this.#keychainFor(`vault-${id}`);
+        if (!kc) continue;
+        const up = kc.available();
+        if (!up.ok) { problem = `The vault’s key may still be in ${kc.name}, which isn’t answering (${up.detail}). It opens nothing now; remove the item “${SERVICE} / vault-${id}” there yourself.`; continue; }
+        kc.remove();
+        keychain = kc.name;
+      }
+    }
+    const disk = fileKeyStore(this.#home);
+    const file = existsSync(join(this.dir, KEY_FILE));
+    disk.remove();
+    this.#key = null;
+    this.#store = null;
+    this.#map = null;
+    return { keychain, file, problem };
+  }
+
+  // ---- the standby's copy (mesh/sync.ts) ------------------------------------------------------
+
+  // The encrypted file as it is on disk, for the sync log. Never the key.
+  sealedFile(): string | null {
+    try { return readFileSync(this.file, 'utf8'); } catch { return null; }
+  }
+
+  // The key, for the sync stream only: it travels inside a batch sealed to the standby's own key.
+  keyForStandby(): string | null {
+    if (!existsSync(this.file)) return null;
+    this.#open();
+    return this.#key?.toString('base64') ?? null;
+  }
+
+  // On the standby: the hub's vault, and its key, which goes into this node's own key store.
+  adopt(fileText: string, keyB64: string): void { this.#withWrite(() => this.#adopt(fileText, keyB64)); }
+  #adopt(fileText: string, keyB64: string): void {
+    const key = Buffer.from(String(keyB64), 'base64');
+    if (key.length !== 32) throw new CoreError('validation', 'The hub sent a vault key Nova can’t use.');
+    const file = parseFile(fileText);
+    const map = decrypt(file, key);
+    const store = this.#choose(file.id);
+    store.write(key);
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    writeAtomic(this.file, fileText);
+    this.#id = file.id;
+    this.#key = key;
+    this.#store = store;
+    this.#map = map;
+    this.#problem = null;
+    for (const v of map.values()) addSecretValue(v);
+    this.emit('change', { secrets: map.size });
+  }
+
+  // On the standby: the hub's vault is gone (its last secret was removed).
+  clear(): void { this.#withWrite(() => this.#clear()); }
+  #clear(): void {
+    rmSync(this.file, { force: true });
+    this.#map = new Map();
+    this.emit('change', { secrets: 0 });
+  }
+
+  // ---- inside -------------------------------------------------------------------------------
+
+  // Same fail-closed lock as the broker's migration launcher. The mutation reloads under the
+  // lock, so a long-lived consumer cannot resurrect entries from its pre-migration cache.
+  #withWrite<T>(run: () => T, refresh = false): T {
+    if (this.#writing) return run();
+    const lock = join(this.dir, '.writer-lock');
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    try { mkdirSync(lock, { mode: 0o700 }); }
+    catch { throw new CoreError('conflict', 'The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.'); }
+    this.#writing = true;
+    try {
+      if (refresh) {
+        this.#map = null;
+        this.#key = null;
+        this.#store = null;
+        this.#problem = null;
+        this.#unopenable = null;
+      }
+      return run();
+    } finally { this.#writing = false; rmSync(lock, { recursive: true }); }
+  }
+
+  // The keychain when the mode allows one and it answers, else the key file.
+  #choose(id = this.#id ?? 'new'): KeyStore {
+    const file = fileKeyStore(this.#home);
+    if (this.#mode === 'file') return file;
+    const kc = this.#keychainFor(`vault-${id}`);
+    const up = kc ? kc.available() : { ok: false, detail: 'none on this platform' };
+    if (kc && up.ok) return kc;
+    if (this.#mode === 'keychain') throw new CoreError('conflict', `Nova is set to keep the vault’s key in the system keychain (NOVA_VAULT_KEY=keychain), but none answers: ${up.detail}.`);
+    return file;
+  }
+
+  #open(): Map<string, string> { return this.#withWrite(() => this.#openLocked()); }
+  #openLocked(): Map<string, string> {
+    if (this.#map) return this.#map;
+    // A keychain that wasn't answering is asked again; a lost vault stays lost.
+    if (this.#problem && this.#unopenable !== 'waiting') throw new CoreError('conflict', this.#problem);
+    this.#problem = null;
+    this.#unopenable = null;
+    if (!existsSync(this.file)) {
+      this.#map = new Map();
+      return this.#map;
+    }
+    let file: VaultFile;
+    try {
+      file = parseFile(readFileSync(this.file, 'utf8'));
+    } catch (e) {
+      this.#unopenable = 'lost';
+      this.#problem = `The vault (${this.file}) is damaged and can’t be read: ${(e as Error).message}. ${START_OVER}`;
+      throw new CoreError('conflict', this.#problem);
+    }
+    this.#id = file.id;
+    let found: { key: Buffer; store: KeyStore; file: VaultFile };
+    try {
+      found = { ...this.#findKey(file), file };
+    } catch (e) {
+      // A re-key cut short: the new key was saved, and the new file is still beside the old one.
+      const done = this.#finishRekey(file);
+      if (!done) throw e;
+      found = done;
+    }
+    let map: Map<string, string>;
+    try { map = decrypt(found.file, found.key); } catch (e) {
+      this.#unopenable = 'lost';
+      this.#problem = `${(e as Error).message} ${START_OVER}`;
+      throw new CoreError('conflict', this.#problem);
+    }
+    rmSync(`${this.file}.tmp`, { force: true });
+    this.#problem = null;
+    this.#unopenable = null;
+    this.#map = map;
+    this.#key = found.key;
+    this.#store = found.store;
+    for (const v of this.#map.values()) addSecretValue(v);
+    return this.#map;
+  }
+
+  #finishRekey(file: VaultFile): { key: Buffer; store: KeyStore; file: VaultFile } | null {
+    const tmp = `${this.file}.tmp`;
+    if (!existsSync(tmp)) return null;
+    let next: VaultFile;
+    try { next = parseFile(readFileSync(tmp, 'utf8')); } catch { return null; }
+    if (next.id !== file.id) return null;
+    const why = { problem: this.#problem, unopenable: this.#unopenable };
+    try {
+      const found = this.#findKey(next);
+      decrypt(next, found.key);
+      renameSync(tmp, this.file);
+      return { ...found, file: next };
+    } catch {
+      this.#problem = why.problem;
+      this.#unopenable = why.unopenable;
+      return null;
+    }
+  }
+
+  // The unopenable file goes aside as secrets.json.unopenable-<time> (in case its key turns up), and
+  // a new vault with a new id and key takes its place on the next save.
+  #startOver(): Map<string, string> {
+    if (existsSync(this.file)) renameSync(this.file, `${this.file}.unopenable-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+    rmSync(`${this.file}.tmp`, { force: true });
+    this.#id = null;
+    this.#key = null;
+    this.#store = null;
+    this.#problem = null;
+    this.#unopenable = null;
+    this.#map = new Map();
+    return this.#map;
+  }
+
+  // The key for this vault, wherever it is. A key found in the file while a keychain answers is
+  // moved into the keychain (written, read back, and only then removed from disk).
+  #findKey(file: VaultFile): { key: Buffer; store: KeyStore } {
+    const disk = fileKeyStore(this.#home);
+    const kc = this.#mode === 'file' ? null : this.#keychainFor(`vault-${file.id}`);
+    const kcUp = kc ? kc.available() : null;
+    const fromKc = kc && kcUp?.ok ? kc.read() : null;
+    const fromDisk = disk.read();
+    const fits = (k: Buffer | null) => !!k && fp(k) === file.fp;
+    if (fits(fromKc)) {
+      if (fromDisk && fits(fromDisk)) disk.remove();
+      return { key: fromKc!, store: kc! };
+    }
+    if (fits(fromDisk)) {
+      if (kc && kcUp?.ok) {
+        try {
+          kc.write(fromDisk!);
+          if (fits(kc.read())) { disk.remove(); return { key: fromDisk!, store: kc }; }
+        } catch { /* the keychain refused: the file stays where it is */ }
+      }
+      return { key: fromDisk!, store: disk };
+    }
+    if (kc && !kcUp?.ok) {
+      this.#unopenable = 'waiting';
+      this.#problem = `Nova can’t find the key to its vault, so connections that need a secret can’t sign in. It may be in the system keychain, which isn’t answering (${kcUp?.detail}). Nova waits for the keychain rather than starting over; to start a new vault anyway, reset the vault (tier 3: POST /api/v1/vault/reset with confirm: true), and the old one is kept aside.`;
+    } else {
+      this.#unopenable = 'lost';
+      this.#problem = `Nova can’t find the key to its vault, so connections that need a secret can’t sign in. ${START_OVER}`;
+    }
+    throw new CoreError('conflict', this.#problem);
+  }
+
+  // With a new key (the first save, or `rekey`), the order keeps the vault openable whatever stops
+  // it: the new file is written beside the old, then the key saved, then the file swapped in.
+  // Stopped between the last two, opening finishes the swap (#finishRekey).
+  #save(map: Map<string, string>, rekey = false): void {
+    this.#id ??= randomUUID();
+    const id = this.#id;
+    const fresh = !this.#key || rekey;
+    const key = fresh ? randomBytes(32) : this.#key!;
+    const store = this.#store ?? this.#choose(id);
+    if (!map.size) {
+      // Nothing left to keep: no file, and a new key for whatever comes next.
+      if (fresh) store.write(key);
+      this.#key = key;
+      this.#store = store;
+      rmSync(this.file, { force: true });
+      this.emit('change', { secrets: 0 });
+      return;
+    }
+    const nonce = randomBytes(12);
+    const c = createCipheriv('aes-256-gcm', key, nonce);
+    c.setAAD(AAD(id));
+    const data = Buffer.concat([c.update(JSON.stringify(Object.fromEntries(map)), 'utf8'), c.final()]);
+    const out: VaultFile = { v: 1, id, alg: 'aes-256-gcm', fp: fp(key), nonce: nonce.toString('base64'), tag: c.getAuthTag().toString('base64'), data: data.toString('base64') };
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    const tmp = `${this.file}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(out)}\n`, { mode: 0o600 });
+    if (fresh) store.write(key);
+    renameSync(tmp, this.file);
+    chmodSync(this.file, 0o600);
+    this.#key = key;
+    this.#store = store;
+    this.emit('change', { secrets: map.size });
+  }
+}
+
+function writeAtomic(path: string, text: string): void {
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, text, { mode: 0o600 });
+  renameSync(tmp, path);
+  chmodSync(path, 0o600);
+}
+
+// The id names the keychain item (vault-<id>), and one keychain CLI takes it inside command text:
+// only a UUID gets that far.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function parseFile(text: string): VaultFile {
+  const f = JSON.parse(text) as VaultFile;
+  if (f?.v !== 1 || f.alg !== 'aes-256-gcm' || typeof f.id !== 'string' || typeof f.data !== 'string' || typeof f.fp !== 'string') throw new Error('not a vault Nova knows');
+  if (!UUID.test(f.id)) throw new Error('its id isn’t one Nova makes');
+  return f;
+}
+
+// Wrong key or a tampered file: refused, never guessed at.
+function decrypt(f: VaultFile, key: Buffer): Map<string, string> {
+  try {
+    const d = createDecipheriv('aes-256-gcm', key, Buffer.from(f.nonce, 'base64'));
+    d.setAAD(AAD(f.id));
+    d.setAuthTag(Buffer.from(f.tag, 'base64'));
+    const plain = Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8');
+    return new Map(Object.entries(JSON.parse(plain) as Record<string, string>));
+  } catch {
+    throw new CoreError('conflict', 'The vault doesn’t open with its key: the key is wrong or the file was changed.');
+  }
+}
 ```
