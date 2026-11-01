@@ -66,6 +66,11 @@ await t('debug_end', () => process._debugEnd());
 await t('chdir_runtime', () => process.chdir(home + '/runtime'));
 try { process.chdir(home + '/state'); } catch { /* chdir is locked now; the runtime starts in state/ anyway */ }
 await t('local_storage', () => { if (globalThis.localStorage === undefined) throw Object.assign(new Error('absent'), { code: 'ABSENT' }); globalThis.localStorage.setItem('k', 'v'); });
+// M10h: the boot agent's workload slots and its capture queue are out of reach too.
+await t('read_workload', () => fs.readFileSync(home + '/workloads/stand-in/v/1.0.0/manifest.json', 'utf8'));
+await t('write_workload', () => fs.writeFileSync(home + '/workloads/stand-in/v/1.0.0/stand-in-screenpipe.js', 'planted'));
+await t('read_capture', () => fs.readFileSync(home + '/capture/outbox/000000000001.json', 'utf8'));
+await t('write_capture', () => fs.writeFileSync(home + '/capture/outbox/000000000002.json', '{}'));
 await t('write_state', () => fs.writeFileSync(home + '/state/fine.txt', 'ok'));
 console.log(JSON.stringify(out));
 // A listener that got through would keep it running.
@@ -75,8 +80,11 @@ process.exit(0);
 test('the runtime’s sandbox: no node:sqlite, and no way out of state/ by links, reports, V8 flags, trace files, sockets, WASI or the inspector', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-sandbox-'));
   const p = paths(home);
-  for (const d of [p.boot, p.runtime, p.state]) mkdirSync(d, { recursive: true, mode: 0o700 });
+  for (const d of [p.boot, p.runtime, p.state, join(p.workloads, 'stand-in', 'v', '1.0.0'), join(p.capture, 'outbox')]) mkdirSync(d, { recursive: true, mode: 0o700 });
   writeFileSync(p.keys, JSON.stringify({ secret: 'test-private-key' }), { mode: 0o600 });
+  writeFileSync(join(p.workloads, 'stand-in', 'v', '1.0.0', 'manifest.json'), '{"signature":"test"}');
+  writeFileSync(join(p.workloads, 'stand-in', 'v', '1.0.0', 'stand-in-screenpipe.js'), 'original');
+  writeFileSync(join(p.capture, 'outbox', '000000000001.json'), '{"text":"CAPTURED-WORDS"}');
   installLocalRuntime(p);
   writeFileSync(join(p.runtime, 'probe.mjs'), PROBE);
   // A local service outside state/ (a unix socket, like an SSH agent or a container daemon) and one
@@ -111,14 +119,15 @@ test('the runtime’s sandbox: no node:sqlite, and no way out of state/ by links
       'read_keys', 'write_boot', 'dotdot', 'symlink', 'symlink_relative', 'hardlink', 'rename_out', 'copy_in', 'chdir_boot', 'load_env_file',
       'report_write', 'report_signal', 'heap_snapshot', 'v8_flags', 'compile_cache', 'unix_connect', 'unix_listen', 'tcp_connect', 'fetch', 'dns',
       'wasi', 'inspector', 'inspector_session', 'process_binding', 'child_process', 'execve', 'worker', 'addon', 'kill', 'local_storage',
-      'raw_kill', 'debug_process', 'debug_end', 'chdir_runtime',
+      'raw_kill', 'debug_process', 'debug_end', 'chdir_runtime', 'read_workload', 'write_workload', 'read_capture', 'write_capture',
     ]) refused(k);
+    assert.equal(readFileSync(join(p.workloads, 'stand-in', 'v', '1.0.0', 'stand-in-screenpipe.js'), 'utf8'), 'original', 'a workload slot is out of its reach');
     assert.equal(bystander.exitCode ?? bystander.signalCode, null, 'the other process was not signalled');
     assert.equal(out.write_state, 'ok', 'state/ stays writable');
     // Nothing appeared outside state/: not in boot/, not where it was started, and no service heard it.
     assert.deepEqual(readdirSync(p.boot).sort(), bootBefore, 'boot/ is unchanged');
-    assert.deepEqual(readdirSync(home).sort(), ['boot', 'runtime', 'state'], 'nothing landed in the folder it was started from');
-    assert.deepEqual(readdirSync(p.runtime).sort(), ['package.json', 'probe.mjs', 'queue.ts', 'runtime.ts'], 'runtime/ is unchanged');
+    assert.deepEqual(readdirSync(home).sort(), ['boot', 'capture', 'runtime', 'state', 'workloads'], 'nothing landed in the folder it was started from');
+    assert.deepEqual(readdirSync(p.runtime).sort(), ['package.json', 'probe.mjs', 'queue.ts', 'rollout.ts', 'runtime.ts'], 'runtime/ is unchanged');
     assert.deepEqual(touched, [], 'no local service was reached');
     assert.equal(JSON.parse(readFileSync(p.keys, 'utf8')).secret, 'test-private-key');
   } finally {

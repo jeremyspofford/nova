@@ -74,22 +74,34 @@ export class Backups {
 
 // Cleans one database file of the rows (and, for memory, of the sync log's entries that carry the
 // words), overwriting the freed pages. Throws when it can't, so the caller destroys the copy.
-export function cleanDbFile(path: string, table: string, ids: string[], words: string[] = []): void {
+export function cleanDbFile(path: string, table: string, ids: string[], words: string[] = []): string[] {
   if (!TABLE.test(table)) throw new Error(`Not a table name: ${table}`);
   const db = new DatabaseSync(path);
   try {
     db.exec('PRAGMA secure_delete = ON');
     const has = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
-    if (!has) return;
+    if (!has) return [];
     // The whole chain goes at once, so records that point at each other (a correction and
     // what it corrected) can't block one another.
     db.exec('PRAGMA foreign_keys = OFF');
     db.exec('BEGIN');
+    // A fetched original is another holder of its event. Find its file IDs before removing the
+    // rows, so folder backups (including encrypted copies and checkpoints) remove the bytes too.
+    const originals: string[] = [];
+    if (table === 'capture_event' && db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'capture_raw_fetch'").get()) {
+      const find = db.prepare('SELECT id FROM capture_raw_fetch WHERE event_id = ?');
+      const remove = db.prepare('DELETE FROM capture_raw_fetch WHERE event_id = ?');
+      for (const id of ids) {
+        originals.push(...(find.all(id) as { id: string }[]).map((r) => r.id));
+        remove.run(id);
+      }
+    }
     const del = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
     for (const id of ids) del.run(id);
     if (db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_log'`).get()) {
       const entry = db.prepare('DELETE FROM sync_log WHERE tbl = ? AND pk = ?');
       for (const id of ids) entry.run(table, id);
+      for (const id of originals) entry.run('file', `capture/raw/${id}`);
       if (table === 'memory') {
         const carrying = db.prepare(`DELETE FROM sync_log WHERE (tbl = 'memory' OR (tbl = 'file' AND (pk = 'MEMORY.md' OR pk LIKE 'memory/%'))) AND instr(row, ?) > 0`);
         for (const w of words) for (const v of new Set([w.trim(), w.trim().replace(/\s+/g, ' ')])) if (v) carrying.run(JSON.stringify(v).slice(1, -1));
@@ -97,6 +109,7 @@ export function cleanDbFile(path: string, table: string, ids: string[], words: s
     }
     db.exec('COMMIT');
     db.exec('VACUUM');
+    return originals;
   } finally {
     db.close();
   }

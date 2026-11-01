@@ -9,15 +9,28 @@
 // declare ios_status_bar fails. Nova still applies such a package (iOS's own strip, the safe
 // default: an older or hand-made package keeps working), but every package authored against
 // this gate says what it wants. (A package without the orb's states fails everywhere.)
+// The designed scales (DESIGN-SYSTEM §0, §2.1) are warnings at runtime, so any package still
+// applies; here a package at the bar (AT_THE_BAR, the lead first) fails when it leaves them, and
+// every other package is listed as not yet at the bar, with what keeps it off.
 // Usage: node scripts/check-themes.js [design-systems/x.json ...]
 import { readFileSync, readdirSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
-import { BUILTIN_DIR, ORB_STATES, contrast, iosStatusBar, validatePackage } from '../src/core/index.ts';
+import { AT_THE_BAR, BUILTIN_DIR, LEAD_DESIGN_SYSTEM, ORB_STATES, contrast, iosStatusBar, packageScaleFindings, validatePackage } from '../src/core/index.ts';
 
 export { contrast };
 
+// Where a package stands against the design bar: at it, or not yet and why. A package named at
+// the bar that leaves the scales is a problem.
+export function barCheck(pkg) {
+  const findings = packageScaleFindings(pkg ?? {});
+  const named = AT_THE_BAR.includes(pkg?.id);
+  return { named, at: named && findings.length === 0, findings, problems: named ? findings.map((f) => `At the design bar, so on the designed scales: ${f}`) : [] };
+}
+
 export function checkPackage(pkg) {
   const v = validatePackage(pkg);
+  const bar = barCheck(pkg);
+  if (bar.problems.length) return { ...v, ok: false, problems: [...v.problems, ...bar.problems] };
   if (pkg && typeof pkg === 'object' && pkg.ios_status_bar === undefined) {
     const problems = [...v.problems, 'ios_status_bar must be declared: translucent (a dark design draws behind the iPhone status bar), default (iOS keeps its own strip), or { light, dark } for a package with both looks.'];
     return { ok: false, problems, warnings: v.warnings.filter((w) => !w.startsWith('ios_status_bar isn’t declared')) };
@@ -50,9 +63,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(`✗ ${basename(f)} (${pkg.name ?? '?'})`);
       for (const p of problems) console.log(`    ${p}`);
     } else {
-      console.log(`✓ ${basename(f)} (${pkg.name}): complete, values well-formed, contrast passes${modes.length ? ` in default and ${modes.join(', ')} modes` : ''}, reduced motion honoured, the orb’s ${ORB_STATES.length} states distinct in more than colour, ${statusBarLine(pkg)}`);
+      const bar = barCheck(pkg);
+      const where = bar.at ? `on the designed scales${pkg.id === LEAD_DESIGN_SYSTEM ? ' (lead; rendered owner review required)' : ''}` : `not yet at the design bar (${bar.findings.length} off the scales${bar.named ? '' : ', and not yet approved'})`;
+      console.log(`✓ ${basename(f)} (${pkg.name}): complete, values well-formed, contrast passes${modes.length ? ` in default and ${modes.join(', ')} modes` : ''}, reduced motion honoured, the orb’s ${ORB_STATES.length} states distinct in more than colour, ${statusBarLine(pkg)}; ${where}`);
+      if (process.env.NOVA_BAR_DETAIL) for (const x of bar.findings) console.log(`    · ${x}`);
     }
   }
   if (!files.length) { console.log('✗ no design-system packages found'); process.exit(1); }
+  if (!process.argv.slice(2).length) {
+    const ids = files.map((f) => { try { return JSON.parse(readFileSync(f, 'utf8')).id; } catch { return null; } });
+    for (const id of AT_THE_BAR) if (!ids.includes(id)) { failed++; console.log(`✗ ${id} is named at the design bar, but there is no such package`); }
+  }
   process.exit(failed ? 1 : 0);
 }

@@ -27,7 +27,8 @@
 //  - nova.pid                                 server.js, home.js
 //  - .git, .gitignore                         home.js (the home's history)
 //  - factory-reset.json, reset-report.json    resilience/reset.ts (a reset staged, and its result)
-// Capture keeps everything in the database: it has no folder of its own. The standby's sync writes
+// Capture's fetched originals live in capture/raw (M10h): they are Nova's own recovery/reset data.
+// The standby's sync writes
 // only paths the hub journalled, and its temporary files (<name>.nova-sync-<pid>.tmp) are Nova's
 // when <name> is.
 import { readdirSync } from 'node:fs';
@@ -36,7 +37,7 @@ export const NOVA_ENTRIES: readonly string[] = [
   'nova.db', 'nova.db-wal', 'nova.db-shm', 'nova.db-journal',
   'AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md',
   'MEMORY.md', 'memory', 'sessions', 'schedules', 'skills', 'permissions.md', 'connectors',
-  'workspace', 'extensions', 'changes', 'vault', 'broker', 'mesh',
+  'workspace', 'extensions', 'changes', 'vault', 'broker', 'mesh', 'capture',
   'logs', 'workers', 'kept', 'exports', 'backups', 'checkpoints', 'nova.pid',
   '.git', '.gitignore',
   'factory-reset.json', 'reset-report.json',

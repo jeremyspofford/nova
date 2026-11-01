@@ -154,6 +154,101 @@ export function overshoots(easing: string): boolean {
   return [y1!, y2!].some((y) => y < 0 || y > 1);
 }
 
+// ---- the designed scales (DESIGN-SYSTEM §0 and §2.1; owner direction 2026-11-01) ------------------
+// The scales' structure is the system's, so every package has the same skeleton and only re-expresses
+// values in it: the spacing scale itself (spacing is layout, and a package never changes layout), the
+// type scale's shape (six steps on one ratio), two elevation levels, radius by component size class,
+// one motion family. A package picks its own body size, ratio, radii, shadows and durations within
+// those rules. Orb Teal is the lead package: it is held to them first, and a package is presented as
+// a peer only after these rules and owner approval of its rendered styleguide. AT_THE_BAR is
+// the technical scale gate, not an approval record; stage 1's lead still awaits owner review.
+export const LEAD_DESIGN_SYSTEM = 'orb-teal';
+export const AT_THE_BAR: readonly string[] = Object.freeze(['orb-teal']);
+// 4pt spacing, with a name for each step. Off-scale spacing is a lint error in ui/ (lint:tokens).
+export const SPACE_SCALE: Readonly<Record<string, { px: number; name: string }>> = Object.freeze({
+  'space/1': { px: 4, name: 'hair' }, 'space/2': { px: 8, name: 'tight' }, 'space/3': { px: 12, name: 'snug' }, 'space/4': { px: 16, name: 'base' },
+  'space/5': { px: 24, name: 'roomy' }, 'space/6': { px: 32, name: 'group' }, 'space/7': { px: 48, name: 'section' }, 'space/8': { px: 64, name: 'page' },
+});
+// The type scale: each step is body × ratio^n, rounded to a whole pixel.
+export const TYPE_STEPS: readonly (readonly [string, number])[] = Object.freeze([['type/caption', -2], ['type/small', -1], ['type/body', 0], ['type/h3', 1], ['type/h2', 2], ['type/h1', 3]] as const);
+export const TYPE_RATIO = Object.freeze({ min: 1.125, max: 1.333 });
+export const TYPE_MIN_PX = 11;
+// Radius by component size class, never by rendered height: a container (card, sheet, panel,
+// bubble) takes radius/card, a control (button, field, the composer, a row) radius/input, and only a
+// token whose height is fixed (a status pill, a chip, a dot, a round icon button) radius/pill.
+export const RADIUS_CLASSES = Object.freeze({ container: 'radius/card', control: 'radius/input', token: 'radius/pill' });
+// The one icon set (ui/js/components.js ICONS): a 24-unit grid, drawn at one stroke weight.
+export const ICON_STROKE = 1.5;
+// Technical bar: selected for the scale gate, and on the scales in every look; never proof of owner approval.
+export const atTheBar = (id: string, pkg: { tokens?: unknown; modes?: unknown }) => AT_THE_BAR.includes(id) && packageScaleFindings(pkg).length === 0;
+
+const px = (v: unknown) => (typeof v === 'string' && /^\d*\.?\d+px$/.test(v) ? Number.parseFloat(v) : v === '0' ? 0 : null);
+const shadowLayers = (v: string) => (v === 'none' ? [] : topLevel(v).map((part) => {
+  const lens = (RE.shadow.exec(part)?.[1] ?? '').trim().split(/\s+/).map((x) => Number.parseFloat(x) || 0);
+  return { y: lens[1] ?? 0, blur: lens[2] ?? 0 };
+}));
+
+// What keeps one resolved token set off the designed scales, in words. Empty: it is on them.
+export function scaleFindings(tokens: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  // Spacing: the scale itself, and the card gap one of its steps.
+  for (const [name, { px: want, name: word }] of Object.entries(SPACE_SCALE)) {
+    if (px(tokens[name]) !== want) out.push(`${name} (${word}) is ${say(tokens[name])}; the spacing scale is the system’s, ${want}px.`);
+  }
+  const gap = px(tokens['layout/card-gap']);
+  if (gap === null || !Object.values(SPACE_SCALE).some((x) => x.px === gap)) out.push(`layout/card-gap is ${say(tokens['layout/card-gap'])}; it must be a step of the spacing scale.`);
+  // Type: six steps on one ratio, nothing under the floor, and real weight contrast.
+  const sizes = TYPE_STEPS.map(([n]) => px(tokens[n]));
+  if (sizes.some((x) => x === null)) out.push('The type scale must be in whole pixels, so its ratio can be checked.');
+  else {
+    const [lo, hi] = [sizes[0]!, sizes.at(-1)!];
+    const ratio = (hi / lo) ** (1 / (TYPE_STEPS.length - 1));
+    const body = sizes[2]!;
+    if (ratio < TYPE_RATIO.min || ratio > TYPE_RATIO.max) out.push(`The type scale’s ratio is ${ratio.toFixed(3)}; it must be ${TYPE_RATIO.min}–${TYPE_RATIO.max}, so the hierarchy is real and not shouting.`);
+    for (const [[n, k], got] of TYPE_STEPS.map((x, i) => [x, sizes[i]!] as const)) {
+      const want = body * ratio ** k;
+      if (Math.abs(got - want) > 0.75) out.push(`${n} is ${got}px; on a ${ratio.toFixed(3)} scale from a ${body}px body it is ${want.toFixed(1)}px.`);
+    }
+    if (lo < TYPE_MIN_PX) out.push(`type/caption is ${lo}px; nothing is set under ${TYPE_MIN_PX}px.`);
+  }
+  const [reg, strong] = [Number(tokens['type/weight-regular']), Number(tokens['type/weight-strong'])];
+  if (!(strong - reg >= 200)) out.push(`type/weight-strong (${say(tokens['type/weight-strong'])}) must be at least 200 heavier than type/weight-regular (${say(tokens['type/weight-regular'])}).`);
+  if (!(Number(tokens['type/line-tight']) < Number(tokens['type/line-body']))) out.push('type/line-tight must be tighter than type/line-body.');
+  // Elevation: two levels, each at most two layers, the raised one visibly above the card.
+  const [card, raised] = [tokens['shadow/card'], tokens['shadow/raised']].map((v) => (typeof v === 'string' && validValue('shadow', v) ? shadowLayers(v) : null));
+  if (!card || !raised) out.push('shadow/card and shadow/raised must both be valid shadows.');
+  else {
+    if (card.length > 2 || raised.length > 2) out.push('Each elevation level is at most two shadow layers.');
+    const reach = (ls: { y: number; blur: number }[]) => Math.max(0, ...ls.map((l) => l.y + l.blur));
+    if (!raised.length || reach(raised) <= reach(card)) out.push('shadow/raised must sit visibly above shadow/card: there are two levels, card and raised.');
+  }
+  // Radius: by size class, on the 4pt grid; a container rounder than a control; the pill always a pill.
+  const [rc, ri, rp] = [px(tokens['radius/card']), px(tokens['radius/input']), px(tokens['radius/pill'])];
+  if (rc === null || ri === null || rc % 4 || ri % 4) out.push(`radius/card (${say(tokens['radius/card'])}) and radius/input (${say(tokens['radius/input'])}) are steps of the 4pt grid.`);
+  else if (!(ri < rc)) out.push(`radius/input (${ri}px) must be smaller than radius/card (${rc}px): a control sits inside a container.`);
+  if (rp === null || rp < 999) out.push(`radius/pill is ${say(tokens['radius/pill'])}; it is always a full pill (999px), and only fixed-height tokens take it.`);
+  // Motion: one family. Fast, standard and slow in order; the loops whole multiples of slow.
+  const d = (n: string) => (typeof tokens[n] === 'string' && validValue('duration', tokens[n]) ? ms(tokens[n] as string) : NaN);
+  const [fast, std, slow, pulse, breathe] = ['motion/duration-fast', 'motion/transition', 'motion/duration-slow', 'motion/pulse', 'motion/breathe'].map(d);
+  // (Their range, 150–300 ms, is M9's own warning above; here, only that they are one ordered family.)
+  if (!(fast! < std! && std! < slow!)) out.push(`The durations are one family, in order: motion/duration-fast < motion/transition < motion/duration-slow; got ${fast}, ${std} and ${slow}ms.`);
+  for (const [n, v] of [['motion/pulse', pulse], ['motion/breathe', breathe]] as const) if (!(v! > 0 && slow! > 0 && v! % slow! === 0)) out.push(`${n} (${v}ms) must be a whole multiple of motion/duration-slow (${slow}ms), so the loops belong to the same family.`);
+  if (typeof tokens['motion/ease'] !== 'string' || !/^cubic-bezier\(/.test(tokens['motion/ease']) || overshoots(tokens['motion/ease'])) out.push('motion/ease is the one curve: a cubic-bezier that never overshoots.');
+  return out;
+}
+
+// Each look of a package (its own tokens, and each mode on top) against the scales.
+export function packageScaleFindings(pkg: { tokens?: unknown; modes?: unknown }): string[] {
+  const tokens = isObj(pkg.tokens) ? pkg.tokens : {};
+  const modes = isObj(pkg.modes) ? pkg.modes : {};
+  const out = scaleFindings(tokens);
+  for (const m of ['light', 'dark']) {
+    if (!isObj(modes[m])) continue;
+    for (const f of scaleFindings({ ...tokens, ...modes[m] })) if (!out.includes(f)) out.push(`In ${m} mode, ${f[0]!.toLowerCase()}${f.slice(1)}`);
+  }
+  return out;
+}
+
 // ---- the orb's states (DESIGN-SYSTEM §1 and §7; owner decision 2026-10-31) ----------------------
 // The set is fixed and its meanings are the system's: a design system expresses every state in its
 // own visual language (its colours, and which motion, light and mark each state shows), and can't
@@ -569,6 +664,10 @@ export function validatePackage(input: unknown): { ok: boolean; problems: string
     if (typeof ease === 'string' && validValue('easing', ease) && overshoots(ease)) warn.push(`${lead}motion/ease overshoots (${ease}): no bounce or elastic motion, so Nova uses ${motionValue('motion/ease', ease)}.`);
   }
 
+  // The designed scales (§0, §2.1): a warning, never a refusal, so a package made before them still
+  // applies. The authoring gate (scripts/check-themes.js) holds the packages at the bar to them.
+  if (isObj(p.tokens)) for (const f of packageScaleFindings(p)) warn.push(`Off the designed scales: ${f}`);
+
   // Reduced motion: loops stop, transitions stay short.
   if (p.reduced_motion !== undefined && !isObj(p.reduced_motion)) out.push('reduced_motion must be an object of motion tokens.');
   for (const [name, v] of Object.entries(isObj(p.reduced_motion) ? p.reduced_motion : {})) {
@@ -787,6 +886,15 @@ export class Design extends EventEmitter {
       contrast: CONTRAST_PAIRS.map(([fg, bg, min, what]) => ({ fg, bg, min, what })),
       live_checks: LIVE_CHECKS.map(([fg, bg, min, kind, what]) => ({ fg, bg, min, kind, what })),
       reduced_motion: { always: REDUCED_MOTION, max_ms: REDUCED_MOTION_MAX_MS },
+      // The designed scales (§0, §2.1): the structure every package re-expresses, for the styleguide.
+      scales: {
+        lead: LEAD_DESIGN_SYSTEM, at_the_bar: AT_THE_BAR,
+        space: Object.entries(SPACE_SCALE).map(([token, v]) => ({ token, ...v })),
+        type: { steps: TYPE_STEPS.map(([token, step]) => ({ token, step })), ratio: TYPE_RATIO, min_px: TYPE_MIN_PX },
+        elevation: ['shadow/card', 'shadow/raised'], radius: RADIUS_CLASSES,
+        motion: ['motion/duration-fast', 'motion/transition', 'motion/duration-slow', 'motion/pulse', 'motion/breathe', 'motion/ease'],
+        icon_stroke: ICON_STROKE,
+      },
       orb_states: { states: ORB_STATES.map((name) => ({ name, meaning: ORB_MEANINGS[name], ...(ORB_STATE_COLORS[name] ? { color: ORB_STATE_COLORS[name] } : {}) })), motions: ORB_MOTIONS, lights: ORB_LIGHTS, marks: ORB_MARKS },
     };
   }
@@ -1009,7 +1117,7 @@ export class Design extends EventEmitter {
     })) : {};
     // What the one-tap fix could do for it: the colours it would move, and those it can't fix.
     const fix = v.ok ? contrastNudge(m) : { nudge: {}, unfixable: [] };
-    return { id: x.id, name: m.name, version: x.version, description: m.description ?? '', state: x.state, builtin: this.#builtins.has(x.id), starter: STARTERS.includes(x.id), valid: v.ok, problems: v.problems, warnings: v.warnings, extras: m.extras ?? [], preview: m.preview ?? [], looks: seen, fixable: Object.keys(fix.nudge), unfixable: fix.unfixable };
+    return { id: x.id, name: m.name, version: x.version, description: m.description ?? '', state: x.state, builtin: this.#builtins.has(x.id), starter: STARTERS.includes(x.id), lead: x.id === LEAD_DESIGN_SYSTEM, at_bar: atTheBar(x.id, m), valid: v.ok, problems: v.problems, warnings: v.warnings, extras: m.extras ?? [], preview: m.preview ?? [], looks: seen, fixable: Object.keys(fix.nudge), unfixable: fix.unfixable };
   }
 
   #usable(id: string): boolean {

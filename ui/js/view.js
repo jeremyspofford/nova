@@ -2,18 +2,12 @@
 // permissions): state in, HTML out. Used by the app and by the living style reference, so the
 // reference always shows the real components. The PWA's own components are in components.js.
 import { escapeHtml as esc, renderMarkdown } from './markdown.js';
-import { status } from './components.js';
+import { ICONS, status } from './components.js';
 import { activityStatus, toolTier } from './status.js';
 import { since, waitState, waitingLine } from './wait.js';
 
-export const icons = {
-  send: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.5V4.5M5 9.5l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-  stop: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1.5" fill="currentColor"/></svg>',
-  plus: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
-  copy: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="7" width="9" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M13 7V5.5A1.5 1.5 0 0 0 11.5 4h-6A1.5 1.5 0 0 0 4 5.5v6A1.5 1.5 0 0 0 5.5 13H7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
-  sidebar: '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="4.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.5v11" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
-  again: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 10a5.5 5.5 0 1 1-1.6-3.9M15.5 4.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-};
+// The conversation's icons are the one set's (components.js ICONS), under the names this file uses.
+export const icons = { send: ICONS.send, stop: ICONS.stop, plus: ICONS.plus, copy: ICONS.copy, sidebar: ICONS.panel, again: ICONS.again };
 
 // ---- dates ---------------------------------------------------------------
 

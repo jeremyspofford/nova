@@ -11,6 +11,16 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: nothing new in the running app yet. Core still uses the old vault. This is PR 1 of 3, with the broker/client, synthetic test evidence and a refreshed self-contained review packet; the consumer and supervisor wiring remains Track 1 work.
 - Still unfinished: the required independent live review was interrupted by an automated safety filter; the other model's findings remain outstanding. This PR has not merged. Old checkpoints still retain credentials (S4), holders can retain previously received data (S6), and authenticated verification remains a documented, rate-capped guess oracle. Updated broker and legacy writers must be deployed together; older/Gmail file writers require quiescence and stale locks require operator recovery. No owner vault or keychain was accessed.
 
+**2026-11-01 · #276 · Native device workloads and capture sync, tested with stand-ins**
+- What changed: paired computers can be assigned a signed native program, checked before it runs, promoted through the Service Manager and rolled back to the kept version. The capture pilot sends signed text batches, queues while the hub is away, carries deletion confirmations and fetches one original with a recorded reason. The takeover fixes make the boot agent enforce promotion itself, end owned descendants after their leader exits, keep failed versions held, confine health checks and preserve installed versions. Capture checks current consent and hub placement, retries failed privacy deletions, and removes forgotten originals from local and replica recovery copies.
+- What you can now do: exercise those paths with the stand-in program and disposable devices used in the gate tests. This is not evidence of working capture on real Windows or macOS devices.
+- Still unfinished: real Screenpipe and real-device permission checks, raw archives, and spoke credentials remain unbuilt or unproven. Declared contract tests on devices are refused explicitly; they are not silently skipped. Safe mode requires explicit stop/start recovery or a different version. Evidence and independent review limits are in docs/evidence/m10h-gate.md and docs/reviews/m10h-takeover-review-2026-11-01.md.
+
+**2026-11-01 · #279 · One lead design and a living styleguide — stage 1 approved**
+- What changed: Orb Teal is the one lead design, with alternatives behind More designs. Fixed spacing, type, radius and motion scales and token lint provide common structure. DESIGN-SYSTEM §0 records art direction and a measurable slop check; the styleguide has individually linked component/state examples. New surfaces start as rendered styleguide entries for owner approval before app code.
+- What you can now do: inspect the real components and their states at /styleguide, and review the evidence in `docs/reviews/design-quality-stage1-review-packet.md`. The approval covers this machinery. The F0 evidence now includes the exact 1280×820 window with a 20-line composer, guarded in Chromium and WebKit.
+- Still unfinished: stage 2 prioritizes desktop card hierarchy, small desktop rail-orb depth (the phone hero works), and background-gradient discipline. It must show visible before/after differences, not tightened values alone; queue: `docs/plans/design-quality-stage2-queue.md`. Other packages reaching the same bar and real-phone checks remain open. Stage 1 does not claim to solve those visual problems.
+
 **2026-11-01 · Handoff · A takeover note for the next builder**
 - What changed: a handoff note (docs/builder-packet/HANDOFF-FROM-BUILDER-2026-11-01.md) records the work in progress, the open questions waiting on you, the next steps, and the quirks of this machine, so a new builder can pick up without losing anything.
 - What you can now do: nothing in the app changed: paperwork only.
@@ -359,6 +369,74 @@ built-ins only.
 ## Decisions
 
 **2026-11-01 (Vault broker Phase 1, PR 1 of 3, #275).** The broker remains 2,666/3,000 lines, dependency-free and separate from core. Owner findings A are preserved at `docs/builder-packet/nova-vault-second-model-findings-2026-11-01-a.md`; RED→GREEN evidence and limits at `docs/reviews/vault-owner-findings-notes-2026-11-01.md`. SEC-01..05 are addressed by regressions and fixes; SEC-06 documents authenticated verification's boolean oracle instead of removing the n8n operation required by the design; SEC-07 requested no change. Parent targeted verification: 45 passed, one optional keychain skip; full-suite failure and rerun results are not portrayed as a green suite. The self-contained packet is regenerated from source snapshot `40952a88`. Independent live review, the other model's findings and green exact-head CI remain required. The branch's Track 1 NOTES, including consumer/supervisor wiring and checkpoint migration cleanup, are unapplied; no live security guarantee is claimed before that integration.
+
+**2026-11-01 (M10h: native workloads on devices, and the capture pilot).** Branch `m10h/native-workloads`.
+Plan `docs/plans/M10h.md`, evidence `docs/evidence/m10h-gate.md`, built from the orchestration ADR's M10h
+phase (Point 6, Decisions 1 and 4) and the capture data path design's gate list. Migration 0023.
+- **Who holds the mesh key and carries the sync (the ADR's resolution note): the boot agent**, in a
+  data channel of its own (`src/device/carrier.ts`), not a verb. It already held the device's key and
+  session; no key moves, and the runtime has no part in the capture data path. The carrier starts
+  nothing (a test reads its source) and reaches only the hub and the live capture workload's loopback
+  port from its signed manifest. **The runtime's no-network rule is kept, not amended:**
+  `RUNTIME_CALLS` is unchanged, and the M4b sandbox test, run again, covers the new folders.
+- **Decision 1 as code:** `WORKLOAD_VERBS` is exactly install, start, stop, switch, probe, frozen. A
+  request is `{verb, service, version}`; any other key (a command, arguments, an environment, a port)
+  refuses it. `install` fetches the manifest itself over the boot agent's session. A manifest is taken
+  only when signed by a key the roster lets sign bundles (`bundleKeys`), for this device and platform,
+  with a command that starts one of its own files (or Nova's Node with it). Every file is checked by
+  SHA-256 before the slot exists, and again at every start. Never as root. The runtime decides each
+  step (`src/device/rollout.ts`, shipped in the signed runtime bundle) and reports in its heartbeat.
+- **6(b) on a device:** alongside `full` or `shadow` is a rehearsal on a preview port (a shadow is told
+  so and its output is never read); `none` starts at the switch. A switch is a restart onto the stable
+  ports, since a device has no forwarder. Failed health after a switch goes back to the kept slot by
+  itself (tier 1), downloading nothing; the hub's assignment follows the device back, and a problem
+  says so. **"Refused" and "waiting" are told apart:** a refusal is reported and not retried; capture
+  being off is waiting.
+- **One driver per device:** `DeviceWorkloads.driver(deviceId)` implements M10e's interface, and the
+  core keeps a Service Manager per device, so Screenpipe can run on several devices with their own
+  versions. The hub's own services stay with the supervisor's manager (another process). **Guard
+  removed:** `ServiceManager.plan` refused any placement away from the hub. It now hands one to its
+  `remote` driver; a manager without one (the supervisor's) still refuses, in new words.
+  `/services/placement` and the role-narrowing route no longer say nothing runs on devices.
+  Narrowing a device's roles now lists and stops its workloads that need a removed role.
+- **Placement:** an image-only service goes to no device until the K3s driver (and never to macOS or
+  Windows). A capture permission (`screen-recording`, `microphone`, `accessibility`) must place by
+  `capture-source`: a new validator refusal, so `tests/core/services-manager.test.ts`'s tier-3 case
+  now uses a non-capture permission. No secrets go to a device (owner decision Q5: the vault broker
+  isn't built), and no `https:` artifact. **Decision 4:** Screenpipe's definition
+  (`services/screenpipe.ts`, alongside `none`, tier 3) on a stand-in. The hub signs the manifest that
+  pins the artifact's hash and serves the bytes unchanged.
+- **The capture data path:** batches signed with the device's key and verified against the enrolled
+  record and the session; each item through `Capture.ingest`, so consent and screening are checked
+  again at the hub; provenance as a new replicated column (`capture_event.provenance`,
+  `ADDED_COLUMNS[23]`). Replicated tables: `device_workload`, `capture_batch` (no per-item checksums
+  kept, so a forgotten item leaves no hash), `capture_device_tombstone` and `capture_raw_fetch` (the event-to-file mapping required to remove originals from replica recovery copies). Not replicated:
+  `device_workload_report`, `device_workload_event`, `capture_device_sync`. The forget's answer gains `elsewhere`, `everywhere` and `said`;
+  an event view's provenance gains `transfer` (`tests/core/capture.test.ts` updated). A cloud site is
+  `NOVA_MESH_SITE=cloud`; "local-first" in the design is `local-preferred` in code.
+- **Changed tests, why:** the runtime bundle carries `rollout.ts` (`device-agent`, `mesh-spokes`,
+  `device-sandbox`); the device tar lists the new device files; the supervisor's manager wording
+  (`services-placement`).
+- **An internal review before the PR** found eight things, all fixed with tests:
+  - device deploys now need an approver;
+  - a close during a switch could leave a process;
+  - the pull could skip items after a failed page or a large burst; it now reads time windows whole;
+  - a rollback could go to a version the hub withdrew;
+  - the live version wasn't restarted while a new one was tried;
+  - what a kind captured while it was off was kept on the device; it is now deleted there;
+  - a capture workload could run as a shadow;
+  - a delete didn't say which kind it was for.
+- **A UI test fixed, not Nova:** `tests/ui/m9-progress.test.ts` read the edited memory's id before the
+  list refreshed with the correction's new record, so its 503 route missed. It failed in CI on this
+  branch only. A diagnostic pushed for it showed the cause. The test now waits for the refreshed list,
+  and keeps the diagnostic.
+- **A chaos test fixed, not Nova:** `tests/chaos/hub.test.ts`, "a server that stops answering is
+  restarted". It waited for a new pid, which the supervisor records before the new server's port, so
+  it could call `http://127.0.0.1:null`. It now waits for the port too.
+
+**2026-11-01 (Owner coordination: outgoing builder stopped).** The owner stopped its coordinator at about 09:12 ET and is closing its session. Integrate from M10h `ff665f92`, vault `8ca4b827`, design source `eede795e` and memory gate `0326e673`. Flag unexpected later commits from that builder rather than treating them as authoritative. Verbatim source: `docs/builder-packet/INPUT-2026-11-01-BUILDER-FREEZE.md`. Incoming-builder continuation commits remain authorized.
+
+**2026-11-01 (Owner approval: design stage 1, #279).** Approved the machinery — §0, styleguide, token values and slop gate — with merge on green CI. The owner corrected the F0 evidence target to a 1280×820 window with a 20-line composer; the exact regression is included in this PR. Stage 2 priorities are desktop card hierarchy, small rail-orb depth and background-gradient discipline. Acceptance requires visible differences in screenshots, not values alone. Verbatim source: `docs/builder-packet/INPUT-2026-11-01-DESIGN-STAGE1-APPROVAL.md`; queue: `docs/plans/design-quality-stage2-queue.md`.
 
 **2026-11-01 (M10g, after the second adversarial review of #272: replays, evidence, ties, the name, long jumps).**
 Branch `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The second review of #272"). Five

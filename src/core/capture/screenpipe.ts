@@ -58,6 +58,8 @@ export interface RawEvent {
   url?: string | null;
   text?: string | null;
   private?: boolean;
+  // Where it came from and how it got here (M10h, the capture data path): kept with the event.
+  provenance?: Record<string, unknown> | null;
 }
 
 export class Unreachable extends Error {}

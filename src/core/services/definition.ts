@@ -109,6 +109,13 @@ export function commandProblem(command: string[], name: string): string | null {
   if (isProgram(first)) return null;
   return `Its command starts with ${JSON.stringify(first ?? '')}. A program starts as itself (${name} or ./${name}) or with Nova’s own Node (node ${name} …): never another program, a shell, an absolute path or a path out of its folder.`;
 }
+// The OS permissions that make a service capture (M10h): screen recording, the microphone, the
+// accessibility tree. A capture service is placed only by the capture-source role, and deploying it
+// never turns capture on (consent stays per source and device). The device agent keeps the same list
+// (src/device/workloads.ts CAPTURE_PERMISSIONS); a test keeps the two the same.
+export const CAPTURE_PERMISSIONS: readonly string[] = Object.freeze(['screen-recording', 'microphone', 'accessibility']);
+export const isCaptureService = (def: Pick<ServiceDefinition, 'os_permissions'>): boolean => def.os_permissions.some((p) => CAPTURE_PERMISSIONS.includes(p));
+
 // macOS and Windows devices never run containers (ADR Point 6(a)): K3s agent nodes are Linux only.
 export const notLinux = (platform: string) => /^(darwin|mac|ios|ipados|win)/i.test(platform);
 
@@ -214,6 +221,11 @@ export function validate(input: unknown, o: { devices?: DeviceView[] } = {}): Va
     if (pl.needs !== undefined && (!isObj(pl.needs) || Object.values(pl.needs).some((v) => typeof v !== 'number' || v < 0))) p.push('placement.needs is numbers, such as {gpu_vram_gb: 8}.');
     if (pl.replicas !== undefined && (pl.mode !== 'floating' || !isInt(pl.replicas, 1, 64))) p.push('Only a floating service has replicas: 1 to 64.');
     if (pl.failover !== undefined && (typeof pl.failover !== 'string' || !pl.failover)) p.push('placement.failover is a device or “any”.');
+    // Capture only onto capture sources (M10h): a service asking for a capture permission says so in
+    // its placement, so the resolver and the device agent both hold it to that role.
+    if (isStrs(d.os_permissions) && d.os_permissions.some((x) => CAPTURE_PERMISSIONS.includes(x)) && !(isStrs(pl.roles) && pl.roles.includes('capture-source'))) {
+      p.push(`It asks for ${d.os_permissions.filter((x) => CAPTURE_PERMISSIONS.includes(x)).join(' and ')}, so it captures: its placement.roles must include capture-source, and it runs only on a device that is a capture source.`);
+    }
     // A floating service runs on whichever device is healthy: its state would be left behind.
     if (pl.mode === 'floating' && hasState) p.push('A floating service can’t have state: it moves between devices, and its state would stay behind. Pin it, or prefer a device with a failover.');
     const devices = o.devices;

@@ -1,9 +1,9 @@
 // The placement resolver (docs/plans/M10-orchestration.md, Point 5; docs/plans/M10f.md §2): from a
 // definition's placement to the device or devices it runs on, using each device's roles (Point 9),
 // its hardware (the heartbeat's `device_hardware`) and its health (heard from within the Online
-// window). Pure: it reads what it is given and decides; nothing here deploys anything. Nothing is
-// deployed to other devices before native workloads (M10h): a caller that gets a device other than
-// the hub says so.
+// window). Pure: it reads what it is given and decides; nothing here deploys anything. A definition
+// placed on a device other than the hub is a native workload (M10h), deployed by the hub's device
+// driver (services/workloads.ts); the supervisor's own Service Manager runs services on the hub only.
 //
 //   pinned      that device only. Down, the service is down, and the resolution says so.
 //   preferred   the best eligible, healthy device; a placed service stays while its device is

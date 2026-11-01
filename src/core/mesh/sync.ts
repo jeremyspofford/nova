@@ -26,6 +26,10 @@ export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
   capture_source: ['id'], capture_event: ['id'], capture_tombstone: ['source_id', 'key'], capture_promotion: ['id'], capture_proposal: ['id'],
   // Migration 0011: the change pipeline's records (M7a), so a standby knows what is live and why.
   change_record: ['id'],
+  // Migration 0023 (M10h): what each device is assigned to run; each capture batch as verified; and
+  // forgets still waiting for a device's acknowledgement; and raw-to-event mappings needed to read
+  // and forget fetched originals and their recovery copies. A hub that takes over keeps all four.
+  device_workload: ['device_id', 'service'], capture_batch: ['id'], capture_device_tombstone: ['id'], capture_raw_fetch: ['id'],
 };
 // Columns a release added to a replicated table, by the schema version that added them (M10f review,
 // finding 3: one mechanism for every such column). A standby a release behind doesn't have them:
@@ -44,6 +48,9 @@ export const ADDED_COLUMNS: Readonly<Record<number, Readonly<Record<string, read
   21: { problem: ['stops'] },
   // Capture screening, job 1: each captured event's screening state and provenance.
   22: { capture_event: ['sensitivity', 'sensitivity_why', 'sensitivity_decision', 'sensitivity_detail', 'sensitivity_at', 'sensitivity_tries', 'sensitivity_next'] },
+  // M10h: where a captured event came from and how it got here (the capture data path's provenance).
+  // A standby without it keeps the event without its provenance until it catches up.
+  23: { capture_event: ['provenance'] },
 });
 export const UNSTATED_SCHEMA = 19;
 
