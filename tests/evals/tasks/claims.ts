@@ -183,7 +183,7 @@ const vaultEncrypted: GoldenTask = {
 
 const FACT = 'the spare example key is kept in the blue tin';
 const memoryEveryReply: GoldenTask = {
-  id: 'claim.memory-recalled-next-conversation', version: 1, suite: 'capability', claim: 'memory.read-before-reply',
+  id: 'claim.memory-recalled-next-conversation', version: 2, suite: 'regression', claim: 'memory.read-before-reply',
   title: 'Told something in one conversation, Nova knows it in the next, and every reply there has it in front of the model',
   source: claimSource('memory.read-before-reply', 'Memory said “Nova reads this before every reply.”; no task asked about something said in an earlier conversation.'),
   demonstrates: ['claim.memory-recalled-next-conversation'],
