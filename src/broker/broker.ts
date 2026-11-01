@@ -708,15 +708,17 @@ export class Broker {
       let origin = m.origin;
       if (x.origin !== undefined && x.origin !== null) { try { origin = canonicalTarget({ kind: 'http', origin: x.origin }).target; } catch { throw new Failed('A proposed site isn’t a canonical https origin.'); } }
       const cls = x.class === 'standard' || x.class === 'sensitive' ? x.class : suggestClass(origin, m.kind);
-      const bindings = Array.isArray(x.bind) ? x.bind.slice(0, 5).map((b) => this.#binding(b)) : [];
-      if (cls === 'sensitive' && [...m.bindings.filter((b) => !bindings.some((n) => n.target === b.target)), ...bindings].some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
-      return { id, m, origin, cls, bindings };
+      const proposed = Array.isArray(x.bind) ? x.bind.slice(0, 5).map((b) => this.#binding(b)) : [];
+      // The card, approval digest and saved policy all describe the complete resulting set.
+      const bindings = [...m.bindings.filter((b) => !proposed.some((n) => n.target === b.target)), ...proposed];
+      if (cls === 'sensitive' && bindings.some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
+      return { id, m, origin, cls, bindings, proposed };
     });
     const items = plan.map((x) => ({ name: x.m.name, kind: x.m.kind, origin: x.origin, username: x.m.username, class: x.cls, bindings: x.bindings.map(cardBinding), target: x.bindings.map((b) => b.target).join(', ') || 'unbound', flags: x.bindings.flatMap((b) => this.#flags(b.target, b.kind)) }));
     const { id: approval } = this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ ref: x.id, origin: x.origin, class: x.cls, bindings: x.bindings.map(cardBinding) })) }, { verb: 'create', what: `Bind ${plan.length} credential(s) moved from the old vault`, tier: 3, items, approving: 'Each is usable only on the target shown. Items left unbound can’t be used until you bind them.' }, true);
     for (const x of plan) {
-      for (const b of x.bindings) if (b.consent) b.consent.approval_id = approval;
-      this.store.setMeta(x.id, stripIndex({ ...x.m, origin: x.origin, class: x.cls, bindings: [...x.m.bindings.filter((b) => !x.bindings.some((n) => n.target === b.target)), ...x.bindings] }));
+      for (const b of x.proposed) if (b.consent) b.consent.approval_id = approval;
+      this.store.setMeta(x.id, stripIndex({ ...x.m, origin: x.origin, class: x.cls, bindings: x.bindings }));
     }
     this.#revoked(...plan.map((x) => x.id));
     return { refs: plan.map((x) => this.#refMeta(x.id)) };
