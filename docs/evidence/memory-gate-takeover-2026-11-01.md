@@ -1,8 +1,7 @@
 # Memory-gate takeover verification — 2026-11-01
 
-PR #277 remains queued after #276. No memory consumer is wired and no model or eval
-was rerun. This update merges `origin/main` (`001f373f`, handoff-only since the
-branch's base), preserves evaluation history, and adds its plain-language LEDGER
+M10h #276 merged at `a62b4d4821106bc9b50d9c19c72fc296b4f5f93d`; #277 follows it in track order. No memory consumer is wired and no model or eval
+was rerun. This update merges `origin/main` again at `a62b4d48` (including approved design stage 1 and M10h), preserves evaluation history, and adds its plain-language LEDGER
 entry, decision record and inventory note.
 
 - `git merge-base --is-ancestor 7d587168 HEAD`: exit 0 (template/rule/bounds).
@@ -21,8 +20,7 @@ passes only at its recorded digest: 0/49 false saves, 25/26 recall, ECE 0.082.
 `tev1:0.8b` fails with 0/26 recall. The false-save interval reaches 7.3%, three
 contradictions were skipped, and one author wrote questions and cases.
 
-Before merge, bring in #276 by **merging** main, resolve prose without discarding
-either ledger entry, and require green CI on that exact head. Never rebase this
+Main was merged, never rebased, and both ledger entries were retained. Require green CI on the exact final head. Never rebase this
 branch. Then merge with `--match-head-commit`, restart the preview as the handoff
 specifies, and verify `/`, `/api/v1/health` and mesh hello. The runner/server wiring
-and candidate-reason migration remain explicit Track 1 follow-ups.
+and candidate-reason migration are queued explicitly in `docs/plans/track1-follow-up-queue.md`.

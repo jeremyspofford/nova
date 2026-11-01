@@ -96,6 +96,8 @@ The template, its rule and the bounds were fixed at `7d587168`. The eval was fix
 
 ## NOTES for Track 1
 
+Queued in `docs/plans/track1-follow-up-queue.md` after #277. No consumer is connected by this PR.
+
 Track 2 changed no memory code, no consumer and no shared file. These are what the template needs to be used.
 
 ### 1. `keep()` asks the gate before writing a memory (`src/runner.js`)
