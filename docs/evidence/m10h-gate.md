@@ -14,17 +14,12 @@ No credential goes to a spoke (owner decision Q5; the vault broker isn't merged)
 
 The branch is `m10h/native-workloads`, from main at `6d51c5d1` (M10e, M10f, M10g merged). Migration
 **0023** (`src/core/migrations/0023_native_workloads.sql`): replicated `device_workload`,
-`capture_batch`, `capture_device_tombstone`; the replicated column `capture_event.provenance`, in
+`capture_batch`, `capture_device_tombstone`, `capture_raw_fetch`; the replicated column `capture_event.provenance`, in
 `ADDED_COLUMNS[23]` (`tests/core/sync-skew.test.ts` and `tests/core/mesh-sync.test.ts` pass with it).
 
 ## Takeover status (2026-11-01)
 
-**The final gate is not yet passed.** The required independent review was interrupted by
-an automated safety filter, and the original head's one CI rerun failed a different
-chaos-test startup race. Reproductions, fixes, exact local commands and remaining gates
-are recorded in `docs/reviews/m10h-takeover-review-2026-11-01.md`. PR #276 remains unmerged;
-the preview is unchanged by this takeover. The results below are historical build evidence,
-not a claim that the current head is approved.
+Two independent source reviews completed at `acbda56b`, with eight reproduced findings. Each fix was driven by failing regressions; independent rechecks and exact final-source validation are recorded in `docs/reviews/m10h-takeover-review-2026-11-01.md` and its linked source reports. Historical interrupted attempts and red/incomplete host suites remain labeled as such. Required CI on the exact final PR head is the merge gate; the PR body records the final check run. No real-device or real Screenpipe capability is claimed.
 
 ## Earlier suite results
 

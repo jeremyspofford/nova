@@ -7,9 +7,9 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 **2026-11-01 · #276 · Native device workloads and capture sync, tested with stand-ins**
-- What changed: paired computers can be assigned a signed native program, checked before it runs, promoted through the Service Manager and rolled back to the kept version. The capture pilot sends signed text batches, queues while the hub is away, carries deletion confirmations and fetches one original with a recorded reason. The takeover fixes make the boot agent enforce the hub's promotion itself and make forgetting a fetched original remove its recovery copies too.
+- What changed: paired computers can be assigned a signed native program, checked before it runs, promoted through the Service Manager and rolled back to the kept version. The capture pilot sends signed text batches, queues while the hub is away, carries deletion confirmations and fetches one original with a recorded reason. The takeover fixes make the boot agent enforce promotion itself, end owned descendants after their leader exits, keep failed versions held, confine health checks and preserve installed versions. Capture checks current consent and hub placement, retries failed privacy deletions, and removes forgotten originals from local and replica recovery copies.
 - What you can now do: exercise those paths with the stand-in program and disposable devices used in the gate tests. This is not evidence of working capture on real Windows or macOS devices.
-- Still unfinished: this PR remains unmerged pending the completed independent adversarial review and green CI. No real Screenpipe binary, real device workload, raw archive, or spoke credential has been deployed. The preview stays on main until those gates pass. Current evidence and review limits are in docs/evidence/m10h-gate.md and docs/reviews/m10h-takeover-review-2026-11-01.md.
+- Still unfinished: real Screenpipe and real-device permission checks, raw archives, and spoke credentials remain unbuilt or unproven. Declared contract tests on devices are refused explicitly; they are not silently skipped. Safe mode requires explicit stop/start recovery or a different version. Evidence and independent review limits are in docs/evidence/m10h-gate.md and docs/reviews/m10h-takeover-review-2026-11-01.md.
 
 **2026-11-01 · #279 · One lead design and a living styleguide — stage 1 approved**
 - What changed: Orb Teal is the one lead design, with alternatives behind More designs. Fixed spacing, type, radius and motion scales and token lint provide common structure. DESIGN-SYSTEM §0 records art direction and a measurable slop check; the styleguide has individually linked component/state examples. New surfaces start as rendered styleguide entries for owner approval before app code.
@@ -403,9 +403,8 @@ phase (Point 6, Decisions 1 and 4) and the capture data path design's gate list.
   record and the session; each item through `Capture.ingest`, so consent and screening are checked
   again at the hub; provenance as a new replicated column (`capture_event.provenance`,
   `ADDED_COLUMNS[23]`). Replicated tables: `device_workload`, `capture_batch` (no per-item checksums
-  kept, so a forgotten item leaves no hash) and `capture_device_tombstone`. Not replicated:
-  `device_workload_report`, `device_workload_event`, `capture_device_sync`, `capture_raw_fetch` (the
-  raw fetch's ledger task replicates). The forget's answer gains `elsewhere`, `everywhere` and `said`;
+  kept, so a forgotten item leaves no hash), `capture_device_tombstone` and `capture_raw_fetch` (the event-to-file mapping required to remove originals from replica recovery copies). Not replicated:
+  `device_workload_report`, `device_workload_event`, `capture_device_sync`. The forget's answer gains `elsewhere`, `everywhere` and `said`;
   an event view's provenance gains `transfer` (`tests/core/capture.test.ts` updated). A cloud site is
   `NOVA_MESH_SITE=cloud`; "local-first" in the design is `local-preferred` in code.
 - **Changed tests, why:** the runtime bundle carries `rollout.ts` (`device-agent`, `mesh-spokes`,
