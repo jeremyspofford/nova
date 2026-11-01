@@ -38,7 +38,18 @@ CI is the record: PR #276, run `41296243939`, at `2162b62e`.
     image), with the tripwire armed and never firing; the screenshots it rewrote were put back. A later
     full local run gave 113 of 114: `m6a-capture`, "database is locked", where the test opens the
     database with no busy timeout while the server writes. It passed in every CI attempt.
-  - At the fix: UI_FINAL.
+  - At the fix (`4d060ccd`), the UI gate passed: run `41306044910`.
+- **The unit job at `4d060ccd`** failed once on each of two existing timing tests, neither touching
+  M10h code:
+  - `tests/core/m10d-review.test.ts:353`, "a kept change keeps its sealed snapshot for 30 days". It
+    passed locally, and on the re-run.
+  - On the re-run, `tests/chaos/hub.test.ts`, "a server that stops answering is restarted", with
+    `Invalid URL`. The supervisor records a restarted server's pid at spawn, before its port, and the
+    mode still says running from before. The test's wait could therefore pass and call
+    `http://127.0.0.1:null`.
+
+  The test now also waits for the port, and passes locally. This branch adds six heavier test files
+  that start real processes; these races surfaced while it ran.
 - **Locally, every M10h file together** (`tests/core/workloads-*.test.ts`, `capture-sync`, `capture-carrier`, `tests/acceptance/m10h-pilot.test.ts`, with the device-agent, sandbox, spokes, services, sync and capture files they touch) all pass.
 - **A full local `npm run check` couldn't be completed on this machine.** Other builders' suites ran alongside it, one of them hung for over six hours. `/tmp` (a 16 GB tmpfs) filled to 100 % during the run, and the tests failed with it. CI, above, is the run of record.
 

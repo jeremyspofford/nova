@@ -72,7 +72,9 @@ test('a server that stops answering is restarted', async () => {
     const pid = s.state().server.pid;
     // Frozen: alive, but answering nothing.
     process.kill(pid, 'SIGSTOP');
-    await until(() => s.state()?.mode === 'running' && s.state().server.pid && s.state().server.pid !== pid, 'a restart of the frozen server', 30_000);
+    // The new pid is recorded at spawn, before its port (and the mode still says running from
+    // before): the restart is done once the new server has said its port.
+    await until(() => s.state()?.mode === 'running' && s.state().server.pid && s.state().server.pid !== pid && !!s.state().server.port, 'a restart of the frozen server', 30_000);
     await until(async () => (await api(s.base(), 'GET', '/api/v1/problems?open=1')).body?.some((p: { message: string }) => /stopped answering its health checks/.test(p.message)), 'the problem');
     assert.equal((await api(s.base(), 'GET', '/api/v1/health')).status, 200);
   } finally {
