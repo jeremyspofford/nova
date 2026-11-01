@@ -58,7 +58,7 @@ const git = (home, ...args) => new Promise((ok) => {
 // mesh/ holds this node's private keys (0600 on disk); git would keep a copy anyone who can read
 // the folder could read, for good. vault/ holds connection secrets (encrypted) and, without a
 // system keychain, their key: a copy in history would outlive revoking them.
-const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'memory/.rendered.json', 'skills/', 'connectors/', 'nova.db*', 'logs/', 'backups/', 'extensions/', 'exports/', 'kept/', 'workers/', 'mesh/', 'vault/', 'nova.pid',
+const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'memory/.rendered.json', 'skills/', 'connectors/', 'nova.db*', 'logs/', 'backups/', 'extensions/', 'exports/', 'kept/', 'workers/', 'mesh/', 'vault/', 'broker/', 'nova.pid',
   // Checkpoints hold the identity and the vault key; the home's mark holds the key that seals a
   // factory reset (M7 amendment). A reset's marker and report are this machine's alone too.
   'checkpoints/', '.nova-home', '.nova-home.tmp', 'factory-reset.json*', 'reset-report.json'];
