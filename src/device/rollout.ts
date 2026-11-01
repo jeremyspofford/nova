@@ -135,6 +135,10 @@ export class Rollout {
     }
 
     if (a.want === 'alongside') {
+      // The live version keeps running while a new one is tried (after a restart, or capture turned
+      // back on, it is started again).
+      const live = s()?.live;
+      if (live && live !== a.version && !running(live)) await run('start', live);
       if (this.#saved.done.includes(key)) return st;
       if (a.alongside === 'none' || a.alongside === 'copy') {
         this.#report(a.service, a.version, 'ready', null, 'Installed and checked. It can’t run next to the live version, so its health is checked when it is switched to; the version before it is kept for one step back.');
@@ -189,9 +193,10 @@ export class Rollout {
     const n = (this.#misses.get(id) ?? 0) + 1;
     this.#misses.set(id, n);
     this.#report(a.service, a.version, 'live', false, p.said, { keepSince: true });
-    if (n >= this.#o.failsLive && s()?.previous) {
+    // Back only to the version the hub says is kept: not one it withdrew (a version that failed).
+    if (n >= this.#o.failsLive && a.previous && a.previous !== a.version && s()?.installed.includes(a.previous)) {
       this.#misses.delete(id);
-      return this.#back(a, s()!.previous, `${p.said} (${n} checks in a row)`, run, () => st, key);
+      return this.#back(a, a.previous, `${p.said} (${n} checks in a row)`, run, () => st, key);
     }
     return st;
   }

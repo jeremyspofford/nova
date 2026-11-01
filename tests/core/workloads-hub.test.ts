@@ -89,6 +89,13 @@ test('capture only onto a capture source: the validator, the resolver and the de
     // The Windows box isn't a capture source: refused.
     const win = await r.deploy(sp(r.win.id));
     assert.match(JSON.stringify(win.body), /Windows box isn’t capture source|No device .* has the roles it asks for/);
+    // A capture workload never runs twice: shadow (or full) is refused, at the hub and at the device.
+    const shadow = await r.deploy({ ...sp(r.mac.id), alongside: 'shadow' }, 'screenpipe@1.0.0');
+    assert.match(shadow.body.error, /It captures, so it can’t run next to its live version: alongside must be none/);
+    // Deploying, promoting and rolling back need an approver: a paired phone may not, whatever it types.
+    for (const [path, body] of [['/services/devices/deploy', { definition: sp(r.mac.id), confirm: 'screenpipe@1.0.0' }], [`/services/devices/${r.mac.id}/screenpipe/promote`, { version: '1.0.0', confirm: 'screenpipe@1.0.0' }], [`/services/devices/${r.mac.id}/screenpipe/rollback`, { confirm: 'rollback' }]] as const) {
+      assert.equal((await call(r.h.mesh, 'POST', `/api/v1${path}`, body, bearer(r.phone.token))).status, 403, path);
+    }
     // The Mac is: deploying asks at tier 3 (OS permissions), typed.
     const ask = await r.deploy(sp(r.mac.id));
     assert.equal(ask.status, 400);

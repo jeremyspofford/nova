@@ -88,6 +88,8 @@ test('a manifest is accepted only when a pinned key signed exactly it, for this 
   assert.match(why(sign(good, hub), { ...o, purposes: ['thin-client'] }), /thin client, so it runs nothing/);
   assert.match(why(sign({ ...good, roles: ['capture-source'], capture: { adapter: 'screenpipe', kinds: ['screen'] }, os_permissions: ['screen-recording'] }, hub), o), /needs capture-source, which this device isn’t/);
   assert.match(why(sign({ ...good, os_permissions: ['screen-recording'] }, hub), { ...o, purposes: ['general-server', 'capture-source'] }), /captures .* but isn’t placed by the capture-source role/);
+  // A capture workload never runs twice (a shadow would capture too, outside what is read and forgotten).
+  assert.match(why(sign({ ...good, roles: ['capture-source'], capture: { adapter: 'screenpipe', kinds: ['screen'] }, os_permissions: ['screen-recording'], alongside: 'shadow' }, hub), { ...o, purposes: ['capture-source'] }), /captures, so it can’t run next to its live version/);
 });
 
 test('install fetches and checks, writes nothing when a hash doesn’t match, and refuses what it can’t verify', async () => {
@@ -199,6 +201,25 @@ test('switch keeps the version before for one step back, and going back to it do
     const st = back.state.find((s) => s.service === 'stand-in')!;
     assert.deepEqual([st.live, st.previous], ['1.0.0', '2.0.0']);
   } finally { await k.w.close(); }
+});
+
+test('closing during a switch (shut down, revoked) leaves nothing running', async () => {
+  const port = await freePort();
+  const versions: Record<string, ReturnType<typeof manifest>> = { '1.0.0': manifest({ device_id: DEVICE, port }), '2.0.0': manifest({ device_id: DEVICE, port, version: '2.0.0' }) };
+  const k = rig({ serve: (_s, v) => (versions[v] ? sign(versions[v]!, hub) : null) });
+  await k.verb('install', 'stand-in', '1.0.0');
+  await k.verb('switch', 'stand-in', '1.0.0');
+  await k.verb('install', 'stand-in', '2.0.0');
+  await until(() => standInAt(port), Boolean, 10_000);
+  const switching = k.verb('switch', 'stand-in', '2.0.0');
+  await new Promise((r) => setTimeout(r, 20));
+  await k.w.close();
+  // Whether the switch finished first or saw the close, it ran to its end before the close ended
+  // everything: nothing it started outlives the agent.
+  await switching;
+  assert.deepEqual(k.w.state().flatMap((s) => s.running), []);
+  assert.equal(await until(() => standInAt(port), (x) => !x, 5000), false, 'nothing of it runs');
+  assert.equal((await k.verb('start', 'stand-in', '1.0.0')).ok, false, 'and nothing starts after');
 });
 
 test('Decision 1 in the code: only the five verbs start anything, and the capture carrier starts nothing', () => {

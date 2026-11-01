@@ -202,3 +202,35 @@ process.send({ type: 'ready' });
     await m.stop();
   }
 });
+
+// The runtime's decisions alone, with stand-in verbs: what it asks for, given what the boot agent says.
+function fake(state: { live: string | null; previous: string | null; installed: string[]; running: string[] }, probe: (v: string) => boolean) {
+  const asked: string[] = [];
+  const view = () => [{ service: 'stand-in', live: state.live, previous: state.previous, installed: state.installed, running: state.running.map((v) => ({ version: v, role: 'live' as const, ports: {}, since: '', failed: null })), capture: false, capture_on: false }];
+  const verb = async (v: string, _s: string, version: string) => {
+    asked.push(`${v} ${version}`);
+    if (v === 'start') state.running = [...new Set([...state.running, version])];
+    if (v === 'switch') { state.previous = state.live; state.live = version; state.running = [version]; }
+    return { ok: v === 'probe' ? probe(version) : true, said: v, state: view() };
+  };
+  return { asked, view, verb };
+}
+
+test('the runtime goes back only to the version the hub keeps, never one it withdrew; the live version runs while a new one is tried', async () => {
+  // After 3.0.0 failed and the device went back to 2.0.0, its own state still names 3.0.0 as kept, but
+  // the hub cleared it: 2.0.0 failing its health now goes nowhere, least of all to 3.0.0.
+  const a = fake({ live: '2.0.0', previous: '3.0.0', installed: ['2.0.0', '3.0.0'], running: ['2.0.0'] }, () => false);
+  const r = new Rollout({ verb: a.verb as never, passes: 1, gapMs: 1, failsLive: 3 });
+  for (let i = 0; i < 5; i++) await r.step([assign('2.0.0', 'live', 'none', 1, null)], a.view());
+  assert.ok(!a.asked.includes('switch 3.0.0'), a.asked.join(', '));
+  assert.equal(r.reports().find((x) => x.version === '2.0.0')?.health, false, 'it reports the failing health');
+  // With the hub's kept version, it goes back to that one.
+  const b = fake({ live: '2.0.0', previous: '3.0.0', installed: ['1.0.0', '2.0.0', '3.0.0'], running: ['2.0.0'] }, (v) => v !== '2.0.0');
+  const rb = new Rollout({ verb: b.verb as never, passes: 1, gapMs: 1, failsLive: 3 });
+  for (let i = 0; i < 4; i++) await rb.step([assign('2.0.0', 'live', 'none', 1, '1.0.0')], b.view());
+  assert.ok(b.asked.includes('switch 1.0.0') && !b.asked.includes('switch 3.0.0'), b.asked.join(', '));
+  // A new version deployed alongside: the live one, stopped (a restart), is started again first.
+  const c = fake({ live: '1.0.0', previous: null, installed: ['1.0.0'], running: [] }, () => true);
+  await new Rollout({ verb: c.verb as never, passes: 1, gapMs: 1 }).step([assign('2.0.0', 'alongside', 'none', 2, '1.0.0')], c.view());
+  assert.deepEqual(c.asked.slice(0, 2), ['install 2.0.0', 'start 1.0.0']);
+});

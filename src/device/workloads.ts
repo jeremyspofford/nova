@@ -106,6 +106,9 @@ export function verifyWorkload(input: unknown, o: { pinned: readonly string[]; d
   // A capture workload runs only on a capture source: the manifest must say so itself.
   if (isCapture(m) && !m.roles.includes('capture-source')) return { ok: false, reason: `${m.service} captures (it asks for ${m.os_permissions.join(', ') || 'capture'}), but isn’t placed by the capture-source role.` };
   if (m.capture !== null && (typeof m.capture !== 'object' || m.capture.adapter !== 'screenpipe' || !Array.isArray(m.capture.kinds))) return { ok: false, reason: 'Its capture adapter isn’t one this agent reads.' };
+  // A capture workload never runs twice (the ADR: shadow only once two copies are shown to run side by
+  // side on that OS): a copy alongside would capture too, outside what the carrier reads and forgets.
+  if (isCapture(m) && m.alongside !== 'none') return { ok: false, reason: `${m.service} captures, so it can’t run next to its live version (alongside must be none).` };
   const roles = assignmentAllowed(o.purposes, { service: m.service, roles: m.roles });
   if (!roles.ok) return { ok: false, reason: roles.reason };
   return { ok: true, value: m };
@@ -286,8 +289,10 @@ export class Workloads {
     return stopped;
   }
 
+  // Nothing starts once closed: a verb in progress (a switch, say) finishes first, then everything ends.
   async close(): Promise<void> {
     this.#closed = true;
+    await Promise.allSettled([...this.#queues.values()]);
     await Promise.all([...this.#running.values()].map((i) => this.#end(i)));
   }
 
@@ -352,6 +357,8 @@ export class Workloads {
       ...Object.fromEntries(m.ports.map((p) => [`NOVA_PORT_${p.name.toUpperCase().replace(/-/g, '_')}`, String(ports[p.name])])),
       ...(role === 'shadow' ? { NOVA_SHADOW: '1' } : {}),
     };
+    // Closing (shut down, revoked) while this verb waited: nothing new starts.
+    if (this.#closed) return { ok: false, said: 'The device agent is stopping, so nothing new starts.' };
     const inst: Instance = {
       service, version, role, ports, since: new Date().toISOString(), failed: null,
       watchdog: new Watchdog<ChildLike>({
@@ -484,6 +491,8 @@ export class Workloads {
     this.#running.delete(`${i.service}@${i.version}`);
     await i.watchdog.stop('SIGTERM', 3000);
     this.#recordPids(i.service);
+    // A copy that ran alongside or as a shadow leaves nothing behind (for capture: nothing it captured).
+    if (i.role !== 'live') rmSync(join(this.root, i.service, 'scratch', i.version), { recursive: true, force: true });
   }
 
   #say(line: string): void { this.#o.say?.(line); }

@@ -103,6 +103,7 @@ export class DeviceWorkloads {
     if (def.secrets.length) out.push(`It needs secrets (${def.secrets.join(', ')}). No credential goes to another device yet: that needs the vault broker, which isn’t built. Run it on the hub instead.`);
     if (isCaptureService(def) && def.service !== SCREENPIPE) out.push('It captures, and the device agent reads capture only from Screenpipe in this build.');
     if (def.alongside === 'copy') out.push('alongside “copy” runs a new version on a copy of its state, which a device doesn’t do: use full, shadow or none.');
+    if (isCaptureService(def) && def.alongside !== 'none') out.push('It captures, so it can’t run next to its live version: alongside must be none until two copies are shown to run side by side on that system.');
     return out;
   }
 

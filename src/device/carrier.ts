@@ -37,6 +37,16 @@ export const BATCH_ITEMS = 100;
 const BATCH_BYTES = 600 * 1024;
 const RAW_BYTES = 640 * 1024;
 const SOURCE = 'screenpipe-adapter';
+// The pull's time windows: at most 10 minutes, at least a second; a window is read in up to 25 pages
+// of 200.
+const WINDOW_MS = 10 * 60_000;
+const MIN_WINDOW_MS = 1000;
+// How far back each pull reads again, for items reported late (as the hub's own Screenpipe adapter does).
+const LOOKBACK_MS = 5 * 60_000;
+const PAGE = 200;
+const PAGES = 25;
+// screenpipe:ocr:17 → {type: 'ocr', id: '17'}: the capture program's own name for it.
+const nativeOf = (id: string) => { const [, type = '', native = ''] = id.split(':'); return { type, id: native }; };
 
 export interface Res { status: number; body: any }
 export interface CapturePlan {
@@ -47,7 +57,7 @@ export interface CapturePlan {
   raw: number;
 }
 export interface CarrierItem { id: string; seq: number; kind: string; at: string; ended_at: string | null; app: string | null; window_title: string | null; url: string | null; text: string | null }
-interface Meta { next_seq: number; watermark: string | null; seen: string[]; forgotten: string[]; acked_seq: number; synced_to: string | null; plan: CapturePlan | null }
+interface Meta { next_seq: number; watermark: string | null; window?: number; seen: string[]; forgotten: string[]; acked_seq: number; synced_to: string | null; plan: CapturePlan | null }
 export interface CarrierStatus { queued: number; paused: string | null; acked_seq: number; synced_to: string | null; last_error: string | null; plan: CapturePlan | null }
 
 export interface CarrierOptions {
@@ -75,7 +85,11 @@ export class Carrier {
   #outbox: string;
   #meta: Meta;
   #busy = false;
-  #paused: string | null = null;
+  // Why taking more is paused (the queue is full), and why sending waits (the hub says it may not be
+  // sent now): either, both, or neither, each said.
+  #full: string | null = null;
+  #held: string | null = null;
+  get #paused(): string | null { return [this.#full, this.#held].filter(Boolean).join(' ') || null; }
   #lastError: string | null = null;
   #saidPause = '';
   #saidStatus = '';
@@ -150,55 +164,103 @@ export class Carrier {
     const kinds = this.#meta.plan?.kinds ?? {};
     const max = this.#o.maxQueue ?? MAX_QUEUE;
     let count = this.#names().length;
-    if (count >= max) return this.#pause(`The capture queue is full (${count} items waiting for the hub), so taking more is paused. Nothing is lost: the capture program keeps its own store until there is room.`);
-    const since = this.#meta.watermark;
-    const items = await this.#search(cap.port, since);
+    const full = () => this.#pause('full', `The capture queue is full (${count} items waiting for the hub), so taking more is paused. Nothing is lost: the capture program keeps its own store until there is room.`);
+    if (count >= max) return full();
     const seen = new Set(this.#meta.seen);
     const forgotten = new Set(this.#meta.forgotten);
-    let newest = since;
-    // Oldest first, so the sequence follows the order they were captured in.
-    for (const it of items.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))) {
-      if (count >= max) { this.#pause(`The capture queue is full (${count} items waiting for the hub), so taking more is paused. Nothing is lost: the capture program keeps its own store until there is room.`); break; }
-      if (!newest || it.at > newest) newest = it.at;
-      if (seen.has(it.id) || forgotten.has(it.id)) continue;
-      seen.add(it.id);
-      const from = kinds[it.kind];
-      // Off, or captured before it was turned on: never queued, never sent.
-      if (!from || it.at < from || it.private) continue;
-      const item: CarrierItem = { id: it.id, seq: this.#meta.next_seq++, kind: it.kind, at: it.at, ended_at: it.ended_at, app: it.app, window_title: it.window_title, url: it.url, text: it.text };
-      write(join(this.#outbox, `${String(item.seq).padStart(12, '0')}.json`), item);
-      count++;
+    // Captured while its kind was off (another kind was on, so the program ran): deleted where it was
+    // captured, never queued or sent.
+    const discard: { type: string; id: string }[] = [];
+    // From the watermark (or the first consent), forward in time windows, each read whole before the
+    // watermark passes it: a window that comes back incomplete (an error, or more than one read
+    // holds) is made smaller and read again; nothing is skipped.
+    const firstConsent = Object.values(kinds).sort()[0] ?? null;
+    // A few minutes back from the watermark each time, for items the program reports late (a
+    // transcript finishes after its audio began); what was seen is recognised by its id.
+    const back = this.#meta.watermark ? new Date(Math.max(Date.parse(this.#meta.watermark) - LOOKBACK_MS, firstConsent ? Date.parse(firstConsent) : 0)).toISOString() : null;
+    let from = back ?? firstConsent;
+    if (!from) return;
+    let windowMs = this.#meta.window ?? WINDOW_MS;
+    const now = (this.#o.now?.() ?? new Date()).getTime();
+    let stopped = false;
+    for (let round = 0; round < 40 && !stopped; round++) {
+      const fromMs = Date.parse(from);
+      if (!(fromMs < now)) break;
+      const toMs = Math.min(fromMs + windowMs, now);
+      const r = await this.#search(cap.port, new Date(fromMs).toISOString(), new Date(toMs).toISOString());
+      if (r.failed) break;
+      if (!r.complete) {
+        if (windowMs <= MIN_WINDOW_MS) { this.#lastError = 'More was captured in one second than one read holds; the rest is read on the next pass.'; break; }
+        windowMs = Math.max(MIN_WINDOW_MS, Math.floor(windowMs / 4));
+        continue;
+      }
+      // Oldest first, so the sequence follows the order they were captured in.
+      for (const it of r.items.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))) {
+        if (seen.has(it.id) || forgotten.has(it.id)) continue;
+        if (count >= max) {
+          // Full: the watermark stops just before what wasn't taken, so it is read again later.
+          this.#meta.watermark = new Date(Math.max(0, Date.parse(it.at) - 1)).toISOString();
+          stopped = true;
+          full();
+          break;
+        }
+        seen.add(it.id);
+        const since = kinds[it.kind];
+        if (!since || it.at < since) { discard.push(nativeOf(it.id)); continue; }
+        // A private window never leaves this device.
+        if (it.private) continue;
+        const item: CarrierItem = { id: it.id, seq: this.#meta.next_seq++, kind: it.kind, at: it.at, ended_at: it.ended_at, app: it.app, window_title: it.window_title, url: it.url, text: it.text };
+        write(join(this.#outbox, `${String(item.seq).padStart(12, '0')}.json`), item);
+        count++;
+      }
+      if (stopped) break;
+      // Read whole: the watermark moves to the window's end, less a little overlap (items sharing
+      // that instant are read again and recognised by their id).
+      const overlap = Math.min(1000, Math.floor(windowMs / 2));
+      this.#meta.watermark = new Date(Math.max(fromMs, toMs - overlap)).toISOString();
+      from = this.#meta.watermark;
+      if (toMs >= now) break;
+      windowMs = Math.min(WINDOW_MS, windowMs * 2);
     }
-    if (count < max) this.#paused = this.#paused?.startsWith('The capture queue is full') ? null : this.#paused;
-    // The watermark stops a second before the newest, so items sharing its second are read again
-    // (and recognised by their id) rather than missed.
-    if (newest) this.#meta.watermark = new Date(Math.max(0, Date.parse(newest) - 1000)).toISOString();
-    this.#meta.seen = [...seen].slice(-5000);
+    this.#meta.window = windowMs;
+    if (!stopped && count < max) this.#full = null;
+    this.#meta.seen = [...seen].slice(-20_000);
+    if (discard.length) await this.#delete(cap.port, discard);
   }
 
-  // Screenpipe's /search, newest first, a page at a time. Its text and transcripts only.
-  async #search(port: number, since: string | null): Promise<Array<Omit<CarrierItem, 'seq'> & { private: boolean }>> {
-    const out: Array<Omit<CarrierItem, 'seq'> & { private: boolean }> = [];
-    for (let offset = 0; offset < 5000; offset += 200) {
-      const q = new URLSearchParams({ content_type: 'all', limit: '200', offset: String(offset), ...(since ? { start_time: since } : {}) });
+  // Screenpipe's /search for one time window, newest first, a page at a time: its text and
+  // transcripts only. `complete` only when the window was read to its end.
+  async #search(port: number, start: string, end: string): Promise<{ items: Array<Omit<CarrierItem, 'seq'> & { private: boolean }>; complete: boolean; failed: boolean }> {
+    const items: Array<Omit<CarrierItem, 'seq'> & { private: boolean }> = [];
+    for (let page = 0; page < PAGES; page++) {
+      const q = new URLSearchParams({ content_type: 'all', limit: String(PAGE), offset: String(page * PAGE), start_time: start, end_time: end });
       let body: { data?: Array<{ type?: string; content?: Record<string, unknown> }> };
       try {
         const r = await fetch(`http://127.0.0.1:${port}/search?${q}`, { signal: AbortSignal.timeout(5000) });
-        if (!r.ok) return out;
+        if (!r.ok) return { items, complete: false, failed: true };
         body = await r.json() as typeof body;
-      } catch { return out; }
-      const page = Array.isArray(body.data) ? body.data : [];
-      for (const d of page) {
+      } catch { return { items, complete: false, failed: true }; }
+      const data = Array.isArray(body.data) ? body.data : [];
+      for (const d of data) {
         const c = d.content ?? {};
         const at = typeof c.timestamp === 'string' && !Number.isNaN(Date.parse(c.timestamp)) ? new Date(c.timestamp).toISOString() : null;
         if (!at) continue;
         const str = (v: unknown) => (typeof v === 'string' && v ? v.slice(0, 20_000) : null);
-        if (d.type === 'OCR') out.push({ id: `screenpipe:ocr:${c.frame_id}`, kind: 'screen', at, ended_at: null, app: str(c.app_name), window_title: str(c.window_name), url: str(c.browser_url), text: str(c.text), private: c.private === true });
-        else if (d.type === 'Audio') out.push({ id: `screenpipe:audio:${c.chunk_id}`, kind: 'audio', at, ended_at: null, app: null, window_title: null, url: null, text: str(c.transcription), private: false });
+        if (d.type === 'OCR') items.push({ id: `screenpipe:ocr:${c.frame_id}`, kind: 'screen', at, ended_at: null, app: str(c.app_name), window_title: str(c.window_name), url: str(c.browser_url), text: str(c.text), private: c.private === true });
+        else if (d.type === 'Audio') items.push({ id: `screenpipe:audio:${c.chunk_id}`, kind: 'audio', at, ended_at: null, app: null, window_title: null, url: null, text: str(c.transcription), private: false });
       }
-      if (page.length < 200) break;
+      if (data.length < PAGE) return { items, complete: true, failed: false };
     }
-    return out;
+    return { items, complete: false, failed: false };
+  }
+
+  // Deletes items from the capture program's own store, by their type and its own id (frames and
+  // audio chunks are numbered apart). The stand-in's call; real Screenpipe's is to be checked.
+  async #delete(port: number, items: { type: string; id: string }[]): Promise<boolean> {
+    try {
+      const d = await fetch(`http://127.0.0.1:${port}/__delete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items }), signal: AbortSignal.timeout(5000) });
+      return d.ok;
+    } catch { return false; }
   }
 
   // ---- 3. the send ---------------------------------------------------------------------------------
@@ -206,7 +268,7 @@ export class Carrier {
   async #send(plan: CapturePlan): Promise<void> {
     if (!plan.sync.allowed) {
       const queued = this.#names().length;
-      this.#pause(plan.sync.why ?? 'The hub says capture can’t be sent to it now, so it waits here.');
+      this.#pause('held', plan.sync.why ?? 'The hub says capture can’t be sent to it now, so it waits here.');
       // What waits is said (a count and why, no content), when it changes.
       const said = `${queued}|${this.#paused}`;
       if (said !== this.#saidStatus) {
@@ -215,7 +277,7 @@ export class Carrier {
       }
       return;
     }
-    if (this.#paused && !this.#paused.startsWith('The capture queue is full')) this.#paused = null;
+    this.#held = null;
     for (let round = 0; round < 50; round++) {
       const names = this.#names();
       if (!names.length) break;
@@ -268,13 +330,7 @@ export class Carrier {
       // be reached, so the tombstone waits, unacknowledged, and the hub's report says so.
       const cap = this.#o.capture();
       if (!cap) continue;
-      const native = ids.map((id) => id.split(':').pop()!);
-      let ok = false;
-      try {
-        const d = await fetch(`http://127.0.0.1:${cap.port}/__delete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: native }), signal: AbortSignal.timeout(5000) });
-        ok = d.ok;
-      } catch { ok = false; }
-      if (!ok) continue;
+      if (!(await this.#delete(cap.port, ids.map(nativeOf)))) continue;
       this.#meta.forgotten = [...new Set([...this.#meta.forgotten, ...ids])].slice(-5000);
       const signature = signMessage(this.#o.keys.ed25519.privateKey, tombstoneAckMessage(this.#o.deviceId(), t.id, ids));
       await this.#o.hub('POST', `/api/v1/mesh/capture/tombstones/${encodeURIComponent(t.id)}/ack`, { removed: ids, signature }).catch(() => null);
@@ -307,8 +363,9 @@ export class Carrier {
 
   // ---- internals ---------------------------------------------------------------------------------------
 
-  #pause(why: string): void {
-    this.#paused = why;
+  #pause(which: 'full' | 'held', why: string): void {
+    if (which === 'full') this.#full = why;
+    else this.#held = why;
     if (this.#saidPause !== why) this.#o.say?.(why);
     this.#saidPause = why;
   }

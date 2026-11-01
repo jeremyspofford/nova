@@ -1250,7 +1250,7 @@ export function createCore(o: CoreOptions) {
       handle: async () => { await placementDevices(); return { services: deviceWorkloads.status() }; },
     },
     {
-      method: 'POST', path: '/services/devices/deploy', body: '{definition, confirm?}',
+      method: 'POST', path: '/services/devices/deploy', access: 'approver', body: '{definition, confirm?}',
       summary: 'Deploy a version to the device its placement resolves to: installed and checked there, started alongside if it can run twice, with no traffic (tier 1). A command no approved version ran asks first, typed (<service>@<version>; tier 3 for capture).',
       handle: async ({ body }) => {
         await placementDevices();
@@ -1266,7 +1266,7 @@ export function createCore(o: CoreOptions) {
       },
     },
     {
-      method: 'POST', path: '/services/devices/{device}/{service}/promote', body: '{version, confirm}',
+      method: 'POST', path: '/services/devices/{device}/{service}/promote', access: 'approver', body: '{version, confirm}',
       summary: 'Move a device’s workload to a version that passed its health there (tier 2; tier 3 for anything with OS permissions, such as capture, every time): type <service>@<version>.',
       handle: async ({ params, body }) => {
         const r = await deviceServices(params.device!).promote(params.service!, String(body.version ?? ''), body.confirm);
@@ -1275,7 +1275,7 @@ export function createCore(o: CoreOptions) {
       },
     },
     {
-      method: 'POST', path: '/services/devices/{device}/{service}/rollback', body: '{confirm: "rollback"}',
+      method: 'POST', path: '/services/devices/{device}/{service}/rollback', access: 'approver', body: '{confirm: "rollback"}',
       summary: 'Back to the version kept on the device, in one step: nothing is downloaded (tier 2).',
       handle: async ({ params, body }) => {
         const r = await deviceServices(params.device!).rollback(params.service!, body.confirm);
