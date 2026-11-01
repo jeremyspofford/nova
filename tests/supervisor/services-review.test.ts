@@ -536,8 +536,10 @@ test('the stable port answers a client that half-closes, and passes a reset on a
 // ---- the tripwire's limit, checked where it can be -----------------------------------------------------------------------
 
 test('no code in Nova or its scripts names a Kubernetes tool to run (the tripwire sees PATH lookups only)', () => {
+  // Onboarding's backend words (M10f, src/core/onboard/backend.ts) name K3s as a backend to choose,
+  // not a program: that file runs nothing, so it is left out.
   const root = join(import.meta.dirname, '..', '..');
-  const r = spawnSync('git', ['-C', root, 'grep', '-nE', `['"\`](kubectl|helm|flux|k3s)['"\` ]`, '--', 'src', 'scripts', ':!scripts/tripwire.sh'], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' } });
+  const r = spawnSync('git', ['-C', root, 'grep', '-nE', `['"\`](kubectl|helm|flux|k3s)['"\` ]`, '--', 'src', 'scripts', ':!scripts/tripwire.sh', ':!src/core/onboard/backend.ts'], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' } });
   // git grep: 1 when nothing matches, 0 when something does.
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.equal(r.stdout, '');

@@ -88,9 +88,11 @@ export function renderToc(list, currentId, now = new Date()) {
 
 // ---- conversation --------------------------------------------------------
 
-// The front page with nothing on it yet, or a fresh conversation.
+// The front page with nothing on it yet, or a fresh conversation. Empty states orient, say what the
+// place is for, and offer one action (Amendment 2026-10-31-B Part 2): here the one action is the
+// message box right below, so the line points at it.
 export function renderEmpty(now = new Date(), { fresh = false } = {}) {
-  return `<div class="empty"><p class="empty-date">${esc(longDate(now, now))}</p><p class="empty-line">${fresh ? 'A new conversation, apart from the main one.' : 'Nothing needs you yet.'}</p></div>`;
+  return `<div class="empty"><p class="empty-date">${esc(longDate(now, now))}</p><p class="empty-line">${fresh ? 'A new conversation, apart from the main one.' : 'Nothing needs you yet.'}</p><p class="memory-lede">Write to Nova below: ask something, or tell it what to remember.</p></div>`;
 }
 
 // Today's page in the main conversation, before anything has happened today.
@@ -487,8 +489,10 @@ export function renderMemory(data, now = new Date()) {
 <ul class="memory-list">${waiting.map(waitingItem).join('')}</ul></section>` : '';
   const count = sections.reduce((n, s) => n + s.entries.length, 0) + days.reduce((n, d) => n + d.entries.length, 0);
   if (!count) {
+    // Orient, the value, one action; with something waiting, keeping it is the action instead.
+    const act = held ? '' : '<a class="btn" href="/chat" data-nav="chat">Tell Nova something to remember</a>';
     return `<div class="empty memory-empty"><p class="empty-date">What Nova knows</p><p class="empty-line">Nothing kept yet.</p>
-<p class="memory-lede">As you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.</p></div>${held}`;
+<p class="memory-lede">As you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.</p>${act}</div>${held}`;
   }
   const titles = data.titles ?? {};
   const out = [`<header class="memory-intro"><p class="empty-date">What Nova knows</p>

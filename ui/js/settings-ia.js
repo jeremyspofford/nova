@@ -12,6 +12,7 @@ export const CATEGORIES = Object.freeze([
   { id: 'connections', label: 'Connections', summary: 'Accounts and services Nova can reach', parts: ['connections', 'sites'] },
   { id: 'models', label: 'Models and providers', summary: 'Local models and outside help', parts: ['providers', 'models'] },
   { id: 'devices', label: 'Devices', summary: 'Phones and computers paired with Nova', parts: ['devices'] },
+  { id: 'services', label: 'Services', summary: 'How Nova runs its services here', parts: ['services'] },
   { id: 'backups', label: 'Backups and changes', summary: 'Checkpoints, restores, Nova’s own changes', parts: ['checkpoints', 'changes'] },
   { id: 'danger', label: 'Start over', summary: 'Export everything, or erase Nova here', parts: ['danger'] },
 ]);
@@ -19,7 +20,7 @@ export const CATEGORIES = Object.freeze([
 // The grouped list's sections.
 export const GROUPS = Object.freeze([
   { title: 'You', cats: ['you', 'appearance', 'privacy'] },
-  { title: 'What Nova works with', cats: ['connections', 'models', 'devices'] },
+  { title: 'What Nova works with', cats: ['connections', 'models', 'devices', 'services'] },
   { title: 'Keeping Nova safe', cats: ['backups', 'danger'] },
 ]);
 
@@ -42,6 +43,8 @@ export const ENTRIES = Object.freeze([
   { cat: 'models', label: 'Providers', target: 'providers', words: ['api key', 'api keys', 'token', 'n8n', 'relay', 'providers', 'provider', 'api key', 'claude', 'openai', 'cloud model', 'coding agent', 'outside help'] },
   { cat: 'models', label: 'Models', target: 'models', words: ['models', 'model', 'local models', 'ollama', 'download', 'llm', 'ai', 'gpu', 'disk space'] },
   { cat: 'devices', label: 'Paired devices', target: 'devices', words: ['tailscale', 'mesh address', 'network', 'remote access', 'hub', 'standby', 'devices', 'device', 'phone', 'phones', 'pair', 'pairing', 'add a device', 'add phone', 'qr', 'qr code', 'tablet', 'laptop', 'computer', 'mesh', 'revoke', 'iphone', 'android'] },
+  { cat: 'devices', label: 'Device roles', target: 'devices', words: ['roles', 'role', 'purpose', 'what it is for', 'thin client', 'hub candidate', 'compute', 'storage', 'capture source', 'general server'] },
+  { cat: 'services', label: 'How services run', target: 'services-backend', words: ['services', 'service', 'backend', 'supervisor', 'k3s', 'kubernetes', 'containers', 'cluster', 'ordinary programs', 'switch backend'] },
   { cat: 'devices', label: 'Install Nova', target: 'install-row', words: ['install', 'app', 'home screen', 'pwa', 'add to home screen', 'shortcut'] },
   { cat: 'backups', label: 'Backups', target: 'checkpoints', words: ['restore', 'backup', 'backups', 'back up', 'checkpoint', 'checkpoints', 'restore', 'snapshot', 'roll back', 'undo everything'] },
   { cat: 'backups', label: 'Changes', target: 'changes', words: ['changes', 'updates', 'update', 'extensions', 'plugins', 'add-ons', 'upgrade', 'new features'] },

@@ -183,7 +183,7 @@ export async function day(o: DayOptions): Promise<DayResult> {
   assert.equal((await get('/health')).setup.done, false, 'a fresh profile');
   const first = await get('/setup');
   say(`**Nova:** ${first.question}`, '');
-  const answers = ["Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'yes'];
+  const answers = ['new', 'yes', 'yes', "Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'no', 'yes'];
   let last: any = null;
   for (const text of answers) {
     const r = await send('POST', '/setup/messages', { text });

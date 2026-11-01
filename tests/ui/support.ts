@@ -75,7 +75,7 @@ export const cssVar = (page: Page, name: string) => page.evaluate((n) => getComp
 
 // Setup answered over the API, for tests about everything after it.
 export async function finishSetup(m: ReturnType<typeof blank>) {
-  for (const text of ['Hi, I am Alex.', 'yes', 'keep', 'plainly', 'keep everything on this machine', 'no']) {
+  for (const text of ['new', 'yes', 'yes', 'Hi, I am Alex.', 'yes', 'keep', 'plainly', 'keep everything on this machine', 'no', 'no']) {
     const r = await m.send('POST', '/api/v1/setup/messages', { text });
     if (r.status !== 200) throw new Error(`setup answer "${text}" failed: ${JSON.stringify(r.body)}`);
   }

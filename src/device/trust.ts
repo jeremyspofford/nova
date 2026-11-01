@@ -17,6 +17,25 @@ export function rosterKeys(r: Roster): string[] {
   return [r.hub.public_key, ...(r.standby ? [r.standby.public_key] : [])];
 }
 
+// What this device may run (M10f, the orchestration ADR Point 9: "checked twice"). The hub checks a
+// placement when it is proposed; the device checks again, against the roles it holds itself (kept in
+// device.json from its approval and from each heartbeat answer), and refuses an assignment they don't
+// allow. A thin client, or a device with no workload role, never runs anything. The roles are the
+// hub's (src/core/mesh/purposes.ts WORKLOAD_PURPOSES); this file ships alone, so they are listed here
+// and a test keeps the two the same.
+export const WORKLOAD_ROLES: readonly string[] = Object.freeze(['compute', 'storage', 'capture-source', 'general-server']);
+
+export function assignmentAllowed(purposes: readonly string[] | undefined, workload: { service: string; roles?: readonly string[] }): Verdict {
+  const mine = Array.isArray(purposes) ? purposes : [];
+  if (!mine.some((p) => WORKLOAD_ROLES.includes(p))) {
+    return { ok: false, reason: mine.includes('thin-client') ? `This device is a thin client, so it runs nothing for Nova: ${workload.service} was refused.` : `This device has no workload role, so ${workload.service} was refused. Give it one in Settings › Devices on the hub.` };
+  }
+  const want = workload.roles?.length ? workload.roles : ['general-server'];
+  const missing = want.filter((r) => !mine.includes(r));
+  if (missing.length) return { ok: false, reason: `${workload.service} needs ${missing.join(', ')}, which this device isn’t, so it was refused.` };
+  return { ok: true };
+}
+
 export interface Proof { id: string; role: string; epoch: number; public_key: string; signature: string }
 
 // A node's answer to our challenge: signed by the key it claims, and that key is pinned.
