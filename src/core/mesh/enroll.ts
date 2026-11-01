@@ -14,6 +14,7 @@ import type { Log } from '../log.ts';
 import type { MeshIdentity } from './identity.ts';
 import { SlidingWindowLimiter } from './limiter.ts';
 import { cleanName, KINDS, type Device, type Devices, type Kind } from './devices.ts';
+import { allowedPurposes, checkPurposes, defaultPurposes, fixedPurposes, type Purpose } from './purposes.ts';
 import {
   PAIRING_CODE_TTL_MS, ed25519PublicKey, freshTime, keyFingerprint, newPairingCode, newPairingNonce, normalizePairingCode,
   pairingCodeHash, pairingCommitment, pairingConfirmationV2, revealMessage, sameDigest, statusMessage, verifyDeviceSignature, x25519PublicKey,
@@ -28,20 +29,23 @@ export type JoinState = 'pending' | 'approved' | 'denied' | 'expired';
 
 interface RequestRow {
   id: string; pairing_id: string; public_key: string; x25519_public_key: string; fingerprint: string; name: string; platform: string; kind: Kind;
-  capabilities: string; address: string | null; commitment: string; hub_nonce: string; device_nonce: string | null; confirmation: string | null;
+  capabilities: string; purposes: string; address: string | null; commitment: string; hub_nonce: string; device_nonce: string | null; confirmation: string | null;
   state: JoinState; reason: string | null; last_time: number; device_id: string | null; created_at: string; revealed_at: string | null;
   decided_at: string | null; decided_by: string | null; expires_at: string;
 }
 
-// What the approval prompt shows: who is asking, what for, and the digits to compare.
+// What the approval prompt shows: who is asking, what for, and the digits to compare. `purposes` is
+// what the device asked to be for (M10f); `allowed` and `fixed` are what its kind may and must hold,
+// so the approval screen can offer exactly those.
 export interface JoinRequest {
-  id: string; name: string; platform: string; kind: Kind; capabilities: string[]; fingerprint: string;
+  id: string; name: string; platform: string; kind: Kind; capabilities: string[]; purposes: Purpose[]; allowed: Purpose[]; fixed: Purpose[]; fingerprint: string;
   confirmation: string | null; state: JoinState; reason: string | null; device_id: string | null;
   created_at: string; revealed_at: string | null; decided_at: string | null; expires_at: string;
 }
 
 const view = (r: RequestRow): JoinRequest => ({
-  id: r.id, name: r.name, platform: r.platform, kind: r.kind, capabilities: JSON.parse(r.capabilities) as string[], fingerprint: r.fingerprint,
+  id: r.id, name: r.name, platform: r.platform, kind: r.kind, capabilities: JSON.parse(r.capabilities) as string[],
+  purposes: JSON.parse(r.purposes ?? '[]') as Purpose[], allowed: allowedPurposes(r.kind), fixed: fixedPurposes(r.kind), fingerprint: r.fingerprint,
   confirmation: r.confirmation, state: r.state, reason: r.reason, device_id: r.device_id,
   created_at: r.created_at, revealed_at: r.revealed_at, decided_at: r.decided_at, expires_at: r.expires_at,
 });
@@ -168,6 +172,11 @@ export class Enrollment extends EventEmitter {
     const platform = typeof claims.platform === 'string' ? claims.platform.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60) : '';
     const caps = claims.capabilities ?? [];
     if (!Array.isArray(caps) || caps.length > 32 || !caps.every((c) => typeof c === 'string' && CAPABILITY.test(c))) problems.push('claims.capabilities must be up to 32 short names.');
+    // What it is for (M10f): what the device asks; the person decides on the hub's approval screen.
+    let purposes: Purpose[] = [];
+    if (KINDS.includes(kind)) {
+      try { purposes = claims.purposes === undefined ? defaultPurposes(kind) : checkPurposes(claims.purposes, kind, { what: 'claims.purposes' }); } catch (e) { problems.push((e as Error).message); }
+    }
     let addr: string | null = null;
     if (kind === 'standby' && claims.address !== undefined) {
       try {
@@ -200,9 +209,9 @@ export class Enrollment extends EventEmitter {
     this.#db.tx(() => {
       this.#db.run('UPDATE pairing SET used_at = ? WHERE id = ?', at, pairing.id);
       this.#db.run(
-        `INSERT INTO join_request (id, pairing_id, public_key, x25519_public_key, fingerprint, name, platform, kind, capabilities, address, commitment, hub_nonce, state, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-        id, pairing.id, pk, xk, keyFingerprint(pk), name, platform, kind, JSON.stringify(caps), addr, body.commitment as string, hubNonce, at, new Date(nowMs + JOIN_REVEAL_TTL_MS).toISOString(),
+        `INSERT INTO join_request (id, pairing_id, public_key, x25519_public_key, fingerprint, name, platform, kind, capabilities, purposes, address, commitment, hub_nonce, state, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        id, pairing.id, pk, xk, keyFingerprint(pk), name, platform, kind, JSON.stringify(caps), JSON.stringify(purposes), addr, body.commitment as string, hubNonce, at, new Date(nowMs + JOIN_REVEAL_TTL_MS).toISOString(),
       );
     });
     this.#codes.set(id, { code, until: nowMs + JOIN_REVEAL_TTL_MS });
@@ -244,13 +253,13 @@ export class Enrollment extends EventEmitter {
 
   // ---- 5. the device polls, signed, until the person decides ----------------------------------
 
-  status(id: string, query: { time: unknown; signature: unknown }): { state: JoinState; reason?: string; device_id?: string; roster?: SignedRoster } {
+  status(id: string, query: { time: unknown; signature: unknown }): { state: JoinState; reason?: string; device_id?: string; roster?: SignedRoster; purposes?: Purpose[] } {
     this.sweep();
     const r = this.#row(id);
     if (!r) throw new CoreError('not_found', 'There is no such request.');
     this.#signed(r, query, statusMessage);
     const fresh = this.#row(id)!;
-    if (fresh.state === 'approved' && fresh.device_id) return { state: 'approved', device_id: fresh.device_id, roster: this.#devices.roster() };
+    if (fresh.state === 'approved' && fresh.device_id) return { state: 'approved', device_id: fresh.device_id, roster: this.#devices.roster(), purposes: this.#devices.find(fresh.device_id)?.purposes ?? [] };
     return { state: fresh.state, ...(fresh.reason ? { reason: fresh.reason } : {}) };
   }
 
@@ -268,17 +277,24 @@ export class Enrollment extends EventEmitter {
     return view(r);
   }
 
-  // Tier 3: explicit confirmation every time.
-  approve(id: string, o: { confirm: boolean; by: string }): { request: JoinRequest; device: Device } {
+  // Tier 3: explicit confirmation every time. `purposes`, when given, is what the person settled on
+  // on the approval screen; otherwise what the device asked for. A computer that would be a hub
+  // candidate needs that confirmed on its own (`confirm_candidate`, Decision 2); a standby's tier-3
+  // approval is its candidacy, as the ADR says, since its key is pinned to take over.
+  approve(id: string, o: { confirm: boolean; by: string; purposes?: unknown; confirm_candidate?: boolean }): { request: JoinRequest; device: Device } {
     if (!o.confirm) throw new CoreError('validation', 'Adding a device needs an explicit confirmation: send confirm: true.');
     const r = this.#live(id);
+    const purposes = o.purposes === undefined ? JSON.parse(r.purposes ?? '[]') as Purpose[] : checkPurposes(o.purposes, r.kind);
+    if (r.kind === 'computer' && purposes.includes('hub-candidate') && o.confirm_candidate !== true) {
+      throw new CoreError('validation', `Adding “${r.name}” as a hub candidate means it could become the hub, and its key is pinned for that. That is confirmed on its own (tier 3): send confirm_candidate: true, or approve it without that role.`);
+    }
     if (!r.confirmation) throw new CoreError('conflict', 'This device hasn’t shown its digits yet, so there is nothing to compare. Wait for them.');
     if (r.kind === 'standby') {
       const s = this.#devices.state().standby_id;
       if (s && this.#devices.find(s)?.trust === 'trusted') throw new CoreError('conflict', 'There is a standby already. Revoke it first; Nova keeps one standby.');
     }
     const device = this.#db.tx(() => {
-      const d = this.#devices.add({ name: r.name, platform: r.platform, kind: r.kind, public_key: r.public_key, x25519_public_key: r.x25519_public_key, capabilities: JSON.parse(r.capabilities) as string[], address: r.address }, o.by);
+      const d = this.#devices.add({ name: r.name, platform: r.platform, kind: r.kind, public_key: r.public_key, x25519_public_key: r.x25519_public_key, capabilities: JSON.parse(r.capabilities) as string[], purposes, address: r.address }, o.by);
       this.#db.run(`UPDATE join_request SET state = 'approved', device_id = ?, decided_at = ?, decided_by = ? WHERE id = ?`, d.id, this.#now().toISOString(), o.by, r.id);
       return d;
     });

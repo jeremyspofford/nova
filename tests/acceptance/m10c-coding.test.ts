@@ -51,7 +51,7 @@ test('M10c gate: a coding request in chat ends as a reviewed diff with green tes
   };
   try {
     // A new user, set up by conversation, who lets Nova use the cloud for this.
-    for (const text of ["Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'yes']) assert.equal((await post('/setup/messages', { text })).status, 200);
+    for (const text of ['new', 'yes', 'yes', "Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'no', 'yes']) assert.equal((await post('/setup/messages', { text })).status, 200);
     assert.equal((await get('/profile')).privacy.default, 'local-only');
     assert.deepEqual((await get('/coding')).runs, []);
 

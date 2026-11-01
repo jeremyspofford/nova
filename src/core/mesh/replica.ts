@@ -233,7 +233,8 @@ export class Replica extends EventEmitter {
     const role = this.#role();
     if (!this.#token) await this.#session(role);
     const after = this.#sync.cursor();
-    const res = await this.#call(`${role.hub.url}/api/v1/mesh/sync?after=${after}&wait=${waitS}`, { timeoutMs: (waitS + 15) * 1000 });
+    // Its schema, so a hub a release ahead leaves out columns this node doesn't have (ADDED_COLUMNS).
+    const res = await this.#call(`${role.hub.url}/api/v1/mesh/sync?after=${after}&wait=${waitS}&schema=${this.#sync.schema()}`, { timeoutMs: (waitS + 15) * 1000 });
     if (res.status === 401) { this.#token = null; return true; }
     if (res.status === 403 || res.status === 409) throw new Refused(String(res.body?.error ?? `The hub refused (${res.status}).`));
     if (res.status !== 200 || typeof res.body?.sealed !== 'string') throw new Error(`The hub answered ${res.status}.`);

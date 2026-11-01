@@ -32,6 +32,20 @@ export const CLAIMS: evals.Claim[] = [
   { id: 'setup.checks-its-welcome-note', where: 'src/core/setup.ts', text: 'I’ll write a short welcome note into your workspace. (Yes or no.)', needs: [],
     strong: 'I’ll write a short welcome note into your workspace and check it myself.', eval: 'claim.setup-welcome-note-verified', priority: 3 },
 
+  // ---- onboarding (M10f): every claim backed by the suite, or worded to the evidence it names ------
+  { id: 'onboard.import-waits-for-ok', where: 'src/core/setup.ts', text: 'then waits in Memory for your OK: none of it is remembered until you keep it', needs: ['import', 'memory-review'] },
+  { id: 'onboard.first-action-review', where: 'src/core/onboard/first.ts', text: 'It waits in Memory for your OK. Keep what is right; nothing is remembered until you do.', needs: ['import', 'memory-review'] },
+  { id: 'onboard.first-action-import-folder', where: 'src/core/onboard/first.ts', text: 'in ~/workspace/import/, then tell Nova. They wait in Memory for your OK.', needs: ['first-run', 'import'] },
+  { id: 'onboard.discovery-finds-only', where: 'src/core/setup.ts', text: 'Looking lists what answers; connecting any of it is a separate step, yours to take.', needs: [],
+    strong: 'Looking only finds them: nothing is connected, and nothing is read.', eval: 'claim.discovery-connects-nothing', priority: 1,
+    note: 'Unit tests show it (tests/core/onboard.test.ts: one GET per known service, nothing connected, sources listed without opening a file); no golden task does, so the words say what the person sees.' },
+  { id: 'onboard.backend-runs-today', where: 'src/core/onboard/backend.ts', text: 'This is how Nova runs its services here.', needs: [],
+    strong: 'Everything Nova does today runs this way; nothing in Nova needs Kubernetes.', eval: 'claim.supervisor-runs-everything', priority: 3,
+    note: 'M10e\'s tripwire evidence (docs/evidence/m10e-gate.md) is a test-suite fact, not an agent outcome.' },
+  { id: 'onboard.thin-client-runs-nothing', where: 'src/core/mesh/purposes.ts', text: 'A screen onto Nova, for using it.', needs: [],
+    strong: 'A screen onto Nova. It never runs anything for Nova.', eval: 'claim.thin-client-runs-nothing', priority: 1,
+    note: 'Unit tests show it (tests/core/services-placement.test.ts, tests/core/roles-bound-work.test.ts); no golden task does.' },
+
   // ---- memory, import and forgetting -----------------------------------------------------------
   { id: 'import.arrives-unreviewed', where: 'templates/home/workspace/import/README.md', text: 'they arrive in Memory unreviewed', needs: ['import', 'memory-review'] },
   { id: 'memory.waiting-unseen', where: 'ui/js/view.js', text: 'Nova doesn\'t see them until you keep them.', needs: ['memory-review'] },
