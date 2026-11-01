@@ -396,6 +396,15 @@ phase (Point 6, Decisions 1 and 4) and the capture data path design's gate list.
 - **Changed tests, why:** the runtime bundle carries `rollout.ts` (`device-agent`, `mesh-spokes`,
   `device-sandbox`); the device tar lists the new device files; the supervisor's manager wording
   (`services-placement`).
+- **An internal review before the PR** found eight things, all fixed with tests:
+  - device deploys now need an approver;
+  - a close during a switch could leave a process;
+  - the pull could skip items after a failed page or a large burst; it now reads time windows whole;
+  - a rollback could go to a version the hub withdrew;
+  - the live version wasn't restarted while a new one was tried;
+  - what a kind captured while it was off was kept on the device; it is now deleted there;
+  - a capture workload could run as a shadow;
+  - a delete didn't say which kind it was for.
 
 **2026-11-01 (M10g, after the second adversarial review of #272: replays, evidence, ties, the name, long jumps).**
 Branch `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The second review of #272"). Five
