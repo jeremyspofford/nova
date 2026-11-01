@@ -35,8 +35,8 @@ export async function captureCheckServer(dir: string) {
   return { tev1, env: { NOVA_OLLAMA_URL: tev1.url, NOVA_HARDWARE_FILE: hardwareFile(dir) }, close: () => tev1.close() };
 }
 
-export async function captureCheck(o: { trusted?: boolean; score?: (content: string, question: string) => number } = {}) {
-  const tev1 = await startTev1StandIn({ score: o.score ?? captureScore });
+export async function captureCheck(o: { trusted?: boolean; score?: (content: string, question: string) => number; contextBytes?: number } = {}) {
+  const tev1 = await startTev1StandIn({ score: o.score ?? captureScore, ...(o.contextBytes ? { contextBytes: o.contextBytes } : {}) });
   const records: VerdictRecord[] = o.trusted === false ? [] : [CS_PASS];
   const now = () => memoryVerdicts(records);
   const verdicts: VerdictStore = { lookup: (...a) => now().lookup(...a), passed: (...a) => now().passed(...a), forModel: (...a) => now().forModel(...a) };
