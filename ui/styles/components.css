@@ -256,9 +256,10 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   filter: var(--orb-filter);
   opacity: var(--orb-fade);
   /* The mark: a ring around the orb, solid or dashed, in the state's own light drawn toward the
-     text colour, so it stands out from any page by its brightness, not only its hue. */
-  outline: calc(var(--orb-size) * 0.08) var(--orb-mark) color-mix(in srgb, var(--orb-hi) 55%, var(--text-primary));
-  outline-offset: calc(var(--orb-size) * 0.14);
+     text colour, so it stands out from any page by its brightness, not only its hue. It scales with
+     the orb up to a fine line, so on the hero it stays a ring and never reaches the greeting. */
+  outline: min(calc(var(--orb-size) * 0.08), var(--space-1)) var(--orb-mark) color-mix(in srgb, var(--orb-hi) 55%, var(--text-primary));
+  outline-offset: min(calc(var(--orb-size) * 0.14), var(--space-2));
 }
 .orb-rail { --orb-size: calc(var(--space-6) + var(--space-3)); }
 .orb-avatar { --orb-size: var(--space-6); }
