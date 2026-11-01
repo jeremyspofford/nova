@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #271 · Captured screen text is now checked for private details before Nova keeps it**
+- What changed: before anything captured from your screen or a recording is kept, Nova's own rules run first. Known password managers, banking and payment apps, password vaults and banks' websites are not kept (best effort). Text shaped like a key, a password or a card number is blanked out, in the words, the window title and the web address. Then the trusted local model checks the rest for passwords, keys, and money or health details. Flagged items are held back from memory, or their words aren't kept, and the Capture page says which and why. Nothing is deleted without showing you. On a device with no trusted model, captured text is held, not added to memory, and the page says what fixes it.
+- What you can now do: open any captured item to see how it was checked. Let a wrongly dropped app back in from Settings › Capture. Review "Memories to look at again": memories made from capture before this check that turn out to hold a private detail, to forget or keep.
+- Still unfinished: those older memories still hold their words until you forget them. Held items can't be remembered, even by you; whether you can override that is your call. Checking what Nova recalls from capture is the next job.
+
 **2026-11-01 · #274 · The Memory page says "Nova reads this before every reply" again**
 - What changed: a permanent test now shows that something you tell Nova in one conversation, it knows in the next. Two local models passed it every time (3 of 3 each), and so did the stand-ins. It runs on every change to Nova, so the stronger wording is back.
 - What you can now do: rely on Nova carrying what you've told it into new conversations, with the models tested.
