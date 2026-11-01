@@ -301,6 +301,36 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (capture screening, job 1, switched on: rules first, capture-sensitive on indexing, hold without a trusted model; Track 1).** Owner decision `INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md` and option B (ADR §2.1, PR #269); plan `docs/plans/capture-screening-consumers.md`; template `capture-sensitive` v1 (#264), unchanged.
+- **Rules first, at intake, with no model call:**
+  - Known sensitive apps and sites are dropped like private windows, counted as `sensitive_app` and never stored. The person's exclusions come first. It uses the template's own `sensitiveApp`, exported from the service's `index.ts`.
+  - Pattern findings are redacted in the text, the window title and the address before the row is written, and before the text is cut to length. Kinds only are kept.
+- **Then the model:** `capture-sensitive` is asked through the Decision Service (subsystem `capture`, the capture source, no evidence-only asks) on every stored event, in each capture tick between the pull and triage, and its outcome is applied:
+  - index;
+  - redact (the stricter of the rules' redaction and the model's answer);
+  - hold (kept under retention only);
+  - exclude (text cleared, row kept).
+
+  Cleared or redacted-in-place words are scrubbed from the write-ahead log and the backups, as a forget does.
+- **Option B:** with no trusted answer (no seat with a passing verdict for v1 on its exact model), every event is held with the owner's notice and one plain line on what stands in the way.
+  - It is never triaged, proposed or remembered, not even by the person (the strict reading; overriding it is the owner's call).
+  - It is checked once a trusted model can answer, and swept by retention.
+- **Only index and redact may be triaged or remembered.** `promote` and `accept` refuse the rest with a 409 in words, and proposals for them aren't listed.
+- **The timeline:**
+  - Every state but index has a label and a reason in Nova's words. Held words are behind a tap; excluded words are gone.
+  - A "Held, not kept" card shows the count, the notice and a Settings › Models link.
+  - Every item opens to how it was checked: template version, seat and pinned model, scores, decision id, capture source.
+- **Provenance:** `capture_event.sensitivity_detail` (JSON) and `sensitivity_decision` (the `decision_record` id).
+- **Migration 0022:** `capture_event.sensitivity` (default `unscreened`, so older rows are checked, rules first), `_why`, `_decision`, `_detail` and `_at`. The sync triggers are remade, and the columns are registered in `ADDED_COLUMNS[22]`.
+- **Routing unchanged:** never a cloud seat in local-first or local-only; in cloud mode only with the per-source opt-in, which is still absent (always off). Tested with Jev set up, opted in and even holding a passing verdict.
+- **Tests (stand-ins only):** `tests/core/capture-screening.test.ts` (10) and `tests/ui/capture-screening.test.ts` (2). The existing capture tests run with a trusted stand-in check: the Tev1 stand-in, or `fake-ollama.js`'s new optional `/v1/systemone`, at the passed build's digest.
+- **Limits:**
+  - events wait up to one tick before their check;
+  - a device's own queue holds text in clear until the hub's intake;
+  - `capture.stream` readers get events before the check;
+  - no content-hash cache;
+  - job 2 (recall-path screening) is separate.
+
 **2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
 - **The bands are derived, not round numbers:**
   - each region has a minimum, computed from the design system's own tokens: the main column is 45ch plus its padding and scrollbar gutters; a card is 20ch plus its padding; the right column is one card plus its padding and scrollbar; the rail is `layout/rail-width`;

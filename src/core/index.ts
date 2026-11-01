@@ -41,7 +41,7 @@ import { Browser, type BrowserOptions } from './browser/worker.ts';
 import type { Hub } from './browser/plan.ts';
 import { browserRoutes } from './browser/routes.ts';
 import { checkers as browserCheckers } from './browser/evidence.ts';
-import { Capture, PROMOTE } from './capture/capture.ts';
+import { Capture, PROMOTE, SCREEN_TEMPLATE } from './capture/capture.ts';
 import { captureRoutes } from './capture/routes.ts';
 import { Models, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
@@ -518,6 +518,15 @@ export function createCore(o: CoreOptions) {
     infer: (r) => models!.infer(r) as never, chat: () => providers.chat(),
   });
   ledger.workers.set(foundry.worker.id, foundry.worker);
+  // Whether a model trusted for capture-sensitive can answer on this device now, and if not, what
+  // stands in the way, in plain words (the holding area's notice, option B).
+  const captureScreening = (): { trusted: boolean; why: string } => {
+    if (decisionService.standing(SCREEN_TEMPLATE).relied) return { trusted: true, why: '' };
+    const d = decisionService.tev1();
+    if (!decisionSettings().tev1) return { trusted: false, why: 'Tev1 is switched off in Settings › Models.' };
+    if (!d.available || !d.model) return { trusted: false, why: d.why };
+    return { trusted: false, why: d.model === 'tev1:4b' ? 'This build of Tev1 4B hasn’t passed the check for captured text, so its answers aren’t relied on.' : `${d.model} is installed, but it didn’t pass the check for captured text; Tev1 4B did.` };
+  };
   // Capture (M6a): consent, storage on the hub, classification, promotion; Screenpipe pulled, and
   // device agents' capture events through the inbox below.
   const capture = new Capture({
@@ -533,6 +542,13 @@ export function createCore(o: CoreOptions) {
     // as screen text (OCR).
     // Capture-derived text: never to a cloud seat until the owner's per-source opt-in exists (§2.1).
     screen: (r) => ingest.screen({ text: r.text, from: 'capture', source: { kind: r.kind === 'audio' || r.kind === 'meeting' ? 'transcript' : 'ocr', origin: r.origin } }),
+    // Screening, job 1 (capture-sensitive; owner decision, decision-service.md §2.1): asked with the
+    // capture source, so the service's one capture rule routes it: never a cloud seat in local-first
+    // or local-only, and in cloud mode only with that source's own opt-in, which isn't built (the
+    // service is given no captureCloud, so it is never on). No evidence-only asks of an untrusted
+    // seat: an answer nobody trusts holds the event anyway (option B).
+    sensitive: (fields, a) => decisionService.service.ask(SCREEN_TEMPLATE, fields, { subsystem: 'capture', capture_source: a.capture_source, shadow: false }),
+    screening: () => captureScreening(),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
     secrets: vault,

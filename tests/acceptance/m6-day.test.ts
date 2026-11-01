@@ -15,6 +15,7 @@ import { filesReply, startFakeOpenAI } from '../../scripts/stand-ins/fake-openai
 import { startFakeScreenpipe } from '../../scripts/fake-screenpipe.js';
 import { CONTRACT_SYSTEM } from '../../src/core/providers/prompt.ts';
 import { INSTALLED, hardwareFile } from '../support/models.ts';
+import { PASSED_4B, PASSED_OLLAMA, captureScore } from '../support/capture-check.ts';
 import { FIXED_SUM } from '../support/providers.ts';
 import { stop, type Running } from './support.ts';
 import { setup } from './m4c-support.ts';
@@ -39,7 +40,10 @@ function reply(req: Req): string {
 }
 
 test('M6 gate: a day in the life, local-only from setup to night, on hub-class hardware (stand-ins)', { timeout: 240_000 }, async () => {
-  let ollama = await startFakeOllama({ models: INSTALLED, reply });
+  // Tev1 on the same Ollama checks captured text before triage (screening, job 1), at the build that
+  // passed capture-sensitive's eval.
+  const withCheck = { models: [...INSTALLED, PASSED_4B], version: PASSED_OLLAMA, systemone: captureScore };
+  let ollama = await startFakeOllama({ ...withCheck, reply });
   const port = ollama.port;
   const cloud = await startFakeOpenAI({ model: 'cloud-model', reply: () => 'Answer from the cloud stand-in.' });
   const sp = await startFakeScreenpipe();
@@ -59,7 +63,7 @@ test('M6 gate: a day in the life, local-only from setup to night, on hub-class h
       outage: {
         how: 'the stand-in Ollama is stopped (its port refuses connections), then started again on the same port.',
         down: () => ollama.close(),
-        up: async () => { ollama = await startFakeOllama({ models: INSTALLED, port, reply }); },
+        up: async () => { ollama = await startFakeOllama({ ...withCheck, port, reply }); },
       },
       title: 'M6 gate — a day in the life, local-only (stand-in run)',
       intro: [
