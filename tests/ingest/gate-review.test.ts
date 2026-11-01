@@ -294,20 +294,30 @@ test('sync: a standby a release behind takes receipts; a column it doesn’t hav
   const base = { provider: 'p', model: 'm', purpose: 'chat reply', egress: 'remote:example', context_items: [] };
   receipts.record({ ...base, privacy_mode: 'cloud-allowed' });
   receipts.record({ ...base, privacy_mode: 'local-preferred', provider: 'jev', opt_in: 'screening' });
+  // M10f (review of #268, finding 3): one mechanism for every column a release adds (mesh/sync.ts
+  // ADDED_COLUMNS). The triggers carry opt_in always; the hub leaves it out for a standby on 0018.
   const rows = hub.db.all<{ row: string }>("SELECT row FROM sync_log WHERE tbl = 'receipt' ORDER BY seq");
-  assert.equal('opt_in' in JSON.parse(rows[0]!.row), false, 'a receipt with no opt-in is shaped as before');
+  assert.equal(JSON.parse(rows[0]!.row).opt_in, null, 'the trigger carries the column; the sender adapts');
   assert.equal(JSON.parse(rows[1]!.row).opt_in, 'screening');
-  // A standby on migration 0018 (no receipt.opt_in) applies the whole batch.
+  // A standby on migration 0018 (no receipt.opt_in) applies the whole batch the hub shaped for it.
   const old = mk(18);
   old.sync.setLogging(false);
-  const batch = hub.sync.batch(0);
-  old.sync.apply(batch, () => {});
+  const shaped = hub.sync.batch(0, { peerSchema: 18 });
+  assert.ok(shaped.rows.filter((r) => r.tbl === 'receipt').every((r) => !('opt_in' in JSON.parse(r.row!))));
+  old.sync.apply(shaped, () => {});
   assert.equal(old.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM receipt')!.n, 2);
-  assert.match(readFileSync(join(old.h, 'logs', 'nova.log'), 'utf8'), /receipt\.opt_in, which this Nova doesn’t have yet/);
+  // And one the hub didn't shape (a standby that said nothing is taken to be on 19): the column is
+  // left out, and the standby records that it is behind.
+  const older = mk(18);
+  older.sync.setLogging(false);
+  const batch = hub.sync.batch(0);
+  older.sync.apply(batch, () => {});
+  assert.equal(older.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM receipt')!.n, 2);
+  assert.match(older.db.get<{ message: string }>("SELECT message FROM problem WHERE message LIKE '%receipt.opt_in%'")!.message, /receipt\.opt_in, which this standby doesn’t have yet/);
   // A row that isn't this table's row plus new columns (one missing its columns) is still refused.
-  assert.throws(() => old.sync.apply({ rows: [{ ...batch.rows.find((r) => r.tbl === 'receipt')!, row: JSON.stringify({ id: 'x', opt_in: 'screening' }) }], upto: batch.upto }, () => {}), /can’t apply/);
+  assert.throws(() => older.sync.apply({ rows: [{ ...batch.rows.find((r) => r.tbl === 'receipt')!, row: JSON.stringify({ id: 'x', opt_in: 'screening' }) }], upto: batch.upto }, () => {}), /can’t apply/);
   // A name that isn't a column name is still refused.
-  assert.throws(() => old.sync.apply({ rows: [{ ...batch.rows.find((r) => r.tbl === 'receipt')!, row: JSON.stringify({ ...JSON.parse(batch.rows.find((r) => r.tbl === 'receipt')!.row!), 'x"; DROP': 1 }) }], upto: batch.upto }, () => {}), /can’t apply/);
+  assert.throws(() => older.sync.apply({ rows: [{ ...batch.rows.find((r) => r.tbl === 'receipt')!, row: JSON.stringify({ ...JSON.parse(batch.rows.find((r) => r.tbl === 'receipt')!.row!), 'x"; DROP': 1 }) }], upto: batch.upto }, () => {}), /can’t apply/);
 });
 
 test('a verdict is tied to the wording it was measured on: an edit without a version bump drops trust', async () => {

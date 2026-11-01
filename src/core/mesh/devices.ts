@@ -7,6 +7,7 @@ import { CoreError } from '../errors.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { MeshIdentity } from './identity.ts';
+import { checkPurposes, defaultPurposes, purposeChange, purposeWords, type Purpose, type PurposeChange } from './purposes.ts';
 import { freshTime, keyFingerprint, sessionMessage, signRoster, verifyDeviceSignature, type Roster, type RosterMember, type SignedRoster } from './wire.ts';
 
 export const KINDS = ['browser', 'phone', 'computer', 'standby'] as const;
@@ -31,6 +32,8 @@ export interface Device {
   x25519_public_key: string;
   fingerprint: string;
   capabilities: string[];
+  // What the device is for (M10f): labels beside its mesh role. See purposes.ts.
+  purposes: Purpose[];
   trust: Trust;
   can_approve: boolean;
   address: string | null;
@@ -41,13 +44,13 @@ export interface Device {
   last_seen: string | null;
 }
 
-interface Row extends Omit<Device, 'capabilities' | 'can_approve'> { capabilities: string; can_approve: number }
+interface Row extends Omit<Device, 'capabilities' | 'can_approve' | 'purposes'> { capabilities: string; can_approve: number; purposes: string }
 
 export interface MeshState { epoch: number; role: 'hub' | 'standby'; hub_id: string | null; standby_id: string | null; updated_at: string }
 
-export interface NewDevice { name: string; platform: string; kind: Kind; public_key: string; x25519_public_key: string; capabilities: string[]; address?: string | null }
+export interface NewDevice { name: string; platform: string; kind: Kind; public_key: string; x25519_public_key: string; capabilities: string[]; purposes?: Purpose[]; address?: string | null }
 
-const fromRow = (r: Row): Device => ({ ...r, capabilities: JSON.parse(r.capabilities) as string[], can_approve: r.can_approve === 1 });
+const fromRow = (r: Row): Device => ({ ...r, capabilities: JSON.parse(r.capabilities) as string[], purposes: JSON.parse(r.purposes ?? '[]') as Purpose[], can_approve: r.can_approve === 1 });
 const tokenHash = (token: string) => createHash('sha256').update(`nova-session\0${token}`, 'utf8').digest('hex');
 
 export function cleanName(v: unknown, what = 'name'): string {
@@ -82,9 +85,9 @@ export class Devices extends EventEmitter {
     this.#db.tx(() => {
       if (!this.#db.get('SELECT 1 FROM device WHERE id = ?', id)) {
         this.#db.run(
-          `INSERT INTO device (id, name, platform, kind, role, public_key, x25519_public_key, fingerprint, capabilities, trust, can_approve, created_at, approved_at, last_seen)
-           VALUES (?, 'Hub', ?, 'computer', 'hub', ?, ?, ?, '[]', 'trusted', 1, ?, ?, ?)`,
-          id, process.platform, this.identity.publicKey, this.identity.x25519PublicKey, this.identity.fingerprint, at, at, at,
+          `INSERT INTO device (id, name, platform, kind, role, public_key, x25519_public_key, fingerprint, capabilities, purposes, trust, can_approve, created_at, approved_at, last_seen)
+           VALUES (?, 'Hub', ?, 'computer', 'hub', ?, ?, ?, '[]', ?, 'trusted', 1, ?, ?, ?)`,
+          id, process.platform, this.identity.publicKey, this.identity.x25519PublicKey, this.identity.fingerprint, JSON.stringify(defaultPurposes('computer', { hub: true })), at, at, at,
         );
       }
       this.#db.run(`INSERT OR IGNORE INTO mesh_state (id, epoch, role, hub_id, standby_id, updated_at) VALUES (1, 1, 'hub', ?, NULL, ?)`, id, at);
@@ -120,9 +123,9 @@ export class Devices extends EventEmitter {
     const at = this.#now().toISOString();
     const id = crypto.randomUUID();
     this.#db.run(
-      `INSERT INTO device (id, name, platform, kind, role, public_key, x25519_public_key, fingerprint, capabilities, trust, can_approve, address, created_at, approved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'trusted', 0, ?, ?, ?)`,
-      id, d.name, d.platform, d.kind, ROLE_OF[d.kind], d.public_key, d.x25519_public_key, keyFingerprint(d.public_key), JSON.stringify(d.capabilities), d.kind === 'standby' ? d.address ?? null : null, at, at,
+      `INSERT INTO device (id, name, platform, kind, role, public_key, x25519_public_key, fingerprint, capabilities, purposes, trust, can_approve, address, created_at, approved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'trusted', 0, ?, ?, ?)`,
+      id, d.name, d.platform, d.kind, ROLE_OF[d.kind], d.public_key, d.x25519_public_key, keyFingerprint(d.public_key), JSON.stringify(d.capabilities), JSON.stringify(checkPurposes(d.purposes ?? defaultPurposes(d.kind), d.kind)), d.kind === 'standby' ? d.address ?? null : null, at, at,
     );
     if (d.kind === 'standby') this.#db.run('UPDATE mesh_state SET standby_id = ?, updated_at = ? WHERE id = 1', id, at);
     const device = this.get(id);
@@ -152,6 +155,39 @@ export class Devices extends EventEmitter {
     this.#log.info('mesh', value ? 'Device may approve new devices.' : 'Device may no longer approve new devices.', { device: id });
     this.emit('change', { action: 'can_approve', device });
     return device;
+  }
+
+  // A device's roles (M10f). Widening is tier 3 (`confirm: true`); narrowing is tier 2 (`approved:
+  // true`), and the answer says which services it would stop there. Adding hub candidate to a
+  // computer is its own tier-3 confirmation every time (`confirm_candidate: true`, Decision 2): its
+  // key is pinned in the next roster. The hub always holds hub candidate and general server.
+  // `stops(id, removed)` names what would stop (nothing runs on other devices before M10h).
+  setPurposes(id: string, value: unknown, o: { confirm?: boolean; approved?: boolean; confirm_candidate?: boolean; dry?: boolean; by: string; stops?: (id: string, removed: Purpose[]) => string[] }): { device: Device; change: PurposeChange; stops: string[] } {
+    const d = this.get(id);
+    if (d.trust !== 'trusted') throw new CoreError('conflict', 'That device was revoked, so its roles can’t change.');
+    const hub = d.role === 'hub';
+    const next = checkPurposes(value, d.kind, { hub });
+    const change = purposeChange(d.purposes, next);
+    const stops = change.removed.length ? (o.stops?.(d.id, change.removed) ?? []) : [];
+    const stopWords = stops.length ? `It would stop ${stops.join(', ')} there.` : 'Nothing runs there that needs it, so nothing stops.';
+    // A dry run: what the change would be and stop, at which tier, with nothing written.
+    if (o.dry) return { device: d, change, stops };
+    if (change.tier === 3 && o.confirm !== true) {
+      throw new CoreError('validation', `Adding ${purposeWords(change.added).toLowerCase()} to “${d.name}” changes what may run there, so it needs your explicit confirmation (tier 3): send confirm: true.`);
+    }
+    if (change.candidacy === 'added' && d.kind === 'computer' && o.confirm_candidate !== true) {
+      throw new CoreError('validation', `Making “${d.name}” a hub candidate means it could become the hub, and its key is pinned for that. That is confirmed on its own, every time (tier 3): send confirm_candidate: true.`);
+    }
+    if (change.tier === 2 && o.confirm !== true && o.approved !== true) {
+      throw new CoreError('validation', `Taking ${purposeWords(change.removed).toLowerCase()} from “${d.name}” may stop work there, so Nova asks first (tier 2). ${stopWords} Send approved: true.`);
+    }
+    if (change.tier) {
+      this.#db.run('UPDATE device SET purposes = ? WHERE id = ?', JSON.stringify(next), d.id);
+      this.#log.info('mesh', 'Device roles changed.', { device: id, added: change.added, removed: change.removed, by: o.by });
+    }
+    const device = this.get(id);
+    if (change.tier) this.emit('change', { action: 'purposes', device });
+    return { device, change, stops };
   }
 
   // Tier 3. The device's sessions end now, its open streams are closed by whoever holds them
@@ -248,7 +284,7 @@ export class Devices extends EventEmitter {
 
   // ---- the roster -----------------------------------------------------------------------------
 
-  // Who the hub and the standby are, signed by this node's identity key.
+  // Who the hub and the standby are, and every other hub candidate, signed by this node's identity key.
   roster(): SignedRoster {
     const s = this.state();
     const member = (id: string | null, url: string | null): RosterMember | null => {
@@ -259,7 +295,12 @@ export class Devices extends EventEmitter {
     if (!hub) throw new CoreError('conflict', 'This node doesn’t know which node is hub.');
     const standbyId = s.standby_id;
     const standby = member(standbyId, standbyId ? this.find(standbyId)?.address ?? null : null);
-    const roster: Roster = { epoch: s.epoch, hub, ...(standby ? { standby } : {}), issued_at: this.#now().toISOString() };
+    // Every other hub candidate's key is pinned too (Decision 2), so a cold promotion (M10g) needs no
+    // new pairing. Only when there is one, so a roster without candidates reads as it always did.
+    const candidates = this.list()
+      .filter((d) => d.trust === 'trusted' && d.purposes.includes('hub-candidate') && d.id !== s.hub_id && d.id !== standbyId)
+      .map((d): RosterMember => ({ id: d.id, url: d.address ?? null, public_key: d.public_key, x25519_public_key: d.x25519_public_key }));
+    const roster: Roster = { epoch: s.epoch, hub, ...(standby ? { standby } : {}), ...(candidates.length ? { candidates } : {}), issued_at: this.#now().toISOString() };
     return signRoster(roster, this.identity.signer());
   }
 

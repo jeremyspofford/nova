@@ -56,7 +56,7 @@ test('M10d gate: infrastructure, a network change and an account step through ch
   let polling = false;
   try {
     // A new user, set up by conversation, keeping everything on this machine.
-    for (const text of ["Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'yes']) assert.equal((await post('/setup/messages', { text })).status, 200);
+    for (const text of ['new', 'yes', 'yes', "Hi! I'm Sam.", 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'no', 'yes']) assert.equal((await post('/setup/messages', { text })).status, 200);
     assert.equal((await get('/profile')).privacy.default, 'local-only');
 
     // ---- Infrastructure ----

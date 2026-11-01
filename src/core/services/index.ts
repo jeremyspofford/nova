@@ -5,5 +5,7 @@ export { ALONGSIDE, CONSOLE, EGRESS, INTERPRETERS, PLACEMENT_MODES, PLATFORMS, c
 export type { Alongside, Artifact, DeviceView, Placement, PlacementMode, Port, ProgramArtifact, ReleaseArtifact, ServiceDefinition, Validated } from './definition.ts';
 export type { Outcome as ServiceOutcome, Plan as ServicePlan, PlanStep as ServicePlanStep, Say as ServiceSay, ServiceDriver, ServiceStatus, VersionStatus as ServiceVersionStatus, VersionView as ServiceVersionView } from './driver.ts';
 export { ServiceManager } from './manager.ts';
+export { FAILOVER_AFTER_MS, NEEDS as PLACEMENT_NEEDS, devicePlatform, ineligible as placementRefusal, resolvePlacement, wantedRoles } from './placement.ts';
+export type { Considered as PlacementConsidered, PlacementDevice, PlacementHardware, Resolution as PlacementResolution, ResolveOptions as PlacementOptions } from './placement.ts';
 export type { ManagerOptions as ServiceManagerOptions } from './manager.ts';
 export { CONSOLE_HEALTH, consoleDefinition } from './console.ts';

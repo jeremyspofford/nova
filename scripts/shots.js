@@ -68,7 +68,7 @@ const fail = async (e) => {
 process.on('uncaughtException', fail);
 process.on('unhandledRejection', fail);
 results.budgets.serverStartMs = Math.round(serverMs);
-for (const text of ['skip', 'skip', 'skip', 'skip', 'allow cloud when needed', 'no']) await v1('POST', '/setup/messages', { text });
+for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'allow cloud when needed', 'no', 'no']) await v1('POST', '/setup/messages', { text });
 {
   const p = await page();
   const t0 = Date.now();

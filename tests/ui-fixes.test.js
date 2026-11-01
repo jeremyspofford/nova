@@ -89,7 +89,7 @@ test('chat: a work-trail entry says how long it took and when it finished', () =
 
 test('settings: one structure, grouped by task, one level deep, every part in exactly one place', () => {
   const parts = CATEGORIES.flatMap((c) => c.parts);
-  assert.deepEqual([...parts].sort(), ['capture', 'changes', 'checkpoints', 'connections', 'danger', 'devices', 'look', 'models', 'perms', 'privacy', 'providers', 'sites', 'you']);
+  assert.deepEqual([...parts].sort(), ['capture', 'changes', 'checkpoints', 'connections', 'danger', 'devices', 'look', 'models', 'perms', 'privacy', 'providers', 'services', 'sites', 'you']);
   assert.equal(new Set(parts).size, parts.length);
   for (const c of CATEGORIES) {
     assert.ok(c.label && c.summary && GROUPS.some((g) => g.cats.includes(c.id)), c.id);
