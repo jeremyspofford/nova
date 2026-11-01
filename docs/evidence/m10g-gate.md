@@ -15,6 +15,11 @@ new is replicated (the promotion's shared record is its ledger tasks; each node'
 ## Suite
 
 - `npm run check` at `8a2f24c3` (tokens, themes, typecheck, then `npm test` under the tripwire): **1456 tests: 1441 pass, 2 fail, 13 skipped**. The two are `tests/core/provider-guard.test.ts` › “a coding agent that changes more than Nova takes…” (the stand-in agent ended without a result) and `tests/skills-api.test.js` › “the email summary…” (timed out): the two load-sensitive Era 2/provider tests M10f’s evidence names too. Run alone right after, both files pass (17 of 17). Neither touches M10g’s code.
+- After main was merged in at `250fa3aa` (#270, the iOS status bar; the only conflict was the LEDGER's
+  Decisions, both entries kept): `npm run check`: **1460 tests: 1443 pass, 4 fail, 13 skipped**: the
+  same two, plus `tests/ingest/round2.test.js` N1b ×2 (timed out), named as load-sensitive in M10f's
+  evidence too. The three files alone: 31 of 31 pass. The drill, the promotion tests, the fresh-user
+  test and the regression evals passed in that run.
 - The first full run, before the roll-back asked the failing hub to stand down, failed the drill with two nodes taking a change in the same tick (see Guards); that is fixed and the drill passed in every run since.
 - `scripts/ui-test.sh`: **108 tests: 108 pass** (Chromium and WebKit, in the Playwright image), `tests/ui/m10g-promotion.test.ts` among them. Its screenshots are in `docs/screenshots/m10g/`; the other evidence screenshots the run rewrote were put back as they were.
 - CI is the record: see the PR.
