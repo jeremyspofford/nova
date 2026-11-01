@@ -6,7 +6,7 @@ Open `/styleguide?entry=topology` (anchor `#sg-topology`). Each specimen can als
 
 Independent review: [initial findings](m10i-styleguide-independent-review.md), [stale-state re-review](m10i-styleguide-independent-rereview.md), [final tier re-review](m10i-styleguide-independent-rereview2.md). The stale-service drill-in finding was reproduced, fixed and rechecked; the existing Node-only localStorage warning is disclosed. The final tier check also corrected capture rollback to the ADR’s tier 2; capture promotion remains tier 3. A failing browser assertion in each engine preceded that fix, and all four action tiers were independently verified. Task 1 spec compliance passes and code/design quality is approved. This is not approval or completion of M10i app integration.
 
-A subsequent ADR check found that the reviewed revision had incorrectly shown capture manual rollback at tier 3. The action-specific correction below is pending independent recheck; the prior review links remain historical evidence, not approval of this new revision.
+A subsequent ADR check found that the prior revision had incorrectly shown capture manual rollback at tier 3. The correction is independently rechecked at `690c8458`; the earlier reviews remain historical evidence, and the final tier re-review covers the corrected revision.
 
 ## Review the three layers
 
@@ -142,4 +142,4 @@ Self-review inspected actual Chromium and WebKit screenshots covering every dist
 - The renderer assumes a hub-first presentation list. Larger/more complex graph layouts and real observation adaptation are future integration work.
 - The styleguide approval buttons deliberately finish with “No change was made.” Existing approval markup is reused, but nothing submits to an action endpoint.
 - The 1100 × 900 capture tests available width, not a physical hinge. Hinge behavior belongs to later application integration.
-- These are author self-checks. Independent review and the owner's rendered approval are still required before any app integration. No push, merge, preview restart or external service change is included.
+- The table above records author self-checks; the linked independent reviews separately cover the final renderer and corrections. The owner's rendered approval is still required before any app integration. This draft has not merged or replaced the normal preview, and no external service change is included.

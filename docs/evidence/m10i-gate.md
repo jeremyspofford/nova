@@ -12,6 +12,10 @@ Token lint, theme validation, typecheck, coverage/UI-review checks (13/13) and d
 
 The optional broad host run recorded 1,579 pass, three fail, 14 skip. Its scoped control-outline contrast failure was fixed and the existing regression check passes. The other two failures, provider-guard and skills email-summary timing cases, passed once in isolation (17/17). No final full-host-suite green claim is made. Exact-head CI remains mandatory before any merge.
 
+## CI fixture correction
+
+The first corrected draft head `fd76346c` failed the packet-named R13 timing case twice, including the single permitted rerun; UI121/121 and axe0 passed. A deterministic forced-reconciliation regression then reproduced the cause before a minimal test-only fix at `b4088fcc`. Focused1/1, full review2 file7/7, typecheck and independent scoped review pass. [Cause, RED/GREEN and limits](../reviews/m10g-r13-fixture-fix-2026-11-01.md). No further blind rerun was used. Full-suite and fresh exact-head CI validation remain required separately.
+
 ## Outstanding gate
 
 - Owner approval of this rendered entry, required by OPERATING-RULES before app code.
