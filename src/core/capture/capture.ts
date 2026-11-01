@@ -791,9 +791,11 @@ export class Capture extends EventEmitter {
   holding(): { held: number; failing: number; unscreened: number; trusted: boolean; notice: string | null; why: string | null } {
     const n = (where: string) => this.#db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM capture_event WHERE ${where}`)!.n;
     const can = this.#screening();
-    const held = n(`sensitivity = 'held' AND sensitivity_tries = 0`);
+    // While nothing trusted can check here, every held event waits for that, whatever failed before
+    // (a model swapped for a build that hasn't passed, say).
+    const held = n(can.trusted ? `sensitivity = 'held' AND sensitivity_tries = 0` : `sensitivity = 'held'`);
     return {
-      held, failing: n(`sensitivity = 'held' AND sensitivity_tries > 0`), unscreened: n(`sensitivity = 'unscreened'`), trusted: can.trusted,
+      held, failing: can.trusted ? n(`sensitivity = 'held' AND sensitivity_tries > 0`) : 0, unscreened: n(`sensitivity = 'unscreened'`), trusted: can.trusted,
       notice: held && !can.trusted ? HELD_NOTICE : null, why: can.trusted ? null : can.why || null,
     };
   }
