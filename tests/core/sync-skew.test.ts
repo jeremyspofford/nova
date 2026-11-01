@@ -116,7 +116,7 @@ test('a 0020 standby against a 0021 hub: the hub leaves out capture_event’s sc
     old.sync.apply(behind, () => {});
     assert.equal(old.db.get<{ text: string }>(`SELECT text FROM capture_event WHERE id = 'e1'`)?.text, 'kept words');
     now.sync.apply(hubSync.batch(0, { peerSchema: 21 }), () => {});
-    assert.deepEqual({ ...now.db.get(`SELECT sensitivity, sensitivity_why, sensitivity_decision FROM capture_event WHERE id = 'e1'`) }, { sensitivity: 'hold', sensitivity_why: 'a reason', sensitivity_decision: 'dec-1' });
+    assert.deepEqual({ ...now.db.get<Record<string, unknown>>(`SELECT sensitivity, sensitivity_why, sensitivity_decision FROM capture_event WHERE id = 'e1'`) }, { sensitivity: 'hold', sensitivity_why: 'a reason', sensitivity_decision: 'dec-1' });
   } finally { rmSync(old.home, { recursive: true, force: true }); rmSync(now.home, { recursive: true, force: true }); }
 });
 
