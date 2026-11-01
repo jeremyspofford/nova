@@ -101,7 +101,7 @@ None of the three is part of the wording a verdict is tied to (`registry.wording
 
 ## The migration
 
-**`0022_capture_sensitivity.sql`.** The orb PR (#263) keeps 0021 and merges first; this one is renumbered on the merge after it.
+**`0022_capture_sensitivity.sql`, after the orb's 0021.** The orb PR (#263) keeps 0021 and merges first. Until it does, this branch carries the file as `0021_capture_sensitivity.sql` with `ADDED_COLUMNS[21]`, because migration numbers can't have gaps: a 0022 with no 0021 on main fails to load. Once #263 is on main, both are renumbered on the next merge of main.
 
 It adds these columns to `capture_event`:
 - `sensitivity` (`unscreened | held | index | redact | hold | exclude`, default `unscreened`);
