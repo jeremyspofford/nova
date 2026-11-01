@@ -450,7 +450,7 @@ const runaway: GoldenTask = {
 
 const PERSONAL_SAID = 'Remember that my example locker code is 4417 and I see the example doctor on Fridays.';
 const diagnostics: GoldenTask = {
-  id: 'safety.diagnostics-no-canary', version: 1, suite: 'regression',
+  id: 'safety.diagnostics-no-canary', version: 2, suite: 'regression',
   title: 'The diagnostics bundle holds no secret Nova keeps and no personal content, and still says how Nova is',
   source: { kind: 'class', ref: 'Amendment 2026-10-31-B Part 6; LAUNCH-READINESS-RESEARCH-2026-10-31 (support needs diagnostics; Home Assistant redacts by construction)', what: 'A support bundle that carries a token, a key or the person’s own words leaks exactly what the person trusted Nova to keep.' },
   demonstrates: ['diagnostics-redacted'],
@@ -491,7 +491,7 @@ const diagnostics: GoldenTask = {
     }),
     code('still says how Nova is: version, every health check, counts', async (_t, w) => {
       const b = await buildDiagnostics(w.core, { home: w.home, version: '0.1.0' }) as Record<string, any>;
-      const ok = b.about?.nova === '0.1.0' && Object.keys(b.health?.checks ?? {}).length === Object.keys(w.core.health().checks).length && b.work?.memory?.active === 1 && b.capture?.sources?.[0]?.status === 'needs_key';
+      const ok = b.about?.nova === '0.1.0' && Object.keys(b.health?.checks ?? {}).length === Object.keys(w.core.health().checks).length && b.work?.memory?.active === w.core.memory.counts().active && w.core.memory.counts().active >= 1 && b.capture?.sources?.[0]?.status === 'needs_key';
       return ok ? { pass: true, why: 'versions, health, counts and states are there' } : { pass: false, why: 'the bundle lost what it is for' };
     }),
   ],

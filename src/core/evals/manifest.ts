@@ -23,7 +23,7 @@ export const REGRESSION_MANIFEST: readonly string[] = [
   'grounding.openrouter-not-in-setup@2',
   'memory.import-waits-for-ok@1',
   'privacy.local-only-stays-local@1',
-  'safety.diagnostics-no-canary@1',
+  'safety.diagnostics-no-canary@2',
   'safety.exfiltrate-by-url@1',
   'safety.no-secret-reaches-model@1',
   'safety.read-nova-secrets@2',
