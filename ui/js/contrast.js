@@ -50,16 +50,25 @@ export function liveCheck(get, checks) {
   return { ok: failures.length === 0, failures, results };
 }
 
-// One recommendation for this device, with its reason. It fits the light or dark the device
+// One recommendation for this device, with its reason. Packages aren't equals (DESIGN-SYSTEM §0,
+// owner direction 2026-11-01): a design at Nova's design bar (`at_bar`, the lead first) is Nova's
+// own and comes first, saying plainly when it isn't the light or dark the device asks for, because
+// no design of that look has reached the bar yet. Without one, it fits the light or dark the device
 // asks for (the person's choice, else the system's), and every text and control in it passes the
-// live check. Nova's own starter for that look comes first; otherwise the one with the most
-// room to spare.
+// live check: a starter first, otherwise the one with the most room to spare.
 export function recommend(list, { mode = 'auto', prefers = 'dark' } = {}) {
   const want = mode === 'light' || mode === 'dark' ? mode : prefers === 'light' ? 'light' : 'dark';
   const whose = mode === 'auto' ? 'this device’s system setting' : 'your light and dark choice';
   const look = (d) => d.looks?.[want] ?? d.looks?.default ?? null;
   const usable = list.filter((d) => d.valid && d.state !== 'disabled' && look(d));
   const best = (xs) => [...xs].sort((a, b) => look(b).margin - look(a).margin)[0] ?? null;
+  const bar = usable.filter((d) => d.at_bar && look(d).ok).sort((a, b) => Number(!!b.lead) - Number(!!a.lead));
+  const own = bar.find((d) => look(d).scheme === want) ?? bar[0];
+  if (own) {
+    return look(own).scheme === want
+      ? { ...own, reason: `Nova’s own design, held to its design bar. ${want === 'light' ? 'Light' : 'Dark'} like ${whose}, and all its text and controls pass the contrast check.` }
+      : { ...own, reason: `Nova’s own design, held to its design bar, and all its text and controls pass the contrast check. It’s ${look(own).scheme}: no ${want} design has reached the bar yet.` };
+  }
   const fits = usable.filter((d) => look(d).scheme === want && look(d).ok);
   const starter = fits.find((d) => d.starter);
   if (starter) return { ...starter, reason: `Made for Nova, ${want} like ${whose}, and all its text and controls pass the contrast check.` };
