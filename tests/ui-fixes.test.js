@@ -145,18 +145,27 @@ function list() {
   return design.list();
 }
 
-test('Nova recommends one design, with a reason: the starter that fits the device and reads well', () => {
+test('Nova recommends one design, with a reason: its own design at the bar first, else the starter that fits and reads well', () => {
   const l = list();
+  // Packages aren't equals (DESIGN-SYSTEM §0, owner direction 2026-11-01): the lead, at the bar.
+  assert.deepEqual(l.filter((d) => d.at_bar).map((d) => d.id), ['orb-teal']);
+  assert.equal(l.find((d) => d.id === 'orb-teal').lead, true);
   const dark = recommend(l, { mode: 'auto', prefers: 'dark' });
   assert.equal(dark.id, 'orb-teal');
-  assert.match(dark.reason, /dark/);
+  assert.match(dark.reason, /design bar.*Dark/);
   assert.match(dark.reason, /contrast/);
+  // A light device still gets Nova's own design, told plainly it is dark and why.
   const light = recommend(l, { mode: 'auto', prefers: 'light' });
-  assert.equal(light.id, 'companion-light');
-  assert.match(light.reason, /light/);
-  assert.equal(recommend(l, { mode: 'dark', prefers: 'light' }).id, 'orb-teal', 'an explicit choice beats the system');
+  assert.equal(light.id, 'orb-teal');
+  assert.match(light.reason, /It’s dark: no light design has reached the bar yet/);
+  assert.equal(recommend(l, { mode: 'light', prefers: 'dark' }).id, 'orb-teal');
+  // With no design at the bar, the starter that fits the device.
+  const unranked = l.map((d) => ({ ...d, at_bar: false }));
+  assert.equal(recommend(unranked, { mode: 'auto', prefers: 'light' }).id, 'companion-light');
+  assert.match(recommend(unranked, { mode: 'auto', prefers: 'light' }).reason, /light/);
+  assert.equal(recommend(unranked, { mode: 'dark', prefers: 'light' }).id, 'orb-teal', 'an explicit choice beats the system');
   // Without the starters, the best-reading design that fits.
-  const others = l.filter((d) => !d.starter);
+  const others = unranked.filter((d) => !d.starter);
   assert.equal(recommend(others, { mode: 'auto', prefers: 'light' }).looks.default.scheme, 'light');
   assert.ok(recommend(others, { mode: 'auto', prefers: 'light' }).reason.length < 160, 'a short reason');
 });

@@ -6,9 +6,13 @@ import { ORB_WORDS, STATUS, isOpen, label, needsApproval, statusOf } from './sta
 import { qrSvg } from './qr.js';
 import { waitingLine } from './wait.js';
 
-// ---- icons: line drawings in currentColor -------------------------------------------------
+// ---- icons: Nova's one icon set (DESIGN-SYSTEM §2.1) ------------------------------------------
+// Line drawings in currentColor on a 24-unit grid, all at one stroke weight (ICON_STROKE in
+// src/core/design.ts; lint:tokens refuses any other), round caps and joins, no fills. Drawn for
+// Nova, so there is no third-party set to license. A new icon is added here, and shown in the
+// styleguide's icon entry, before anything uses it.
 
-const svg = (d, extra = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" class="icon"${extra}><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${d}</g></svg>`;
+const svg = (d, extra = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" class="icon"${extra}><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${d}</g></svg>`;
 export const ICONS = {
   home: svg('<path d="M4 11.5 12 5l8 6.5"/><path d="M6.5 10v9h11v-9"/>'),
   chat: svg('<path d="M5 6.5h14v9H10l-4 3v-3H5z"/>'),
@@ -33,6 +37,9 @@ export const ICONS = {
   conversations: svg('<path d="M4.5 6.5h15M4.5 12h15M4.5 17.5h9"/>'),
   panel: svg('<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M14.5 5v14"/>'),
   back: svg('<path d="M14.5 6 8.5 12l6 6"/>'),
+  chevron: svg('<path d="m9.5 6 6 6-6 6"/>'),
+  copy: svg('<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>'),
+  again: svg('<path d="M18.5 12a6.5 6.5 0 1 1-1.9-4.6"/><path d="M18.5 4.5v3.5H15"/>'),
 };
 
 // ---- the orb: Nova's presence. Abstract light only: no face, no features, ever. -----------

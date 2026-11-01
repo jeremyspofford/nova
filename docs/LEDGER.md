@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #279 · One lead design and a living styleguide — stage 1 approved**
+- What changed: Orb Teal is the one lead design, with alternatives behind More designs. Fixed spacing, type, radius and motion scales and token lint provide common structure. DESIGN-SYSTEM §0 records art direction and a measurable slop check; the styleguide has individually linked component/state examples. New surfaces start as rendered styleguide entries for owner approval before app code.
+- What you can now do: inspect the real components and their states at /styleguide, and review the evidence in `docs/reviews/design-quality-stage1-review-packet.md`. The approval covers this machinery. The F0 evidence now includes the exact 1280×820 window with a 20-line composer, guarded in Chromium and WebKit.
+- Still unfinished: stage 2 prioritizes desktop card hierarchy, small desktop rail-orb depth (the phone hero works), and background-gradient discipline. It must show visible before/after differences, not tightened values alone; queue: `docs/plans/design-quality-stage2-queue.md`. Other packages reaching the same bar and real-phone checks remain open. Stage 1 does not claim to solve those visual problems.
+
 **2026-11-01 · Handoff · A takeover note for the next builder**
 - What changed: a handoff note (docs/builder-packet/HANDOFF-FROM-BUILDER-2026-11-01.md) records the work in progress, the open questions waiting on you, the next steps, and the quirks of this machine, so a new builder can pick up without losing anything.
 - What you can now do: nothing in the app changed: paperwork only.
@@ -352,6 +357,10 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-11-01 (Owner coordination: outgoing builder stopped).** The owner stopped its coordinator at about 09:12 ET and is closing its session. Integrate from M10h `ff665f92`, vault `8ca4b827`, design source `eede795e` and memory gate `0326e673`. Flag unexpected later commits from that builder rather than treating them as authoritative. Verbatim source: `docs/builder-packet/INPUT-2026-11-01-BUILDER-FREEZE.md`. Incoming-builder continuation commits remain authorized.
+
+**2026-11-01 (Owner approval: design stage 1, #279).** Approved the machinery — §0, styleguide, token values and slop gate — with merge on green CI. The owner corrected the F0 evidence target to a 1280×820 window with a 20-line composer; the exact regression is included in this PR. Stage 2 priorities are desktop card hierarchy, small rail-orb depth and background-gradient discipline. Acceptance requires visible differences in screenshots, not values alone. Verbatim source: `docs/builder-packet/INPUT-2026-11-01-DESIGN-STAGE1-APPROVAL.md`; queue: `docs/plans/design-quality-stage2-queue.md`.
 
 **2026-11-01 (M10g, after the second adversarial review of #272: replays, evidence, ties, the name, long jumps).**
 Branch `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The second review of #272"). Five

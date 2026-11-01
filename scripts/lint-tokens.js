@@ -3,10 +3,15 @@
 // name, radius, shadow, motion value or raw spacing anywhere in ui/, and on any var(--x) that
 // isn't a token of the schema in src/core/design.ts (or a custom property ui/ itself declares).
 // Breakpoints live only in the layout file (DESIGN-SYSTEM §5).
+// The designed scales (DESIGN-SYSTEM §0, §2.1, owner direction 2026-11-01): spacing takes one step
+// of the 4pt scale (or its negative), never a half step or a sum; type takes the type scale's own
+// tokens; a radius is one radius token, by the component's size class, never a fraction of one and
+// never the pill on something that grows; a gradient is the orb's light or the page's, never
+// decoration; one icon set at one stroke weight; no emoji. In CSS, and in the styles scripts write.
 // Usage: node scripts/lint-tokens.js [files...]
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
-import { TOKEN_NAMES, cssVar } from '../src/core/index.ts';
+import { ICON_STROKE, TOKEN_NAMES, cssVar } from '../src/core/index.ts';
 
 const UI = 'ui';
 export const LAYOUT_FILE = 'ui/styles/layout.css';
@@ -17,6 +22,15 @@ const NAMED = /\b(white|black|red|green|blue|gray|grey|silver|orange|yellow|purp
 const FONT_NAMES = /\b(serif|sans-serif|monospace|system-ui|ui-serif|ui-monospace|-apple-system|Georgia|Inter|Helvetica|Arial|Menlo|Consolas|Times|"SF [^"]+"|"New York"|"Iowan Old Style")\b/;
 const SPACING = /^(padding|margin|gap|row-gap|column-gap|inset)(-(top|right|bottom|left|block|inline)(-(start|end))?)?$/;
 const ONLY_VARS = /^(?:\s*(?:var\(--[\w-]+\)|italic|\/)\s*)+$/;
+const TYPE_SIZE = /^var\(--type-(h1|h2|h3|body|small|caption)\)$/;
+const TYPE_LINE = /^var\(--type-line-(tight|body)\)$/;
+const RADIUS_TOKEN = /^var\(--radius-(card|input|pill)\)$/;
+// What can grow taller than one line, so must never take the pill (its radius follows the height:
+// UX review 1, F0's ellipse). A container takes radius/card, a control radius/input.
+const GROWS = /(^|[\s.#>+~(,])(textarea|composer|card|sheet|panel|bubble|banner|toast|btn|choice|input|field|dialog)(?![\w-])/;
+// Gradients light the orb and the page behind everything; anywhere else they are decoration.
+const GRADIENT_OK = /\.orb\b|\.orb-|^\s*(html|body)\s*$/;
+const EMOJI_ALL = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B50}\u{2B55}]/gu;
 
 // Custom properties ui/ declares itself (in CSS, or with style.setProperty), e.g. --gutter.
 function declared(text) {
@@ -128,6 +142,51 @@ function motionProblems(body, lineOf) {
   return out;
 }
 
+// The designed scales, for one declaration. `local` is ui/'s own custom properties: an expression
+// with one of them (a measured hit area, the orb's glow scale) or with env() or a layout token is
+// derived geometry, not a spacing choice.
+const VARS = /var\((--[\w-]+)\)/g;
+// Every top-level calc(…) in a value, parentheses balanced.
+function calcs(v) {
+  const out = [];
+  for (let i = v.indexOf('calc('); i !== -1; i = v.indexOf('calc(', i + 1)) {
+    let depth = 0;
+    let j = i + 4;
+    for (; j < v.length; j++) { if (v[j] === '(') depth++; if (v[j] === ')' && --depth === 0) break; }
+    out.push(v.slice(i, j + 1));
+    i = j;
+  }
+  return out;
+}
+export function scaleProblems(prop, v, local = new Set()) {
+  const out = [];
+  // A name that isn't a token is already its own problem (unknown token); don't say it twice.
+  if ([...v.matchAll(VARS)].some((m) => !SCHEMA.has(m[1]) && !local.has(m[1])) && !SPACING.test(prop)) return out;
+  if (SPACING.test(prop)) {
+    for (const m of v.matchAll(/var\(--(type|radius|shadow|motion|blur)-[\w-]+\)/g)) out.push(`off-scale spacing: ${prop} takes a space token, not ${m[0]}`);
+    for (const c0 of calcs(v)) {
+      // A hairline (± 1px) beside a step makes up for a border; it isn't a step of its own.
+      const c = c0.replace(/\s*[-+]\s*1px\b/g, '');
+      const names = [...c.matchAll(VARS)].map((m) => m[1]);
+      const derived = /env\(/.test(c) || names.some((n) => n.startsWith('--layout-') || local.has(n));
+      const negative = /^calc\(\s*-1\s*\*\s*var\(--space-[1-8]\)\s*\)$/.test(c) || /^calc\(\s*var\(--space-[1-8]\)\s*\*\s*-1\s*\)$/.test(c);
+      if (!derived && !negative) out.push(`off-scale spacing: ${prop}: ${c0} isn't a step of the 4pt scale; use one space token (or calc(-1 * var(--space-n)))`);
+    }
+  }
+  if (prop === 'font-size' && v !== 'inherit' && !TYPE_SIZE.test(v)) out.push(`off-scale type: font-size takes a type size token (--type-h1 … --type-caption); got ${v}`);
+  if (prop === 'line-height' && v !== 'inherit' && !TYPE_LINE.test(v)) out.push(`off-scale type: line-height takes --type-line-tight or --type-line-body; got ${v}`);
+  if (prop === 'font' && ONLY_VARS.test(v)) {
+    const [size, line] = v.replace(/var\(--(font|type-weight)-[\w-]+\)|italic/g, '').trim().split('/').map((x) => x.trim());
+    if (size && !TYPE_SIZE.test(size)) out.push(`off-scale type: font size ${size} isn't a step of the type scale`);
+    if (line && !TYPE_LINE.test(line)) out.push(`off-scale type: line height ${line} isn't --type-line-tight or --type-line-body`);
+  }
+  if (/^border(-[a-z]+)*-radius$/.test(prop) && !/^(0|50%|inherit)$/.test(v)) {
+    const parts = split(v, ' ');
+    if (parts.some((x) => x !== '0' && !RADIUS_TOKEN.test(x))) out.push(`off-scale radius: ${prop}: ${v}; a radius is one radius token by size class, never a fraction or sum of one`);
+  }
+  return out;
+}
+
 function cssProblems(css, ctx) {
   const out = [];
   const body = css.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
@@ -140,10 +199,24 @@ function cssProblems(css, ctx) {
   if (ctx.path !== LAYOUT_FILE) {
     for (const m of body.matchAll(/@(?:media|container)[^{]*\((?:min-|max-)?(?:width|height|inline-size)\s*[:<>]/g)) out.push([lineOf(m.index), `breakpoints belong in ${LAYOUT_FILE} (DESIGN-SYSTEM §5)`]);
   }
+  // Per rule: the pill on something that grows, and gradients outside the orb and the page.
+  for (const m of body.matchAll(/([^{};]+)\{([^{}]*)\}/g)) {
+    const selector = m[1].trim();
+    if (selector.startsWith('@')) continue;
+    const line = lineOf(m.index + m[0].indexOf('{'));
+    const sels = selector.split(',').map((x) => x.trim());
+    if (/border(-[a-z]+)*-radius\s*:[^;]*var\(--radius-pill\)/.test(m[2])) {
+      const grows = sels.filter((x) => GROWS.test(x.replace(/::?[\w-]+(\([^)]*\))?/g, '')) && !/::?(before|after)\b/.test(x));
+      if (grows.length) out.push([line, `pill radius on something that grows (${grows.join(', ')}): a pill's radius follows its height; a container takes --radius-card, a control --radius-input`]);
+    }
+    if (/-gradient\(/.test(m[2]) && !sels.every((x) => GRADIENT_OK.test(x))) out.push([line, `decorative gradient on ${selector}: gradients are the orb's light and the page's, nothing else`]);
+  }
+  for (const m of body.matchAll(EMOJI_ALL)) out.push([lineOf(m.index), `emoji ${m[0]}: icons come from the one icon set`]);
   for (const m of body.matchAll(/([a-z-]+)\s*:\s*([^;{}]+)/g)) {
     const [, prop, value] = m;
     const line = lineOf(m.index);
     const v = value.trim();
+    for (const msg of scaleProblems(prop, v, ctx.local)) out.push([line, msg]);
     if (COLOR_PROPS.test(prop) && NAMED.test(v.replace(/var\([^)]*\)/g, ''))) out.push([line, `named color in ${prop}: ${v}`]);
     if (prop === 'font-family' && !/^(var\(--font[\w-]*\)|inherit)$/.test(v)) out.push([line, `font-family must be a token: ${v}`]);
     if (prop === 'font' && !(ONLY_VARS.test(v) || v === 'inherit')) out.push([line, `font must be built from type tokens: ${v}`]);
@@ -176,11 +249,30 @@ function jsProblems(js, ctx) {
   for (const m of js.matchAll(/\.style\.(color|background|fontFamily|font|borderRadius|boxShadow|transition|animation)\s*=/g)) out.push([lineOf(m.index), `inline style.${m[1]} bypasses tokens`]);
   for (const m of js.matchAll(/\btransition:\s*([^;"'`]+)/g)) out.push(...transitionProblems(m[1].trim(), lineOf(m.index)));
   for (const m of js.matchAll(/\.animate\(/g)) out.push([lineOf(m.index), 'animate() bypasses the motion tokens: use a CSS class']);
+  // Styles a script writes: the designed scales hold there too. A declaration whose value is
+  // computed (\${…}) is measured geometry (a skeleton copying a layout), not a choice.
+  for (const m of js.matchAll(/style="([^"]*)"/g)) {
+    for (const d of m[1].matchAll(/([a-z-]+)\s*:\s*([^;]+)/g)) {
+      const v = d[2].trim();
+      if (v.includes('${')) continue;
+      for (const msg of scaleProblems(d[1], v, ctx.local)) out.push([lineOf(m.index), msg]);
+    }
+  }
+  for (const m of js.matchAll(/\.style\.(padding|margin|gap|rowGap|columnGap|inset|fontSize|lineHeight|borderRadius)(\w*)\s*=\s*([^;\n]+)/g)) {
+    const v = m[3].trim();
+    if (/^['"`].*\d(px|rem|em)?['"`]$/.test(v) || /^\d/.test(v)) out.push([lineOf(m.index), `inline style.${m[1]}${m[2]} with a raw value bypasses the designed scales: ${v}`]);
+  }
+  // One icon set at one stroke weight (DESIGN-SYSTEM §2.1).
+  for (const m of js.matchAll(/stroke-width="([\d.]+)"/g)) if (Number(m[1]) !== ICON_STROKE) out.push([lineOf(m.index), `icon stroke ${m[1]}: Nova's one icon set is drawn at ${ICON_STROKE} (ICONS in ui/js/components.js)`]);
+  for (const m of js.matchAll(EMOJI_ALL)) out.push([lineOf(m.index), `emoji ${m[0]}: icons come from the one icon set`]);
   return out;
 }
 
 function htmlProblems(html, ctx) {
   const out = [];
+  const lineOf = (i) => html.slice(0, i).split('\n').length;
+  for (const m of html.matchAll(/stroke-width="([\d.]+)"/g)) if (Number(m[1]) !== ICON_STROKE) out.push([lineOf(m.index), `icon stroke ${m[1]}: Nova's one icon set is drawn at ${ICON_STROKE}`]);
+  for (const m of html.matchAll(EMOJI_ALL)) out.push([lineOf(m.index), `emoji ${m[0]}: icons come from the one icon set`]);
   for (const m of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) out.push(...cssProblems(m[1], ctx));
   for (const m of html.matchAll(/style="([^"]*)"/g)) out.push(...cssProblems(`x{${m[1]}}`, ctx));
   for (const m of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) out.push(...jsProblems(m[1], ctx));
@@ -211,5 +303,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     for (const [line, msg] of lint(f, readFileSync(f, 'utf8'), local)) { console.log(`${relative('.', f)}:${line}  ${msg}`); count++; }
   }
   if (count) { console.log(`\n✗ ${count} problem${count === 1 ? '' : 's'}. Use a token from the design-system schema (GET /api/v1/design-systems/schema).`); process.exit(1); }
-  console.log(`✓ token lint: ${targets.length} files reference only schema tokens; no hardcoded colors, fonts, radii, shadows or motion values`);
+  console.log(`✓ token lint: ${targets.length} files reference only schema tokens; no hardcoded colors, fonts, radii, shadows or motion values; spacing, type and radius on the designed scales; one icon stroke; no decorative gradients or emoji`);
 }
