@@ -33,13 +33,16 @@ new is replicated (the promotion's shared record is its ledger tasks; each node'
   (11 of 11), `tests/core/mesh-promotion.test.ts`, the fresh-user test (first win 4141 ms) and the
   regression evals (29 of 29; the negative control failed every task, as it must).
 - `scripts/ui-test.sh` after the review: **111 tests: 111 pass** (Chromium and WebKit; main brought three more), `tests/ui/m10g-promotion.test.ts` among them, now with `NOVA_DRILL=1` for its short window.
-- **After the second adversarial review** (main unchanged since `77c404ac`): `npm run check`: **1497
+- **After the second adversarial review**, at `899af1fe` (before main moved): `npm run check`: **1497
   tests: 1482 pass, 2 fail, 13 skipped**. The two are `tests/core/provider-guard.test.ts` "a coding
   agent that changes more than Nova takes…" and `tests/skills-api.test.js` "the email summary…", the
   load-sensitive pair named above; the two files alone: 17 of 17 pass. Every M10g test passed in that
   run: the drill (with case 11), `m10g-review.test.ts` (11 of 11), `m10g-review2.test.ts` (7 of 7), the
   device-agent safe-mode test, the promotion core tests, the fresh-user test (first win 10646 ms) and
   the regression evals.
+- Main merged in at `2f29287d` (#271, capture screening; the only conflict was the LEDGER's Decisions,
+  both kept): the M10g files, the promotion and device-agent core tests, the capture-screening tests
+  and the evals test: 80 of 80 pass. CI runs the whole suite on the merge.
 - `scripts/ui-test.sh` after the second review: **112 tests: 112 pass** (Chromium and WebKit), `tests/ui/m10g-promotion.test.ts` among them; its screenshots in `docs/screenshots/m10g/` re-taken, the others put back.
 - CI is the record: see the PR.
 
