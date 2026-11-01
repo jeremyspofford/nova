@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
 import { startFakeScreenpipe } from '../../scripts/fake-screenpipe.js';
 import { INSTALLED, modelsCore } from '../support/models.ts';
+import { PASSED_4B, PASSED_OLLAMA, captureScore } from '../support/capture-check.ts';
 import type { Core } from '../../src/core/index.ts';
 
 // What the stand-in model says: the screen's five probabilities for a structured call (by what the
@@ -141,8 +142,9 @@ test('the API screens content for a caller and lists screens, never their conten
 
 test('captured text is screened before the triage decision reads it: a block proposes nothing; the rest is read screened', async () => {
   const seen: string[] = [];
+  // Tev1 on the same Ollama checks captured text first (screening, job 1), at the build that passed.
   const o = await startFakeOllama({
-    models: INSTALLED,
+    models: [...INSTALLED, PASSED_4B], version: PASSED_OLLAMA, systemone: captureScore,
     reply: (body: { format?: { properties?: { answers?: { properties?: Record<string, unknown> } } }; messages: { content: string }[] }) => {
       const asked = body.format?.properties?.answers?.properties ?? {};
       if ('remember' in asked) { seen.push(body.messages.at(-1)!.content); return JSON.stringify({ answers: { remember: 0.93 }, confidence: 0.9, why: 'x' }); }
@@ -159,6 +161,8 @@ test('captured text is screened before the triage decision reads it: a block pro
     sp.add({ at: new Date(Date.now() + 60_000).toISOString(), app: 'Browser', text: `A banner said ${smuggled}` });
     sp.add({ at: new Date(Date.now() + 61_000).toISOString(), app: 'Editor', text: 'The recycling moved to Wednesdays.' });
     await core.capture.pull(src.id);
+    await core.decisionService.refresh();
+    assert.deepEqual((await core.capture.screen()).outcomes, { index: 2 });
     const r = await core.capture.propose();
     assert.equal(r.proposed.length, 1, 'only the ordinary event is proposed');
     assert.equal(core.capture.proposals()[0]!.event.text, 'The recycling moved to Wednesdays.');

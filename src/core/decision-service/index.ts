@@ -7,7 +7,7 @@ import { DecisionService, type RemoteReceipt } from './service.ts';
 import { Registry, type Registered } from './registry.ts';
 import { INGEST_SCREEN_V1 } from './templates/ingest-screen.ts';
 import { INGEST_SCREEN_V2 } from './templates/ingest-screen-v2.ts';
-import { CAPTURE_SENSITIVE_V1 } from './templates/capture-sensitive.ts';
+import { CAPTURE_SENSITIVE_V1, sensitiveApp, findSecrets, redact as redactFindings } from './templates/capture-sensitive.ts';
 import { JevSeat } from './seats/jev.ts';
 import { Tev1Seat, type Tev1Detail } from './seats/tev1.ts';
 import { LegacySeat } from './seats/legacy.ts';
@@ -20,6 +20,10 @@ import type { PrivacyMode } from '../envelope.ts';
 import type { SeatStatus, ServiceTemplate } from './types.ts';
 
 export { DecisionService, Registry, INGEST_SCREEN_V1, INGEST_SCREEN_V2, CAPTURE_SENSITIVE_V1, DEFAULT_SETTINGS, OPT_IN_WORDS, notices, recommend, validateSettings };
+// capture-sensitive's deterministic layer, for capture's intake (capture screening, job 1): the
+// known sensitive apps and the pattern detectors, the same code the template's precheck runs, so
+// the two can't drift. No model is reached through these.
+export { sensitiveApp, findSecrets, redactFindings };
 export { MemoryLog, FileLog, DbLog, type DecisionLog, type RecordDb } from './log.ts';
 export { validate } from './registry.ts';
 export { memoryVerdicts, type VerdictStore, type VerdictRecord } from './verdicts.ts';
@@ -42,6 +46,8 @@ export interface ServiceSetup {
   // Today's sorting model, and the template as it knows it (the old store), until it is retired.
   legacy?: { provider: DecisionProvider; old: (templateId: string) => Template | null };
   receipt?: (r: RemoteReceipt) => void;
+  // This home's key for capture text's state hash in the record (service.ts #stateHash).
+  stateKey?: () => Buffer | null;
   verdicts?: VerdictStore;
   templates?: readonly ServiceTemplate[];
   now?: () => Date;
@@ -77,6 +83,7 @@ export function createDecisionService(o: ServiceSetup): { service: DecisionServi
     registry, verdicts, settings: o.settings, privacy: o.privacy, log: o.log,
     seats: { tev1, jev, ...(legacy ? { legacy } : {}) },
     ...(o.receipt ? { receipt: o.receipt } : {}),
+    ...(o.stateKey ? { stateKey: o.stateKey } : {}),
     ...(o.now ? { now: o.now } : {}),
   });
   const refresh = async () => { await tev1.refresh(); };
