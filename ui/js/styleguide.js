@@ -10,6 +10,7 @@ import { icons, memoryIndex, renderActivity, renderEmpty, renderGmail, renderHan
 import { ICONS, ORB_SIZES, addDeviceSheet, allowApproveSheet, approvalSheet, briefCard, chatBubble, codingSheet, coldPromotionSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, infraSheet, joinRequestSheet, lookingIntoItCard, memoryHighlightCard, networkSheet, orb, proactiveBanner, promoteSheet, promotionActionSheet, promotionSheet, revokeSheet, rolesReviewSheet, rolesSheet, settingsRow, status, takeoverPanel, taskRow, triggerRow, verifiedResultCard, voiceState } from './components.js';
 import { waitingLine } from './wait.js';
 import { ORB_STATES } from './status.js';
+import { renderTopology } from './topology-view.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -155,6 +156,110 @@ const infraRun = { id: 'i1', project: { name: 'Static site' }, folder: 'infra/si
 const netChange = (step) => ({ id: 'n1', title: 'Open port 8443 for the hub', target: { name: 'the home router', kind: 'router' }, window_s: 300, diff: '+ allow tcp 8443 from lan', snapshot: { sha256: '0f3c9a7b2e1d4c5b6a79', at: at(-0.1) }, counts: ['your phone', 'the study desktop'], step });
 const takeover = (mode, holder = null) => ({ live: true, mode, url: 'https://shop.example.com/checkout', step: { n: 3, of: 5, what: 'fill in the delivery address' }, asked: mode === 'needs_person' ? 'type the code your bank sent' : null, holder, blocked: [{ host: 'ads.example.net', count: 4 }] });
 
+// M10i: illustrative presentation fixtures, not the user's machines or a cluster backend.
+const topologyStates = [
+  ['overview', 'Overview'], ['attention', 'Attention / stale'], ['attention-service', 'Stale service detail'], ['machine', 'Machine services'],
+  ['service', 'Service versions / actions'], ['capture', 'Capture versions / actions'],
+  ['empty', 'Empty'], ['loading', 'Loading'], ['failed', 'Failed refresh'], ['long-names', 'Long names'],
+  ['approval-service', 'Promote service / tier 2'], ['approval-capture', 'Promote capture / tier 3'],
+  ['rollback-service', 'Roll back service / tier 2'], ['rollback-capture', 'Roll back capture / tier 2'],
+];
+const topologyVersions = [
+  { name: '2.4.1', role: 'Current', detail: 'Serving on this machine' },
+  { name: '2.5.0', role: 'Candidate', detail: 'Available for review; not serving' },
+  { name: '2.4.0', role: 'Previous', detail: 'Retained for rollback' },
+];
+const topologyMachines = [
+  { id: 'home', name: 'Home hub', roles: ['Hub', 'Storage'], stale: false, status: 'quiet', age: 'Observed 1 minute ago', observations: [], services: [
+    { id: 'notes', name: 'Notes index', status: 'quiet', placement: 'Home hub', capture: false, versions: topologyVersions },
+    { id: 'archive', name: 'Archive helper', status: 'quiet', placement: 'Home hub', capture: false, versions: topologyVersions },
+  ] },
+  { id: 'study', name: 'Study desktop', roles: ['Compute'], stale: false, status: 'quiet', age: 'Observed 2 minutes ago', observations: [], services: [
+    { id: 'capture', name: 'Desktop capture', status: 'quiet', placement: 'Native workload on Study desktop', capture: true, versions: topologyVersions },
+  ] },
+  { id: 'travel', name: 'Travel notebook', roles: ['Client'], stale: false, status: 'quiet', age: 'Observed 3 minutes ago', observations: [], services: [] },
+];
+const topologyStale = { ...topologyMachines[1], stale: true, status: 'needs-you', age: 'Last observation is 18 minutes old', observations: [
+  { source: 'Cluster', reason: 'worker is ready', age: 'Observation is 2 minutes old' },
+  { source: 'Heartbeat', reason: 'no response', age: 'Observation is 18 minutes old' },
+] };
+let topologyState = new URLSearchParams(location.search).get('state') ?? 'overview';
+if (!topologyStates.some(([id]) => id === topologyState)) topologyState = 'overview';
+let topologyMachine = null;
+let topologyService = null;
+let topologyApproval = null;
+let topologyReturnFocus = null;
+function selectTopologyState(next) {
+  topologyState = next;
+  topologyMachine = ['attention', 'attention-service', 'capture'].includes(next) || next.includes('capture') ? 'study' : ['machine', 'service'].includes(next) || next.includes('service') ? 'home' : null;
+  topologyService = next === 'attention-service' || next === 'capture' || next.includes('-capture') ? 'capture' : next === 'service' || next.includes('-service') ? 'notes' : null;
+  topologyApproval = next.startsWith('approval-') ? 'promote' : next.startsWith('rollback-') ? 'rollback' : null;
+}
+selectTopologyState(topologyState);
+function topologyFixture() {
+  if (topologyState === 'empty') return [];
+  if (topologyState === 'failed') return [topologyStale];
+  if (['attention', 'attention-service'].includes(topologyState)) return topologyMachines.map((m) => m.id === 'study' ? topologyStale : m);
+  if (topologyState === 'long-names') return topologyMachines.map((m) => ({ ...m, name: `${m.name} for shared research and the extended household archive`, roles: [...m.roles, 'LongRunningLocalWorkloadCoordinatorWithoutWordBreaks'], services: m.services.map((s) => ({ ...s, name: `${s.name} for the shared reference library and research annotations` })) }));
+  return topologyMachines;
+}
+function topologyBody() {
+  const machines = topologyFixture();
+  const m = machines.find((x) => x.id === topologyMachine);
+  const s = m?.services.find((x) => x.id === topologyService);
+  if (topologyApproval && s) {
+    const verb = topologyApproval === 'promote' ? 'Promote' : 'Roll back';
+    return `<section class="topology" aria-label="Approval specimen" data-topology-state="${topologyState}"><button type="button" class="btn quiet topology-back" data-topology-back>Back to versions</button><div class="sheet-inner panel">${approvalSheet({ id: 'topology-specimen', title: `${verb} ${s.name}`, owner: m.name, approval_tier: topologyApproval === 'promote' && s.capture ? 3 : 2, privacy_mode: 'local-only', brief: { goal: `${verb} ${s.name} ${topologyApproval === 'promote' ? 'from 2.4.1 to 2.5.0' : 'from 2.4.1 to 2.4.0'}. ${s.capture ? 'This changes the capture process on Study desktop.' : 'This changes which version serves on Home hub.'}` } })}<p class="topology-meta" data-topology-notice role="status">Illustrative approval. No change will be made.</p></div></section>`;
+  }
+  return renderTopology({ machines, selectedMachine: topologyMachine, selectedService: topologyService, state: topologyState });
+}
+function topologyEntry() {
+  return `<div class="topology-demo-controls"><label for="topology-state">Specimen state</label><select class="input" id="topology-state">${topologyStates.map(([id, name]) => `<option value="${id}"${id === topologyState ? ' selected' : ''}>${name}</option>`).join('')}</select></div><p class="topology-fixture-note">Illustrative machines and observations. No devices are connected; actions open specimens only.</p><div data-topology-content>${topologyBody()}</div>`;
+}
+function bindTopology() {
+  const entry = sg.querySelector('#sg-topology');
+  if (!entry) return;
+  const paint = (focus = true) => {
+    entry.querySelector('[data-topology-content]').innerHTML = topologyBody();
+    // Freeze the existing waiting component as an explicitly labelled specimen: no clock,
+    // simulated phase changes or progress. The pure renderer owns no elapsed-time logic.
+    const waitingSlot = entry.querySelector('[data-topology-wait]');
+    if (waitingSlot) {
+      waitingSlot.innerHTML = waitingLine('Receiving machine observations', { since: Date.now() - 2000 });
+      waitingSlot.querySelector('[data-since]')?.removeAttribute('data-since');
+    }
+    if (focus) (entry.querySelector('[data-topology-heading]') ?? entry.querySelector('[data-topology-back]'))?.focus();
+  };
+  paint(false);
+  entry.addEventListener('change', (e) => {
+    if (e.target.id === 'topology-state') { selectTopologyState(e.target.value); paint(false); }
+    if (e.target.matches('[name="confirm"]')) entry.querySelector('[data-action="approve"]').disabled = !e.target.checked;
+  });
+  entry.addEventListener('submit', (e) => {
+    e.preventDefault();
+    entry.querySelector('[data-topology-notice]').textContent = 'Specimen complete. No change was made.';
+  });
+  entry.addEventListener('click', (e) => {
+    const button = e.target.closest('button');
+    if (!button) return;
+    if (button.hasAttribute('data-topology-machine')) {
+      topologyMachine = button.dataset.topologyMachine; topologyService = null; paint();
+    } else if (button.hasAttribute('data-topology-service')) {
+      topologyService = button.dataset.topologyService; paint();
+    } else if (button.hasAttribute('data-topology-action')) {
+      topologyReturnFocus = button.dataset.topologyAction; topologyApproval = button.dataset.topologyAction; paint();
+    } else if (button.hasAttribute('data-topology-back') || ['close-sheet', 'cancel-task'].includes(button.dataset.action)) {
+      let selector;
+      if (topologyApproval) { topologyApproval = null; selector = `[data-topology-action="${topologyReturnFocus ?? 'promote'}"]`; }
+      else if (topologyService) { selector = `[data-topology-service="${topologyService}"]`; topologyService = null; }
+      else { selector = `[data-topology-machine="${topologyMachine}"]`; topologyMachine = null; }
+      paint(false); entry.querySelector(selector)?.focus();
+    } else if (button.hasAttribute('data-topology-return')) {
+      selectTopologyState('attention'); entry.querySelector('#topology-state').value = 'attention'; paint();
+    }
+  });
+}
+
 // ---- how an entry is drawn -----------------------------------------------------------------------
 
 const state = (label, html, cls = '') => `<figure class="sg-state${cls ? ` ${cls}` : ''}"><figcaption class="sg-label">${label}</figcaption><div class="sg-specimen">${html}</div></figure>`;
@@ -187,6 +292,7 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
         () => `<div class="sg-icons">${Object.entries(ICONS).map(([k, svg]) => `<div class="sg-icon">${svg}<span class="sg-name">${k}</span></div>`).join('')}</div>`],
     ]],
     ['Components', [
+      ['topology', 'Topology', 'Machines, their services, and versions in three layers. The hub leads the diagram; on a phone the same machines form an ordered list.', topologyEntry],
       ['orb', 'Orb', 'Nova’s presence: abstract light, no face, once per view. Seven fixed states; the hero on Home, the rail size everywhere else.',
         () => `<div class="sg-grid">${ORB_STATES.map((s) => `<div class="sg-swatch">${orb({ state: s, size: 'rail' })}<span class="sg-name">${s}</span></div>`).join('')}</div>${state('Sizes', `<div class="sg-demo-row sg-orb-sizes">${ORB_SIZES.map((s) => `<div class="sg-swatch">${orb({ state: 'idle', size: s })}<span class="sg-name">${s}</span></div>`).join('')}</div>`)}`],
       ['status', 'Status', 'One vocabulary everywhere, each with a fixed colour. Verified always opens its evidence.',
@@ -277,6 +383,7 @@ function render() {
     const index = `<nav class="sg-index" aria-label="Entries">${groups.map(([g, list]) => `<div><p class="sg-label">${g}</p><ul>${list.map(([id, name]) => `<li><a href="#sg-${id}">${name}</a></li>`).join('')}</ul></div>`).join('')}</nav>`;
     sg.innerHTML = index + groups.map(([g, list]) => `<section class="sg-section" aria-label="${g}"><h2>${g}</h2>${list.map(one).join('')}</section>`).join('');
   }
+  bindTopology();
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }

@@ -134,6 +134,9 @@ test('R13 (p13): a replayed “unhealthy” answer is refused: every signed answ
     for await (const c of req) chunks.push(c as Buffer);
     if (req.url!.endsWith('/promotion/health') && m.replay > 0 && m.unhealthy) { m.replay--; res.writeHead(200, { 'content-type': 'application/json' }); res.end(m.unhealthy); return; }
     try {
+      // Force the timer schedule that exposed R13 in CI: the hub repairs the stable name
+      // before answering health. The injected name fault must survive that independent work.
+      if (req.url!.endsWith('/promotion/health')) await p.b.core.mesh.promotions.settleName();
       const r = await fetch(`${p.b.mesh}${req.url}`, { method: req.method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: chunks.length ? Buffer.concat(chunks) : undefined });
       const text = await r.text();
       // Only one honest "unhealthy" gets through (more in a row would be a real roll-back).
@@ -147,10 +150,13 @@ test('R13 (p13): a replayed “unhealthy” answer is refused: every signed answ
     await promote(p);
     await verifying(p);
     await sleep(600);
-    // One unhealthy answer, honestly given (the name leads elsewhere for a moment), captured on the way.
+    // Hold the name fault until a real signed answer is captured. Otherwise the new hub's
+    // independent reconciliation can repair it before any health request observes it.
+    p.name.stuck(true);
     p.name.point(p.a.mesh);
     await until(() => m.unhealthy, (x) => !!x, 20_000);
     p.name.point(p.b.mesh);
+    p.name.stuck(false);
     assert.ok(m.unhealthy, 'an unhealthy answer was captured');
     await until(() => p.a.core.mesh.promotions.record()!.probes.at(-1)?.result, (x) => x === 'ok', 10_000);
     const before = p.a.core.mesh.promotions.record()!.probes.length;
