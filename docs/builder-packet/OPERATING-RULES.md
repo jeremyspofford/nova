@@ -86,3 +86,27 @@ Where it differs from earlier packet text, the amendment wins: for example, the 
 - **The packet's name:** it sits beside the work, as `docs/reviews/<artifact>-review-packet.md`.
 - **Findings** come back as owner input and are triaged like any review, each with a failing test first where it reproduces.
 - **This doesn't replace** the in-house independent or adversarial review a milestone already has.
+
+## Addendum — Design quality (owner direction, 2026-11-01)
+`INPUT-2026-11-01-DESIGN-QUALITY.md` is binding, with its diagnosis `nova-design-quality-system-2026-11-01.md`. The design it sets is DESIGN-SYSTEM §0 (art direction, the slop list, the living styleguide) and §2.1 (the designed scales).
+
+**(a) A component that isn't in the styleguide doesn't ship.**
+- **The styleguide:** `/styleguide` renders every component in every state, drawn by the app's own code with realistic Nova content and neutral placeholders.
+- **The check:** `tests/styleguide-coverage.test.js` fails when a component exported from `ui/js/components.js` or `ui/js/view.js` has no entry. Its helper list names, with reasons, what isn't a component, and the known gaps.
+
+**(b) Design-first workflow, for any new surface or component:**
+1. The first deliverable is its rendered styleguide entry, with its own anchor and address (`/styleguide?entry=<entry>`), and screenshots of each state.
+2. The owner approves that rendered entry before any app code is written. This is a recognition check, about a minute per surface. The builder waits for it; it is the one place in the build loop that does.
+3. App code composes only styleguide components. A new visual pattern goes back to step 1, never straight into a view.
+4. The UI PR includes screenshots of the surface matched against the styleguide rendering of what it composes. `tests/ui/design-shots.ts` captures the main surfaces at desktop and phone width, and each styleguide entry on its own.
+
+**When it takes effect:** the workflow applies from the next new surface after the design-quality PR merges. Existing surfaces are conformed opportunistically, as the UX fix list reaches them. There is no big-bang rewrite.
+
+**Every UI PR includes:**
+- the posture screenshots the fold work already requires;
+- the screenshots matched to the styleguide;
+- a **slop check** against DESIGN-SYSTEM §0.4: per surface touched, each of the eight items scored pass, fail or n/a, with one line of evidence. A fail is reported plainly, not hidden. A PR template, if one is added, carries this section.
+
+**Enforced mechanically:**
+- `lint:tokens` holds `ui/` to the designed scales: spacing, type and radius, the pill only on fixed-height tokens, gradients only on the orb and the page, one icon stroke, no emoji.
+- `check:themes` holds the packages at the bar to the scales, and lists the rest as not yet at the bar.
