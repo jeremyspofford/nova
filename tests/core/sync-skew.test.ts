@@ -42,13 +42,14 @@ test('the registry names every column a release added to a replicated table, the
   const newest = Math.max(...all.map((m) => m.version));
   assert.deepEqual(ADDED_COLUMNS[19], { receipt: ['opt_in'] });
   assert.deepEqual(ADDED_COLUMNS[20], { device: ['purposes'] });
-  assert.ok(newest >= 20);
+  assert.deepEqual(ADDED_COLUMNS[21], { problem: ['stops'] });
+  assert.ok(newest >= 21);
   // Every column a replicated table has on the newest schema is either in the oldest supported
   // schema or registered: a release can't add one and forget to say so.
   const old = new Db(':memory:'); old.migrate({ migrations: upTo(UNSTATED_SCHEMA - 1) });
   const now = new Db(':memory:'); now.migrate({ migrations: all });
   const cols = (db: Db, t: string) => db.all<{ name: string }>(`SELECT name FROM pragma_table_info('${t}')`).map((c) => c.name);
-  for (const t of ['device', 'receipt', 'task', 'memory', 'profile', 'capture_source', 'change_record']) {
+  for (const t of ['device', 'receipt', 'task', 'memory', 'profile', 'capture_source', 'change_record', 'problem']) {
     const added = cols(now, t).filter((c) => !cols(old, t).includes(c));
     const said = Object.values(ADDED_COLUMNS).flatMap((m) => m[t] ?? []);
     assert.deepEqual(added.sort(), [...said].sort(), t);
@@ -107,4 +108,50 @@ test('the receipt’s triggers carry opt_in always now: the sender adapts, not t
   const row = JSON.parse(hub.get<{ row: string }>(`SELECT row FROM sync_log WHERE tbl = 'receipt' AND pk = 'r2'`)!.row);
   assert.equal(Object.hasOwn(row, 'opt_in'), true);
   assert.equal(row.opt_in, null);
+});
+
+// The orb's red (owner decision 2026-10-31): problem.stops, added by 0021. A 0020 standby has no such
+// column; it takes the problem without it, and shows it amber, as every problem was before.
+function hubWithProblem() {
+  const { hub, sync } = hubBatch();
+  const log = new Log(hub, null);
+  log.problem('ledger', 'A task failed: Backup now.', { stops: true });
+  return { hub, sync };
+}
+
+test('a 0020 standby against a 0021 hub: the hub leaves out problem.stops for it, and the problem lands', () => {
+  const { sync: hubSync } = hubWithProblem();
+  const s = standby(20);
+  try {
+    const batch = hubSync.batch(0, { peerSchema: 20 });
+    const p = JSON.parse(batch.rows.find((r) => r.tbl === 'problem' && r.op === 'put')!.row!);
+    assert.equal(Object.hasOwn(p, 'stops'), false, 'left out by the hub');
+    assert.deepEqual(JSON.parse(hubSync.batch(0, { peerSchema: 21 }).rows.find((r) => r.tbl === 'problem' && r.op === 'put')!.row!).stops, 1, 'a 0021 standby gets it');
+    s.sync.apply(batch, () => {});
+    assert.equal(s.db.get<{ message: string }>(`SELECT message FROM problem WHERE source = 'ledger'`)?.message, 'A task failed: Backup now.');
+    assert.equal(s.db.get<{ purposes: string }>(`SELECT purposes FROM device WHERE id = 'c'`)?.purposes, '["compute"]', 'the 0020 column still arrives');
+  } finally { rmSync(s.home, { recursive: true, force: true }); }
+});
+
+test('a 0021 standby keeps problem.stops: the problem that stops Nova is red there too', () => {
+  const { sync: hubSync } = hubWithProblem();
+  const s = standby(21);
+  try {
+    s.sync.apply(hubSync.batch(0, { peerSchema: 21 }), () => {});
+    assert.equal(s.db.get<{ stops: number }>(`SELECT stops FROM problem WHERE source = 'ledger'`)?.stops, 1);
+  } finally { rmSync(s.home, { recursive: true, force: true }); }
+});
+
+test('a hub that didn’t adapt to a 0020 standby: it leaves problem.stops out, says once it is behind, and the problem lands', () => {
+  const { sync: hubSync } = hubWithProblem();
+  const s = standby(20);
+  // A standby's own problems take ids below zero, so the hub's (copied as they are) never replace them.
+  s.log.local = () => true;
+  try {
+    s.sync.apply(hubSync.batch(0, { peerSchema: 21 }), () => {});
+    assert.equal(s.db.get<{ message: string }>(`SELECT message FROM problem WHERE source = 'ledger'`)?.message, 'A task failed: Backup now.');
+    const said = s.db.all<{ message: string }>(`SELECT message FROM problem WHERE message LIKE '%problem.stops%'`);
+    assert.equal(said.length, 1, JSON.stringify(said));
+    assert.match(said[0]!.message, /release behind/);
+  } finally { rmSync(s.home, { recursive: true, force: true }); }
 });

@@ -587,7 +587,8 @@ export class Ledger extends EventEmitter {
   #fail(id: string, why: string, detail?: string, kind = 'failed'): void {
     this.#db.run(`UPDATE task SET user_visibility = 'attention' WHERE id = ?`, id);
     this.#move(id, 'failed', why, kind, detail ? { detail } : undefined);
-    this.#log.problem('ledger', `A task failed: ${this.get(id).title}. ${why}`, { detail, taskId: id });
+    // A task that failed is the Failed class: its work can't proceed (DESIGN-SYSTEM §1).
+    this.#log.problem('ledger', `A task failed: ${this.get(id).title}. ${why}`, { detail, taskId: id, stops: true });
   }
 
   #move(id: string, to: State, reason: string | null, kind: string, detail?: unknown): Task {

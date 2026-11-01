@@ -3,12 +3,33 @@
 This is the contract between Nova's product design and every line of UI code. It defines (a) the design language, (b) the token schema all packages must implement, (c) the package/hot-swap mechanism. Approved visual references: concepts E–H (round 2) as one language; A for feature set; B/F for conversational warmth; D/E/H for the ambient home.
 
 ## 1. Design language (applies to every package)
-- **The Orb is Nova's face.** A luminous sphere of abstract light. **No face, no features, ever.** Identity and state are expressed through light: color temperature, brightness, motion (breathing idle, gentle pulse while working, slow swirl while listening, steady bright when speaking, warm amber when it needs you, red only for real alerts). One orb component, token-driven, reused at every size — hero presence on the home, status in the rail. **It appears once per view** (Amendment 2026-10-30-C): never as a per-message avatar in chat.
+- **The Orb is Nova's face.** A luminous sphere of abstract light. **No face, no features, ever.** Identity and state are expressed through light: color temperature, brightness, motion (breathing idle, gentle pulse while working, slow swirl while listening, steady bright when speaking, warm amber when it needs you, red only for what stops Nova). Its states are a fixed, semantic set (below, owner decision 2026-10-31). One orb component, token-driven, reused at every size — hero presence on the home, status in the rail. **It appears once per view** (Amendment 2026-10-30-C): never as a per-message avatar in chat.
 - **Cards are the unit of information.** Briefs, tasks, devices, results: rounded cards with one job each, generous padding, one headline, at most a few lines. If content needs more, it gets a detail view — the card never becomes a table.
 - **Density is capped.** Default surfaces show the minimum that matters. Power detail (logs, diffs, full device lists, raw health) lives one layer down, on demand. Dense cockpit layouts are an anti-pattern for Nova.
 - **One status vocabulary.** Everywhere: Quiet / Working / Waiting / Verified / Needs you / Failed — with fixed semantic colors from tokens. "Verified" always carries its evidence affordance (tap → evidence).
 - **"Nova is handling"** is the standard component for background work: task rows with plain-language titles and status, expandable to the ledger entry.
 - **Calm motion.** Slow, small, purposeful. Motion conveys state (orb, status transitions), never decoration for its own sake. Reduced-motion setting honored everywhere.
+
+### The orb's semantic states (binding — owner decision, 2026-10-31)
+The owner's words: **"RED is reserved for problems that STOP Nova (the Failed class — work cannot proceed, a dead-man switch fired, a security refusal). AMBER is needs-you-but-running: approvals waiting, problems like the Health items, degraded capture. This maps 1:1 onto the status vocabulary and it is a SEMANTIC rule, not a colour choice, so it survives theming."**
+- **The state set is fixed:** idle / listening / working / speaking / needs-you (amber) / stopped (red) / offline. "Themes may not add, remove, or re-meaning states."
+  | State | Means | Status vocabulary |
+  |---|---|---|
+  | idle | Nothing is happening; Nova is there. | Quiet |
+  | listening | The person is talking to Nova. | — |
+  | working | Nova is doing something. | Working |
+  | speaking | A reply is arriving. | — |
+  | needs-you | Something needs the person while Nova keeps running: an approval waiting, a problem worth a look (a Health item), capture running degraded. Amber. | Needs you |
+  | stopped | Something stopped Nova: work can't proceed (a task failed, a rollback or revert that couldn't be made, Nova unable to restart), a dead-man's switch fired, a security refusal. Red, and nothing else is. | Failed |
+  | offline | Nova isn't reachable. | — |
+- **Which problems stop Nova** is said where each is raised, not guessed from its words: a problem carries `stops` (set by `Log.problem(…, { stops: true })` or by a playbook marked `stops`). Every other problem is amber. The list of stopping sources is in `docs/plans/orb-states.md`.
+- **Each theme package expresses the states in its own visual language** ("a future space theme renders the same states as stellar phenomena, not teal light — values and motion are the theme's, the meanings are the system's"). Today a package does this with `orb_states{}` (§4): for each state a colour token, a motion, a light and a mark, from what the renderer draws, plus its reduced-motion equivalent.
+- **In every theme** ("colour alone is not a safe channel"):
+  - **States differ by motion and brightness pattern as well as hue.** No two states may share motion, light and mark; under reduced motion, no two may share light and mark.
+  - **The stopped state is unmistakable.** No other state shares its motion, its light or its mark, with motion or without; it takes `status/error`, and no other state may.
+  - **Reduced-motion equivalents are required** for every state: under reduced motion nothing on the orb moves, and the state's reduced light and mark carry it.
+- **Enforced:** `npm run check:themes` (validatePackage) fails a package that adds, removes or omits a state, or breaks a rule above; `tests/ui/orb-states.test.ts` renders all seven states in every installed design system, light and dark, with and without reduced motion, with colour taken away, and checks every pair still looks different and stopped stands apart.
+- **UX review 1 (F3).** The flat salmon disc the review captured was the old alert state, shown because Health had open problems (files too large for the standby's copy). Under this rule those problems need the person while Nova keeps running, so the orb reads as amber needs-you. The rendering depth (the lit sphere of #254) is still the F3 fix, and stays.
 
 ### Perception principles (binding, non-negotiable — owner amendment, 2026-10-29)
 1. **Show real progress.** Task state comes from the Work Ledger, never simulated activity.
@@ -54,7 +75,7 @@ A package that omits a required token fails validation and cannot be applied (`c
 Both packages must render EVERY layout and component identically in structure — a package changes values, never layout or features. (Historical exception carried from Era 2: a theme may add one signature extra surface — the Stellar Map in the Nova theme — declared in its manifest as an extra, never as a removal.)
 
 ## 4. Package format and hot swap
-A design system is an extension (EXTENSION-MODEL) with kind `design-system` and the manifest of CONTRACTS §4 plus: `tokens{}` (full schema of §2), `components{}` (per-component token bindings and any package-specific variants), `content_rules` (may tighten, never loosen, the content rules of §6), `extras[]` (declared signature surfaces), `preview` (thumbnail/screenshot set).
+A design system is an extension (EXTENSION-MODEL) with kind `design-system` and the manifest of CONTRACTS §4 plus: `tokens{}` (full schema of §2), `orb_states{}` (the orb's seven states, each `{color, motion, light, mark, reduced: {light, mark}}`; motions `breathe`, `swirl`, `pulse`, `ripple`, `beckon`, `alarm`, `still`; lights `soft`, `full`, `bright`, `stark`, `dim`; marks `none`, `ring`, `dashed`; rules in §1), `components{}` (per-component token bindings and any package-specific variants), `content_rules` (may tighten, never loosen, the content rules of §6), `extras[]` (declared signature surfaces), `preview` (thumbnail/screenshot set).
 - **Apply path**: install → validate completeness → apply live to the real UI (no embedded preview mock; swatches are picker thumbnails only — Amendment 2026-10-30-C) → tokens are CSS variables (web) swapped at runtime — **no rebuild, no restart** → previous package kept for one-click rollback. This device: applies instantly with a visible Undo. All devices: an explicit Save.
 - Scope: per user (all devices) or per device override. Sync of the choice follows the profile.
 - Native clients later compile the same token set to native themes; a package valid for the PWA is valid for native.
@@ -82,4 +103,4 @@ Every layout exposes the same features; layouts differ in arrangement only.
 - Numbers that drive decisions (cost, time, stakes) are shown with their basis; no naked percentages without denominators where the package renders decision content.
 
 ## 7. Component inventory (v1 — each specced with states)
-Orb (states: idle/listening/working/speaking/attention/alert/offline) · BriefCard · HandlingCard (task rows) · TaskRow · VerifiedResultCard (with evidence viewer) · LookingIntoItCard · DeviceRow · DeviceMeshCard · HealthCard · MemoryHighlightCard · ApprovalSheet (tiered, plain-language permissions) · TriggerRow (schedule/event with pause/delete) · ChatBubble set · Composer (text/voice) · Toast/ProactiveBanner · SettingsRow · EmptyState ("Nothing needs you" is a valid, designed state).
+Orb (states, fixed: idle/listening/working/speaking/needs-you/stopped/offline — §1) · BriefCard · HandlingCard (task rows) · TaskRow · VerifiedResultCard (with evidence viewer) · LookingIntoItCard · DeviceRow · DeviceMeshCard · HealthCard · MemoryHighlightCard · ApprovalSheet (tiered, plain-language permissions) · TriggerRow (schedule/event with pause/delete) · ChatBubble set · Composer (text/voice) · Toast/ProactiveBanner · SettingsRow · EmptyState ("Nothing needs you" is a valid, designed state).
