@@ -342,6 +342,44 @@ export function promoteSheet(replica) {
 </form>`;
 }
 
+// Promoting a hub candidate to hub (M10g), from Settings › Devices on the hub: what happens and each
+// pre-check, said first, then tier 3. The words are the hub's (src/core/mesh/handover.ts), so the
+// claims register reads one file. A candidate that fails a pre-check gets the reason and no button.
+const checkList = (checks = []) => `<ul class="checks">${checks.map((c) => `<li class="check" data-ok="${c.ok}"><span class="check-mark" aria-hidden="true">${c.ok ? ICONS.check : ICONS.close}</span><div><p class="check-why">${esc(c.said)}</p></div></li>`).join('')}</ul>`;
+const factList = (facts = []) => `<dl class="facts">${facts.map((f) => `<dt>${esc(f.label)}</dt><dd>${esc(f.text)}</dd>`).join('')}</dl>`;
+
+export function promotionSheet(d, check) {
+  const ok = !!check?.ok;
+  return `<form class="approval-sheet" data-tier="3" data-promotion="${esc(d.id)}" method="dialog">
+  <p class="sheet-kicker">${status(ok ? 'needs-you' : 'failed')}</p>
+  <h2 class="sheet-title" id="sheet-title">Make “${esc(d.name)}” the hub?</h2>
+  ${ok ? factList(check.sheet) : '<p class="sheet-line">Not yet: a pre-check didn’t pass.</p>'}
+  <h3 class="sheet-heading">The pre-checks</h3>
+  ${checkList(check?.checks)}
+  ${ok ? '<label class="confirm"><input type="checkbox" name="confirm" required> I want this computer to be the hub.</label>' : ''}
+  <div class="sheet-actions">
+    ${ok ? '<button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Promote to hub</button>' : ''}
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+// Becoming the hub from the latest backup (M10g), on a hub candidate whose hub can't be reached: the
+// backup's time, what was lost and that connectors sign in again, said before anything (Decision 5).
+export function coldPromotionSheet(view) {
+  const ok = !!view?.eligible;
+  return `<form class="approval-sheet" data-tier="3" data-cold-promotion="1" method="dialog">
+  <p class="sheet-kicker">${status(ok ? 'needs-you' : 'failed')}</p>
+  <h2 class="sheet-title" id="sheet-title">Make this the hub from a backup?</h2>
+  ${ok ? factList(view.sheet) : `<p class="sheet-line">Not here: ${esc((view?.reasons ?? [])[0] ?? 'Nova couldn’t tell.')}</p>`}
+  ${ok ? '<label class="confirm"><input type="checkbox" name="confirm" required> I understand what is lost, and want this node to be the hub.</label>' : ''}
+  <div class="sheet-actions">
+    ${ok ? '<button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Make this the hub</button>' : ''}
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
 // Letting a phone or browser approve new devices, or stopping it (tier 3).
 export function allowApproveSheet(d, yes) {
   return `<form class="approval-sheet" data-tier="3" data-allow="${esc(d.id)}" data-value="${yes}" method="dialog">

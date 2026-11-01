@@ -12,6 +12,7 @@ import type { Log } from '../log.ts';
 import type { MeshIdentity } from './identity.ts';
 import { sessionMessage, type SignedRoster } from './wire.ts';
 import type { LogRow, SyncLog } from './sync.ts';
+import { tap } from './tap.ts';
 
 // ---- role.json ---------------------------------------------------------------------------------
 
@@ -244,6 +245,7 @@ export class Replica extends EventEmitter {
     } catch {
       throw new Refused('A sync answer didn’t open with the hub’s key. Something between this standby and the hub may be tampering with it.');
     }
+    tap('sync', payload);
     if (payload.hub_id !== role.hub.id || payload.standby_id !== role.device_id || payload.after !== after) throw new Refused('A sync answer was meant for a different hub or standby.');
     if (payload.epoch < this.#epoch()) throw new Refused(`The node at ${role.hub.url} is at epoch ${payload.epoch}, older than this standby knows (${this.#epoch()}). It isn’t the hub any more.`);
     // Its own hub at a higher epoch: the hub went back to a checkpoint and its log began again

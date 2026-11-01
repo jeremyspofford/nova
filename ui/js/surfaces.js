@@ -2,7 +2,7 @@
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
-import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
+import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, promotionSheet, coldPromotionSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
@@ -241,6 +241,8 @@ export async function approve(form) {
   if (form.dataset.revoke) return confirmRevoke(form);
   if (form.dataset.allow) return confirmAllow(form);
   if (form.dataset.promote) return confirmPromote(form);
+  if (form.dataset.promotion) return confirmPromotion(form);
+  if (form.dataset.coldPromotion) return confirmCold(form);
   if (form.dataset.provider) return confirmProvider(form);
   if (form.dataset.testRun) return approveTestRun(form.dataset.testRun);
   const id = form.dataset.task;
@@ -657,8 +659,14 @@ export function renderDevices() {
     if (d.role === 'hub') return rolesButton(d);
     const allow = approver && (d.kind === 'phone' || d.kind === 'browser') && !d.this
       ? `<button type="button" class="btn small quiet" data-action="allow-approve" data-device="${esc(d.id)}" data-value="${d.can_approve ? 'false' : 'true'}">${d.can_approve ? 'Stop it approving' : 'Let it approve'}</button>` : '';
-    return `${rolesButton(d)}${allow}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
+    // A hub candidate can be made the hub (M10g): the pre-checks say whether it is ready.
+    const promote = approver && (d.purposes ?? []).includes('hub-candidate') && (d.kind === 'standby' || d.kind === 'computer')
+      ? `<button type="button" class="btn small quiet" data-action="promote-device" data-device="${esc(d.id)}">Promote to hub</button>` : '';
+    return `${rolesButton(d)}${allow}${promote}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
   };
+  // A promotion under way, or how the last one ended, in its own words (GET /mesh/status).
+  const p = m?.promotion;
+  const promotionRow = p && p.said ? settingsRow({ id: 'promotion-row', title: p.kind === 'cold' ? 'Promotion from a backup' : 'Promotion', note: p.said }) : '';
   const waiting = store.requests.map((r) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(r.name)} is asking to join</p><p class="settings-note">${esc(KIND_WORDS[r.kind] ?? r.kind)} · compare the six digits it shows.</p></div><div class="settings-control"><button type="button" class="btn small primary" data-action="review-request" data-request="${esc(r.id)}">Review</button></div></li>`).join('');
   const lede = !m
     ? 'Paired devices show here.'
@@ -677,6 +685,7 @@ export function renderDevices() {
   return `<section class="memory-section" id="devices" aria-labelledby="set-devices"><h2 class="memory-heading" id="set-devices">Devices</h2>
 <p class="memory-lede">${esc(lede)}</p>
 ${waiting ? `<ul class="settings-list">${waiting}</ul>` : ''}
+${promotionRow ? `<ul class="settings-list">${promotionRow}</ul>` : ''}
 <ul class="device-list device-registry">${trusted.map((d) => deviceRow(d, { actions: actions(d), roles: true })).join('')}</ul>
 ${add}
 ${revoked.length ? `<details class="raw"><summary>Revoked (${revoked.length})</summary><ul class="device-list device-registry">${revoked.map((d) => deviceRow(d)).join('')}</ul></details>` : ''}
@@ -850,6 +859,44 @@ async function confirmRoles(form) {
     toast(`${d.name} is for: ${d.purposes.length ? d.purposes.join(', ').replace(/-/g, ' ') : 'nothing yet'}.`);
   } catch (e) { toast(e.message); }
   await load(['devices']);
+}
+
+// ---- promotion (M10g) ---------------------------------------------------------------------------
+
+// The pre-checks first (tier 0), then the sheet at tier 3.
+export async function promoteDevice(id) {
+  const d = meshDevices().find((x) => x.id === id);
+  if (!d) return;
+  let check;
+  try { check = await api('POST', '/mesh/promotions/check', { device_id: id }); } catch (e) { toast(e.message); return; }
+  openSheet(promotionSheet(d, check), { label: 'Promote to hub' });
+}
+
+async function confirmPromotion(form) {
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (!confirm?.checked) { confirm?.focus(); return; }
+  try {
+    await api('POST', '/mesh/promotions', { device_id: form.dataset.promotion, confirm: true });
+    closeSheet();
+    toast('Handing the hub over. Changes wait a moment while it happens.');
+  } catch (e) { toast(e.message); }
+  await load(['devices', 'mesh']);
+}
+
+export async function promoteCold() {
+  let view;
+  try { view = await api('GET', '/mesh/promotion/cold'); } catch (e) { toast(e.message); return; }
+  openSheet(coldPromotionSheet(view), { label: 'Make this the hub from a backup' });
+}
+
+async function confirmCold(form) {
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (!confirm?.checked) { confirm?.focus(); return; }
+  try {
+    const r = await api('POST', '/mesh/promotion/cold', { confirm: true });
+    closeSheet();
+    toast(`Restoring the backup of ${r.backup?.at ?? 'then'}. Nova restarts to apply it.`);
+  } catch (e) { toast(e.message); }
 }
 
 // ---- the standby: becoming the hub ------------------------------------------------------------

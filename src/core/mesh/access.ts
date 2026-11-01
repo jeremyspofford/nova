@@ -91,7 +91,9 @@ export function sessionCookie(token: string, o: { secure: boolean; maxAgeS: numb
   return `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${o.maxAgeS}; HttpOnly; SameSite=Strict${o.secure ? '; Secure' : ''}`;
 }
 
-export interface MeshListenerInfo { publicUrl: string; transport: 'tls' | 'proxy' | 'network' }
+// `address`: this node's own mesh address, where other nodes reach it directly, when it isn't the
+// stable name devices use (M10g: a promotion moves the name, never this).
+export interface MeshListenerInfo { publicUrl: string; transport: 'tls' | 'proxy' | 'network'; address?: string | null }
 
 export class Access {
   #devices: Devices;

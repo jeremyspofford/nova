@@ -27,7 +27,7 @@ import {
   hubResetMessage, revealMessage, runtimeManifest, sessionMessage, sha256Hex, signMessage, statusMessage, verifyDeviceSignature, verifyRoster, x25519Statement,
   type DeviceKeys, type SignedRoster,
 } from '../core/mesh/wire.ts';
-import { acceptRoster, assignmentAllowed, checkProof, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof, type Verdict } from './trust.ts';
+import { acceptRoster, assignmentAllowed, bundleKeys, checkProof, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof, type Verdict } from './trust.ts';
 import { Watchdog } from './watchdog.ts';
 import { detectHardware, type Hardware } from '../core/models/hardware.ts';
 import { Queue, QUEUE_KINDS, type QueueKind } from './queue.ts';
@@ -274,11 +274,13 @@ export type Found =
   | { ok: false; revoked: true; reason: string }
   | { ok: false; revoked: false; reason: string };
 
-// Where to look: the address it last reached the hub at, the hub's and the standby's in the pinned
-// roster, and the address it joined at.
+// Where to look: the address it last reached the hub at, the hub's, the standby's and every other hub
+// candidate's in the pinned roster (M10g), and the address it joined at (the stable mesh name, which
+// a promotion points at the new hub).
 export function candidates(d: DeviceFile): string[] {
   const r = d.roster.roster;
-  return [...new Set([d.hub_url, r.hub.url, r.standby?.url, d.join_url].filter((u): u is string => typeof u === 'string' && /^https?:\/\//.test(u)).map((u) => new URL(u).origin))];
+  const others = Array.isArray(r.candidates) ? r.candidates.map((c) => c.url) : [];
+  return [...new Set([d.hub_url, r.hub.url, r.standby?.url, ...others, d.join_url].filter((u): u is string => typeof u === 'string' && /^https?:\/\//.test(u)).map((u) => new URL(u).origin))];
 }
 
 export class Signer {
@@ -548,7 +550,7 @@ export class Boot {
     const b = r.body as Bundle;
     const installed = runtimeIntact(this.p);
     if (!o.force && installed && installed.source === 'hub' && installed.manifest.sha256 === b?.manifest?.sha256) return;
-    const checked = verifyBundle(b, this.d.pinned);
+    const checked = verifyBundle(b, bundleKeys(this.d.roster.roster));
     // Never back to an older runtime than the hub's one installed, however validly signed: an old
     // bundle served again could bring back a fixed bug.
     const v: typeof checked = checked.ok && installed?.source === 'hub' && runtimeOrder(b.manifest, installed.manifest) < 0

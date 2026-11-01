@@ -92,7 +92,16 @@ export function meshConfig(env, file = {}) {
   if (transport !== 'network' && publicUrl.protocol !== 'https:') {
     throw new ConfigError(`Devices reach Nova over TLS here, so NOVA_MESH_PUBLIC_URL must be an https:// address, not ${pub}.`);
   }
-  return { bindHost, port: Number(url.port), transport, tls, publicUrl: publicUrl.origin };
+  // This node's own address apart from the stable name (M10g: a promotion points the name at the new
+  // hub, while nodes reach each other directly): NOVA_MESH_ADDRESS, else the address it listens on when
+  // it is on the same host as the name (a name in front of this listener, as the drill's stand-in is).
+  // Only given when it differs from the name.
+  const own = env.NOVA_MESH_ADDRESS ?? file.mesh_address ?? (!wildcard && url.hostname === publicUrl.hostname ? url.origin : null);
+  let address = null;
+  if (own) {
+    try { address = new URL(own).origin; } catch { throw new ConfigError(`NOVA_MESH_ADDRESS isn't an address: ${own}`); }
+  }
+  return { bindHost, port: Number(url.port), transport, tls, publicUrl: publicUrl.origin, ...(address && address !== publicUrl.origin ? { address } : {}) };
 }
 
 function instanceOf(v, dev) {

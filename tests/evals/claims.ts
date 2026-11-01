@@ -46,6 +46,35 @@ export const CLAIMS: evals.Claim[] = [
     strong: 'A screen onto Nova. It never runs anything for Nova.', eval: 'claim.thin-client-runs-nothing', priority: 1,
     note: 'Unit tests show it (tests/core/services-placement.test.ts, tests/core/roles-bound-work.test.ts); no golden task does.' },
 
+  // ---- hub promotion (M10g): the sheets' words, worded to what the tests show -----------------------
+  // Unit and drill tests show each of these (tests/core/mesh-promotion.test.ts,
+  // tests/acceptance/m10g-drill.test.ts); no golden task does, so none claims more than the person
+  // will see happen, and each keeps its stronger words for the eval that would prove them.
+  { id: 'promotion.old-hub-live-copy', where: 'src/core/mesh/handover.ts', text: 'This hub becomes its standby, keeping a live copy.', needs: [],
+    strong: 'Nothing is lost and nothing runs twice.', eval: 'claim.promotion-loses-nothing', priority: 1,
+    note: 'The drill compares content hashes across a planned promotion and the core test copies after it; no golden task promotes a hub.' },
+  { id: 'promotion.no-pairing-again', where: 'src/core/mesh/handover.ts', text: 'None is paired again.', needs: [],
+    strong: 'Every device follows by itself, wherever it is.', eval: 'claim.promotion-devices-follow', priority: 2,
+    note: 'The drill’s stand-in computer and phone follow through the stand-in stable name; no real device has.' },
+  { id: 'promotion.keys-stay', where: 'src/core/mesh/handover.ts', text: 'Each computer keeps its own keys. The new hub signs a new roster with the key you pinned when you made it a candidate.', needs: [],
+    strong: 'No private key ever leaves its device.', eval: 'claim.promotion-keys-never-move', priority: 1,
+    note: 'The drill hashes every key file before and after and scans every tapped message, backup and home for each private key.' },
+  { id: 'promotion.rolls-back', where: 'src/core/mesh/handover.ts', text: 'If it fails, Nova makes this hub the hub again by itself and tells you.', needs: [],
+    strong: 'A failed promotion is always undone, with nothing lost.', eval: 'claim.promotion-rolls-back', priority: 1,
+    note: 'The core test and the drill fail the new hub’s checks (the stable name stuck) and see the roll-back at epoch + 2; a hub that fails in other ways is not exercised.' },
+  { id: 'promotion.lost-after-backup', where: 'src/core/mesh/handover.ts', text: 'changes, conversations, memories and tasks from then on are not in the backup.', needs: [],
+    strong: 'Everything before the backup comes back exactly.', eval: 'claim.cold-promotion-restores-backup', priority: 1,
+    note: 'The restore drill runs on the backup first; the drill finds what was written after it absent.' },
+  { id: 'promotion.connectors-no-escrow', where: 'src/core/mesh/handover.ts', text: 'Connectors need signing in again. The backup holds your saved secrets encrypted but never their key, and Nova keeps no copy of that key anywhere, so they can’t be opened.', needs: [],
+    strong: 'Nobody can open your secrets without this computer.', eval: 'claim.no-vault-key-escrow', priority: 1,
+    note: 'Decision 5. The drill scans every backup for the vault’s key; backup.ts leaves vault/key out by design.' },
+  { id: 'promotion.devices-no-pairing', where: 'src/core/mesh/handover.ts', text: 'Devices paired before the backup find this node without pairing again: its key is in the roster they hold.', needs: [],
+    strong: 'Every device finds the new hub by itself.', eval: 'claim.promotion-devices-follow', priority: 2,
+    note: 'The drill’s stand-in computer and phone, paired before the backup, follow after an emergency promotion.' },
+  { id: 'promotion.old-hub-steps-down', where: 'src/core/mesh/handover.ts', text: 'higher than any it knows of, so a hub that comes back steps down.', needs: [],
+    strong: 'There is never a second hub.', eval: 'claim.never-two-hubs', priority: 1,
+    note: 'Fencing tests and the drill’s write probe; a hub cut off from every peer still acts alone until it hears of the new one (a limit).' },
+
   // ---- memory, import and forgetting -----------------------------------------------------------
   { id: 'import.arrives-unreviewed', where: 'templates/home/workspace/import/README.md', text: 'they arrive in Memory unreviewed', needs: ['import', 'memory-review'] },
   { id: 'memory.waiting-unseen', where: 'ui/js/view.js', text: 'Nova doesn\'t see them until you keep them.', needs: ['memory-review'] },

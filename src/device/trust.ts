@@ -12,8 +12,18 @@ import {
 
 export type Verdict = { ok: true } | { ok: false; reason: string };
 
-// The keys a roster names: the hub's and the standby's.
+// The keys that may hold the hub's role: the hub's, the standby's, and every other hub candidate the
+// roster lists (M10g, Decision 2: each candidacy was confirmed at tier 3, so a cold promotion onto
+// any of them needs no new pairing). A node is still accepted as hub only by proving one of these
+// keys, at an epoch no lower than known, with a roster signed by that same key (`checkProof`,
+// `acceptRoster`), and the hub it replaced steps down because fencing covers every candidate too.
 export function rosterKeys(r: Roster): string[] {
+  return [...new Set([r.hub.public_key, ...(r.standby ? [r.standby.public_key] : []), ...(Array.isArray(r.candidates) ? r.candidates.map((c) => c.public_key) : [])].filter((k): k is string => typeof k === 'string'))];
+}
+
+// The keys a runtime bundle may be signed by: the hub's and the standby's, as before M10g. A
+// candidate signs bundles once it is the hub, never before (M10f held candidate trust back for this).
+export function bundleKeys(r: Roster): string[] {
   return [r.hub.public_key, ...(r.standby ? [r.standby.public_key] : [])];
 }
 

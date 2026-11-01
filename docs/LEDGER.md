@@ -313,6 +313,58 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (M10g: hub promotion, planned and emergency, and the promotion drill).** Branch `m10g/hub-promotion`.
+Plan `docs/plans/M10g.md`, evidence `docs/evidence/m10g-gate.md`, built from the orchestration ADR's M10g
+phase (Point 10; Decisions 2 and 5). No migration: nothing new is replicated.
+- **Trust widened, then fenced:** device agents now pin every hub candidate the roster lists
+  (`trust.ts rosterKeys`) and look at their addresses (`boot.ts candidates`); runtime bundles stay
+  signed by the hub or the standby only (`bundleKeys`), which is why M10f held this back. Fencing
+  (`promote.ts fence`) treats every trusted hub candidate as a possible successor (Decision 2) and
+  also asks the stable mesh name; a key that isn't pinned still can't take the role, and a peer still
+  acting as hub at a lower epoch is asked to check at once. **Guard removed:** a replaced standby (a
+  hub candidate) proving a higher epoch used to be refused; it is a successor now
+  (`tests/core/mesh-sync.test.ts` changed accordingly: a computer that is no candidate stays refused).
+- **Planned promotion is the hub's, over signed calls:** the hub drives its live standby with
+  requests signed by its identity key (step, both ids, epoch, time, nonce, body hash; used once), and
+  takes nothing from the candidate on trust but its own signed roster. **Step 0 is a refusal with
+  directions**, not an automatic re-enrollment: enrolling a standby is a pairing made on that
+  machine. Steps 1–6 are ledger tasks in one chain (`parent_id`), worker `mesh-promotion`,
+  confirmation system `nova-promotion`; the transfer and the roll-back are M4's own promotion task,
+  under the chain.
+- **The drain** is a new `ledger.drain()` (nothing new starts but the promotion's own records; the
+  bound, then running work is stopped and left active for the next hub's recovery; work past its
+  commit point is waited for and, if still running, the promotion stops) and `ledger.resume()`; a node
+  that becomes hub always resumes its queue (`startHub`). **Writes are held** by the same gate as a
+  standby's (409 with the reason), with the mesh's own calls passing; the hold is written down, so a
+  restart while holding starts holding.
+- **The old hub follows the new one live** (`MeshRole.follow`): its cursor starts at the hand-over's
+  last sequence, its own log past it dropped (none, since writes were held and logging stopped).
+  A roll-back is the same swap the other way at epoch + 2; the node that took over steps down when
+  fencing shows it the old hub at the higher epoch, and copies it afresh (`sync.fresh()`). M4's
+  `replica().demoted` now also counts a role file that says hub (a node once a standby, promoted,
+  then fenced): before, that node read as a live standby that could be promoted with a stale copy.
+- **The verification window is watched by the old hub**, now the standby (a failed new hub can't be
+  relied on to undo itself): hello as hub at the new epoch with a roster signed by its key; the stable
+  name leading to it, when Nova moves the name; the copy arriving. Three failures in a row roll back
+  (tier 1, a problem). 30 minutes by default; `NOVA_PROMOTION_WINDOW_S` sets another (the drill and the
+  tests use seconds). There is no setting for the person yet.
+- **The stable name's dead-man's switch is that window,** not M10d's change chain: M10d's targets
+  aren't replicated, and its switch watches device contact on the node that applied the change, which
+  stops being hub mid-step. Nova moves the name only through `NOVA_MESH_NAME_CONTROL` (in this build,
+  only the drill's loopback stand-in); without it the sheet says the person moves it.
+- **Emergency promotion from the latest backup** reuses the checkpoint restore's staging and swap
+  (`stageCold`, a `cold` marker; `carryOver` keeps this node's `mesh/`, so its keys and role) after the
+  restore drill passes on the backup; this node takes max + 1 of every epoch it knows. Offered only
+  where no hub answers anywhere and this node holds no live copy (a live standby uses M4's "Make
+  this the hub"). **No escrow (Decision 5):** the backup's vault is set aside unopened (its key was
+  never in a backup); a new vault holds only Nova's own keys when this node has them; the sheet and a
+  problem say connectors sign in again. The vault's key does still reach a live standby, sealed to
+  it, as since M5b: that is how a planned promotion keeps connectors working.
+- **The drill** (`tests/acceptance/m10g-drill.ts`, `scripts/promotion-drill.ts`) proves no private key
+  crosses by tapping what each node received (`NOVA_DRILL_TAP`, off unless set) and scanning it, every
+  backup and every home for each private key in three encodings, with the key files hashed before and
+  after.
+
 **2026-10-31 (M10f: device roles, placement, and onboarding, supervisor only).** Branch `m10f/roles-onboarding`.
 Plan `docs/plans/M10f.md`, evidence `docs/evidence/m10f-gate.md`, built from the orchestration ADR's M10f
 phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in.
