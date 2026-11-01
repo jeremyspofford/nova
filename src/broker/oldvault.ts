@@ -44,16 +44,29 @@ export function readOldVault(home: string, o: { env?: NodeJS.ProcessEnv; store?:
   const env = o.env ?? process.env;
   const disk = fileKeyStore(join(home, 'vault', 'key'));
   const kc = o.store ? o.store(f.id) : chooseStore('nova-vault', `vault-${f.id}`, join(home, 'vault', 'key'), { mode: keyMode(env), env });
-  for (const s of [kc, disk]) {
-    let key: Buffer | null = null;
-    try { key = s.read(); } catch { key = null; }
-    if (!key || fp(key) !== f.fp) continue;
-    const d = createDecipheriv('aes-256-gcm', key, Buffer.from(f.nonce, 'base64'));
-    d.setAAD(AAD(f.id));
-    d.setAuthTag(Buffer.from(f.tag, 'base64'));
-    let map: Map<string, string>;
-    try { map = new Map(Object.entries(JSON.parse(Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8')) as Record<string, string>)); } catch { throw new Error('The old vault doesn’t open with its key.'); }
-    return { id: f.id, map, key, store: s };
+  const id = f.id;
+  // The launcher holds withOldVaultLock. If a re-key saved its new key but stopped before the
+  // rename, recover only a same-vault pending file that authenticates under that saved key.
+  // An openable current file wins; malformed, unrelated or damaged pending files stay untouched.
+  for (const pending of [false, true]) {
+    if (pending) {
+      let next: VaultFile;
+      try { next = JSON.parse(readFileSync(`${file}.tmp`, 'utf8')) as VaultFile; } catch { break; }
+      if (next?.v !== 1 || next.alg !== 'aes-256-gcm' || next.id !== id) break;
+      f = next;
+    }
+    for (const s of [kc, disk]) {
+      let key: Buffer | null = null;
+      try { key = s.read(); } catch { key = null; }
+      if (!key || fp(key) !== f.fp) continue;
+      const d = createDecipheriv('aes-256-gcm', key, Buffer.from(f.nonce, 'base64'));
+      d.setAAD(AAD(f.id));
+      d.setAuthTag(Buffer.from(f.tag, 'base64'));
+      let map: Map<string, string>;
+      try { map = new Map(Object.entries(JSON.parse(Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8')) as Record<string, string>)); } catch { throw new Error('The old vault doesn’t open with its key.'); }
+      if (pending) { renameSync(`${file}.tmp`, file); chmodSync(file, 0o600); }
+      return { id: f.id, map, key, store: s };
+    }
   }
   throw new Error('The old vault’s key isn’t where it should be, so nothing can be moved from it.');
 }
