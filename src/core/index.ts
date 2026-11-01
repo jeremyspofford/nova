@@ -892,14 +892,17 @@ export function createCore(o: CoreOptions) {
     };
   }
   // What taking roles away from a device stops there (M10f): model roles on it without compute,
-  // its capture sources without capture source. Nothing else runs on other devices before M10h.
+  // its capture sources without capture source, and (M10h) its native workloads that need a role taken.
   const workStopping = (id: string, removed: string[]): string[] => [
     ...(removed.includes('compute') && models ? models.rolesOn(id).map((r) => `its ${MODEL_ROLE_WORDS[r].name.toLowerCase()} model`) : []),
     ...(removed.includes('capture-source') ? capture.sourcesOn(id) : []),
+    ...deviceWorkloads.needing(id, removed).map((s) => `its ${s} workload`),
   ];
   // And it stops: a computer that is no longer a capture source has its sources turned off.
   devices.on('change', (e: { action: string; device: Device; removed?: string[] }) => {
     if (e.action === 'purposes' && e.device.role !== 'hub' && !e.device.purposes.includes('capture-source')) capture.deviceRemoved(e.device.id, 'Turned off: its computer is no longer a capture source (Settings › Devices).');
+    // M10h: a workload its roles no longer allow is assigned stopped (its agent stops it on its own check too).
+    if (e.action === 'purposes') deviceWorkloads.narrowed(e.device.id, e.device.purposes);
   });
   // The devices placement is resolved against (M10f): roles, hardware and health, as the hub knows
   // them now.
@@ -1283,12 +1286,12 @@ export function createCore(o: CoreOptions) {
     {
       method: 'GET', path: '/mesh/workloads/{service}/{version}', access: 'device',
       summary: 'The manifest this hub signs for this device’s own assigned version (or the one kept): its files pinned by SHA-256, its one command, ports and health. Nothing about any other device.',
-      handle: async ({ params, who }) => { await placementDevices(); return deviceWorkloads.manifest(me(who).id, params.service!, params.version!); },
+      handle: ({ params, who }) => deviceWorkloads.manifest(me(who).id, params.service!, params.version!),
     },
     {
       method: 'GET', path: '/mesh/workloads/{service}/{version}/file/{name}', access: 'device',
       summary: 'A file the manifest pins, exactly as it was published (Nova never signs or changes a workload’s program).',
-      handle: async ({ params, who }) => { await placementDevices(); return new Raw('application/octet-stream', deviceWorkloads.file(me(who).id, params.service!, params.version!, params.name!)); },
+      handle: ({ params, who }) => new Raw('application/octet-stream', deviceWorkloads.file(me(who).id, params.service!, params.version!, params.name!)),
     },
     ...captureSync!.routes({ me: (w) => me(w as Who) }),
     // ---- the device mesh (M4 plan §0–§1) ----
@@ -1325,7 +1328,6 @@ export function createCore(o: CoreOptions) {
         if ((body.can_approve !== undefined || body.purposes !== undefined) && allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', 'Only the hub’s own screen, or a device you’ve allowed to approve, can change who approves or what a device is for.');
         if (body.name !== undefined) devices.rename(params.id!, body.name);
         if (body.can_approve !== undefined) devices.setCanApprove(params.id!, body.can_approve, body.confirm === true);
-        // Nothing runs on other devices before native workloads (M10h), so narrowing stops nothing.
         if (body.purposes !== undefined && body.dry_run === true) { const r = devices.setPurposes(params.id!, body.purposes, { dry: true, by: by(who), stops: workStopping }); return { ...deviceView(r.device, who.principal), change: r.change, stops: r.stops }; }
         if (body.purposes !== undefined) devices.setPurposes(params.id!, body.purposes, { confirm: body.confirm === true, approved: body.approved === true, confirm_candidate: body.confirm_candidate === true, by: by(who), stops: workStopping });
         return deviceView(devices.get(params.id!), who.principal);

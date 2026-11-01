@@ -121,7 +121,9 @@ export interface WorkloadState {
   capture: boolean;
   capture_on: boolean;
 }
-export interface VerbResult { ok: boolean; said: string; refused?: boolean; state: WorkloadState[] }
+// refused: it can't be done, however often it is asked (unsigned, a wrong hash, a role it doesn't hold);
+// waiting: not now, for a reason that may pass (capture is off there; it starts at its switch).
+export interface VerbResult { ok: boolean; said: string; refused?: boolean; waiting?: boolean; state: WorkloadState[] }
 
 export interface WorkloadsOptions {
   home: string;
@@ -157,6 +159,49 @@ export class Workloads {
     this.root = join(o.home, 'workloads');
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     chmodSync(this.root, 0o700);
+    this.#endLeftovers();
+  }
+
+  // A boot agent that was killed (not stopped) leaves its workloads' process groups running. The next
+  // one ends them before it starts anything, so the runtime's decisions start from what is true. A pid
+  // is ended only when its command line still names one of this home's slots (Linux: /proc), so a pid
+  // reused by another program is left alone. Without /proc they are left (the plan's limits say so).
+  #endLeftovers(): void {
+    let names: string[] = [];
+    try { names = readdirSync(this.root).filter((n) => SERVICE.test(n)); } catch { return; }
+    for (const service of names) {
+      const file = join(this.root, service, 'running.json');
+      let pids: { pid: number; slot: string }[] = [];
+      try { pids = JSON.parse(readFileSync(file, 'utf8')) as typeof pids; } catch { continue; }
+      for (const r of Array.isArray(pids) ? pids : []) {
+        if (!Number.isInteger(r.pid) || r.pid <= 1 || typeof r.slot !== 'string' || !r.slot.startsWith(this.root)) continue;
+        let cmd = '';
+        try { cmd = readFileSync(`/proc/${r.pid}/cmdline`, 'utf8'); } catch { continue; }
+        if (!cmd.includes(r.slot)) continue;
+        try { process.kill(-r.pid, 'SIGKILL'); } catch { try { process.kill(r.pid, 'SIGKILL'); } catch { /* gone */ } }
+        this.#say(`Ended ${service}’s process ${r.pid}, left running by an agent that stopped without ending it.`);
+      }
+      rmSync(file, { force: true });
+    }
+  }
+
+  #recordPids(service: string): void {
+    const list = [...this.#running.values()].filter((i) => i.service === service && i.watchdog.child?.pid).map((i) => ({ pid: i.watchdog.child!.pid!, slot: this.#slot(service, i.version) }));
+    const file = join(this.root, service, 'running.json');
+    try { writeFileSync(`${file}.tmp`, JSON.stringify(list), { mode: 0o600 }); renameSync(`${file}.tmp`, file); } catch { /* best effort */ }
+  }
+
+  // The roles this device holds changed: what they no longer allow stops now (its slot stays).
+  async recheck(): Promise<string[]> {
+    const stopped: string[] = [];
+    for (const i of [...this.#running.values()]) {
+      const v = this.#verifiedSlot(i.service, i.version);
+      if (v.ok) continue;
+      await this.#end(i);
+      stopped.push(`${i.service} ${i.version}`);
+      this.#say(`Stopped ${i.service} ${i.version}: ${v.reason}`);
+    }
+    return stopped;
   }
 
   // The one way in: a request is checked, then run, one at a time per service.
@@ -287,9 +332,9 @@ export class Workloads {
     const m = v.value;
     const st = this.#state(service);
     const role: RunningView['role'] = as ?? (st.live === version ? 'live' : m.alongside === 'shadow' ? 'shadow' : m.alongside === 'full' ? 'alongside' : 'live');
-    if (!as && role === 'live' && st.live !== version) return { ok: false, refused: true, said: `${service} ${version} can’t run next to the live version (alongside: ${m.alongside}): it starts when it is switched to.` };
+    if (!as && role === 'live' && st.live !== version) return { ok: false, waiting: true, said: `${service} ${version} can’t run next to the live version (alongside: ${m.alongside}): it starts when it is switched to.` };
     if ((this.#o.uid?.() ?? process.getuid?.() ?? null) === 0) return this.#refuse(service, version, 'This agent is running as root, and it never runs a workload as root. Run it as your own user.');
-    if (isCapture(m) && !this.#o.captureOn()) return { ok: false, refused: true, said: `${service} ${version} wasn’t started: capture is off on this device. Deploying it didn’t turn capture on; turning on one of its capture sources on the hub does.` };
+    if (isCapture(m) && !this.#o.captureOn()) return { ok: false, waiting: true, said: `${service} ${version} wasn’t started: capture is off on this device. Deploying it didn’t turn capture on; turning on one of its capture sources on the hub does.` };
     const ports: Record<string, number> = {};
     for (const p of m.ports) ports[p.name] = role === 'live' ? p.port : await freePort();
     const dir = join(this.root, service);
@@ -315,6 +360,7 @@ export class Workloads {
       }),
     };
     inst.watchdog.on('safe_mode', () => { inst.failed = 'It stopped three times in a minute, so the device agent stopped trying.'; this.#say(`${service} ${version}: ${inst.failed}`); });
+    inst.watchdog.on('start', () => this.#recordPids(service));
     this.#running.set(key, inst);
     inst.watchdog.run();
     this.#say(`Started ${service} ${version}${role === 'live' ? '' : ` ${role === 'shadow' ? 'as a shadow (its output is never read)' : 'alongside the live version'}`} on 127.0.0.1:${env.PORT}.`);
@@ -345,7 +391,7 @@ export class Workloads {
     const back = old && st.previous === version;
     this.#setState(service, { live: version, previous: old });
     const started = await this.#start(service, version, 'live');
-    if (!started.ok && !started.refused) {
+    if (!started.ok && !started.waiting) {
       // It didn't start at all: the old one goes back, as it was.
       this.#setState(service, st);
       if (old) await this.#start(service, old, 'live');
@@ -437,6 +483,7 @@ export class Workloads {
   async #end(i: Instance): Promise<void> {
     this.#running.delete(`${i.service}@${i.version}`);
     await i.watchdog.stop('SIGTERM', 3000);
+    this.#recordPids(i.service);
   }
 
   #say(line: string): void { this.#o.say?.(line); }

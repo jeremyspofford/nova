@@ -746,6 +746,9 @@ export class Capture extends EventEmitter {
   // Nova's own rules and screening apply as to any other source, with its provenance kept. A source
   // for its kind is made (off) if there isn't one yet.
   fromSpoke(device: { id: string }, raw: RawEvent): { kept: string | null; status: 'kept' | 'duplicate' | 'not_kept'; reason: string | null } {
+    // Its capture-source role first (M10f), as for the inbox: a device that isn't one keeps nothing here.
+    const not = this.#o.mayCapture?.(device.id);
+    if (not) return { kept: null, status: 'not_kept', reason: not };
     const id = this.#ensureDeviceSource(device.id, raw.kind) ?? `device:${device.id}:${raw.kind}`;
     const r = this.ingest(id, [raw], 'inbox');
     if (r.kept.length) return { kept: r.kept[0]!, status: 'kept', reason: null };

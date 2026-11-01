@@ -547,6 +547,7 @@ export class Boot {
       hub: (method, path, body) => this.#hubCall(method, path, body),
       capture: () => this.workloads.liveCapture(),
       stopCapture: (why) => this.workloads.stopCapture(why),
+      active: () => this.workloads.captureCapabilities().length > 0,
       ...(env.NOVA_DEVICE_CAPTURE_QUEUE_MAX && Number(env.NOVA_DEVICE_CAPTURE_QUEUE_MAX) > 0 ? { maxQueue: Number(env.NOVA_DEVICE_CAPTURE_QUEUE_MAX) } : {}),
     });
     this.workloads = new Workloads({
@@ -758,9 +759,12 @@ export class Boot {
     const r = await this.workloads.perform(request);
     if (r.refused && r.said) void this.#hubCall('POST', '/api/v1/mesh/devices/me/report', { problem: 'workload_refused', detail: r.said.slice(0, 280) }).catch(() => {});
     if (c?.connected && typeof id === 'number') c.send({ type: 'verb_answer', id, ...r } satisfies VerbAnswer);
-    // The capabilities may have changed (a capture workload installed): the runtime hears them.
-    if (r.ok) this.#toRuntime();
+    // A capture workload installed offers its kinds: only then does the runtime need a new session
+    // message (its heartbeat carries the capabilities).
+    const caps = this.workloads.captureCapabilities().join(',');
+    if (caps !== this.#sentCaps) { this.#sentCaps = caps; this.#toRuntime(); }
   }
+  #sentCaps = '';
 
   async #unauthorized(): Promise<void> {
     this.#session = null;
@@ -890,6 +894,8 @@ export class Boot {
     this.d.purposes = p as string[];
     writeJson(this.p.device, this.d);
     this.say(`The hub says this computer is for: ${p.length ? p.join(', ') : 'nothing yet'}.`);
+    // A role taken away stops what it allowed, here and now (M10h): the second check, at the device.
+    void this.workloads.recheck();
   }
 
   // The second check on an assignment (M10f): the hub checked it when it was proposed; this agent

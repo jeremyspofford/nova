@@ -15,7 +15,7 @@ import { Workloads } from '../../src/device/workloads.ts';
 import { Rollout, type Assignment } from '../../src/device/rollout.ts';
 import { Boot } from '../../src/device/boot.ts';
 import { FAST, FakeNode, bundle, joinedHome, until } from './device-support.ts';
-import { STAND_IN_NAME, freePort, getJson, manifest, sign, standInBytes } from '../support/workloads.ts';
+import { STAND_IN_NAME, freePort, getJson, manifest, sign, standInAt, standInBytes } from '../support/workloads.ts';
 
 const SRC = join(import.meta.dirname, '../../src/device');
 const runtimeFiles = () => Object.fromEntries(['runtime.ts', 'queue.ts', 'rollout.ts'].map((f) => [f, readFileSync(join(SRC, f), 'utf8')]));
@@ -48,7 +48,7 @@ test('in-process: shadow, health, switch; a version that can’t run twice start
     assert.equal(shadow.role, 'shadow');
     assert.notEqual(shadow.ports.api, port, 'a shadow never takes the stable port');
     assert.equal((await getJson(`http://127.0.0.1:${shadow.ports.api}/health`)).body.shadow, true, 'it was told it is a shadow');
-    assert.equal((await getJson(`http://127.0.0.1:${port}/health`)).status, 0, 'nothing serves on the stable port before the promotion');
+    assert.equal(await standInAt(port), false, 'nothing serves on the stable port before the promotion');
     // Promoted: switched, live on the stable port, its health checked.
     await r.step([assign('1.0.0', 'live', 'shadow', 2)], w.state());
     assert.equal(report('1.0.0')?.status, 'live');
@@ -139,7 +139,7 @@ test('through the real agents: the runtime decides from its heartbeat answer, th
   } finally {
     await m.stop();
   }
-  assert.equal((await getJson(`http://127.0.0.1:${port}/health`)).status, 0, 'the workload stops with its agent');
+  assert.equal(await standInAt(port), false, 'the workload stops with its agent');
 });
 
 test('a runtime that asks for anything but the five verbs, or puts a command in a request, is refused, and the hub is told', { timeout: 60_000 }, async () => {
@@ -185,7 +185,7 @@ process.send({ type: 'ready' });
     assert.match(a[5].said, /Couldn’t fetch the manifest of stand-in 6\.6\.6/);
     assert.equal(a[6].ok, true, 'the signed, assigned one installs');
     assert.ok(!existsSync(join(m.dev.p.state, 'pwned')), 'its command never ran');
-    assert.equal((await getJson(`http://127.0.0.1:${port}/health`)).status, 0, 'and nothing was started');
+    assert.equal(await standInAt(port), false, 'and nothing was started');
     await until(() => m.hub.reports.filter((r) => r.problem === 'workload_refused').length, (n) => n >= 4, 10_000);
     assert.ok(m.hub.reports.filter((r) => r.problem === 'workload_refused').length >= 4, 'each refusal is reported to the hub');
   } finally {

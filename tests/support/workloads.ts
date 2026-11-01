@@ -43,6 +43,13 @@ export async function getJson(url: string): Promise<{ status: number; body: any 
   } catch { return { status: 0, body: null }; }
 }
 
+// Whether the stand-in answers on this port (another program on this machine may hold a port that
+// nothing of the test's is using, so "nothing listens" isn't asked: only "not the stand-in").
+export async function standInAt(port: number): Promise<boolean> {
+  const h = await getJson(`http://127.0.0.1:${port}/health`);
+  return typeof h.body?.frame_status === 'string';
+}
+
 export async function postJson(url: string, body: unknown): Promise<{ status: number; body: any }> {
   const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
   return { status: r.status, body: await r.json().catch(() => null) };

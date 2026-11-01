@@ -74,6 +74,14 @@ async function joinDevice(h: Hub, name: string, platform: string, roles: string[
   return { id: d.device_id, name, home, boot, lines, platform };
 }
 
+// Nothing of the workload runs on that device: its agent runs no copy, and no stand-in answers on its
+// port (another program on this machine may hold a port nobody is using, so the agent's own word counts).
+async function nothingRuns(d: { name: string; boot: Boot }, port: number): Promise<void> {
+  assert.deepEqual(d.boot.workloads.state().flatMap((s) => s.running), [], `${d.name}: nothing started`);
+  const h = await getJson(`http://127.0.0.1:${port}/health`);
+  assert.ok(h.status === 0 || h.body?.version === undefined, `${d.name}: no stand-in answers on its port`);
+}
+
 const devicesOf = async (h: Hub) => (await h.c('GET', '/mesh/devices')).body as { id: string; online: boolean; purposes: string[] }[];
 const status = async (h: Hub, deviceId: string, service = 'screenpipe') => ((await h.c('GET', '/services/devices')).body.services as { service: string; device: { id: string }; live: string | null; versions: { version: string; status: string; said: string | null }[] }[]).find((s) => s.service === service && s.device.id === deviceId);
 const versionOf = async (h: Hub, deviceId: string, version: string) => (await status(h, deviceId))?.versions.find((v) => v.version === version);
@@ -115,7 +123,7 @@ test('M10h pilot: Screenpipe (stand-in) on Linux, macOS and Windows stand-ins: c
     const sources = async () => ((await h.c('GET', '/capture')).body.sources as { id: string; device: string | null; enabled: boolean }[]);
     const listed = await until(sources, (s) => [linux, mac, win].every((d) => s.some((x) => x.id === `device:${d.id}:screen`)), 20_000);
     assert.ok(listed.every((s) => !s.enabled), 'consent off throughout deployment');
-    for (const d of [linux, mac, win]) assert.equal((await getJson(`http://127.0.0.1:${ports[d.id]}/health`)).status, 0, `${d.name}: nothing started`);
+    for (const d of [linux, mac, win]) await nothingRuns(d, ports[d.id]!);
 
     // 3. Promote on the Mac: tier 3, typed. It goes live, but capture is still off there, so it isn't started.
     const promote = (d: { id: string }, version: string, confirm?: string) => h.c('POST', `/services/devices/${d.id}/screenpipe/promote`, { version, ...(confirm ? { confirm } : {}) });
@@ -123,7 +131,7 @@ test('M10h pilot: Screenpipe (stand-in) on Linux, macOS and Windows stand-ins: c
     assert.equal((await promote(mac, '1.0.0', 'screenpipe@1.0.0')).status, 200);
     const live = await until(() => versionOf(h, mac.id, '1.0.0'), (x) => x?.status === 'live', 30_000);
     assert.match(live!.said ?? '', /capture is off on this device/);
-    assert.equal((await getJson(`http://127.0.0.1:${ports[mac.id]}/health`)).status, 0);
+    await nothingRuns(mac, ports[mac.id]!);
 
     // 4. The person turns on the Mac's screen source (audio stays off). Now it starts, and derived
     //    capture syncs: private windows and audio never leave the Mac.
@@ -205,7 +213,7 @@ test('M10h pilot: Screenpipe (stand-in) on Linux, macOS and Windows stand-ins: c
 
     // 9. Linux and Windows never had capture turned on: nothing started there, nothing synced from them.
     for (const d of [linux, win]) {
-      assert.equal((await getJson(`http://127.0.0.1:${ports[d.id]}/health`)).status, 0, `${d.name}: never started`);
+      await nothingRuns(d, ports[d.id]!);
       assert.ok(!(await events(h)).some((e) => e.device.id === d.id), `${d.name}: nothing synced`);
       assert.deepEqual(readdirSync(join(d.home, 'capture', 'outbox')), []);
     }

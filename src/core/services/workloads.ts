@@ -262,6 +262,23 @@ export class DeviceWorkloads {
     }
   }
 
+  // The workloads on this device that need one of these roles: what narrowing its roles would stop.
+  needing(deviceId: string, removed: readonly string[]): string[] {
+    return this.#o.db.all<Row>(`SELECT * FROM device_workload WHERE device_id = ? AND want != 'stopped'`, deviceId)
+      .filter((r) => wantedRoles((JSON.parse(r.definition) as ServiceDefinition).placement).some((x) => removed.includes(x))).map((r) => r.service);
+  }
+
+  // Its roles were narrowed: what they no longer allow is assigned stopped, and the record says so.
+  narrowed(deviceId: string, purposes: readonly string[]): void {
+    const at = this.#o.now().toISOString();
+    for (const r of this.#o.db.all<Row>(`SELECT * FROM device_workload WHERE device_id = ? AND want != 'stopped'`, deviceId)) {
+      const need = wantedRoles((JSON.parse(r.definition) as ServiceDefinition).placement);
+      if (need.every((x) => purposes.includes(x))) continue;
+      this.#o.db.run(`UPDATE device_workload SET want = 'stopped', assigned_at = ?, updated_at = ? WHERE device_id = ? AND service = ?`, at, at, deviceId, r.service);
+      this.#event(deviceId, r.service, r.version, 'stopped', `Stopped: ${this.#name(deviceId)} no longer has the ${need.filter((x) => !purposes.includes(x)).join(', ')} role it needs.`);
+    }
+  }
+
   // ---- internals -------------------------------------------------------------------------------------
 
   #assigned(deviceId: string, service: string, version: string): { def: ServiceDefinition; device: PlacementDevice } {

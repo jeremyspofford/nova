@@ -185,5 +185,10 @@ test('promotion only once the device reports it ready, at its tier; a device tha
     assert.ok(!(await r.h.c('GET', '/services/devices')).body.services.some((s: { device: { id: string } }) => s.device.id === r.linux.id));
     // Rollback asked for: tier 2, typed; one step, nothing to download.
     assert.equal((await r.h.c('POST', `/services/devices/${r.mac.id}/screenpipe/rollback`, {})).status, 400);
+    // Narrowing the Mac's roles says what it stops, and assigns the workload stopped (tier 2).
+    const dry = await r.h.c('PATCH', `/mesh/devices/${r.mac.id}`, { purposes: ['general-server'], dry_run: true });
+    assert.ok(dry.body.stops.includes('its screenpipe workload'), JSON.stringify(dry.body));
+    assert.equal((await r.h.c('PATCH', `/mesh/devices/${r.mac.id}`, { purposes: ['general-server'], approved: true })).status, 200);
+    assert.equal((await r.heartbeat(r.mac.token)).body.workloads[0].want, 'stopped');
   } finally { await r.h.stop(); }
 });

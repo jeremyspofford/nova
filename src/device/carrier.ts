@@ -61,6 +61,9 @@ export interface CarrierOptions {
   capture: () => { port: number; kinds: string[] } | null;
   // Capture was turned off on this device: stop the capture workload.
   stopCapture: (why: string) => Promise<unknown>;
+  // Whether a capture workload is installed here. Without one, and with nothing queued, a tick does
+  // nothing at all (no call to the hub).
+  active?: () => boolean;
   say?: (line: string) => void;
   maxQueue?: number;
   now?: () => Date;
@@ -75,6 +78,7 @@ export class Carrier {
   #paused: string | null = null;
   #lastError: string | null = null;
   #saidPause = '';
+  #saidStatus = '';
 
   constructor(o: CarrierOptions) {
     this.#o = o;
@@ -100,6 +104,7 @@ export class Carrier {
 
   async tick(): Promise<void> {
     if (this.#busy) return;
+    if (this.#o.active && !this.#o.active() && !this.#names().length && !this.captureOn()) return;
     this.#busy = true;
     try {
       const plan = await this.#plan();
@@ -202,7 +207,12 @@ export class Carrier {
     if (!plan.sync.allowed) {
       const queued = this.#names().length;
       this.#pause(plan.sync.why ?? 'The hub says capture can’t be sent to it now, so it waits here.');
-      await this.#o.hub('POST', '/api/v1/mesh/capture/status', { queued, paused: this.#paused }).catch(() => null);
+      // What waits is said (a count and why, no content), when it changes.
+      const said = `${queued}|${this.#paused}`;
+      if (said !== this.#saidStatus) {
+        const r = await this.#o.hub('POST', '/api/v1/mesh/capture/status', { queued, paused: this.#paused }).catch(() => null);
+        if (r?.status === 200) this.#saidStatus = said;
+      }
       return;
     }
     if (this.#paused && !this.#paused.startsWith('The capture queue is full')) this.#paused = null;

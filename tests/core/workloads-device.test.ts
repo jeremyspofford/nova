@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { generateDeviceKeys, CAPTURE_PERMISSIONS as HUB_CAPTURE_PERMISSIONS } from '../../src/core/index.ts';
 import { CAPTURE_PERMISSIONS, WORKLOAD_VERBS, Workloads, checkVerbRequest, commandProblem, verifyWorkload, type VerbResult } from '../../src/device/workloads.ts';
 import { RUNTIME_CALLS } from '../../src/device/boot.ts';
-import { freePort, getJson, manifest, sign, standInBytes } from '../support/workloads.ts';
+import { freePort, getJson, manifest, sign, standInAt, standInBytes } from '../support/workloads.ts';
 import { until } from './device-support.ts';
 
 const hub = generateDeviceKeys();
@@ -25,14 +25,15 @@ function rig(o: { purposes?: string[]; captureOn?: boolean; uid?: number | null;
   const served = new Map<string, unknown>();
   const fetched: string[] = [];
   let captureOn = o.captureOn ?? false;
+  let roles = o.purposes ?? ['general-server', 'capture-source'];
   const w = new Workloads({
-    home, platform: `${process.platform}-${process.arch}`, deviceId: () => DEVICE, pinned: () => [hub.ed25519.publicKey], purposes: () => o.purposes ?? ['general-server', 'capture-source'],
+    home, platform: `${process.platform}-${process.arch}`, deviceId: () => DEVICE, pinned: () => [hub.ed25519.publicKey], purposes: () => roles,
     captureOn: () => captureOn, uid: () => o.uid ?? 1000, backoffMs: 50,
     fetchManifest: async (s, v) => { const m = o.serve?.(s, v) ?? served.get(`${s}@${v}`); if (!m) throw new Error('404'); return m; },
     fetchFile: async (_s, _v, name) => { fetched.push(name); return o.file ? o.file(name) : standInBytes(); },
   });
   const verb = (verb: string, service = 'stand-in', version = '1.0.0'): Promise<VerbResult> => w.perform({ verb, service, version });
-  return { home, w, served, fetched, verb, capture: (on: boolean) => { captureOn = on; } };
+  return { home, w, served, fetched, verb, capture: (on: boolean) => { captureOn = on; }, roles: (r: string[]) => { roles = r; } };
 }
 
 test('the verb set is exactly five, frozen; a request is {verb, service, version} and nothing more', () => {
@@ -134,14 +135,14 @@ test('start runs the manifest’s own command on 127.0.0.1, checked again at eve
     assert.equal(health.body.version, '1.0.0', 'the stand-in answers as the version the manifest named');
     assert.equal((await until(() => k.verb('probe'), (p) => p.ok, 5000)).ok, true);
     assert.equal((await k.verb('stop')).ok, true);
-    assert.equal((await until(() => getJson(`http://127.0.0.1:${port}/health`), (h) => h.status === 0, 5000)).status, 0, 'stopped');
+    assert.equal(await until(() => standInAt(port), (x) => !x, 5000), false, 'stopped');
     assert.equal((await k.verb('probe')).ok, false);
     // Changed after install: refused at the next start, not run.
     writeFileSync(join(k.home, 'workloads', 'stand-in', 'v', '1.0.0', 'stand-in-screenpipe.js'), 'process.exit(0)\n');
     const r = await k.verb('start');
     assert.equal(r.ok, false);
     assert.match(r.said, /changed after it was installed .* so it wasn’t run/);
-    assert.equal((await getJson(`http://127.0.0.1:${port}/health`)).status, 0);
+    assert.equal(await standInAt(port), false);
   } finally { await k.w.close(); }
 });
 
@@ -151,7 +152,7 @@ test('never as root; a capture workload starts only while capture is on there, a
   await root.verb('install');
   const r = await root.verb('switch');
   assert.match(r.said, /running as root, and it never runs a workload as root/);
-  assert.equal((await getJson(`http://127.0.0.1:${port}/health`)).status, 0);
+  assert.equal(await standInAt(port), false);
 
   const capPort = await freePort();
   const cap = manifest({ device_id: DEVICE, port: capPort, service: 'screenpipe', roles: ['capture-source'], capture: { adapter: 'screenpipe', kinds: ['screen', 'audio'] }, os_permissions: ['screen-recording', 'microphone'] });
@@ -161,7 +162,7 @@ test('never as root; a capture workload starts only while capture is on there, a
     const s = await c.verb('switch', 'screenpipe');
     assert.equal(s.ok, true, 'it is live');
     assert.match(s.said, /wasn’t started: capture is off on this device\. Deploying it didn’t turn capture on/);
-    assert.equal((await getJson(`http://127.0.0.1:${capPort}/health`)).status, 0, 'nothing runs while capture is off');
+    assert.equal(await standInAt(capPort), false, 'nothing runs while capture is off');
     assert.equal(c.w.liveCapture(), null);
     assert.deepEqual(c.w.captureCapabilities(), ['capture.audio', 'capture.screen'], 'it offers its kinds, so the hub lists them as sources, off');
     c.capture(true);
@@ -171,7 +172,7 @@ test('never as root; a capture workload starts only while capture is on there, a
     // Turned off again: it stops.
     c.capture(false);
     assert.deepEqual(await c.w.stopCapture('capture is off on this device.'), ['screenpipe 1.0.0']);
-    assert.equal((await until(() => getJson(`http://127.0.0.1:${capPort}/health`), (h) => h.status === 0, 5000)).status, 0);
+    assert.equal(await until(() => standInAt(capPort), (x) => !x, 5000), false);
   } finally { await c.w.close(); }
 });
 
@@ -209,4 +210,30 @@ test('Decision 1 in the code: only the five verbs start anything, and the captur
   assert.equal([...w.matchAll(/\bspawn\(/g)].length, 1);
   assert.match(w, /start: \(\) => group\(spawn\(file, args, \{ cwd: slot, env, stdio: 'ignore', detached: true \}\)/);
   assert.doesNotMatch(w, /shell: true|execSync|exec\(/);
+});
+
+test('a role taken away stops what it allowed, at the device; a killed agent’s leftovers are ended by the next one', async () => {
+  const port = await freePort();
+  const k = rig({ purposes: ['general-server'], serve: () => sign(manifest({ device_id: DEVICE, port }), hub) });
+  try {
+    await k.verb('install');
+    await k.verb('switch');
+    await until(() => getJson(`http://127.0.0.1:${port}/health`), (h) => h.status === 200, 10_000);
+    // The hub narrowed its roles: the device's own check stops it.
+    k.roles(['storage']);
+    assert.deepEqual(await k.w.recheck(), ['stand-in 1.0.0']);
+    assert.equal(await until(() => standInAt(port), (x) => !x, 5000), false);
+    assert.match((await k.verb('start')).said, /needs general-server, which this device isn’t/);
+    // Back, it runs; then the agent is gone without stopping it (as when killed): the next agent on
+    // this home ends what it left, before anything else starts.
+    k.roles(['general-server']);
+    assert.equal((await k.verb('start')).ok, true);
+    await until(() => getJson(`http://127.0.0.1:${port}/health`), (h) => h.status === 200, 10_000);
+    const next = new Workloads({
+      home: k.home, platform: `${process.platform}-${process.arch}`, deviceId: () => DEVICE, pinned: () => [hub.ed25519.publicKey], purposes: () => ['general-server'], captureOn: () => false,
+      fetchManifest: async () => { throw new Error('unused'); }, fetchFile: async () => { throw new Error('unused'); },
+    });
+    assert.equal(await until(() => standInAt(port), (x) => !x, 5000), false, 'the leftover was ended');
+    await next.close();
+  } finally { await k.w.close(); }
 });
