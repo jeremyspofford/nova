@@ -12,7 +12,7 @@ Source: `INPUT-2026-11-01-DESIGN-QUALITY.md` and its diagnosis, `nova-design-qua
   - on the designed scales in every look (`check:themes` reports it per package);
   - and the owner has approved its rendered styleguide (the owner names it in `AT_THE_BAR`, `src/core/design.ts`).
 
-  Today only Orb Teal is at the bar.
+  Stage 1 proposes Orb Teal for rendered owner review. `AT_THE_BAR`/`at_bar` currently records the technical scale gate, not an owner-approval record. This PR must not merge until the owner approves its screenshots.
 - **How that is presented:**
   - *Settings › Appearance* shows Orb Teal as "Nova's design", with its reason. When the device asks for light, the reason says plainly that it is dark because no light design has reached the bar yet.
   - The other five sit behind *More designs*, marked "not yet at Nova's design bar". They stay installed and usable; none is deleted.
@@ -57,6 +57,8 @@ We take qualities from these, never their branding, assets, names or copy. Each 
 - **Emoji as icons.**
 
 ### 0.4 The slop list (scored on every UI PR)
+The styleguide deliberately places labelled specimen states together for comparison; score the app view or one specimen state, not the whole catalogue as an app screen.
+
 Each item is scored per surface as **pass**, **fail** or **n/a**, with one line of evidence. The owner-side UX review scores the same list independently, so the wording is the test.
 
 1. **Uniform equal-weight card grids.**

@@ -6,7 +6,7 @@
 const schema = await fetch('/api/v1/design-systems/schema').then((r) => r.json());
 const tokensOf = (test) => schema.tokens.filter(test).map((t) => t.css);
 import { MODES, apply, current, previewCss } from './theme.js';
-import { icons, memoryIndex, renderActivity, renderEmpty, renderHandoff, renderMemory, renderPermissions, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
+import { icons, memoryIndex, renderActivity, renderEmpty, renderGmail, renderHandoff, renderMemory, renderPermissions, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
 import { ICONS, ORB_SIZES, addDeviceSheet, allowApproveSheet, approvalSheet, briefCard, chatBubble, codingSheet, coldPromotionSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, infraSheet, joinRequestSheet, lookingIntoItCard, memoryHighlightCard, networkSheet, orb, proactiveBanner, promoteSheet, promotionActionSheet, promotionSheet, revokeSheet, rolesReviewSheet, rolesSheet, settingsRow, status, takeoverPanel, taskRow, triggerRow, verifiedResultCard, voiceState } from './components.js';
 import { waitingLine } from './wait.js';
 import { ORB_STATES } from './status.js';
@@ -257,6 +257,8 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
     ]],
     ['Views', [
       ['memory', 'Memory', 'What Nova keeps, by kind, and the day’s notes.', () => `<div class="thread memory">${renderMemory(memorySample)}</div>`],
+      ['gmail', 'Gmail connection', 'The production connection card: not connected, connected, and reconnecting, with either sign-in method. Remote clients do not offer local OAuth actions.',
+        () => `<div class="sg-cards">${state('Not connected', renderGmail({}))}${state('Connected with an app password', renderGmail({ connected: true, method: 'password', account: 'you@example.com', since: at(-48) }))}${state('Connected with a Google client', renderGmail({ connected: true, method: 'oauth', client: true, account: 'you@example.com' }))}${state('App password needs replacing', renderGmail({ broken: true, method: 'password', account: 'you@example.com' }))}${state('Google sign-in needs reconnecting', renderGmail({ broken: true, method: 'oauth', client: true }))}${state('Remote client', renderGmail({ broken: true, method: 'oauth', client: true }, { local: false }))}</div>`],
       ['skills', 'Skills', 'Installed and available skills, with a connection.', () => `<div class="thread memory skills">${renderSkills(skillSample)}</div>`],
       ['schedules', 'Schedules', 'Every schedule state: on time, running, paused, missed, failed.', () => `<div class="thread memory skills schedules">${renderSchedules(scheduleSample, t0)}</div>`],
       ['activity', 'Activity', 'What is happening now, and each day in a sentence and its entries.', () => `<div class="thread memory activity">${renderActivity(activitySample, t0)}</div>`],

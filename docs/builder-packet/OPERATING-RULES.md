@@ -98,7 +98,9 @@ Where it differs from earlier packet text, the amendment wins: for example, the 
 1. The first deliverable is its rendered styleguide entry, with its own anchor and address (`/styleguide?entry=<entry>`), and screenshots of each state.
 2. The owner approves that rendered entry before any app code is written. This is a recognition check, about a minute per surface. The builder waits for it; it is the one place in the build loop that does.
 3. App code composes only styleguide components. A new visual pattern goes back to step 1, never straight into a view.
-4. The UI PR includes screenshots of the surface matched against the styleguide rendering of what it composes. `tests/ui/design-shots.ts` captures the main surfaces at desktop and phone width, and each styleguide entry on its own.
+4. The UI PR includes screenshots of the surface matched against the styleguide rendering of what it composes. `tests/ui/design-shots.ts` captures the main surfaces at desktop, phone, tablet and half-open viewport widths, and each styleguide entry on its own.
+
+**Stage 1 gate:** this initial design PR requires owner approval of its rendered screenshots before merge. Do not merge it unattended.
 
 **When it takes effect:** the workflow applies from the next new surface after the design-quality PR merges. Existing surfaces are conformed opportunistically, as the UX fix list reaches them. There is no big-bang rewrite.
 

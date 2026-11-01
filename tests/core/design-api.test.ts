@@ -117,8 +117,9 @@ test('preview CSS renders a package for a sandboxed frame without applying it', 
   await stop();
 });
 
-test('a third-party package installs over the API, validates, applies, and is removed through the extension host', async () => {
+test('a third-party package installs over the API, validates, applies, and is removed through the extension host', async (t) => {
   const { root, call, text, stop } = await boot();
+  t.after(stop); // A failed warning assertion must not strand this test server.
   const installed = await call('POST', '/design-systems', { manifest: fixture() });
   assert.equal(installed.status, 201);
   assert.equal(installed.body.design_system.id, 'example.slate');
@@ -127,14 +128,18 @@ test('a third-party package installs over the API, validates, applies, and is re
   const checked = (await call('POST', '/design-systems/example.slate/validate')).body;
   assert.deepEqual({ ok: checked.ok, problems: checked.problems }, { ok: true, problems: [] });
   // Made before DESIGN-SYSTEM §5's status bar too: it applies with iOS's own strip, and says so.
-  assert.equal(checked.warnings.length, 3);
+  const legacy = checked.warnings.filter((w: string) => !w.startsWith('Off the designed scales:'));
+  assert.equal(legacy.length, 3, 'the two motion warnings and the missing iOS declaration remain');
+  for (const token of ['motion/duration-fast', 'motion/duration-slow', 'ios_status_bar']) assert.ok(legacy.some((w: string) => w.includes(token)), token);
+  const scale = checked.warnings.filter((w: string) => w.startsWith('Off the designed scales:'));
+  assert.equal(scale.length, 4, 'legacy package scale debt is advisory and visible through the API');
+  for (const token of ['type/caption', 'type/h3', 'type/h1', 'motion/breathe']) assert.ok(scale.some((w: string) => w.includes(token)), token);
   assert.equal(checked.warnings.filter((w: string) => /ios_status_bar isn’t declared/.test(w)).length, 1);
   await call('POST', '/design-systems/example.slate/apply', { scope: 'user' });
   assert.match((await text(`${root}/design-system.css`)).body, /Example Slate/);
   assert.equal((await call('DELETE', '/extensions/example.slate')).status, 200);
   assert.match((await text(`${root}/design-system.css`)).body, /Orb Teal/);
   assert.equal((await call('DELETE', '/extensions/nova')).status, 409, 'built-ins stay');
-  await stop();
 });
 
 test('an invalid package is listed with its problems and refused when applied', async () => {

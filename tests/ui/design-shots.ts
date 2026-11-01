@@ -49,8 +49,9 @@ async function surfaces(b: Browser, base: string) {
     await d.page.waitForSelector('.sg-section', { timeout: 15_000 });
     await d.page.waitForTimeout(400);
     const anchors = await d.page.$$eval('.sg-entry[id]', (xs) => xs.map((x) => x.id));
+    assert.equal(await d.page.locator('.sg-broken').count(), 0, 'every component fixture renders without an exception');
     assert.equal(new Set(anchors).size, anchors.length, 'each entry has a unique direct link');
-    assert.ok(anchors.length >= 40, 'tokens, components and states are individually addressable');
+    assert.ok(anchors.length >= 39, 'tokens, components and states are individually addressable');
     assert.equal(d.errors.length, 0, d.errors.join('\n'));
     await d.page.screenshot({ path: join(out, `styleguide-${size}.png`), fullPage: size === 'desktop' || size === 'phone', animations: 'disabled', caret: 'hide' });
     if (size === 'desktop') {

@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · Design quality stage 1 (proposed; owner review before merge)**
+- What changes in this PR: Orb Teal becomes the one lead design; other designs sit behind More designs. Fixed spacing, type, radius and motion scales plus stricter lint give components a common structure. The styleguide has individually linked component/state examples. DESIGN-SYSTEM now states art direction and a measurable slop check. The next new surface starts as a rendered styleguide entry for owner approval before app code.
+- What you can review: before/after phone and desktop comparisons, tablet/half-open views and individual styleguide entries in `docs/reviews/design-quality-stage1-review-packet.md`. The exemplar set is proposed 2026-11-01; the owner may amend it. No preview change or design merge has happened.
+- Still unfinished: owner approval; other packages reaching the same bar; opportunistic cleanup of existing repeated cards. The composer ellipse and flat orb were already fixed in the baseline; this PR does not claim those earlier fixes. Real-phone checks remain open.
+
 **2026-11-01 · Handoff · A takeover note for the next builder**
 - What changed: a handoff note (docs/builder-packet/HANDOFF-FROM-BUILDER-2026-11-01.md) records the work in progress, the open questions waiting on you, the next steps, and the quirks of this machine, so a new builder can pick up without losing anything.
 - What you can now do: nothing in the app changed: paperwork only.

@@ -20,8 +20,6 @@ const HELPERS = {
     longDate: 'words', shortDay: 'words', exactTime: 'words', msgTime: 'words', toolLabel: 'words', toolState: 'logic', relWhen: 'words', took: 'words', daySentence: 'words',
     renderNotes: 'drawn inside renderTurn', collapseLines: 'logic', renderKept: 'drawn inside renderTurn', renderSkillNote: 'drawn inside renderTurn',
     renderBlocks: 'the thread, made of renderTurn', renderThread: 'the thread, made of renderTurn', memoryIndex: 'logic', activityEntry: 'drawn inside renderActivity',
-    // Known debt: the Gmail connection's card in Settings › Connections has no entry yet.
-    renderGmail: 'not yet in the styleguide (conformed opportunistically, per the UX fix list)',
   },
 };
 
