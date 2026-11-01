@@ -52,7 +52,7 @@ test('sync and dedupe: consent first, each item taken in once, every item answer
   const r = await rig();
   try {
     // Off by default: the plan names no kind, and nothing sent is kept.
-    assert.deepEqual((await r.plan(r.mac.token)).body, { kinds: {}, sync: { allowed: true, why: null }, tombstones: 0, raw: 0 });
+    assert.deepEqual((await r.plan(r.mac.token)).body, { kinds: {}, sync: { allowed: true, why: null }, tombstones: 0, raw: 0, raw_allowed: false });
     const early = r.signed([r.item({ text: 'BEFORE-CONSENT', s: 1 })], r.mac.keys, r.mac);
     const e0 = await r.send(r.mac.token, early);
     assert.equal(e0.status, 200);

@@ -94,6 +94,8 @@ test('off-kind deletion survives transient failure and carrier restart', async (
   const at = new Date(now.getTime() - 60000).toISOString();
   let store = [{ type: 'Audio', content: { chunk_id: 1, timestamp: at, transcription: 'SYNTHETIC AUDIO WHILE OFF' } }];
   let failDelete = true;
+  let active = true;
+  let screenOn = true;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url!, 'http://localhost');
     for await (const _ of req) { /* consume synthetic request */ }
@@ -110,12 +112,15 @@ test('off-kind deletion survives transient failure and carrier restart', async (
   const port = (server.address() as AddressInfo).port;
   const home = mkdtempSync(join(tmpdir(), 'nova-carrier-delete-regression-'));
   const keys = generateDeviceKeys();
-  const make = () => new Carrier({ home, keys, deviceId: () => 'synthetic-device', deviceName: () => 'Synthetic device', now: () => now, capture: () => ({ port, kinds: ['screen', 'audio'] }), stopCapture: async () => {}, hub: async () => ({ status: 200, body: { kinds: { screen: '2026-11-01T11:00:00.000Z' }, sync: { allowed: true, why: null }, tombstones: 0, raw: 0 } }) });
+  const make = () => new Carrier({ home, keys, active: () => active, deviceId: () => 'synthetic-device', deviceName: () => 'Synthetic device', now: () => now, capture: () => ({ port, kinds: ['screen', 'audio'] }), stopCapture: async () => {}, hub: async () => ({ status: 200, body: { kinds: screenOn ? { screen: '2026-11-01T11:00:00.000Z' } : {}, sync: { allowed: true, why: null }, tombstones: 0, raw: 0 } }) });
   try {
     const first = make();
     await first.tick();
     assert.equal(store.length, 1);
     const failure = first.status().last_error;
+    screenOn = false;
+    await first.tick();
+    active = false;
     failDelete = false;
     const restarted = make();
     await restarted.tick();
@@ -125,7 +130,7 @@ test('off-kind deletion survives transient failure and carrier restart', async (
   } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); rmSync(home, { recursive: true, force: true }); }
 });
 
-for (const transition of ['before-read', 'before-send'] as const) {
+for (const transition of ['before-read', 'before-send', 'sync-denied-initial', 'sync-denied-before-send'] as const) {
   test(`carrier checks raw permission ${transition}`, async () => {
     let allowed = true;
     let reads = 0;
@@ -138,14 +143,14 @@ for (const transition of ['before-read', 'before-send'] as const) {
     const port = (server.address() as AddressInfo).port;
     const home = mkdtempSync(join(tmpdir(), 'nova-carrier-policy-regression-'));
     const carrier = new Carrier({ home, keys: generateDeviceKeys(), deviceId: () => 'synthetic-device', deviceName: () => 'Synthetic device', capture: () => ({ port, kinds: ['screen'] }), stopCapture: async () => {}, hub: async (_method, path) => {
-      if (path.endsWith('/plan')) return { status: 200, body: { kinds: { screen: new Date().toISOString() }, sync: { allowed, why: null }, raw_allowed: allowed, tombstones: 0, raw: 1 } };
+      if (path.endsWith('/plan')) return { status: 200, body: { kinds: { screen: new Date().toISOString() }, sync: { allowed: transition === 'sync-denied-initial' ? false : allowed, why: null }, raw_allowed: transition.startsWith('sync-denied') ? true : allowed, tombstones: 0, raw: 1 } };
       if (path.endsWith('/raw')) { if (transition === 'before-read') allowed = false; return { status: 200, body: { requests: [{ id: 'synthetic-request', item: 'screenpipe:ocr:1', reason: 'Synthetic test' }] } }; }
       if (path.endsWith('/raw/synthetic-request')) { uploads++; return { status: 200, body: { ok: true } }; }
       return null;
     } });
     try {
       await carrier.tick();
-      assert.equal(reads, transition === 'before-read' ? 0 : 1);
+      assert.equal(reads, transition === 'before-read' || transition === 'sync-denied-initial' ? 0 : 1);
       assert.equal(uploads, 0, 'a changed permission must stop raw bytes before upload');
     } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); rmSync(home, { recursive: true, force: true }); }
   });

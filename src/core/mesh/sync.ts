@@ -27,8 +27,9 @@ export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
   // Migration 0011: the change pipeline's records (M7a), so a standby knows what is live and why.
   change_record: ['id'],
   // Migration 0023 (M10h): what each device is assigned to run; each capture batch as verified; and
-  // forgets still waiting for a device's acknowledgement, so a hub that takes over keeps all three.
-  device_workload: ['device_id', 'service'], capture_batch: ['id'], capture_device_tombstone: ['id'],
+  // forgets still waiting for a device's acknowledgement; and raw-to-event mappings needed to read
+  // and forget fetched originals and their recovery copies. A hub that takes over keeps all four.
+  device_workload: ['device_id', 'service'], capture_batch: ['id'], capture_device_tombstone: ['id'], capture_raw_fetch: ['id'],
 };
 // Columns a release added to a replicated table, by the schema version that added them (M10f review,
 // finding 3: one mechanism for every such column). A standby a release behind doesn't have them:

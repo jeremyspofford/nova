@@ -87,11 +87,12 @@ export class CaptureSync {
     return { allowed: true, why: null };
   }
 
-  plan(device: Device): { kinds: Record<string, string>; sync: { allowed: boolean; why: string | null }; tombstones: number; raw: number } {
+  plan(device: Device): { kinds: Record<string, string>; sync: { allowed: boolean; why: string | null }; tombstones: number; raw: number; raw_allowed: boolean } {
     return {
       kinds: this.#o.capture.deviceKinds(device.id), sync: this.syncAllowed(),
       tombstones: this.#o.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM capture_device_tombstone WHERE device_id = ? AND acked_at IS NULL', device.id)!.n,
-      raw: this.#o.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM capture_raw_fetch WHERE device_id = ? AND state = 'asked'`, device.id)!.n,
+      raw: this.#rawAllowed(device) ? this.#o.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM capture_raw_fetch WHERE device_id = ? AND state = 'asked'`, device.id)!.n : 0,
+      raw_allowed: this.#rawAllowed(device),
     };
   }
 
@@ -254,12 +255,14 @@ export class CaptureSync {
   }
 
   rawFor(device: Device): { requests: { id: string; item: string; reason: string }[] } {
+    if (!this.#rawAllowed(device)) return { requests: [] };
     return { requests: this.#o.db.all<RawRow>(`SELECT * FROM capture_raw_fetch WHERE device_id = ? AND state = 'asked' ORDER BY asked_at LIMIT 10`, device.id).map((r) => ({ id: r.id, item: r.item, reason: r.reason })) };
   }
 
   rawUpload(device: Device, id: string, body: Record<string, unknown>): { ok: true } {
     const r = this.#o.db.get<RawRow>('SELECT * FROM capture_raw_fetch WHERE id = ?', id);
     if (!r || r.device_id !== device.id) throw new CoreError('not_found', 'Nobody asked this device for that.');
+    if (!this.#rawAllowed(device)) throw new CoreError('conflict', 'The original stays on the device: raw transfer needs a home hub and this device’s screen capture consent to still be on.');
     if (r.state !== 'asked') return { ok: true };
     const m = body.manifest as RawManifest | undefined;
     if (!isObj(m) || typeof body.signature !== 'string' || typeof body.data !== 'string') throw new CoreError('validation', 'Send {manifest, signature, data}.');
@@ -275,6 +278,11 @@ export class CaptureSync {
     this.#o.db.run(`UPDATE capture_raw_fetch SET state = 'arrived', sha256 = ?, size = ?, signature = ?, done_at = ? WHERE id = ?`, m.sha256, m.size, body.signature, this.#o.now().toISOString(), id);
     this.#arrived.get(id)?.();
     return { ok: true };
+  }
+
+  // Permission is live, not a property of the old request. Cloud raw opt-in is not built.
+  #rawAllowed(device: Device): boolean {
+    return this.#o.site() === 'home' && this.#o.devices.find(device.id)?.trust === 'trusted' && !!this.#o.capture.deviceKinds(device.id).screen;
   }
 
   // A raw item that came, read back (the person's own reading of the original).

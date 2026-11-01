@@ -55,9 +55,10 @@ export interface CapturePlan {
   sync: { allowed: boolean; why: string | null };
   tombstones: number;
   raw: number;
+  raw_allowed: boolean;
 }
 export interface CarrierItem { id: string; seq: number; kind: string; at: string; ended_at: string | null; app: string | null; window_title: string | null; url: string | null; text: string | null }
-interface Meta { next_seq: number; watermark: string | null; window?: number; seen: string[]; forgotten: string[]; acked_seq: number; synced_to: string | null; plan: CapturePlan | null }
+interface Meta { next_seq: number; watermark: string | null; window?: number; seen: string[]; forgotten: string[]; discard: string[]; acked_seq: number; synced_to: string | null; plan: CapturePlan | null }
 export interface CarrierStatus { queued: number; paused: string | null; acked_seq: number; synced_to: string | null; last_error: string | null; plan: CapturePlan | null }
 
 export interface CarrierOptions {
@@ -99,7 +100,7 @@ export class Carrier {
     this.dir = join(o.home, 'capture');
     this.#outbox = join(this.dir, 'outbox');
     for (const d of [this.dir, this.#outbox]) mkdirSync(d, { recursive: true, mode: 0o700 });
-    this.#meta = { next_seq: 1, watermark: null, seen: [], forgotten: [], acked_seq: 0, synced_to: null, plan: null, ...(read<Partial<Meta>>(join(this.dir, 'meta.json')) ?? {}) };
+    this.#meta = { next_seq: 1, watermark: null, seen: [], forgotten: [], discard: [], acked_seq: 0, synced_to: null, plan: null, ...(read<Partial<Meta>>(join(this.dir, 'meta.json')) ?? {}) };
   }
 
   // Whether capture is on for this device, as the hub last said (kept across restarts, so a device
@@ -118,10 +119,11 @@ export class Carrier {
 
   async tick(): Promise<void> {
     if (this.#busy) return;
-    if (this.#o.active && !this.#o.active() && !this.#names().length && !this.captureOn()) return;
+    if (this.#o.active && !this.#o.active() && !this.#names().length && !this.captureOn() && !this.#meta.discard.length) return;
     this.#busy = true;
     try {
       const plan = await this.#plan();
+      await this.#discard();
       if (!this.captureOn()) {
         await this.#o.stopCapture('capture is off on this device.');
       } else {
@@ -150,7 +152,7 @@ export class Carrier {
     if (b.kinds && typeof b.kinds === 'object') for (const [k, v] of Object.entries(b.kinds)) if (/^[a-z-]{1,20}$/.test(k) && typeof v === 'string' && !Number.isNaN(Date.parse(v))) kinds[k] = new Date(v).toISOString();
     const plan: CapturePlan = {
       kinds, sync: { allowed: b.sync?.allowed === true, why: typeof b.sync?.why === 'string' ? b.sync.why.slice(0, 300) : null },
-      tombstones: Number(b.tombstones) || 0, raw: Number(b.raw) || 0,
+      tombstones: Number(b.tombstones) || 0, raw: Number(b.raw) || 0, raw_allowed: b.raw_allowed === true,
     };
     this.#meta.plan = plan;
     return plan;
@@ -170,7 +172,7 @@ export class Carrier {
     const forgotten = new Set(this.#meta.forgotten);
     // Captured while its kind was off (another kind was on, so the program ran): deleted where it was
     // captured, never queued or sent.
-    const discard: { type: string; id: string }[] = [];
+    const discard = new Set(this.#meta.discard);
     // From the watermark (or the first consent), forward in time windows, each read whole before the
     // watermark passes it: a window that comes back incomplete (an error, or more than one read
     // holds) is made smaller and read again; nothing is skipped.
@@ -206,7 +208,7 @@ export class Carrier {
         }
         seen.add(it.id);
         const since = kinds[it.kind];
-        if (!since || it.at < since) { discard.push(nativeOf(it.id)); continue; }
+        if (!since || it.at < since) { discard.add(it.id); continue; }
         // A private window never leaves this device.
         if (it.private) continue;
         const item: CarrierItem = { id: it.id, seq: this.#meta.next_seq++, kind: it.kind, at: it.at, ended_at: it.ended_at, app: it.app, window_title: it.window_title, url: it.url, text: it.text };
@@ -225,7 +227,23 @@ export class Carrier {
     this.#meta.window = windowMs;
     if (!stopped && count < max) this.#full = null;
     this.#meta.seen = [...seen].slice(-20_000);
-    if (discard.length) await this.#delete(cap.port, discard);
+    this.#meta.discard = [...discard];
+    // Save pending privacy deletion before its I/O; a restart must not turn seen into forgotten work.
+    this.#save();
+    await this.#discard();
+  }
+
+  async #discard(): Promise<void> {
+    if (!this.#meta.discard.length) return;
+    const cap = this.#o.capture();
+    if (!cap || !(await this.#delete(cap.port, this.#meta.discard.map(nativeOf)))) {
+      this.#lastError = `Couldn’t delete ${this.#meta.discard.length} captured item(s) whose source was off. Deletion is pending and will be retried.`;
+      this.#o.say?.(this.#lastError);
+      return;
+    }
+    this.#meta.discard = [];
+    this.#lastError = null;
+    this.#save();
   }
 
   // Screenpipe's /search for one time window, newest first, a page at a time: its text and
@@ -310,7 +328,7 @@ export class Carrier {
         this.#meta.acked_seq = Math.max(this.#meta.acked_seq, i.seq);
         if (!this.#meta.synced_to || i.at > this.#meta.synced_to) this.#meta.synced_to = i.at;
       }
-      this.#lastError = null;
+      if (!this.#meta.discard.length) this.#lastError = null;
       this.#save();
     }
   }
@@ -341,13 +359,15 @@ export class Carrier {
   // ---- 5. raw ------------------------------------------------------------------------------------------
 
   async #raw(plan: CapturePlan): Promise<void> {
-    if (!plan.raw) return;
+    if (!plan.raw || !plan.raw_allowed || !plan.sync.allowed) return;
     const cap = this.#o.capture();
     if (!cap) return;
     const r = await this.#o.hub('GET', '/api/v1/mesh/capture/raw').catch(() => null);
     if (!r || r.status !== 200 || !Array.isArray(r.body?.requests)) return;
     for (const q of r.body.requests as { id?: unknown; item?: unknown }[]) {
       if (typeof q.id !== 'string' || typeof q.item !== 'string' || !/^screenpipe:ocr:[A-Za-z0-9_-]{1,64}$/.test(q.item)) continue;
+      const before = await this.#plan();
+      if (!before?.raw_allowed || !before.sync.allowed) return;
       let data: Buffer;
       try {
         const f = await fetch(`http://127.0.0.1:${cap.port}/frames/${encodeURIComponent(q.item.split(':').pop()!)}`, { signal: AbortSignal.timeout(10_000) });
@@ -355,6 +375,8 @@ export class Carrier {
         data = Buffer.from(await f.arrayBuffer());
       } catch { continue; }
       if (data.length > RAW_BYTES) { this.#o.say?.(`A raw item the hub asked for is ${Math.ceil(data.length / 1024)} KB, more than one request carries; it wasn’t sent.`); continue; }
+      const after = await this.#plan();
+      if (!after?.raw_allowed || !after.sync.allowed) return;
       const manifest: RawManifest = { v: 1, request_id: q.id, device_id: this.#o.deviceId(), item: q.item, sha256: sha256Hex(data), size: data.length, sent_at: new Date().toISOString() };
       const signature = signMessage(this.#o.keys.ed25519.privateKey, rawManifestMessage(manifest));
       await this.#o.hub('POST', `/api/v1/mesh/capture/raw/${encodeURIComponent(q.id)}`, { manifest, signature, data: data.toString('base64') }).catch(() => null);

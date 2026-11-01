@@ -94,7 +94,8 @@ CREATE TABLE capture_device_sync (
 );
 
 -- A raw item fetched from a device because the person asked, with the reason (its ledger task is the
--- record that replicates). The file is in the home, capture/raw/<id>, checked against the device's
+-- record that replicates). Its metadata replicates too: standby recovery copies need the event-to-file
+-- mapping to remove forgotten originals. The file is in capture/raw/<id>, checked against the device's
 -- signed checksum.
 CREATE TABLE capture_raw_fetch (
   id TEXT PRIMARY KEY,
@@ -163,4 +164,19 @@ END;
 CREATE TRIGGER sync_capture_device_tombstone_delete AFTER DELETE ON "capture_device_tombstone" WHEN (SELECT logging FROM sync_state WHERE id = 1) = 1 BEGIN
   DELETE FROM sync_log WHERE tbl = 'capture_device_tombstone' AND pk = CAST(OLD."id" AS TEXT);
   INSERT INTO sync_log (tbl, pk, op, row, hlc) VALUES ('capture_device_tombstone', CAST(OLD."id" AS TEXT), 'delete', NULL, printf('%015d-%04x-%s', CAST(unixepoch('subsec') * 1000 AS INTEGER), (IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'sync_log'), 0) + 1) % 65536, IFNULL((SELECT hub_id FROM mesh_state WHERE id = 1), 'node')));
+END;
+
+CREATE TRIGGER sync_capture_raw_fetch_insert AFTER INSERT ON "capture_raw_fetch" WHEN (SELECT logging FROM sync_state WHERE id = 1) = 1 BEGIN
+  DELETE FROM sync_log WHERE tbl = 'capture_raw_fetch' AND pk = CAST(NEW."id" AS TEXT);
+  INSERT INTO sync_log (tbl, pk, op, row, hlc) VALUES ('capture_raw_fetch', CAST(NEW."id" AS TEXT), 'put', json_object('id', NEW."id", 'task_id', NEW."task_id", 'device_id', NEW."device_id", 'event_id', NEW."event_id", 'item', NEW."item", 'reason', NEW."reason", 'state', NEW."state", 'sha256', NEW."sha256", 'size', NEW."size", 'signature', NEW."signature", 'asked_at', NEW."asked_at", 'done_at', NEW."done_at"), printf('%015d-%04x-%s', CAST(unixepoch('subsec') * 1000 AS INTEGER), (IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'sync_log'), 0) + 1) % 65536, IFNULL((SELECT hub_id FROM mesh_state WHERE id = 1), 'node')));
+END;
+
+CREATE TRIGGER sync_capture_raw_fetch_update AFTER UPDATE ON "capture_raw_fetch" WHEN (SELECT logging FROM sync_state WHERE id = 1) = 1 BEGIN
+  DELETE FROM sync_log WHERE tbl = 'capture_raw_fetch' AND pk = CAST(NEW."id" AS TEXT);
+  INSERT INTO sync_log (tbl, pk, op, row, hlc) VALUES ('capture_raw_fetch', CAST(NEW."id" AS TEXT), 'put', json_object('id', NEW."id", 'task_id', NEW."task_id", 'device_id', NEW."device_id", 'event_id', NEW."event_id", 'item', NEW."item", 'reason', NEW."reason", 'state', NEW."state", 'sha256', NEW."sha256", 'size', NEW."size", 'signature', NEW."signature", 'asked_at', NEW."asked_at", 'done_at', NEW."done_at"), printf('%015d-%04x-%s', CAST(unixepoch('subsec') * 1000 AS INTEGER), (IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'sync_log'), 0) + 1) % 65536, IFNULL((SELECT hub_id FROM mesh_state WHERE id = 1), 'node')));
+END;
+
+CREATE TRIGGER sync_capture_raw_fetch_delete AFTER DELETE ON "capture_raw_fetch" WHEN (SELECT logging FROM sync_state WHERE id = 1) = 1 BEGIN
+  DELETE FROM sync_log WHERE tbl = 'capture_raw_fetch' AND pk = CAST(OLD."id" AS TEXT);
+  INSERT INTO sync_log (tbl, pk, op, row, hlc) VALUES ('capture_raw_fetch', CAST(OLD."id" AS TEXT), 'delete', NULL, printf('%015d-%04x-%s', CAST(unixepoch('subsec') * 1000 AS INTEGER), (IFNULL((SELECT seq FROM sqlite_sequence WHERE name = 'sync_log'), 0) + 1) % 65536, IFNULL((SELECT hub_id FROM mesh_state WHERE id = 1), 'node')));
 END;
