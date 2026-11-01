@@ -72,7 +72,7 @@ test('a server that stops answering is restarted', async () => {
     const pid = s.state().server.pid;
     // Frozen: alive, but answering nothing.
     process.kill(pid, 'SIGSTOP');
-    await until(() => s.state()?.mode === 'running' && s.state().server.pid && s.state().server.pid !== pid, 'a restart of the frozen server', 30_000);
+    await until(() => s.state()?.mode === 'running' && s.state().server.pid && s.state().server.pid !== pid && !!s.state().server.port, 'a restart of the frozen server', 30_000);
     await until(async () => {
       // A new PID is published before its ephemeral port. Under CI load the server may also
       // still be starting when the port appears: poll the actual problem, not just the PID.

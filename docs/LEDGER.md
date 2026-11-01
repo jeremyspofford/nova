@@ -419,6 +419,9 @@ phase (Point 6, Decisions 1 and 4) and the capture data path design's gate list.
   list refreshed with the correction's new record, so its 503 route missed. It failed in CI on this
   branch only. A diagnostic pushed for it showed the cause. The test now waits for the refreshed list,
   and keeps the diagnostic.
+- **A chaos test fixed, not Nova:** `tests/chaos/hub.test.ts`, "a server that stops answering is
+  restarted". It waited for a new pid, which the supervisor records before the new server's port, so
+  it could call `http://127.0.0.1:null`. It now waits for the port too.
 
 **2026-11-01 (M10g, after the second adversarial review of #272: replays, evidence, ties, the name, long jumps).**
 Branch `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The second review of #272"). Five
