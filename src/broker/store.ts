@@ -35,6 +35,7 @@ export interface Meta {
   // here, migrated by the broker's own launcher, sealed with a passkey approval, or sealed through
   // core's relay (a value core could have chosen). Older items have none: treated as `sealed`.
   provenance?: 'generated' | 'migrated' | 'sealed-passkey' | 'sealed'; migrated_from?: string;
+  migrated_revision?: string;
 }
 interface ItemFile { v: 1; id: string; gen: number; version: number; key: Sealed; meta: Sealed; value: Sealed; pending?: { version: number; key: Sealed; value: Sealed } }
 export interface Passkey { public_key: string; rp_id: string; origins: string[]; sign_count: number; registered_at: string }

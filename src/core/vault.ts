@@ -231,6 +231,7 @@ export class Vault extends EventEmitter {
   #id: string | null = null;
   #map: Map<string, string> | null = null;
   #problem: string | null = null;
+  #writing = false;
   // Why it won't open: lost for good (no key that fits, or a damaged file), or a keychain that may
   // still answer later. Only a lost vault is set aside by the next save.
   #unopenable: 'lost' | 'waiting' | null = null;
@@ -258,7 +259,8 @@ export class Vault extends EventEmitter {
     return this.get(nameOf(ref));
   }
 
-  put(name: string, value: string): string {
+  put(name: string, value: string): string { return this.#withWrite(() => this.#put(name, value), true); }
+  #put(name: string, value: string): string {
     checkName(name);
     if (typeof value !== 'string' || !value.length) throw new CoreError('validation', 'A secret can’t be empty.');
     // A vault that can never open again would refuse every save forever. Saving starts a new one
@@ -285,7 +287,8 @@ export class Vault extends EventEmitter {
 
   // A new key each time something is deleted, so a copy of the file from before (a backup, an old
   // sync entry) doesn't open with the key in use: the deleted secret stays deleted.
-  delete(name: string): boolean {
+  delete(name: string): boolean { return this.#withWrite(() => this.#delete(name), true); }
+  #delete(name: string): boolean {
     const map = this.#open();
     if (!map.delete(checkName(name))) return false;
     this.#save(map, true);
@@ -294,7 +297,8 @@ export class Vault extends EventEmitter {
 
   // Starts a new, empty vault on purpose (tier 3: needs confirm), with the old file kept aside: for
   // a vault whose key is in a keychain that no longer answers, which saving alone won't replace.
-  reset(confirm: boolean): VaultStatus {
+  reset(confirm: boolean): VaultStatus { return this.#withWrite(() => this.#reset(confirm)); }
+  #reset(confirm: boolean): VaultStatus {
     if (!confirm) throw new CoreError('validation', 'Starting a new vault leaves every saved secret behind (the old file is kept aside). Send confirm: true to do that.');
     this.#startOver();
     this.emit('change', { secrets: 0 });
@@ -302,7 +306,8 @@ export class Vault extends EventEmitter {
   }
 
   // Everything under a prefix (`connector/gmail/`), for revoking an extension's secrets at once.
-  deletePrefix(prefix: string): string[] {
+  deletePrefix(prefix: string): string[] { return this.#withWrite(() => this.#deletePrefix(prefix), true); }
+  #deletePrefix(prefix: string): string[] {
     const map = this.#open();
     const gone = [...map.keys()].filter((k) => k.startsWith(prefix));
     if (!gone.length) return [];
@@ -338,7 +343,8 @@ export class Vault extends EventEmitter {
   // Removes this vault's key wherever it is: the keychain item of each id (this vault's, and any
   // given) and the key file. The vault holds nothing after this. Returns where it was removed from,
   // in plain words; a keychain that isn't answering is said, not guessed at.
-  forgetKeys(ids: string[] = []): { keychain: string | null; file: boolean; problem: string | null } {
+  forgetKeys(ids: string[] = []): { keychain: string | null; file: boolean; problem: string | null } { return this.#withWrite(() => this.#forgetKeys(ids)); }
+  #forgetKeys(ids: string[] = []): { keychain: string | null; file: boolean; problem: string | null } {
     let keychain: string | null = null;
     let problem: string | null = null;
     if (this.#mode !== 'file') {
@@ -375,7 +381,8 @@ export class Vault extends EventEmitter {
   }
 
   // On the standby: the hub's vault, and its key, which goes into this node's own key store.
-  adopt(fileText: string, keyB64: string): void {
+  adopt(fileText: string, keyB64: string): void { this.#withWrite(() => this.#adopt(fileText, keyB64)); }
+  #adopt(fileText: string, keyB64: string): void {
     const key = Buffer.from(String(keyB64), 'base64');
     if (key.length !== 32) throw new CoreError('validation', 'The hub sent a vault key Nova can’t use.');
     const file = parseFile(fileText);
@@ -394,13 +401,35 @@ export class Vault extends EventEmitter {
   }
 
   // On the standby: the hub's vault is gone (its last secret was removed).
-  clear(): void {
+  clear(): void { this.#withWrite(() => this.#clear()); }
+  #clear(): void {
     rmSync(this.file, { force: true });
     this.#map = new Map();
     this.emit('change', { secrets: 0 });
   }
 
   // ---- inside -------------------------------------------------------------------------------
+
+  // Same fail-closed lock as the broker's migration launcher. The mutation reloads under the
+  // lock, so a long-lived consumer cannot resurrect entries from its pre-migration cache.
+  #withWrite<T>(run: () => T, refresh = false): T {
+    if (this.#writing) return run();
+    const lock = join(this.dir, '.writer-lock');
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    try { mkdirSync(lock, { mode: 0o700 }); }
+    catch { throw new CoreError('conflict', 'The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.'); }
+    this.#writing = true;
+    try {
+      if (refresh) {
+        this.#map = null;
+        this.#key = null;
+        this.#store = null;
+        this.#problem = null;
+        this.#unopenable = null;
+      }
+      return run();
+    } finally { this.#writing = false; rmSync(lock, { recursive: true }); }
+  }
 
   // The keychain when the mode allows one and it answers, else the key file.
   #choose(id = this.#id ?? 'new'): KeyStore {
@@ -413,7 +442,8 @@ export class Vault extends EventEmitter {
     return file;
   }
 
-  #open(): Map<string, string> {
+  #open(): Map<string, string> { return this.#withWrite(() => this.#openLocked()); }
+  #openLocked(): Map<string, string> {
     if (this.#map) return this.#map;
     // A keychain that wasn't answering is asked again; a lost vault stays lost.
     if (this.#problem && this.#unopenable !== 'waiting') throw new CoreError('conflict', this.#problem);
