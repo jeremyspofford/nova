@@ -108,7 +108,14 @@
 - In process, the Tev1 stand-in plus a verdict store.
 - For a real server, the Tev1 stand-in, or `fake-ollama.js`'s new optional `/v1/systemone`, listing tev1:4b at the build that passed. The server's committed verdicts trust it.
 
-**A real `tev1:4b` run** is opt-in only and wasn't needed here: the template's own eval run (`NOVA_REAL_CAPTURE_SENSITIVE=1`) is unchanged.
+**A real `tev1:4b` smoke check** (opt-in, local, not CI; 2026-10-31): the real core, its committed verdicts, and the local Ollama 0.40.13 with `tev1:4b@7954dce2…`. Nothing was pulled or changed. Six synthetic items, from a script outside the repo, were checked in 1.5 s:
+- **index:** a work note, and a recipe with a vitamin dose;
+- **hold:** a person's test results and medication, at health 0.95;
+- **hold:** a person's balance and mortgage, at finance 0.95;
+- **redacted, then hold:** "password is …" was redacted by the rules at intake, then held as unsure (secret key 0.47);
+- **redacted, then hold:** the test card was redacted by the rules, then held as unsure on finance (0.69).
+
+This shows the wiring works on the real model. It isn't an eval: the template's own eval (`NOVA_REAL_CAPTURE_SENSITIVE=1`) is unchanged.
 
 ## Limits
 
