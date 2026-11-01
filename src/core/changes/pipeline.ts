@@ -835,7 +835,7 @@ export class Changes extends EventEmitter {
       if (prev) await ops.restore(prev, c.artifact, this.#o.live, { aside: this.#aside(c.id) });
     } catch (e) {
       this.#update(c.id, { state: 'broken', reason: `Nova couldn’t put back ${back}: ${(e as Error).message}` });
-      this.#o.log.problem('changes', `Nova couldn’t roll back “${c.title}” v${c.version}: ${(e as Error).message}. Check ${c.title} by hand.`, { ...(c.ship_task_id ? { taskId: c.ship_task_id } : {}) });
+      this.#o.log.problem('changes', `Nova couldn’t roll back “${c.title}” v${c.version}: ${(e as Error).message}. Check ${c.title} by hand.`, { ...(c.ship_task_id ? { taskId: c.ship_task_id } : {}), stops: true });
       this.emit('change', { id: c.id, state: 'broken' });
       this.#waiters.get(c.id)?.({ ok: false, why: `${why} Nova couldn’t put back ${back}.` });
       this.#waiters.delete(c.id);

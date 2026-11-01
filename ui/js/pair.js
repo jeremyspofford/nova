@@ -41,7 +41,7 @@ const coarse = matchMedia('(pointer: coarse)').matches;
 const platform = () => (navigator.userAgentData?.platform || navigator.platform || '').slice(0, 60);
 let hello = null;
 
-function stop(heading, text, { retry = false, state = 'attention' } = {}) {
+function stop(heading, text, { retry = false, state = 'needs-you' } = {}) {
   orb(state);
   title(heading);
   body.innerHTML = `<p class="pair-line">${esc(text)}</p>${retry ? '<div class="pair-actions"><button type="button" class="btn primary" id="again">Start again</button></div>' : ''}`;
@@ -66,7 +66,7 @@ function form(note = '') {
 }
 
 function fail(e) {
-  stop('That didn’t work', e.message || 'Something went wrong.', { retry: true, state: 'alert' });
+  stop('That didn’t work', e.message || 'Something went wrong.', { retry: true, state: 'stopped' });
 }
 
 async function join(code, name) {
@@ -99,7 +99,7 @@ async function join(code, name) {
 // The digits, and a signed check on the request every two seconds until the person decides.
 function wait(id) {
   const { requestId, digits } = id.pending;
-  orb('attention');
+  orb('needs-you');
   title('Check the digits');
   body.innerHTML = `<p class="pair-digits" aria-label="${esc(digits.split('').join(' '))}">${esc(group(digits))}</p>
 <p class="pair-line">Your hub shows six digits too. If they match, approve this device there. If they don’t, deny it.</p>
@@ -153,7 +153,7 @@ async function start() {
     return stop('Nova isn’t answering', 'This page can’t reach Nova right now. Check the address, then reload.', { state: 'offline' });
   }
   if (given.fingerprint && given.fingerprint !== hello.fingerprint) {
-    return stop('Wrong address', 'This isn’t the hub that made the code. Don’t enter the code here; open the address your hub showed you.', { state: 'alert' });
+    return stop('Wrong address', 'This isn’t the hub that made the code. Don’t enter the code here; open the address your hub showed you.', { state: 'stopped' });
   }
   const id = await key.load();
   // Left showing digits with no key behind them (WebKit once kept nothing): nothing here can sign,
