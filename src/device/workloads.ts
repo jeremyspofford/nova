@@ -19,7 +19,7 @@
 //   workloads/<service>/home/           HOME and TMPDIR for its processes
 // This file ships with the device agent alone: it imports only the wire format and its neighbours.
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { sha256Hex, verifyDeviceSignature, workloadManifestMessage, type SignedWorkload, type WorkloadManifest } from '../core/mesh/wire.ts';
@@ -312,30 +312,36 @@ export class Workloads {
     if (!v.ok) return this.#refuse(service, version, v.reason);
     const m = v.value;
     const slot = this.#slot(service, version);
-    const next = `${slot}.next`;
-    rmSync(next, { recursive: true, force: true });
-    mkdirSync(next, { recursive: true, mode: 0o700 });
-    for (const [name, sha] of Object.entries(m.files)) {
-      let bytes: Buffer;
-      try { bytes = await this.#o.fetchFile(service, version, name); } catch (e) { rmSync(next, { recursive: true, force: true }); return { ok: false, said: `Couldn’t download ${name}: ${(e as Error).message}` }; }
-      const got = sha256Hex(bytes);
-      if (got !== sha) { rmSync(next, { recursive: true, force: true }); return this.#refuse(service, version, `${name} doesn’t match its hash (it is ${got.slice(0, 12)}…, the manifest pins ${sha.slice(0, 12)}…). Nothing was installed.`); }
-      // Exactly the bytes that were pinned: never changed, never signed again by Nova.
-      writeFileSync(join(next, name), bytes, { mode: 0o700 });
-    }
-    writeFileSync(join(next, 'manifest.json'), `${JSON.stringify(signed)}\n`, { mode: 0o600 });
-    rmSync(slot, { recursive: true, force: true });
-    mkdirSync(join(this.root, service, 'v'), { recursive: true, mode: 0o700 });
-    renameSync(next, slot);
-    this.#prune(service, version);
-    this.#say(`Installed ${service} ${version}, signed by the hub; every file matches its pinned hash.`);
-    return { ok: true, said: `Installed ${service} ${version}: signed by the hub, every file as pinned.` };
+    // Staging is unique to this install, outside the valid version namespace: `1.next` may
+    // itself be a live version, so `${slot}.next` must never be used as scratch space.
+    mkdirSync(join(this.root, service), { recursive: true, mode: 0o700 });
+    const next = mkdtempSync(join(this.root, service, '.install-'));
+    try {
+      for (const [name, sha] of Object.entries(m.files)) {
+        let bytes: Buffer;
+        try { bytes = await this.#o.fetchFile(service, version, name); } catch (e) { return { ok: false, said: `Couldn’t download ${name}: ${(e as Error).message}` }; }
+        const got = sha256Hex(bytes);
+        if (got !== sha) return this.#refuse(service, version, `${name} doesn’t match its hash (it is ${got.slice(0, 12)}…, the manifest pins ${sha.slice(0, 12)}…). Nothing was installed.`);
+        // Exactly the bytes that were pinned: never changed, never signed again by Nova.
+        writeFileSync(join(next, name), bytes, { mode: 0o700 });
+      }
+      writeFileSync(join(next, 'manifest.json'), `${JSON.stringify(signed)}\n`, { mode: 0o600 });
+      rmSync(slot, { recursive: true, force: true });
+      mkdirSync(join(this.root, service, 'v'), { recursive: true, mode: 0o700 });
+      renameSync(next, slot);
+      this.#prune(service, version);
+      this.#say(`Installed ${service} ${version}, signed by the hub; every file matches its pinned hash.`);
+      return { ok: true, said: `Installed ${service} ${version}: signed by the hub, every file as pinned.` };
+    } finally { rmSync(next, { recursive: true, force: true }); }
   }
 
   async #start(service: string, version: string, as?: RunningView['role']): Promise<Omit<VerbResult, 'state'>> {
     const key = `${service}@${version}`;
     const running = this.#running.get(key);
     if (running && !running.failed) return { ok: true, said: `${service} ${version} is running already.` };
+    // Heartbeats repeating start/switch cannot reset the crash budget. Recovery first stops
+    // the held instance explicitly; another version gets its own watchdog as usual.
+    if (running?.watchdog.safeMode) return { ok: false, said: running.failed! };
     if (running) await this.#end(running);
     const v = this.#verifiedSlot(service, version);
     if (!v.ok) return this.#refuse(service, version, v.reason);
@@ -422,7 +428,7 @@ export class Workloads {
     if (!m) return { ok: false, said: `${service} ${version} has no manifest.` };
     const port = i.ports[m.ports[0]!.name];
     try {
-      const r = await fetch(`http://127.0.0.1:${port}${m.health.http}`, { signal: AbortSignal.timeout(this.#o.probeTimeoutMs ?? 2000) });
+      const r = await fetch(`http://127.0.0.1:${port}${m.health.http}`, { redirect: 'manual', signal: AbortSignal.timeout(this.#o.probeTimeoutMs ?? 2000) });
       await r.arrayBuffer().catch(() => {});
       return r.ok ? { ok: true, said: `${service} ${version} answered its health check.` } : { ok: false, said: `${service} ${version} answered its health check with ${r.status}.` };
     } catch (e) {
@@ -509,6 +515,9 @@ function group(c: ChildProcess, failed: (e: Error) => void): ChildLike {
   // A program that can't be started at all (gone, not executable) says so here, never as a crash
   // of this agent.
   c.on('error', failed);
+  // The leader may exit while descendants still hold the group's resources. End that group
+  // before the watchdog forgets this child or starts another, including TERM-resistant children.
+  c.on('exit', () => { try { if (c.pid) process.kill(-c.pid, 'SIGKILL'); } catch { /* the group is gone */ } });
   return {
     get pid() { return c.pid; },
     on: (event: 'exit', fn: (code: number | null, signal: NodeJS.Signals | null) => void) => c.on(event, fn),

@@ -101,6 +101,7 @@ export class DeviceWorkloads {
     else if (!prog) out.push(`It has no program for ${d.name}, which is ${plat}.`);
     else if (!prog.url.startsWith('file://')) out.push('Its program is at a web address. In this build the hub serves only a program from a file on this computer that it has checked; Nova downloads no program.');
     if (def.secrets.length) out.push(`It needs secrets (${def.secrets.join(', ')}). No credential goes to another device yet: that needs the vault broker, which isn’t built. Run it on the hub instead.`);
+    if (def.contract_tests.length) out.push('Contract tests are not supported on a device yet. Run this service on the hub instead; its contract tests cannot be skipped.');
     if (isCaptureService(def) && def.service !== SCREENPIPE) out.push('It captures, and the device agent reads capture only from Screenpipe in this build.');
     if (def.alongside === 'copy') out.push('alongside “copy” runs a new version on a copy of its state, which a device doesn’t do: use full, shadow or none.');
     if (isCaptureService(def) && def.alongside !== 'none') out.push('It captures, so it can’t run next to its live version: alongside must be none until two copies are shown to run side by side on that system.');

@@ -41,6 +41,16 @@ async function rig() {
   return { h, linux, mac, win, phone, deploy, heartbeat };
 }
 
+test('remote contract tests are refused before assignment rather than silently skipped', async () => {
+  const r = await rig();
+  try {
+    const res = await r.deploy(service({ contract_tests: ['http:/contract-fails'], placement: { mode: 'pinned', device: r.linux.id } }), 'stand-in@1.0.0');
+    assert.ok(res.status >= 400, JSON.stringify(res.body));
+    assert.match(res.body.error, /contract tests.*not supported.*device/i);
+    assert.deepEqual((await r.heartbeat(r.linux.token)).body.workloads ?? [], []);
+  } finally { await r.h.stop(); }
+});
+
 test('placement: containers only on Linux and on no device without K3s; native onto any device whose roles allow; never a thin client; no secrets to a spoke', async () => {
   const r = await rig();
   try {

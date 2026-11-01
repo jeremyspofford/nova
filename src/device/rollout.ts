@@ -183,7 +183,9 @@ export class Rollout {
     }
     // Live already: started if it isn't running and may run (after a restart, or capture turned on),
     // and watched. Failing health several times in a row goes back to the kept version by itself.
-    if (!running(a.version)) {
+    // A held instance still exists: probe it as failed health, preserving its watchdog's crash
+    // history and the usual consecutive-check rollback path instead of asking for a fresh start.
+    if (!s()?.running.some((r) => r.version === a.version)) {
       const r = await run('start');
       if (!r.ok) { this.#report(a.service, a.version, 'live', null, r.said); return st; }
     }
