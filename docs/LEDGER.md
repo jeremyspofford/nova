@@ -6,6 +6,13 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-10-31 · #⟨n⟩ · Two of your decisions recorded: capture holds back when it can't check, and dark designs fill the iPhone's top edge**
+- What changed:
+  - On a device without a trusted model to check captured text for private details, that text will be held, visible in the capture timeline, instead of kept.
+  - In the installed iPhone app, dark designs will draw right up to the top edge; light designs keep the iPhone's own status strip so the time stays readable.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: both are being built. The status bar change will need a look on your phone.
+
 **2026-10-31 · #265 · Nova's words now promise only what its tests show**
 - What changed: Nova's screens, setup questions and help text were reworded to promise only what its own tests can show. For example, Settings now says model calls stay on your devices under local-only, rather than "nothing leaves this machine". Two sentences were simply wrong and are fixed: Nova told itself every command waits for your OK, and that anything that can't be undone always asks. In fact a command runs without asking if you've switched that on; a command that comes after Nova reads something from outside still asks.
 - What you can now do: trust that what Nova tells you about itself has evidence behind it. Nothing works differently; only the words changed.
@@ -300,6 +307,10 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (owner decisions: capture with no trusted model; the iOS status bar).**
+1. **Capture, option B:** on a device with no trusted model for `capture-sensitive`, captured text is held, not kept, after the deterministic rules. It shows in the capture timeline, with a plain notice of the fix, until a trusted model can check it or retention ends. This is recorded in the Decision Service ADR §2.1, and is built with the capture-screening consumers (a Track 1 follow-up).
+2. **Status bar, option C:** design packages declare whether they draw behind the iOS status bar. Dark designs do (`black-translucent`); light designs keep iOS's strip. This is recorded in DESIGN-SYSTEM §5 and built as a small Track 1 PR. It needs a real-iPhone check.
 
 **2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
 - **The bands are derived, not round numbers:**

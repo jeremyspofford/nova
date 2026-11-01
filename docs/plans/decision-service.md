@@ -207,6 +207,10 @@ What the ingest gate's battery (`ingest-screen`) screens, and which seat may see
 - **The cloud opt-in:** in cloud mode, sending capture text to the cloud is a per-source opt-in, off by default. Its setting says what it does in plain words: "screen text from this capture source may be sent to the decision provider for safety checks".
 - **Deterministic checks first:** known sensitive apps and windows (password managers, banking) pause or exclude capture without any model call, per the capture design. Jev handles the grey area the rules can't see, such as secrets inside ordinary documents and pages. It does not replace the structural rules.
 - **Provenance and visibility:** verdicts are logged with the capture item's provenance (template version, provider, scores), like every Decision Service call. A "sensitive" verdict on a frame is visible in the capture timeline. Nothing is ever deleted silently.
+- **With no trusted model on a device** (owner decision, 2026-10-31, option B):
+  - **What happens:** captured text is **held, not kept**, after the deterministic rules run. It waits in a holding area that is visible in the capture timeline, until a trusted model on that device can check it, or its retention ends.
+  - **What the person sees:** a plain notice saying why, and what fixes it. For example: "This device can't check captured text for private details yet, so it's being held, not kept. Add the Tev1 4B model to fix that."
+  - **What was rejected:** keeping text after the rules alone, because the rules can't see grey-area secrets.
 
 ## 3. The decision log
 
