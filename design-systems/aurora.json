@@ -1,6 +1,6 @@
 {
   "id": "aurora",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "kind": "design-system",
   "name": "Aurora",
   "description": "Morning light through frosted glass.",
@@ -130,5 +130,6 @@
   },
   "content_rules": {},
   "extras": [],
-  "preview": []
+  "preview": [],
+  "ios_status_bar": { "light": "default", "dark": "translucent" }
 }

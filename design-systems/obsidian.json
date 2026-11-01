@@ -1,6 +1,6 @@
 {
   "id": "obsidian",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "kind": "design-system",
   "name": "Obsidian",
   "description": "A quiet control room. Always dark.",
@@ -104,5 +104,6 @@
   },
   "content_rules": {},
   "extras": [],
-  "preview": []
+  "preview": [],
+  "ios_status_bar": "translucent"
 }

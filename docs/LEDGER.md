@@ -6,10 +6,22 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #270 · Dark designs fill the top of the iPhone screen; light ones keep the iPhone's strip**
+- What changed: on an iPhone with Nova on the Home Screen, the dark designs (Orb Teal, Nova, Obsidian, and Aurora and Paper in dark mode) now fill the top of the screen behind the time and battery, so there's no empty band above Nova. The light designs keep iPhone's own strip, because iPhone would make the time and battery white there, which you couldn't read on a light page.
+- What you can now do: use the installed app edge to edge in a dark design. Settings › Appearance tells you that after switching to or from a dark design, you may need to close Nova and open it again before the top of the screen matches.
+- Still unfinished: checking it on your real iPhone. The tests can check the setting Nova sends and that nothing sits under the time or the home bar, but no test browser runs as an installed iPhone app.
+
 **2026-10-31 · #268 · Devices say what they're for, and setup shows what Nova found**
 - What changed: when you add a device, you now say what it's for (a screen only, a possible future hub, running models, storage, capture, other services), and you confirm it on the hub. Nova sends a screen-only device no model work and no capture. Setup now starts with this computer: what it is, that it's your hub, and how Nova runs its services here. Then, if you say so, it looks for things on this computer and your network (finding, not connecting), offers to bring in your notes, bookmarks and calendar (each checked first, then waiting for your OK), and ends on a page showing what it found and one thing to do next.
 - What you can now do: pick a device's roles when you add it, and change them in Settings › Devices (adding asks for your explicit confirmation; removing asks first and says what would stop). A computer runs local models for Nova only if it is set for compute, and captures only if it is a capture source; computers already doing either keep the role. See how Nova runs services on this computer in Settings › Services.
 - Still unfinished: Nova doesn't run its own services on other devices yet (models and capture on a computer now need it to have that role), and Kubernetes isn't available. Making a device the hub is a later step. Looking on your network hasn't been tried on a real network yet.
+
+**2026-10-31 · #269 · Two of your decisions recorded: capture holds back when it can't check, and dark designs fill the iPhone's top edge**
+- What changed:
+  - On a device without a trusted model to check captured text for private details, that text will be held, visible in the capture timeline, instead of kept.
+  - In the installed iPhone app, dark designs will draw right up to the top edge; light designs keep the iPhone's own status strip so the time stays readable.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: both are being built. The status bar change will need a look on your phone.
 
 **2026-10-31 · #265 · Nova's words now promise only what its tests show**
 - What changed: Nova's screens, setup questions and help text were reworded to promise only what its own tests can show. For example, Settings now says model calls stay on your devices under local-only, rather than "nothing leaves this machine". Two sentences were simply wrong and are fixed: Nova told itself every command waits for your OK, and that anything that can't be undone always asks. In fact a command runs without asking if you've switched that on; a command that comes after Nova reads something from outside still asks.
@@ -317,6 +329,22 @@ built-ins only.
 - **Each package expresses the states in its own visual language** through `orb_states{}`. The values and motion are the theme's; the meanings are the system's.
 - **The F3 fix (#254's lit sphere) stays.**
 
+**2026-10-31 (owner decision 2C: the iOS status bar per design; Track 1).** DESIGN-SYSTEM §5 (PR #269); plan `docs/plans/ios-status-bar.md`.
+- **Each package declares it:** `ios_status_bar` is `translucent` (draws behind the status bar, `black-translucent`) or `default` (iOS's own strip), or `{ light, dark }` for a package with both looks.
+  - Orb Teal, Nova and Obsidian (dark only): `translucent`. Companion Light (light only): `default`. Aurora and Paper (light with a dark mode): `{ light: default, dark: translucent }`.
+  - Each built-in's patch version went up by one.
+- **The check:** `translucent` over a light look is a problem, because iOS makes the status text white. `default` over a dark look is only a warning.
+- **A package without the field:** `check:themes` fails it, so every authored package declares it. Nova still applies it with an explicit `default` and a warning: that is iOS's behaviour with no tag, readable on any look, and older or hand-made packages keep working.
+- **The tag:**
+  - The server writes the words of the device's design into `ui/index.html` before sending it. The device is known from a first-party `nova-appearance` cookie that `theme.js` sets; with no cookie, the person's design is used.
+  - An inline script picks light or dark as the CSS does (the mode, or the system's preference under Auto).
+  - `theme.js` updates the tag on a live swap, a mode change and a system scheme change. iOS may read it only at launch, and Settings › Appearance says so.
+- **The safe area:** no CSS change. The shell from PR #267 keeps `env(safe-area-inset-top)` clear once, so the top bar starts right under the inset.
+- **The gate:**
+  - `tests/themes.test.js`: the declarations, the missing-field rule and the refusals.
+  - `tests/ui/ios-status-bar.test.ts`: 20 design × mode × scheme cases in Chromium and WebKit, as sent, at first parse and once loaded; a live swap; Chromium-emulated insets of 47 and 59 px plus landscape.
+  - Not checked on a real iPhone: no test browser runs as an installed iOS app.
+
 **2026-10-31 (M10f: device roles, placement, and onboarding, supervisor only).** Branch `m10f/roles-onboarding`.
 Plan `docs/plans/M10f.md`, evidence `docs/evidence/m10f-gate.md`, built from the orchestration ADR's M10f
 phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in.
@@ -364,6 +392,10 @@ phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in
   three backed (`import`, `memory-review`, `first-run`), three worded to named test evidence.
 - **The first win** is measured at machine speed (the API path, and a browser path in Chromium) with
   each step's time recorded; the human path is an estimate (words read, answers, clicks), said so.
+
+**2026-10-31 (owner decisions: capture with no trusted model; the iOS status bar).**
+1. **Capture, option B:** on a device with no trusted model for `capture-sensitive`, captured text is held, not kept, after the deterministic rules. It shows in the capture timeline, with a plain notice of the fix, until a trusted model can check it or retention ends. This is recorded in the Decision Service ADR §2.1, and is built with the capture-screening consumers (a Track 1 follow-up).
+2. **Status bar, option C:** design packages declare whether they draw behind the iOS status bar. Dark designs do (`black-translucent`); light designs keep iOS's strip. This is recorded in DESIGN-SYSTEM §5 and built as a small Track 1 PR. It needs a real-iPhone check.
 
 **2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
 - **The bands are derived, not round numbers:**

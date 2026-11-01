@@ -1,6 +1,6 @@
 {
   "id": "orb-teal",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "kind": "design-system",
   "name": "Orb Teal",
   "description": "Deep teal light, a luminous orb and frosted glass cards. The default.",
@@ -91,5 +91,6 @@
   },
   "content_rules": {},
   "extras": [],
-  "preview": []
+  "preview": [],
+  "ios_status_bar": "translucent"
 }

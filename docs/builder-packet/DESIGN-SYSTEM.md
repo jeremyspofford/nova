@@ -89,6 +89,13 @@ Layouts are chosen by viewport + posture, never by device name:
 - **Desktop/laptop** — Calm Control (G): slim rail (orb + ≤6 destinations), center column (conversation/brief), optional right column with at most three quiet cards (Active Tasks, Device Mesh, System Health) — collapsible, off by default on smaller widths.
 Every layout exposes the same features; layouts differ in arrangement only.
 
+**The iOS status bar in the installed app** (owner decision, 2026-10-31, option C):
+- **Dark designs:** each design package declares whether it draws behind the status bar. Dark designs do (`black-translucent`), so Nova's background fills to the top edge.
+- **Light designs:** they keep iOS's own strip, because iOS forces the status text to white when an app draws behind it.
+- **Re-opening the app:** iOS reads this setting at launch, so changing to or from a dark design may need the installed app re-opened before it shows. The setting says so.
+- **The safe-area rule still holds:** no control sits under the cutout or the home indicator.
+- **Not yet checked:** on a real iPhone; no test browser runs as an installed iOS app.
+
 ## 6. Content and formatting rules (binding)
 - Implements NOVA-SPEC §5: concise by default, plain language, overview first, depth on demand.
 - Per-channel renderings of the same content object: **spoken** (no markup, short sentences, numbers spoken naturally), **chat** (light structure, short paragraphs, lists only when enumerating real items), **card** (headline + ≤3 lines + one action), **brief/report** (structured, evidence attached), **notification** (one line + one action).
