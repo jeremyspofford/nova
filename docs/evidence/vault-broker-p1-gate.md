@@ -9,6 +9,12 @@
 - No real vault, key file or secret on this machine was read.
 - The no-Kubernetes tripwire was armed for every run.
 
+## Takeover live review — completed, owner B still pending
+
+Independent review pinned `8ca4b827` and verified all three test-first fixes at `3faa3463`; the coordinated branch merges main without rebasing. Final independent suite: 88 passed, one real-keychain skip, zero failed. The coordinator independently reran all six live synthetic probes, with the same passing outcomes. After merging M10h and resolving Nova-owned entries to retain both broker/ and capture/, disposable Docker verification passed 89 tests with one real-keychain skip (90 total), including all broker/legacy-vault tests and the existing M7 factory-reset browser flow. Typecheck and diff check passed. Broker/client/legacy-writer sources are byte-for-byte identical to independently reviewed `3faa3463`. Report: `docs/reviews/vault-independent-live-review-2026-11-01.md`; individual RED/GREEN records: `vault-proposal-policy-review-fixes.md`, `vault-migration-recovery-review-fix.md`, `vault-proposal-card-review-fix.md` in this directory.
+
+S4 and S6 remain permitted, demonstrated deferrals: old checkpoints retain old credentials/keys, and revocation cannot retract already delivered holder material. Core consumers remain on the legacy vault; no live confidentiality cutover is claimed. The owner’s second findings set B, exact-head CI and merge-time Track 1 NOTES still gate merging #275.
+
 ## P1a: the broker, Nova Vault, fixed verbs and IPC
 
 **The branch:** `vault/broker-phase1`, from main at `6d51c5d1`. **No migration:** the broker keeps no rows in `nova.db`.

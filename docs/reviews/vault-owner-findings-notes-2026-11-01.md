@@ -41,6 +41,6 @@ All runs use Node 26.3.1, disposable homes and file key stores, loopback targets
 
 ## Unfinished merge gates
 
-The independent adversarial reviewer was interrupted by an automatic safety filter. That required review remains INCOMPLETE; this defensive implementation did not redo it or bypass the filter. The other model's findings set is still outstanding. Neither gate is satisfied by the regression tests or by this owner findings A follow-up. Parent coordination is required before updating the original broker branch; this branch must not be merged directly.
+The historical interrupted attempt is superseded by the completed independent live review in `docs/reviews/vault-independent-live-review-2026-11-01.md`. Its three additional findings were fixed test-first and independently verified at `3faa3463`. The coordinator reran all six live probes: each passed; S4/S6 limits were confirmed rather than called fixed. Owner findings set B remains outstanding, and exact-head CI plus the merge-time Track 1 NOTES remain required. No merge is claimed. The original owner A RED/GREEN record above is unchanged.
 
 Track 1 should apply any desired ledger/roadmap evidence updates and regenerate the self-contained review packet's source excerpts against the coordinated final head. Its reviewed snapshot remains labeled historical here; the claims section includes SEC-06's concrete exception.

@@ -7,15 +7,19 @@
 - the core client that talks to it, `src/core/broker/client.ts`;
 - the cooperating legacy writer, `src/core/vault.ts`, needed for migration consistency.
 
-**What's here:** the whole broker, client and cooperating legacy writer: 18 files and 3402 source lines, at the end of this document. The broker alone remains 2,666/3,000 lines under its boundary test's counting rule.
+**What's here:** the whole broker, client and cooperating legacy writer: 18 files and 3417 source lines, at the end of this document. The broker alone remains 2,681/3,000 lines under its boundary test's counting rule.
 
-**Source snapshot:** `40952a88a9d6edd3779492150486faf3fb5f94f1`, including owner findings A fixes. The coordinated branch merges main without rebasing. The previous reviewed packet remains available in git at `7b39b0c3`.
+**Source snapshot:** `1f9977c6`, including owner findings A, all three independent live-review fixes, and current main through M10h. Broker sources match independently reviewed `3faa3463`. The coordinated branch merges main without rebasing. The previous reviewed packet remains available in git at `7b39b0c3`.
+
+**Integration status:** this is unmerged P1a groundwork. The running app still reads the legacy vault; supervisor startup, consumer cutover, sealed console fields and the full canary gate remain the branch’s Track 1/P1b/P1c work. Descriptions of core using only the client refer to the isolated client harness and the intended cutover, not a completed live-app migration. The owner’s second findings set B is still outstanding; this packet and green tests do not satisfy that merge gate.
+
+Independent live-review evidence is `docs/reviews/vault-independent-live-review-2026-11-01.md`: proposal revocation/rollback, interrupted legacy rekey recovery, and complete effective-binding approval cards/digests each have RED→GREEN tests. S4 pre-migration checkpoint retention and S6 already-received holder material were demonstrated and remain explicit deferrals, as permitted by the takeover brief.
 
 **What comes back:** your findings go to the owner, who triages them like any review. A finding that reproduces gets a failing test first.
 
 This document is self-contained: you need nothing else to review the code. Paths are in the repository `jeremyspofford/nova`, branch `vault/broker-phase1`.
 
-**This is the third version, incorporating owner findings A.** An in-house adversarial review of the first (`0b7457da`) found five blocking problems:
+**This version incorporates owner findings A and the completed independent live review.** An in-house adversarial review of the first (`0b7457da`) found five blocking problems:
 - a run ticket core could redeem;
 - the migration answering guesses and moving without approval;
 - scrubbed echoes of core's own text;
@@ -978,10 +982,10 @@ export class Broker {
   }
 
   // A revocation (a binding removed, a consent withdrawn, details changed) re-keys the vault, so an
-  // item file rolled back to before it doesn't open (S5). Grants for the item go too.
-  #revoked(id: string): void {
-    this.store.rotateRoot();
-    this.#forgetGrants(id);
+  // item file rolled back to before it doesn't open (S5). Grants for every changed item go too.
+  #revoked(...ids: string[]): void {
+    if (ids.length) this.store.rotateRoot();
+    for (const id of ids) this.#forgetGrants(id);
     this.#reindex();
   }
   #forgetGrants(id: string): void { for (const g of [...this.#grants]) if (g.startsWith(`${id}|`)) this.#grants.delete(g); }
@@ -1110,17 +1114,19 @@ export class Broker {
       let origin = m.origin;
       if (x.origin !== undefined && x.origin !== null) { try { origin = canonicalTarget({ kind: 'http', origin: x.origin }).target; } catch { throw new Failed('A proposed site isn’t a canonical https origin.'); } }
       const cls = x.class === 'standard' || x.class === 'sensitive' ? x.class : suggestClass(origin, m.kind);
-      const bindings = Array.isArray(x.bind) ? x.bind.slice(0, 5).map((b) => this.#binding(b)) : [];
-      if (cls === 'sensitive' && [...m.bindings.filter((b) => !bindings.some((n) => n.target === b.target)), ...bindings].some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
-      return { id, m, origin, cls, bindings };
+      const proposed = Array.isArray(x.bind) ? x.bind.slice(0, 5).map((b) => this.#binding(b)) : [];
+      // The card, approval digest and saved policy all describe the complete resulting set.
+      const bindings = [...m.bindings.filter((b) => !proposed.some((n) => n.target === b.target)), ...proposed];
+      if (cls === 'sensitive' && bindings.some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
+      return { id, m, origin, cls, bindings, proposed };
     });
     const items = plan.map((x) => ({ name: x.m.name, kind: x.m.kind, origin: x.origin, username: x.m.username, class: x.cls, bindings: x.bindings.map(cardBinding), target: x.bindings.map((b) => b.target).join(', ') || 'unbound', flags: x.bindings.flatMap((b) => this.#flags(b.target, b.kind)) }));
     const { id: approval } = this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ ref: x.id, origin: x.origin, class: x.cls, bindings: x.bindings.map(cardBinding) })) }, { verb: 'create', what: `Bind ${plan.length} credential(s) moved from the old vault`, tier: 3, items, approving: 'Each is usable only on the target shown. Items left unbound can’t be used until you bind them.' }, true);
     for (const x of plan) {
-      for (const b of x.bindings) if (b.consent) b.consent.approval_id = approval;
-      this.store.setMeta(x.id, stripIndex({ ...x.m, origin: x.origin, class: x.cls, bindings: [...x.m.bindings.filter((b) => !x.bindings.some((n) => n.target === b.target)), ...x.bindings] }));
+      for (const b of x.proposed) if (b.consent) b.consent.approval_id = approval;
+      this.store.setMeta(x.id, stripIndex({ ...x.m, origin: x.origin, class: x.cls, bindings: x.bindings }));
     }
-    this.#reindex();
+    this.#revoked(...plan.map((x) => x.id));
     return { refs: plan.map((x) => this.#refMeta(x.id)) };
   }
 }
@@ -2769,16 +2775,29 @@ export function readOldVault(home: string, o: { env?: NodeJS.ProcessEnv; store?:
   const env = o.env ?? process.env;
   const disk = fileKeyStore(join(home, 'vault', 'key'));
   const kc = o.store ? o.store(f.id) : chooseStore('nova-vault', `vault-${f.id}`, join(home, 'vault', 'key'), { mode: keyMode(env), env });
-  for (const s of [kc, disk]) {
-    let key: Buffer | null = null;
-    try { key = s.read(); } catch { key = null; }
-    if (!key || fp(key) !== f.fp) continue;
-    const d = createDecipheriv('aes-256-gcm', key, Buffer.from(f.nonce, 'base64'));
-    d.setAAD(AAD(f.id));
-    d.setAuthTag(Buffer.from(f.tag, 'base64'));
-    let map: Map<string, string>;
-    try { map = new Map(Object.entries(JSON.parse(Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8')) as Record<string, string>)); } catch { throw new Error('The old vault doesn’t open with its key.'); }
-    return { id: f.id, map, key, store: s };
+  const id = f.id;
+  // The launcher holds withOldVaultLock. If a re-key saved its new key but stopped before the
+  // rename, recover only a same-vault pending file that authenticates under that saved key.
+  // An openable current file wins; malformed, unrelated or damaged pending files stay untouched.
+  for (const pending of [false, true]) {
+    if (pending) {
+      let next: VaultFile;
+      try { next = JSON.parse(readFileSync(`${file}.tmp`, 'utf8')) as VaultFile; } catch { break; }
+      if (next?.v !== 1 || next.alg !== 'aes-256-gcm' || next.id !== id) break;
+      f = next;
+    }
+    for (const s of [kc, disk]) {
+      let key: Buffer | null = null;
+      try { key = s.read(); } catch { key = null; }
+      if (!key || fp(key) !== f.fp) continue;
+      const d = createDecipheriv('aes-256-gcm', key, Buffer.from(f.nonce, 'base64'));
+      d.setAAD(AAD(f.id));
+      d.setAuthTag(Buffer.from(f.tag, 'base64'));
+      let map: Map<string, string>;
+      try { map = new Map(Object.entries(JSON.parse(Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8')) as Record<string, string>)); } catch { throw new Error('The old vault doesn’t open with its key.'); }
+      if (pending) { renameSync(`${file}.tmp`, file); chmodSync(file, 0o600); }
+      return { id: f.id, map, key, store: s };
+    }
   }
   throw new Error('The old vault’s key isn’t where it should be, so nothing can be moved from it.');
 }
