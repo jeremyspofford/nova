@@ -227,10 +227,11 @@ export function scaleFindings(tokens: Record<string, unknown>): string[] {
   if (rc === null || ri === null || rc % 4 || ri % 4) out.push(`radius/card (${say(tokens['radius/card'])}) and radius/input (${say(tokens['radius/input'])}) are steps of the 4pt grid.`);
   else if (!(ri < rc)) out.push(`radius/input (${ri}px) must be smaller than radius/card (${rc}px): a control sits inside a container.`);
   if (rp === null || rp < 999) out.push(`radius/pill is ${say(tokens['radius/pill'])}; it is always a full pill (999px), and only fixed-height tokens take it.`);
-  // Motion: one family. Fast, standard and slow in order within 150–300 ms; the loops whole multiples of slow.
+  // Motion: one family. Fast, standard and slow in order; the loops whole multiples of slow.
   const d = (n: string) => (typeof tokens[n] === 'string' && validValue('duration', tokens[n]) ? ms(tokens[n] as string) : NaN);
   const [fast, std, slow, pulse, breathe] = ['motion/duration-fast', 'motion/transition', 'motion/duration-slow', 'motion/pulse', 'motion/breathe'].map(d);
-  if (!(MOTION_MIN_MS <= fast! && fast! < std! && std! < slow! && slow! <= MOTION_MAX_MS)) out.push(`The durations are one family: motion/duration-fast < motion/transition < motion/duration-slow, within ${MOTION_MIN_MS}–${MOTION_MAX_MS}ms; got ${fast}, ${std} and ${slow}ms.`);
+  // (Their range, 150–300 ms, is M9's own warning above; here, only that they are one ordered family.)
+  if (!(fast! < std! && std! < slow!)) out.push(`The durations are one family, in order: motion/duration-fast < motion/transition < motion/duration-slow; got ${fast}, ${std} and ${slow}ms.`);
   for (const [n, v] of [['motion/pulse', pulse], ['motion/breathe', breathe]] as const) if (!(v! > 0 && slow! > 0 && v! % slow! === 0)) out.push(`${n} (${v}ms) must be a whole multiple of motion/duration-slow (${slow}ms), so the loops belong to the same family.`);
   if (typeof tokens['motion/ease'] !== 'string' || !/^cubic-bezier\(/.test(tokens['motion/ease']) || overshoots(tokens['motion/ease'])) out.push('motion/ease is the one curve: a cubic-bezier that never overshoots.');
   return out;
