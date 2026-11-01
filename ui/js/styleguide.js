@@ -162,7 +162,7 @@ const topologyStates = [
   ['service', 'Service versions / actions'], ['capture', 'Capture versions / actions'],
   ['empty', 'Empty'], ['loading', 'Loading'], ['failed', 'Failed refresh'], ['long-names', 'Long names'],
   ['approval-service', 'Promote service / tier 2'], ['approval-capture', 'Promote capture / tier 3'],
-  ['rollback-service', 'Roll back service / tier 2'], ['rollback-capture', 'Roll back capture / tier 3'],
+  ['rollback-service', 'Roll back service / tier 2'], ['rollback-capture', 'Roll back capture / tier 2'],
 ];
 const topologyVersions = [
   { name: '2.4.1', role: 'Current', detail: 'Serving on this machine' },
@@ -209,7 +209,7 @@ function topologyBody() {
   const s = m?.services.find((x) => x.id === topologyService);
   if (topologyApproval && s) {
     const verb = topologyApproval === 'promote' ? 'Promote' : 'Roll back';
-    return `<section class="topology" aria-label="Approval specimen" data-topology-state="${topologyState}"><button type="button" class="btn quiet topology-back" data-topology-back>Back to versions</button><div class="sheet-inner panel">${approvalSheet({ id: 'topology-specimen', title: `${verb} ${s.name}`, owner: m.name, approval_tier: s.capture ? 3 : 2, privacy_mode: 'local-only', brief: { goal: `${verb} ${s.name} ${topologyApproval === 'promote' ? 'from 2.4.1 to 2.5.0' : 'from 2.4.1 to 2.4.0'}. ${s.capture ? 'This changes the capture process on Study desktop.' : 'This changes which version serves on Home hub.'}` } })}<p class="topology-meta" data-topology-notice role="status">Illustrative approval. No change will be made.</p></div></section>`;
+    return `<section class="topology" aria-label="Approval specimen" data-topology-state="${topologyState}"><button type="button" class="btn quiet topology-back" data-topology-back>Back to versions</button><div class="sheet-inner panel">${approvalSheet({ id: 'topology-specimen', title: `${verb} ${s.name}`, owner: m.name, approval_tier: topologyApproval === 'promote' && s.capture ? 3 : 2, privacy_mode: 'local-only', brief: { goal: `${verb} ${s.name} ${topologyApproval === 'promote' ? 'from 2.4.1 to 2.5.0' : 'from 2.4.1 to 2.4.0'}. ${s.capture ? 'This changes the capture process on Study desktop.' : 'This changes which version serves on Home hub.'}` } })}<p class="topology-meta" data-topology-notice role="status">Illustrative approval. No change will be made.</p></div></section>`;
   }
   return renderTopology({ machines, selectedMachine: topologyMachine, selectedService: topologyService, state: topologyState });
 }

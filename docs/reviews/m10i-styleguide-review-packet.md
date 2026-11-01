@@ -6,6 +6,8 @@ Open `/styleguide?entry=topology` (anchor `#sg-topology`). Each specimen can als
 
 Independent review: [initial findings](m10i-styleguide-independent-review.md), [clean scoped re-review](m10i-styleguide-independent-rereview.md). The stale-service drill-in finding was reproduced, fixed and rechecked; the existing Node-only localStorage warning is disclosed. Task 1 spec compliance passes and code/design quality is approved. This is not approval or completion of M10i app integration.
 
+A subsequent ADR check found that the reviewed revision had incorrectly shown capture manual rollback at tier 3. The action-specific correction below is pending independent recheck; the prior review links remain historical evidence, not approval of this new revision.
+
 ## Review the three layers
 
 These are direct Chromium browser captures of `.topology`, rendered in Orb Teal, not edited images:
@@ -45,7 +47,7 @@ Filename rule: `<engine>/<state>-<posture>.png`. These 112 full-page captures pr
 | Promote ordinary service, tier 2 | `/styleguide?entry=topology&state=approval-service` | [Desktop](../screenshots/m10i-styleguide/webkit/approval-service-desktop.png) |
 | Promote capture, tier 3 | `/styleguide?entry=topology&state=approval-capture` | [Phone](../screenshots/m10i-styleguide/chromium/approval-capture-phone.png) |
 | Roll back ordinary service, tier 2 | `/styleguide?entry=topology&state=rollback-service` | [Phone](../screenshots/m10i-styleguide/webkit/rollback-service-phone.png) |
-| Roll back capture, tier 3 | `/styleguide?entry=topology&state=rollback-capture` | [Desktop](../screenshots/m10i-styleguide/webkit/rollback-capture-desktop.png) |
+| Roll back capture, tier 2 | `/styleguide?entry=topology&state=rollback-capture` | [Desktop](../screenshots/m10i-styleguide/webkit/rollback-capture-desktop.png) |
 
 ## Verification
 
@@ -64,7 +66,7 @@ git diff --check
 
 Observed RED: the first `scripts/ui-test.sh tests/ui/m10i-styleguide.test.ts` run failed its assertion `missing named topology entry` (`0 !== 1`). No renderer or entry existed yet.
 
-Observed GREEN: the focused browser file passes all five tests, with no skips. It checks all 14 states on phone and desktop in all six installed starter packages in Chromium and WebKit, plus tablet/half-open widths in Orb Teal: 392 state/package/posture/engine combinations. Applied theme CSS is awaited before checking. It verifies no page overflow or clipped tested text, no browser errors, semantic machine buttons and phone list, long service names after drill-in, real keyboard Tab/Enter navigation and visible focus, return-focus restoration, both disagreeing source reasons and their ages, tier-2/tier-3 promotion and rollback sheets, tier-3 confirmation gating, and zero mutation requests during demonstrations.
+Observed GREEN: the focused browser file passes all five tests, with no skips. It checks all 14 states on phone and desktop in all six installed starter packages in Chromium and WebKit, plus tablet/half-open widths in Orb Teal: 392 state/package/posture/engine combinations. Applied theme CSS is awaited before checking. It verifies no page overflow or clipped tested text, no browser errors, semantic machine buttons and phone list, long service names after drill-in, real keyboard Tab/Enter navigation and visible focus, return-focus restoration, both disagreeing source reasons and their ages, ordinary-service promotion at tier 2, capture promotion at tier 3, both manual rollbacks at tier 2, tier-3 confirmation gating, and zero mutation requests during demonstrations.
 
 The renderer's hostile-string check covers names, IDs, roles, versions, placement and reasons, plus deterministic output and unchanged input. A second RED→GREEN test uses a 47-minute age and no prior observation: failed refresh must retain supplied age rather than inventing freshness. The 18-minute example now exists only in the styleguide fixture.
 
@@ -97,6 +99,19 @@ git diff --check
 
 Observed RED: 3/5 pass, both browser tests fail on missing supplied service age. Observed GREEN: 5/5 browser tests, 392 combinations plus both stale drill-in routes; 13/13 existing static coverage/UI-review tests, with the warning above. No broad host-suite rerun was made. Affected service/capture/attention images and service crops were regenerated; unchanged-state images were retained from the initial verified capture.
 
+## Fix round 2: action-specific approval tiers
+
+The binding M10 ADR distinguishes capture promotion from manual rollback. The specimen now keeps all four cases explicit:
+
+| Action | Approval tier |
+|---|---|
+| Ordinary-service promotion | 2 |
+| Capture promotion | 3, with explicit confirmation |
+| Ordinary-service manual rollback | 2 |
+| Capture manual rollback | 2 |
+
+The browser expectations use this four-case table. Before the fix both engines failed `rollback-capture: action-specific ADR tier` (`3 !== 2`). After the fix the full focused matrix passes, including clicking Review rollback from capture versions and completing its inert tier-2 specimen without a tier-3 checkbox. Capture and ordinary-service version copy now name promotion and manual rollback separately. Capture/stale-capture version images, capture rollback images, and the affected direct crops were regenerated; other evidence was preserved. No application/backend action path changed.
+
 ## Slop check, per specimen
 
 Scores apply to the rendered component, not to the whole styleguide catalogue. The evidence links above show each surface. The columns are the eight DESIGN-SYSTEM §0.4 items in order.
@@ -116,7 +131,7 @@ Scores apply to the rendered component, not to the whole styleguide catalogue. T
 | Promote ordinary service | N/A: existing sheet | Pass: facts and action left | Pass: none added | Pass: only Approve is primary | Pass: title/body/facts | Pass: token lint | N/A: no icons | N/A: populated |
 | Promote capture | N/A: existing sheet | Pass: facts and action left | Pass: none added | Pass: only Confirm is primary | Pass: title/body/facts | Pass: token lint | N/A: no icons | N/A: populated |
 | Roll back ordinary service | N/A: existing sheet | Pass: facts and action left | Pass: none added | Pass: only Approve is primary | Pass: title/body/facts | Pass: token lint | N/A: no icons | N/A: populated |
-| Roll back capture | N/A: existing sheet | Pass: facts and action left | Pass: none added | Pass: only Confirm is primary | Pass: title/body/facts | Pass: token lint | N/A: no icons | N/A: populated |
+| Roll back capture | N/A: existing sheet | Pass: facts and action left | Pass: none added | Pass: only Approve is primary | Pass: title/body/facts | Pass: token lint | N/A: no icons | N/A: populated |
 
 Self-review inspected actual Chromium and WebKit screenshots covering every distinct state, all four viewport sizes, long names, phone approval wrapping, both age reasons, and the eight component captures. The brief's plain neutral language and existing token family are retained. No palette, font family, icon set, runtime dependency or motion pattern was introduced.
 

@@ -86,9 +86,12 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               assert.equal(await p.locator('.topology [data-status="verified"]').count(), 0);
             }
             if (state.includes('approval') || state.includes('rollback')) {
-              const capture = state.includes('capture');
-              assert.equal(await p.locator('.approval-sheet').getAttribute('data-tier'), capture ? '3' : '2');
-              assert.equal(await p.locator('[data-action="approve"]').isDisabled(), capture);
+              // ADR M10 tiers: only capture promotion is tier 3; both manual rollbacks are tier 2.
+              const tiers: Record<string, number> = { 'approval-service': 2, 'approval-capture': 3, 'rollback-service': 2, 'rollback-capture': 2 };
+              const tier = tiers[state]!;
+              assert.equal(await p.locator('.approval-sheet').getAttribute('data-tier'), String(tier), `${state}: action-specific ADR tier`);
+              assert.equal(await p.locator('[data-action="approve"]').isDisabled(), tier === 3);
+              assert.equal(await p.locator('[name="confirm"]').count(), tier === 3 ? 1 : 0);
             }
             if (state === 'failed') {
               assert.match(await p.locator('.topology').innerText(), /last observation is 18 minutes old/i);
@@ -150,6 +153,13 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         await p.locator('[data-topology-action="promote"]').click();
         assert.equal(await p.locator('[data-action="approve"]').isDisabled(), true);
         await p.locator('[name="confirm"]').check();
+        assert.equal(await p.locator('[data-action="approve"]').isEnabled(), true);
+        await p.locator('[data-action="approve"]').click();
+        assert.match(await p.locator('[data-topology-notice]').innerText(), /No change was made/);
+        await p.locator('[data-topology-back]').click();
+        await p.locator('[data-topology-action="rollback"]').click();
+        assert.equal(await p.locator('.approval-sheet').getAttribute('data-tier'), '2', 'capture manual rollback asks at tier 2');
+        assert.equal(await p.locator('[name="confirm"]').count(), 0);
         assert.equal(await p.locator('[data-action="approve"]').isEnabled(), true);
         await p.locator('[data-action="approve"]').click();
         assert.match(await p.locator('[data-topology-notice]').innerText(), /No change was made/);
