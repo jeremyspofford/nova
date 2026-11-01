@@ -60,7 +60,7 @@
 | **ECE**: over every (case, question) pair, with Part 1's method (10 bins; an unanswered case at p = 0.5, counted against the model) | **≤ 0.10** | As Part 1 |
 
 - **A case's expected outcome** is the rule applied to its labels (each true label as "yes", each false label as "no"), so the expected outcome and the labels can't disagree.
-- **Unanswered cases:** for false saves they count as not saved, since the consumer falls back to today's save; for recall, as missed.
+- **Unanswered cases count against the model both ways.** The consumer then falls back to today's save, so an unanswered case is a false save where saving is wrong, and a missed save where saving is right, since the gate didn't save it. *(Corrected before any run. The template commit's wording said the opposite for false saves; the scoring code, `eval-memory.ts`, is the definition.)*
 - **Reported, not bounded:** contradiction flags and duplicate merges, each against its expected cases, and the full outcome accuracy.
 - **Deterministic:** exact duplicates merge 100% of the time, with no model call. That is a code property, checked in CI.
 - **A size passes** only if all three bounds hold. The verdict per size goes in the service's verdict store.

@@ -1,0 +1,11 @@
+{
+  "bounds": {
+    "false_save_max": 0.05,
+    "save_recall_min": 0.75,
+    "ece_max": 0.1,
+    "bins": 10
+  },
+  "pre_run_commit": null,
+  "cases_sha256": null,
+  "records": []
+}
