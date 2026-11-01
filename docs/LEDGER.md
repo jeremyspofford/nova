@@ -11,6 +11,13 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: pick a device's roles when you add it, and change them in Settings › Devices (adding asks for your explicit confirmation; removing asks first and says what would stop). A computer runs local models for Nova only if it is set for compute, and captures only if it is a capture source; computers already doing either keep the role. See how Nova runs services on this computer in Settings › Services.
 - Still unfinished: Nova doesn't run its own services on other devices yet (models and capture on a computer now need it to have that role), and Kubernetes isn't available. Making a device the hub is a later step. Looking on your network hasn't been tried on a real network yet.
 
+**2026-10-31 · #269 · Two of your decisions recorded: capture holds back when it can't check, and dark designs fill the iPhone's top edge**
+- What changed:
+  - On a device without a trusted model to check captured text for private details, that text will be held, visible in the capture timeline, instead of kept.
+  - In the installed iPhone app, dark designs will draw right up to the top edge; light designs keep the iPhone's own status strip so the time stays readable.
+- What you can now do: Nothing in the app changed: paperwork only.
+- Still unfinished: both are being built. The status bar change will need a look on your phone.
+
 **2026-10-31 · #265 · Nova's words now promise only what its tests show**
 - What changed: Nova's screens, setup questions and help text were reworded to promise only what its own tests can show. For example, Settings now says model calls stay on your devices under local-only, rather than "nothing leaves this machine". Two sentences were simply wrong and are fixed: Nova told itself every command waits for your OK, and that anything that can't be undone always asks. In fact a command runs without asking if you've switched that on; a command that comes after Nova reads something from outside still asks.
 - What you can now do: trust that what Nova tells you about itself has evidence behind it. Nothing works differently; only the words changed.
@@ -353,6 +360,10 @@ phase (Points 5, 9, 11; Decision 2) with Amendment 2026-10-31-B Part 2 folded in
   three backed (`import`, `memory-review`, `first-run`), three worded to named test evidence.
 - **The first win** is measured at machine speed (the API path, and a browser path in Chromium) with
   each step's time recorded; the human path is an estimate (words read, answers, clicks), said so.
+
+**2026-10-31 (owner decisions: capture with no trusted model; the iOS status bar).**
+1. **Capture, option B:** on a device with no trusted model for `capture-sensitive`, captured text is held, not kept, after the deterministic rules. It shows in the capture timeline, with a plain notice of the fix, until a trusted model can check it or retention ends. This is recorded in the Decision Service ADR §2.1, and is built with the capture-screening consumers (a Track 1 follow-up).
+2. **Status bar, option C:** design packages declare whether they draw behind the iOS status bar. Dark designs do (`black-translucent`); light designs keep iOS's strip. This is recorded in DESIGN-SYSTEM §5 and built as a small Track 1 PR. It needs a real-iPhone check.
 
 **2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
 - **The bands are derived, not round numbers:**
