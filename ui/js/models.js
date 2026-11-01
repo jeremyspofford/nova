@@ -194,8 +194,9 @@ export function renderModels() {
   const head = '<section class="memory-section" id="models" aria-labelledby="set-models"><h2 class="memory-heading" id="set-models">Models</h2>';
   if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="models-retry">Try again</button>` : waitingLine('Loading models', { key: 'models' })}</section>`;
   const hub = data.devices[0];
+  // “what Nova recommends for each job” is backed by the eval claim.model-recommendation-fits-job (tests/evals/tasks/claims.ts).
   const lede = hub?.runtime?.ok
-    ? 'Nova runs models on your own devices. Here is what each can do, with a suggested model for each job.'
+    ? 'Nova runs models on your own devices. Here is what each can do, and what Nova recommends for each job.'
     : `Nova runs models on your own devices, through Ollama. ${hub?.runtime ? hub.runtime.words : ''}`;
   const standout = data.standout === 'accept' && !data.recent.some((t) => t.needs_ok);
   const cloud = data.cloud;

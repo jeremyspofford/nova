@@ -161,8 +161,9 @@ export function renderTasks(el, now = new Date()) {
   <h2 class="section-title" id="tg-${k}">${esc(title)}</h2>
   <ul class="task-list">${by.get(k).map((t) => taskRow(t, { now })).join('')}</ul>
 </section>`).join('');
+  // “Nothing is done until Nova has checked the evidence” is backed by the eval claim.verified-only-with-evidence (tests/evals/tasks/claim-backlog.ts).
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Tasks</h2>
-<p class="view-lede">Everything Nova takes on, in plain words. A task shows Verified only after Nova has checked its evidence; tap Verified to see it.</p></header>
+<p class="view-lede">Everything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.</p></header>
 ${groups || emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.', action: '<a class="btn" href="/chat" data-nav="chat">Ask Nova to do something</a>' })}`;
 }
 
