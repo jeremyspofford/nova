@@ -65,6 +65,11 @@ record didn't say whether it stops Nova, so the record now does:
 - budget guardrails (`src/core/infra/index.ts`). They refuse the plan but are not security
   refusals. An apply they stop also fails its task, and that failure is stopped.
 
+**Consequence to know:** a failed task is stopped, so a failed "Backup now" turns the orb red.
+The UI review profile (`tests/ui/axe-support.ts`) fails one on purpose, so its screens show the
+stopped orb. The fold-posture baselines for the cover posture's Home and Settings were rewritten
+for that (`tests/ui/baselines/fold/*-duo-cover-{home,settings}.png`); the other 16 are unchanged.
+
 **The pair page** (`ui/js/pair.js`) uses the same states: needs-you while it waits, and stopped
 when pairing fails or the hub is the wrong one.
 
@@ -107,6 +112,8 @@ when pairing fails or the hub is the wrong one.
   - idle and needs-you had the same breathing;
   - in Obsidian, idle and needs-you were also the same colour (`orb/core` = `orb/attention` =
     `#e8b34b`), so there was nothing to tell them apart.
+- **The mark's size.** It scales with the orb up to `space/1` wide and `space/2` out, so on the
+  hero it stays a fine ring and never reaches the greeting.
 - **The alarm's rate.** It blinks once per `motion/pulse` (1.8 s in every built-in). That is far
   below three flashes a second (WCAG 2.3.1).
 
