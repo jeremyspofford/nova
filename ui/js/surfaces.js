@@ -516,6 +516,7 @@ const FRAME = `<section class="memory-section" id="appearance" aria-labelledby="
 <div class="ds-picker" id="appearance-design"></div>
 <div class="contrast-check" id="contrast-check" role="status"></div>
 <div data-sub="mode"></div>
+<p class="settings-note" id="appearance-iphone">On an iPhone with Nova on the Home Screen, a dark design also fills the strip with the time and battery. After you switch to or from a dark design, that strip may only change once you close Nova and open it again.</p>
 <p class="perm-foot"><a class="set-link" href="/styleguide">Style reference</a></p></section>`;
 
 const setHtml = (node, html) => { if (node && node.innerHTML !== html) node.innerHTML = html; };

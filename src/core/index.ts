@@ -119,7 +119,7 @@ export type { Who } from './api.ts';
 export type { ChatHandle } from './providers/registry.ts';
 export { signatureHeader as n8nSignature, SIGNATURE_HEADER as N8N_SIGNATURE_HEADER } from './providers/n8n.ts';
 export { originHost } from './api.ts';
-export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM, STARTERS, LIVE_CHECKS, liveCheck, looks, contrastNudge, applyNudge, MOTION_MIN_MS, MOTION_MAX_MS, TRANSITION_TOKENS, overshoots } from './design.ts';
+export { TOKENS, TOKEN_NAMES, cssVar, contrast, validatePackage, generateCss, iosStatusBar, IOS_STATUS_BARS, IOS_STATUS_BAR_META, IOS_STATUS_BAR_UNDECLARED, STATUS_BAR_TAG, statusBarTag, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM, STARTERS, LIVE_CHECKS, liveCheck, looks, contrastNudge, applyNudge, MOTION_MIN_MS, MOTION_MAX_MS, TRANSITION_TOKENS, overshoots } from './design.ts';
 // The vault and connectors (M5b): Era 2's Gmail keeps its secrets in the vault and registers as a connector.
 export { Vault, FILE_KEY_NOTICE, SECRET_SCHEME, secretRef, keyMode, fileKeyStore, secretToolKeyStore, macKeyStore, windowsKeyStore, platformKeyStore } from './vault.ts';
 export type { KeyMode, KeyStore, Run as KeyCommandRunner, VaultStatus } from './vault.ts';

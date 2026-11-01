@@ -1,6 +1,6 @@
 {
   "id": "companion-light",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "kind": "design-system",
   "name": "Companion Light",
   "description": "Warm cream, a soft coral accent, the teal orb and a serif voice.",
@@ -82,5 +82,6 @@
   },
   "content_rules": {},
   "extras": [],
-  "preview": []
+  "preview": [],
+  "ios_status_bar": "default"
 }
