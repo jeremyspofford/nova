@@ -42,7 +42,31 @@ export async function refresh() {
   });
   document.documentElement.dataset.theme = active.id;
   document.documentElement.dataset.mode = active.mode;
+  statusBar(active);
   window.dispatchEvent(new CustomEvent('nova:appearance', { detail: current() }));
+}
+
+// The installed iPhone app's status bar (DESIGN-SYSTEM §5; the tag in index.html): what this
+// device's design declares for light and dark, picked as its CSS is (the mode, or the system's
+// preference under auto). iOS reads the tag at launch, so a change made here may only show once
+// the app is opened again; keeping it current means that next launch is right.
+function statusBar(active) {
+  const tag = document.getElementById('ios-status-bar');
+  const bar = active?.ios_status_bar;
+  if (!tag || !bar) return;
+  Object.assign(tag.dataset, { light: bar.light, dark: bar.dark, mode: active.mode });
+  pickStatusBar();
+  // The server can't read this device's appearance id (it is in localStorage), so it is also kept
+  // in a first-party cookie: the next launch's page then carries this device's own design's words.
+  try { document.cookie = `nova-appearance=${deviceId()}; Path=/; Max-Age=31536000; SameSite=Strict`; } catch { /* cookies off: the person's design's words */ }
+}
+function pickStatusBar() {
+  const tag = document.getElementById('ios-status-bar');
+  if (!tag) return;
+  const d = tag.dataset;
+  const dark = d.mode === 'dark' || (d.mode !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+  const want = (dark ? d.dark : d.light) === 'translucent' ? 'black-translucent' : 'default';
+  if (tag.content !== want) tag.content = want;
 }
 
 let following = false;
@@ -52,6 +76,7 @@ export function apply() {
   refresh().catch(() => {});
   if (following) return;
   following = true;
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', pickStatusBar);
   stream().addEventListener('design-system', () => { swap().catch(() => {}); refresh().catch(() => {}); });
 }
 

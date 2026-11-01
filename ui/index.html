@@ -11,6 +11,12 @@
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Nova">
+  <!-- The installed iPhone app's status bar (DESIGN-SYSTEM §5): a dark design draws behind it
+       (black-translucent), a light one keeps iOS's own strip. The server writes in what this
+       device's design declares for light and dark; this picks one as the design's CSS does. iOS
+       reads it at launch; theme.js keeps it current after that. -->
+  <meta name="apple-mobile-web-app-status-bar-style" id="ios-status-bar" content="default" data-light="default" data-dark="default" data-mode="auto">
+  <script>(function (m) { var d = m.dataset, dark = d.mode === 'dark' || (d.mode !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches); m.content = (dark ? d.dark : d.light) === 'translucent' ? 'black-translucent' : 'default'; })(document.getElementById('ios-status-bar'));</script>
   <!-- The applied design system as CSS variables. theme.js swaps #ds when the core says it changed. -->
   <link rel="stylesheet" id="ds-boot" href="/design-system.css">
   <style id="ds"></style>

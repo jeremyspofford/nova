@@ -301,6 +301,22 @@ built-ins only.
 
 ## Decisions
 
+**2026-10-31 (owner decision 2C: the iOS status bar per design; Track 1).** DESIGN-SYSTEM §5 (PR #269); plan `docs/plans/ios-status-bar.md`.
+- **Each package declares it:** `ios_status_bar` is `translucent` (draws behind the status bar, `black-translucent`) or `default` (iOS's own strip), or `{ light, dark }` for a package with both looks.
+  - Orb Teal, Nova and Obsidian (dark only): `translucent`. Companion Light (light only): `default`. Aurora and Paper (light with a dark mode): `{ light: default, dark: translucent }`.
+  - Each built-in's patch version went up by one.
+- **The check:** `translucent` over a light look is a problem, because iOS makes the status text white. `default` over a dark look is only a warning.
+- **A package without the field:** `check:themes` fails it, so every authored package declares it. Nova still applies it with an explicit `default` and a warning: that is iOS's behaviour with no tag, readable on any look, and older or hand-made packages keep working.
+- **The tag:**
+  - The server writes the words of the device's design into `ui/index.html` before sending it. The device is known from a first-party `nova-appearance` cookie that `theme.js` sets; with no cookie, the person's design is used.
+  - An inline script picks light or dark as the CSS does (the mode, or the system's preference under Auto).
+  - `theme.js` updates the tag on a live swap, a mode change and a system scheme change. iOS may read it only at launch, and Settings › Appearance says so.
+- **The safe area:** no CSS change. The shell from PR #267 keeps `env(safe-area-inset-top)` clear once, so the top bar starts right under the inset.
+- **The gate:**
+  - `tests/themes.test.js`: the declarations, the missing-field rule and the refusals.
+  - `tests/ui/ios-status-bar.test.ts`: 20 design × mode × scheme cases in Chromium and WebKit, as sent, at first parse and once loaded; a live swap; Chromium-emulated insets of 47 and 59 px plus landscape.
+  - Not checked on a real iPhone: no test browser runs as an installed iOS app.
+
 **2026-10-31 (UX review F8/F9: fold postures; owner-approved fix, Track 1).** Plan `docs/plans/fold-postures.md`.
 - **The bands are derived, not round numbers:**
   - each region has a minimum, computed from the design system's own tokens: the main column is 45ch plus its padding and scrollbar gutters; a card is 20ch plus its padding; the right column is one card plus its padding and scrollbar; the rail is `layout/rail-width`;
