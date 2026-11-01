@@ -191,6 +191,9 @@ test('M9 gate, progress: optimistic UI is honest — a slow send says so, a fail
     await d.page.unroute(`**/api/memory/${id}`);
 
     // A failed edit: the old words come back, the reason is said, and what was typed is one tap away.
+    // A correction is a new record (the old one is superseded): wait for the list to show it, so the
+    // item routed below is the one clicked (reading the id before the list refreshed was a race).
+    await d.page.waitForFunction((old) => !document.querySelector(`#memory .memory-item[data-id="${old}"]`), id, { timeout: 10000 });
     const again = d.page.locator('#memory .memory-item').first();
     const id2 = await again.getAttribute('data-id');
     await d.page.route(`**/api/memory/${id2}`, (r) => r.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Nova is restarting.' }) }));

@@ -19,7 +19,28 @@ The branch is `m10h/native-workloads`, from main at `6d51c5d1` (M10e, M10f, M10g
 
 ## Suite
 
-SUITE_RESULTS
+CI is the record: PR #276, run `41296243939`, at `2162b62e`.
+- **`lint · typecheck · themes · tests`**:
+  - First attempt: **1545 tests, 1531 pass, 1 fail, 13 skipped**. The one failure was `tests/acceptance/m10g-review2.test.ts` › R13, an M10g timing test that waits up to 20 s for a captured "unhealthy" answer. It touches no M10h code and passed alone locally.
+  - Re-run of the failed jobs: **1545 tests, 1532 pass, 0 fail, 13 skipped**. The tripwire was armed and never fired. Every M10h test passed (the pilot in 10.2 s). The regression evals passed, 30 tasks and 0 failing, as did the fresh-user test (first win 2641 ms, human path estimated at 360 s) and the closing-rule claims test (`tests/core/evals.test.ts`).
+- **UI gate:** at `2162b62e` the gate failed three times running on one test,
+  `tests/ui/m9-progress.test.ts` › "optimistic UI is honest". That test passed locally, also as root in
+  the Playwright image, and main and other branches passed it in CI the same morning.
+  - **The cause, found with a diagnostic pushed at `912d971f`:** the test read the edited memory's id
+    before the list refreshed. A correction is a new record, so the test routed a 503 for the old id
+    while the click went to the new one, and that edit really saved ("Saved…" instead of "Nova is
+    restarting"). This is a race in the test, not in Nova. On this branch the list happened to refresh
+    later in CI.
+  - **The fix:** the test now waits for the list to show the corrected record before it reads the id.
+    The diagnostic line stays, so a failure there says what the page showed.
+  - The other 113 UI tests passed on every attempt.
+  - Locally, `scripts/ui-test.sh` gave 114 of 114 at `3e2fbf26` (Chromium and WebKit, in the Playwright
+    image), with the tripwire armed and never firing; the screenshots it rewrote were put back. A later
+    full local run gave 113 of 114: `m6a-capture`, "database is locked", where the test opens the
+    database with no busy timeout while the server writes. It passed in every CI attempt.
+  - At the fix: UI_FINAL.
+- **Locally, every M10h file together** (`tests/core/workloads-*.test.ts`, `capture-sync`, `capture-carrier`, `tests/acceptance/m10h-pilot.test.ts`, with the device-agent, sandbox, spokes, services, sync and capture files they touch) all pass.
+- **A full local `npm run check` couldn't be completed on this machine.** Other builders' suites ran alongside it, one of them hung for over six hours. `/tmp` (a 16 GB tmpfs) filled to 100 % during the run, and the tests failed with it. CI, above, is the run of record.
 
 ## Who holds the mesh key and carries the sync
 
@@ -102,7 +123,17 @@ for a device.
 
 ## Counts
 
-COUNTS
+- Source, new: `src/device/workloads.ts`, `src/device/rollout.ts`, `src/device/carrier.ts`, `src/core/services/workloads.ts`, `src/core/services/screenpipe.ts` and `src/core/capture/sync.ts`; migration 0023; the stand-in `scripts/stand-ins/stand-in-screenpipe.js`.
+- Tests, new: 6 files, 25 tests:
+  - `workloads-device` 9;
+  - `workloads-rollout` 4;
+  - `workloads-hub` 4;
+  - `capture-sync` 5;
+  - `capture-carrier` 2;
+  - `m10h-pilot` 1 (one long test).
+
+  Existing files were extended: device-sandbox, device-agent, mesh-spokes, services-placement, services-manager and capture.
+- Suite: 1545 tests in CI (13 skipped need a real model, Claude or Relay).
 
 ## Limits
 
