@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · Handoff · A takeover note for the next builder**
+- What changed: a handoff note (docs/builder-packet/HANDOFF-FROM-BUILDER-2026-11-01.md) records the work in progress, the open questions waiting on you, the next steps, and the quirks of this machine, so a new builder can pick up without losing anything.
+- What you can now do: nothing in the app changed: paperwork only.
+- Still unfinished: M10h (#276), the memory gate (#277), the vault broker (#275) and the design quality PR are still open; the note says where each stands.
+
 **2026-11-01 · #272 · You can move the hub to another computer, and recover it from a backup**
 - What changed: in Settings › Devices, a computer that can become the hub now has "Promote to hub". Nova checks first that it is ready (it copies everything, has room, runs the same version, and there is a recent backup that passed its test), and tells you plainly if not. Then it hands over: the last changes are copied, running work finishes or moves along, new changes wait for a moment, and the other computer becomes the hub. The old hub keeps a live copy. For a while afterwards it checks the new hub. If the new hub says it isn't working, it takes the role back by itself and tells you; if it simply can't reach the new hub, it doesn't guess: it tells you, and you can take the role back yourself. Nothing either computer saved is thrown away; anything that couldn't be carried over is kept on that computer and listed for you. If your hub is gone for good, a computer that could be the hub can take over from your latest backup: Nova says first when that backup was made, that anything after it is lost, and that your connections (like email) need signing in again. Your devices find the new hub without pairing again.
 - What you can now do: move Nova to a better computer without starting over, and recover from losing the hub. Each step shows up in Tasks.
