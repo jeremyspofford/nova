@@ -207,3 +207,18 @@ body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { displ
   .toast { bottom: calc(100dvh - env(viewport-segment-bottom 0 0) + var(--space-5)); }
   .sheet { margin-block-start: env(viewport-segment-top 0 1); max-height: calc(env(viewport-segment-height 0 1) - 2 * var(--space-3)); }
 }
+
+/* The topology's diagram needs room for two readable machine columns and their connector.
+   Under the compact-width floor used above, preserve the same semantic ordered list. */
+@media (max-width: 599px) {
+  .topology { padding: var(--space-4); }
+  .topology-machines { display: block; }
+  .topology-machines > li { display: block; padding: 0; border-bottom: 1px solid var(--border-subtle); }
+  .topology-machine, .topology-hub .topology-machine { min-height: 0; padding: var(--space-4) 0; border: 0; background: transparent; }
+  .topology-connections { display: none; }
+  .topology-machine-title { flex-wrap: wrap; }
+  .topology-heading { flex-wrap: wrap; }
+  .topology .sheet-inner { padding: var(--space-3); }
+  .topology .facts { grid-template-columns: minmax(0, 1fr); }
+  .topology .sheet-title { padding-right: 0; }
+}
