@@ -1,6 +1,6 @@
 # Design quality stage 1 — rendered review packet
 
-**Proposed 2026-11-01. Owner approval required before merge.** Exemplar set: **proposed 2026-11-01, owner may amend**. No preview deployment or design merge has happened.
+**Owner-approved as stage 1, 2026-11-01:** the machinery (§0, styleguide, token values and slop gate). [Approval and attached notes](../builder-packet/INPUT-2026-11-01-DESIGN-STAGE1-APPROVAL.md). Merge requires green CI on the updated head. Exemplar set: **proposed 2026-11-01, owner may amend**. Stage-2 visual priorities are recorded in the [follow-up queue](../plans/design-quality-stage2-queue.md).
 
 ## What to judge
 
@@ -15,7 +15,7 @@ Binding sources: [owner input](../builder-packet/INPUT-2026-11-01-DESIGN-QUALITY
 - Orb Teal uses fixed 4pt spacing; six approximately 1.2-ratio type steps; 8px controls and 12px containers; two shadow levels; one ordered motion family; one 24-unit, 1.5-stroke SVG set. Lint catches off-scale spacing/type/radius and growing pills, as well as raw values. Safe-area and measured geometry exceptions are explicit.
 - Settings presents Orb Teal first and puts five alternatives behind **More designs**. Its reason admits when the lead is dark despite a light OS. Existing alternatives remain usable. Their scale debt is reported by `check:themes`; they are not portrayed as reviewed peers. The technical `at_bar` flag is not proof of owner approval of this PR.
 - Onboarding already used Orb Teal without a six-theme question. No onboarding rewrite is claimed.
-- The composer ellipse and flat orb were already fixed in the baseline. This stage tightens the composer to an 8px size-class radius and prevents growing pills; it does not take credit for the earlier sphere-depth or semantic-state fixes.
+- The earlier composer screenshots did not reproduce the original F0 geometry. The added regression below uses the exact 1280×820 window and 20-line draft. It protects the existing fix, without claiming stage 1 originally fixed F0. The phone hero orb works; depth at the small desktop rail size remains a stage-2 priority.
 - Repeated Home/sidebar cards remain review debt. Real-device folding and installed-iPhone checks remain open.
 
 ## Before and after the four symptoms
@@ -24,8 +24,8 @@ The previous builder committed the baseline before the values pass. The after ru
 
 | Symptom | Before | After | Assessment |
 |---|---|---|---|
-| Composer ellipse | [Phone](../screenshots/design-quality/before/composer-long-phone.png), [desktop](../screenshots/design-quality/before/composer-long-desktop.png) | [Phone](../screenshots/design-quality/after/composer-long-phone.png), [desktop](../screenshots/design-quality/after/composer-long-desktop.png), [contract](../screenshots/design-quality/after/styleguide/composer.png) | Ellipse absent in baseline; bounded control radius now enforced by lint. |
-| Flat orb | [Home phone](../screenshots/design-quality/before/home-phone.png) | [Home phone](../screenshots/design-quality/after/home-phone.png), [all states](../screenshots/design-quality/after/styleguide/orb.png) | Sphere already present; retained across all seven semantic states. |
+| Composer ellipse | [Phone](../screenshots/design-quality/before/composer-long-phone.png), [desktop](../screenshots/design-quality/before/composer-long-desktop.png) | [Phone](../screenshots/design-quality/after/composer-long-phone.png), [desktop](../screenshots/design-quality/after/composer-long-desktop.png), [contract](../screenshots/design-quality/after/styleguide/composer.png) | Earlier images do not reproduce F0. The exact 1280×820, 20-line regression is below; bounded radius is enforced by lint. |
+| Flat orb | [Home phone](../screenshots/design-quality/before/home-phone.png) | [Home phone](../screenshots/design-quality/after/home-phone.png), [all states](../screenshots/design-quality/after/styleguide/orb.png) | Phone hero sphere already present. Small desktop rail depth remains stage-2 work; phone evidence does not prove it. |
 | Six equal themes | [Appearance](../screenshots/design-quality/before/appearance-desktop.png), [onboarding](../screenshots/design-quality/before/onboarding-phone.png) | [Appearance](../screenshots/design-quality/after/appearance-desktop.png), [onboarding](../screenshots/design-quality/after/onboarding-phone.png) | One lead, alternatives behind a disclosure. Onboarding already had no equal-theme chooser. |
 | Density without hierarchy | [Tasks](../screenshots/design-quality/before/tasks-desktop.png), [Activity](../screenshots/design-quality/before/activity-phone.png) | [Tasks](../screenshots/design-quality/after/tasks-desktop.png), [Activity](../screenshots/design-quality/after/activity-phone.png), [type roles](../screenshots/design-quality/after/styleguide/type.png) | Distinct title, item and supporting-text roles. Repeated cards remain follow-up work. |
 
@@ -34,6 +34,41 @@ The previous builder committed the baseline before the values pass. The after ru
 ![After appearance](../screenshots/design-quality/after/appearance-desktop.png)
 
 ![Composer contract](../screenshots/design-quality/after/styleguide/composer.png)
+
+## F0 evidence correction — owner approval note
+
+The original failure geometry is **1280×820 with a 20-line composer**. The earlier
+1440×900 desktop picture and short styleguide specimen do not reproduce it.
+`tests/ui/composer-f0.test.ts` now opens the real seeded PWA at that exact window,
+fills twenty lines, verifies the input really scrolls within its 25dvh cap, and checks
+that the grown control keeps the control radius rather than a pill/ellipse. It runs
+in Chromium and WebKit and records the measured geometry alongside each image.
+No production behavior was changed for this correction.
+
+Validation: both engines pass (2/2), with 20 lines, a 205px input cap, a 496px
+scroll height and an 8px radius. A negative control temporarily restored the growing
+pill radius: both engines failed (999px versus 8px). The original CSS was restored
+byte-for-byte before the final passing run. The screenshot dimensions are 1280×820.
+
+- [Chromium full-window shot](../screenshots/design-quality/after/f0/composer-20-lines-1280x820-chromium.png) · [measured geometry](../screenshots/design-quality/after/f0/composer-20-lines-1280x820-chromium.json)
+- [WebKit full-window shot](../screenshots/design-quality/after/f0/composer-20-lines-1280x820-webkit.png) · [measured geometry](../screenshots/design-quality/after/f0/composer-20-lines-1280x820-webkit.json)
+
+![F0: 1280×820 window, twenty-line composer](../screenshots/design-quality/after/f0/composer-20-lines-1280x820-chromium.png)
+
+Reproduce with:
+
+```sh
+NOVA_UI_SHOTS=docs/screenshots/design-quality/after/f0 scripts/ui-test.sh tests/ui/composer-f0.test.ts
+```
+
+## Stage-2 visual priorities
+
+1. Desktop card hierarchy: cards currently carry one visual weight.
+2. Rail-orb depth at small desktop sizes: the phone hero works, the small rail orb reads flat.
+3. Background-gradient discipline.
+
+The owner will judge stage 2 on **visible differences in matched screenshots**, not
+on tightened values alone. See the [follow-up queue](../plans/design-quality-stage2-queue.md).
 
 ## Entry map
 
@@ -60,7 +95,7 @@ Scores use DESIGN-SYSTEM §0.4. The styleguide's labelled comparison grids are a
 |---|---|---|
 | Uniform equal-weight cards | **Fail — existing debt** | Home and the desktop sidebar retain repeated treatment. Settings now has one lead and disclosed alternatives. No wholesale rewrite is claimed. |
 | Everything centred | Pass | Tasks, Activity, Settings and reading text align left. Hero/column centring is purposeful. |
-| Decorative gradients | Pass | Lint confines gradients to page/orb light. |
+| Decorative gradients | Mechanical pass; visual review pending | Lint confines gradients to page/orb light. Background-gradient discipline remains an explicit stage-2 priority. |
 | Competing standouts | Pass | Appearance has one lead; an approval sheet is its own view. Catalogue states are labelled comparisons. |
 | Flat type hierarchy | Pass | Type entry and Tasks show separate title, group, item and metadata roles, with 400/600 weight contrast. |
 | Off-scale spacing | Pass | Token lint and lead package validation. Secondary package scale findings are reported separately. |
