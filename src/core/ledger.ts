@@ -467,6 +467,13 @@ export class Ledger extends EventEmitter {
     return { finished: before.filter((id) => !left.includes(id)), handed: left, stuck: [] };
   }
 
+  // Nothing new starts but what `keep` allows, and nothing running is stopped: a hub that restarts
+  // while it holds writes for a hand-over (M10g review, finding 4) starts like this, before recovery.
+  pause(keep: (t: Task) => boolean): void {
+    this.#halted = true;
+    this.#keep = keep;
+  }
+
   // A drain that didn't end in a handover: the queue runs again.
   resume(): void {
     this.#halted = false;

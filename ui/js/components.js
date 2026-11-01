@@ -368,13 +368,35 @@ export function promotionSheet(d, check) {
 // backup's time, what was lost and that connectors sign in again, said before anything (Decision 5).
 export function coldPromotionSheet(view) {
   const ok = !!view?.eligible;
-  return `<form class="approval-sheet" data-tier="3" data-cold-promotion="1" method="dialog">
+  // The backup it shows is the one confirmed: the server refuses any other.
+  return `<form class="approval-sheet" data-tier="3" data-cold-promotion="1" data-backup="${esc(view?.facts?.backup?.id ?? '')}" method="dialog">
   <p class="sheet-kicker">${status(ok ? 'needs-you' : 'failed')}</p>
   <h2 class="sheet-title" id="sheet-title">Make this the hub from a backup?</h2>
   ${ok ? factList(view.sheet) : `<p class="sheet-line">Not here: ${esc((view?.reasons ?? [])[0] ?? 'Nova couldn’t tell.')}</p>`}
   ${ok ? '<label class="confirm"><input type="checkbox" name="confirm" required> I understand what is lost, and want this node to be the hub.</label>' : ''}
   <div class="sheet-actions">
     ${ok ? '<button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Make this the hub</button>' : ''}
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+// Settling a promotion by hand (M10g review), tier 3, with what Nova can't know said first:
+// cancelling a hand-over whose outcome isn't known, or taking the hub back from a new hub that can't
+// be reached.
+export function promotionActionSheet(kind, p) {
+  const to = p?.to_name ? `“${p.to_name}”` : 'the other computer';
+  const words = kind === 'cancel'
+    ? { title: 'Cancel the hand-over?', line: `Nova can’t tell whether ${to} took the hub’s role: it can’t be reached. Nova asks it once more first. If it still can’t say, this computer carries on as the hub at a higher epoch. If ${to} did take the role and some devices reach it, both take changes until the two meet; then ${to} steps down and keeps what it took meanwhile in a checkpoint on itself.`, box: 'I understand, and want this computer to carry on as the hub.', button: 'Cancel the hand-over' }
+    : { title: 'Take the hub back?', line: `Nova can’t reach ${to}, the hub since the hand-over. Nova asks it first to stop taking changes. If it can’t be reached and is still running for some devices, both take changes until the two meet; then ${to} steps down and keeps what it took meanwhile in a checkpoint on itself.`, box: 'I understand, and want this computer to be the hub again.', button: 'Take the hub back' };
+  return `<form class="approval-sheet" data-tier="3" data-promotion-action="${esc(kind)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(words.title)}</h2>
+  <p class="sheet-line">${esc(words.line)}</p>
+  <dl class="facts"><dt>Why it asks</dt><dd>${esc(TIER_WORDS[3])}</dd></dl>
+  <label class="confirm"><input type="checkbox" name="confirm" required> ${esc(words.box)}</label>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>${esc(words.button)}</button>
     <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
   </div>
 </form>`;

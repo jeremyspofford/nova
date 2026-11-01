@@ -30,6 +30,11 @@ import { sessionMessage, verifyRoster, type SignedRoster } from './wire.ts';
 import { tap } from './tap.ts';
 
 export type NodeRole = 'hub' | 'standby';
+// Which of two hubs wins (M10g review, finding 2): the higher epoch; at an equal epoch, the smaller
+// device id. Every node applies the same rule, so equal epochs settle to one hub. Devices never follow
+// another hub at an equal epoch at all (src/device/trust.ts epochVerdict).
+export const outranks = (a: { epoch: number; id: string }, b: { epoch: number; id: string }): boolean => a.epoch > b.epoch || (a.epoch === b.epoch && a.id !== b.id && a.id < b.id);
+export const EPOCH_CEILING = 2 ** 31 - 1;
 export const FENCE_EVERY_MS = 30_000;
 export const CONFIRMATION_SYSTEM = 'nova-mesh';
 const LAG_EVERY_MS = 15_000;
@@ -136,6 +141,17 @@ export class MeshRole extends EventEmitter {
   // steps) still pass. Null when nothing is held.
   held(): { reason: string; held: true } | null {
     return this.#held && this.role() === 'hub' ? { reason: this.#held, held: true } : null;
+  }
+
+  // A hub cancelling a hand-over it can't settle (handover.ts cancel): its epoch goes up by `by`, so a
+  // candidate that did take the role at the next epoch steps down when they meet. Epochs only rise.
+  raiseEpoch(by: number): number {
+    if (this.role() !== 'hub' || !Number.isInteger(by) || by < 1 || by > 3) throw new CoreError('conflict', 'Only the hub raises its epoch, by 1 to 3.');
+    this.#o.db.run('UPDATE mesh_state SET epoch = epoch + ?, updated_at = ? WHERE id = 1', by, this.#o.now().toISOString());
+    const epoch = this.#o.devices.state().epoch;
+    if (this.#file) { this.#file = { ...this.#file, epoch }; writeRole(this.#o.home, this.#file); }
+    this.emit('change', this.status());
+    return epoch;
   }
 
   hold(reason: string, o: { fence?: boolean } = {}): void {
@@ -308,10 +324,12 @@ export class MeshRole extends EventEmitter {
       const mine = this.#o.devices.state().epoch;
       // A peer still acting as hub at a lower epoch (one that came back while this node was away from
       // it) is asked to check now, rather than at its next round: it finds this node and steps down.
-      if (h?.role === 'hub' && Number.isInteger(h.epoch) && h.epoch! < mine && typeof h.id === 'string' && this.#o.devices.find(h.id)?.trust === 'trusted') {
+      if (h?.role === 'hub' && Number.isSafeInteger(h.epoch) && typeof h.id === 'string' && !outranks({ epoch: h.epoch!, id: h.id }, { epoch: mine, id: me }) && this.#o.devices.find(h.id)?.trust === 'trusted') {
         void ask(`${a.url}/api/v1/mesh/promotion/fence`, { method: 'POST', headers: { 'x-nova': '1' }, body: {}, timeoutMs: 3000, caFile: this.#file?.ca_file ?? null }).catch(() => {});
       }
-      if (h?.role !== 'hub' || !Number.isInteger(h.epoch) || h.epoch! <= mine || typeof h.id !== 'string') continue;
+      // A higher epoch wins; at an equal epoch (two hubs, say one promoted from a backup while the other
+      // lived on), a fixed rule picks one, the same on every node, so the tie always settles.
+      if (h?.role !== 'hub' || !Number.isSafeInteger(h.epoch) || h.epoch! > EPOCH_CEILING || typeof h.id !== 'string' || !outranks({ epoch: h.epoch!, id: h.id }, { epoch: mine, id: me })) continue;
       const peer = this.#o.devices.find(h.id);
       const r = h.roster?.roster;
       // Only a node this hub already trusted, proving it with its own key, can take the role.

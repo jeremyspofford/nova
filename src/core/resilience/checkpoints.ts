@@ -755,7 +755,7 @@ function applyCold(home: string, staged: string, c: ColdStage, carried: Carried,
     v.reset(true);
     for (const n of own) { const val = live.get(n); if (val !== null) v.put(n, val); }
   } catch { own = []; }
-  carried.vault = `The backup’s saved secrets can’t be opened: their key was never in a backup, and Nova keeps no copy of it anywhere. Sign in to each connector again.${own.length ? ` Nova’s own keys (${own.join(', ')}) came from this node.` : ''}`;
+  carried.vault = `The backup’s saved secrets can’t be opened: backups never hold their key, so they can’t be opened from it. Sign in to each connector again. (The key stays only where it already was: on the old hub, a standby that copied it, and their own checkpoints.)${own.length ? ` Nova’s own keys (${own.join(', ')}) came from this node.` : ''}`;
 }
 
 export function restoreRecord(home: string, id: string): (RestoreMarker & { finished_at: string }) | null {

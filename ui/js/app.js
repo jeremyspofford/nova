@@ -1943,6 +1943,8 @@ async function coreAction(b) {
   if (action === 'promote') return core.promote();
   if (action === 'promote-device') return core.promoteDevice(b.dataset.device);
   if (action === 'promote-cold') return core.promoteCold();
+  if (action === 'promotion-cancel') return core.promotionAction('cancel');
+  if (action === 'promotion-take-back') return core.promotionAction('take-back');
   if (['backup-now', 'drill-now', 'repair-problem'].includes(action)) return core.resilienceAction(action, b.dataset.problem).then(() => scheduleRefresh(['resilience', 'problems', 'health', 'tasks']));
   try {
     if (action === 'resolve-problem') { await post(`/api/v1/problems/${encodeURIComponent(b.dataset.problem)}/resolve`); scheduleRefresh(['problems', 'health']); toast('Marked as dealt with.'); }
@@ -1951,7 +1953,7 @@ async function coreAction(b) {
   } catch (e) { toast(e.message); }
 }
 const CORE_ACTIONS = new Set(['open-task', 'evidence', 'retry-task', 'cancel-task', 'decline-merge', 'decline-change', 'close-sheet', 'pause-rule', 'resume-rule', 'delete-rule', 'resolve-problem', 'read-message', 'send-message',
-  'add-device', 'copy-command', 'review-request', 'deny-request', 'revoke-device', 'allow-approve', 'edit-roles', 'promote', 'promote-device', 'promote-cold', 'backup-now', 'drill-now', 'repair-problem']);
+  'add-device', 'copy-command', 'review-request', 'deny-request', 'revoke-device', 'allow-approve', 'edit-roles', 'promote', 'promote-device', 'promote-cold', 'promotion-cancel', 'promotion-take-back', 'backup-now', 'drill-now', 'repair-problem']);
 document.addEventListener('click', (e) => {
   if (e.defaultPrevented || e.target.closest('#setup')) return;
   if (followLink(e)) return;

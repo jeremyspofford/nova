@@ -316,6 +316,14 @@ export function signRoster(roster: Roster, privateKey: KeyObject): SignedRoster 
 }
 
 // True when one of `pinned` (raw Ed25519 public keys) signed it.
+// What a roster says, apart from when it was signed: a heartbeat answer names it, so a device agent
+// knows to take the new one (M10g review, finding 7).
+export function rosterDigest(signed: SignedRoster | null): string {
+  if (!signed?.roster) return '';
+  const { issued_at: _i, ...r } = signed.roster;
+  return sha256Hex(canonicalJson(r));
+}
+
 export function verifyRoster(signed: SignedRoster, pinned: string[]): boolean {
   if (!signed || typeof signed !== 'object' || !signed.roster) return false;
   let message: Buffer;

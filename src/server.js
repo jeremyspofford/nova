@@ -644,7 +644,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     nova.chatRun.recover();
     nova.scheduler.start();
   };
-  const hub = !role.replica() && !sandbox;
+  // A hub that stopped while it held writes to hand over (M10g) runs no work until that is settled.
+  const hub = !role.replica() && !sandbox && !nova.core.mesh.promotions.holdPending();
   if (hub) nova.helpers.recover();
   const recovered = nova.core.start();
   if (hub) {
@@ -657,8 +658,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   role.on('demoted', ({ reason }) => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); console.log(reason); });
   // A planned promotion (M10g): the scheduler pauses while the hub drains, starts again if nothing was
   // handed over, and stops when this node becomes the new hub's standby.
-  role.on('draining', () => nova.scheduler.stop());
-  role.on('resumed', () => { if (!role.replica()) nova.scheduler.start(); });
+  // Era 2's running work stops too (its runs are ledger tasks the drain hands over: M10g review, 5).
+  role.on('draining', () => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); });
+  role.on('resumed', () => { if (!role.replica()) runWork(); });
   role.on('followed', ({ hub }) => { nova.scheduler.stop(); for (const id of nova.runner.active.keys()) nova.runner.stop(id); console.log(`This node is the standby now, copying the hub (${hub}).`); });
   nova.server.listen(config.port, config.host, () => {
     const ms = Math.round(performance.now() - nova.started);

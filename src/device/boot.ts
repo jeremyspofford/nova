@@ -24,10 +24,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import tls from 'node:tls';
 import {
   exportDeviceKeys, generateDeviceKeys, importDeviceKeys, keyFingerprint, newPairingNonce, pairingCommitment, pairingConfirmationV2,
-  hubResetMessage, revealMessage, runtimeManifest, sessionMessage, sha256Hex, signMessage, statusMessage, verifyDeviceSignature, verifyRoster, x25519Statement,
+  hubResetMessage, revealMessage, rosterDigest, runtimeManifest, sessionMessage, sha256Hex, signMessage, statusMessage, verifyDeviceSignature, verifyRoster, x25519Statement,
   type DeviceKeys, type SignedRoster,
 } from '../core/mesh/wire.ts';
-import { acceptRoster, assignmentAllowed, bundleKeys, checkProof, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof, type Verdict } from './trust.ts';
+import { acceptRoster, assignmentAllowed, bundleKeys, checkProof, epochVerdict, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof, type Verdict } from './trust.ts';
 import { Watchdog } from './watchdog.ts';
 import { detectHardware, type Hardware } from '../core/models/hardware.ts';
 import { Queue, QUEUE_KINDS, type QueueKind } from './queue.ts';
@@ -308,8 +308,17 @@ export async function probe(url: string, d: DeviceFile, signer: Signer): Promise
   const proof = r.body as Proof;
   const pv = checkProof(proof, challenge, d.pinned);
   if (!pv.ok) return { ok: false, revoked: false, reason: `${url}: ${pv.reason}` };
-  if (proof.role !== 'hub') return { ok: false, revoked: false, reason: `${url} is the ${proof.role}, not the hub.` };
-  if (proof.epoch < d.epoch) return { ok: false, revoked: false, reason: `${url} says it is hub at epoch ${proof.epoch}, older than ${d.epoch}; it was replaced.` };
+  // A node that isn't the hub is told which roster this device holds (signed by its hub), so a hub
+  // candidate about to be promoted from a backup knows how far the epoch has got (M10g review, 2).
+  if (proof.role !== 'hub') {
+    void call(url, 'POST', '/api/v1/mesh/seen', { body: { roster: d.roster } }).catch(() => {});
+    return { ok: false, revoked: false, reason: `${url} is the ${proof.role}, not the hub.` };
+  }
+  const ev = epochVerdict(proof.epoch, proof.public_key, { known: d.epoch, current: d.roster.roster.hub.public_key });
+  if (!ev.ok) {
+    void call(url, 'POST', '/api/v1/mesh/seen', { body: { roster: d.roster } }).catch(() => {});
+    return { ok: false, revoked: false, reason: `${url} says it is hub at ${ev.reason}` };
+  }
   const s = await call(url, 'POST', '/api/v1/mesh/session', { body: signer.session(d.device_id) }).catch((e: Error) => ({ status: 0, body: { error: e.message } }));
   if (s.status === 401 || s.status === 403) {
     const reason = errorOf(s);
@@ -320,7 +329,7 @@ export async function probe(url: string, d: DeviceFile, signer: Signer): Promise
   if (s.status !== 200) return { ok: false, revoked: false, reason: `${url} couldn’t start a session (${errorOf(s)}).` };
   const ro = await call(url, 'GET', '/api/v1/mesh/roster', { token: s.body.token }).catch((e: Error) => ({ status: 0, body: { error: e.message } }));
   if (ro.status !== 200) return { ok: false, revoked: false, reason: `${url} didn’t send its roster (${errorOf(ro)}).` };
-  const rv = acceptRoster(ro.body, { pinned: d.pinned, epoch: d.epoch, hubKey: proof.public_key });
+  const rv = acceptRoster(ro.body, { pinned: d.pinned, epoch: d.epoch, hubKey: proof.public_key, currentHub: d.roster.roster.hub.public_key });
   if (!rv.ok) return { ok: false, revoked: false, reason: `${url}: ${rv.reason}` };
   const moved = new URL(url).origin !== new URL(d.hub_url).origin || ro.body.roster.epoch > d.epoch;
   return { ok: true, url: new URL(url).origin, token: s.body.token, expires_at: s.body.expires_at, epoch: ro.body.roster.epoch, moved, roster: ro.body };
@@ -624,7 +633,7 @@ export class Boot {
       const r = await call(s.url, m.method, m.path, { token: s.token, body: m.body });
       answer({ status: r.status, body: r.body });
       // A heartbeat answer this agent got itself, over its own session: the hub may say it was reset.
-      if (m.path === '/api/v1/mesh/devices/me/heartbeat' && r.status === 200) { this.#heardPurposes(r.body); this.#heardReset(r.body); }
+      if (m.path === '/api/v1/mesh/devices/me/heartbeat' && r.status === 200) { this.#heardPurposes(r.body); this.#heardReset(r.body); void this.#heardRoster(r.body); }
     } catch (e) {
       answer({ error: (e as Error).message });
     }
@@ -742,6 +751,27 @@ export class Boot {
     return true;
   }
   #saidUnsigned = false;
+
+  // The hub's roster changed (a candidate added or removed, a device revoked: M10g review, finding
+  // 7): a heartbeat answer names its digest, and this agent takes the new roster over its own session,
+  // from the hub it follows, by the same rules as ever. A revoked candidate's key is unpinned within a
+  // heartbeat, not at the next reconnect.
+  async #heardRoster(body: unknown): Promise<void> {
+    const digest = (body as { roster_digest?: unknown } | null)?.roster_digest;
+    const s = this.#session;
+    if (typeof digest !== 'string' || !s || digest === rosterDigest(this.d.roster)) return;
+    try {
+      const ro = await call(s.url, 'GET', '/api/v1/mesh/roster', { token: s.token });
+      if (ro.status !== 200) return;
+      const current = this.d.roster.roster.hub.public_key;
+      const v = acceptRoster(ro.body, { pinned: this.d.pinned, epoch: this.d.epoch, hubKey: current, currentHub: current });
+      if (!v.ok || sameRoster(this.d.roster, ro.body)) return;
+      this.d.roster = ro.body;
+      this.d.pinned = rosterKeys(ro.body.roster);
+      this.d.epoch = ro.body.roster.epoch;
+      writeJson(this.p.device, this.d);
+    } catch { /* the next heartbeat tries again */ }
+  }
 
   // The roles the hub holds for this device (M10f), from a heartbeat answer over this agent's own
   // session with a node that proved a pinned key. Kept in device.json, so the check below works

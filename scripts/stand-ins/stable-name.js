@@ -5,9 +5,10 @@
 // It stands for a DNS name or a tailnet address; nothing real is changed (the ADR's Hard limits).
 //
 //   import { startStableName } from './scripts/stand-ins/stable-name.js'
-//   const name = await startStableName({ target: 'http://127.0.0.1:1234' });
+//   const name = await startStableName({ target: 'http://127.0.0.1:1234', token });
 //   name.url        the name devices use (http://127.0.0.1:<port>)
-//   name.control    where Nova asks to move it (POST {address})
+//   name.control    where Nova asks to move it (POST {address}, with `authorization: Bearer <token>`
+//                   when a token is given: anything else is refused, as a real driver must)
 //   name.target()   where it points now;  name.point(address) moves it as the test
 //   name.stuck(true) makes it answer "moved" and stay where it is (a change that didn't take)
 //   name.moves()    every move asked for, in order;  await name.close()
@@ -15,7 +16,7 @@ import { createServer as http } from 'node:http';
 import { connect, createServer as tcp } from 'node:net';
 import { pathToFileURL } from 'node:url';
 
-/** @param {{ target?: string | null }} o */
+/** @param {{ target?: string | null, token?: string | null }} o */
 export async function startStableName(o = {}) {
   let target = o.target ? new URL(o.target) : null;
   let stuck = false;
@@ -39,6 +40,12 @@ export async function startStableName(o = {}) {
     req.on('data', (d) => { body += d; });
     req.on('end', () => {
       if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
+      if (o.token && req.headers.authorization !== `Bearer ${o.token}`) {
+        moves.push({ address: null, refused: 'no token', at: new Date().toISOString() });
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not without the token.' }));
+        return;
+      }
       let address = null;
       try { address = new URL(JSON.parse(body).address); } catch { /* below */ }
       if (!address || address.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(address.hostname)) {

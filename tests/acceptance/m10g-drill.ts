@@ -9,7 +9,7 @@
 // the record as it happens.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { createHash, generateKeyPairSync } from 'node:crypto';
+import { createHash, createPrivateKey, generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
@@ -54,11 +54,32 @@ function files(dir: string, skip: (p: string) => boolean = () => false): string[
   return out;
 }
 
-// A private key in every way it could be written down: the JWK `d` as stored (base64url), and its raw
-// bytes as hex and as standard base64.
-function encodings(d: string): string[] {
+// A private key in every way it could be written down (review p8): the JWK `d` as stored (base64url);
+// its raw bytes as hex (both cases), as standard base64 and as a JSON byte list; and the whole key as
+// PKCS8 DER (raw bytes, hex, base64) and PEM. `raw` and `der` are matched as bytes too.
+function encodings(d: string, x: string, crv: 'Ed25519' | 'X25519'): { text: string[]; bytes: Buffer[] } {
   const raw = Buffer.from(d, 'base64url');
-  return [d, raw.toString('hex'), raw.toString('base64').replace(/=+$/, '')];
+  const key = createPrivateKey({ key: { kty: 'OKP', crv, d, x }, format: 'jwk' });
+  const der = key.export({ format: 'der', type: 'pkcs8' }) as Buffer;
+  const pem = String(key.export({ format: 'pem', type: 'pkcs8' })).split('\n').filter((l) => l && !l.startsWith('-----')).join('');
+  return {
+    text: [d, raw.toString('hex'), raw.toString('hex').toUpperCase(), raw.toString('base64').replace(/=+$/, ''), JSON.stringify([...raw]).slice(1, -1), der.toString('hex'), der.toString('base64').replace(/=+$/, ''), pem],
+    bytes: [raw, der],
+  };
+}
+
+// Every row of every SQLite database under the scan, as text: a value the file's raw bytes split
+// across pages (an overflow page) is whole here.
+function dbRows(f: string): string[] {
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(f, { readOnly: true });
+    const out: string[] = [];
+    for (const t of (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as { name: string }[]).map((x) => x.name)) {
+      for (const r of db.prepare(`SELECT * FROM "${t}"`).all() as Record<string, unknown>[]) out.push(JSON.stringify(r, (_k, v) => (v instanceof Uint8Array ? Buffer.from(v).toString('latin1') : v)));
+    }
+    return out;
+  } catch { return []; } finally { db?.close(); }
 }
 
 export async function runDrill(o: { say?: (line: string) => void } = {}): Promise<DrillResult> {
@@ -77,20 +98,31 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
   const tapDir = join(root, 'tap');
   const backups = join(root, 'backups');
   mkdirSync(backups, { mode: 0o700 });
-  const name = await startStableName();
+  const NAME_TOKEN = 'the-drill-token-for-the-stable-name';
+  const name = await startStableName({ token: NAME_TOKEN });
   const n1 = blank('nova-m10g-n1-');
   const n2 = blank('nova-m10g-n2-');
-  const mesh1 = `http://127.0.0.1:${await freePort()}`;
-  const mesh2 = `http://127.0.0.1:${await freePort()}`;
+  const port1 = await freePort();
+  const port2 = await freePort();
+  const mesh1 = `http://127.0.0.1:${port1}`;
+  const mesh2 = `http://127.0.0.1:${port2}`;
+  // Each node reaches the other through a link the drill can cut (a loopback forwarder): its address,
+  // as the other knows it, is the link's. The stable name leads to whichever address a node points it at.
+  const link1 = await startStableName({ target: mesh1 });
+  const link2 = await startStableName({ target: mesh2 });
+  const addr = { n1: link1.url, n2: link2.url };
+  const outputs: string[] = [];
   const kHome = join(root, 'computer');
-  const env = (mesh: string) => ({
-    ...agent, NOVA_MESH_URL: mesh, NOVA_MESH_PUBLIC_URL: name.url, NOVA_MESH_TRANSPORT: 'network', NOVA_SYNC_WAIT_S: '2',
-    NOVA_MESH_NAME_CONTROL: name.control, NOVA_PROMOTION_WINDOW_S: '6', NOVA_PROMOTION_PROBE_MS: '400', NOVA_DRILL_TAP: tapDir,
+  // NOVA_DRILL=1 on temp homes: the only place the short window, fast probes and the tap are allowed.
+  const env = (mesh: string, address: string) => ({
+    ...agent, NOVA_MESH_URL: mesh, NOVA_MESH_PUBLIC_URL: name.url, NOVA_MESH_ADDRESS: address, NOVA_MESH_TRANSPORT: 'network', NOVA_SYNC_WAIT_S: '2',
+    NOVA_MESH_NAME_CONTROL: name.control, NOVA_MESH_NAME_TOKEN: NAME_TOKEN, NOVA_PROMOTION_WINDOW_S: '6', NOVA_PROMOTION_PROBE_MS: '400', NOVA_DRILL_TAP: tapDir,
+    NOVA_DRILL: '1', TMPDIR: tmpdir(),
   });
   const running: Record<'n1' | 'n2', Running | null> = { n1: null, n2: null };
   const node = { n1, n2 } as const;
-  const startNode = async (k: 'n1' | 'n2') => { running[k] = await node[k].start(env(k === 'n1' ? mesh1 : mesh2)); };
-  const stopNode = async (k: 'n1' | 'n2', how: 'term' | 'kill' = 'term') => { const r = running[k]; running[k] = null; if (r) await (how === 'kill' ? kill(r) : stop(r)); };
+  const startNode = async (k: 'n1' | 'n2') => { running[k] = await node[k].start(env(k === 'n1' ? mesh1 : mesh2, addr[k])); };
+  const stopNode = async (k: 'n1' | 'n2', how: 'term' | 'kill' = 'term') => { const r = running[k]; running[k] = null; if (r) { await (how === 'kill' ? kill(r) : stop(r)); outputs.push(r.out.join('')); } };
   const hello = async (mesh: string) => (await call(mesh, 'GET', '/api/v1/mesh/hello')).body;
 
   // Case 8, throughout: both nodes asked to take a change at the same moment, every 100 ms. A tick
@@ -152,13 +184,14 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
       const said: string[] = [];
       p.stdout!.on('data', (d) => said.push(String(d)));
       p.stderr!.on('data', (d) => said.push(String(d)));
+      p.on('exit', () => outputs.push(said.join('')));
       const req = (await wait('a join request', () => n1.get('/api/v1/mesh/requests'), (rs: any[]) => rs.length > 0)).at(-1);
       assert.equal((await n1.send('POST', `/api/v1/mesh/requests/${req.id}/approve`, { confirm: true })).status, 200);
       for (let i = 0; i < 400 && p.exitCode === null; i++) await sleep(25);
       assert.equal(p.exitCode, 0, said.join(''));
       return req;
     };
-    await enrollWith(['--kind', 'standby', '--name', 'Spare', '--nova-home', n2.home, '--address', mesh2], { HOME: join(n2.dir, 'user'), NOVA_DEVICE_HOME: join(n2.dir, 'device') });
+    await enrollWith(['--kind', 'standby', '--name', 'Spare', '--nova-home', n2.home, '--address', addr.n2], { HOME: join(n2.dir, 'user'), NOVA_DEVICE_HOME: join(n2.dir, 'device') });
     const n2Id = JSON.parse(readFileSync(join(n2.home, 'mesh', 'role.json'), 'utf8')).device_id as string;
     const n1Id = (await hello(mesh1)).id as string;
     await startNode('n2');
@@ -221,7 +254,7 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     assert.equal(started.status, 202, JSON.stringify(started.body));
     await wait('N2 to be the hub at epoch 2', () => hello(mesh2), (h: any) => h.role === 'hub' && h.epoch === 2);
     await wait('N1 to be N2’s standby', () => n1.get('/api/v1/mesh/status'), (s: any) => s.role === 'standby');
-    assert.equal(name.target(), mesh2, 'the new hub pointed the stable name at itself');
+    assert.equal(name.target(), addr.n2, 'the new hub pointed the stable name at itself');
     const held = (await n1.send('PUT', '/api/v1/profile/user/name', { value: 'x' }));
     assert.equal(held.status, 409, 'the old hub refuses changes');
     await wait('N1 to copy N2', () => n2.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.acked_seq > 0 && h.checks.mesh.standby.lag.rows === 0);
@@ -232,6 +265,13 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     assert.equal(computer().d.roster.roster.hub.id, n2Id, 'the computer follows N2, without pairing again');
     const ps1 = await phone.session();
     assert.equal(ps1.status, 200, 'the phone signs in at the stable name, now N2, without pairing again');
+    // Inside the window, the link from N1 to N2 is cut for a while (review p1): N1 can't check N2, so
+    // it says so and does nothing by itself; N2 stays the hub. Then the link heals and the window ends.
+    link2.point(null);
+    const cut = await wait('N1 to say it can’t reach N2', () => n1.get('/api/v1/problems?open=1'), (ps: any[]) => ps.some((x) => /can’t reach “Spare”, the hub since the hand-over/.test(x.message)), 30_000);
+    assert.equal((await n1.get('/api/v1/mesh/status')).role, 'standby', 'no roll-back on a broken link');
+    assert.equal((await hello(mesh2)).role, 'hub');
+    link2.point(mesh2);
     const verified = await wait('the window to pass', () => n1.get('/api/v1/mesh/promotion'), (v: any) => v.promotion?.state === 'verified', 60_000);
     const chain2 = await wait('the chain on N2', () => n2.get('/api/v1/mesh/promotion'), (v: any) => v.tasks.length >= 6 && v.tasks.every((t: any) => t.state === 'done'));
     step(2, 'A planned promotion N1 → N2: every step ledgered, no data lost, devices re-pointed through the stable name, N1 a live standby, the window passed', [
@@ -239,7 +279,8 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
       ...chain2.tasks.map((t: any) => `ledger: “${t.title}”: ${t.state}`),
       `content hashes equal on both: ${JSON.stringify(after1.n2)}`,
       `the computer: epoch ${k1.ok ? k1.epoch : '?'} at ${k1.ok ? k1.url : '?'}; the phone: session ${ps1.status} at the stable name`,
-      `window: ${verified.promotion.probes.length} probes over ${verified.promotion.window_s} s, the last passed`,
+      `window: ${verified.promotion.probes.length} probes over ${verified.promotion.window_s} s (${verified.promotion.probes.filter((x: any) => x.result === 'unknown').length} unknown while the link was cut: no roll-back), the last passed`,
+      `while the link was cut, N1 said: ${cut.find((x: any) => /can’t reach/.test(x.message)).message}`,
     ]);
 
     // ---- case 3: a planned promotion N2 → N1 that fails its checks: roll-back at epoch + 2 --------
@@ -257,7 +298,7 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     name.stuck(false);
     const problems = (await n2.get('/api/v1/problems?open=1')) as any;
     const said = JSON.stringify(problems);
-    assert.match(said, /didn’t pass its checks after it became the hub/);
+    assert.match(said, /said it was failing its checks after it became the hub/);
     const k3 = await computer().find();
     assert.ok(k3.ok && k3.epoch === 4, JSON.stringify(k3));
     step(3, 'A planned promotion N2 → N1 whose new hub fails its checks (the stable name didn’t move): N2 hub again by itself at epoch 4 = 2 + 2; N1 stepped down to copy it', [
@@ -272,7 +313,9 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     const pr = await n1.send('POST', '/api/v1/mesh/promote', { confirm: true });
     assert.equal(pr.status, 200, JSON.stringify(pr.body));
     assert.equal(pr.body.epoch, 5);
-    await wait('the name to lead to N1', async () => name.target(), (t) => t === mesh1);
+    await wait('the name to lead to N1', async () => name.target(), (t) => t === addr.n1);
+    const k4 = await computer().find();
+    assert.ok(k4.ok && k4.epoch === 5, JSON.stringify(k4));
     await startNode('n2');
     const fenced = await n2.get('/api/v1/mesh/status');
     assert.equal(fenced.role, 'standby');
@@ -288,13 +331,19 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     const b6 = await backupAndDrill('n1');
     const lost = (await n1.send('POST', '/api/v1/memory', { kind: 'fact', content: 'Written after the last backup.' })).body;
     await stopNode('n1', 'kill');
-    const sheet = await wait('the emergency sheet', () => n2.get('/api/v1/mesh/promotion/cold'), (v: any) => v.eligible === true, 30_000);
+    // The computer looks for the hub (N1 is gone) and, finding N2 not to be it, shows N2 the roster it
+    // holds (review p3): the emergency promotion's epoch is then higher than anything a device has seen.
+    const kLook = await computer().find();
+    assert.equal(kLook.ok, false);
+    const sheet = await wait('the emergency sheet', () => n2.get('/api/v1/mesh/promotion/cold'), (v: any) => v.eligible === true && (v.facts.seen?.count ?? 0) >= 1, 30_000);
+    assert.equal(sheet.facts.seen.max, 5, 'the computer’s roster, at epoch 5');
     const words = sheet.sheet.map((f: any) => `${f.label}: ${f.text}`);
     assert.ok(words.some((w: string) => w.includes(b6.at)), 'the backup’s time');
     assert.ok(words.some((w: string) => /^What is lost: Everything written after/.test(w)), 'what was lost');
     assert.ok(words.some((w: string) => /^Connectors: Connectors need signing in again/.test(w)), 'connectors');
     assert.equal((await n2.send('POST', '/api/v1/mesh/promotion/cold', {})).status, 400, 'tier 3 every time');
-    const cold = await n2.send('POST', '/api/v1/mesh/promotion/cold', { confirm: true });
+    assert.equal((await n2.send('POST', '/api/v1/mesh/promotion/cold', { confirm: true, backup: 'nova-backup-000001' })).status, 409, 'only the backup the sheet showed');
+    const cold = await n2.send('POST', '/api/v1/mesh/promotion/cold', { confirm: true, backup: sheet.facts.backup.id });
     assert.equal(cold.status, 202, JSON.stringify(cold.body));
     await wait('N2 to come back as the hub at epoch 6', () => hello(mesh2), (h: any) => h.role === 'hub' && h.epoch === 6, 120_000);
     await wait('N2’s console after its restart', () => n2.get('/api/v1/mesh/status'), (s: any) => s.role === 'hub');
@@ -304,7 +353,7 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     assert.ok(!memories.some((m) => m.id === lost.id), 'what was written after it is lost, as the sheet said');
     const vault = await n2.get('/api/v1/vault');
     assert.ok(!(vault.names ?? []).includes('provider/DRILL_TOKEN'), 'the connector’s secret didn’t come back: it needs signing in again');
-    await wait('the name to lead to N2', async () => name.target(), (t) => t === mesh2);
+    await wait('the name to lead to N2', async () => name.target(), (t) => t === addr.n2);
     const k6 = await computer().find();
     assert.ok(k6.ok && k6.epoch === 6, JSON.stringify(k6));
     assert.equal(computer().d.roster.roster.hub.id, n2Id);
@@ -353,7 +402,7 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     k10.d.hub_url = name.url;
     const f10 = await findHub(k10.p, { ...k10.d, roster: { ...k10.d.roster, roster: { ...k10.d.roster.roster, hub: { ...k10.d.roster.roster.hub, url: name.url }, candidates: [] } } }, new Signer(importDeviceKeys(JSON.parse(readFileSync(k10.p.keys, 'utf8')))));
     liar.close();
-    name.point(mesh2);
+    name.point(addr.n2);
     assert.equal(computer().d.epoch, 6, 'nothing was taken from it');
     const said10 = f10.ok ? '' : f10.reason;
     assert.match(said10, /Its key isn’t one this device pinned/);
@@ -371,8 +420,8 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     await stopNode('n2');
     const after = Object.fromEntries(Object.entries(keyFiles).map(([k, f]) => [k, sha(readFileSync(f))]));
     assert.deepEqual(after, before, 'every key file is byte-identical');
-    const priv = (f: string) => { const j = JSON.parse(readFileSync(f, 'utf8')); return [j.ed25519.private, j.x25519.private] as string[]; };
-    const owners: { who: string; keys: string[]; own: (p: string) => boolean }[] = [
+    const priv = (f: string) => { const j = JSON.parse(readFileSync(f, 'utf8')); return [encodings(j.ed25519.private, j.ed25519.public, 'Ed25519'), encodings(j.x25519.private, j.x25519.public, 'X25519')]; };
+    const owners: { who: string; keys: ReturnType<typeof encodings>[]; own: (p: string) => boolean }[] = [
       { who: 'N1', keys: priv(keyFiles.n1), own: (p) => p === keyFiles.n1 || p.startsWith(join(n1.home, 'checkpoints')) },
       { who: 'N2', keys: priv(keyFiles.n2), own: (p) => p === keyFiles.n2 || p.startsWith(join(n2.home, 'checkpoints')) },
       { who: 'the computer', keys: priv(keyFiles.computer), own: (p) => p === keyFiles.computer },
@@ -381,28 +430,41 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     const tapped = files(tapDir).reduce((n, f) => n + readFileSync(f, 'utf8').split('\n').filter(Boolean).length, 0);
     assert.ok(tapped > 0, 'the tap recorded what crossed');
     const kinds = new Set(files(tapDir).flatMap((f) => readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l).kind as string)));
-    for (const k of ['sync', 'handover', 'transfer-answer', 'ready-answer', 'hello']) assert.ok(kinds.has(k), `the tap saw ${k}`);
+    for (const k of ['sync', 'handover', 'transfer-answer', 'ready-answer', 'health-answer', 'stand-down-answer', 'hello']) assert.ok(kinds.has(k), `the tap saw ${k}`);
     const found: string[] = [];
     let bytes = 0;
-    for (const f of everything) {
-      const text = readFileSync(f).toString('latin1');
-      bytes += text.length;
+    let rows = 0;
+    const seen = (where: string, buf: Buffer, text: string) => {
       for (const o2 of owners) {
-        if (o2.own(f)) continue;
-        for (const k of o2.keys) for (const e of encodings(k)) if (text.includes(e)) found.push(`${o2.who}'s private key in ${f}`);
+        if (o2.own(where)) continue;
+        for (const k of o2.keys) if (k.text.some((e) => text.includes(e)) || k.bytes.some((b) => buf.includes(b))) found.push(`${o2.who}'s private key in ${where}`);
       }
+    };
+    for (const f of everything) {
+      const buf = readFileSync(f);
+      bytes += buf.length;
+      seen(f, buf, buf.toString('latin1'));
+      if (/\.db$/.test(f)) for (const r of dbRows(f)) { rows++; seen(`${f} (a row)`, Buffer.from(r, 'latin1'), r); }
     }
+    // Everything the processes printed (both nodes, every start, and every enrollment).
+    const printed = outputs.join('\n');
+    seen('the processes’ output', Buffer.from(printed), printed);
     assert.deepEqual(found, [], 'no private key anywhere but its own key file (and its own checkpoints, which never leave it)');
-    // No vault-key escrow: no backup holds the vault's key.
+    // The vault's key: only in the vault key files (N1's own, N2's copy as a standby) and those nodes'
+    // checkpoints, which never leave them. Never in a backup, a tapped message (redacted to its
+    // digest), a database row or the output.
     const vk = readFileSync(join(n1.home, 'vault', 'key'));
     assert.equal(vk.length, 32);
-    const vaultKey = [vk.toString('latin1'), vk.toString('hex'), vk.toString('base64').replace(/=+$/, ''), vk.toString('base64url')];
-    const inBackups = files(backups).filter((f) => { const t = readFileSync(f).toString('latin1'); return vaultKey.some((e) => t.includes(e)); });
+    const vaultKey = [vk.toString('hex'), vk.toString('base64').replace(/=+$/, ''), vk.toString('base64url')];
+    const keyAt = (p: string) => /\/vault\/key$/.test(p) || /\/checkpoints\//.test(p);
+    const vaultSeen = [...everything.filter((f) => !keyAt(f) && (() => { const b = readFileSync(f); return b.includes(vk) || vaultKey.some((e) => b.toString('latin1').includes(e)); })()), ...(vaultKey.some((e) => printed.includes(e)) ? ['the processes’ output'] : [])];
+    assert.deepEqual(vaultSeen, [], 'the vault’s key only where it is kept on purpose');
+    const inBackups = files(backups).filter((f) => { const b = readFileSync(f); return b.includes(vk) || vaultKey.some((e) => b.toString('latin1').includes(e)); });
     assert.deepEqual(inBackups, [], 'no backup holds the vault’s key');
     step(9, 'No private key left its device', [
       `key files byte-identical before and after: ${Object.entries(after).map(([k, h]) => `${k} ${h.slice(0, 12)}…`).join(', ')}`,
-      `scanned ${everything.length} files (${Math.round(bytes / 1024)} KB): both homes, the computer’s home, every backup and ${tapped} tapped messages (${[...kinds].sort().join(', ')}), for 6 private keys in 3 encodings each: none found outside its own key file`,
-      `no backup in ${backups} holds the vault’s key`,
+      `scanned ${everything.length} files (${Math.round(bytes / 1024)} KB), ${rows} database rows read one by one, and ${Math.round(printed.length / 1024)} KB the processes printed: both homes, the computer’s home, every backup and ${tapped} tapped messages (${[...kinds].sort().join(', ')}), for 6 private keys in 8 text encodings (JWK, hex both cases, base64, a byte list, PKCS8 DER as hex and base64, PEM) and 2 byte forms (raw, DER): none outside its own key file`,
+      `the vault’s key: no backup, tapped message, database row or output holds it; only the vault key files and their own checkpoints do`,
     ]);
     return { steps, probes: ticks, keys: { files: Object.fromEntries(Object.keys(before).map((k) => [k, { before: before[k]!, after: after[k]! }])), scanned: { files: everything.length, bytes, tapped }, found }, seconds: Math.round((Date.now() - t0) / 1000) };
   } finally {
@@ -410,6 +472,8 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     await prober.catch(() => {});
     for (const k of ['n1', 'n2'] as const) await stopNode(k).catch(() => {});
     await name.close();
+    await link1.close();
+    await link2.close();
     if (!process.env.NOVA_DRILL_KEEP) for (const d of [root, n1.dir, n2.dir]) { try { rmSync(d, { recursive: true, force: true }); } catch { /* left */ } }
   }
 }

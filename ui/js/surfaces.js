@@ -2,7 +2,7 @@
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
-import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, promotionSheet, coldPromotionSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
+import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, promotionSheet, promotionActionSheet, coldPromotionSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
@@ -243,6 +243,7 @@ export async function approve(form) {
   if (form.dataset.promote) return confirmPromote(form);
   if (form.dataset.promotion) return confirmPromotion(form);
   if (form.dataset.coldPromotion) return confirmCold(form);
+  if (form.dataset.promotionAction) return confirmPromotionAction(form);
   if (form.dataset.provider) return confirmProvider(form);
   if (form.dataset.testRun) return approveTestRun(form.dataset.testRun);
   const id = form.dataset.task;
@@ -667,7 +668,12 @@ export function renderDevices() {
   };
   // A promotion under way, or how the last one ended, in its own words (GET /mesh/status).
   const p = m?.promotion;
-  const promotionRow = p && p.said ? settingsRow({ id: 'promotion-row', title: p.kind === 'cold' ? 'Promotion from a backup' : 'Promotion', note: p.said }) : '';
+  // Settling it by hand (M10g review): a hand-over whose outcome isn't known can be cancelled; a new
+  // hub that can't be reached can be given back. Both tier 3, on this computer's own screen.
+  const settle = !p || !approver ? ''
+    : p.side === 'from' && ['holding', 'transferring'].includes(p.state) && (p.told ?? []).includes('unknown') ? '<button type="button" class="btn small" data-action="promotion-cancel">Cancel the hand-over</button>'
+      : p.side === 'from' && p.state === 'verifying' && (p.told ?? []).includes('unreachable') ? '<button type="button" class="btn small" data-action="promotion-take-back">Take the hub back</button>' : '';
+  const promotionRow = p && p.said ? settingsRow({ id: 'promotion-row', title: p.kind === 'cold' ? 'Promotion from a backup' : 'Promotion', note: p.said, control: settle }) : '';
   const waiting = store.requests.map((r) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(r.name)} is asking to join</p><p class="settings-note">${esc(KIND_WORDS[r.kind] ?? r.kind)} · compare the six digits it shows.</p></div><div class="settings-control"><button type="button" class="btn small primary" data-action="review-request" data-request="${esc(r.id)}">Review</button></div></li>`).join('');
   const lede = !m
     ? 'Paired devices show here.'
@@ -890,11 +896,26 @@ export async function promoteCold() {
   openSheet(coldPromotionSheet(view), { label: 'Make this the hub from a backup' });
 }
 
+export function promotionAction(kind) {
+  openSheet(promotionActionSheet(kind, store.mesh?.promotion), { label: kind === 'cancel' ? 'Cancel the hand-over' : 'Take the hub back' });
+}
+
+async function confirmPromotionAction(form) {
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (!confirm?.checked) { confirm?.focus(); return; }
+  try {
+    const r = await api('POST', form.dataset.promotionAction === 'cancel' ? '/mesh/promotion/cancel' : '/mesh/promotion/take-back', { confirm: true });
+    closeSheet();
+    toast(r.said ?? 'Done.');
+  } catch (e) { toast(e.message); }
+  await load(['devices', 'mesh']);
+}
+
 async function confirmCold(form) {
   const confirm = form.querySelector('input[name="confirm"]');
   if (!confirm?.checked) { confirm?.focus(); return; }
   try {
-    const r = await api('POST', '/mesh/promotion/cold', { confirm: true });
+    const r = await api('POST', '/mesh/promotion/cold', { confirm: true, backup: form.dataset.backup });
     closeSheet();
     toast(`Restoring the backup of ${r.backup?.at ?? 'then'}. Nova restarts to apply it.`);
   } catch (e) { toast(e.message); }

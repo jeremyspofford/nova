@@ -232,8 +232,13 @@ export class Devices extends EventEmitter {
     return { epoch: this.state().epoch, revoked };
   }
 
+  // While a hub holds writes to hand over (M10g), a device's sign-in doesn't write its last-seen
+  // time: the log then shows only real changes, and any it does show are kept and said.
+  quiet = false;
+
   // Heard from now. Written at most every 30 s per device.
   touch(id: string): void {
+    if (this.quiet) return;
     const now = this.#now().getTime();
     if (now - (this.#touched.get(id) ?? 0) < TOUCH_EVERY_MS) return;
     this.#touched.set(id, now);
@@ -266,7 +271,7 @@ export class Devices extends EventEmitter {
       this.#db.run('INSERT INTO session_signature (device_id, time, until) VALUES (?, ?, ?)', id, time, new Date(nowMs + 2 * 60_000 + 1000).toISOString());
       this.#db.run('DELETE FROM device_session WHERE expires_at <= ?', at);
       this.#db.run('INSERT INTO device_session (token_hash, device_id, created_at, expires_at) VALUES (?, ?, ?, ?)', tokenHash(token), id, at, expires);
-      this.#db.run('UPDATE device SET last_seen = ? WHERE id = ?', at, id);
+      if (!this.quiet) this.#db.run('UPDATE device SET last_seen = ? WHERE id = ?', at, id);
     });
     this.#touched.set(id, nowMs);
     return { token, device: this.get(id), expires_at: expires };

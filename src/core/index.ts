@@ -37,7 +37,8 @@ import { validate } from './services/definition.ts';
 import { APPROVER_ONLY, Access, allows, loopbackAddress, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
 import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
-import { Promotions, httpStableName, tap as drillTap } from './mesh/handover.ts';
+import { Promotions, httpStableName, testing as promotionTesting } from './mesh/handover.ts';
+import { setTap, tap as drillTap } from './mesh/tap.ts';
 import { drill as runDrill } from './resilience/drill.ts';
 import { SEAL_NAME } from './resilience/backup.ts';
 import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
@@ -679,8 +680,12 @@ export function createCore(o: CoreOptions) {
       const drilled = !!b.path && !!db.get('SELECT 1 FROM backup_drill WHERE ok = 1 AND backup_id = ?', b.path);
       return { at: b.at, path: b.path, drilled };
     },
-    name: nameControl && publicUrl() ? httpStableName(nameControl, publicUrl()!) : null,
+    name: nameControl && publicUrl() ? httpStableName(nameControl, publicUrl()!, process.env.NOVA_MESH_NAME_TOKEN) : null,
     ...(o.promotion ?? {}),
+    inflight: () => inflightWrites,
+    quiet: (on) => { devices.quiet = on; },
+    keep: (name) => { const v = checkpoints.take({ kind: 'named', name }); return { id: v.id, label: v.label }; },
+    pause: (k) => ledger.pause(k),
     cold: {
       drill: (dir) => runDrill({ live: db, backupDir: dir, source: 'folder', migrations: loadMigrations(), ...(o.resilience?.drill?.root ? { root: o.resilience.drill.root } : {}), ...(o.resilience?.drill?.env ? { sandboxEnv: o.resilience.drill.env } : {}), ...(o.resilience?.drill?.timeoutMs ? { timeoutMs: o.resilience.drill.timeoutMs } : {}) }),
       stage: (dir, c) => checkpoints.stageCold(dir, { node: c.node, floor: c.floor, promotion: c.promotion, backup: { id: c.backup.id, seq: c.backup.seq, at: c.backup.at, path: c.backup.path }, by: c.by }),
@@ -689,7 +694,13 @@ export function createCore(o: CoreOptions) {
       folder: () => keep.settings().target,
     },
   });
-  if (process.env.NOVA_DRILL_TAP && !o.sandbox) { log.warn('mesh', 'The promotion drill’s tap is on: what this node receives over the mesh is written to NOVA_DRILL_TAP.', { dir: process.env.NOVA_DRILL_TAP }); drillTap('start', { node: meshIdentity.id }); }
+  if (nameControl && publicUrl() && !process.env.NOVA_MESH_NAME_TOKEN) log.warn('mesh', 'NOVA_MESH_NAME_CONTROL is set without NOVA_MESH_NAME_TOKEN (16 characters or more), or isn’t https or this machine, so Nova won’t move the stable name: an unauthenticated request must never move it.');
+  // The drill's tap (mesh/tap.ts) writes only in a test or the drill, on a temp home; anywhere else it
+  // is refused and said.
+  if (process.env.NOVA_DRILL_TAP && !o.sandbox) {
+    if (promotionTesting(o.home)) { setTap(process.env.NOVA_DRILL_TAP); log.warn('mesh', 'The promotion drill’s tap is on: what this node receives over the mesh is written to NOVA_DRILL_TAP, with the vault’s key replaced by its digest.', { dir: process.env.NOVA_DRILL_TAP }); drillTap('start', { node: meshIdentity.id }); }
+    else { setTap(null); log.warn('mesh', 'NOVA_DRILL_TAP is set, but this isn’t a test or the drill on a temp home, so nothing is tapped.'); }
+  }
   // Stops the work: the ledger takes nothing new, every child process stops, running work gets up to
   // `boundMs` to finish (before an in-place restart, a quit, or a factory reset's wipe).
   async function stopWork(boundMs = 5000) {
@@ -913,7 +924,7 @@ export function createCore(o: CoreOptions) {
   function meshHealth() {
     const s = role.status();
     const pr = promotions.record();
-    return { role: s.role, epoch: s.epoch, listening: !!meshInfo, counts: devices.counts(), standby: s.standby, replica: s.replica, promotion: pr ? { id: pr.id, kind: pr.kind, side: pr.side, state: pr.state, said: pr.said, updated_at: pr.updated_at } : null };
+    return { role: s.role, epoch: s.epoch, listening: !!meshInfo, counts: devices.counts(), standby: s.standby, replica: s.replica, promotion: pr ? { id: pr.id, kind: pr.kind, side: pr.side, state: pr.state, said: pr.said, told: pr.told ?? [], to_name: pr.to?.name ?? null, updated_at: pr.updated_at } : null };
   }
 
   // The one mesh setting: automatic failover, off unless the person sets a number of seconds. It
@@ -1385,9 +1396,10 @@ export function createCore(o: CoreOptions) {
   }
   // On a standby (or a hub that stepped down) every change is refused, saying which node is hub;
   // the only change it takes is becoming the hub.
-  const REPLICA_WRITES = new Set(['/api/v1/mesh/promote', '/api/v1/mesh/promotion/ready', '/api/v1/mesh/promotion/transfer', '/api/v1/mesh/promotion/fence', '/api/v1/mesh/promotion/cold']);
+  const REPLICA_WRITES = new Set(['/api/v1/mesh/promote', '/api/v1/mesh/promotion/ready', '/api/v1/mesh/promotion/transfer', '/api/v1/mesh/promotion/fence', '/api/v1/mesh/promotion/cold', '/api/v1/mesh/promotion/transfer-status', '/api/v1/mesh/promotion/take-back', '/api/v1/mesh/seen']);
   // While a hub holds writes to hand over (M10g), the mesh's own calls still pass: sessions, the
   // standby's acknowledgements and the promotion's steps. Every other change is refused, saying why.
+  let inflightWrites = 0;
   const HOLD_PASSES = (path: string) => path === '/api/v1/mesh/session' || path === '/api/v1/mesh/sync/ack' || path.startsWith('/api/v1/mesh/promotion');
 
   // GET /join.sh and GET /device-agent.tar: the one-line command's script, and the agent it unpacks.
@@ -1451,7 +1463,12 @@ export function createCore(o: CoreOptions) {
       }
       const write = p && req.method !== 'GET' && req.method !== 'HEAD';
       const replica = write && !REPLICA_WRITES.has(url.pathname) ? role.replica() ?? (HOLD_PASSES(url.pathname) ? null : role.held()) : null;
-      if (!replica) return p;
+      if (!replica) {
+        // A change past the gate, counted until it has answered: a hold for a hand-over waits for
+        // these before it fixes the last sequence (M10g review, finding 5).
+        if (write && !HOLD_PASSES(url.pathname)) { inflightWrites++; let done = false; const end = () => { if (!done) { done = true; inflightWrites--; } }; res.once('finish', end); res.once('close', end); }
+        return p;
+      }
       res.writeHead(409, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ error: replica.reason, replica: true }));
       return null;
@@ -1491,9 +1508,12 @@ export function createCore(o: CoreOptions) {
       if (role.role() === 'hub' && !o.sandbox) {
         try { checkpoints.recordFinished(); } catch (e) { log.problem('resilience', 'Nova couldn’t record a finished restore in the ledger.', { detail: (e as Error)?.stack ?? String(e) }); }
       }
-      const recovered = role.role() === 'hub' ? startHub() : { requeued: [], reverified: [] };
+      // A hub that stopped while it held writes to hand over starts holding them, before any work is
+      // recovered (M10g review, finding 4): work handed over must not run here too.
+      const held = !o.sandbox && promotions.restoreHold();
+      const recovered = role.role() === 'hub' && !held ? startHub() : { requeued: [], reverified: [] };
       role.start();
-      // A promotion this node was part of carries on (M10g): a hub that was holding writes holds them.
+      // A promotion this node was part of carries on (M10g).
       if (!o.sandbox) promotions.start();
       return recovered;
     },

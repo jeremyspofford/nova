@@ -33,6 +33,7 @@ async function until<T>(read: () => T | Promise<T>, done: (v: T) => boolean, ms 
 }
 
 const GIB = 1024 ** 3;
+const NAME_TOKEN = 'a-test-token-for-the-stable-name';
 
 // A Nova core behind a console and a mesh listener on loopback. Its mesh info is shared by
 // reference, as server.js does, so the address is filled in once the listener is bound.
@@ -85,8 +86,9 @@ function backedUp(core: Core, at = new Date()) {
 // A hub and its standby, enrolled through the front door with the standby's own identity keys, both
 // with the stable name (a stand-in forwarder) as their public address, and the name's driver set.
 async function pair(o: { standbyVersion?: string; standbyHardware?: () => { free_disk: number | null; memory: number } } = {}) {
-  const name = await startStableName();
+  const name = await startStableName({ token: NAME_TOKEN });
   process.env.NOVA_MESH_NAME_CONTROL = name.control;
+  process.env.NOVA_MESH_NAME_TOKEN = NAME_TOKEN;
   const a = await node({ name: name.url });
   const b = await node({ name: name.url, ...(o.standbyVersion ? { version: o.standbyVersion } : {}), ...(o.standbyHardware ? { hardware: o.standbyHardware } : {}) });
   name.point(a.mesh);
@@ -118,6 +120,7 @@ async function stop(p: Awaited<ReturnType<typeof pair>>) {
   await p.a.close();
   await p.name.close();
   delete process.env.NOVA_MESH_NAME_CONTROL;
+  delete process.env.NOVA_MESH_NAME_TOKEN;
 }
 
 function rowsOf(dbPath: string, sql: string): string {
@@ -387,7 +390,7 @@ test('the new hub fails its checks (the stable name didn’t move): the old hub 
     assert.equal(rec!.state, 'rolled-back', JSON.stringify(rec));
     assert.equal(p.a.core.mesh.role.role(), 'hub');
     assert.equal(p.a.core.mesh.devices.state().epoch, 3, 'epoch + 2 from where it started: epochs only rise');
-    assert.ok(p.a.core.log.problems().some((x) => /didn’t pass its checks after it became the hub/.test(x.message)), 'tier 1: Nova acts and reports');
+    assert.ok(p.a.core.log.problems().some((x) => /said it was failing its checks after it became the hub/.test(x.message)), 'tier 1: Nova acts and reports');
     // The new hub sees it (asked to look now), steps down, and copies the old one afresh.
     await until(() => p.b.core.mesh.role.role(), (r) => r === 'standby');
     assert.deepEqual([p.a.core.mesh.role.role(), p.b.core.mesh.role.role()], ['hub', 'standby'], 'one hub');
@@ -414,7 +417,13 @@ test('the emergency sheet says the backup’s time, what was lost and that conne
   const text = sheet.map((f) => `${f.label}: ${f.text}`).join('\n');
   assert.match(text, /Backup 4, made 2026-10-31T03:00:00\.000Z/);
   assert.match(text, /Everything written after 2026-10-31T03:00:00\.000Z/);
-  assert.match(text, /Connectors need signing in again\..*never their key, and Nova keeps no copy of that key anywhere/);
+  assert.match(text, /Connectors need signing in again\. Backups never hold the key to your saved secrets/);
+  assert.doesNotMatch(text, /keeps no copy/, 'checkpoints and a standby do hold the key (finding 9)');
+  assert.match(text, /None of your devices has shown this node its roster, so Nova can’t tell whether the old hub is still running/, 'no evidence, said plainly (finding 2)');
+  assert.doesNotMatch(text, /higher than any it knows of/);
+  assert.match(text, /What may come back: Devices revoked and memories forgotten/);
+  const withSeen = coldSheet({ backup: null, epoch_now: 5, epoch_backup: 4, epoch_new: 8, pinned: true, lost: '', connectors: '', devices: '', seen: { max: 7, count: 2 } }, { name: null }).find((f) => f.label === 'Epoch')!.text;
+  assert.match(withSeen, /epoch 8: higher than its own record \(5\), the backup’s \(4\) and the newest roster your devices have shown it \(epoch 7, from 2 devices\)/);
   assert.match(text, /epoch 6/);
   assert.match(text, /tier 3/);
   const p = await pair();

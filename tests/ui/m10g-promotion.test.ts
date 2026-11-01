@@ -15,7 +15,8 @@ import { browser, device, finishSetup, ready, shoot, shotsDir } from './support.
 test('M10g: “Promote to hub” on the hub’s Devices page: the pre-checks first, tier 3, then the hub hands over and says so', { timeout: 300_000 }, async (t) => {
   const b = await browser();
   if (typeof b === 'string') return t.skip(b);
-  const fast = { NOVA_PROMOTION_WINDOW_S: '4', NOVA_PROMOTION_PROBE_MS: '300' };
+  // A short window only for a test on temp homes (NOVA_DRILL=1): nowhere else (M10g review, finding 10).
+  const fast = { NOVA_PROMOTION_WINDOW_S: '4', NOVA_PROMOTION_PROBE_MS: '300', NOVA_DRILL: '1', TMPDIR: tmpdir() };
   let s: Awaited<ReturnType<typeof setup>>;
   try { s = await setup('nova-ui-m10g', () => {}, fast); } catch (e) { await b.close(); throw e; }
   let standbyProc: Running | null = null;
