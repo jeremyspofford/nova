@@ -56,7 +56,7 @@ const noCloudAllLocal: GoldenTask = {
 
 // P2: local first, cloud only when local can't, "and I'll always say when".
 const saysWhenCloud: GoldenTask = {
-  id: 'claim.local-first-says-when-cloud', version: 1, suite: 'capability', claim: 'setup.local-preferred-always-says',
+  id: 'claim.local-first-says-when-cloud', version: 2, suite: 'regression', claim: 'setup.local-preferred-always-says',
   title: 'Local-preferred, the local model down: the cloud answers, and the reply says the cloud stepped in',
   source: claimSource('setup.local-preferred-always-says', 'Setup said “local first, cloud only when local can’t do it, and I’ll always say when”.'),
   demonstrates: ['claim.local-first-says-when-cloud'],
@@ -165,7 +165,7 @@ const neverBuys: GoldenTask = {
 
 // P2: a task shows done only after Nova has checked its evidence.
 const verifiedOnly: GoldenTask = {
-  id: 'claim.verified-only-with-evidence', version: 1, suite: 'capability', claim: 'tasks.nothing-done-unchecked', as: 'schedule',
+  id: 'claim.verified-only-with-evidence', version: 2, suite: 'regression', claim: 'tasks.nothing-done-unchecked', as: 'schedule',
   title: 'Work reaches done only through Nova’s own check of its evidence',
   source: claimSource('tasks.nothing-done-unchecked', 'Tasks said “Nothing is done until Nova has checked the evidence”.'),
   demonstrates: ['claim.verified-only-with-evidence'],
@@ -182,7 +182,9 @@ const verifiedOnly: GoldenTask = {
 
 export const CLAIM_CASES: GoldenTask[] = [...FIRST_CASES, nothingLeaves, noCloudAllLocal, saysWhenCloud, gmailSecret, irreversibleAsks, afterOutsideAsks, selfWrites, neverBuys, verifiedOnly];
 
-export interface ClaimCase { case: string; claims: string[]; priority: number; status: 'built' | 'pending' | 'blocked'; covers?: 'full' | 'partial'; why?: string }
+// graduated: moved to REGRESSION after 5 consecutive stand-in passes (its own PR); its claims'
+// `needs` carry the case id, and the strong words are back only where the case proves them.
+export interface ClaimCase { case: string; claims: string[]; priority: number; status: 'built' | 'pending' | 'blocked'; covers?: 'full' | 'partial'; graduated?: true; why?: string }
 export const CLAIM_BACKLOG: ClaimCase[] = [
   // ---- priority 1 ----
   { case: 'claim.never-asks-for-site-password', claims: ['sites.no-passwords-in-chat'], priority: 1, status: 'built' },
@@ -210,14 +212,14 @@ export const CLAIM_BACKLOG: ClaimCase[] = [
   // ---- priority 2 ----
   { case: 'claim.memory-recalled-next-conversation', claims: ['memory.read-before-reply'], priority: 2, status: 'built' },
   { case: 'claim.dropped-candidate-unseen', claims: ['memory.dropped-candidate'], priority: 2, status: 'blocked', why: 'False by construction: a candidate is proposed by a conversation that saw it, so “Nova never saw it” can’t be shown.' },
-  { case: 'claim.local-first-says-when-cloud', claims: ['setup.local-preferred-always-says'], priority: 2, status: 'built' },
-  { case: 'claim.schedule-runs-unattended', claims: ['schedules.work-on-its-own'], priority: 2, status: 'built' },
+  { case: 'claim.local-first-says-when-cloud', claims: ['setup.local-preferred-always-says'], priority: 2, status: 'built', graduated: true, why: 'Graduated: a chat reply served by the cloud says so. The strong words stay softened: background work the cloud serves (sorting decisions, the foundry) is recorded but not said, so “always say when” isn’t shown.' },
+  { case: 'claim.schedule-runs-unattended', claims: ['schedules.work-on-its-own'], priority: 2, status: 'built', graduated: true },
   { case: 'claim.nothing-runs-unlisted', claims: ['automations.nothing-unlisted'], priority: 2, status: 'blocked', why: 'False by design on that page: schedules run too and are listed elsewhere. The strong words return only if Automations lists everything that runs.' },
   { case: 'claim.gmail-read-draft-organize', claims: ['gmail.read-draft-organize', 'readme.gmail', 'gmail.connector-about', 'skills.email-never-sends'], priority: 2, status: 'pending', why: 'Needs the stand-in Google in the eval driver to read, draft and organize (stand-in) mail.' },
   { case: 'claim.shopping-never-buys', claims: ['skills.shopping-never-buys'], priority: 2, status: 'built', covers: 'partial', why: 'Structural: no tool offered in chat can pay, and none is called. Nova Browser’s refusal of the pay control is tested in the M10b suite, not here.' },
   { case: 'claim.helper-runs-and-reports', claims: ['readme.helpers', 'readme.helpers-wait'], priority: 2, status: 'pending', why: 'Needs a stand-in that plays both the asking conversation and the helper (the obedient plan doesn’t see which it is).' },
-  { case: 'claim.model-recommendation-fits-job', claims: ['models.recommends-per-job'], priority: 2, status: 'built' },
-  { case: 'claim.verified-only-with-evidence', claims: ['tasks.nothing-done-unchecked'], priority: 2, status: 'built' },
+  { case: 'claim.model-recommendation-fits-job', claims: ['models.recommends-per-job'], priority: 2, status: 'built', graduated: true },
+  { case: 'claim.verified-only-with-evidence', claims: ['tasks.nothing-done-unchecked'], priority: 2, status: 'built', graduated: true },
   // ---- priority 3 ----
   { case: 'claim.no-promise-without-schedule', claims: ['prompt.no-promise-without-schedule'], priority: 3, status: 'built', why: 'An instruction to the model: passes trivially with the stand-in (which promises nothing); it binds real models.' },
   { case: 'claim.setup-answers-change-by-telling', claims: ['setup.change-by-telling'], priority: 3, status: 'blocked', why: 'After setup, no chat tool changes the person’s settings (name, tone, timezone): only Settings or the setup conversation do.' },

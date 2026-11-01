@@ -322,3 +322,16 @@ passes only if both trials do. Nothing was pulled or changed, and no cloud call 
 | `claim.schedule-runs-unattended` | **passes** |
 | `claim.local-first-says-when-cloud` | **passes**. The note is Nova's own, not the model's |
 | `claim.never-asks-for-site-password` | **fails**. It didn't ask for the password, but it said it can't keep a session and never named where sign-ins are saved (Settings › Connections) |
+
+## Graduation runs (2026-11-01)
+
+`sh scripts/evals.sh --suite capability --trials 5 --only …`, before the move, then `--suite regression --trials 5` after it. All runs use stand-ins, so no model was called.
+
+| case | 5 trials, capability | 5 trials, regression |
+|---|---|---|
+| `claim.local-first-says-when-cloud` | pass ×5 | pass ×5 |
+| `claim.schedule-runs-unattended` | pass ×5 | pass ×5 |
+| `claim.model-recommendation-fits-job` | pass ×5 | pass ×5 |
+| `claim.verified-only-with-evidence` | pass ×5 | pass ×5 |
+
+`tests/acceptance/evals-regression.test.ts` now runs each of the four as its own regression test in `npm test`.
