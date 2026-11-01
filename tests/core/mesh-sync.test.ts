@@ -515,21 +515,28 @@ async function claimsHub(dev: Joiner, epoch: number) {
   return { url: url(), close: () => { s.closeAllConnections(); s.close(); } };
 }
 
-test('only the current standby can make a hub step down; a replaced standby loses its standby role and address', async () => {
+// M10g (Decision 2): fencing treats every pinned hub candidate as a possible successor. Before M10g
+// only the current standby was; a replaced standby (still a hub candidate) proving a higher epoch
+// was refused. What stays refused is a trusted device that is no hub candidate.
+test('only the standby or a pinned hub candidate can make a hub step down; a replaced standby loses its standby role and address', async () => {
   const h = await hub();
   const { enroll } = await import('./mesh-support.ts');
+  const pc = await enroll(h, { kind: 'computer', name: 'Desk computer', platform: 'linux', capabilities: [] });
+  const pcPeer = await claimsHub(pc.dev, 99);
   const old = await enroll(h, { kind: 'standby', name: 'Old standby', address: 'http://127.0.0.1:1' });
   const oldPeer = await claimsHub(old.dev, 99);
   try {
-    h.core.db.run('UPDATE device SET address = ? WHERE id = ?', oldPeer.url, old.dev.deviceId);
-    // It stops being the standby without being revoked: here as after a promotion elsewhere, which
-    // leaves mesh_state with no standby while the registry still has the old one, trusted.
-    h.core.db.run('UPDATE mesh_state SET standby_id = NULL');
-    // Its key (from a machine nobody uses now, say) signs a roster naming itself hub at epoch 99.
+    // A computer the person never made a hub candidate, its key signing a roster that names itself
+    // hub at epoch 99 (from a machine nobody uses now, say): not a reason to step down.
+    h.core.db.run('UPDATE device SET address = ? WHERE id = ?', pcPeer.url, pc.dev.deviceId);
     const f = await h.core.mesh.role.fence();
-    assert.equal(f.demoted, false, 'a trusted device that isn’t the standby can’t take the role');
+    assert.equal(f.demoted, false, 'a trusted device that isn’t the standby or a hub candidate can’t take the role');
     assert.equal(h.core.mesh.role.role(), 'hub');
-    assert.ok(h.core.log.problems().some((x) => /isn’t this hub’s standby/.test(x.message)), 'the person is told');
+    assert.ok(h.core.log.problems().some((x) => /isn’t this hub’s standby or a hub candidate/.test(x.message)), 'the person is told');
+    h.core.db.run('UPDATE device SET address = NULL WHERE id = ?', pc.dev.deviceId);
+    // The standby stops being the standby without being revoked: here as after a promotion elsewhere,
+    // which leaves mesh_state with no standby while the registry still has the old one, trusted.
+    h.core.db.run('UPDATE mesh_state SET standby_id = NULL');
 
     // A new standby is approved: the old one is no longer standby, and isn't asked about it.
     const fresh = await enroll(h, { kind: 'standby', name: 'New standby', address: 'http://127.0.0.1:1' });
@@ -539,6 +546,8 @@ test('only the current standby can make a hub step down; a replaced standby lose
     assert.equal(was.trust, 'trusted', 'still the person’s machine');
     assert.equal(h.core.mesh.devices.state().standby_id, fresh.dev.deviceId);
     assert.ok(!(await h.core.mesh.role.fence()).checked.includes(oldPeer.url));
+    // Still a hub candidate, so its key stays pinned in the roster devices take (Decision 2).
+    assert.ok(h.core.mesh.devices.roster().roster.candidates?.some((c) => c.id === old.dev.deviceId));
 
     // The current standby, proving its key at a higher epoch, is the one that can.
     const freshPeer = await claimsHub(fresh.dev, 2);
@@ -551,6 +560,7 @@ test('only the current standby can make a hub step down; a replaced standby lose
     }
   } finally {
     oldPeer.close();
+    pcPeer.close();
     await h.stop();
   }
 });

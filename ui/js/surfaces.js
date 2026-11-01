@@ -2,7 +2,7 @@
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
-import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
+import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, promotionSheet, promotionActionSheet, coldPromotionSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
@@ -161,8 +161,9 @@ export function renderTasks(el, now = new Date()) {
   <h2 class="section-title" id="tg-${k}">${esc(title)}</h2>
   <ul class="task-list">${by.get(k).map((t) => taskRow(t, { now })).join('')}</ul>
 </section>`).join('');
+  // “Nothing is done until Nova has checked the evidence” is backed by the eval claim.verified-only-with-evidence (tests/evals/tasks/claim-backlog.ts).
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Tasks</h2>
-<p class="view-lede">Everything Nova takes on, in plain words. A task shows Verified only after Nova has checked its evidence; tap Verified to see it.</p></header>
+<p class="view-lede">Everything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.</p></header>
 ${groups || emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.', action: '<a class="btn" href="/chat" data-nav="chat">Ask Nova to do something</a>' })}`;
 }
 
@@ -241,6 +242,9 @@ export async function approve(form) {
   if (form.dataset.revoke) return confirmRevoke(form);
   if (form.dataset.allow) return confirmAllow(form);
   if (form.dataset.promote) return confirmPromote(form);
+  if (form.dataset.promotion) return confirmPromotion(form);
+  if (form.dataset.coldPromotion) return confirmCold(form);
+  if (form.dataset.promotionAction) return confirmPromotionAction(form);
   if (form.dataset.provider) return confirmProvider(form);
   if (form.dataset.testRun) return approveTestRun(form.dataset.testRun);
   const id = form.dataset.task;
@@ -326,7 +330,7 @@ function meshRoleLine(c) {
 export function renderHealth(el) {
   const h = store.health;
   const problem = (p, open) => `<li class="settings-row" id="pr-${esc(String(p.id))}">
-  <div class="settings-text"><p class="settings-label">${esc(p.message)}</p><p class="settings-note">${esc(p.source)} · ${esc(ago(p.at))}${p.task_id ? ` · <a class="link" href="/tasks" data-action="open-task" data-task="${esc(p.task_id)}">the task</a>` : ''}</p>
+  <div class="settings-text"><p class="settings-label">${esc(p.message)}</p><p class="settings-note">${open ? `${status(p.stops ? 'failed' : 'needs-you')} ` : ''}${esc(p.source)} · ${esc(ago(p.at))}${p.task_id ? ` · <a class="link" href="/tasks" data-action="open-task" data-task="${esc(p.task_id)}">the task</a>` : ''}</p>
   ${open ? playbookBlock(p) : ''}
   ${p.detail ? `<details class="raw"><summary>Technical detail</summary><pre tabindex="0">${esc(p.detail)}</pre></details>` : ''}</div>
   ${open ? `<div class="settings-control"><button type="button" class="btn small" data-action="resolve-problem" data-problem="${esc(String(p.id))}">Mark as dealt with</button></div>` : ''}
@@ -658,8 +662,19 @@ export function renderDevices() {
     if (d.role === 'hub') return rolesButton(d);
     const allow = approver && (d.kind === 'phone' || d.kind === 'browser') && !d.this
       ? `<button type="button" class="btn small quiet" data-action="allow-approve" data-device="${esc(d.id)}" data-value="${d.can_approve ? 'false' : 'true'}">${d.can_approve ? 'Stop it approving' : 'Let it approve'}</button>` : '';
-    return `${rolesButton(d)}${allow}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
+    // A hub candidate can be made the hub (M10g): the pre-checks say whether it is ready.
+    const promote = approver && (d.purposes ?? []).includes('hub-candidate') && (d.kind === 'standby' || d.kind === 'computer')
+      ? `<button type="button" class="btn small quiet" data-action="promote-device" data-device="${esc(d.id)}">Promote to hub</button>` : '';
+    return `${rolesButton(d)}${allow}${promote}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
   };
+  // A promotion under way, or how the last one ended, in its own words (GET /mesh/status).
+  const p = m?.promotion;
+  // Settling it by hand (M10g review): a hand-over whose outcome isn't known can be cancelled; a new
+  // hub that can't be reached can be given back. Both tier 3, on this computer's own screen.
+  const settle = !p || !approver ? ''
+    : p.side === 'from' && ['holding', 'transferring'].includes(p.state) && (p.told ?? []).includes('unknown') ? '<button type="button" class="btn small" data-action="promotion-cancel">Cancel the hand-over</button>'
+      : p.side === 'from' && p.state === 'verifying' && (p.told ?? []).includes('unreachable') ? '<button type="button" class="btn small" data-action="promotion-take-back">Take the hub back</button>' : '';
+  const promotionRow = p && p.said ? settingsRow({ id: 'promotion-row', title: p.kind === 'cold' ? 'Promotion from a backup' : 'Promotion', note: p.said, control: settle }) : '';
   const waiting = store.requests.map((r) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(r.name)} is asking to join</p><p class="settings-note">${esc(KIND_WORDS[r.kind] ?? r.kind)} · compare the six digits it shows.</p></div><div class="settings-control"><button type="button" class="btn small primary" data-action="review-request" data-request="${esc(r.id)}">Review</button></div></li>`).join('');
   const lede = !m
     ? 'Paired devices show here.'
@@ -678,6 +693,7 @@ export function renderDevices() {
   return `<section class="memory-section" id="devices" aria-labelledby="set-devices"><h2 class="memory-heading" id="set-devices">Devices</h2>
 <p class="memory-lede">${esc(lede)}</p>
 ${waiting ? `<ul class="settings-list">${waiting}</ul>` : ''}
+${promotionRow ? `<ul class="settings-list">${promotionRow}</ul>` : ''}
 <ul class="device-list device-registry">${trusted.map((d) => deviceRow(d, { actions: actions(d), roles: true })).join('')}</ul>
 ${add}
 ${revoked.length ? `<details class="raw"><summary>Revoked (${revoked.length})</summary><ul class="device-list device-registry">${revoked.map((d) => deviceRow(d)).join('')}</ul></details>` : ''}
@@ -851,6 +867,59 @@ async function confirmRoles(form) {
     toast(`${d.name} is for: ${d.purposes.length ? d.purposes.join(', ').replace(/-/g, ' ') : 'nothing yet'}.`);
   } catch (e) { toast(e.message); }
   await load(['devices']);
+}
+
+// ---- promotion (M10g) ---------------------------------------------------------------------------
+
+// The pre-checks first (tier 0), then the sheet at tier 3.
+export async function promoteDevice(id) {
+  const d = meshDevices().find((x) => x.id === id);
+  if (!d) return;
+  let check;
+  try { check = await api('POST', '/mesh/promotions/check', { device_id: id }); } catch (e) { toast(e.message); return; }
+  openSheet(promotionSheet(d, check), { label: 'Promote to hub' });
+}
+
+async function confirmPromotion(form) {
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (!confirm?.checked) { confirm?.focus(); return; }
+  try {
+    await api('POST', '/mesh/promotions', { device_id: form.dataset.promotion, confirm: true });
+    closeSheet();
+    toast('Handing the hub over. Changes wait a moment while it happens.');
+  } catch (e) { toast(e.message); }
+  await load(['devices', 'mesh']);
+}
+
+export async function promoteCold() {
+  let view;
+  try { view = await api('GET', '/mesh/promotion/cold'); } catch (e) { toast(e.message); return; }
+  openSheet(coldPromotionSheet(view), { label: 'Make this the hub from a backup' });
+}
+
+export function promotionAction(kind) {
+  openSheet(promotionActionSheet(kind, store.mesh?.promotion), { label: kind === 'cancel' ? 'Cancel the hand-over' : 'Take the hub back' });
+}
+
+async function confirmPromotionAction(form) {
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (!confirm?.checked) { confirm?.focus(); return; }
+  try {
+    const r = await api('POST', form.dataset.promotionAction === 'cancel' ? '/mesh/promotion/cancel' : '/mesh/promotion/take-back', { confirm: true });
+    closeSheet();
+    toast(r.said ?? 'Done.');
+  } catch (e) { toast(e.message); }
+  await load(['devices', 'mesh']);
+}
+
+async function confirmCold(form) {
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (!confirm?.checked) { confirm?.focus(); return; }
+  try {
+    const r = await api('POST', '/mesh/promotion/cold', { confirm: true, backup: form.dataset.backup });
+    closeSheet();
+    toast(`Restoring the backup of ${r.backup?.at ?? 'then'}. Nova restarts to apply it.`);
+  } catch (e) { toast(e.message); }
 }
 
 // ---- the standby: becoming the hub ------------------------------------------------------------

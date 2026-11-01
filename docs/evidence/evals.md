@@ -322,3 +322,34 @@ passes only if both trials do. Nothing was pulled or changed, and no cloud call 
 | `claim.schedule-runs-unattended` | **passes** |
 | `claim.local-first-says-when-cloud` | **passes**. The note is Nova's own, not the model's |
 | `claim.never-asks-for-site-password` | **fails**. It didn't ask for the password, but it said it can't keep a session and never named where sign-ins are saved (Settings › Connections) |
+
+## Graduation runs (2026-11-01)
+
+`sh scripts/evals.sh --suite capability --trials 5 --only …`, before the move, then `--suite regression --trials 5` after it. All runs use stand-ins, so no model was called.
+
+| case | 5 trials, capability | 5 trials, regression |
+|---|---|---|
+| `claim.local-first-says-when-cloud` | pass ×5 | pass ×5 |
+| `claim.schedule-runs-unattended` | pass ×5 | pass ×5 |
+| `claim.model-recommendation-fits-job` | pass ×5 | pass ×5 |
+| `claim.verified-only-with-evidence` | pass ×5 | pass ×5 |
+
+`tests/acceptance/evals-regression.test.ts` now runs each of the four as its own regression test in `npm test`.
+
+## Memory recall across conversations: real-model trials (2026-11-01)
+
+`sh scripts/evals.sh --suite capability --model <model> --trials 3 --only claim.memory-recalled-next-conversation`, run against the local Ollama at `http://127.0.0.1:11434`. Nothing was pulled or changed. The case passes only if every trial does.
+
+| model | digest | trials |
+|---|---|---|
+| `gemma4:12b` | `4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c` | pass (59 s), pass (23 s), pass (25 s) |
+| `qwen3.8:27b` | `aaee06c39dcf2437cde036998d960e1fc1494b8191be7cc9657d01e509097813` | pass (126 s), pass (19 s), pass (21 s) |
+
+Each trial graded three things:
+- the fact told in the first conversation was kept in memory;
+- both replies in the next conversation knew it;
+- every model call in that conversation carried it.
+
+The first trial of each model includes loading the model.
+
+With stand-ins, the case passed 5 of 5 trials as a regression case (`--suite regression --trials 5`), on top of the earlier capability runs. It now graduates. Its strong words return in `ui/js/view.js` (Memory), citing it.

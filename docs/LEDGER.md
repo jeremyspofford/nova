@@ -6,6 +6,31 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #272 · You can move the hub to another computer, and recover it from a backup**
+- What changed: in Settings › Devices, a computer that can become the hub now has "Promote to hub". Nova checks first that it is ready (it copies everything, has room, runs the same version, and there is a recent backup that passed its test), and tells you plainly if not. Then it hands over: the last changes are copied, running work finishes or moves along, new changes wait for a moment, and the other computer becomes the hub. The old hub keeps a live copy. For a while afterwards it checks the new hub. If the new hub says it isn't working, it takes the role back by itself and tells you; if it simply can't reach the new hub, it doesn't guess: it tells you, and you can take the role back yourself. Nothing either computer saved is thrown away; anything that couldn't be carried over is kept on that computer and listed for you. If your hub is gone for good, a computer that could be the hub can take over from your latest backup: Nova says first when that backup was made, that anything after it is lost, and that your connections (like email) need signing in again. Your devices find the new hub without pairing again.
+- What you can now do: move Nova to a better computer without starting over, and recover from losing the hub. Each step shows up in Tasks.
+- Still unfinished: if your two computers lose sight of each other mid-way, both can take changes for a short while; when they reconnect, one stays the hub and the other's changes are kept and listed for you, never mixed in by themselves (whether to add a third vote to prevent that is your decision). The computer must already be your standby to be promoted (adding it as the standby is a separate step); moving your real network name (DNS or Tailscale) isn't done for you; this has only been tried on test computers on one machine, not on your real ones.
+
+**2026-11-01 · #271 · Captured screen text is now checked for private details before Nova keeps it**
+- What changed: before anything captured from your screen or a recording is kept, Nova's own rules run first. Known password managers, banking and payment apps, password vaults and banks' websites are not kept (best effort). Text shaped like a key, a password or a card number is blanked out, in the words, the window title and the web address. Then the trusted local model checks the rest for passwords, keys, and money or health details. Flagged items are held back from memory, or their words aren't kept, and the Capture page says which and why. Nothing is deleted without showing you. On a device with no trusted model, captured text is held, not added to memory, and the page says what fixes it.
+- What you can now do: open any captured item to see how it was checked. Let a wrongly dropped app back in from Settings › Capture. Review "Memories to look at again": memories made from capture before this check that turn out to hold a private detail, to forget or keep.
+- Still unfinished: those older memories still hold their words until you forget them. Held items can't be remembered, even by you; whether you can override that is your call. Checking what Nova recalls from capture is the next job.
+
+**2026-11-01 · #274 · The Memory page says "Nova reads this before every reply" again**
+- What changed: a permanent test now shows that something you tell Nova in one conversation, it knows in the next. Two local models passed it every time (3 of 3 each), and so did the stand-ins. It runs on every change to Nova, so the stronger wording is back.
+- What you can now do: rely on Nova carrying what you've told it into new conversations, with the models tested.
+- Still unfinished: helpers (Nova's background workers) get no memory by design; the wording covers the replies you get.
+
+**2026-11-01 · #263 · The orb has seven fixed states, and red now only means "something stopped"**
+- What changed: red is reserved for problems that stop Nova, such as a failed task, a safety switch that fired, or a request refused for your security. Anything that needs you while Nova keeps running is amber, such as an approval waiting or a Health item to look at. Each state differs in movement and brightness as well as colour, with a still version for reduced motion. Every design must show all seven, and can't redefine them.
+- What you can now do: tell at a glance whether Nova is stopped (red) or just needs you (amber). Health labels each problem "Failed" or "Needs you". Note that a failed task, including a failed "Backup now", counts as stopped, so it shows red.
+- Still unfinished: a design you made yourself, without the new state list, falls back to the default design until it's updated.
+
+**2026-11-01 · #273 · Four promises Nova can now prove are back in its own words**
+- What changed: four things Nova says about itself now have permanent tests behind them, so a change that breaks one can't merge. Those are that scheduled work runs on its own, that Nova recommends a model for each job, that nothing is marked done until Nova has checked the evidence, and that a chat reply served by the cloud says so. Three screens got their stronger wording back.
+- What you can now do: rely on those four statements; each is checked on every change.
+- Still unfinished: setup still says "each cloud call is recorded" rather than "I'll always say when", because some background cloud work isn't announced yet. Remembering across conversations needs more real-model trials before it counts.
+
 **2026-11-01 · #261 · Every promise Nova toned down now has a test waiting to prove it**
 - What changed: each of the 38 claims Nova softened in its own words has a named test that would prove the stronger version. 20 tests are built. Some already pass, such as saying when the cloud answered, schedules running on their own, and recommending a model for each job. Six fail because the stronger promise isn't true today: for example, every command waiting for your OK even when you've allowed commands, or Nova writing its own notes without asking.
 - What you can now do: nothing changes in the app; this is the list of what Nova can and can't yet prove about itself.
@@ -322,6 +347,193 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-11-01 (M10g, after the second adversarial review of #272: replays, evidence, ties, the name, long jumps).**
+Branch `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The second review of #272"). Five
+findings and four minor at `53058d93`, each reproduced from the reviewer's probe (p10–p15) as a test
+(`tests/acceptance/m10g-review2.test.ts` R10–R15, a device-agent test, or the drill's new case 11),
+fixed, and seen failing again with the fix undone.
+- **What M10g guarantees during a split, stated exactly:** during a split, two hubs can briefly accept
+  writes; when contact returns, it settles to one, and the loser's changes are kept and named, never
+  merged automatically. ADR-11's "one active hub" holds only while the nodes can reach each other.
+  Whether ADR-11 is reworded or a lease or third vote is added is the owner's decision (open); no lease
+  is built.
+- **Signed answers are bound to their request** (its nonce and time), so a forwarder can drop or delay
+  them but not replay one; the nonces a node took survive its restart.
+- **Devices' roster reports** (`/mesh/seen`) count only when signed by a paired device's own key; the
+  highest epoch seen only rises; one a second per device, after the checks; devices are counted, not
+  reports.
+- **A tie** is settled with the winner going one epoch higher at once, so devices follow it; every
+  step-down keeps what that node took as hub in a named checkpoint, listing only its own changes.
+- **The stable name** is pointed at whichever node is hub once it settles (every step-down, a cancel,
+  and a periodic check on the hub), and a move that didn't take is said plainly.
+- **Long jumps:** each planned hand-over adds a link signed by the hub handing over; a device follows
+  a jump of any size along that chain back to the hub it knows. Chosen over raising the +3 limit, which
+  would let any pinned key jump far ahead. Emergency promotions add no link.
+- **Minor:** safe mode takes a changed roster; the name token never reaches the agent and is a
+  diagnostics secret; the epoch ceiling is enforced where epochs are made.
+
+**2026-11-01 (M10g, after the adversarial review of #272: split-brain and data loss closed).** Branch
+`m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The review of #272"). Two blocking findings
+and seven should-fix, each reproduced from the reviewer's probe as a test (`tests/acceptance/m10g-review.test.ts`
+R1–R9, or a drill case), fixed, and seen failing again with the fix undone. Under the owner's rules: one
+active hub, private keys never move, epochs only rise, nothing lost or deleted silently.
+- **No automatic roll-back without positive evidence.** The old hub probes the new one over a request
+  signed by its key, and the answer (the new hub's health) is signed by the new hub's key. Nova takes
+  the role back by itself only when the new hub says it is failing three times running and then
+  acknowledges, signed, that it stood down. A link that doesn't answer (or a clock too far off) is
+  `unknown`: no move, a problem said once, and a tier-3 "take the hub back" that says the risk.
+- **A node that steps down keeps what it took:** whatever the winning hub never copied goes into a
+  named checkpoint on that node first, and the problem lists it by kind and key; if it can't be set
+  aside, the node keeps it and doesn't copy over it. Problems are written after the copy starts, as a
+  standby's own, so the copy can't overwrite them.
+- **Transfer outcomes are settled by the candidate's signed word** (`transfer-status`): taken, the old
+  hub follows; declined, it carries on and the candidate never takes that hand-over; nothing, it keeps
+  holding until then, or the person cancels at tier 3 and it carries on two epochs higher. A restart
+  while holding restores the hold before the ledger resumes or recovers anything.
+- **The hold** waits for requests already past the gate, keeps the sync log recording (device sessions
+  stop writing last-seen while held), and stops Era 2's running work, so nothing lands uncopied and
+  unsaid.
+- **Epochs:** an emergency promotion takes max + 1 over the rosters devices showed it too (`POST
+  /mesh/seen`, signed by a key it trusts to be hub); fencing breaks an equal-epoch tie to the smaller
+  device id; devices follow another hub only at a strictly higher epoch, at most 3 past what they know
+  unless the current hub signed it, never past 2^31 − 1; heartbeat answers carry the roster's digest so
+  a changed roster (a revoked candidate) reaches agents within a heartbeat. Chosen over raising the
+  epoch on every revocation, which would make a live standby copy everything afresh.
+- **Words:** the connector sentence no longer says Nova keeps no copy of the vault key (a standby and
+  checkpoints do, by design); its claims-register case is blocked as false by design; the sheet says
+  what a restore can't know and where its epoch comes from.
+- **Clamps and minor:** the window and probe pace are shortened only in a test or the drill on a temp
+  home; the name driver needs a token and https or loopback; an automatic failover doesn't move the
+  name; the tap runs only in tests and the drill and writes the vault key as a digest; the emergency
+  sheet is bound to the backup it showed.
+
+**2026-10-31 (M10g: hub promotion, planned and emergency, and the promotion drill).** Branch `m10g/hub-promotion`.
+Plan `docs/plans/M10g.md`, evidence `docs/evidence/m10g-gate.md`, built from the orchestration ADR's M10g
+phase (Point 10; Decisions 2 and 5). No migration: nothing new is replicated.
+- **Trust widened, then fenced:** device agents now pin every hub candidate the roster lists
+  (`trust.ts rosterKeys`) and look at their addresses (`boot.ts candidates`); runtime bundles stay
+  signed by the hub or the standby only (`bundleKeys`), which is why M10f held this back. Fencing
+  (`promote.ts fence`) treats every trusted hub candidate as a possible successor (Decision 2) and
+  also asks the stable mesh name; a key that isn't pinned still can't take the role, and a peer still
+  acting as hub at a lower epoch is asked to check at once. **Guard removed:** a replaced standby (a
+  hub candidate) proving a higher epoch used to be refused; it is a successor now
+  (`tests/core/mesh-sync.test.ts` changed accordingly: a computer that is no candidate stays refused).
+- **Planned promotion is the hub's, over signed calls:** the hub drives its live standby with
+  requests signed by its identity key (step, both ids, epoch, time, nonce, body hash; used once), and
+  takes nothing from the candidate on trust but its own signed roster. **Step 0 is a refusal with
+  directions**, not an automatic re-enrollment: enrolling a standby is a pairing made on that
+  machine. Steps 1–6 are ledger tasks in one chain (`parent_id`), worker `mesh-promotion`,
+  confirmation system `nova-promotion`; the transfer and the roll-back are M4's own promotion task,
+  under the chain.
+- **The drain** is a new `ledger.drain()` (nothing new starts but the promotion's own records; the
+  bound, then running work is stopped and left active for the next hub's recovery; work past its
+  commit point is waited for and, if still running, the promotion stops) and `ledger.resume()`; a node
+  that becomes hub always resumes its queue (`startHub`). **Writes are held** by the same gate as a
+  standby's (409 with the reason), with the mesh's own calls passing; the hold is written down, so a
+  restart while holding starts holding.
+- **The old hub follows the new one live** (`MeshRole.follow`): its cursor starts at the hand-over's
+  last sequence, its own log past it dropped (none, since writes were held and logging stopped).
+  A roll-back is the same swap the other way at epoch + 2; the node that took over steps down when
+  fencing shows it the old hub at the higher epoch, and copies it afresh (`sync.fresh()`). M4's
+  `replica().demoted` now also counts a role file that says hub (a node once a standby, promoted,
+  then fenced): before, that node read as a live standby that could be promoted with a stale copy.
+- **The verification window is watched by the old hub**, now the standby (a failed new hub can't be
+  relied on to undo itself): hello as hub at the new epoch with a roster signed by its key; the stable
+  name leading to it, when Nova moves the name; the copy arriving. Three failures in a row roll back
+  (tier 1, a problem). 30 minutes by default; `NOVA_PROMOTION_WINDOW_S` sets another (the drill and the
+  tests use seconds). There is no setting for the person yet.
+- **The stable name's dead-man's switch is that window,** not M10d's change chain: M10d's targets
+  aren't replicated, and its switch watches device contact on the node that applied the change, which
+  stops being hub mid-step. Nova moves the name only through `NOVA_MESH_NAME_CONTROL` (in this build,
+  only the drill's loopback stand-in); without it the sheet says the person moves it.
+- **Emergency promotion from the latest backup** reuses the checkpoint restore's staging and swap
+  (`stageCold`, a `cold` marker; `carryOver` keeps this node's `mesh/`, so its keys and role) after the
+  restore drill passes on the backup; this node takes max + 1 of every epoch it knows. Offered only
+  where no hub answers anywhere and this node holds no live copy (a live standby uses M4's "Make
+  this the hub"). **No escrow (Decision 5):** the backup's vault is set aside unopened (its key was
+  never in a backup); a new vault holds only Nova's own keys when this node has them; the sheet and a
+  problem say connectors sign in again. The vault's key does still reach a live standby, sealed to
+  it, as since M5b: that is how a planned promotion keeps connectors working.
+- **The drill** (`tests/acceptance/m10g-drill.ts`, `scripts/promotion-drill.ts`) proves no private key
+  crosses by tapping what each node received (`NOVA_DRILL_TAP`, off unless set) and scanning it, every
+  backup and every home for each private key in three encodings, with the key files hashed before and
+  after.
+
+**2026-10-31 (capture screening, job 1, switched on: rules first, capture-sensitive on indexing, hold without a trusted model; Track 1).** Owner decision `INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md` and option B (ADR §2.1, PR #269); plan `docs/plans/capture-screening-consumers.md`; template `capture-sensitive` v1 (#264), unchanged.
+- **Rules first, at intake, with no model call:**
+  - Known sensitive apps and sites are dropped like private windows, counted as `sensitive_app` and never stored. The person's exclusions come first. It uses the template's own `sensitiveApp`, exported from the service's `index.ts`.
+  - Pattern findings are redacted in the text, the window title and the address before the row is written, each field whole and only then cut to length. Kinds only are kept.
+- **Then the model** (the check reads the window title and the address with the words): `capture-sensitive` is asked through the Decision Service (subsystem `capture`, the capture source, no evidence-only asks) on every stored event, in each capture tick between the pull and triage, and its outcome is applied:
+  - index;
+  - redact (the stricter of the rules' redaction and the model's answer);
+  - hold (kept under retention only);
+  - exclude (the words, title and address cleared; the row kept).
+
+  Cleared or redacted-in-place words are scrubbed from the write-ahead log and the backups, as a forget does.
+- **Option B:** with no trusted answer (no seat with a passing verdict for v1 on its exact model), every event is held with the owner's notice and one plain line on what stands in the way.
+  - It is never triaged, proposed or remembered, not even by the person (the strict reading; overriding it is the owner's call).
+  - It is checked once a trusted model can answer, and swept by retention.
+- **Only index and redact may be triaged or remembered.** `promote` and `accept` refuse the rest with a 409 in words, and proposals for them aren't listed.
+- **The timeline:**
+  - Every state but index has a label and a reason in Nova's words. Held words are behind a tap; excluded words are gone.
+  - A "Held until checked" card shows the count, the notice when it is true, and a Settings › Models link.
+  - Every item opens to how it was checked: template version, seat and pinned model, scores, decision id, capture source.
+- **Provenance:** `capture_event.sensitivity_detail` (JSON) and `sensitivity_decision` (the `decision_record` id).
+- **Migration 0022, after the orb's 0021**: `capture_event.sensitivity` (default `unscreened`, so older rows are checked, rules first), `_why`, `_decision`, `_detail`, `_at`, `_tries` and `_next`; the `capture_screen_cache` table; one open proposal per event. The sync triggers are remade, and the columns are registered in `ADDED_COLUMNS[22]`.
+- **Routing unchanged:** never a cloud seat in local-first or local-only; in cloud mode only with the per-source opt-in, which is still absent (always off). Tested with Jev set up, opted in and even holding a passing verdict.
+- **Tests (stand-ins only):** `tests/core/capture-screening.test.ts` (10) and `tests/ui/capture-screening.test.ts` (2). The existing capture tests run with a trusted stand-in check: the Tev1 stand-in, or `fake-ollama.js`'s new optional `/v1/systemone`, at the passed build's digest.
+- **The independent review** (`2063c4d8`): nine should-fix findings and some minor ones. Each got a failing test first (`tests/core/capture-screening-review.test.ts`, 12 tests), then its fix; all 12 fail again with the fixes reverted. Evidence: `docs/evidence/capture-screening-review.md`.
+  - **Rules before every check:** Nova's rules redact every field before every check, old rows included, so an at-cap row the model can't take never keeps a detected secret in clear.
+  - **Titles and addresses:** they are judged with the words and scrubbed before they are cut, and an exclude clears them.
+  - **The list:** web vaults, major banks by registrable domain, missed apps, bundle ids, and manager names in window titles. It matches more precisely, so `databank.org` and "Keeper Standings" aren't caught, and the person can let an app back in per source (`allow`, the exclusions' tier).
+  - **Old memories:** memories made from items a later check finds sensitive are listed for review, redacted. They aren't rewritten.
+  - **Failed checks:** a trusted model's failures back off (10 minutes, doubling to a day, 5 tries) and never starve newer events. The owner's notice shows only when it is true.
+  - **One pass at a time:** tick and triage are single-flight, and a unique index allows one open proposal per event.
+  - **The cache and the records:** a content-hash cache keyed by an HMAC with this home's key, per source, for a day. An event's decision records go with it (forget, retention), and capture records keep an HMAC'd state hash, never a plain one.
+  - **The minor findings:**
+    - stream readers and event rules hear an event after its check;
+    - a held record says hold (the template's no-answer default is now hold; its wording and verdict are unchanged);
+    - suggestions are kept for released events;
+    - verdict files are cached;
+    - the UI wording is honest ("Held until checked"; "kept on your devices like the rest of capture … checked or not"; "on this computer or your own network").
+- **Limits:**
+  - events wait up to one tick before their check;
+  - a device's own queue holds text in clear until the hub's intake;
+  - the eval measured words alone, not titles and addresses;
+  - old memories are listed, not rewritten;
+  - a standby's older backups keep words the hub later redacted, until they rotate;
+  - an older standby promoted to hub would triage held events (#272);
+  - nobody can override a hold yet (the owner's question; the code has one place for it);
+  - job 2 (recall-path screening) is separate.
+
+**2026-11-01 (memory recall graduates, PR #274, Track 3).**
+- **The move:** `claim.memory-recalled-next-conversation` is now REGRESSION. It passed 3/3 trials on gemma4:12b (`4eb23ef1…`) and 3/3 on qwen3.8:27b (`aaee06c3…`), with digests in `docs/evidence/evals.md`, and 5/5 with stand-ins.
+- **Wording:** the Memory page's strong words return ("Nova reads this before every reply."), citing the case. A helper's report gets no memory by design and isn't a reply to the person.
+- **The suite bound:** the golden suite may now hold up to 200 tasks, up from 50.
+
+**2026-11-01 (claim cases graduated, PR #273, Track 3).** Four model-independent claim cases moved from CAPABILITY to REGRESSION after 5 consecutive stand-in passes before the move and 5 after:
+- `claim.local-first-says-when-cloud`;
+- `claim.schedule-runs-unattended`;
+- `claim.model-recommendation-fits-job`;
+- `claim.verified-only-with-evidence`.
+
+Their claims now count as backed, and a drop blocks merge.
+- **Strong wording restored:** three lines, each citing its case: Schedules, Settings › Models, and Tasks' "Nothing is done until Nova has checked the evidence".
+- **Kept softened:** setup's cloud line stays "each cloud call is recorded". Background cloud work (sorting decisions, the foundry) is recorded but not said, so "always say when" isn't shown.
+- **Still capability:** `claim.memory-recalled-next-conversation` needs 3 trials on at least two local models, every one passing.
+- **Suite size:** the golden suite is now at 50 tasks, the top of its enforced range; the next task needs that bound raised.
+
+**2026-10-31 (owner decision: the orb's fixed semantic states; red stops, amber needs you).** Recorded in DESIGN-SYSTEM §1 ("The orb's semantic states"); plan and evidence `docs/plans/orb-states.md`, branch `ui/orb-states`.
+- **The set is fixed:** idle, listening, working, speaking, needs-you (amber), stopped (red), offline. Themes may not add, remove or re-mean a state. `attention` is now `needs-you` and `alert` is `stopped`.
+- **Red is reserved for problems that stop Nova** (the Failed class: work can't proceed, a dead-man's switch fired, a security refusal). Amber is for whatever needs the person while Nova keeps running: approvals waiting, Health items, degraded capture. This maps 1:1 onto the status vocabulary (Failed, Needs you).
+- **Classified where raised:** a problem now carries `stops` (migration 0021, registered in the sync's `ADDED_COLUMNS` so a standby one release behind takes problems without it, as amber). It is set at 11 raise sites and by 3 supervisor playbooks; the list is in the plan. Every other problem defaults to amber. This settles UX review 1's open question (`docs/plans/ux-review-1.md`): the review's standby-copy problems are amber.
+- **Visual rules in every theme,** enforced by `check:themes` and a UI test across every installed design system, light and dark, with and without reduced motion:
+  - states differ by motion and brightness pattern as well as hue;
+  - stopped is unmistakable;
+  - every state has a reduced-motion equivalent.
+- **Each package expresses the states in its own visual language** through `orb_states{}`. The values and motion are the theme's; the meanings are the system's.
+- **The F3 fix (#254's lit sphere) stays.**
 
 **2026-11-01 (claim cases, the backlog, PR #261, Track 3).** The register's eval cases (`tests/evals/claims.ts`, from #265 and M10f) are in `tests/evals/tasks/claim-backlog.ts`.
 - **38 cases:**

@@ -342,6 +342,66 @@ export function promoteSheet(replica) {
 </form>`;
 }
 
+// Promoting a hub candidate to hub (M10g), from Settings › Devices on the hub: what happens and each
+// pre-check, said first, then tier 3. The words are the hub's (src/core/mesh/handover.ts), so the
+// claims register reads one file. A candidate that fails a pre-check gets the reason and no button.
+const checkList = (checks = []) => `<ul class="checks">${checks.map((c) => `<li class="check" data-ok="${c.ok}"><span class="check-mark" aria-hidden="true">${c.ok ? ICONS.check : ICONS.close}</span><div><p class="check-why">${esc(c.said)}</p></div></li>`).join('')}</ul>`;
+const factList = (facts = []) => `<dl class="facts">${facts.map((f) => `<dt>${esc(f.label)}</dt><dd>${esc(f.text)}</dd>`).join('')}</dl>`;
+
+export function promotionSheet(d, check) {
+  const ok = !!check?.ok;
+  return `<form class="approval-sheet" data-tier="3" data-promotion="${esc(d.id)}" method="dialog">
+  <p class="sheet-kicker">${status(ok ? 'needs-you' : 'failed')}</p>
+  <h2 class="sheet-title" id="sheet-title">Make “${esc(d.name)}” the hub?</h2>
+  ${ok ? factList(check.sheet) : '<p class="sheet-line">Not yet: a pre-check didn’t pass.</p>'}
+  <h3 class="sheet-heading">The pre-checks</h3>
+  ${checkList(check?.checks)}
+  ${ok ? '<label class="confirm"><input type="checkbox" name="confirm" required> I want this computer to be the hub.</label>' : ''}
+  <div class="sheet-actions">
+    ${ok ? '<button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Promote to hub</button>' : ''}
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+// Becoming the hub from the latest backup (M10g), on a hub candidate whose hub can't be reached: the
+// backup's time, what was lost and that connectors sign in again, said before anything (Decision 5).
+export function coldPromotionSheet(view) {
+  const ok = !!view?.eligible;
+  // The backup it shows is the one confirmed: the server refuses any other.
+  return `<form class="approval-sheet" data-tier="3" data-cold-promotion="1" data-backup="${esc(view?.facts?.backup?.id ?? '')}" method="dialog">
+  <p class="sheet-kicker">${status(ok ? 'needs-you' : 'failed')}</p>
+  <h2 class="sheet-title" id="sheet-title">Make this the hub from a backup?</h2>
+  ${ok ? factList(view.sheet) : `<p class="sheet-line">Not here: ${esc((view?.reasons ?? [])[0] ?? 'Nova couldn’t tell.')}</p>`}
+  ${ok ? '<label class="confirm"><input type="checkbox" name="confirm" required> I understand what is lost, and want this node to be the hub.</label>' : ''}
+  <div class="sheet-actions">
+    ${ok ? '<button type="submit" class="btn primary" data-action="approve" value="approve" disabled>Make this the hub</button>' : ''}
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
+// Settling a promotion by hand (M10g review), tier 3, with what Nova can't know said first:
+// cancelling a hand-over whose outcome isn't known, or taking the hub back from a new hub that can't
+// be reached.
+export function promotionActionSheet(kind, p) {
+  const to = p?.to_name ? `“${p.to_name}”` : 'the other computer';
+  const words = kind === 'cancel'
+    ? { title: 'Cancel the hand-over?', line: `Nova can’t tell whether ${to} took the hub’s role: it can’t be reached. Nova asks it once more first. If it still can’t say, this computer carries on as the hub at a higher epoch. If ${to} did take the role and some devices reach it, both take changes until the two meet; then ${to} steps down and keeps what it took meanwhile in a checkpoint on itself.`, box: 'I understand, and want this computer to carry on as the hub.', button: 'Cancel the hand-over' }
+    : { title: 'Take the hub back?', line: `Nova can’t reach ${to}, the hub since the hand-over. Nova asks it first to stop taking changes. If it can’t be reached and is still running for some devices, both take changes until the two meet; then ${to} steps down and keeps what it took meanwhile in a checkpoint on itself.`, box: 'I understand, and want this computer to be the hub again.', button: 'Take the hub back' };
+  return `<form class="approval-sheet" data-tier="3" data-promotion-action="${esc(kind)}" method="dialog">
+  <p class="sheet-kicker">${status('needs-you')}</p>
+  <h2 class="sheet-title" id="sheet-title">${esc(words.title)}</h2>
+  <p class="sheet-line">${esc(words.line)}</p>
+  <dl class="facts"><dt>Why it asks</dt><dd>${esc(TIER_WORDS[3])}</dd></dl>
+  <label class="confirm"><input type="checkbox" name="confirm" required> ${esc(words.box)}</label>
+  <div class="sheet-actions">
+    <button type="submit" class="btn primary" data-action="approve" value="approve" disabled>${esc(words.button)}</button>
+    <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
+  </div>
+</form>`;
+}
+
 // Letting a phone or browser approve new devices, or stopping it (tier 3).
 export function allowApproveSheet(d, yes) {
   return `<form class="approval-sheet" data-tier="3" data-allow="${esc(d.id)}" data-value="${yes}" method="dialog">
@@ -411,7 +471,9 @@ export function healthCard({ health = null, problems = [], reachable = true } = 
     const lines = problems.length ? [problemsSummary(problems), 'What happened, and what you can do, is in Health.']
       : bad.length ? [`Needs a look: ${listWords(bad.map(([k]) => CHECK_NAMES[k] ?? 'another check'))}.`, 'The detail is in Health.']
         : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
-    body = `<p class="card-lead" data-status="${problems.length || bad.length ? 'failed' : 'verified'}">${esc(lead)}</p>${lines.map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}`;
+    // Failed (red) only when a problem stops Nova; any other open problem needs you (amber).
+    const tone = problems.some((p) => p?.stops) || (!problems.length && bad.length) ? 'failed' : problems.length ? 'needs-you' : 'verified';
+    body = `<p class="card-lead" data-status="${tone}">${esc(lead)}</p>${lines.map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}`;
   }
   return card({ kind: 'health-card', title: 'System health', icon: 'health', body, action: '<a class="link" href="/health" data-nav="health">Health</a>' });
 }

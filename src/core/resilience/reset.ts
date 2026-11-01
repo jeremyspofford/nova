@@ -557,7 +557,7 @@ export class FactoryReset {
       if (this.#canRestart()) {
         try { await this.#o.restarter!.restartInPlace('a factory reset'); } catch (e) {
           this.#stagedSaid = `Nova couldn’t restart itself (${(e as Error).message}). ${NEXT_START_SAID}`;
-          this.#o.log.problem('reset', `Nova couldn’t restart itself to finish erasing. ${NEXT_START_SAID}`, { detail: (e as Error)?.stack ?? String(e) });
+          this.#o.log.problem('reset', `Nova couldn’t restart itself to finish erasing. ${NEXT_START_SAID}`, { detail: (e as Error)?.stack ?? String(e), stops: true });
         }
       } else this.#stagedSaid = NEXT_START_SAID;
       return devices;

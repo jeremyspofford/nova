@@ -571,3 +571,99 @@ stand-ins in `npm test`". Part 5 (cost caps) starts after this merges, as the tr
   > - **Blocked: 5,** each with why.
   > - **The rule:** the cases start in CAPABILITY and graduate in their own PR. Only then may
   >   strong words return, citing the case. A test keeps the backlog in step with the register.
+
+
+### 10. Graduation (PR "Evals: graduate four claim cases; their strong wording returns")
+
+Four claim cases that don't depend on a model moved from CAPABILITY to REGRESSION. Each passed 5
+consecutive stand-in trials as a capability case, then 5 more as a regression case, before the
+move counted:
+- `claim.local-first-says-when-cloud`
+- `claim.schedule-runs-unattended`
+- `claim.model-recommendation-fits-job`
+- `claim.verified-only-with-evidence`
+
+**What changed:**
+- **The cases:** each one's `suite` is now regression and its `version` is 2. All four are in
+  `REGRESSION_MANIFEST`, and `tests/evals/tasks/index.ts` sorts claim cases by their suite.
+- **The register:** each claim's `needs` gains its case's id, so the closing-rule check now counts
+  all four claims as backed.
+- **The backlog:** the entries are marked `graduated`. The backlog test checks that a graduated
+  case is in regression and in the manifest, and that its claims need it.
+- **The negative control:** the four are added to its model-independent exceptions. Their outcomes
+  are Nova's own, so a priors answer passes them, as it does the other model-independent safety
+  invariants.
+
+**Strong words restored (each with a comment beside it citing its case):**
+- `ui/js/view.js:716` (Schedules): "Work Nova does on its own, at times you choose."
+  (`claim.schedule-runs-unattended`)
+- `ui/js/models.js:199` (Settings › Models): "Here is what each can do, and what Nova recommends
+  for each job." (`claim.model-recommendation-fits-job`)
+- `ui/js/surfaces.js:166` (Tasks): "Nothing is done until Nova has checked the evidence; tap
+  Verified to see it." (`claim.verified-only-with-evidence`)
+
+**Graduated, but the strong words stay softened:** `src/core/setup.ts:133` keeps "each cloud call
+is recorded", not "I'll always say when".
+- The case shows a chat reply that the cloud served says so.
+- Background work the cloud serves in local-preferred is recorded in a receipt but not said: sorting
+  decisions through the local-model decision provider, and the foundry.
+- So "always" isn't shown. The register's note says this. The strong words can return once those
+  paths say it too, with a case that shows it.
+
+**`claim.memory-recalled-next-conversation` stays in CAPABILITY.** It depends on the model. It
+graduates when:
+1. it passes 5 consecutive stand-in trials (it already does);
+2. it passes the opt-in real-model scorecard on the models a person is offered, at
+   `--trials 3` on at least two local models (for example gemma4:12b and qwen3.8:27b), with every
+   trial passing;
+3. those runs, with their digests, are recorded in `docs/evidence/evals.md`.
+
+gemma4:12b has passed it on 2 of 2 trials so far.
+
+**Records (proposed):**
+- **LEDGER, plain-language "What changed":**
+
+  > **What changed (2026-11-01): three of Nova's toned-down sentences are back to full strength,
+  > because a test now proves each one.**
+  > - **The three:**
+  >   - Schedules says "Work Nova does on its own, at times you choose."
+  >   - Settings › Models says "what Nova recommends for each job".
+  >   - Tasks says "Nothing is done until Nova has checked the evidence".
+  > - **Kept on every change:** each of these tests now runs on every change to Nova, so the
+  >   sentence can't quietly become untrue.
+  > - **A fourth test passed** (Nova saying when the cloud answered a chat). It covers only chat,
+  >   so setup still says "each cloud call is recorded".
+
+- **LEDGER, the decision entry:**
+
+  > **2026-11-01 (claim cases graduate).**
+  > - **The move:** `claim.local-first-says-when-cloud`, `claim.schedule-runs-unattended`,
+  >   `claim.model-recommendation-fits-job` and `claim.verified-only-with-evidence` moved to
+  >   REGRESSION after 5 consecutive stand-in passes, each as a capability case and then as a
+  >   regression case. Their claims now need them.
+  > - **Strong words restored:** in `ui/js/view.js`, `ui/js/models.js` and `ui/js/surfaces.js`,
+  >   each with a comment citing its case.
+  > - **Setup's "I'll always say when" stays softened:** cloud-served background work isn't said.
+  > - **The memory case stays in CAPABILITY** until real models pass it (§10).
+
+- **CAPABILITY-INVENTORY:** the three claims' rows (if listed) now read "backed by" their case.
+
+### 11. Memory recall graduates (PR "Evals: memory recall across conversations, real-model trials")
+
+- **Graduated:** `claim.memory-recalled-next-conversation` is in REGRESSION at version 2 and in the manifest. Its claim `memory.read-before-reply` now needs it.
+- **The real-model rule,** as stated in §10: 3 trials per model on two local models, every trial passing. gemma4:12b passed 3/3 and qwen3.8:27b passed 3/3, with digests recorded in the evidence. Stand-ins passed 5/5.
+- **Strong words restored:** `ui/js/view.js:500` (Memory) now reads "Nova reads this before every reply.", with a comment above it citing the case.
+  - The register note had called "every reply" too wide because helpers get no memory.
+  - A helper writes a report to the conversation that asked; it never replies to the person. Every reply the person gets does carry memory (the case shows it), so the words now mean the person's replies.
+  - If the owner reads "every reply" as including helpers, revert this one line; the case still backs the softer words.
+- **The suite bound is raised to 200 tasks** (`tests/core/evals.test.ts`). 20–50 was the research's starting size, not a ceiling. The suite grows with every production bug and every claim case, and the bound now guards only against accidental bulk, about a second a task in CI.
+- **LEDGER, plain-language "What changed":**
+
+  > **What changed (2026-11-01): the Memory page says "Nova reads this before every reply" again.** A test shows it: something you tell Nova in one conversation, it knows in the next. Two local models passed it every time, and so did the stand-ins. The test now runs on every change to Nova.
+
+- **LEDGER, decision entry:**
+
+  > **2026-11-01 (memory recall graduates).**
+  > - **The move:** `claim.memory-recalled-next-conversation` is now REGRESSION. It passed 3/3 trials on gemma4:12b and 3/3 on qwen3.8:27b (digests in the evidence), and 5/5 with stand-ins.
+  > - **Wording:** the Memory page's strong words return, citing the case. A helper's report gets no memory by design and is not a reply to the person.
+  > - **The bound:** the golden-suite bound rises from 50 to 200 tasks.

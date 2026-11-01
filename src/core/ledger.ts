@@ -133,6 +133,8 @@ export class Ledger extends EventEmitter {
   #running = new Map<string, AbortController>();
   // Nova is about to restart: nothing new starts, and what was running is left for the next start.
   #halted = false;
+  // While a hub drains before handing over (M10g): the only queued work that may still start.
+  #keep: ((t: Task) => boolean) | null = null;
   #inflight = new Map<string, { lane: string; done: Promise<void> }>();
 
   constructor(o: LedgerOptions) {
@@ -393,8 +395,9 @@ export class Ledger extends EventEmitter {
         for (;;) {
           this.#dirty = false;
           // No limit: a full lane with many queued tasks must not hide the tasks of other lanes.
-          for (const row of this.#halted ? [] : this.#db.all<Row>(`SELECT * FROM task WHERE state = 'queued' ORDER BY created_at, rowid`)) {
+          for (const row of this.#halted && !this.#keep ? [] : this.#db.all<Row>(`SELECT * FROM task WHERE state = 'queued' ORDER BY created_at, rowid`)) {
             const t = toTask(row);
+            if (this.#halted && !this.#keep!(t)) continue;
             if (this.#inflight.has(t.id)) continue;
             const lane = this.#lane(t);
             if ([...this.#inflight.values()].filter((x) => x.lane === lane.key).length >= lane.max) continue;
@@ -431,9 +434,51 @@ export class Ledger extends EventEmitter {
   // more is started, and the stopped tasks stay as they were, for the next start's recovery.
   halt(reason = 'Nova is restarting.'): string[] {
     this.#halted = true;
+    this.#keep = null;
     const ids = [...this.#running.keys()];
     for (const ac of this.#running.values()) ac.abort(new Error(reason));
     return ids;
+  }
+
+  // Before this hub hands the role to another node (M10g, the orchestration ADR's step 3): nothing new
+  // starts except what `keep` allows (the promotion's own records); running work gets `boundMs` to
+  // finish; a task past its commit point (its worker's `uncancellable` says why) is never cut, and is
+  // waited for up to `commitMs`; anything else still running is stopped and stays active, so the next
+  // hub's recovery requeues it (or holds it, if it may have had an effect). `stuck`: work past its
+  // commit point still running at the end; the caller then gives up handing over and resumes.
+  async drain(o: { boundMs: number; commitMs: number; keep: (t: Task) => boolean }): Promise<{ finished: string[]; handed: string[]; stuck: string[] }> {
+    this.#halted = true;
+    this.#keep = o.keep;
+    const mine = () => [...this.#running.keys()].filter((id) => { try { return !o.keep(this.get(id)); } catch { return true; } });
+    const before = mine();
+    const wait = async (ids: string[], ms: number) => {
+      const until = Date.now() + ms;
+      while (ids.some((id) => this.#running.has(id)) && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+    };
+    await wait(before, o.boundMs);
+    const committed = (id: string) => { try { return !!this.workers.get(this.get(id).owner)?.uncancellable?.(this.get(id)); } catch { return false; } };
+    let left = before.filter((id) => this.#running.has(id));
+    const past = left.filter(committed);
+    if (past.length) await wait(past, o.commitMs);
+    const stuck = past.filter((id) => this.#running.has(id));
+    if (stuck.length) return { finished: before.filter((id) => !this.#running.has(id)), handed: [], stuck };
+    left = before.filter((id) => this.#running.has(id));
+    for (const id of left) this.#running.get(id)?.abort(new Error('This hub is handing over to another node.'));
+    return { finished: before.filter((id) => !left.includes(id)), handed: left, stuck: [] };
+  }
+
+  // Nothing new starts but what `keep` allows, and nothing running is stopped: a hub that restarts
+  // while it holds writes for a hand-over (M10g review, finding 4) starts like this, before recovery.
+  pause(keep: (t: Task) => boolean): void {
+    this.#halted = true;
+    this.#keep = keep;
+  }
+
+  // A drain that didn't end in a handover: the queue runs again.
+  resume(): void {
+    this.#halted = false;
+    this.#keep = null;
+    void this.pump();
   }
 
   // Resolves when nothing is running or queued.
@@ -483,7 +528,7 @@ export class Ledger extends EventEmitter {
       raw = await Promise.race([TASK_CONTEXT.run({ task_id: t.id, privacy_mode: t.brief.privacy_mode }, () => worker.run(t.brief, signal)), stopped]);
     } catch (e) {
       this.#running.delete(t.id);
-      if (this.#halted) return;
+      if (this.#halted && !this.#keep?.(t)) return;
       if (this.get(t.id).state === 'cancelled') return;
       if (signal.aborted && (e as Error)?.name === 'TimeoutError') {
         return this.#retryOrFail(t.id, `${worker.name} took longer than ${Math.round(limit / 1000)} s.`, undefined, 'timed_out');
@@ -587,7 +632,8 @@ export class Ledger extends EventEmitter {
   #fail(id: string, why: string, detail?: string, kind = 'failed'): void {
     this.#db.run(`UPDATE task SET user_visibility = 'attention' WHERE id = ?`, id);
     this.#move(id, 'failed', why, kind, detail ? { detail } : undefined);
-    this.#log.problem('ledger', `A task failed: ${this.get(id).title}. ${why}`, { detail, taskId: id });
+    // A task that failed is the Failed class: its work can't proceed (DESIGN-SYSTEM §1).
+    this.#log.problem('ledger', `A task failed: ${this.get(id).title}. ${why}`, { detail, taskId: id, stops: true });
   }
 
   #move(id: string, to: State, reason: string | null, kind: string, detail?: unknown): Task {

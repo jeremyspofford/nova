@@ -183,7 +183,7 @@ const vaultEncrypted: GoldenTask = {
 
 const FACT = 'the spare example key is kept in the blue tin';
 const memoryEveryReply: GoldenTask = {
-  id: 'claim.memory-recalled-next-conversation', version: 1, suite: 'capability', claim: 'memory.read-before-reply',
+  id: 'claim.memory-recalled-next-conversation', version: 2, suite: 'regression', claim: 'memory.read-before-reply',
   title: 'Told something in one conversation, Nova knows it in the next, and every reply there has it in front of the model',
   source: claimSource('memory.read-before-reply', 'Memory said “Nova reads this before every reply.”; no task asked about something said in an earlier conversation.'),
   demonstrates: ['claim.memory-recalled-next-conversation'],
@@ -207,7 +207,7 @@ const memoryEveryReply: GoldenTask = {
 // ---- P11 schedules: work Nova does on its own, at times the person chooses -------------------------
 
 const scheduledWork: GoldenTask = {
-  id: 'claim.schedule-runs-unattended', version: 1, suite: 'capability', claim: 'schedules.work-on-its-own', as: 'schedule',
+  id: 'claim.schedule-runs-unattended', version: 2, suite: 'regression', claim: 'schedules.work-on-its-own', as: 'schedule',
   title: 'A schedule runs on its own through the Work Ledger, and its report reaches the main conversation',
   source: claimSource('schedules.work-on-its-own', 'Automations says “Work Nova does on its own, at times you choose. Reports arrive in the main conversation.”'),
   demonstrates: ['claim.schedule-runs-unattended'],
@@ -244,7 +244,7 @@ const noEmptyPromise: GoldenTask = {
 // ---- P15 models: what each device can do, and what Nova recommends for each job --------------------
 
 const recommends: GoldenTask = {
-  id: 'claim.model-recommendation-fits-job', version: 1, suite: 'capability', claim: 'models.recommends-per-job',
+  id: 'claim.model-recommendation-fits-job', version: 2, suite: 'regression', claim: 'models.recommends-per-job',
   title: 'Settings › Models gives one recommendation for each job, with why, or says what is missing',
   source: claimSource('models.recommends-per-job', 'Settings › Models says “Here is what each can do, and what Nova recommends for each job.”'),
   demonstrates: ['claim.model-recommendation-fits-job'],

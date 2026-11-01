@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { startFakeScreenpipe } from '../../scripts/fake-screenpipe.js';
+import { captureCheck } from '../support/capture-check.ts';
 import { Screenpipe, Unreachable } from '../../src/core/capture/screenpipe.ts';
 import { call, enroll, hub } from './mesh-support.ts';
 
@@ -29,7 +30,11 @@ function holding(dir: string, needle: string): string[] {
 }
 
 async function withScreenpipe(fn: (h: Hub, sp: Sp, id: string) => Promise<void>) {
-  const h = await hub();
+  // A trusted capture-sensitive check (the Tev1 stand-in), so what is captured can be remembered
+  // (screening, job 1); tests/core/capture-screening.test.ts covers a device without one.
+  const check = await captureCheck();
+  const h = await hub({ core: check.core });
+  await h.core.decisionService.refresh();
   const sp = await startFakeScreenpipe();
   try {
     const added = await h.c('POST', '/capture/sources/screenpipe', { url: sp.base });
@@ -38,11 +43,13 @@ async function withScreenpipe(fn: (h: Hub, sp: Sp, id: string) => Promise<void>)
   } finally {
     await sp.close();
     await h.stop();
+    await check.close();
   }
 }
 
 const on = (h: Hub, id: string) => h.c('POST', `/capture/sources/${encodeURIComponent(id)}/enable`);
-const pull = async (h: Hub, id: string) => (await h.c('POST', `/capture/sources/${encodeURIComponent(id)}/pull`)).body;
+// A pull, then the screening pass, as a capture tick does right after its pull.
+const pull = async (h: Hub, id: string) => { const r = (await h.c('POST', `/capture/sources/${encodeURIComponent(id)}/pull`)).body; await h.core.capture.screen(); return r; };
 const texts = async (h: Hub) => ((await h.c('GET', '/capture/events?limit=500')).body as any[]).map((e) => e.text).sort();
 
 // Nowhere: no file under the home (database, write-ahead log, backups), no sync-log row, no inbox

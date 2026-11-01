@@ -222,7 +222,7 @@ test('F3: the orb is a luminous sphere, lit and glowing, in every state and desi
     const page = await ctx.newPage();
     await page.goto(`${m.base}/styleguide`);
     await page.locator('#sg-ds').waitFor();
-    const states = ['idle', 'listening', 'working', 'speaking', 'attention', 'alert', 'offline'];
+    const states = ['idle', 'listening', 'working', 'speaking', 'needs-you', 'stopped', 'offline'];
     for (const ds of DESIGNS) {
       for (const mode of ['light', 'dark']) {
         await page.selectOption('#sg-ds', ds);

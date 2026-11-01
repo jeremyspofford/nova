@@ -8,8 +8,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { captureCheckServer } from '../support/capture-check.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { startFakeScreenpipe } from '../../scripts/fake-screenpipe.js';
 import { blank, stop, until, type Running } from './support.ts';
@@ -92,7 +94,10 @@ test('M6a: the real server pulls Screenpipe on its own, never stores a private w
 
 test('M6a: capture replicates to the standby; forgetting holds on both nodes, backups included; a new hub leaves the old hub’s Screenpipe alone', { timeout: 180_000 }, async () => {
   const sp = await startFakeScreenpipe();
-  const s = await setup('nova-m6a');
+  // A trusted capture-sensitive check on the hub (the Tev1 stand-in), so captured text can be
+  // remembered (screening, job 1).
+  const check = await captureCheckServer(mkdtempSync(join(tmpdir(), 'nova-m6a-check-')));
+  const s = await setup('nova-m6a', () => {}, check.env);
   const { hub, standby } = s;
   let hubProc: Running | null = s.hubProc;
   let standbyProc: Running | null = null;
@@ -107,6 +112,7 @@ test('M6a: capture replicates to the standby; forgetting holds on both nodes, ba
       { at: at(t0, 3), app: 'Editor', window: 'c', text: 'stays' },
     );
     assert.equal((await hub.send('POST', `/api/v1/capture/sources/${enc(src.id)}/pull`)).body.kept, 3);
+    await until(() => hub.send('POST', '/api/v1/capture/screen').then(() => hub.get('/api/v1/capture/events')), (l: any[]) => l.every((e) => e.sensitivity.state === 'index'), 200);
     const evs = await hub.get('/api/v1/capture/events');
     const byText = (t: string) => evs.find((e: any) => e.text.startsWith(t));
     const promoted = (await hub.send('POST', '/api/v1/capture/promote', { event_ids: [byText('MEMORY-SENTINEL').id] })).body.memory;
@@ -146,5 +152,6 @@ test('M6a: capture replicates to the standby; forgetting holds on both nodes, ba
     if (hubProc) await stop(hubProc);
     if (standbyProc) await stop(standbyProc);
     await sp.close();
+    await check.close();
   }
 });

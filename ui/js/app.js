@@ -10,6 +10,7 @@ import { apply as applyTheme } from './theme.js';
 import { fromCache, on as onCore, stream as coreStream } from './core.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
+import { problemTone, stoppingProblems } from './status.js';
 import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js';
 import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
@@ -193,12 +194,15 @@ function showBusy(busy = state.busy) {
 function showSignals() {
   const asking = core.needsYou();
   setBadge('tasks', asking ? { tone: 'attention', label: `${asking} need${asking === 1 ? 's' : ''} you` } : null);
-  setBadge('health', core.store.problems.length ? { tone: 'alert', label: `${core.store.problems.length} problem${core.store.problems.length === 1 ? '' : 's'}` } : null);
+  // Red only for problems that stop Nova; any other open problem needs the person (amber).
+  const problems = core.store.problems;
+  const stopped = stoppingProblems(problems).length;
+  setBadge('health', problems.length ? { tone: problemTone(problems), label: `${problems.length} problem${problems.length === 1 ? '' : 's'}` } : null);
   signal({
     reachable: state.reachable && state.online,
     listening: state.listening,
-    problems: core.store.problems.length,
-    needsYou: asking + state.busy.waiting,
+    stopped,
+    needsYou: asking + state.busy.waiting + (problems.length - stopped),
     speaking: state.view === 'chat' && state.live?.phase === 'streaming',
     working: core.working() + state.busy.working + (state.pending || state.live ? 1 : 0),
   });
@@ -619,6 +623,16 @@ function renderChrome() {
     b.className = 'btn small';
     b.dataset.action = 'promote';
     b.textContent = 'Make this the hub';
+    el.banner.append(b);
+  }
+  // A node that stepped down copies nothing; if the hub is gone, it can become the hub from the
+  // latest backup (M10g). The sheet says first what that loses.
+  if (banner && replica && banner === replica.reason && replica.demoted && core.store.mesh?.you?.can_approve) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn small';
+    b.dataset.action = 'promote-cold';
+    b.textContent = 'Make this the hub from a backup';
     el.banner.append(b);
   }
 
@@ -1850,7 +1864,7 @@ function scheduleRefresh(parts) {
 onCore('task', () => scheduleRefresh(['tasks']));
 onCore('problem', (p) => {
   scheduleRefresh(['problems', 'health', 'resilience']);
-  notify(p?.message ?? 'Something went wrong inside Nova.', { tone: 'alert', action: { label: 'See Health', run: () => navigate('/health') } });
+  notify(p?.message ?? 'Something went wrong inside Nova.', { tone: p?.stops ? 'alert' : 'attention', action: { label: 'See Health', run: () => navigate('/health') } });
 });
 onCore('message', () => scheduleRefresh(['messages']));
 // A repair playbook moved (M7b): what Nova did shows under its problem.
@@ -1931,6 +1945,10 @@ async function coreAction(b) {
   if (action === 'allow-approve') return core.allowApprove(b.dataset.device, b.dataset.value);
   if (action === 'edit-roles') return core.editRoles(b.dataset.device);
   if (action === 'promote') return core.promote();
+  if (action === 'promote-device') return core.promoteDevice(b.dataset.device);
+  if (action === 'promote-cold') return core.promoteCold();
+  if (action === 'promotion-cancel') return core.promotionAction('cancel');
+  if (action === 'promotion-take-back') return core.promotionAction('take-back');
   if (['backup-now', 'drill-now', 'repair-problem'].includes(action)) return core.resilienceAction(action, b.dataset.problem).then(() => scheduleRefresh(['resilience', 'problems', 'health', 'tasks']));
   try {
     if (action === 'resolve-problem') { await post(`/api/v1/problems/${encodeURIComponent(b.dataset.problem)}/resolve`); scheduleRefresh(['problems', 'health']); toast('Marked as dealt with.'); }
@@ -1939,7 +1957,7 @@ async function coreAction(b) {
   } catch (e) { toast(e.message); }
 }
 const CORE_ACTIONS = new Set(['open-task', 'evidence', 'retry-task', 'cancel-task', 'decline-merge', 'decline-change', 'close-sheet', 'pause-rule', 'resume-rule', 'delete-rule', 'resolve-problem', 'read-message', 'send-message',
-  'add-device', 'copy-command', 'review-request', 'deny-request', 'revoke-device', 'allow-approve', 'edit-roles', 'promote', 'backup-now', 'drill-now', 'repair-problem']);
+  'add-device', 'copy-command', 'review-request', 'deny-request', 'revoke-device', 'allow-approve', 'edit-roles', 'promote', 'promote-device', 'promote-cold', 'promotion-cancel', 'promotion-take-back', 'backup-now', 'drill-now', 'repair-problem']);
 document.addEventListener('click', (e) => {
   if (e.defaultPrevented || e.target.closest('#setup')) return;
   if (followLink(e)) return;

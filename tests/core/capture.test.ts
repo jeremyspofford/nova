@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCore } from '../../src/core/index.ts';
 import { startFakeScreenpipe } from '../../scripts/fake-screenpipe.js';
+import { captureCheck } from '../support/capture-check.ts';
 import { call, enroll, hub } from './mesh-support.ts';
 
 type Hub = Awaited<ReturnType<typeof hub>>;
@@ -29,7 +30,11 @@ function holding(dir: string, needle: string): string[] {
 }
 
 async function withScreenpipe(fn: (h: Hub, sp: Awaited<ReturnType<typeof startFakeScreenpipe>>, id: string) => Promise<void>) {
-  const h = await hub();
+  // A trusted capture-sensitive check (the Tev1 stand-in), so what is captured can be remembered
+  // (screening, job 1); tests/core/capture-screening.test.ts covers a device without one.
+  const check = await captureCheck();
+  const h = await hub({ core: check.core });
+  await h.core.decisionService.refresh();
   const sp = await startFakeScreenpipe();
   try {
     const added = await h.c('POST', '/capture/sources/screenpipe', { url: sp.base });
@@ -38,10 +43,12 @@ async function withScreenpipe(fn: (h: Hub, sp: Awaited<ReturnType<typeof startFa
   } finally {
     await sp.close();
     await h.stop();
+    await check.close();
   }
 }
 
-const pull = async (h: Hub, id: string) => (await h.c('POST', `/capture/sources/${encodeURIComponent(id)}/pull`)).body;
+// A pull, then the screening pass, as a capture tick does right after its pull.
+const pull = async (h: Hub, id: string) => { const r = (await h.c('POST', `/capture/sources/${encodeURIComponent(id)}/pull`)).body; await h.core.capture.screen(); return r; };
 const events = async (h: Hub, q = '') => (await h.c('GET', `/capture/events${q}`)).body as any[];
 
 test('consent is off by default and per source: nothing is pulled, nothing stored, no indicator, until it is turned on', async () => {

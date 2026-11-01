@@ -316,6 +316,43 @@ export function signRoster(roster: Roster, privateKey: KeyObject): SignedRoster 
 }
 
 // True when one of `pinned` (raw Ed25519 public keys) signed it.
+// A succession link (M10g review N5): the hub at the epoch before names the next hub's key and its
+// epoch, signed with its own key. A chain of them, each signed by the hub before, lets a device that
+// was away follow a jump of any size, link by link back to the hub it knows.
+export interface SuccessionLink { v: 1; epoch: number; hub_key: string; by_key: string; at: string }
+export interface SignedLink { link: SuccessionLink; signature: string }
+export const linkMessage = (l: SuccessionLink) => Buffer.from(`nova-succession-v1|${canonicalJson(l)}`, 'utf8');
+export const verifyLink = (s: SignedLink): boolean => !!s?.link && typeof s.signature === 'string' && typeof s.link.by_key === 'string' && verifyDeviceSignature(s.link.by_key, linkMessage(s.link), s.signature);
+
+// Whether `links` lead, each signed by the hub before it, from `from` (the hub a device follows, at
+// the epoch it knows) to `to` (the node claiming the role now): epochs strictly rising, each link
+// signed by the key the previous one named, the last naming `to.key` at an epoch no higher than `to`'s.
+export function chainLeads(links: SignedLink[], from: { key: string; epoch: number }, to: { key: string; epoch: number }): boolean {
+  if (!Array.isArray(links)) return false;
+  let key = from.key;
+  let epoch = from.epoch;
+  for (const l of [...links].filter((x) => x?.link && Number.isSafeInteger(x.link.epoch)).sort((a, b) => a.link.epoch - b.link.epoch)) {
+    if (l.link.epoch <= epoch) continue;
+    if (l.link.by_key !== key || !verifyLink(l)) return false;
+    key = l.link.hub_key;
+    epoch = l.link.epoch;
+    if (key === to.key && epoch <= to.epoch) return true;
+  }
+  return key === to.key && epoch <= to.epoch && epoch > from.epoch;
+}
+
+// A device's report of the roster it holds to a node that isn't its hub (review N2): signed with the
+// device's own key, so only a paired device's report counts, and it counts once per device.
+export const seenMessage = (deviceId: string, time: number, roster: SignedRoster | null) => Buffer.from(`nova-seen-v1|${deviceId}|${time}|${rosterDigest(roster)}`, 'utf8');
+
+// What a roster says, apart from when it was signed: a heartbeat answer names it, so a device agent
+// knows to take the new one (M10g review, finding 7).
+export function rosterDigest(signed: SignedRoster | null): string {
+  if (!signed?.roster) return '';
+  const { issued_at: _i, ...r } = signed.roster;
+  return sha256Hex(canonicalJson(r));
+}
+
 export function verifyRoster(signed: SignedRoster, pinned: string[]): boolean {
   if (!signed || typeof signed !== 'object' || !signed.roster) return false;
   let message: Buffer;

@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { generateDeviceKeys, helloProofMessage, signMessage, signRoster, type Roster } from '../../src/core/index.ts';
+import { generateDeviceKeys, helloProofMessage, rosterDigest, signMessage, signRoster, type Roster } from '../../src/core/index.ts';
 import { Queue } from '../../src/device/queue.ts';
 import { acceptRoster, checkProof, verifyBundle } from '../../src/device/trust.ts';
 import { Watchdog } from '../../src/device/watchdog.ts';
@@ -372,6 +372,25 @@ test('three crashes in a minute: safe mode, said in the heartbeat; a new signed 
     await until(() => m.hub.heartbeats.at(-1)?.safe_mode, (v) => v === false);
     assert.ok(m.lines.some((l) => /Leaving safe mode/.test(l)));
     assert.equal(status(m.dev.home).safe_mode, false);
+  } finally {
+    await m.stop();
+  }
+});
+
+test('in safe mode too, a changed roster is taken: a revoked candidate is unpinned (M10g review, minor)', async () => {
+  const m = await mesh();
+  try {
+    m.hub.bundle = bundle({ 'runtime.ts': 'process.exit(7);\n', 'queue.ts': '' }, m.hub.keys);
+    await m.boot.start({ signals: false });
+    await until(() => m.hub.heartbeats.some((h) => h.safe_mode === true), Boolean);
+    const pinned = () => (JSON.parse(readFileSync(m.dev.p.device, 'utf8')) as { pinned: string[] }).pinned;
+    assert.ok(pinned().includes(m.standby.keys.ed25519.publicKey));
+    // The standby is revoked: the hub's roster no longer names it, and the heartbeat says it changed.
+    m.hub.roster = m.hub.sign({ epoch: 1, hub: m.hub.member() });
+    m.hub.heartbeatExtra = { roster_digest: rosterDigest(m.hub.roster) };
+    const after = await until(pinned, (k) => !k.includes(m.standby.keys.ed25519.publicKey), 10_000);
+    assert.ok(!after.includes(m.standby.keys.ed25519.publicKey), 'the revoked candidate isn’t pinned any more');
+    assert.equal(status(m.dev.home).safe_mode, true, 'still in safe mode');
   } finally {
     await m.stop();
   }

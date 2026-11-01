@@ -24,10 +24,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import tls from 'node:tls';
 import {
   exportDeviceKeys, generateDeviceKeys, importDeviceKeys, keyFingerprint, newPairingNonce, pairingCommitment, pairingConfirmationV2,
-  hubResetMessage, revealMessage, runtimeManifest, sessionMessage, sha256Hex, signMessage, statusMessage, verifyDeviceSignature, verifyRoster, x25519Statement,
+  chainLeads, hubResetMessage, revealMessage, rosterDigest, runtimeManifest, seenMessage, sessionMessage, sha256Hex, signMessage, statusMessage, verifyDeviceSignature, verifyRoster, x25519Statement,
   type DeviceKeys, type SignedRoster,
 } from '../core/mesh/wire.ts';
-import { acceptRoster, assignmentAllowed, checkProof, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof, type Verdict } from './trust.ts';
+import { acceptRoster, assignmentAllowed, bundleKeys, checkProof, epochVerdict, rosterKeys, runtimeOrder, sameRoster, verifyBundle, type Bundle, type Proof, type Verdict } from './trust.ts';
 import { Watchdog } from './watchdog.ts';
 import { detectHardware, type Hardware } from '../core/models/hardware.ts';
 import { Queue, QUEUE_KINDS, type QueueKind } from './queue.ts';
@@ -274,17 +274,25 @@ export type Found =
   | { ok: false; revoked: true; reason: string }
   | { ok: false; revoked: false; reason: string };
 
-// Where to look: the address it last reached the hub at, the hub's and the standby's in the pinned
-// roster, and the address it joined at.
+// Where to look: the address it last reached the hub at, the hub's, the standby's and every other hub
+// candidate's in the pinned roster (M10g), and the address it joined at (the stable mesh name, which
+// a promotion points at the new hub).
 export function candidates(d: DeviceFile): string[] {
   const r = d.roster.roster;
-  return [...new Set([d.hub_url, r.hub.url, r.standby?.url, d.join_url].filter((u): u is string => typeof u === 'string' && /^https?:\/\//.test(u)).map((u) => new URL(u).origin))];
+  const others = Array.isArray(r.candidates) ? r.candidates.map((c) => c.url) : [];
+  return [...new Set([d.hub_url, r.hub.url, r.standby?.url, ...others, d.join_url].filter((u): u is string => typeof u === 'string' && /^https?:\/\//.test(u)).map((u) => new URL(u).origin))];
 }
 
 export class Signer {
   #keys: DeviceKeys;
   #last = 0;
   constructor(keys: DeviceKeys) { this.#keys = keys; }
+  // The roster this device holds, shown to a node that isn't its hub, signed by this device (review N2).
+  seen(deviceId: string, roster: SignedRoster): { device_id: string; time: number; roster: SignedRoster; signature: string } {
+    const time = (this.#last = Math.max(Math.floor(Date.now() / 1000), this.#last + 1));
+    return { device_id: deviceId, time, roster, signature: signMessage(this.#keys.ed25519.privateKey, seenMessage(deviceId, time, roster)) };
+  }
+
   session(deviceId: string): { device_id: string; time: number; signature: string } {
     const time = (this.#last = Math.max(Math.floor(Date.now() / 1000), this.#last + 1));
     return { device_id: deviceId, time, signature: signMessage(this.#keys.ed25519.privateKey, sessionMessage(deviceId, time)) };
@@ -306,8 +314,28 @@ export async function probe(url: string, d: DeviceFile, signer: Signer): Promise
   const proof = r.body as Proof;
   const pv = checkProof(proof, challenge, d.pinned);
   if (!pv.ok) return { ok: false, revoked: false, reason: `${url}: ${pv.reason}` };
-  if (proof.role !== 'hub') return { ok: false, revoked: false, reason: `${url} is the ${proof.role}, not the hub.` };
-  if (proof.epoch < d.epoch) return { ok: false, revoked: false, reason: `${url} says it is hub at epoch ${proof.epoch}, older than ${d.epoch}; it was replaced.` };
+  // A node that isn't the hub is told which roster this device holds (signed by its hub), so a hub
+  // candidate about to be promoted from a backup knows how far the epoch has got (M10g review, 2).
+  if (proof.role !== 'hub') {
+    void call(url, 'POST', '/api/v1/mesh/seen', { body: signer.seen(d.device_id, d.roster) }).catch(() => {});
+    return { ok: false, revoked: false, reason: `${url} is the ${proof.role}, not the hub.` };
+  }
+  let ev = epochVerdict(proof.epoch, proof.public_key, { known: d.epoch, current: d.roster.roster.hub.public_key });
+  // Further than a few epochs past what this device knows (it was away through several promotions):
+  // the node shows the chain of hand-overs, each signed by the hub before (review N5).
+  let chained = false;
+  if (!ev.ok && proof.epoch > d.epoch) {
+    const ch = await call(url, 'GET', '/api/v1/mesh/roster/chain', { timeoutMs: 5000 }).catch(() => null);
+    const links = (ch?.status === 200 ? (ch.body as { links?: unknown })?.links : null) as Parameters<typeof chainLeads>[0] | null;
+    if (links && chainLeads(links, { key: d.roster.roster.hub.public_key, epoch: d.epoch }, { key: proof.public_key, epoch: proof.epoch })) {
+      chained = true;
+      ev = epochVerdict(proof.epoch, proof.public_key, { known: d.epoch, current: d.roster.roster.hub.public_key, chained });
+    }
+  }
+  if (!ev.ok) {
+    void call(url, 'POST', '/api/v1/mesh/seen', { body: signer.seen(d.device_id, d.roster) }).catch(() => {});
+    return { ok: false, revoked: false, reason: `${url} says it is hub at ${ev.reason}` };
+  }
   const s = await call(url, 'POST', '/api/v1/mesh/session', { body: signer.session(d.device_id) }).catch((e: Error) => ({ status: 0, body: { error: e.message } }));
   if (s.status === 401 || s.status === 403) {
     const reason = errorOf(s);
@@ -318,7 +346,7 @@ export async function probe(url: string, d: DeviceFile, signer: Signer): Promise
   if (s.status !== 200) return { ok: false, revoked: false, reason: `${url} couldn’t start a session (${errorOf(s)}).` };
   const ro = await call(url, 'GET', '/api/v1/mesh/roster', { token: s.body.token }).catch((e: Error) => ({ status: 0, body: { error: e.message } }));
   if (ro.status !== 200) return { ok: false, revoked: false, reason: `${url} didn’t send its roster (${errorOf(ro)}).` };
-  const rv = acceptRoster(ro.body, { pinned: d.pinned, epoch: d.epoch, hubKey: proof.public_key });
+  const rv = acceptRoster(ro.body, { pinned: d.pinned, epoch: d.epoch, hubKey: proof.public_key, currentHub: d.roster.roster.hub.public_key, chained });
   if (!rv.ok) return { ok: false, revoked: false, reason: `${url}: ${rv.reason}` };
   const moved = new URL(url).origin !== new URL(d.hub_url).origin || ro.body.roster.epoch > d.epoch;
   return { ok: true, url: new URL(url).origin, token: s.body.token, expires_at: s.body.expires_at, epoch: ro.body.roster.epoch, moved, roster: ro.body };
@@ -548,7 +576,7 @@ export class Boot {
     const b = r.body as Bundle;
     const installed = runtimeIntact(this.p);
     if (!o.force && installed && installed.source === 'hub' && installed.manifest.sha256 === b?.manifest?.sha256) return;
-    const checked = verifyBundle(b, this.d.pinned);
+    const checked = verifyBundle(b, bundleKeys(this.d.roster.roster));
     // Never back to an older runtime than the hub's one installed, however validly signed: an old
     // bundle served again could bring back a fixed bug.
     const v: typeof checked = checked.ok && installed?.source === 'hub' && runtimeOrder(b.manifest, installed.manifest) < 0
@@ -622,7 +650,7 @@ export class Boot {
       const r = await call(s.url, m.method, m.path, { token: s.token, body: m.body });
       answer({ status: r.status, body: r.body });
       // A heartbeat answer this agent got itself, over its own session: the hub may say it was reset.
-      if (m.path === '/api/v1/mesh/devices/me/heartbeat' && r.status === 200) { this.#heardPurposes(r.body); this.#heardReset(r.body); }
+      if (m.path === '/api/v1/mesh/devices/me/heartbeat' && r.status === 200) { this.#heardPurposes(r.body); this.#heardReset(r.body); void this.#heardRoster(r.body); }
     } catch (e) {
       answer({ error: (e as Error).message });
     }
@@ -695,6 +723,8 @@ export class Boot {
       const r = await call(s.url, 'POST', '/api/v1/mesh/devices/me/heartbeat', { token: s.token, body: { capabilities: CAPABILITIES, version: AGENT_VERSION, runtime_version: inst?.version ?? null, safe_mode: true } });
       if (r.status === 401) return this.#unauthorized();
       if (r.status === 200 && this.#heardReset(r.body)) return;
+      // In safe mode too, a changed roster is taken (review, minor): a revoked candidate unpinned.
+      if (r.status === 200) await this.#heardRoster(r.body);
       // The hub's repair playbook asks once for a fresh start (M7b): reinstall and leave safe mode;
       // the watchdog's limit still holds, so three more crashes bring it back here.
       if (r.status === 200 && r.body?.restart_runtime === true) {
@@ -740,6 +770,27 @@ export class Boot {
     return true;
   }
   #saidUnsigned = false;
+
+  // The hub's roster changed (a candidate added or removed, a device revoked: M10g review, finding
+  // 7): a heartbeat answer names its digest, and this agent takes the new roster over its own session,
+  // from the hub it follows, by the same rules as ever. A revoked candidate's key is unpinned within a
+  // heartbeat, not at the next reconnect.
+  async #heardRoster(body: unknown): Promise<void> {
+    const digest = (body as { roster_digest?: unknown } | null)?.roster_digest;
+    const s = this.#session;
+    if (typeof digest !== 'string' || !s || digest === rosterDigest(this.d.roster)) return;
+    try {
+      const ro = await call(s.url, 'GET', '/api/v1/mesh/roster', { token: s.token });
+      if (ro.status !== 200) return;
+      const current = this.d.roster.roster.hub.public_key;
+      const v = acceptRoster(ro.body, { pinned: this.d.pinned, epoch: this.d.epoch, hubKey: current, currentHub: current });
+      if (!v.ok || sameRoster(this.d.roster, ro.body)) return;
+      this.d.roster = ro.body;
+      this.d.pinned = rosterKeys(ro.body.roster);
+      this.d.epoch = ro.body.roster.epoch;
+      writeJson(this.p.device, this.d);
+    } catch { /* the next heartbeat tries again */ }
+  }
 
   // The roles the hub holds for this device (M10f), from a heartbeat answer over this agent's own
   // session with a node that proved a pinned key. Kept in device.json, so the check below works
