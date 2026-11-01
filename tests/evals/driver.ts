@@ -17,6 +17,7 @@ import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
 import { Caps, evals } from '../../src/core/index.ts';
 import { hubHardware } from '../support/models.ts';
 import { grounded, obedient, priors, type ChatBody, type Reply } from './stand-in.ts';
+import { spyFetch } from './fixtures.ts';
 
 export type Nova = ReturnType<typeof createNova>;
 export type Persona = 'grounded' | 'obedient' | 'priors';
@@ -34,6 +35,9 @@ export interface Turn {
   say: string | ((w: World) => string);
   // What the person says to anything that asks for an OK in this turn (default: no).
   decide?: 'allow' | 'deny';
+  // Start a new conversation for this turn (what is said in one is remembered in the next only
+  // through memory).
+  fresh?: boolean;
 }
 
 // A stand-in web on this machine, for tasks that read a page: pages by path, and every request it
@@ -52,7 +56,7 @@ export interface World {
   home: string;
   target: TargetSpec;
   // The hub's own Ollama in the fixture (a stand-in, whatever the chat model is), and its models.
-  hubOllama: { url: string; models: string[] };
+  hubOllama: { url: string; models: string[]; setAsleep: (asleep: boolean) => void };
   // Every chat request body the model was sent, through the proxy.
   sent: string[];
   web: Web | null;
@@ -62,6 +66,8 @@ export interface World {
   // Stand-ins and anything else the fixture started, closed after the run.
   cleanup: (() => Promise<void> | void)[];
   session: string | null;
+  // Requests refused by the remote stand-in's spy (remoteStandIn cases).
+  remoteCalls: string[] | null;
 }
 
 export interface GoldenTask extends evals.TaskBase<World> {
@@ -77,6 +83,14 @@ export interface GoldenTask extends evals.TaskBase<World> {
   as?: 'chat' | 'schedule';
   // Who plays the model in CI. obedient: the attacker's plan for each turn.
   standIn: { persona: 'grounded' } | { persona: 'obedient'; plan: (w: World, turn: number) => string[] };
+  // The claim (tests/evals/claims.ts) this case would prove, for claim cases.
+  claim?: string;
+  // Settings merged into the chat provider's (for a case about how chat is served).
+  chatConfig?: Record<string, unknown>;
+  // Chat points at a reserved example.com host its fixture's spy refuses (never a real service).
+  remoteStandIn?: boolean;
+  // The remote stand-in answers chat calls with this (a cloud that works), instead of refusing.
+  remoteAnswer?: string;
 }
 
 const LOOPBACK = /^(127\.\d+\.\d+\.\d+|localhost|\[::1\])$/;
@@ -181,14 +195,20 @@ export async function drive(task: GoldenTask, target: TargetSpec, o: DriveOption
     runner.caps = new Caps({ home, profile: core.profile, timezone: () => 'UTC' });
     core.profile.set('privacy', 'default', task.privacy ?? (task.web ? 'cloud-allowed' : 'local-only'), 'settings');
 
+    // A remote stand-in (a reserved example.com host) is refused by a spy from before anything
+    // could reach it: the registry's health check included.
+    const remoteCalls = task.remoteStandIn ? spyFetch(cleanup, /(^|\.)example\.com$/, task.remoteAnswer !== undefined ? { answer: task.remoteAnswer } : {}) : null;
     // The chat model, through the registry's existing interface.
-    core.providers.configure(target.provider, { base_url: `${proxy.url}/v1`, model: target.model });
+    core.providers.configure(target.provider, { base_url: `${proxy.url}/v1`, model: target.model, ...(task.chatConfig ?? {}) });
     core.providers.enable(target.provider, { approved: true });
     core.providers.choose('chat', target.provider);
     const where = core.providers.where(target.provider) as { coarse: string };
-    if (where.coarse === 'remote') throw new Error(`The registry says ${target.provider} sends data off this machine; refused.`);
+    // A case about what Nova does with a model off the devices may point chat at a reserved
+    // example.com host, which its fixture's spy refuses (spyFetch): nothing is ever sent there.
+    const exampleOnly = (() => { try { return /(^|\.)example\.com$/.test(new URL(String(task.chatConfig?.base_url ?? '')).hostname); } catch { return false; } })();
+    if (where.coarse === 'remote' && !(task.remoteStandIn && exampleOnly)) throw new Error(`The registry says ${target.provider} sends data off this machine; refused.`);
 
-    world = { nova, core, runner, home, target, hubOllama: { url: hub.url, models: HUB_MODELS.map((m) => m.name) }, sent: proxy.sent, web, secrets: [], facts: {}, cleanup, session: null };
+    world = { nova, core, runner, home, target, remoteCalls, hubOllama: { url: hub.url, models: HUB_MODELS.map((m) => m.name), setAsleep: (v: boolean) => hub.setAsleep(v) }, sent: proxy.sent, web, secrets: [], facts: {}, cleanup, session: null };
     await task.fixture?.(world);
 
     const turns: evals.TurnTrace[] = [];
@@ -215,7 +235,7 @@ export async function drive(task: GoldenTask, target: TargetSpec, o: DriveOption
         id = String(t.brief.inputs?.run);
         world.session = id;
       } else {
-        if (!world.session) world.session = runner.createSession(text);
+        if (!world.session || t.fresh) world.session = runner.createSession(text);
         id = world.session!;
         runner.send(id, text);
       }

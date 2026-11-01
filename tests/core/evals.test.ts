@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { evals } from '../../src/core/index.ts';
 import { CAPABILITY, REGRESSION, TASKS } from '../evals/tasks/index.ts';
 import { CLAIMS, USER_FACING } from '../evals/claims.ts';
+import { CLAIM_BACKLOG, CLAIM_CASES } from '../evals/tasks/claim-backlog.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 // Every text file under a folder (the closing rule's user-facing folders).
@@ -254,3 +255,40 @@ test('the closing rule: no unbacked claim in user-facing text, and no softened c
   }
   assert.deepEqual(found, []);
 });
+
+// The claim backlog (Track 3, owner decision 2026-10-31): one entry per eval case the register
+// names (claim.<slug>), with the claims it would prove and the register's priority, in priority
+// order. A built case is in the suite (CAPABILITY until it graduates) and names its claims; a
+// pending or blocked one says why. The register and the backlog can't drift apart.
+test('the claim backlog covers every case the register names, in priority order; built cases exist; the rest say why', () => {
+  const named = new Map<string, { claims: string[]; priority: number }>();
+  for (const c of CLAIMS) {
+    if (!c.eval) continue;
+    const e = named.get(c.eval) ?? { claims: [], priority: 9 };
+    e.claims.push(c.id);
+    e.priority = Math.min(e.priority, c.priority ?? 9);
+    named.set(c.eval, e);
+  }
+  assert.deepEqual(CLAIM_BACKLOG.map((b) => b.case).sort(), [...named.keys()].sort(), 'one backlog entry per eval case the register names');
+  assert.equal(new Set(CLAIM_BACKLOG.map((b) => b.case)).size, CLAIM_BACKLOG.length);
+  for (const b of CLAIM_BACKLOG) {
+    const r = named.get(b.case)!;
+    assert.deepEqual([...b.claims].sort(), [...r.claims].sort(), `${b.case}: the register's claims`);
+    assert.equal(b.priority, r.priority, `${b.case}: the register's priority`);
+    const c = CLAIM_CASES.find((x) => x.id === b.case);
+    if (b.status === 'built') {
+      assert.ok(c, `${b.case} is built`);
+      assert.ok(b.claims.includes(c!.claim!), `${b.case} names one of its claims`);
+      assert.ok(c!.demonstrates.includes(b.case), `${b.case} demonstrates its own tag`);
+      assert.ok(c!.suite === 'capability', 'a claim case starts in capability and graduates in its own PR');
+      if (b.covers === 'partial') assert.ok((b.why ?? '').length > 20, `${b.case}: says what it doesn’t cover`);
+    } else {
+      assert.ok(!c, `${b.case} is ${b.status}, so it isn’t in the suite`);
+      assert.ok((b.why ?? '').length > 20, `${b.case}: ${b.status} says why`);
+    }
+  }
+  const p = CLAIM_BACKLOG.map((b) => b.priority);
+  assert.deepEqual(p, [...p].sort((a, b) => a - b), 'in priority order');
+  assert.equal(CLAIM_CASES.length, CLAIM_BACKLOG.filter((b) => b.status === 'built').length);
+});
+
