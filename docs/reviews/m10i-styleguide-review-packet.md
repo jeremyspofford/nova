@@ -1,8 +1,10 @@
 # M10i topology: rendered entry for owner review
 
-This is the first styleguide deliverable, pending independent review and the owner's rendered approval. It is not the application map or completion of M10i.
+This is the first styleguide deliverable, independently reviewed at `f614beab`, pending the owner's rendered approval. It is not the application map or completion of M10i.
 
 Open `/styleguide?entry=topology` (anchor `#sg-topology`). Each specimen can also open directly with `&state=<state>`; the state picker changes only the local demonstration. The fixtures explicitly describe illustrative machines; no real machines or cluster are connected.
+
+Independent review: [initial findings](m10i-styleguide-independent-review.md), [clean scoped re-review](m10i-styleguide-independent-rereview.md). The stale-service drill-in finding was reproduced, fixed and rechecked; the existing Node-only localStorage warning is disclosed. Task 1 spec compliance passes and code/design quality is approved. This is not approval or completion of M10i app integration.
 
 ## Review the three layers
 
