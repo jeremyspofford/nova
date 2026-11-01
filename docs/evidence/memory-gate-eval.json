@@ -1,0 +1,3456 @@
+{
+ "template": "memory-gate",
+ "version": 1,
+ "template_commit": "7d5871687db36e24982d01c2631f8dd0d4f5c52f",
+ "pre_run_commit": "6392c6b0af076a325c1d1417ed0fdd0bb42d79de",
+ "cases_sha256": "9edd6f696a1e9a76b2c02654cef0a8ebdb055e8f2c30cc4bbf5a864fe269a160",
+ "sizes": {
+  "tev1:4b": {
+   "status": "pass",
+   "why": "all three bounds met",
+   "digest": "7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740",
+   "ollama": "0.40.13",
+   "run_at": "2026-11-01T03:33:44.691Z",
+   "metrics": {
+    "cases": 75,
+    "asked": 72,
+    "unanswered": [],
+    "false_save": {
+     "k": 0,
+     "n": 49,
+     "rate": 0,
+     "wilson95": [
+      0,
+      0.0727
+     ]
+    },
+    "save_recall": {
+     "k": 25,
+     "n": 26,
+     "rate": 0.9615,
+     "wilson95": [
+      0.8111,
+      0.9932
+     ]
+    },
+    "false_saves": [],
+    "missed_saves": [
+     "fact-partner"
+    ],
+    "flag_recall": {
+     "k": 5,
+     "n": 8,
+     "rate": 0.625,
+     "wilson95": [
+      0.3057,
+      0.8632
+     ]
+    },
+    "merge_recall": {
+     "k": 11,
+     "n": 11,
+     "rate": 1,
+     "wilson95": [
+      0.7412,
+      1
+     ]
+    },
+    "accuracy": {
+     "k": 71,
+     "n": 75,
+     "rate": 0.9467,
+     "wilson95": [
+      0.8707,
+      0.9791
+     ]
+    },
+    "deterministic": {
+     "k": 3,
+     "n": 3,
+     "rate": 1,
+     "wilson95": [
+      0.4385,
+      1
+     ]
+    },
+    "ece": 0.0817,
+    "bins": [
+     {
+      "lo": 0,
+      "hi": 0.1,
+      "n": 105,
+      "mean_p": 0.0432,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.1,
+      "hi": 0.2,
+      "n": 21,
+      "mean_p": 0.1443,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.2,
+      "hi": 0.3,
+      "n": 18,
+      "mean_p": 0.2418,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.3,
+      "hi": 0.4,
+      "n": 8,
+      "mean_p": 0.3318,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.4,
+      "hi": 0.5,
+      "n": 6,
+      "mean_p": 0.441,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.5,
+      "hi": 0.6,
+      "n": 3,
+      "mean_p": 0.535,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.6,
+      "hi": 0.7,
+      "n": 5,
+      "mean_p": 0.6635,
+      "mean_label": 0.6
+     },
+     {
+      "lo": 0.7,
+      "hi": 0.8,
+      "n": 3,
+      "mean_p": 0.7415,
+      "mean_label": 0.3333
+     },
+     {
+      "lo": 0.8,
+      "hi": 0.9,
+      "n": 10,
+      "mean_p": 0.8567,
+      "mean_label": 0.7
+     },
+     {
+      "lo": 0.9,
+      "hi": 1,
+      "n": 109,
+      "mean_p": 0.967,
+      "mean_label": 0.9817
+     }
+    ],
+    "ece_by_question": {
+     "lasting": 0.1705,
+     "in_person_words": 0.062,
+     "duplicate": 0.0709,
+     "contradicts": 0.1092
+    }
+   },
+   "cases": [
+    {
+     "id": "fact-moved",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9909941671054524,
+      "in_person_words": 0.990583319187852,
+      "duplicate": 0.04892500841149996,
+      "contradicts": 0.18304792296175984
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 382,
+     "error": null
+    },
+    {
+     "id": "fact-job",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9675710304771113,
+      "in_person_words": 0.9830104222165743,
+      "duplicate": 0.04323140338488125,
+      "contradicts": 0.047855186134647336
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 178,
+     "error": null
+    },
+    {
+     "id": "fact-sister",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9921191932706741,
+      "in_person_words": 0.9908190414479658,
+      "duplicate": 0.02647356503361834,
+      "contradicts": 0.022467523192557428
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 178,
+     "error": null
+    },
+    {
+     "id": "fact-dog",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9355935989794711,
+      "in_person_words": 0.9627996326316255,
+      "duplicate": 0.08037903732477468,
+      "contradicts": 0.0666001289268355
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 171,
+     "error": null
+    },
+    {
+     "id": "fact-language",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9722199389697422,
+      "in_person_words": 0.9341480252367824,
+      "duplicate": 0.05221273160896534,
+      "contradicts": 0.047773471600113124
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 162,
+     "error": null
+    },
+    {
+     "id": "fact-car",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9718204114552934,
+      "in_person_words": 0.9918902946845368,
+      "duplicate": 0.05181978228412615,
+      "contradicts": 0.08882106422367095
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 162,
+     "error": null
+    },
+    {
+     "id": "fact-partner",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9138636322099825,
+      "in_person_words": 0.9906389861154891,
+      "duplicate": 0.040514853897871905,
+      "contradicts": 0.9193697878634703
+     },
+     "asked": true,
+     "outcome": "flag",
+     "ms": 163,
+     "error": null
+    },
+    {
+     "id": "fact-choir",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9699276590480124,
+      "in_person_words": 0.98551660771731,
+      "duplicate": 0.01767768666393994,
+      "contradicts": 0.06382682112904468
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 170,
+     "error": null
+    },
+    {
+     "id": "fact-allotment",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9691794732992405,
+      "in_person_words": 0.9839948112418708,
+      "duplicate": 0.021897785439520565,
+      "contradicts": 0.053317966859045565
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 163,
+     "error": null
+    },
+    {
+     "id": "fact-kids",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9642335408141874,
+      "in_person_words": 0.9592055145534192,
+      "duplicate": 0.06737893915643467,
+      "contradicts": 0.06436710495563905
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 177,
+     "error": null
+    },
+    {
+     "id": "fact-birthday",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9889855203125031,
+      "in_person_words": 0.9865266677127557,
+      "duplicate": 0.020721539543483363,
+      "contradicts": 0.015615257921299535
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 173,
+     "error": null
+    },
+    {
+     "id": "fact-flat-floor",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9913614429104626,
+      "in_person_words": 0.9715584861488136,
+      "duplicate": 0.025595688820756114,
+      "contradicts": 0.04495342005731459
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 174,
+     "error": null
+    },
+    {
+     "id": "pref-vegetarian",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9850567050645498,
+      "in_person_words": 0.9790427654988317,
+      "duplicate": 0.06153684656136436,
+      "contradicts": 0.033982264263145746
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 168,
+     "error": null
+    },
+    {
+     "id": "pref-train",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9955506995254386,
+      "in_person_words": 0.9910956465558489,
+      "duplicate": 0.04820244650386072,
+      "contradicts": 0.04604328451864296
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 172,
+     "error": null
+    },
+    {
+     "id": "pref-mornings",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9408090833824919,
+      "in_person_words": 0.9814105440476936,
+      "duplicate": 0.0891730273770192,
+      "contradicts": 0.05745618558554378
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 649,
+     "error": null
+    },
+    {
+     "id": "pref-metric",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9603491061828761,
+      "in_person_words": 0.9762609384478582,
+      "duplicate": 0.0952470157377474,
+      "contradicts": 0.018232533577978362
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 620,
+     "error": null
+    },
+    {
+     "id": "pref-short",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9628432610162432,
+      "in_person_words": 0.9879154046653031,
+      "duplicate": 0.10084800575376575,
+      "contradicts": 0.02535834455627252
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 593,
+     "error": null
+    },
+    {
+     "id": "pref-aisle",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9857568950474646,
+      "in_person_words": 0.9870952074692941,
+      "duplicate": 0.024433453802835306,
+      "contradicts": 0.029508071003683044
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 359,
+     "error": null
+    },
+    {
+     "id": "pref-tea",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9708655748116128,
+      "in_person_words": 0.9877735681055453,
+      "duplicate": 0.047977876190482285,
+      "contradicts": 0.02994243116375188
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 409,
+     "error": null
+    },
+    {
+     "id": "pref-email",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9731680978396904,
+      "in_person_words": 0.9786676579905964,
+      "duplicate": 0.02371489408789606,
+      "contradicts": 0.024376823728566057
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 387,
+     "error": null
+    },
+    {
+     "id": "pass-tired",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.12897058416400373,
+      "in_person_words": 0.9921118377653412,
+      "duplicate": 0.05031249357603471,
+      "contradicts": 0.03751196801043965
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 388,
+     "error": null
+    },
+    {
+     "id": "pass-rain",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.2798146550776345,
+      "in_person_words": 0.9817701975610121,
+      "duplicate": 0.04218880998449267,
+      "contradicts": 0.04307475761352468
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 175,
+     "error": null
+    },
+    {
+     "id": "pass-lunch",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.42283416007000996,
+      "in_person_words": 0.9859439612252349,
+      "duplicate": 0.03180107651624008,
+      "contradicts": 0.05060694432839187
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 171,
+     "error": null
+    },
+    {
+     "id": "pass-cinema",
+     "category": "today’s plans",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.26649818949101634,
+      "in_person_words": 0.9760174473511875,
+      "duplicate": 0.02091184689249788,
+      "contradicts": 0.050100118326444884
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 172,
+     "error": null
+    },
+    {
+     "id": "pass-mood",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.11051895759006161,
+      "in_person_words": 0.9849639115527573,
+      "duplicate": 0.051335173860865474,
+      "contradicts": 0.019894316200018296
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 173,
+     "error": null
+    },
+    {
+     "id": "pass-traffic",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.13082863549934545,
+      "in_person_words": 0.940561116617675,
+      "duplicate": 0.01694732672205686,
+      "contradicts": 0.036589792144167695
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 178,
+     "error": null
+    },
+    {
+     "id": "pass-phone",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.34631457366881496,
+      "in_person_words": 0.9875877466487495,
+      "duplicate": 0.019748866949365885,
+      "contradicts": 0.13540035150814642
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 182,
+     "error": null
+    },
+    {
+     "id": "pass-weekend",
+     "category": "today’s plans",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.46081204443508844,
+      "in_person_words": 0.9830559777326133,
+      "duplicate": 0.026016884450453366,
+      "contradicts": 0.03612609294914731
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 179,
+     "error": null
+    },
+    {
+     "id": "pass-hungry",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.17207780653418417,
+      "in_person_words": 0.9952276276106565,
+      "duplicate": 0.02771034427734557,
+      "contradicts": 0.010844381309489249
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 171,
+     "error": null
+    },
+    {
+     "id": "once-table",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.1876048986922396,
+      "in_person_words": 0.9808136089720894,
+      "duplicate": 0.02458421082756358,
+      "contradicts": 0.06965314849260995
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 177,
+     "error": null
+    },
+    {
+     "id": "once-timer",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.4048575889067225,
+      "in_person_words": 0.9367869870190049,
+      "duplicate": 0.023731636448038763,
+      "contradicts": 0.0331940292210427
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 169,
+     "error": null
+    },
+    {
+     "id": "once-gift",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.7440600174177306,
+      "in_person_words": 0.9918288016345723,
+      "duplicate": 0.01719803790249818,
+      "contradicts": 0.028210527371541956
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 194,
+     "error": null
+    },
+    {
+     "id": "once-train",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.2125577975321329,
+      "in_person_words": 0.9820839976753346,
+      "duplicate": 0.029553385846573424,
+      "contradicts": 0.013693418489911364
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 187,
+     "error": null
+    },
+    {
+     "id": "once-recipe",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.09682648911614673,
+      "in_person_words": 0.9713237516538662,
+      "duplicate": 0.02668304083370704,
+      "contradicts": 0.02172057925699693
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 177,
+     "error": null
+    },
+    {
+     "id": "once-translate",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.32359172793907326,
+      "in_person_words": 0.9585853060926268,
+      "duplicate": 0.06842980916145189,
+      "contradicts": 0.008969494465023492
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 181,
+     "error": null
+    },
+    {
+     "id": "once-remind",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.26893279628487565,
+      "in_person_words": 0.748107607516112,
+      "duplicate": 0.010864429672377118,
+      "contradicts": 0.20117950729835724
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 183,
+     "error": null
+    },
+    {
+     "id": "once-weather",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.315038333872479,
+      "in_person_words": 0.9309146149715546,
+      "duplicate": 0.021301145278276718,
+      "contradicts": 0.032643306713284186
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 178,
+     "error": null
+    },
+    {
+     "id": "nova-cheese",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.5664242327172874,
+      "in_person_words": 0.1797244936843083,
+      "duplicate": 0.09139303117480087,
+      "contradicts": 0.0337568292175724
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 186,
+     "error": null
+    },
+    {
+     "id": "nova-sister-name",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.8879191481177445,
+      "in_person_words": 0.30237217225461754,
+      "duplicate": 0.011336113571977528,
+      "contradicts": 0.03128086533693059
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 185,
+     "error": null
+    },
+    {
+     "id": "nova-city",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.2705585118951802,
+      "in_person_words": 0.30180517130506007,
+      "duplicate": 0.018344684942508783,
+      "contradicts": 0.07833625687952622
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 175,
+     "error": null
+    },
+    {
+     "id": "nova-job-guess",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.8398635550016711,
+      "in_person_words": 0.6645509424872518,
+      "duplicate": 0.07643029934320333,
+      "contradicts": 0.6817218104535747
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 180,
+     "error": null
+    },
+    {
+     "id": "nova-diet",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.26708470826295905,
+      "in_person_words": 0.12182138276942923,
+      "duplicate": 0.019557663829070725,
+      "contradicts": 0.055044760707643595
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 177,
+     "error": null
+    },
+    {
+     "id": "nova-kids-age",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.3961078593434852,
+      "in_person_words": 0.07249447883207476,
+      "duplicate": 0.015767206443961894,
+      "contradicts": 0.033417745588116526
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 161,
+     "error": null
+    },
+    {
+     "id": "nova-hobby",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.5341896695795775,
+      "in_person_words": 0.042177635685717176,
+      "duplicate": 0.027377453747950878,
+      "contradicts": 0.054199414238484706
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 159,
+     "error": null
+    },
+    {
+     "id": "nova-pet",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.25365368723201787,
+      "in_person_words": 0.1109586613476229,
+      "duplicate": 0.047374371519665635,
+      "contradicts": 0.30257136884779734
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 165,
+     "error": null
+    },
+    {
+     "id": "over-brother",
+     "category": "more than the person said",
+     "labels": {
+      "lasting": true,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.8307041253129042,
+      "in_person_words": 0.1226984427286159,
+      "duplicate": 0.016997861937526743,
+      "contradicts": 0.44400673290211456
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 175,
+     "error": null
+    },
+    {
+     "id": "over-yoga",
+     "category": "more than the person said",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.2026354274913517,
+      "in_person_words": 0.04737411328417165,
+      "duplicate": 0.00981372713063007,
+      "contradicts": 0.3667859585216807
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 163,
+     "error": null
+    },
+    {
+     "id": "over-city",
+     "category": "more than the person said",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.23541448590432848,
+      "in_person_words": 0.5044106293042472,
+      "duplicate": 0.025964833056593924,
+      "contradicts": 0.4418686795967702
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 168,
+     "error": null
+    },
+    {
+     "id": "over-spanish",
+     "category": "more than the person said",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.1863861550580229,
+      "in_person_words": 0.054644336806043727,
+      "duplicate": 0.039223012207360027,
+      "contradicts": 0.4714523232371377
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 171,
+     "error": null
+    },
+    {
+     "id": "over-boss",
+     "category": "more than the person said",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.8999810333893771,
+      "in_person_words": 0.7322441945060237,
+      "duplicate": 0.07572898140423974,
+      "contradicts": 0.9035983493371408
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 178,
+     "error": null
+    },
+    {
+     "id": "dup-pepper",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.982446091284067,
+      "in_person_words": 0.9607846061093801,
+      "duplicate": 0.9388940737389397,
+      "contradicts": 0.03021944974527807
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 182,
+     "error": null
+    },
+    {
+     "id": "dup-librarian",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9926992094350624,
+      "in_person_words": 0.9840424131647243,
+      "duplicate": 0.9398865219692927,
+      "contradicts": 0.2080431373609023
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 175,
+     "error": null
+    },
+    {
+     "id": "dup-veg",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9881865177484266,
+      "in_person_words": 0.9868204118210255,
+      "duplicate": 0.8188859199059687,
+      "contradicts": 0.16481187520898943
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 176,
+     "error": null
+    },
+    {
+     "id": "dup-train",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9868551951456073,
+      "in_person_words": 0.9851408397833378,
+      "duplicate": 0.96105128288782,
+      "contradicts": 0.0694197848430791
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 186,
+     "error": null
+    },
+    {
+     "id": "dup-celsius",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9802378359994486,
+      "in_person_words": 0.9568595472109883,
+      "duplicate": 0.8795825992474045,
+      "contradicts": 0.10453140735476112
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 178,
+     "error": null
+    },
+    {
+     "id": "dup-sister",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9697653984328477,
+      "in_person_words": 0.9367613430400152,
+      "duplicate": 0.9041459013654282,
+      "contradicts": 0.05942608882692858
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 181,
+     "error": null
+    },
+    {
+     "id": "dup-choir",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9755904490858854,
+      "in_person_words": 0.9764766632592846,
+      "duplicate": 0.8051652419947664,
+      "contradicts": 0.05290942172731059
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 175,
+     "error": null
+    },
+    {
+     "id": "dup-tea",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9837998112027403,
+      "in_person_words": 0.9663161942224495,
+      "duplicate": 0.89336501950639,
+      "contradicts": 0.12315991129563765
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 179,
+     "error": null
+    },
+    {
+     "id": "con-moved",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.9159608566657543,
+      "in_person_words": 0.8277824771274505,
+      "duplicate": 0.07173839633285578,
+      "contradicts": 0.9637796112233641
+     },
+     "asked": true,
+     "outcome": "flag",
+     "ms": 634,
+     "error": null
+    },
+    {
+     "id": "con-job",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.9789607776089856,
+      "in_person_words": 0.9793316891313658,
+      "duplicate": 0.16310825426415643,
+      "contradicts": 0.9839595073536946
+     },
+     "asked": true,
+     "outcome": "flag",
+     "ms": 577,
+     "error": null
+    },
+    {
+     "id": "con-meat",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.6617982307340636,
+      "in_person_words": 0.971092706427946,
+      "duplicate": 0.15536909866732765,
+      "contradicts": 0.9635524811881359
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 611,
+     "error": null
+    },
+    {
+     "id": "con-fly",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.9232735121503503,
+      "in_person_words": 0.9245574184164621,
+      "duplicate": 0.12749829208692634,
+      "contradicts": 0.9471205815001844
+     },
+     "asked": true,
+     "outcome": "flag",
+     "ms": 397,
+     "error": null
+    },
+    {
+     "id": "con-coffee",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.9546837408025387,
+      "in_person_words": 0.9807696985269262,
+      "duplicate": 0.08320589303506683,
+      "contradicts": 0.9565078185965007
+     },
+     "asked": true,
+     "outcome": "flag",
+     "ms": 394,
+     "error": null
+    },
+    {
+     "id": "con-car",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.9549198119285758,
+      "in_person_words": 0.9824420778028579,
+      "duplicate": 0.22961516595891623,
+      "contradicts": 0.9681130704433262
+     },
+     "asked": true,
+     "outcome": "flag",
+     "ms": 405,
+     "error": null
+    },
+    {
+     "id": "con-choir",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.6416425584585522,
+      "in_person_words": 0.9335672141720143,
+      "duplicate": 0.1954032931545884,
+      "contradicts": 0.9323280229419164
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 371,
+     "error": null
+    },
+    {
+     "id": "con-sister-city",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.9321556139866124,
+      "in_person_words": 0.667858855780091,
+      "duplicate": 0.22037882018616478,
+      "contradicts": 0.9578072590721924
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 174,
+     "error": null
+    },
+    {
+     "id": "rel-brother",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9383876577902742,
+      "in_person_words": 0.9588987851788435,
+      "duplicate": 0.0849699382118061,
+      "contradicts": 0.059461813414714876
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 162,
+     "error": null
+    },
+    {
+     "id": "rel-second-cat",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9453324053453402,
+      "in_person_words": 0.9257407057244726,
+      "duplicate": 0.2797135780198077,
+      "contradicts": 0.1264131475839223
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 161,
+     "error": null
+    },
+    {
+     "id": "rel-partner-job",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.945438369741211,
+      "in_person_words": 0.8832747317474529,
+      "duplicate": 0.27703421354633423,
+      "contradicts": 0.21065940426884067
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 157,
+     "error": null
+    },
+    {
+     "id": "rel-allergy-free",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.980804525933762,
+      "in_person_words": 0.987152856608776,
+      "duplicate": 0.06917117821591623,
+      "contradicts": 0.05748005078575236
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 157,
+     "error": null
+    },
+    {
+     "id": "rel-second-home",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9720613002116084,
+      "in_person_words": 0.9581975553792392,
+      "duplicate": 0.09077546529595058,
+      "contradicts": 0.24312191026152052
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 170,
+     "error": null
+    },
+    {
+     "id": "rel-cousin",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9572256648384124,
+      "in_person_words": 0.9655730269561017,
+      "duplicate": 0.22611841807478938,
+      "contradicts": 0.06640582016508095
+     },
+     "asked": true,
+     "outcome": "save",
+     "ms": 181,
+     "error": null
+    },
+    {
+     "id": "exact-pepper",
+     "category": "exact duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": null,
+     "asked": false,
+     "outcome": "merge",
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "exact-celsius",
+     "category": "exact duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": null,
+     "asked": false,
+     "outcome": "merge",
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "exact-train",
+     "category": "exact duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": null,
+     "asked": false,
+     "outcome": "merge",
+     "ms": 0,
+     "error": null
+    }
+   ]
+  },
+  "tev1:0.8b": {
+   "status": "fail",
+   "why": "save recall 0% is below 75%; ECE 0.111 is above 0.10",
+   "digest": "abc31fdb0bf52506cc47091145ac19c4cfb509b73a6841789324f9e32200c099",
+   "ollama": "0.40.13",
+   "run_at": "2026-11-01T03:34:01.798Z",
+   "metrics": {
+    "cases": 75,
+    "asked": 72,
+    "unanswered": [],
+    "false_save": {
+     "k": 0,
+     "n": 49,
+     "rate": 0,
+     "wilson95": [
+      0,
+      0.0727
+     ]
+    },
+    "save_recall": {
+     "k": 0,
+     "n": 26,
+     "rate": 0,
+     "wilson95": [
+      0,
+      0.1287
+     ]
+    },
+    "false_saves": [],
+    "missed_saves": [
+     "fact-moved",
+     "fact-job",
+     "fact-sister",
+     "fact-dog",
+     "fact-language",
+     "fact-car",
+     "fact-partner",
+     "fact-choir",
+     "fact-allotment",
+     "fact-kids",
+     "fact-birthday",
+     "fact-flat-floor",
+     "pref-vegetarian",
+     "pref-train",
+     "pref-mornings",
+     "pref-metric",
+     "pref-short",
+     "pref-aisle",
+     "pref-tea",
+     "pref-email",
+     "rel-brother",
+     "rel-second-cat",
+     "rel-partner-job",
+     "rel-allergy-free",
+     "rel-second-home",
+     "rel-cousin"
+    ],
+    "flag_recall": {
+     "k": 2,
+     "n": 8,
+     "rate": 0.25,
+     "wilson95": [
+      0.0715,
+      0.5907
+     ]
+    },
+    "merge_recall": {
+     "k": 6,
+     "n": 11,
+     "rate": 0.5455,
+     "wilson95": [
+      0.2801,
+      0.7873
+     ]
+    },
+    "accuracy": {
+     "k": 38,
+     "n": 75,
+     "rate": 0.5067,
+     "wilson95": [
+      0.396,
+      0.6167
+     ]
+    },
+    "deterministic": {
+     "k": 3,
+     "n": 3,
+     "rate": 1,
+     "wilson95": [
+      0.4385,
+      1
+     ]
+    },
+    "ece": 0.1108,
+    "bins": [
+     {
+      "lo": 0,
+      "hi": 0.1,
+      "n": 12,
+      "mean_p": 0.0853,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.1,
+      "hi": 0.2,
+      "n": 51,
+      "mean_p": 0.1567,
+      "mean_label": 0
+     },
+     {
+      "lo": 0.2,
+      "hi": 0.3,
+      "n": 40,
+      "mean_p": 0.2452,
+      "mean_label": 0.025
+     },
+     {
+      "lo": 0.3,
+      "hi": 0.4,
+      "n": 22,
+      "mean_p": 0.3484,
+      "mean_label": 0.1818
+     },
+     {
+      "lo": 0.4,
+      "hi": 0.5,
+      "n": 26,
+      "mean_p": 0.4476,
+      "mean_label": 0.2692
+     },
+     {
+      "lo": 0.5,
+      "hi": 0.6,
+      "n": 22,
+      "mean_p": 0.5521,
+      "mean_label": 0.5
+     },
+     {
+      "lo": 0.6,
+      "hi": 0.7,
+      "n": 29,
+      "mean_p": 0.656,
+      "mean_label": 0.6552
+     },
+     {
+      "lo": 0.7,
+      "hi": 0.8,
+      "n": 30,
+      "mean_p": 0.7486,
+      "mean_label": 0.8
+     },
+     {
+      "lo": 0.8,
+      "hi": 0.9,
+      "n": 37,
+      "mean_p": 0.8398,
+      "mean_label": 0.8919
+     },
+     {
+      "lo": 0.9,
+      "hi": 1,
+      "n": 19,
+      "mean_p": 0.9396,
+      "mean_label": 1
+     }
+    ],
+    "ece_by_question": {
+     "lasting": 0.133,
+     "in_person_words": 0.1523,
+     "duplicate": 0.3521,
+     "contradicts": 0.1943
+    }
+   },
+   "cases": [
+    {
+     "id": "fact-moved",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9188913071938384,
+      "in_person_words": 0.7194082675981548,
+      "duplicate": 0.42458672339612286,
+      "contradicts": 0.28687459769361223
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 6477,
+     "error": null
+    },
+    {
+     "id": "fact-job",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.7359883134956512,
+      "in_person_words": 0.7479861021771042,
+      "duplicate": 0.5065971360517035,
+      "contradicts": 0.22697533707124626
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 230,
+     "error": null
+    },
+    {
+     "id": "fact-sister",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9659664179901004,
+      "in_person_words": 0.8269504806966166,
+      "duplicate": 0.5332526746777483,
+      "contradicts": 0.16861510262209284
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 219,
+     "error": null
+    },
+    {
+     "id": "fact-dog",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.2788992449348297,
+      "in_person_words": 0.74616970073944,
+      "duplicate": 0.2538447496416934,
+      "contradicts": 0.17846066584047002
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 233,
+     "error": null
+    },
+    {
+     "id": "fact-language",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.7063767984921037,
+      "in_person_words": 0.6249214327355364,
+      "duplicate": 0.12509272605941268,
+      "contradicts": 0.18951083744588476
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 206,
+     "error": null
+    },
+    {
+     "id": "fact-car",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.7574101278189779,
+      "in_person_words": 0.8144800156350911,
+      "duplicate": 0.4519198064465628,
+      "contradicts": 0.25400626957173217
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 249,
+     "error": null
+    },
+    {
+     "id": "fact-partner",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9201316845220974,
+      "in_person_words": 0.7987640865609497,
+      "duplicate": 0.24613497657909147,
+      "contradicts": 0.197993595031918
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 237,
+     "error": null
+    },
+    {
+     "id": "fact-choir",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.8738450744148885,
+      "in_person_words": 0.8664557261989486,
+      "duplicate": 0.3758039982954181,
+      "contradicts": 0.09882489505153845
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 197,
+     "error": null
+    },
+    {
+     "id": "fact-allotment",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.851944141152423,
+      "in_person_words": 0.7391136019863641,
+      "duplicate": 0.47196803527899245,
+      "contradicts": 0.1601695394376555
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 229,
+     "error": null
+    },
+    {
+     "id": "fact-kids",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.558605422153367,
+      "in_person_words": 0.7239220968547303,
+      "duplicate": 0.2306245163309466,
+      "contradicts": 0.2216285982471851
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 160,
+     "error": null
+    },
+    {
+     "id": "fact-birthday",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.4216774028967995,
+      "in_person_words": 0.827927628083922,
+      "duplicate": 0.8438790208054324,
+      "contradicts": 0.09642906824092327
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 227,
+     "error": null
+    },
+    {
+     "id": "fact-flat-floor",
+     "category": "lasting fact",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9039215168274551,
+      "in_person_words": 0.8048664532049786,
+      "duplicate": 0.7169766622821739,
+      "contradicts": 0.19599742810987505
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 155,
+     "error": null
+    },
+    {
+     "id": "pref-vegetarian",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.815963411138089,
+      "in_person_words": 0.6742817609916892,
+      "duplicate": 0.4789024763934321,
+      "contradicts": 0.2892015040455453
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 86,
+     "error": null
+    },
+    {
+     "id": "pref-train",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9757960389703243,
+      "in_person_words": 0.8378548641471758,
+      "duplicate": 0.34365829916869844,
+      "contradicts": 0.11723594794118974
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 87,
+     "error": null
+    },
+    {
+     "id": "pref-mornings",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.78446839509899,
+      "in_person_words": 0.8163048658173321,
+      "duplicate": 0.6727790472353503,
+      "contradicts": 0.18691459891476575
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 86,
+     "error": null
+    },
+    {
+     "id": "pref-metric",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.8398004398890577,
+      "in_person_words": 0.6759701803236486,
+      "duplicate": 0.5541311914786706,
+      "contradicts": 0.14171237059284134
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 83,
+     "error": null
+    },
+    {
+     "id": "pref-short",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.8208730971531293,
+      "in_person_words": 0.9058243126028935,
+      "duplicate": 0.7609005862359126,
+      "contradicts": 0.08666195492117834
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 87,
+     "error": null
+    },
+    {
+     "id": "pref-aisle",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9328867734665354,
+      "in_person_words": 0.8309014579845848,
+      "duplicate": 0.5276169750402706,
+      "contradicts": 0.17501696810269196
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 85,
+     "error": null
+    },
+    {
+     "id": "pref-tea",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.848724539375834,
+      "in_person_words": 0.7340700091694582,
+      "duplicate": 0.6698435555175268,
+      "contradicts": 0.21360520626014884
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 84,
+     "error": null
+    },
+    {
+     "id": "pref-email",
+     "category": "standing preference",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.8163663498359325,
+      "in_person_words": 0.8214638185682201,
+      "duplicate": 0.4768522862311706,
+      "contradicts": 0.1425516919844097
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 88,
+     "error": null
+    },
+    {
+     "id": "pass-tired",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.25949197622847486,
+      "in_person_words": 0.7609932244267292,
+      "duplicate": 0.283650764833618,
+      "contradicts": 0.13713227742231304
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 99,
+     "error": null
+    },
+    {
+     "id": "pass-rain",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.04209126533524378,
+      "in_person_words": 0.3028366771426805,
+      "duplicate": 0.13086724664949098,
+      "contradicts": 0.25027126564317564
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 95,
+     "error": null
+    },
+    {
+     "id": "pass-lunch",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.11876445225591481,
+      "in_person_words": 0.6921992074606425,
+      "duplicate": 0.4647245919640994,
+      "contradicts": 0.14623530393302608
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 105,
+     "error": null
+    },
+    {
+     "id": "pass-cinema",
+     "category": "today’s plans",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.18359019201776652,
+      "in_person_words": 0.7019601427127636,
+      "duplicate": 0.17045432312727626,
+      "contradicts": 0.23146252667280467
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 102,
+     "error": null
+    },
+    {
+     "id": "pass-mood",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.31774249305011715,
+      "in_person_words": 0.7817402990708725,
+      "duplicate": 0.5258258617312583,
+      "contradicts": 0.09111228309054344
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 103,
+     "error": null
+    },
+    {
+     "id": "pass-traffic",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.09581773826253706,
+      "in_person_words": 0.7970741132139076,
+      "duplicate": 0.23212243034603866,
+      "contradicts": 0.17161743391089215
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 96,
+     "error": null
+    },
+    {
+     "id": "pass-phone",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.16299190649000858,
+      "in_person_words": 0.6430841701713377,
+      "duplicate": 0.230627223813523,
+      "contradicts": 0.15234478827189432
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 86,
+     "error": null
+    },
+    {
+     "id": "pass-weekend",
+     "category": "today’s plans",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.2621967260015319,
+      "in_person_words": 0.524327128288936,
+      "duplicate": 0.09888317427187626,
+      "contradicts": 0.17526551283971242
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 86,
+     "error": null
+    },
+    {
+     "id": "pass-hungry",
+     "category": "passing remark",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.14787406960593077,
+      "in_person_words": 0.5917421328004075,
+      "duplicate": 0.2631183619564824,
+      "contradicts": 0.16794637616812808
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 97,
+     "error": null
+    },
+    {
+     "id": "once-table",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.4030123843145376,
+      "in_person_words": 0.8006974809322113,
+      "duplicate": 0.4550098802363582,
+      "contradicts": 0.24808632427668864
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 92,
+     "error": null
+    },
+    {
+     "id": "once-timer",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.3469309913122418,
+      "in_person_words": 0.6743337028346582,
+      "duplicate": 0.2482051791641519,
+      "contradicts": 0.21568966710146875
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 91,
+     "error": null
+    },
+    {
+     "id": "once-gift",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.4261709253494817,
+      "in_person_words": 0.8496605555862478,
+      "duplicate": 0.7063910399098036,
+      "contradicts": 0.098112060721265
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 92,
+     "error": null
+    },
+    {
+     "id": "once-train",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.08247161989458691,
+      "in_person_words": 0.498788359152718,
+      "duplicate": 0.13930968133338123,
+      "contradicts": 0.31823639204518717
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 84,
+     "error": null
+    },
+    {
+     "id": "once-recipe",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.25597630681105443,
+      "in_person_words": 0.6509241970184635,
+      "duplicate": 0.4634940502988698,
+      "contradicts": 0.14628246066692538
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 81,
+     "error": null
+    },
+    {
+     "id": "once-translate",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.19885212012017564,
+      "in_person_words": 0.6277506698763983,
+      "duplicate": 0.2525971600930925,
+      "contradicts": 0.12783369747102893
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 82,
+     "error": null
+    },
+    {
+     "id": "once-remind",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.20628535024986958,
+      "in_person_words": 0.5756853917355487,
+      "duplicate": 0.21669645586650682,
+      "contradicts": 0.3103999427788435
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 94,
+     "error": null
+    },
+    {
+     "id": "once-weather",
+     "category": "one-off request",
+     "labels": {
+      "lasting": false,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.10695410474589084,
+      "in_person_words": 0.4913272020433685,
+      "duplicate": 0.08450057395146811,
+      "contradicts": 0.2991907670878083
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 88,
+     "error": null
+    },
+    {
+     "id": "nova-cheese",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.38563807927781574,
+      "in_person_words": 0.5546184100199405,
+      "duplicate": 0.3627354962345621,
+      "contradicts": 0.12259500212509297
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 90,
+     "error": null
+    },
+    {
+     "id": "nova-sister-name",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.5260522253500539,
+      "in_person_words": 0.7339337119738273,
+      "duplicate": 0.7613995696985586,
+      "contradicts": 0.18092660478621786
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 90,
+     "error": null
+    },
+    {
+     "id": "nova-city",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.4038322417528732,
+      "in_person_words": 0.6035658756992528,
+      "duplicate": 0.20188205381399996,
+      "contradicts": 0.1856453861672457
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 96,
+     "error": null
+    },
+    {
+     "id": "nova-job-guess",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.07672648784964974,
+      "in_person_words": 0.36358465529313605,
+      "duplicate": 0.10489492924407437,
+      "contradicts": 0.17751270337293812
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 94,
+     "error": null
+    },
+    {
+     "id": "nova-diet",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.17092276031758089,
+      "in_person_words": 0.45525678499471317,
+      "duplicate": 0.25253918971021727,
+      "contradicts": 0.20723665259768145
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 93,
+     "error": null
+    },
+    {
+     "id": "nova-kids-age",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.5828667205717211,
+      "in_person_words": 0.6197491019417941,
+      "duplicate": 0.6215148870726198,
+      "contradicts": 0.18560328999180759
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 79,
+     "error": null
+    },
+    {
+     "id": "nova-hobby",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.6445791292590201,
+      "in_person_words": 0.5777494435111061,
+      "duplicate": 0.45009216728368073,
+      "contradicts": 0.2143876850327769
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 86,
+     "error": null
+    },
+    {
+     "id": "nova-pet",
+     "category": "only in Nova’s answer",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.22684083244343373,
+      "in_person_words": 0.36610712069308127,
+      "duplicate": 0.2971647048258465,
+      "contradicts": 0.15506397690121082
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 88,
+     "error": null
+    },
+    {
+     "id": "over-brother",
+     "category": "more than the person said",
+     "labels": {
+      "lasting": true,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.4129064692980786,
+      "in_person_words": 0.4415629470328234,
+      "duplicate": 0.1291513183133702,
+      "contradicts": 0.1883338919328251
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 94,
+     "error": null
+    },
+    {
+     "id": "over-yoga",
+     "category": "more than the person said",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.1821960652705171,
+      "in_person_words": 0.40039533964979107,
+      "duplicate": 0.1170958703234366,
+      "contradicts": 0.18145237011821452
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 89,
+     "error": null
+    },
+    {
+     "id": "over-city",
+     "category": "more than the person said",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.6857098587293474,
+      "in_person_words": 0.6151086277064615,
+      "duplicate": 0.40805191299336246,
+      "contradicts": 0.27308531021761395
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 86,
+     "error": null
+    },
+    {
+     "id": "over-spanish",
+     "category": "more than the person said",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.11454715715701017,
+      "in_person_words": 0.38853102071373313,
+      "duplicate": 0.07249909590535145,
+      "contradicts": 0.1658589350330707
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 84,
+     "error": null
+    },
+    {
+     "id": "over-boss",
+     "category": "more than the person said",
+     "labels": {
+      "lasting": false,
+      "in_person_words": false,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "skip",
+     "scores": {
+      "lasting": 0.31807460951980804,
+      "in_person_words": 0.46239244238615923,
+      "duplicate": 0.12375290780260201,
+      "contradicts": 0.19316997157248159
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 87,
+     "error": null
+    },
+    {
+     "id": "dup-pepper",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.3208886320302193,
+      "in_person_words": 0.5754146745725448,
+      "duplicate": 0.6517541161896173,
+      "contradicts": 0.22778757357132962
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 94,
+     "error": null
+    },
+    {
+     "id": "dup-librarian",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9451255334192217,
+      "in_person_words": 0.6427233519105618,
+      "duplicate": 0.783534613621212,
+      "contradicts": 0.15007479974919602
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 96,
+     "error": null
+    },
+    {
+     "id": "dup-veg",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9652751895529494,
+      "in_person_words": 0.6091055332496693,
+      "duplicate": 0.6039532765387327,
+      "contradicts": 0.21208410282189086
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 97,
+     "error": null
+    },
+    {
+     "id": "dup-train",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9682532009445513,
+      "in_person_words": 0.8678778629886821,
+      "duplicate": 0.9740942413520465,
+      "contradicts": 0.2750871223080313
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 100,
+     "error": null
+    },
+    {
+     "id": "dup-celsius",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9744579157700664,
+      "in_person_words": 0.8437985918059179,
+      "duplicate": 0.9003919942241146,
+      "contradicts": 0.178718640711454
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 93,
+     "error": null
+    },
+    {
+     "id": "dup-sister",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.8785444128904948,
+      "in_person_words": 0.713562617928194,
+      "duplicate": 0.6948226272846304,
+      "contradicts": 0.2783234497824042
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 83,
+     "error": null
+    },
+    {
+     "id": "dup-choir",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.8596909008587431,
+      "in_person_words": 0.749018016891948,
+      "duplicate": 0.8953812560443721,
+      "contradicts": 0.13804866326498155
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 85,
+     "error": null
+    },
+    {
+     "id": "dup-tea",
+     "category": "duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": {
+      "lasting": 0.9557611462096071,
+      "in_person_words": 0.8686817194440454,
+      "duplicate": 0.9869529620367751,
+      "contradicts": 0.2098577991524323
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 84,
+     "error": null
+    },
+    {
+     "id": "con-moved",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.8649509416933456,
+      "in_person_words": 0.6852406541242734,
+      "duplicate": 0.35490410685772056,
+      "contradicts": 0.34777761959397474
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 92,
+     "error": null
+    },
+    {
+     "id": "con-job",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.9206815165157327,
+      "in_person_words": 0.8347078955833573,
+      "duplicate": 0.813032348321021,
+      "contradicts": 0.5542508853985123
+     },
+     "asked": true,
+     "outcome": "flag",
+     "ms": 93,
+     "error": null
+    },
+    {
+     "id": "con-meat",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.7528074205741233,
+      "in_person_words": 0.7030065635029871,
+      "duplicate": 0.39428977968247914,
+      "contradicts": 0.5008153908176961
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 88,
+     "error": null
+    },
+    {
+     "id": "con-fly",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.5967810955326299,
+      "in_person_words": 0.6595807689732637,
+      "duplicate": 0.40923831776727526,
+      "contradicts": 0.47108969764627073
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 84,
+     "error": null
+    },
+    {
+     "id": "con-coffee",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.825155086780513,
+      "in_person_words": 0.8432502747181109,
+      "duplicate": 0.8181472761691087,
+      "contradicts": 0.5457708926592333
+     },
+     "asked": true,
+     "outcome": "flag",
+     "ms": 83,
+     "error": null
+    },
+    {
+     "id": "con-car",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.5717525914723387,
+      "in_person_words": 0.6907783194386189,
+      "duplicate": 0.3270215325188751,
+      "contradicts": 0.31305131193505115
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 91,
+     "error": null
+    },
+    {
+     "id": "con-choir",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.8054899827309828,
+      "in_person_words": 0.7402755899532388,
+      "duplicate": 0.38121956625614994,
+      "contradicts": 0.6147165948427304
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 93,
+     "error": null
+    },
+    {
+     "id": "con-sister-city",
+     "category": "contradiction",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": true
+     },
+     "expected": "flag",
+     "scores": {
+      "lasting": 0.7761805624448339,
+      "in_person_words": 0.4749669695656777,
+      "duplicate": 0.4337753256417988,
+      "contradicts": 0.4852595140772491
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 100,
+     "error": null
+    },
+    {
+     "id": "rel-brother",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.9188655734479766,
+      "in_person_words": 0.6762070137374372,
+      "duplicate": 0.5489294781048307,
+      "contradicts": 0.39678832874825753
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 96,
+     "error": null
+    },
+    {
+     "id": "rel-second-cat",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.563821749738556,
+      "in_person_words": 0.8630204437174992,
+      "duplicate": 0.7734266708588514,
+      "contradicts": 0.20823552820902513
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 103,
+     "error": null
+    },
+    {
+     "id": "rel-partner-job",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.906205822853635,
+      "in_person_words": 0.7971429017747268,
+      "duplicate": 0.846406447484932,
+      "contradicts": 0.2667820188619258
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 94,
+     "error": null
+    },
+    {
+     "id": "rel-allergy-free",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.8334215337068454,
+      "in_person_words": 0.6991236426792631,
+      "duplicate": 0.5489545083326941,
+      "contradicts": 0.3290025378658159
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 84,
+     "error": null
+    },
+    {
+     "id": "rel-second-home",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.7529000470728453,
+      "in_person_words": 0.8759404522902946,
+      "duplicate": 0.6995238987807941,
+      "contradicts": 0.10974191965575958
+     },
+     "asked": true,
+     "outcome": "skip",
+     "ms": 82,
+     "error": null
+    },
+    {
+     "id": "rel-cousin",
+     "category": "related but different",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": false,
+      "contradicts": false
+     },
+     "expected": "save",
+     "scores": {
+      "lasting": 0.912612163556505,
+      "in_person_words": 0.8247438608479183,
+      "duplicate": 0.69979163590106,
+      "contradicts": 0.17098439454670036
+     },
+     "asked": true,
+     "outcome": "merge",
+     "ms": 80,
+     "error": null
+    },
+    {
+     "id": "exact-pepper",
+     "category": "exact duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": null,
+     "asked": false,
+     "outcome": "merge",
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "exact-celsius",
+     "category": "exact duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": null,
+     "asked": false,
+     "outcome": "merge",
+     "ms": 0,
+     "error": null
+    },
+    {
+     "id": "exact-train",
+     "category": "exact duplicate",
+     "labels": {
+      "lasting": true,
+      "in_person_words": true,
+      "duplicate": true,
+      "contradicts": false
+     },
+     "expected": "merge",
+     "scores": null,
+     "asked": false,
+     "outcome": "merge",
+     "ms": 0,
+     "error": null
+    }
+   ]
+  }
+ }
+}

@@ -24,9 +24,9 @@ import type { LegacySeat } from './seats/legacy.ts';
 import type { DecisionSettings } from './settings.ts';
 import type { DecisionLog } from './log.ts';
 import type { VerdictStore } from './verdicts.ts';
-import type { Answer, Band, BuiltState, Decided, DecisionRecord, Feature, Precheck, Quality, Seat, SeatAnswer, SeatId, ServiceTemplate, Shadow, Trust } from './types.ts';
+import type { Answer, Band, BuiltState, Decided, DecisionRecord, Feature, Precheck, Quality, Seat, SeatAnswer, SeatId, ServiceTemplate, Shadow, Trust, OptInFeature } from './types.ts';
 
-export interface RemoteReceipt { task_id: string | null; provider: 'jev'; model: string; purpose: string; privacy_mode: PrivacyMode; egress: 'remote:typesafe'; opt_in: Feature | null; state_sha256: string }
+export interface RemoteReceipt { task_id: string | null; provider: 'jev'; model: string; purpose: string; privacy_mode: PrivacyMode; egress: 'remote:typesafe'; opt_in: OptInFeature | null; state_sha256: string }
 
 export interface ServiceOptions {
   registry: Registry;
@@ -98,7 +98,7 @@ export class DecisionService {
   get registry(): Registry { return this.#o.registry; }
 
   // Whether cloud Jev may receive this template's state now.
-  cloudAllowed(t: ServiceTemplate, mode: PrivacyMode, s: DecisionSettings = this.#o.settings(), c: ContentClass = {}): { ok: boolean; opt_in: Feature | null; why: string } {
+  cloudAllowed(t: ServiceTemplate, mode: PrivacyMode, s: DecisionSettings = this.#o.settings(), c: ContentClass = {}): { ok: boolean; opt_in: OptInFeature | null; why: string } {
     // One rule for capture text (owner decision, decision-service.md §2.1), whether the template is a
     // capture template (capture-sensitive) or the text is capture-derived inside another template
     // (the ingest screen of screen text and transcripts): never a cloud seat in local-first or
@@ -110,13 +110,19 @@ export class DecisionService {
       if (!source || !this.#o.captureCloud?.(source)) return { ok: false, opt_in: null, why: 'Capture text goes to a cloud provider only with that capture source’s own opt-in, which is off.' };
       return { ok: true, opt_in: 'capture', why: `Capture source ${source} is opted in.` };
     }
+    // The person's own conversation and memory (memory-gate): cloud only in cloud mode; no opt-in
+    // sends it to a cloud provider in a local mode.
+    if (t.feature === 'private') {
+      if (mode === 'cloud-allowed') return { ok: true, opt_in: null, why: 'Cloud mode.' };
+      return { ok: false, opt_in: null, why: `${mode} keeps the person’s own conversation on this device; no opt-in sends it to a cloud provider.` };
+    }
     if (t.feature === 'box') {
       if (!s.opt_in.box) return { ok: false, opt_in: null, why: 'Images go to Jev only with the Box opt-in on.' };
       if (mode === 'local-only') return { ok: false, opt_in: null, why: 'In local-only, images never go to a cloud provider.' };
       return { ok: true, opt_in: 'box', why: 'The Box opt-in is on.' };
     }
     if (mode === 'cloud-allowed') return { ok: true, opt_in: null, why: 'Cloud mode.' };
-    if (s.opt_in[t.feature as 'screening']) return { ok: true, opt_in: t.feature, why: `The ${t.feature} opt-in is on in ${mode}.` };
+    if (s.opt_in[t.feature as 'screening']) return { ok: true, opt_in: t.feature as OptInFeature, why: `The ${t.feature} opt-in is on in ${mode}.` };
     return { ok: false, opt_in: null, why: `${mode} keeps ${t.feature} on this device unless its opt-in is on.` };
   }
 
@@ -234,7 +240,7 @@ export class DecisionService {
     let decided: { seat: SeatId; model: string | null; answers: Record<string, Answer>; trust: Trust; ref: string | null; why: string } | null = null;
 
     let receipted = false;
-    let sentOptIn: Feature | null = null;
+    let sentOptIn: OptInFeature | null = null;
     for (const c of candidates) {
       // Evidence-only asks are bounded: the caller's sample, and a daily budget per seat.
       if (!c.trusted && (o.shadow === false || this.#shadowLeft(c.seat.id) <= 0)) {

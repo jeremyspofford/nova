@@ -1,0 +1,815 @@
+{
+ "cases_sha256": "9edd6f696a1e9a76b2c02654cef0a8ebdb055e8f2c30cc4bbf5a864fe269a160",
+ "total": 75,
+ "expected": {
+  "save": 26,
+  "skip": 30,
+  "merge": 11,
+  "flag": 8
+ },
+ "counts": {
+  "lasting fact": 12,
+  "standing preference": 8,
+  "passing remark": 7,
+  "today’s plans": 2,
+  "one-off request": 8,
+  "only in Nova’s answer": 8,
+  "more than the person said": 5,
+  "duplicate": 8,
+  "contradiction": 8,
+  "related but different": 6,
+  "exact duplicate": 3
+ },
+ "rows": [
+  {
+   "id": "fact-moved",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "bb2cdcb309626c6ffffbf75364b80b2a60e94ba65c84e9905f706e8c04e28ed2"
+  },
+  {
+   "id": "fact-job",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "da26dcc68ea1298d007a2bb93482ae1027abdf0c5d57d877585e3c28eeb52a47"
+  },
+  {
+   "id": "fact-sister",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "03e4476499ef1c9ba8d94b014e7299b59ac96ac9bfc7ecb35e8d745041ab1ca1"
+  },
+  {
+   "id": "fact-dog",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "392259ee41e8ff76aa5f71c3c9cbcda795370b4f425a7cb8559074b0a88e763c"
+  },
+  {
+   "id": "fact-language",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "f1f02f6829f593f3339376967351491a02b38dd5205f90961265a8335adb3e82"
+  },
+  {
+   "id": "fact-car",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "ca38e0fb88153f7ec834ce33af3e36bb0396b3e9b6dabc2f0446257018421101"
+  },
+  {
+   "id": "fact-partner",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "4e9f22e1711fff71498d8f3b6dceaf52ebcbf02c3cbc347c6c1ee84b680344c7"
+  },
+  {
+   "id": "fact-choir",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "93b06a67eb3711acd2f243ebea9feaf360e2649c7f7962e4bee640029a0def4c"
+  },
+  {
+   "id": "fact-allotment",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "5d91c381a8d82cba60e2e18c4ff97a04dc5cdb93116957267013d2df10bcc642"
+  },
+  {
+   "id": "fact-kids",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "9b1aaf2c8fadd8f4a40b8e41709079fe9399be01cad0b7370473df49f32456e2"
+  },
+  {
+   "id": "fact-birthday",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "c0ee14141c1a201c77758d7d484ddcbddc0d9cd29c319e081a0511d76383f1e3"
+  },
+  {
+   "id": "fact-flat-floor",
+   "category": "lasting fact",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "07f13659579c5e43575f4bf09092201595d32e0741dd53cd43b1e7dfec1aad20"
+  },
+  {
+   "id": "pref-vegetarian",
+   "category": "standing preference",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "2cf3ff62c4348d96f4cf6868608e015cb58dfdc50036c163b4a565ba197acce6"
+  },
+  {
+   "id": "pref-train",
+   "category": "standing preference",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "8b07b840e3827430c79b633bd866610cb918262ba278539dc7007e92cc2e770e"
+  },
+  {
+   "id": "pref-mornings",
+   "category": "standing preference",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "378e741dfe0873a3859d7fc390a834ddddc1bc4fd5551a328542d9b2e5766100"
+  },
+  {
+   "id": "pref-metric",
+   "category": "standing preference",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "10ebf1efcbcfc294011bf48304792bc938f35580c3fe5bfe3cf6194d0f7b6344"
+  },
+  {
+   "id": "pref-short",
+   "category": "standing preference",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "5b5941195bfa12f46dc6fa6898ec8d80fdf8557bf8ab0d817fc517e6a660646f"
+  },
+  {
+   "id": "pref-aisle",
+   "category": "standing preference",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "952f2166cd253b1d6a502000d37b96a6f32ee438f12c10e66ca81f306fd0a896"
+  },
+  {
+   "id": "pref-tea",
+   "category": "standing preference",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "cc09b98a779b469188bf1c2e7a6203bce3bd2a79540fdef8887f0e80512b3179"
+  },
+  {
+   "id": "pref-email",
+   "category": "standing preference",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "405baeb390b5e08572f09ccc5635a479929d0b55833454357ec4f1c77de64615"
+  },
+  {
+   "id": "pass-tired",
+   "category": "passing remark",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "3bd7e866dca7be918db64838d454dc9f741c0c3c7165bec7255ba3cc6b632ccd"
+  },
+  {
+   "id": "pass-rain",
+   "category": "passing remark",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "e18afc99a7c2616eae9fc929e59ec940fac371c52483b5be2435c848bdcb85f1"
+  },
+  {
+   "id": "pass-lunch",
+   "category": "passing remark",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "9ef15eb6126b42751d0ac619465d91cbf7713ef92f60798359859cf1b029873b"
+  },
+  {
+   "id": "pass-cinema",
+   "category": "today’s plans",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "94b98475249e173254b169efac449edeabf7d02d0e221c991c6e6e304f41f9f2"
+  },
+  {
+   "id": "pass-mood",
+   "category": "passing remark",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "2bb9ef28d67bb6eaff6245b4421e3aca6a477b77a8902e7ff15c2ceaf50c173f"
+  },
+  {
+   "id": "pass-traffic",
+   "category": "passing remark",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "80335d866a754f417916857240f539b6c1ab2c720ece7fe7b3da5d4c1a2c8153"
+  },
+  {
+   "id": "pass-phone",
+   "category": "passing remark",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "ec6a22e0cdf00d9f5f07d7543003f1fa089a5588697b68f476ec84042aab3be9"
+  },
+  {
+   "id": "pass-weekend",
+   "category": "today’s plans",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "88000e0fecfe64de58d976627f0183362b2096cee2271a987a38c9618f8b8a46"
+  },
+  {
+   "id": "pass-hungry",
+   "category": "passing remark",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "59606f4d6805c38bbfb4b3899f737e2e8839b11d9bf3cfc4f5cbd190e2ebe634"
+  },
+  {
+   "id": "once-table",
+   "category": "one-off request",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "d1d1ddedf8d0b446c70f9e82c2c76f8ee601f99c9f93e58c7b3d6b4f3cfba5b4"
+  },
+  {
+   "id": "once-timer",
+   "category": "one-off request",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "712bbc57ead873c9565f49cbc17b224397887f95a6067197529550322001db3f"
+  },
+  {
+   "id": "once-gift",
+   "category": "one-off request",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "6bbd306ec951c367a5784ca8f3d3b71b26154af2c5a7a379798b8a737a93dcfd"
+  },
+  {
+   "id": "once-train",
+   "category": "one-off request",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "b2a64a96228f32b8975b950abd960ff11bf084b2ce464ccf501b5f27e8fefdf3"
+  },
+  {
+   "id": "once-recipe",
+   "category": "one-off request",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "fcc03ba38ecffabdcc667a8b61a21f64242bf89ac618a92164c9854310029584"
+  },
+  {
+   "id": "once-translate",
+   "category": "one-off request",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "54fed76de6eaa747becd560068bc0519ae07062fed92badab4d7bf83369a2395"
+  },
+  {
+   "id": "once-remind",
+   "category": "one-off request",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "2349cd3ccb107f1b1bf3037af024dee2c74e212f07590d2cf31b84ca95e07887"
+  },
+  {
+   "id": "once-weather",
+   "category": "one-off request",
+   "labels": [
+    "in_person_words"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "bb7a9752a4ae7a216066844c64aa34567e4045e70c6e3f6aade343cab9caa73f"
+  },
+  {
+   "id": "nova-cheese",
+   "category": "only in Nova’s answer",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "cecc699e0f69fad5a4ced80e0f68767afab45c4158493ccc19d1bc35dfdb07b9"
+  },
+  {
+   "id": "nova-sister-name",
+   "category": "only in Nova’s answer",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "60a7c3fe9c92184bac337de748f0f3fc313ef1e8e160ee874a7bb40a64fed869"
+  },
+  {
+   "id": "nova-city",
+   "category": "only in Nova’s answer",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "b704da01db075e2f76982120532b299a968045a8e3075ee92da78ac44e8bf207"
+  },
+  {
+   "id": "nova-job-guess",
+   "category": "only in Nova’s answer",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "580876fdc8ff0a6d02754c14cabd2e39f4f865087b86538a80c4c7cd7ec68257"
+  },
+  {
+   "id": "nova-diet",
+   "category": "only in Nova’s answer",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "f15194fe91c4307addca96bf08bf4163d3d00d57850ab2d24adeea11b3b62b35"
+  },
+  {
+   "id": "nova-kids-age",
+   "category": "only in Nova’s answer",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "b0a927968c9804bf646c7df875179f7e25d309b880f1aee61521a94adefbaa21"
+  },
+  {
+   "id": "nova-hobby",
+   "category": "only in Nova’s answer",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "325e7f3e8b1157982421f00ae1117a0dd286d08dd64287227bad4460e7b2842f"
+  },
+  {
+   "id": "nova-pet",
+   "category": "only in Nova’s answer",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "df4e3a586aab5e23a1267fe9748411f8a6667c85fb1ff7ee04ecfa365c3a937f"
+  },
+  {
+   "id": "over-brother",
+   "category": "more than the person said",
+   "labels": [
+    "lasting"
+   ],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "9ae10872a227ab53bd5437a0816d50b34e5770955f6bfa0dd870e1d5c0fe9765"
+  },
+  {
+   "id": "over-yoga",
+   "category": "more than the person said",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "8947e9a7818048c615d11453182ac3dab58fa31a06ec2686ba998b236f34770e"
+  },
+  {
+   "id": "over-city",
+   "category": "more than the person said",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "6685dfd052a8139faf3c4337b7e7075cb11c3a640c25a24ed36e960204b17477"
+  },
+  {
+   "id": "over-spanish",
+   "category": "more than the person said",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "caf886e6264f0ee83e5faefc7c2a497e49b4e156523c6724313146fe5e1749e8"
+  },
+  {
+   "id": "over-boss",
+   "category": "more than the person said",
+   "labels": [],
+   "expected": "skip",
+   "deterministic": false,
+   "input_sha256": "dd603a154cb9457b2737f47757730cd9fbaace5e9ac511dcc7b639bebc5d171b"
+  },
+  {
+   "id": "dup-pepper",
+   "category": "duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": false,
+   "input_sha256": "83da2be46c1f205a10ec9683cf38c617d2f37699fa1d8555c5326bba6f784695"
+  },
+  {
+   "id": "dup-librarian",
+   "category": "duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": false,
+   "input_sha256": "28de22be1c7367d3bb9ca45e9f74a246f029f2ca143d14771a975c512da35630"
+  },
+  {
+   "id": "dup-veg",
+   "category": "duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": false,
+   "input_sha256": "777f84f64e71ef2d13917dc89c809325717bd1bd0be0da52a504cc5573271616"
+  },
+  {
+   "id": "dup-train",
+   "category": "duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": false,
+   "input_sha256": "6ed613a6800d091443c3a16d2c2b8fd2b7fb813ebee95c14ddfd8e49e8905918"
+  },
+  {
+   "id": "dup-celsius",
+   "category": "duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": false,
+   "input_sha256": "8daf9b73aa305c4174fee9cd37256981491bc739202dad5a1b55f50636b51589"
+  },
+  {
+   "id": "dup-sister",
+   "category": "duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": false,
+   "input_sha256": "f7e01467af31e30d2edeed641694e8923adb405bf1a23026116ba1a9a9074b71"
+  },
+  {
+   "id": "dup-choir",
+   "category": "duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": false,
+   "input_sha256": "f9df3337a6f1d98f0138383a07cc9a6ad81a0741863de7c5df7c40b8f6108cfd"
+  },
+  {
+   "id": "dup-tea",
+   "category": "duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": false,
+   "input_sha256": "5fd60c244da867c6cce3b6936c6658acc84673a7104be8f428651cc033c99efb"
+  },
+  {
+   "id": "con-moved",
+   "category": "contradiction",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "contradicts"
+   ],
+   "expected": "flag",
+   "deterministic": false,
+   "input_sha256": "7a279c7b555f858b49334f42e46588342fe9d881cd93687d013828d6cede309b"
+  },
+  {
+   "id": "con-job",
+   "category": "contradiction",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "contradicts"
+   ],
+   "expected": "flag",
+   "deterministic": false,
+   "input_sha256": "2d918f3d19be7f0d97285b9abb77af50a809c2a1a06f628694d5e2777e943ffb"
+  },
+  {
+   "id": "con-meat",
+   "category": "contradiction",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "contradicts"
+   ],
+   "expected": "flag",
+   "deterministic": false,
+   "input_sha256": "61b31abfabb23aa87a9a9a40adaec6299f24cc5e691b80f8814b23f565a6bd22"
+  },
+  {
+   "id": "con-fly",
+   "category": "contradiction",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "contradicts"
+   ],
+   "expected": "flag",
+   "deterministic": false,
+   "input_sha256": "b1e99165f480396a018aed86b0f8ff90d004e5c1221a85e3b77a6f90192b07b8"
+  },
+  {
+   "id": "con-coffee",
+   "category": "contradiction",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "contradicts"
+   ],
+   "expected": "flag",
+   "deterministic": false,
+   "input_sha256": "0c990660d2a7cb040fb0b86937080980ea5d44fbcf6f4a80c16bb4861062ceb6"
+  },
+  {
+   "id": "con-car",
+   "category": "contradiction",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "contradicts"
+   ],
+   "expected": "flag",
+   "deterministic": false,
+   "input_sha256": "9855e50a9347eec226e1bd95a5334dcd5207b6025970964aeda88911ad7e7196"
+  },
+  {
+   "id": "con-choir",
+   "category": "contradiction",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "contradicts"
+   ],
+   "expected": "flag",
+   "deterministic": false,
+   "input_sha256": "0e1810c41254451edaadd6923acdf7e168d9c7ceb232ae6b62d30c380f49a539"
+  },
+  {
+   "id": "con-sister-city",
+   "category": "contradiction",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "contradicts"
+   ],
+   "expected": "flag",
+   "deterministic": false,
+   "input_sha256": "5b11291c1c2e456db96c5b37d1be2b5b8a1bf3e08f97c5682dfeb2af3a7cadd8"
+  },
+  {
+   "id": "rel-brother",
+   "category": "related but different",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "7250f9af4ba3f0100d2e0d685f4fb5077282f36f748dc91c49f671bddcfc2705"
+  },
+  {
+   "id": "rel-second-cat",
+   "category": "related but different",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "ca9a38fc011889f9e7b4849dcee488b8a1e3822114918e1437d218f83db083c7"
+  },
+  {
+   "id": "rel-partner-job",
+   "category": "related but different",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "582573a164fbf975dd299603da1e1044019560dd03c85c7550a7bd73bf0a96f0"
+  },
+  {
+   "id": "rel-allergy-free",
+   "category": "related but different",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "c074e494dd39ae25a2abf3f6cdb2d97d64e8762b1ee412e8a2aafae319f3de3c"
+  },
+  {
+   "id": "rel-second-home",
+   "category": "related but different",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "183ee18d678bb9a04ca830111faa87bba7324910b73cabadc0e9668b10ec32b0"
+  },
+  {
+   "id": "rel-cousin",
+   "category": "related but different",
+   "labels": [
+    "lasting",
+    "in_person_words"
+   ],
+   "expected": "save",
+   "deterministic": false,
+   "input_sha256": "a8fd97621b83cbc1e290623ac692762c4bee1ba07b03fa7c2bbc6c711fef21bf"
+  },
+  {
+   "id": "exact-pepper",
+   "category": "exact duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": true,
+   "input_sha256": "98fb1f1f0898b3a1e54cecedcb643eb09dcffafe648fffe8dbc01e15b900ee8f"
+  },
+  {
+   "id": "exact-celsius",
+   "category": "exact duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": true,
+   "input_sha256": "a06f8e7a6a38a478445d0754d8bed59001f5e505347149407a70f04d168bea44"
+  },
+  {
+   "id": "exact-train",
+   "category": "exact duplicate",
+   "labels": [
+    "lasting",
+    "in_person_words",
+    "duplicate"
+   ],
+   "expected": "merge",
+   "deterministic": true,
+   "input_sha256": "264b3276b9dfd091307bf6cfa2465d774e672d55a65fcdf10376287f2a24c67c"
+  }
+ ]
+}
