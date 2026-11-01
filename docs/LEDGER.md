@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #261 · Every promise Nova toned down now has a test waiting to prove it**
+- What changed: each of the 38 claims Nova softened in its own words has a named test that would prove the stronger version. 20 tests are built. Some already pass, such as saying when the cloud answered, schedules running on their own, and recommending a model for each job. Six fail because the stronger promise isn't true today: for example, every command waiting for your OK even when you've allowed commands, or Nova writing its own notes without asking.
+- What you can now do: nothing changes in the app; this is the list of what Nova can and can't yet prove about itself.
+- Still unfinished: the passing tests become permanent ones in a follow-up, and only then can those stronger words come back. 13 tests still need something built first, and 5 are blocked, each with its reason.
+
 **2026-11-01 · #270 · Dark designs fill the top of the iPhone screen; light ones keep the iPhone's strip**
 - What changed: on an iPhone with Nova on the Home Screen, the dark designs (Orb Teal, Nova, Obsidian, and Aurora and Paper in dark mode) now fill the top of the screen behind the time and battery, so there's no empty band above Nova. The light designs keep iPhone's own strip, because iPhone would make the time and battery white there, which you couldn't read on a light page.
 - What you can now do: use the installed app edge to edge in a dark design. Settings › Appearance tells you that after switching to or from a dark design, you may need to close Nova and open it again before the top of the screen matches.
@@ -328,6 +333,27 @@ built-ins only.
   - every state has a reduced-motion equivalent.
 - **Each package expresses the states in its own visual language** through `orb_states{}`. The values and motion are the theme's; the meanings are the system's.
 - **The F3 fix (#254's lit sphere) stays.**
+
+**2026-11-01 (claim cases, the backlog, PR #261, Track 3).** The register's eval cases (`tests/evals/claims.ts`, from #265 and M10f) are in `tests/evals/tasks/claim-backlog.ts`.
+- **38 cases:**
+  - Built, 20. With stand-ins, 12 pass (5 of them partly) and 7 fail honestly: 6 because their strong words are false as written, 1 for want of a keychain. One passes only trivially.
+  - Pending, 13, each with what it needs.
+  - Blocked, 5, each with why.
+- **The rule:** the cases start in the capability suite and graduate in their own PR. Only then may strong words return, citing the case. A test keeps the backlog in step with the register.
+- **Ready to graduate:** four cases that don't depend on the model:
+  - `claim.local-first-says-when-cloud`;
+  - `claim.schedule-runs-unattended`;
+  - `claim.model-recommendation-fits-job`;
+  - `claim.verified-only-with-evidence`.
+
+  `claim.memory-recalled-next-conversation` depends on the model and has passed twice with gemma4:12b.
+- **Can't return as written, whatever a case shows, unless the behaviour changes:**
+  - every shell command waits;
+  - everything outside the conversation asks first;
+  - Nova's own writes wait;
+  - anything irreversible always asks;
+  - after outside content, Nova always asks;
+  - no cloud model means everything runs on the devices.
 
 **2026-10-31 (owner decision 2C: the iOS status bar per design; Track 1).** DESIGN-SYSTEM §5 (PR #269); plan `docs/plans/ios-status-bar.md`.
 - **Each package declares it:** `ios_status_bar` is `translucent` (draws behind the status bar, `black-translucent`) or `default` (iOS's own strip), or `{ light, dark }` for a package with both looks.
