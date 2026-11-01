@@ -80,6 +80,98 @@
 
 Labels are per question, under rules written at the top of the generator.
 
+## The result (2026-10-31)
+
+The template, its rule and the bounds were fixed at `7d587168`. The eval was fixed at `6392c6b0` before the run. The run was on Ollama 0.40.13.
+
+| Size | Digest | False saves | Save recall | ECE | Flags | Merges | Verdict |
+|---|---|---:|---:|---:|---:|---:|---|
+| `tev1:4b` | `7954dce2…0740` | 0/49 | 25/26 (96%) | 0.082 | 5/8 | 11/11 | **pass: trusted on this build** |
+| `tev1:0.8b` | `abc31fdb…c099` | 0/49 | **0/26** | **0.111** | 2/8 | 6/11 | **fail: evidence only** |
+
+**The caveats,** in full in `docs/evidence/memory-gate-eval.md`:
+- the false-save interval reaches 7.3%;
+- three contradictions were skipped rather than flagged (the rule checks lasting and in-person first), so outdated memories stay;
+- one author wrote the questions and the cases.
+
 ## NOTES for Track 1
 
-Filled in when the results are in, at the end of this file.
+Track 2 changed no memory code, no consumer and no shared file. These are what the template needs to be used.
+
+### 1. `keep()` asks the gate before writing a memory (`src/runner.js`)
+
+Today a reply's `<remember>` block is written straight away, unless the run read outside content (then it becomes a candidate). The gate sits in front of that write, for untainted runs only. Tainted runs keep today's candidate path unchanged.
+
+```js
+// Runner constructor deps: add memoryGate (server.js passes it; see item 2).
+constructor(config, store, { …, ingest = null, memoryGate = null, … } = {}) {
+  …
+  this.memoryGate = memoryGate;
+}
+
+// keep(): for a remember op in an untainted run.
+if (o.op === 'remember' && this.memoryGate) {
+  const near = this.memory.store().search(o.text, { limit: 5 }).records.map((r) => r.content);
+  const d = await this.memoryGate({
+    person_said: this.personSaid(sessionId, tag.turn),   // the person's message for this turn
+    nova_answer: said,                                    // the visible reply, context only
+    candidate: o.text,
+    existing_memories: near.join('\n'),
+  }, { task_id: run.task_id ?? null });
+  if (d && d.trust !== 'none') {
+    if (d.outcome === 'skip') return { op: 'remember', ok: true, skipped: true, why: d.why };
+    if (d.outcome === 'merge') return { op: 'remember', ok: true, existing: true };
+    if (d.outcome === 'flag') {
+      const id = this.ingest.candidate({ op: 'remember', kind: o.kind, content: o.text, source: from, taint: [], reason: 'contradicts an existing memory' });
+      return { op: 'remember', ok: true, held: true, id };
+    }
+  }
+  // 'save', or an untrusted or unanswered gate: today's behaviour.
+}
+return this.memory.remember({ ...o, from });
+```
+
+- **`keep()` becomes async,** and its one call site (`runner.js:383`) awaits it. `said` is the visible reply text that `extractMemory()` returns; pass it into `keep()`.
+- **`personSaid(sessionId, turn)`** reads the session's `type: 'user'` record for that turn: the text the person typed.
+- **The decision record** gets the session and turn as `subsystem: 'memory'`, and the memory row's `source` stays `sessionId/turn` as today.
+- **`ingest.candidate()` takes an optional `reason`,** and the candidate list shows it ("Nova heard something that conflicts with what it remembers: …"). Candidates already carry provenance; add the `reason` column (item 3).
+
+### 2. The wiring (`src/server.js`)
+
+```js
+const runner = new Runner(config, store, { …, memoryGate: (fields, o) => core.decisionService.ask('memory-gate', fields, { subsystem: 'memory', ...o }) });
+```
+
+`core.decisionService.ask` is the service Track 1 already exposes on the core (`src/core/index.ts`), with the template a built-in. It routes as `private`: the person's own conversation never goes to a cloud seat in local-first or local-only, and no opt-in sends it there.
+
+### 3. A migration
+
+`ALTER TABLE memory_candidate ADD COLUMN reason TEXT;`
+
+### 4. The records
+
+**`docs/LEDGER.md`, under `## Decisions`:**
+
+> **2026-10-31 (DS2: memory-gate).** Plan `docs/plans/ds2-memory-gate.md`; evidence `docs/evidence/memory-gate-eval.md`; PR #⟨n⟩.
+> - **The template:** `memory-gate` v1, after TypeSafe's memory cookbook.
+>   - **Four Nouls:** lasting, in_person_words (Nova's answer never counts), duplicate, contradicts.
+>   - **Deterministic first:** exact duplicates merge with no model call.
+>   - **The rule:** not in the person's words or not lasting → skip; a conflict → flag; a duplicate → merge; otherwise save. Saving needs a confident 0.8; not tuned.
+>   - **Routing:** a new `private` feature; the person's conversation goes to a cloud seat only in cloud mode.
+>   - The template, rule and bounds were fixed at `7d587168`, before any case.
+> - **The eval,** fixed at `6392c6b0` before the run: 75 synthetic conversations.
+> - **Bounds:** false saves ≤ 5%, save recall ≥ 75%, ECE ≤ 0.10.
+> - **Result, on Ollama 0.40.13:**
+>   - tev1:4b `7954dce2…`: 0/49 false saves, 25/26 saves, ECE 0.082. **Pass**: trusted on that build.
+>   - tev1:0.8b: saved nothing. **Fail.**
+>
+>   **Caveats:** the false-save interval reaches 7.3%; three contradictions were skipped rather than flagged, so outdated memories stay; one author.
+> - **Pending Track 1:** `keep()` asks the gate, the wiring, the candidate `reason`.
+
+**The plain-language entry:**
+
+> Before Nova keeps something it thinks it should remember about you, it can now check that you actually said it (not just Nova), that it's lasting rather than about today, and whether it repeats or contradicts something it already knows. On this computer's model, in 75 practice conversations it never saved anything it shouldn't have, and it kept 25 of the 26 things worth keeping. It still sometimes misses that a new fact replaces an old one. It isn't switched on yet.
+
+**`docs/builder-packet/CAPABILITY-INVENTORY.md`, on the Decision Service row:**
+
+> **The memory gate:** `memory-gate` v1 (`templates/memory-gate.ts`), with four Nouls after TypeSafe's memory cookbook, deterministic exact-duplicate merges, and saving only on a confident yes. **Passed** its pre-registered eval on tev1:4b `7954dce2…` (0/49 false saves, 25/26 saves, ECE 0.082), so it is trusted on that build; tev1:0.8b failed (saved nothing). It never leaves the device in a local mode. **Gaps:** no consumer yet (`keep()` asks the gate; NOTES 1–3); three contradictions skipped rather than flagged; one author for the questions and the cases.

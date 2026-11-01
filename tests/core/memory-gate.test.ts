@@ -129,3 +129,13 @@ test('the person’s own conversation never goes to a cloud seat in a local mode
     assert.equal(c.log.records[0]!.opt_in, null);
   } finally { await c.close(); }
 });
+
+test('the committed verdicts: trusted on exactly tev1:4b@7954…, not on tev1:0.8b, nor on another build', async () => {
+  const { fileVerdicts } = await import('../../src/core/decision-service/verdicts.ts');
+  const v = fileVerdicts();
+  const four = v.lookup('memory-gate', 1, 'tev1', 'tev1:4b@7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740');
+  assert.equal(four.trusted, true, four.why);
+  assert.equal(v.lookup('memory-gate', 1, 'tev1', 'tev1:0.8b@abc31fdb0bf52506cc47091145ac19c4cfb509b73a6841789324f9e32200c099').trusted, false);
+  assert.equal(v.lookup('memory-gate', 1, 'tev1', 'tev1:4b@some-other-build').trusted, false);
+  assert.equal(v.lookup('memory-gate', 1, 'jev', 'jev-1.14.0').trusted, false);
+});
