@@ -34,6 +34,9 @@ import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/d
 import { Enrollment } from './mesh/enroll.ts';
 import { resolvePlacement, type PlacementDevice } from './services/placement.ts';
 import { validate } from './services/definition.ts';
+import { DeviceWorkloads } from './services/workloads.ts';
+import { ServiceManager } from './services/manager.ts';
+import { CaptureSync } from './capture/sync.ts';
 import { APPROVER_ONLY, Access, allows, loopbackAddress, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
 import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
@@ -195,6 +198,11 @@ export interface CoreOptions {
   designSystems?: string;
   // The mesh listener, when there is one: where devices reach Nova, and what carries it.
   mesh?: MeshListenerInfo | null;
+  // Where this hub runs (M10h, the capture data path's privacy rule): one of the person's own
+  // machines, or a cloud site. NOVA_MESH_SITE=cloud by default; tests say it directly.
+  site?: () => 'home' | 'cloud';
+  // How long a raw capture fetch waits for its device (tests: short).
+  captureRawWaitMs?: number;
   // Where the vault's key lives (vault.ts): NOVA_VAULT_KEY by default; tests inject a keychain.
   vault?: { mode?: KeyMode; keychain?: ((account: string) => KeyStore | null) | null };
   // Nova Computer (M10a), for tests: another adapter than Docker, whose home folder a project may
@@ -601,6 +609,8 @@ export function createCore(o: CoreOptions) {
   };
   // Capture (M6a): consent, storage on the hub, classification, promotion; Screenpipe pulled, and
   // device agents' capture events through the inbox below.
+  // The capture data path (M10h) is made once capture is; capture's forget reaches it from here.
+  let captureSync: CaptureSync | null = null;
   const capture = new Capture({
     db, log, profile, memory, backups, decisions, templates, now,
     self: () => meshIdentity.id,
@@ -630,6 +640,9 @@ export function createCore(o: CoreOptions) {
     screening: () => captureScreening(),
     hashKey: captureKey,
     records: { forget: (ids) => decisionLog.forget(ids), prune: (before) => decisionLog.prune('capture', before) },
+    // The capture data path (M10h): a forget of what came from a spoke goes to that spoke too.
+    forgotten: (rows) => captureSync?.issue(rows) ?? [],
+    removed: (ids) => captureSync?.forgetRaw(ids),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
     secrets: vault,
@@ -645,9 +658,46 @@ export function createCore(o: CoreOptions) {
   const configVersion = (r: { value: string; updated_at: string }) => createHash('sha256').update(`${r.updated_at}\0${r.value}`).digest('hex').slice(0, 16);
   // A device note's first screen, from the check before the inbox writes, reused when it is kept.
   const noteScreens = new WeakMap<object, ReturnType<typeof ingest.screenNow>>();
+  // Native workloads on devices (M10h): the `device` driver signs each device's manifests with this
+  // node's key and turns heartbeats into status. Each device has a Service Manager of its own, with
+  // its own registry, so one service (Screenpipe) can run on several devices, each with its own
+  // versions, promotions and rollbacks, at the same tiers.
+  const deviceWorkloads = new DeviceWorkloads({
+    db, log, now, sign: (m) => meshIdentity.sign(m), publicKey: () => meshIdentity.publicKey, epoch: () => devices.state().epoch, hubId: () => meshIdentity.id,
+    devices: () => placementDevicesNow(),
+  });
+  const deviceManagers = new Map<string, ServiceManager>();
+  const deviceServices = (deviceId: string): ServiceManager => {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(deviceId) || !devices.find(deviceId)) throw new CoreError('not_found', 'There is no such device.');
+    let m = deviceManagers.get(deviceId);
+    if (!m) {
+      m = new ServiceManager({
+        dir: join(o.home, 'services', 'devices', deviceId), drivers: [], remote: deviceWorkloads.driver(deviceId),
+        placement: () => ({ devices: placementDevicesNow(), hubId: meshIdentity.id }),
+        devices: () => {
+          const views = placementDevicesNow().filter((d) => d.trust === 'trusted').map((d) => ({ id: d.id, platform: d.platform, roles: [...d.purposes] }));
+          const hubView = views.find((d) => d.id === meshIdentity.id);
+          return hubView ? [...views, { ...hubView, id: 'hub' }] : views;
+        },
+      });
+      deviceManagers.set(deviceId, m);
+    }
+    return m;
+  };
+  captureSync = new CaptureSync({
+    db, log, home: o.home, now, capture, devices, ledger, verifier, hubId: () => meshIdentity.id,
+    site: o.site ?? (() => (process.env.NOVA_MESH_SITE === 'cloud' ? 'cloud' : 'home')),
+    privacy: () => profile.privacyDefault(),
+    timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
+    ...(o.captureRawWaitMs ? { rawWaitMs: o.captureRawWaitMs } : {}),
+  });
   const spokes = new Spokes({
     db, log, devices, identity: meshIdentity, now, version: o.version,
     effects: {
+      workloads: {
+        report: (d, reports) => deviceWorkloads.report(d.id, reports),
+        answer: (d) => ({ workloads: deviceWorkloads.assignments(d.id) }),
+      },
       task: (d, key, body) => {
         const task = ledger.create({ ...(body as unknown as TaskInput), origin: { kind: 'device', ref: d.id }, idempotency_key: `device:${d.id}:${key}` });
         triggers.reactive(task, `device:${d.id}`);
@@ -853,8 +903,17 @@ export function createCore(o: CoreOptions) {
   });
   // The devices placement is resolved against (M10f): roles, hardware and health, as the hub knows
   // them now.
+  // The same, now, with the hub's hardware as last read (the Service Manager decides synchronously).
+  let hubHwCache: Awaited<ReturnType<NonNullable<typeof models>['hubHardware']>> | null = null;
+  function placementDevicesNow(): PlacementDevice[] {
+    return placementRows(hubHwCache);
+  }
   async function placementDevices(): Promise<PlacementDevice[]> {
     const hubHw = models ? await models.hubHardware().catch(() => null) : null;
+    hubHwCache = hubHw;
+    return placementRows(hubHw);
+  }
+  function placementRows(hubHw: typeof hubHwCache): PlacementDevice[] {
     return devices.list().map((d) => {
       const hw = d.id === meshIdentity.id ? hubHw : models?.hardwareOf(d.id) ?? null;
       return {
@@ -1179,9 +1238,59 @@ export function createCore(o: CoreOptions) {
         if (!v.ok) return { valid: false, problems: v.problems, resolution: null };
         const resolution = resolvePlacement(v.def, devs, { hubId: meshIdentity.id, now: now() });
         const away = resolution.ok ? resolution.devices.filter((d) => d.id !== meshIdentity.id) : [];
-        return { valid: true, problems: [], resolution, ...(away.length ? { note: 'Running services on devices other than the hub comes with native workloads; nothing is deployed there yet.' } : {}) };
+        return { valid: true, problems: [], resolution, ...(away.length ? { note: 'On a device other than the hub it runs as a native workload, deployed with POST /services/devices/deploy; this only says where.' } : {}) };
       },
     },
+    // ---- native workloads on devices (M10h) ----
+    {
+      method: 'GET', path: '/services/devices', summary: 'Native workloads on your other devices: per service, its device, the live version, the one kept for one step back, each version’s status as the device reported it, and what happened.',
+      handle: async () => { await placementDevices(); return { services: deviceWorkloads.status() }; },
+    },
+    {
+      method: 'POST', path: '/services/devices/deploy', body: '{definition, confirm?}',
+      summary: 'Deploy a version to the device its placement resolves to: installed and checked there, started alongside if it can run twice, with no traffic (tier 1). A command no approved version ran asks first, typed (<service>@<version>; tier 3 for capture).',
+      handle: async ({ body }) => {
+        await placementDevices();
+        const v = validate(body.definition, { devices: placementDevicesNow().filter((d) => d.trust === 'trusted').map((d) => ({ id: d.id, platform: d.platform, roles: [...d.purposes] })) });
+        if (!v.ok) throw new CoreError('validation', 'The definition can’t be used.', v.problems);
+        const where = deviceWorkloads.where(v.def);
+        if (!where.device) throw new CoreError('conflict', `It can’t go to a device: ${where.refused.join(' ')}`);
+        const m = deviceServices(where.device.id);
+        const plan = m.plan(body.definition);
+        const r = await m.deploy(body.definition, () => {}, body.confirm);
+        if (!r.ok) throw new CoreError(r.asks ? 'validation' : 'conflict', r.said);
+        return { ...r, device: { id: where.device.id, name: where.device.name }, plan: plan.ok ? plan.plan : null };
+      },
+    },
+    {
+      method: 'POST', path: '/services/devices/{device}/{service}/promote', body: '{version, confirm}',
+      summary: 'Move a device’s workload to a version that passed its health there (tier 2; tier 3 for anything with OS permissions, such as capture, every time): type <service>@<version>.',
+      handle: async ({ params, body }) => {
+        const r = await deviceServices(params.device!).promote(params.service!, String(body.version ?? ''), body.confirm);
+        if (!r.ok) throw new CoreError(r.tier && body.confirm !== `${params.service}@${body.version}` ? 'validation' : 'conflict', r.said);
+        return r;
+      },
+    },
+    {
+      method: 'POST', path: '/services/devices/{device}/{service}/rollback', body: '{confirm: "rollback"}',
+      summary: 'Back to the version kept on the device, in one step: nothing is downloaded (tier 2).',
+      handle: async ({ params, body }) => {
+        const r = await deviceServices(params.device!).rollback(params.service!, body.confirm);
+        if (!r.ok) throw new CoreError(body.confirm === 'rollback' ? 'conflict' : 'validation', r.said);
+        return r;
+      },
+    },
+    {
+      method: 'GET', path: '/mesh/workloads/{service}/{version}', access: 'device',
+      summary: 'The manifest this hub signs for this device’s own assigned version (or the one kept): its files pinned by SHA-256, its one command, ports and health. Nothing about any other device.',
+      handle: async ({ params, who }) => { await placementDevices(); return deviceWorkloads.manifest(me(who).id, params.service!, params.version!); },
+    },
+    {
+      method: 'GET', path: '/mesh/workloads/{service}/{version}/file/{name}', access: 'device',
+      summary: 'A file the manifest pins, exactly as it was published (Nova never signs or changes a workload’s program).',
+      handle: async ({ params, who }) => { await placementDevices(); return new Raw('application/octet-stream', deviceWorkloads.file(me(who).id, params.service!, params.version!, params.name!)); },
+    },
+    ...captureSync!.routes({ me: (w) => me(w as Who) }),
     // ---- the device mesh (M4 plan §0–§1) ----
     {
       method: 'GET', path: '/mesh/hello', access: 'public', summary: 'The hub’s fingerprint, epoch, role and public keys. No person data; anyone may ask.',

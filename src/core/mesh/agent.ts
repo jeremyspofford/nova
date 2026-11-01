@@ -11,7 +11,7 @@ import { runtimeManifest, runtimeManifestMessage, type RuntimeManifest } from '.
 export const SRC_DIR = fileURLToPath(new URL('../../', import.meta.url));
 const DEVICE_DIR = join(SRC_DIR, 'device');
 // The runtime agent's files. The boot agent installs them into <device home>/runtime.
-export const RUNTIME_FILES = ['runtime.ts', 'queue.ts'] as const;
+export const RUNTIME_FILES = ['runtime.ts', 'queue.ts', 'rollout.ts'] as const;
 
 // ---- tar ---------------------------------------------------------------------------------------
 

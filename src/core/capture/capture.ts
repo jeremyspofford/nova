@@ -193,7 +193,8 @@ export interface CaptureEvent {
   space: string | null;
   space_by: string | null;
   consent: { state: 'granted'; at: string };
-  provenance: { adapter: string; source_id: string; external_id: string | null; via: string; device_id: string; received_at: string };
+  // `transfer` (M10h): how it reached the hub from a spoke (the capture data path), or null.
+  provenance: { adapter: string; source_id: string; external_id: string | null; via: string; device_id: string; received_at: string; transfer: Record<string, unknown> | null };
   promoted: string[];
   proposal: { id: string; p: number | null; provider: string } | null;
   // Screening, job 1: its state, Nova's words for it, whether it may be remembered, and what decided
@@ -227,7 +228,7 @@ export interface SourceView {
 export interface Settings { retention_days: number; exclusions: Exclusion[]; signals: Signal[]; switch: Switch | null; spaces: string[]; allow: Allow[] }
 
 interface SourceRow { id: string; device_id: string; adapter: 'screenpipe' | 'device'; name: string; kinds: string; config: string; enabled: number; paused: number; consent_at: string | null; consent_by: string | null; cursor: string | null; status: string; status_detail: string | null; status_at: string | null; counts: string; created_at: string; updated_at: string }
-interface EventRow { id: string; source_id: string; device_id: string; adapter: string; kind: Kind; at: string; ended_at: string | null; received_at: string; app: string | null; window_title: string | null; url: string | null; text: string | null; space: string | null; space_by: string | null; external_id: string | null; via: string; consent_at: string; triaged: number; sensitivity: Sensitivity; sensitivity_why: string | null; sensitivity_decision: string | null; sensitivity_detail: string | null; sensitivity_at: string | null; sensitivity_tries: number; sensitivity_next: string | null }
+interface EventRow { id: string; source_id: string; device_id: string; adapter: string; kind: Kind; at: string; ended_at: string | null; received_at: string; app: string | null; window_title: string | null; url: string | null; text: string | null; space: string | null; space_by: string | null; external_id: string | null; via: string; consent_at: string; triaged: number; sensitivity: Sensitivity; sensitivity_why: string | null; sensitivity_decision: string | null; sensitivity_detail: string | null; sensitivity_at: string | null; sensitivity_tries: number; sensitivity_next: string | null; provenance?: string | null }
 
 export type Ingested = { kept: string[]; dropped: Record<string, number>; why: Record<string, string> };
 
@@ -281,6 +282,11 @@ export interface CaptureOptions {
   // The decision records about captured events go with them: a forget or retention deletes them
   // (review finding 8).
   records?: { forget(ids: string[]): void; prune(before: string): void };
+  // M10h, the capture data path: events that came from a spoke were forgotten, so a tombstone goes to
+  // each device that holds them; the answer names each holder and whether it has acknowledged yet.
+  forgotten?: (rows: { id: string; device_id: string; source_id: string; external_id: string | null; provenance: string | null }[]) => { device_id: string; name: string; tombstone: string; acknowledged: boolean }[];
+  // Events were deleted (forgotten or swept): what was kept beside them goes too (a fetched original).
+  removed?: (ids: string[]) => void;
 }
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -580,11 +586,11 @@ export class Capture extends EventEmitter {
         const why = redacted.length ? `Nova’s own checks redacted ${listed(redacted)} before it was kept. It is held until it’s checked.` : null;
         const id = randomUUID();
         this.#db.run(
-          `INSERT INTO capture_event (id, source_id, device_id, adapter, kind, at, ended_at, received_at, app, window_title, url, text, space, space_by, external_id, via, consent_at, sensitivity, sensitivity_why, sensitivity_detail, sensitivity_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unscreened', ?, ?, ?)`,
+          `INSERT INTO capture_event (id, source_id, device_id, adapter, kind, at, ended_at, received_at, app, window_title, url, text, space, space_by, external_id, via, consent_at, sensitivity, sensitivity_why, sensitivity_detail, sensitivity_at, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unscreened', ?, ?, ?, ?)`,
           id, s.id, s.device_id, s.adapter, raw.kind, at, f.ended_at ?? null,
           received, f.app, title, url, text, c?.space ?? null, c?.by ?? null, external, via, s.consent_at!,
-          why, JSON.stringify(detail), received,
+          why, JSON.stringify(detail), received, raw.provenance ? JSON.stringify({ ...raw.provenance, received_at: received }) : null,
         );
         out.kept.push(id);
       }
@@ -696,19 +702,55 @@ export class Capture extends EventEmitter {
   // Real deletion. A memory promoted from these events holds the same words, so it is forgotten
   // too, unless the person keeps it (keep_memory). Backups, the write-ahead log and the standby
   // follow (the sync log carries a content-free delete).
-  forget(ids: string[], by: string, o: { keep_memory?: boolean } = {}): { forgotten: string[]; memories: string[] } {
+  forget(ids: string[], by: string, o: { keep_memory?: boolean } = {}): { forgotten: string[]; memories: string[]; elsewhere: { device_id: string; name: string; tombstone: string; acknowledged: boolean }[]; everywhere: boolean; said: string } {
     if (!Array.isArray(ids) || !ids.length || !ids.every((x) => typeof x === 'string')) throw new CoreError('validation', 'Say which events to forget: ids.');
     const rows = ids.map((id) => this.#db.get<EventRow>('SELECT * FROM capture_event WHERE id = ?', id)).filter((r): r is EventRow => !!r);
     if (!rows.length) throw new CoreError('not_found', 'There are no such captured events.');
     const memories = o.keep_memory ? [] : [...new Set(this.#db.all<{ memory_id: string }>(
       `SELECT memory_id FROM capture_promotion WHERE event_id IN (${rows.map(() => '?').join(', ')})`, ...rows.map((r) => r.id)).map((m) => m.memory_id))];
     this.#remove(rows, { tombstone: true });
+    const elsewhere = this.#elsewhere(rows);
     const forgotten: string[] = [];
     for (const m of memories) {
       try { forgotten.push(...this.#o.memory.forget(m, by).forgotten); } catch (e) { if (!(e instanceof CoreError && e.code === 'not_found')) throw e; }
     }
     this.#changed('events');
-    return { forgotten: rows.map((r) => r.id), memories: forgotten };
+    // "Deleted everywhere" only when every device that held it has said so (the design's standard,
+    // as for deletion in backups): an offline device shows as waiting.
+    const waiting = elsewhere.filter((e) => !e.acknowledged);
+    const said = waiting.length ? `Deleted here. Waiting for ${waiting.map((w) => w.name).join(', ')} to confirm ${waiting.length === 1 ? 'it has' : 'they have'} deleted ${rows.length === 1 ? 'its copy' : 'their copies'} too.` : 'Deleted everywhere.';
+    return { forgotten: rows.map((r) => r.id), memories: forgotten, elsewhere, everywhere: !waiting.length, said };
+  }
+
+  // The devices that still hold what was forgotten (it came from them by the capture data path).
+  #elsewhere(rows: EventRow[]): { device_id: string; name: string; tombstone: string; acknowledged: boolean }[] {
+    const from = rows.filter((r) => r.device_id !== this.#o.self() && r.provenance);
+    if (!from.length || !this.#o.forgotten) return [];
+    return this.#o.forgotten(from.map((r) => ({ id: r.id, device_id: r.device_id, source_id: r.source_id, external_id: r.external_id, provenance: r.provenance ?? null })));
+  }
+
+  // Which kinds this device may capture now, each from when (M10h, the device's capture plan): its
+  // sources that are on and not paused, from their consent (or where they were resumed).
+  deviceKinds(deviceId: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (this.#o.mayCapture?.(deviceId)) return out;
+    for (const r of this.#db.all<SourceRow>(`SELECT * FROM capture_source WHERE device_id = ? AND adapter = 'device' AND enabled = 1 AND paused = 0`, deviceId)) {
+      const since = parse<{ since?: string }>(r.cursor, {}).since ?? r.consent_at;
+      if (!since) continue;
+      for (const k of parse<string[]>(r.kinds, [])) out[k] = since;
+    }
+    return out;
+  }
+
+  // One event from a spoke by the capture data path (M10h): through `ingest`, so consent, exclusions,
+  // Nova's own rules and screening apply as to any other source, with its provenance kept. A source
+  // for its kind is made (off) if there isn't one yet.
+  fromSpoke(device: { id: string }, raw: RawEvent): { kept: string | null; status: 'kept' | 'duplicate' | 'not_kept'; reason: string | null } {
+    const id = this.#ensureDeviceSource(device.id, raw.kind) ?? `device:${device.id}:${raw.kind}`;
+    const r = this.ingest(id, [raw], 'inbox');
+    if (r.kept.length) return { kept: r.kept[0]!, status: 'kept', reason: null };
+    const reason = Object.keys(r.dropped)[0] ?? 'unreadable';
+    return { kept: null, status: reason === 'duplicate' ? 'duplicate' : 'not_kept', reason: reason === 'duplicate' ? null : (r.why[reason] ?? reason) };
   }
 
   // Retention (a profile policy): capture older than retention_days is deleted the way a forget
@@ -741,7 +783,7 @@ export class Capture extends EventEmitter {
     const rows = [...new Set(links.map((l) => l.event_id))].map((id) => this.#db.get<EventRow>('SELECT * FROM capture_event WHERE id = ?', id)).filter((r): r is EventRow => !!r);
     this.#db.run(`DELETE FROM capture_promotion WHERE memory_id IN (${q})`, ...ids);
     this.#db.run(`UPDATE capture_proposal SET memory_id = NULL WHERE memory_id IN (${q})`, ...ids);
-    if (rows.length) this.#remove(rows, { tombstone: true });
+    if (rows.length) { this.#remove(rows, { tombstone: true }); this.#elsewhere(rows); }
     this.#changed('events');
   }
 
@@ -768,6 +810,7 @@ export class Capture extends EventEmitter {
       try { this.#o.records?.forget(records); } catch (e) { this.#o.log.warn('capture', 'Nova couldn’t delete the screening records of what it forgot.', { error: (e as Error).message }); }
       for (const id of records) this.#db.run('DELETE FROM capture_screen_cache WHERE decision_id = ?', id);
     }
+    try { this.#o.removed?.(ids); } catch (e) { this.#o.log.warn('capture', 'Nova couldn’t delete what was kept beside the events it deleted.', { error: (e as Error).message }); }
     // The freed pages were overwritten (secure_delete, set by memory.ts on this connection); the
     // write-ahead log's copies are folded in now, and every backup is cleaned of the rows.
     this.#scrub(ids);
@@ -1389,7 +1432,7 @@ export class Capture extends EventEmitter {
       device: { id: r.device_id, name: this.#o.deviceName(r.device_id) },
       app: r.app, window_title: r.window_title, url: r.url, text: r.text, space: r.space, space_by: r.space_by,
       consent: { state: 'granted', at: r.consent_at },
-      provenance: { adapter: r.adapter, source_id: r.source_id, external_id: r.external_id, via: r.via, device_id: r.device_id, received_at: r.received_at },
+      provenance: { adapter: r.adapter, source_id: r.source_id, external_id: r.external_id, via: r.via, device_id: r.device_id, received_at: r.received_at, transfer: parse<Record<string, unknown> | null>(r.provenance ?? null, null) },
       promoted, proposal: prop ?? null,
       sensitivity: {
         state: r.sensitivity, label: SENSITIVITY_WORDS[r.sensitivity] ?? r.sensitivity, why: r.sensitivity_why, usable: USABLE.includes(r.sensitivity),

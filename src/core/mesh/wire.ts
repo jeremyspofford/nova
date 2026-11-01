@@ -385,6 +385,65 @@ export function runtimeManifestMessage(m: RuntimeManifest): Buffer {
   return Buffer.from(`nova-runtime-v1.${canonicalJson(m)}`, 'utf8');
 }
 
+// A native workload's manifest (M10h, the orchestration ADR Point 6 and Decision 1): signed by the hub,
+// for one device and one platform. It pins every file by SHA-256 and says the one command the boot
+// agent may start, its ports and its health check. The program itself is never signed by Nova: the
+// manifest pins the artifact as it was published (Decision 4: Screenpipe keeps its own signature).
+export interface WorkloadManifest {
+  v: 1;
+  service: string;
+  version: string;
+  device_id: string;
+  platform: string;
+  files: Record<string, string>;
+  command: string[];
+  ports: { name: string; port: number }[];
+  health: { http: string; every_s: number };
+  alongside: 'full' | 'shadow' | 'copy' | 'none';
+  roles: string[];
+  // A capture workload: which adapter reads it and which kinds it captures. Null for anything else.
+  capture: { adapter: 'screenpipe'; kinds: string[] } | null;
+  os_permissions: string[];
+  epoch: number;
+  issued_at: string;
+}
+export interface SignedWorkload { manifest: WorkloadManifest; signature: string; signer: string }
+export function workloadManifestMessage(m: WorkloadManifest): Buffer {
+  return Buffer.from(`nova-workload-v1.${canonicalJson(m)}`, 'utf8');
+}
+
+// The capture data path (M10h; docs/builder-packet/nova-capture-data-path-design-2026-10-31.md): every
+// transfer states its machine, in a manifest signed with the device's own key, verified by the hub
+// against the enrolled device record before anything is stored.
+export interface CaptureBatchManifest {
+  v: 1;
+  batch_id: string;
+  device_id: string;
+  device_name: string;
+  // native | screenpipe-adapter
+  source: string;
+  seq_from: number;
+  seq_to: number;
+  items: { id: string; seq: number; sha256: string }[];
+  // What is still waiting on the device after this batch.
+  queued: number;
+  sent_at: string;
+}
+export function captureBatchMessage(m: CaptureBatchManifest): Buffer {
+  return Buffer.from(`nova-capture-batch-v1.${canonicalJson(m)}`, 'utf8');
+}
+// The words an item's checksum is over: the item as sent, in canonical JSON.
+export const captureItemDigest = (item: unknown): string => sha256Hex(canonicalJson(item));
+// A device saying it removed what a tombstone named.
+export function tombstoneAckMessage(deviceId: string, tombstoneId: string, removed: readonly string[]): Buffer {
+  return Buffer.from(`nova-capture-tombstone-ack-v1.${canonicalJson({ device_id: deviceId, tombstone_id: tombstoneId, removed: [...removed].sort() })}`, 'utf8');
+}
+// One raw item, sent because the person asked for it (a ledger task names it and the reason).
+export interface RawManifest { v: 1; request_id: string; device_id: string; item: string; sha256: string; size: number; sent_at: string }
+export function rawManifestMessage(m: RawManifest): Buffer {
+  return Buffer.from(`nova-capture-raw-v1.${canonicalJson(m)}`, 'utf8');
+}
+
 export function sha256Hex(bytes: Uint8Array | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }

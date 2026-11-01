@@ -15,9 +15,11 @@
 //   runtime/  the runtime agent's files, replaced only by a verified bundle
 //   state/    the only folder the runtime may write: its queue and its status
 //   agent/    this program, as join.sh unpacked it
+//   workloads/ native workloads (M10h): a slot per version, exactly as the hub signed and pinned it
+//   capture/  the capture carrier's queue (M10h): derived capture waiting for the hub
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -31,7 +33,9 @@ import { acceptRoster, assignmentAllowed, bundleKeys, checkProof, epochVerdict, 
 import { Watchdog } from './watchdog.ts';
 import { detectHardware, type Hardware } from '../core/models/hardware.ts';
 import { Queue, QUEUE_KINDS, type QueueKind } from './queue.ts';
-import type { CallAnswer, FromRuntime, SessionMessage } from './runtime.ts';
+import type { CallAnswer, FromRuntime, SessionMessage, VerbAnswer } from './runtime.ts';
+import { devicePlatformKey, Workloads } from './workloads.ts';
+import { Carrier } from './carrier.ts';
 
 // The hub calls the runtime may ask this agent to make for it, and nothing else; and how big one
 // may be (the hub takes request bodies up to 1 MB).
@@ -46,7 +50,7 @@ export const AGENT_VERSION = (() => {
   try { return String(JSON.parse(readFileSync(join(HERE, '..', '..', 'package.json'), 'utf8')).version ?? '0'); } catch { return '0'; }
 })();
 // What the runtime agent consists of; the hub's bundle carries the same files.
-const RUNTIME_FILES = ['runtime.ts', 'queue.ts'];
+const RUNTIME_FILES = ['runtime.ts', 'queue.ts', 'rollout.ts'];
 const CAPABILITIES = ['heartbeat', 'queue'];
 // The process exits with this when the hub revoked the device, so a supervisor can tell.
 export const EXIT_REVOKED = 3;
@@ -66,6 +70,7 @@ export function paths(home: string) {
     keys: join(boot, 'keys.json'), device: join(boot, 'device.json'), bootState: join(boot, 'state.json'),
     installed: join(boot, 'installed.json'), ca: join(boot, 'ca.pem'), pid: join(boot, 'run.pid'),
     queue: join(home, 'state', 'queue'), runtimeStatus: join(home, 'state', 'runtime.json'),
+    workloads: join(home, 'workloads'), capture: join(home, 'capture'),
   };
 }
 export type Paths = ReturnType<typeof paths>;
@@ -153,6 +158,24 @@ export async function call(base: string, method: string, path: string, o: { body
   return { status: res.status, body };
 }
 
+// A file from a node, as bytes (a workload's pinned program: M10h).
+export async function callBytes(base: string, path: string, token: string, timeoutMs = 120_000): Promise<Buffer> {
+  let res: Response;
+  try {
+    res = await fetch(new URL(path, base), { signal: AbortSignal.timeout(timeoutMs), headers: { authorization: `Bearer ${token}` } });
+  } catch (e) {
+    const cause = (e as { cause?: { code?: string; message?: string } }).cause;
+    throw new NetError(`${base} can’t be reached (${cause?.code ?? cause?.message ?? (e as Error).message}).`);
+  }
+  const body = Buffer.from(await res.arrayBuffer());
+  if (res.status !== 200) {
+    let why = `HTTP ${res.status}`;
+    try { why = String(JSON.parse(body.toString('utf8')).error ?? why); } catch { /* not JSON */ }
+    throw new Error(why);
+  }
+  return body;
+}
+
 const say = (line: string) => console.log(line);
 const errorOf = (r: Res) => (typeof r.body === 'object' && r.body?.error ? r.body.error : `HTTP ${r.status}`);
 
@@ -181,7 +204,8 @@ export async function joinHub(home: string, o: JoinOptions, env: NodeJS.ProcessE
   const keys = generateDeviceKeys();
   const nonce = newPairingNonce();
   const name = o.name?.trim() || hostname() || 'Computer';
-  const claims: Record<string, unknown> = { name, platform: `${process.platform} ${process.arch}`, kind, capabilities: kind === 'standby' ? ['sync'] : CAPABILITIES };
+  // NOVA_DEVICE_PLATFORM is a test stand-in only (a Linux test machine labelled macOS or Windows).
+  const claims: Record<string, unknown> = { name, platform: devicePlatformKey(env).replace('-', ' '), kind, capabilities: kind === 'standby' ? ['sync'] : CAPABILITIES };
   if (kind === 'standby' && o.address) claims.address = o.address;
   // What this computer is for (M10f): asked here, confirmed or changed on the hub's approval screen.
   if (o.roles?.length) claims.purposes = o.roles;
@@ -492,12 +516,19 @@ export class Boot {
   #hardware: Hardware | null = null;
   #hardwareAt = 0;
   readonly finished: Promise<number>;
+  // Native workloads (M10h): the five verbs, for hub-signed workloads only.
+  readonly workloads: Workloads;
+  // The capture data path (M10h): this agent holds the key, so it signs and carries; it starts nothing.
+  readonly carrier: Carrier;
 
   // Where the agent's plain-words lines go (its log).
   readonly say: (line: string) => void;
+  // A stand-in platform label (tests: NOVA_DEVICE_PLATFORM), said in the hardware too.
+  #platformLabel: string | null;
 
   constructor(home: string, env: NodeJS.ProcessEnv = process.env, o: { say?: (line: string) => void } = {}) {
     this.say = o.say ?? say;
+    this.#platformLabel = env.NOVA_DEVICE_PLATFORM && devicePlatformKey(env) === env.NOVA_DEVICE_PLATFORM ? env.NOVA_DEVICE_PLATFORM : null;
     this.p = paths(home);
     this.o = runOptions(env);
     const d = readJson<DeviceFile>(this.p.device);
@@ -510,6 +541,43 @@ export class Boot {
     caPem(this.p, env);
     this.watchdog = new Watchdog({ start: () => this.#startRuntime(), backoffMs: this.o.backoffMs, maxBackoffMs: Math.max(this.o.backoffMs, 30_000) });
     this.finished = new Promise((r) => { this.#done = r; });
+    const keys = loadKeys(this.p);
+    this.carrier = new Carrier({
+      home, keys, deviceId: () => this.d.device_id, deviceName: () => this.d.name, say: (l) => this.say(l),
+      hub: (method, path, body) => this.#hubCall(method, path, body),
+      capture: () => this.workloads.liveCapture(),
+      stopCapture: (why) => this.workloads.stopCapture(why),
+      ...(env.NOVA_DEVICE_CAPTURE_QUEUE_MAX && Number(env.NOVA_DEVICE_CAPTURE_QUEUE_MAX) > 0 ? { maxQueue: Number(env.NOVA_DEVICE_CAPTURE_QUEUE_MAX) } : {}),
+    });
+    this.workloads = new Workloads({
+      home, platform: devicePlatformKey(env), say: (l) => this.say(l),
+      deviceId: () => this.d.device_id,
+      pinned: () => bundleKeys(this.d.roster.roster),
+      purposes: () => this.d.purposes,
+      captureOn: () => this.carrier.captureOn(),
+      fetchManifest: async (service, version) => {
+        const r = await this.#hubCall('GET', `/api/v1/mesh/workloads/${encodeURIComponent(service)}/${encodeURIComponent(version)}`);
+        if (!r) throw new Error('there is no session with the hub yet');
+        if (r.status !== 200) throw new Error(errorOf(r));
+        return r.body;
+      },
+      fetchFile: async (service, version, name) => {
+        const s = this.#session;
+        if (!s) throw new Error('there is no session with the hub yet');
+        return callBytes(s.url, `/api/v1/mesh/workloads/${encodeURIComponent(service)}/${encodeURIComponent(version)}/file/${encodeURIComponent(name)}`, s.token);
+      },
+      ...(env.NOVA_DEVICE_BACKOFF_MS ? { backoffMs: this.o.backoffMs } : {}),
+    });
+  }
+
+  // A hub call over this agent's own session, for its own parts (the workloads, the carrier); null
+  // when there is no session yet.
+  async #hubCall(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Res | null> {
+    const s = this.#session;
+    if (!s) return null;
+    const r = await call(s.url, method, path, { token: s.token, ...(body === undefined ? {} : { body }) });
+    if (r.status === 401) { void this.#unauthorized(); return null; }
+    return r;
   }
 
   async start(o: { signals?: boolean } = {}): Promise<void> {
@@ -534,6 +602,8 @@ export class Boot {
     if (!this.#session) void this.#lookForHub();
     // Safe mode heartbeats come from here; so do session renewals and the search for the hub.
     this.#timers.push(setInterval(() => void this.#tick(), this.o.heartbeatMs));
+    // The capture carrier: pulled, queued and sent on its own timer, whatever the runtime is doing.
+    this.#timers.push(setInterval(() => { if (!this.#closed) void this.carrier.tick(); }, this.o.tickMs));
     if (o.signals !== false) {
       for (const s of ['SIGINT', 'SIGTERM'] as const) process.on(s, () => void this.shutdown(0));
       process.on('SIGHUP', () => void this.recover());
@@ -545,6 +615,7 @@ export class Boot {
     for (const t of this.#timers) clearInterval(t);
     this.#timers = [];
     await this.watchdog.stop();
+    await this.workloads.close();
     this.#unlock();
     this.#done(code);
   }
@@ -618,7 +689,9 @@ export class Boot {
     if (Date.now() - this.#hardwareAt > 3600_000) void this.#readHardware();
     return {
       type: 'session', hub_url: s.url, device_id: this.d.device_id, expires_at: s.expires_at, version: inst?.version ?? 'unknown',
-      capabilities: CAPABILITIES, heartbeat_ms: this.o.heartbeatMs, tick_ms: this.o.tickMs,
+      // An installed capture workload offers its kinds, so the hub lists them as sources, off.
+      capabilities: [...CAPABILITIES, ...this.workloads.captureCapabilities()], heartbeat_ms: this.o.heartbeatMs, tick_ms: this.o.tickMs,
+      workloads: this.workloads.state(),
       ...(this.#hardware ? { hardware: this.#hardware } : {}),
     };
   }
@@ -629,6 +702,7 @@ export class Boot {
     this.#hardwareAt = Date.now();
     try {
       this.#hardware = await detectHardware({ diskPath: this.p.boot });
+      if (this.#platformLabel) { const [platform, arch] = this.#platformLabel.split('-'); this.#hardware = { ...this.#hardware, platform: platform!, arch: arch! } as Hardware; }
       this.#toRuntime();
     } catch (e) {
       this.say(`Couldn’t read this computer’s hardware: ${(e as Error).message}`);
@@ -671,7 +745,21 @@ export class Boot {
       // The runtime is untrusted: it can't say the hub was reset (see #heardReset).
       case 'heartbeat': return;
       case 'call': return this.#callForRuntime(m);
+      case 'verb': return this.#verbForRuntime(m);
     }
+  }
+
+  // One of the five verbs, asked by the runtime (Decision 1: it decides, this agent does). The whole
+  // request goes to the check, less only the message's own type and id, so a request carrying
+  // anything more (a command, arguments, a port) is refused there. The answer carries the state.
+  async #verbForRuntime(m: Extract<FromRuntime, { type: 'verb' }>): Promise<void> {
+    const c = this.watchdog.child;
+    const { type: _t, id, ...request } = m as unknown as Record<string, unknown>;
+    const r = await this.workloads.perform(request);
+    if (r.refused && r.said) void this.#hubCall('POST', '/api/v1/mesh/devices/me/report', { problem: 'workload_refused', detail: r.said.slice(0, 280) }).catch(() => {});
+    if (c?.connected && typeof id === 'number') c.send({ type: 'verb_answer', id, ...r } satisfies VerbAnswer);
+    // The capabilities may have changed (a capture workload installed): the runtime hears them.
+    if (r.ok) this.#toRuntime();
   }
 
   async #unauthorized(): Promise<void> {
@@ -833,6 +921,7 @@ export class Boot {
     for (const t of this.#timers) clearInterval(t);
     this.#timers = [];
     await this.watchdog.stop();
+    await this.workloads?.close();
     this.#unlock();
     this.#done(EXIT_REVOKED);
   }
@@ -874,6 +963,8 @@ export function status(home: string): Record<string, unknown> {
     running: !!pid && alive(pid), pid: pid || null, safe_mode: !!st.safe_mode, revoked: !!st.revoked, revoked_reason: st.revoked_reason ?? null,
     runtime: inst ? { version: inst.version, source: inst.source, installed_at: inst.installed_at } : null, last_update: st.last_update ?? null,
     runtime_status: readJson(p.runtimeStatus), queue,
+    workloads: existsSync(p.workloads) ? readdirSync(p.workloads).filter((n) => /^[a-z][a-z0-9-]*$/.test(n)).map((n) => ({ service: n, ...(readJson<{ live: string | null; previous: string | null }>(join(p.workloads, n, 'state.json')) ?? { live: null, previous: null }) })) : [],
+    capture: existsSync(join(p.capture, 'meta.json')) ? { queued: existsSync(join(p.capture, 'outbox')) ? readdirSync(join(p.capture, 'outbox')).filter((f) => f.endsWith('.json')).length : 0, ...(() => { const m = readJson<{ acked_seq?: number; synced_to?: string | null }>(join(p.capture, 'meta.json')); return { acked_seq: m?.acked_seq ?? 0, synced_to: m?.synced_to ?? null }; })() } : null,
   };
 }
 
@@ -890,6 +981,9 @@ function printStatus(s: Record<string, unknown>): void {
   if (rs?.last_error) say(`Last trouble: ${rs.last_error}`);
   const q = s.queue as { pending: number; delivered: number; refused: number } | null;
   if (q) say(`Queue: ${q.pending} waiting, ${q.delivered} delivered${q.refused ? `, ${q.refused} refused or rejected` : ''}`);
+  for (const w of (s.workloads as { service: string; live: string | null; previous: string | null }[] | undefined) ?? []) say(`Workload ${w.service}: ${w.live ? `${w.live} live` : 'not live'}${w.previous ? `, ${w.previous} kept for one step back` : ''}`);
+  const c = s.capture as { queued: number; synced_to: string | null } | null;
+  if (c) say(`Capture: ${c.synced_to ? `synced to ${c.synced_to}` : 'nothing synced yet'} · ${c.queued} queued`);
 }
 
 // ---- the command line ---------------------------------------------------------------------------

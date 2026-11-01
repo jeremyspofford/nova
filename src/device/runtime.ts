@@ -6,13 +6,17 @@
 // few hub calls it needs (heartbeat, inbox), and the boot agent makes them with its session.
 //
 // What it does: heartbeats, so the hub shows this computer Online; and flushes the offline queue to
-// the hub's inbox, in order, settling each item only once the hub has answered it. When the hub
-// can't be reached it says so to the boot agent, which looks for the hub (or a promoted standby)
-// and sends a new session when it finds one; until then everything waits in the queue.
+// the hub's inbox, in order, settling each item only once the hub has answered it. M10h: it decides
+// what to do with the native workloads the hub assigns (rollout.ts) and asks the boot agent for one
+// of its five verbs, over IPC; it reports what happened in its heartbeat. It starts nothing itself.
+// When the hub can't be reached it says so to the boot agent, which looks for the hub (or a promoted
+// standby) and sends a new session when it finds one; until then everything waits in the queue.
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { itemBytes, Queue, type QueueResult } from './queue.ts';
+import { readAssignments, Rollout } from './rollout.ts';
+import type { VerbResult, WorkloadState, WorkloadVerb } from './workloads.ts';
 
 // What one inbox call carries at most: under the boot agent's limit for a call (900 kB) and the
 // hub's for a request (1 MB), with room for the envelope.
@@ -30,16 +34,22 @@ export interface SessionMessage {
   hardware?: unknown;
   heartbeat_ms?: number;
   tick_ms?: number;
+  // What is installed and running (M10h), from the boot agent.
+  workloads?: WorkloadState[];
 }
 export interface CallAnswer { type: 'answer'; id: number; status?: number; body?: unknown; error?: string }
-export type ToRuntime = SessionMessage | { type: 'stop' } | { type: 'flush' } | CallAnswer;
+// The boot agent's answer to a verb, with what is installed and running now.
+export interface VerbAnswer extends VerbResult { type: 'verb_answer'; id: number }
+export type ToRuntime = SessionMessage | { type: 'stop' } | { type: 'flush' } | CallAnswer | VerbAnswer | { type: 'workloads'; state: WorkloadState[] };
 export type FromRuntime =
   | { type: 'ready' }
   | { type: 'unreachable'; detail: string }
   | { type: 'unauthorized'; detail: string }
   | { type: 'update'; version: string }
   | { type: 'heartbeat'; at: string; epoch: number }
-  | { type: 'call'; id: number; method: 'POST'; path: string; body: unknown };
+  | { type: 'call'; id: number; method: 'POST'; path: string; body: unknown }
+  // One of the boot agent's five verbs (M10h): a verb, a service and a version, and nothing else.
+  | { type: 'verb'; id: number; verb: WorkloadVerb; service: string; version: string };
 
 class Unreachable extends Error {}
 class Unauthorized extends Error {}
@@ -55,20 +65,27 @@ export class Runtime {
   #status: Record<string, unknown> = {};
   #stopped = false;
   #calls = new Map<number, (a: CallAnswer) => void>();
+  #verbs = new Map<number, (a: VerbAnswer) => void>();
   #nextCall = 1;
+  #workloads: WorkloadState[] = [];
+  readonly rollout: Rollout;
 
   constructor(home: string, send: (m: FromRuntime) => void) {
     this.home = home;
     this.#send = send;
     mkdirSync(join(home, 'state'), { recursive: true });
     this.queue = new Queue(join(home, 'state', 'queue'));
+    this.rollout = new Rollout({ verb: (verb, service, version) => this.#verb(verb, service, version), file: join(home, 'state', 'rollout.json') });
   }
 
   receive(m: ToRuntime): void {
     if (m.type === 'stop') return this.stop();
     if (m.type === 'flush') { void this.flush(); return; }
     if (m.type === 'answer') { this.#calls.get(m.id)?.(m); return; }
+    if (m.type === 'verb_answer') { this.#verbs.get(m.id)?.(m); return; }
+    if (m.type === 'workloads') { if (Array.isArray(m.state)) this.#workloads = m.state; return; }
     if (m.type !== 'session') return;
+    if (Array.isArray(m.workloads)) this.#workloads = m.workloads;
     const first = !this.#session;
     this.#session = m;
     this.#offline = false;
@@ -84,11 +101,15 @@ export class Runtime {
     const s = this.#session;
     if (!s || this.#offline || this.#stopped) return;
     try {
-      const r = await this.#call('POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: s.capabilities, version: s.version, runtime_version: s.version, safe_mode: false, ...(s.hardware ? { hardware: s.hardware } : {}) }) as { epoch: number; runtime?: { version?: string } };
+      const reports = this.rollout.reports();
+      const r = await this.#call('POST', '/api/v1/mesh/devices/me/heartbeat', { capabilities: s.capabilities, version: s.version, runtime_version: s.version, safe_mode: false, ...(s.hardware ? { hardware: s.hardware } : {}), ...(reports.length ? { workloads: reports } : {}) }) as { epoch: number; runtime?: { version?: string }; workloads?: unknown };
       const at = new Date().toISOString();
       this.#write({ last_heartbeat_at: at, epoch: r.epoch, last_error: null });
       this.#send({ type: 'heartbeat', at, epoch: r.epoch });
       if (r.runtime?.version && r.runtime.version !== s.version) this.#send({ type: 'update', version: r.runtime.version });
+      // What the hub assigns: decided here, carried out by the boot agent's verbs, reported next time.
+      const assigned = readAssignments(r.workloads);
+      if (assigned.length) void this.rollout.step(assigned, this.#workloads).catch((e: Error) => this.#write({ last_error: `workloads: ${e.message}` }));
     } catch (e) {
       this.#trouble(e);
     }
@@ -136,6 +157,7 @@ export class Runtime {
     for (const t of this.#timers) clearInterval(t);
     this.#timers = [];
     for (const [id, done] of [...this.#calls]) done({ type: 'answer', id, error: 'The runtime is stopping.' });
+    for (const [id, done] of [...this.#verbs]) done({ type: 'verb_answer', id, ok: false, said: 'The runtime is stopping.', state: this.#workloads });
     this.queue.close();
   }
 
@@ -168,6 +190,18 @@ export class Runtime {
     if (a.status >= 500 || a.status === 409 || a.status === 421) throw new Unreachable(`The hub at ${s.hub_url} answered ${a.status}.`);
     if (a.status < 200 || a.status >= 300) throw new Error(`The hub refused ${method} ${path} (${a.status}): ${JSON.stringify(a.body ?? null).slice(0, 200)}`);
     return a.body ?? null;
+  }
+
+  // One of the boot agent's five verbs: asked, never done here. The answer carries what is installed
+  // and running now.
+  #verb(verb: WorkloadVerb, service: string, version: string): Promise<VerbResult> {
+    const id = this.#nextCall++;
+    return new Promise<VerbResult>((resolve) => {
+      if (this.#stopped) return resolve({ ok: false, said: 'The runtime is stopping.', state: this.#workloads });
+      const t = setTimeout(() => { this.#verbs.delete(id); resolve({ ok: false, said: 'The boot agent didn’t answer in time.', state: this.#workloads }); }, 120_000);
+      this.#verbs.set(id, (m) => { clearTimeout(t); this.#verbs.delete(id); if (Array.isArray(m.state)) this.#workloads = m.state; resolve({ ok: m.ok, said: m.said, ...(m.refused ? { refused: true } : {}), state: this.#workloads }); });
+      this.#send({ type: 'verb', id, verb, service, version });
+    });
   }
 
   // state/runtime.json: what the boot agent's `status` command shows. Written whole, then moved.
