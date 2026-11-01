@@ -711,8 +711,9 @@ export function renderSchedules(data, now = new Date()) {
   const set = data?.set ?? [];
   const available = data?.available ?? [];
   const tz = data?.timezone;
+  // “Work Nova does on its own” is backed by the eval claim.schedule-runs-unattended (tests/evals/tasks/claims.ts).
   const out = [`<header class="memory-intro"><p class="empty-date">Schedules</p>
-<p class="memory-lede">Work you set Nova to do at times you choose. Reports arrive in the main conversation, and each schedule is a plain file in your Nova folder.</p></header>`];
+<p class="memory-lede">Work Nova does on its own, at times you choose. Reports arrive in the main conversation, and each schedule is a plain file in your Nova folder.</p></header>`];
   out.push(`<section class="memory-section" aria-labelledby="sc-set"><h2 class="memory-heading" id="sc-set">Set</h2>
 ${set.length
     ? `<ul class="skill-list">${set.map((s) => scheduleItem(s, now, tz)).join('')}</ul>`
