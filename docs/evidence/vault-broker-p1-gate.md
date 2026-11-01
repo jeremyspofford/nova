@@ -15,7 +15,7 @@
 
 ### Suite
 
-- **`npm run check`** (tokens, themes, typecheck, then `npm test` under the tripwire): {{SUITE}}
+- **`npm run check`** (tokens, themes, typecheck, then `npm test` under the tripwire): `npm run check` at `94d7d007`: **1556 tests: 1540 pass, 3 fail, 13 skipped**. The three are the load-sensitive tests M10f's and M10g's evidence name: `tests/core/provider-guard.test.ts` › “a coding agent that changes more than Nova takes…” (the stand-in agent ended without a result), `tests/ingest/round2.test.js` N1b (timed out) and `tests/skills-api.test.js` › “the email summary…” (timed out). Run alone right after, the three files pass (31 of 31). None touches the broker. The closing-rule claims test passed in the run.
 - **The broker's own tests:** `node --test tests/core/broker-*.test.ts` gives **36 tests: 36 pass**, in about 6 seconds.
 
 ### Gate items, as far as P1a reaches
