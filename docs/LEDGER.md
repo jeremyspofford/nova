@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #277 · A tested check for proposed memories, not switched on yet**
+- What changed: the decision service has a memory-gate template that checks whether you said a proposed fact, whether it lasts, and whether it repeats or contradicts a memory. Exact duplicates merge without a model call. The larger tested local model passed the fixed 75-case evaluation: 0 false saves among 49 cases that should not be saved, 25 of 26 useful facts retained, calibration error 0.082. The smaller model failed.
+- What you can now do: nothing new in the app yet. This adds the tested template and its evidence, not the memory-writing connection. M10h (#276) is merged; the template remains inactive until its Track 1 wiring lands.
+- Still unfinished: Track 1 must connect the runner and server and add candidate reasons (docs/plans/track1-follow-up-queue.md). The sample is small (the false-save interval reaches 7.3%), three contradictions were skipped rather than flagged, and one author wrote both questions and cases. The verdict applies only to the tested model digest. The preregistration SHAs remain ancestors; no model was pulled or evaluation rerun.
+
 **2026-11-01 · #276 · Native device workloads and capture sync, tested with stand-ins**
 - What changed: paired computers can be assigned a signed native program, checked before it runs, promoted through the Service Manager and rolled back to the kept version. The capture pilot sends signed text batches, queues while the hub is away, carries deletion confirmations and fetches one original with a recorded reason. The takeover fixes make the boot agent enforce promotion itself, end owned descendants after their leader exits, keep failed versions held, confine health checks and preserve installed versions. Capture checks current consent and hub placement, retries failed privacy deletions, and removes forgotten originals from local and replica recovery copies.
 - What you can now do: exercise those paths with the stand-in program and disposable devices used in the gate tests. This is not evidence of working capture on real Windows or macOS devices.
@@ -362,6 +367,8 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-11-01 (DS2: memory gate, #277).** Plan `docs/plans/ds2-memory-gate.md`; evidence `docs/evidence/memory-gate-eval.md`. Template/rule/bounds fixed at `7d587168`, cases at `6392c6b0`, results at `ebae919a`; all remain ancestors after merging main. `tev1:4b` at the recorded digest passes (0/49 false saves, 25/26 recall, ECE 0.082); `tev1:0.8b` fails (0/26 recall). Small sample, three contradictions skipped, one author. No consumer is wired: runner, server and candidate-reason migration remain Track 1 follow-ups. This takeover does not rebase or change the evaluation.
 
 **2026-11-01 (M10h: native workloads on devices, and the capture pilot).** Branch `m10h/native-workloads`.
 Plan `docs/plans/M10h.md`, evidence `docs/evidence/m10h-gate.md`, built from the orchestration ADR's M10h

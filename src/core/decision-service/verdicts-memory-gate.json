@@ -1,0 +1,32 @@
+{
+  "bounds": {
+    "false_save_max": 0.05,
+    "save_recall_min": 0.75,
+    "ece_max": 0.1,
+    "bins": 10
+  },
+  "pre_run_commit": "6392c6b0af076a325c1d1417ed0fdd0bb42d79de",
+  "cases_sha256": "9edd6f696a1e9a76b2c02654cef0a8ebdb055e8f2c30cc4bbf5a864fe269a160",
+  "records": [
+    {
+      "template_id": "memory-gate",
+      "version": 1,
+      "seat": "tev1",
+      "model": "tev1:4b@7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740",
+      "status": "pass",
+      "why": "all three bounds met",
+      "run_at": "2026-11-01T03:33:44.691Z",
+      "ref": "memory-gate-eval.json#tev1:4b@6392c6b0af076a325c1d1417ed0fdd0bb42d79de"
+    },
+    {
+      "template_id": "memory-gate",
+      "version": 1,
+      "seat": "tev1",
+      "model": "tev1:0.8b@abc31fdb0bf52506cc47091145ac19c4cfb509b73a6841789324f9e32200c099",
+      "status": "fail",
+      "why": "save recall 0% is below 75%; ECE 0.111 is above 0.10",
+      "run_at": "2026-11-01T03:34:01.798Z",
+      "ref": "memory-gate-eval.json#tev1:0.8b@6392c6b0af076a325c1d1417ed0fdd0bb42d79de"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { BOUNDS, type Bounds, type Metrics } from './eval.ts';
 import { BOUNDS_V2 } from './eval-v2.ts';
 import { BOUNDS_CS } from './eval-capture.ts';
+import { BOUNDS_MG } from './eval-memory.ts';
 import { modelId, type Size } from './seats/tev1.ts';
 import type { SeatId } from './types.ts';
 
@@ -117,9 +118,11 @@ export function recordsOf(f: RecordsFile | null, bounds: Record<string, number> 
 
 // Each later eval keeps its own records file, under its own registered bounds.
 export const CAPTURE_RECORDS_FILE = new URL('./verdicts-capture-sensitive.json', import.meta.url);
+export const MEMORY_RECORDS_FILE = new URL('./verdicts-memory-gate.json', import.meta.url);
 export const RECORD_SETS: { file: URL; bounds: Record<string, number> }[] = [
   { file: RECORDS_FILE, bounds: BOUNDS_V2 },
   { file: CAPTURE_RECORDS_FILE, bounds: BOUNDS_CS },
+  { file: MEMORY_RECORDS_FILE, bounds: BOUNDS_MG },
 ];
 
 // The verdicts the service uses: Part 1's file and the records file, read fresh each time so a new
