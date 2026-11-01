@@ -6,7 +6,7 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
-**2026-10-31 · #⟨n⟩ · Two of your decisions recorded: capture holds back when it can't check, and dark designs fill the iPhone's top edge**
+**2026-10-31 · #269 · Two of your decisions recorded: capture holds back when it can't check, and dark designs fill the iPhone's top edge**
 - What changed:
   - On a device without a trusted model to check captured text for private details, that text will be held, visible in the capture timeline, instead of kept.
   - In the installed iPhone app, dark designs will draw right up to the top edge; light designs keep the iPhone's own status strip so the time stays readable.
