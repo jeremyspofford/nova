@@ -1,6 +1,6 @@
 {
   "id": "paper",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "kind": "design-system",
   "name": "Paper",
   "description": "Warm paper, ink, and a serif voice.",
@@ -62,8 +62,8 @@
     "space/3": "12px",
     "space/4": "16px",
     "space/5": "24px",
-    "space/6": "36px",
-    "space/7": "56px",
+    "space/6": "32px",
+    "space/7": "48px",
     "space/8": "64px",
     "radius/card": "10px",
     "radius/pill": "999px",
