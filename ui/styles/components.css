@@ -243,7 +243,7 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   --orb-swirl-op: 0;
   --orb-glow-op: 1;
   --orb-glow-scale: 1;
-  --orb-filter: none;
+  --orb-filter: brightness(1);
   --orb-fade: 1;
   --orb-mark: none;
   position: relative;
@@ -253,7 +253,6 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   height: var(--orb-size);
   border-radius: 50%;
   isolation: isolate;
-  filter: var(--orb-filter);
   opacity: var(--orb-fade);
   /* The mark: a ring around the orb, solid or dashed, in the state's own light drawn toward the
      text colour, so it stands out from any page by its brightness, not only its hue. It scales with
@@ -271,15 +270,18 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
    the light toward the far edge (its own colour, darkened: never the page showing through) with a
    rim of light caught at the edge; a highlight. */
 .orb > .orb-glow {
-  inset: -60%;
+  --orb-gl: color-mix(in srgb, var(--orb-g) calc(var(--orb-glow-op) * 100%), transparent);
+  inset: calc(50% - 110% * var(--orb-glow-scale));
   z-index: -1;
-  background: radial-gradient(circle closest-side, var(--orb-g) 0%, var(--orb-g) 40%, color-mix(in srgb, var(--orb-g) 50%, transparent) 56%, color-mix(in srgb, var(--orb-g) 16%, transparent) 76%, transparent 100%);
-  opacity: var(--orb-glow-op);
-  scale: var(--orb-glow-scale);
+  background: radial-gradient(circle closest-side, var(--orb-gl) 0%, var(--orb-gl) 40%, color-mix(in srgb, var(--orb-gl) 50%, transparent) 56%, color-mix(in srgb, var(--orb-gl) 16%, transparent) 76%, transparent 100%);
+  filter: var(--orb-filter);
   animation: var(--orb-glow-anim);
 }
 .orb-core {
   background: radial-gradient(circle at 36% 30%, color-mix(in srgb, var(--orb-hi) 70%, var(--orb-c)) 0%, var(--orb-c) 34%, var(--orb-c) 100%);
+  /* The state's light is a filter on each layer, never on the orb as a whole: a filter on the
+     parent of an animated layer repaints it every frame (the M9 vitals gate measured it). */
+  filter: var(--orb-filter);
 }
 .orb-core::before,
 .orb-core::after { content: ""; position: absolute; inset: 0; border-radius: 50%; }
@@ -304,20 +306,20 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
 .orb-sheen {
   /* A highlight: the orb's own light, brighter. Never a feature. */
   background: radial-gradient(ellipse 26% 20% at 34% 28%, var(--orb-hi) 0%, color-mix(in srgb, var(--orb-hi) 40%, transparent) 55%, transparent 100%);
-  filter: saturate(0.5) brightness(1.8);
+  filter: saturate(0.5) brightness(1.8) var(--orb-filter);
   opacity: 0.75;
 }
 
-/* The motions a design system picks from, on the glow (swirl turns the swirl layer). Each keeps to
-   the state's light: the glow's opacity and size scale from --orb-glow-op and --orb-glow-scale.
+/* The motions a design system picks from, on the glow (swirl turns the swirl layer), in plain
+   numbers so they run on the compositor; the state's light is in the glow's colour and box.
    breathe: a slow swell (idle). pulse: a steady beat (working). ripple: light spreading outward
    (speaking). beckon: two beats, then a rest (needs you). alarm: a hard on-off blink, slower than
    once a second (stopped; well under the three flashes a second that can trigger seizures). */
-@keyframes orb-breathe { from { opacity: calc(var(--orb-glow-op, 1) * 0.55); scale: calc(var(--orb-glow-scale, 1) * 0.92); } to { opacity: var(--orb-glow-op, 1); scale: calc(var(--orb-glow-scale, 1) * 1.04); } }
-@keyframes orb-pulse { 0%, 100% { opacity: calc(var(--orb-glow-op, 1) * 0.6); scale: calc(var(--orb-glow-scale, 1) * 0.96); } 50% { opacity: var(--orb-glow-op, 1); scale: calc(var(--orb-glow-scale, 1) * 1.1); } }
-@keyframes orb-ripple { from { opacity: var(--orb-glow-op, 1); scale: calc(var(--orb-glow-scale, 1) * 0.9); } to { opacity: calc(var(--orb-glow-op, 1) * 0.35); scale: calc(var(--orb-glow-scale, 1) * 1.25); } }
-@keyframes orb-beckon { 0%, 36%, 100% { opacity: calc(var(--orb-glow-op, 1) * 0.5); scale: calc(var(--orb-glow-scale, 1) * 0.94); } 12%, 28% { opacity: var(--orb-glow-op, 1); scale: calc(var(--orb-glow-scale, 1) * 1.12); } 20% { opacity: calc(var(--orb-glow-op, 1) * 0.7); scale: var(--orb-glow-scale, 1); } }
-@keyframes orb-alarm { 0% { opacity: var(--orb-glow-op, 1); scale: calc(var(--orb-glow-scale, 1) * 1.1); } 50% { opacity: calc(var(--orb-glow-op, 1) * 0.2); scale: calc(var(--orb-glow-scale, 1) * 0.92); } }
+@keyframes orb-breathe { from { opacity: 0.55; scale: 0.92; } to { opacity: 1; scale: 1.04; } }
+@keyframes orb-pulse { 0%, 100% { opacity: 0.6; scale: 0.96; } 50% { opacity: 1; scale: 1.1; } }
+@keyframes orb-ripple { from { opacity: 1; scale: 0.9; } to { opacity: 0.35; scale: 1.25; } }
+@keyframes orb-beckon { 0%, 36%, 100% { opacity: 0.5; scale: 0.94; } 12%, 28% { opacity: 1; scale: 1.12; } 20% { opacity: 0.7; scale: 1; } }
+@keyframes orb-alarm { 0% { opacity: 1; scale: 1.1; } 50% { opacity: 0.2; scale: 0.92; } }
 @keyframes orb-swirl { to { rotate: 1turn; } }
 
 /* ---- cards: one job each ----------------------------------------------------------------- */

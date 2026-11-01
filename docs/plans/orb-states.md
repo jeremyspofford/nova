@@ -112,6 +112,11 @@ when pairing fails or the hub is the wrong one.
   - idle and needs-you had the same breathing;
   - in Obsidian, idle and needs-you were also the same colour (`orb/core` = `orb/attention` =
     `#e8b34b`), so there was nothing to tell them apart.
+- **On the compositor.** A state's light is a filter on each layer, and its glow strength and size
+  are in the glow's own colour and box. The motions animate opacity and scale with plain numbers.
+  A first version put the filter on the whole orb, around an animated glow, so the glow was
+  repainted every frame. The M9 vitals gate caught it: on a phone with a 4× slower CPU, chat's LCP
+  was 2564 ms against main's 320 ms. Now it is 332 ms.
 - **The mark's size.** It scales with the orb up to `space/1` wide and `space/2` out, so on the
   hero it stays a fine ring and never reaches the greeting.
 - **The alarm's rate.** It blinks once per `motion/pulse` (1.8 s in every built-in). That is far
@@ -146,8 +151,8 @@ least difference between any two states, with colour taken away:
 | | least of any pair | where |
 |---|---|---|
 | with motion | 0.0103 | speaking and needs-you, Companion Light |
-| under reduced motion | 0.0078 | speaking and needs-you, Companion Light |
-| stopped and its nearest state | 0.0145 | |
+| under reduced motion | 0.0069 | speaking and needs-you, Companion Light |
+| stopped and its nearest state | 0.0143 | |
 
 The test caught a real gap on its first run. Under reduced motion, speaking and needs-you were
 0.0008 apart on light pages: the dashed ring was drawn in the state's own light, and in grey on a

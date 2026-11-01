@@ -198,7 +198,7 @@ const MOTION_VARS: Readonly<Record<OrbMotion, Record<string, string>>> = {
 };
 const LIGHT_VARS: Readonly<Record<OrbLight, Record<string, string>>> = {
   soft: { 'glow-op': '0.7', 'glow-scale': '1', filter: 'brightness(0.92)', fade: '1' },
-  full: { 'glow-op': '1', 'glow-scale': '1', filter: 'none', fade: '1' },
+  full: { 'glow-op': '1', 'glow-scale': '1', filter: 'brightness(1)', fade: '1' },
   bright: { 'glow-op': '1', 'glow-scale': '1.08', filter: 'brightness(1.15)', fade: '1' },
   stark: { 'glow-op': '1', 'glow-scale': '1.12', filter: 'contrast(1.2)', fade: '1' },
   dim: { 'glow-op': '0.6', 'glow-scale': '1', filter: 'grayscale(1)', fade: '0.7' },
