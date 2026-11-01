@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #263 · The orb has seven fixed states, and red now only means "something stopped"**
+- What changed: red is reserved for problems that stop Nova, such as a failed task, a safety switch that fired, or a request refused for your security. Anything that needs you while Nova keeps running is amber, such as an approval waiting or a Health item to look at. Each state differs in movement and brightness as well as colour, with a still version for reduced motion. Every design must show all seven, and can't redefine them.
+- What you can now do: tell at a glance whether Nova is stopped (red) or just needs you (amber). Health labels each problem "Failed" or "Needs you". Note that a failed task, including a failed "Backup now", counts as stopped, so it shows red.
+- Still unfinished: a design you made yourself, without the new state list, falls back to the default design until it's updated.
+
 **2026-11-01 · #273 · Four promises Nova can now prove are back in its own words**
 - What changed: four things Nova says about itself now have permanent tests behind them, so a change that breaks one can't merge. Those are that scheduled work runs on its own, that Nova recommends a model for each job, that nothing is marked done until Nova has checked the evidence, and that a chat reply served by the cloud says so. Three screens got their stronger wording back.
 - What you can now do: rely on those four statements; each is checked on every change.
