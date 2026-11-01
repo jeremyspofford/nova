@@ -682,7 +682,7 @@ export class Promotions {
 
   #watch(): void {
     if (this.#watching || this.#closed) return;
-    const next = () => { this.#watching = setTimeout(() => { this.#watching = null; void this.probe().then(() => next(), () => next()); }, this.probeMs); this.#watching.unref?.(); };
+    const next = () => { if (this.#closed) return; this.#watching = setTimeout(() => { this.#watching = null; void this.probe().then(() => next(), () => next()); }, this.probeMs); this.#watching.unref?.(); };
     // Not after the end: probe() itself finishes the window.
     next();
   }
@@ -923,11 +923,12 @@ export class Promotions {
     const since = Date.now();
     let told = false;
     const look = setInterval(() => {
-      if (this.#o.role.role() !== 'hub' || this.#closed) { clearInterval(look); return; }
+      if (this.#closed) { clearInterval(look); return; }
+      try { if (this.#o.role.role() !== 'hub') { clearInterval(look); return; } } catch { clearInterval(look); return; }
       void this.#o.role.fence().catch(() => {});
       if (Date.now() - since < 120_000) return;
       void ask(`${r.from!.address}/api/v1/mesh/hello`, { timeoutMs: 3000 }).then((a) => {
-        if (this.#o.role.role() !== 'hub') return;
+        if (this.#closed || this.#o.role.role() !== 'hub') return;
         if (a.status === 200 && a.body?.id === from.id && a.body.role === 'standby') {
           clearInterval(look);
           this.#o.role.release();
