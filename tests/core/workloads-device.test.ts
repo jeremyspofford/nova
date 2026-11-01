@@ -36,6 +36,33 @@ function rig(o: { purposes?: string[]; captureOn?: boolean; uid?: number | null;
   return { home, w, served, fetched, verb, capture: (on: boolean) => { captureOn = on; }, roles: (r: string[]) => { roles = r; } };
 }
 
+test('a queued switch rechecks authorization after an installation finishes', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'nova-workload-grant-'));
+  const port = await freePort();
+  let allowed = true;
+  let release!: () => void;
+  let downloading!: () => void;
+  const started = new Promise<void>((resolve) => { downloading = resolve; });
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const w = new Workloads({
+    home, platform: `${process.platform}-${process.arch}`, deviceId: () => DEVICE,
+    pinned: () => [hub.ed25519.publicKey], purposes: () => ['general-server'], captureOn: () => false,
+    uid: () => 1000, authorize: () => allowed,
+    fetchManifest: async () => sign(manifest({ device_id: DEVICE, port }), hub),
+    fetchFile: async () => { downloading(); await hold; return standInBytes(); },
+  });
+  try {
+    const installing = w.perform({ verb: 'install', service: 'stand-in', version: '1.0.0' });
+    await started;
+    const switching = w.perform({ verb: 'switch', service: 'stand-in', version: '1.0.0' });
+    allowed = false;
+    release();
+    assert.equal((await installing).ok, true);
+    assert.equal((await switching).ok, false, 'a withdrawn grant cannot start a queued workload');
+    assert.equal(await standInAt(port), false);
+  } finally { release(); await w.close(); }
+});
+
 test('the verb set is exactly five, frozen; a request is {verb, service, version} and nothing more', () => {
   assert.deepEqual([...WORKLOAD_VERBS], ['install', 'start', 'stop', 'switch', 'probe']);
   assert.ok(Object.isFrozen(WORKLOAD_VERBS));

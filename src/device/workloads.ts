@@ -140,6 +140,8 @@ export interface WorkloadsOptions {
   fetchFile: (service: string, version: string, name: string) => Promise<Buffer>;
   // Whether any capture source of this device is on (the hub's word, kept by the carrier).
   captureOn: () => boolean;
+  // Boot's own record of the hub's grants; rechecked when queued verbs execute and before spawn.
+  authorize?: (request: VerbRequest) => boolean;
   say?: (line: string) => void;
   // The user it runs as: never root (tests stand in for it).
   uid?: () => number | null;
@@ -218,6 +220,9 @@ export class Workloads {
     const prev = this.#queues.get(service) ?? Promise.resolve();
     const run = prev.catch(() => {}).then(async (): Promise<VerbResult> => {
       if (this.#closed) return { ok: false, said: 'The device agent is stopping.', state: this.state() };
+      if (this.#o.authorize && !this.#o.authorize(c.value)) return {
+        ok: false, refused: true, said: 'The hub has not authorized this workload verb for that version. Installing a signed program does not promote it.', state: this.state(),
+      };
       try {
         // Exactly these five, by name: there is no other way in.
         const r = verb === 'install' ? await this.#install(service, version)
@@ -359,6 +364,7 @@ export class Workloads {
     };
     // Closing (shut down, revoked) while this verb waited: nothing new starts.
     if (this.#closed) return { ok: false, said: 'The device agent is stopping, so nothing new starts.' };
+    if (this.#o.authorize && !this.#o.authorize({ verb: role === 'live' ? 'switch' : 'start', service, version })) return this.#refuse(service, version, 'The hub has not authorized this workload to start in that role.');
     const inst: Instance = {
       service, version, role, ports, since: new Date().toISOString(), failed: null,
       watchdog: new Watchdog<ChildLike>({

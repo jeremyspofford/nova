@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #276 · Native device workloads and capture sync, tested with stand-ins**
+- What changed: paired computers can be assigned a signed native program, checked before it runs, promoted through the Service Manager and rolled back to the kept version. The capture pilot sends signed text batches, queues while the hub is away, carries deletion confirmations and fetches one original with a recorded reason. The takeover fixes make the boot agent enforce the hub's promotion itself and make forgetting a fetched original remove its recovery copies too.
+- What you can now do: exercise those paths with the stand-in program and disposable devices used in the gate tests. This is not evidence of working capture on real Windows or macOS devices.
+- Still unfinished: this PR remains unmerged pending the completed independent adversarial review and green CI. No real Screenpipe binary, real device workload, raw archive, or spoke credential has been deployed. The preview stays on main until those gates pass. Current evidence and review limits are in docs/evidence/m10h-gate.md and docs/reviews/m10h-takeover-review-2026-11-01.md.
+
 **2026-11-01 · Handoff · A takeover note for the next builder**
 - What changed: a handoff note (docs/builder-packet/HANDOFF-FROM-BUILDER-2026-11-01.md) records the work in progress, the open questions waiting on you, the next steps, and the quirks of this machine, so a new builder can pick up without losing anything.
 - What you can now do: nothing in the app changed: paperwork only.

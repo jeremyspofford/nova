@@ -8,6 +8,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import {
   captureBatchMessage, captureItemDigest, generateDeviceKeys, rawManifestMessage, sha256Hex, signMessage, tombstoneAckMessage,
   type CaptureBatchManifest, type CoreOptions, type DeviceKeys,
@@ -183,6 +187,8 @@ test('a forget reaches the device that holds it, and says "deleted everywhere" o
 
 test('a raw fetch is a ledger task naming the item and the reason; the device’s signed original is checked by Nova itself', async () => {
   const r = await rig();
+  const target = mkdtempSync(join(tmpdir(), 'nova-raw-backups-'));
+  const second = mkdtempSync(join(tmpdir(), 'nova-raw-encrypted-'));
   try {
     await r.enable(r.mac.id, 'screen');
     r.h.tick(5000);
@@ -210,8 +216,29 @@ test('a raw fetch is a ledger task naming the item and the reason; the device’
     const got = (await r.h.c('GET', `/capture/raw/${reqs[0].id}`)).body;
     assert.equal(Buffer.from(got.data, 'base64').toString(), data.toString());
     assert.equal(got.reason, 'To read the chart in the frame.');
+    r.h.core.resilience.setSettings({ target, encrypted_target: second });
+    const backup = r.h.core.resilience.nightly.run();
+    assert.ok(backup.ok, backup.error ?? 'backup failed');
+    const rawPath = `capture/raw/${reqs[0].id}`;
+    assert.ok(existsSync(join(backup.path!, 'files', rawPath)), 'the backup held the original before forgetting');
+    const checkpoint = r.h.core.checkpoints.take({ kind: 'named', name: 'Before forgetting the original' });
+    assert.ok(existsSync(join(r.h.home, 'checkpoints', checkpoint.id, 'files', rawPath)), 'capture originals belong to Nova and follow home recovery/reset');
     // Forgetting the event forgets the original fetched with it.
     await r.h.c('DELETE', `/capture/events/${ev.id}`);
     assert.equal((await r.h.c('GET', `/capture/raw/${reqs[0].id}`)).status, 404);
-  } finally { await r.h.stop(); }
+    const opened = join(target, 'opened');
+    r.h.core.resilience.nightly.decrypt(backup.encrypted_path!, opened);
+    for (const dir of [backup.path!, opened, join(r.h.home, 'checkpoints', checkpoint.id)]) {
+      assert.equal(existsSync(join(dir, 'files', rawPath)), false, 'no recovery copy keeps the forgotten original');
+      const db = new DatabaseSync(join(dir, 'nova.db'), { readOnly: true });
+      try { assert.equal(db.prepare('SELECT COUNT(*) AS n FROM capture_raw_fetch WHERE event_id = ?').get(ev.id)!.n, 0); }
+      finally { db.close(); }
+      const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
+      assert.ok(!manifest.files.some((f: { path: string }) => f.path === rawPath), 'a restore never expects the removed file');
+    }
+  } finally {
+    await r.h.stop();
+    rmSync(target, { recursive: true, force: true });
+    rmSync(second, { recursive: true, force: true });
+  }
 });

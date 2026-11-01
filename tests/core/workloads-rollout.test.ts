@@ -122,6 +122,44 @@ const reported = (hub: FakeNode, version: string) => {
   return null;
 };
 
+test('the boot agent requires the hub promotion before switching an installed workload live', { timeout: 60_000 }, async () => {
+  const m = await device();
+  const port = await freePort();
+  try {
+    offer(m.hub, m.dev.deviceId, '1.0.0', port);
+    m.hub.heartbeatExtra = { workloads: [assign('1.0.0', 'alongside', 'none', 1)] };
+    // A minimal test runtime asks for ordinary verbs. Installing signed bytes is separate from
+    // authorizing them to serve: the boot agent must enforce the latter itself.
+    const runtime = `
+import { writeFileSync } from 'node:fs';
+const home = process.argv[2];
+let round = 0;
+process.on('message', (m) => {
+  if (m.type === 'session' && !round) {
+    round = 1;
+    process.send({ type: 'call', id: 1, method: 'POST', path: '/api/v1/mesh/devices/me/heartbeat', body: {} });
+  } else if (m.type === 'answer') {
+    process.send({ type: 'verb', id: 2, verb: 'install', service: 'stand-in', version: '1.0.0' });
+  } else if (m.type === 'verb_answer' && m.id === 2) {
+    process.send({ type: 'verb', id: 3, verb: 'switch', service: 'stand-in', version: '1.0.0' });
+  } else if (m.type === 'verb_answer' && m.id === 3) {
+    writeFileSync(home + '/state/promotion-result.json', JSON.stringify(m));
+  }
+});
+process.send({ type: 'ready' });
+`;
+    m.hub.bundle = bundle({ 'runtime.ts': runtime, 'queue.ts': '' }, m.hub.keys);
+    await m.boot.start({ signals: false });
+    const file = join(m.dev.p.state, 'promotion-result.json');
+    await until(() => existsSync(file), Boolean, 20_000);
+    const result = JSON.parse(readFileSync(file, 'utf8'));
+    assert.equal(result.ok, false, 'signed and installed does not mean promoted');
+    assert.equal(result.refused, true);
+    assert.equal(await standInAt(port), false, 'the stable port never serves before promotion');
+    assert.equal(m.boot.workloads.state()[0]!.live, null);
+  } finally { await m.stop(); }
+});
+
 test('through the real agents: the runtime decides from its heartbeat answer, the boot agent installs, switches and rolls back, and the heartbeat reports it', { timeout: 90_000 }, async () => {
   const m = await device();
   const port = await freePort();
@@ -157,6 +195,7 @@ test('a runtime that asks for anything but the five verbs, or puts a command in 
   const port = await freePort();
   try {
     offer(m.hub, m.dev.deviceId, '1.0.0', port);
+    m.hub.heartbeatExtra = { workloads: [assign('1.0.0', 'alongside', 'none', 1)] };
     // A runtime that tries: a verb outside the five, a command of its own, a port, a manifest of its
     // own, and an unsigned version the hub never assigned; it writes down each answer.
     const sly = `
@@ -166,6 +205,9 @@ const answers = {};
 const ask = (id, extra) => process.send({ type: 'verb', id, service: 'stand-in', version: '1.0.0', ...extra });
 process.on('message', (m) => {
   if (m.type === 'session') {
+    process.send({ type: 'call', id: 10, method: 'POST', path: '/api/v1/mesh/devices/me/heartbeat', body: {} });
+  }
+  if (m.type === 'answer' && m.id === 10) {
     ask(1, { verb: 'exec' });
     ask(2, { verb: 'start', command: ['sh', '-c', 'touch ' + home + '/state/pwned'] });
     ask(3, { verb: 'install', port: 22 });
@@ -192,7 +234,7 @@ process.send({ type: 'ready' });
       assert.match(a[i].said, /carries only a verb, a service and a version/);
     }
     assert.equal(a[5].ok, false, 'a version the hub never signed for it');
-    assert.match(a[5].said, /Couldn’t fetch the manifest of stand-in 6\.6\.6/);
+    assert.match(a[5].said, /hub has not authorized/);
     assert.equal(a[6].ok, true, 'the signed, assigned one installs');
     assert.ok(!existsSync(join(m.dev.p.state, 'pwned')), 'its command never ran');
     assert.equal(await standInAt(port), false, 'and nothing was started');

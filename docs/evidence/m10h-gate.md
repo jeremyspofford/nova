@@ -17,7 +17,16 @@ The branch is `m10h/native-workloads`, from main at `6d51c5d1` (M10e, M10f, M10g
 `capture_batch`, `capture_device_tombstone`; the replicated column `capture_event.provenance`, in
 `ADDED_COLUMNS[23]` (`tests/core/sync-skew.test.ts` and `tests/core/mesh-sync.test.ts` pass with it).
 
-## Suite
+## Takeover status (2026-11-01)
+
+**The final gate is not yet passed.** The required independent review was interrupted by
+an automated safety filter, and the original head's one CI rerun failed a different
+chaos-test startup race. Reproductions, fixes, exact local commands and remaining gates
+are recorded in `docs/reviews/m10h-takeover-review-2026-11-01.md`. PR #276 remains unmerged;
+the preview is unchanged by this takeover. The results below are historical build evidence,
+not a claim that the current head is approved.
+
+## Earlier suite results
 
 CI is the record: PR #276, run `41296243939`, at `2162b62e`.
 - **`lint · typecheck · themes · tests`**:
@@ -38,7 +47,8 @@ CI is the record: PR #276, run `41296243939`, at `2162b62e`.
     image), with the tripwire armed and never firing; the screenshots it rewrote were put back. A later
     full local run gave 113 of 114: `m6a-capture`, "database is locked", where the test opens the
     database with no busy timeout while the server writes. It passed in every CI attempt.
-  - At the fix: UI_FINAL.
+  - At `4d060ccd`, the UI job in run `41306044910` passed. Its overall gate did not;
+    see the takeover status above.
 - **Locally, every M10h file together** (`tests/core/workloads-*.test.ts`, `capture-sync`, `capture-carrier`, `tests/acceptance/m10h-pilot.test.ts`, with the device-agent, sandbox, spokes, services, sync and capture files they touch) all pass.
 - **A full local `npm run check` couldn't be completed on this machine.** Other builders' suites ran alongside it, one of them hung for over six hours. `/tmp` (a 16 GB tmpfs) filled to 100 % during the run, and the tests failed with it. CI, above, is the run of record.
 

@@ -34,7 +34,8 @@ import { Watchdog } from './watchdog.ts';
 import { detectHardware, type Hardware } from '../core/models/hardware.ts';
 import { Queue, QUEUE_KINDS, type QueueKind } from './queue.ts';
 import type { CallAnswer, FromRuntime, SessionMessage, VerbAnswer } from './runtime.ts';
-import { devicePlatformKey, Workloads } from './workloads.ts';
+import { devicePlatformKey, Workloads, type VerbRequest } from './workloads.ts';
+import { readAssignments, type Assignment } from './rollout.ts';
 import { Carrier } from './carrier.ts';
 
 // The hub calls the runtime may ask this agent to make for it, and nothing else; and how big one
@@ -94,6 +95,9 @@ export interface DeviceFile {
 }
 export interface BootState {
   safe_mode: boolean;
+  // Only heartbeat replies obtained by boot itself may grant workload execution. Kept in boot/,
+  // outside the runtime's permissions, so approved offline rollback still works after a restart.
+  workload_assignments?: Assignment[];
   safe_mode_since?: string | null;
   revoked?: boolean;
   revoked_at?: string;
@@ -556,6 +560,7 @@ export class Boot {
       pinned: () => bundleKeys(this.d.roster.roster),
       purposes: () => this.d.purposes,
       captureOn: () => this.carrier.captureOn(),
+      authorize: (request) => this.#workloadAllowed(request),
       fetchManifest: async (service, version) => {
         const r = await this.#hubCall('GET', `/api/v1/mesh/workloads/${encodeURIComponent(service)}/${encodeURIComponent(version)}`);
         if (!r) throw new Error('there is no session with the hub yet');
@@ -723,9 +728,12 @@ export class Boot {
     if (!s) return answer({ error: 'no session with the hub yet' });
     try {
       const r = await call(s.url, m.method, m.path, { token: s.token, body: m.body });
-      answer({ status: r.status, body: r.body });
       // A heartbeat answer this agent got itself, over its own session: the hub may say it was reset.
-      if (m.path === '/api/v1/mesh/devices/me/heartbeat' && r.status === 200) { this.#heardPurposes(r.body); this.#heardReset(r.body); void this.#heardRoster(r.body); }
+      if (m.path === '/api/v1/mesh/devices/me/heartbeat' && r.status === 200) {
+        this.#saveState({ workload_assignments: readAssignments(r.body?.workloads) });
+        this.#heardPurposes(r.body); this.#heardReset(r.body); void this.#heardRoster(r.body);
+      }
+      answer({ status: r.status, body: r.body });
     } catch (e) {
       answer({ error: (e as Error).message });
     }
@@ -765,6 +773,20 @@ export class Boot {
     if (caps !== this.#sentCaps) { this.#sentCaps = caps; this.#toRuntime(); }
   }
   #sentCaps = '';
+
+  #workloadAllowed(r: VerbRequest): boolean {
+    if (r.verb === 'stop' || r.verb === 'probe') return true;
+    const a = this.state.workload_assignments?.find((x) => x.service === r.service);
+    if (!a || a.want === 'stopped') return false;
+    const state = this.workloads.state().find((x) => x.service === r.service);
+    const current = r.version === a.version;
+    // The last live version may keep running while an update is rehearsed, and is the only
+    // automatic rollback destination. A signed slot from any older assignment is not a grant.
+    const previous = r.version === a.previous && (state?.live === r.version || state?.previous === r.version);
+    if (!current && !previous) return false;
+    if (r.verb === 'switch') return a.want === 'live' || (previous && state?.live === r.version);
+    return true;
+  }
 
   async #unauthorized(): Promise<void> {
     this.#session = null;
