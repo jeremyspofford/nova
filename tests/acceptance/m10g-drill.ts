@@ -278,7 +278,11 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     assert.equal(fenced.role, 'standby');
     const refused4 = await n2.send('POST', '/api/v1/memory', { kind: 'fact', content: 'x' });
     assert.equal(refused4.status, 409);
-    step(4, 'N2 killed; N1, its live standby, made the hub (M4’s promotion, epoch 5); N2 back and fenced', [`N2 says: ${refused4.body.error}`]);
+    // It copies nothing now, so it can't be made the hub with what it had (its role file still says hub).
+    const stale = await n2.send('POST', '/api/v1/mesh/promote', { confirm: true });
+    assert.equal(stale.status, 409, JSON.stringify(stale.body));
+    assert.match(stale.body.error, /no copy of the hub’s latest data/);
+    step(4, 'N2 killed; N1, its live standby, made the hub (M4’s promotion, epoch 5); N2 back and fenced', [`N2 says: ${refused4.body.error}`, `asked to become the hub with what it had: ${stale.body.error}`]);
 
     // ---- case 6: an emergency promotion from the latest backup onto N2, not the standby ---------
     const b6 = await backupAndDrill('n1');

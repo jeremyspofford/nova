@@ -354,7 +354,14 @@ export class Promotions {
     }
     const checks = prechecks({ device, standbyId: s.standby_id, candidate, unreachable, hub: this.#hubFacts() });
     const ok = checks.every((c) => c.ok);
-    return { ok, checks, device, candidate, sheet: device ? plannedSheet({ device, checks, windowS: this.windowS, name: this.#o.publicUrl(), driver: !!this.#o.name, hub: this.#o.identity.id }) : null };
+    return { ok, checks, device, candidate, sheet: device ? plannedSheet({ device, checks, windowS: this.windowS, name: this.#stable(), driver: !!this.#o.name, hub: this.#o.identity.id }) : null };
+  }
+
+  // The stable mesh name, when there is one apart from this node's own address (devices joined at it,
+  // and a promotion points it at the new hub). Without an address of its own, the public address is
+  // this node's, and moves with nothing.
+  #stable(): string | null {
+    return this.#o.address() ? this.#o.publicUrl() : null;
   }
 
   #hubFacts(): HubFacts {
@@ -557,12 +564,24 @@ export class Promotions {
     const to = r.to!;
     const failing = r.probes.slice(-FAILS_TO_ROLL_BACK).flatMap((p) => p.checks.filter((c) => !c.ok).map((c) => c.said));
     r = this.#save({ ...r, state: 'rolling-back', said: 'Taking the hub back.' });
+    // First the failing hub stops taking changes, so there is never a moment with two hubs; what it
+    // took before it stopped is copied here first. A hub that can't be reached at all can't be asked:
+    // the roll-back goes ahead, which is what it is for (a cut-off one is a limit, docs/plans/M10g.md).
+    let stood: string;
+    try {
+      const a = await this.#callCandidate(to, 'stand-down', { id: r.id }, 5000);
+      if (a.status === 200 && Number.isInteger(a.body?.head)) {
+        const head = Number(a.body.head);
+        const copied = await this.#until(() => this.#o.sync.cursor() >= head, 10_000);
+        stood = copied ? `“${to.name}” stopped taking changes first, and this node had copied all it took (to sequence ${head}).` : `“${to.name}” stopped taking changes first; this node hadn’t copied all it took (it had ${this.#o.sync.cursor()} of ${head}), and “${to.name}” says what stayed there.`;
+      } else stood = `“${to.name}” wouldn’t stop taking changes (${a.body?.error ?? a.status}).`;
+    } catch (e) { stood = `“${to.name}” couldn’t be reached to stop it taking changes (${(e as Error).message}).`; }
     const back = await this.#o.role.promote({
       confirm: true, by: 'nova',
       planned: { previous: to.id, address: to.address, parent: r.parent, title: 'Promotion rolled back: this node is the hub again', goal: `“${to.name}” didn’t pass its checks after taking over (${failing[0] ?? 'it failed its probes'}), so this node takes the hub back, by itself (tier 1).` },
     });
     this.#o.ledger.resume();
-    this.#task(r, 'verify', `Checks of “${to.name}” as the hub`, false, `“${to.name}” failed ${FAILS_TO_ROLL_BACK} checks in a row: ${[...new Set(failing)].join(' ')}`, { probes: r.probes, window_s: r.window_s });
+    this.#task(r, 'verify', `Checks of “${to.name}” as the hub`, false, `“${to.name}” failed ${FAILS_TO_ROLL_BACK} checks in a row: ${[...new Set(failing)].join(' ')} ${stood}`, { probes: r.probes, window_s: r.window_s, stood });
     const pointed = await this.#pointName();
     this.#save({ ...r, state: 'rolled-back', said: `“${to.name}” didn’t pass its checks, so this node is the hub again, at epoch ${back.epoch}.${pointed ? ` ${pointed}` : ''}` });
     this.#o.log.problem('mesh', `“${to.name}” didn’t pass its checks after it became the hub (${failing[0] ?? 'its probes failed'}), so Nova made this node the hub again by itself, at epoch ${back.epoch}. “${to.name}” steps down when it sees that, and copies this hub.`);
@@ -624,6 +643,50 @@ export class Promotions {
     return { roster: p.roster, epoch: p.epoch, task: p.task.id, handover: signed };
   }
 
+  // A roll-back (on the new hub): the old hub, its standby, failed it and asks it to stop taking
+  // changes before it takes the role back. It holds writes now, keeps fencing (it steps down when it
+  // sees the old hub at the higher epoch) and says how far its log goes, so the old hub can copy it all.
+  #standDown(body: unknown): unknown {
+    const r = this.record();
+    const s = this.#o.devices.state();
+    if (s.role !== 'hub' || !r || r.side !== 'to' || !r.from || s.standby_id !== r.from.id) throw new CoreError('conflict', 'This node isn’t a hub that took the role from its standby.');
+    const from = this.#o.devices.find(r.from.id);
+    if (!from || from.trust !== 'trusted') throw new CoreError('forbidden', 'That node isn’t trusted here.');
+    const v = verifyCall('stand-down', body, { hubId: from.id, hubKey: from.public_key, me: this.#o.identity.id, nowS: Math.floor(this.#o.now().getTime() / 1000), seen: this.#seen });
+    if (!v.ok) throw new CoreError('forbidden', v.why);
+    if (v.epoch !== s.epoch || v.payload.id !== r.id) throw new CoreError('conflict', 'That isn’t this node’s promotion.');
+    this.#o.role.hold(`Nova is giving the hub back to “${from.name}”, so changes wait a moment. Try again in a minute${this.#o.publicUrl() ? `, at ${this.#o.publicUrl()}` : ''}.`, { fence: true });
+    this.#o.sync.setLogging(false);
+    this.#o.role.emit('draining', { promotion: r.id });
+    this.#save({ ...r, said: `“${from.name}” found this hub failing its checks and is taking the role back; this node takes no changes meanwhile.` });
+    // It steps down once it sees the old hub at the higher epoch; asked again here in case no nudge
+    // comes. After two minutes: an old hub that answers as the standby didn't take the role, and this
+    // node carries on; one that can't be reached leaves this node holding (it can't tell), said once.
+    const since = Date.now();
+    let told = false;
+    const look = setInterval(() => {
+      if (this.#o.role.role() !== 'hub' || this.#closed) { clearInterval(look); return; }
+      void this.#o.role.fence().catch(() => {});
+      if (Date.now() - since < 120_000) return;
+      void ask(`${r.from!.address}/api/v1/mesh/hello`, { timeoutMs: 3000 }).then((a) => {
+        if (this.#o.role.role() !== 'hub') return;
+        if (a.status === 200 && a.body?.id === from.id && a.body.role === 'standby') {
+          clearInterval(look);
+          this.#o.role.release();
+          this.#o.sync.setLogging(true);
+          this.#o.role.emit('resumed', {});
+          this.#o.log.problem('mesh', `“${from.name}” asked this hub to stop taking changes so it could take the role back, then didn’t. This node carries on as the hub.`);
+        }
+      }, () => {
+        if (told) return;
+        told = true;
+        this.#o.log.problem('mesh', `“${from.name}” asked this hub to stop taking changes so it could take the role back, and can’t be reached now. Nova keeps refusing changes here until it knows which node is hub. If “${from.name}” is gone for good, restart Nova here and it carries on as the hub.`);
+      });
+    }, 2000);
+    look.unref?.();
+    return { held: true, head: this.#o.sync.head() };
+  }
+
   // The node that became hub points the stable name at itself.
   async #pointName(): Promise<string | null> {
     const n = this.#o.name;
@@ -677,7 +740,7 @@ export class Promotions {
       backup, epoch_now: s.epoch, epoch_backup: epochBackup, epoch_new: backup ? floor + 1 : null, pinned,
       lost: backup ? LOST_WORDS(backup.at) : 'Not known: there is no backup to restore.', connectors: CONNECTOR_WORDS, devices: DEVICE_WORDS,
     };
-    return { eligible: reasons.length === 0, reasons, facts, sheet: coldSheet(facts, { name: this.#o.publicUrl() }), folder };
+    return { eligible: reasons.length === 0, reasons, facts, sheet: coldSheet(facts, { name: this.#stable() }), folder };
   }
 
   // Probes every address a hub might answer at: the role file's hub, the stable name, every trusted peer.
@@ -828,7 +891,7 @@ export class Promotions {
     return d ? { id: d.id, name: d.name, address: address?.replace(/\/+$/, '') ?? null, public_key: d.public_key, x25519_public_key: d.x25519_public_key } : null;
   }
 
-  async #callCandidate(d: Device, step: string, payload: Record<string, unknown>, timeoutMs: number) {
+  async #callCandidate(d: { id: string; address: string | null }, step: string, payload: Record<string, unknown>, timeoutMs: number) {
     const time = (this.#lastTime = Math.max(Math.floor(this.#o.now().getTime() / 1000), this.#lastTime + 1));
     const body = signCall(this.#o.identity, step, d.id, this.#o.devices.state().epoch, payload, time);
     const a = await ask(`${d.address!.replace(/\/+$/, '')}/api/v1/mesh/promotion/${step}`, { method: 'POST', headers: { 'x-nova': '1' }, body, timeoutMs });
@@ -879,6 +942,7 @@ export class Promotions {
       },
       // The candidate's side, signed by its hub (public: the signature is the authority).
       { method: 'POST', path: '/mesh/promotion/ready', access: 'public', body: '{auth, payload}', summary: 'The hub asks its standby about itself before a promotion (signed by the hub’s key).', handle: ({ body }) => { this.#fromHub('ready', body); return this.#facts(); } },
+      { method: 'POST', path: '/mesh/promotion/stand-down', access: 'public', body: '{auth, payload: {id}}', summary: 'A roll-back: the old hub, this hub’s standby, asks it to stop taking changes before it takes the role back (signed by the old hub’s key).', handle: ({ body }) => this.#standDown(body) },
       { method: 'POST', path: '/mesh/promotion/transfer', access: 'public', body: '{auth, payload: {handover}}', summary: 'The hub hands its role to this standby (signed by the hub’s key, with a handover signed by it): this node becomes the hub at the next epoch and answers with its own signed roster.', handle: ({ body }) => this.#transfer(body) },
       {
         method: 'POST', path: '/mesh/promotion/fence', access: 'public', summary: 'Asks this node to check now whether another node is hub at a higher epoch (fencing). Nothing is taken on trust: it checks for itself.',

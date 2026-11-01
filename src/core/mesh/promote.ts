@@ -80,8 +80,11 @@ export class MeshRole extends EventEmitter {
   #promoting: Promise<unknown> | null = null;
   #owing: ReturnType<typeof setInterval> | null = null;
   #lastTime = 0;
-  // Writes held while the hub is handed over (M10g): the reason every refused change gives.
+  // Writes held while the hub is handed over (M10g): the reason every refused change gives. `#heldFence`:
+  // fencing still runs while held (a new hub asked to stand down during a roll-back steps down when it
+  // sees the old one back at the higher epoch); a forward hand-over settles who is hub itself.
   #held: string | null = null;
+  #heldFence = false;
 
   constructor(o: MeshRoleOptions) {
     super();
@@ -135,13 +138,15 @@ export class MeshRole extends EventEmitter {
     return this.#held && this.role() === 'hub' ? { reason: this.#held, held: true } : null;
   }
 
-  hold(reason: string): void {
+  hold(reason: string, o: { fence?: boolean } = {}): void {
     this.#held = reason;
+    this.#heldFence = !!o.fence;
     this.emit('change', this.status());
   }
 
   release(): void {
     this.#held = null;
+    this.#heldFence = false;
     this.emit('change', this.status());
   }
 
@@ -272,7 +277,7 @@ export class MeshRole extends EventEmitter {
   async fence(): Promise<{ demoted: boolean; checked: string[] }> {
     const checked: string[] = [];
     // While writes are held for a hand-over, the promotion itself settles who is hub (handover.ts).
-    if (this.role() !== 'hub' || this.#closed || this.#held) return { demoted: false, checked };
+    if (this.role() !== 'hub' || this.#closed || (this.#held && !this.#heldFence)) return { demoted: false, checked };
     const me = this.#o.identity.id;
     const peers = new Map<string, string>();
     for (const d of this.#o.devices.list()) if (d.id !== me && d.trust === 'trusted' && d.address) peers.set(d.address.replace(/\/+$/, ''), d.id);
@@ -346,6 +351,8 @@ export class MeshRole extends EventEmitter {
       this.#o.db.run('DELETE FROM device_session');
     });
     this.#stopHub();
+    this.#held = null;
+    this.#heldFence = false;
     this.#o.becameStandby();
     for (const d of this.#o.devices.list()) this.#o.access.close(d.id);
     const why = `“${hub.name}” at ${url} became the hub (epoch ${epoch}) while this node was away. This node stepped down so there is only one hub: it reads, but refuses changes, and every device session here has ended.`;

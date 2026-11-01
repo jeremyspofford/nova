@@ -373,6 +373,12 @@ test('the new hub fails its checks (the stable name didn’t move): the old hub 
     backedUp(p.a.core);
     await synced(p);
     p.name.stuck(true);
+    // Both nodes asked to take a change at the same moment, all through: never both (a profile section
+    // that doesn't exist, so the gate decides and nothing changes: 400 taken, 409 refused).
+    const ticks = { n: 0, both: 0, a: 0, b: 0 };
+    let probing = true;
+    const takes = async (n: typeof p.a) => (await n.api('PUT', '/profile/drill/probe', { value: '1' }).catch(() => ({ status: 0 }))).status === 400;
+    const prober = (async () => { while (probing) { const [x, y] = await Promise.all([takes(p.a), takes(p.b)]); ticks.n++; if (x) ticks.a++; if (y) ticks.b++; if (x && y) ticks.both++; await sleep(5); } })();
     const started = await p.a.api('POST', '/mesh/promotions', { device_id: p.standbyId, confirm: true });
     assert.equal(started.status, 202, JSON.stringify(started.body));
     await until(() => p.b.core.mesh.role.role(), (r) => r === 'hub');
@@ -392,6 +398,12 @@ test('the new hub fails its checks (the stable name didn’t move): the old hub 
     const titles = await until(() => p.a.core.ledger.list().filter((t) => t.parent_id === rec!.parent).map((t) => `${t.title}: ${t.state}`), (ts) => ts.some((t) => t.startsWith('Promotion rolled back')) && ts.some((t) => /^Checks of/.test(t)));
     assert.ok(titles.includes('Promotion rolled back: this node is the hub again: done'), titles.join('\n'));
     assert.ok(titles.includes('Checks of “Standby” as the hub: failed'), titles.join('\n'));
+    probing = false;
+    await prober;
+    assert.ok(ticks.a > 0 && ticks.b > 0, JSON.stringify(ticks));
+    assert.equal(ticks.both, 0, `two hubs took a change at the same moment: ${JSON.stringify(ticks)}`);
+    const said = p.a.core.ledger.list().find((t) => t.title === 'Checks of “Standby” as the hub')!.brief.inputs!.stood as string;
+    assert.match(said, /stopped taking changes first/);
   } finally {
     await stop(p);
   }
