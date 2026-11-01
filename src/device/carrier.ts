@@ -286,18 +286,19 @@ export class Carrier {
 
   // ---- 3. the send ---------------------------------------------------------------------------------
 
-  async #send(plan: CapturePlan): Promise<void> {
-    if (!plan.sync.allowed) {
-      const queued = this.#names().length;
-      this.#pause('held', plan.sync.why ?? 'The hub says capture can’t be sent to it now, so it waits here.');
-      // What waits is said (a count and why, no content), when it changes.
-      const said = `${queued}|${this.#paused}`;
-      if (said !== this.#saidStatus) {
-        const r = await this.#o.hub('POST', '/api/v1/mesh/capture/status', { queued, paused: this.#paused }).catch(() => null);
-        if (r?.status === 200) this.#saidStatus = said;
-      }
-      return;
+  async #holdSync(why: string): Promise<void> {
+    const queued = this.#names().length;
+    this.#pause('held', why);
+    // What waits is said (a count and why, no content), when it changes.
+    const said = `${queued}|${this.#paused}`;
+    if (said !== this.#saidStatus) {
+      const r = await this.#o.hub('POST', '/api/v1/mesh/capture/status', { queued, paused: this.#paused }).catch(() => null);
+      if (r?.status === 200) this.#saidStatus = said;
     }
+  }
+
+  async #send(plan: CapturePlan): Promise<void> {
+    if (!plan.sync.allowed) return this.#holdSync(plan.sync.why ?? 'The hub says capture can’t be sent to it now, so it waits here.');
     this.#held = null;
     for (let round = 0; round < 50; round++) {
       const names = this.#names();
@@ -320,6 +321,13 @@ export class Carrier {
         queued: names.length - items.length, sent_at: (this.#o.now?.() ?? new Date()).toISOString(),
       };
       const signature = signMessage(this.#o.keys.ed25519.privateKey, captureBatchMessage(manifest));
+      // Every batch crosses an awaited hub call. Permission for the preceding batch says nothing
+      // about this one: a change, or a failed refresh, keeps these items in the durable queue.
+      const current = await this.#plan();
+      if (!current?.sync.allowed) {
+        await this.#holdSync(current?.sync.why ?? 'Waiting to refresh capture sync permission from the hub.');
+        return;
+      }
       const r = await this.#o.hub('POST', '/api/v1/mesh/capture/batch', { manifest, signature, items }).catch((e: Error) => { this.#lastError = e.message; return null; });
       // No answer: everything stays queued, and goes again (the hub takes each item once).
       if (!r) return;

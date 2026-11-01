@@ -27,6 +27,12 @@ Root review identified that raw rechecks updated the saved plan while derived sy
 
 Full project `npm test` completed with **1567 tests: 1553 passed, 13 skipped, 1 failed**. The failure was the unchanged email-summary case at `tests/skills-api.test.js:81`, which timed out in its `settle()` helper after about 5973 ms. The no-Kubernetes tripwire never fired. Log: `/tmp/nova-m10h-capture-suite.log`. A focused `node --test tests/skills-api.test.js` rerun passed **9 of 9 tests** (`/tmp/nova-m10h-capture-skills-rerun.log`); the full run is not claimed as passing. The full run began before the final derived-sync follow-up; the final carrier/regression run and typecheck were rerun after that follow-up.
 
+## Independent follow-up: refresh permission for every derived batch
+
+The independent reviewer found that `#send` could await up to 50 batch uploads under one initial plan. The new regression starts with 101 durable queue files: after the first 100 are acknowledged, the next plan either denies sync or is unavailable. Both cases failed RED because the last item was sent anyway (`/tmp/nova-m10h-capture-each-batch-red.log`).
+
+The carrier now refreshes policy immediately before each batch POST. A refusal or unavailable plan retains the unsent items and reports why through the existing paused/status path. The regressions also restore permission and verify that the remaining item syncs once without resending acknowledged items. Final `node --test tests/core/capture-privacy-regressions.test.ts tests/core/capture-carrier.test.ts tests/core/capture-sync.test.ts`: **20 passed, 0 failed** (`/tmp/nova-m10h-capture-each-batch-green.log`). Typecheck and `git diff --check` passed again. The full suite was not rerun for this final focused change.
+
 Commands, from the implementation worktree, using Node 26.3.1:
 
 ```sh

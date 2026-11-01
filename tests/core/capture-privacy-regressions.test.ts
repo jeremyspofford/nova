@@ -161,3 +161,41 @@ for (const transition of ['before-read', 'before-send', 'sync-denied-initial', '
     } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); rmSync(home, { recursive: true, force: true }); }
   });
 }
+
+for (const transition of ['denied', 'unavailable'] as const) {
+  test(`derived sync holds its next batch when policy becomes ${transition} after an acknowledgement`, async () => {
+    const home = mkdtempSync(join(tmpdir(), 'nova-carrier-batch-policy-regression-'));
+    let held = false;
+    const received: string[] = [];
+    const carrier = new Carrier({
+      home, keys: generateDeviceKeys(), deviceId: () => 'synthetic-device', deviceName: () => 'Synthetic device',
+      capture: () => null, stopCapture: async () => {},
+      hub: async (_method, path, body) => {
+        if (path.endsWith('/plan')) {
+          if (held && transition === 'unavailable') return null;
+          return { status: 200, body: { kinds: { screen: '2026-11-01T11:00:00.000Z' }, sync: { allowed: !held, why: held ? 'Synthetic policy now denies transfer.' : null }, raw_allowed: false, tombstones: 0, raw: 0 } };
+        }
+        if (path.endsWith('/batch')) {
+          const items = (body as { items: { id: string }[] }).items;
+          received.push(...items.map((i) => i.id));
+          held = true;
+          return { status: 200, body: { results: items.map((i) => ({ id: i.id, status: 'kept' })) } };
+        }
+        if (path.endsWith('/status')) return { status: 200, body: { ok: true } };
+        return null;
+      },
+    });
+    for (let seq = 1; seq <= 101; seq++) writeFileSync(join(home, 'capture', 'outbox', `${String(seq).padStart(12, '0')}.json`), JSON.stringify({ id: `screenpipe:ocr:${seq}`, seq, kind: 'screen', at: '2026-11-01T12:00:00.000Z', ended_at: null, app: 'Editor', window_title: 'Notes', url: null, text: `Synthetic queued event ${seq}` }));
+    try {
+      await carrier.tick();
+      assert.equal(received.length, 100, 'only the batch authorized before the policy change may leave');
+      assert.deepEqual(carrier.queued().map((i) => i.id), ['screenpipe:ocr:101'], 'the unsent batch must remain durable');
+      assert.match(carrier.status().paused ?? '', /policy|refresh|waiting/i, 'a held queue must report why it stopped');
+      held = false;
+      await carrier.tick();
+      assert.equal(received.length, 101);
+      assert.equal(new Set(received).size, 101, 'resuming must not resend acknowledged events');
+      assert.equal(carrier.status().queued, 0);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+}
