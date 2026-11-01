@@ -1,9 +1,8 @@
 # INPUT 2026-11-01 — Design quality system (owner direction, verbatim)
 
-Filed verbatim as received. The referenced diagnosis document
-(nova-design-quality-system-2026-11-01.md) was not in the packet
-when this direction arrived; it is filed beside this one when the
-owner supplies it.
+Filed verbatim as received. The diagnosis it refers to is filed
+beside it, verbatim:
+[nova-design-quality-system-2026-11-01.md](nova-design-quality-system-2026-11-01.md).
 
 ---
 
