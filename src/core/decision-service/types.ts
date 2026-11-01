@@ -66,7 +66,11 @@ export interface Policy {
 // 'capture': capture-derived text (OCR, transcripts), the most sensitive class Nova holds (owner
 // decision on capture screening, ADR §2.1): never to a cloud seat in local-first or local-only; in
 // cloud mode only with a per-source opt-in, off by default.
-export type Feature = 'screening' | 'box' | 'capture';
+// 'private': the person's own conversation and memory: cloud only in cloud mode, never in a local
+// mode, and no opt-in sends it there.
+export type Feature = 'screening' | 'box' | 'capture' | 'private';
+// The features an opt-in can name ('private' never has one).
+export type OptInFeature = Exclude<Feature, 'private'>;
 // The person's per-feature switches for cloud Jev in local modes (settings.ts). Capture has none:
 // its cloud opt-in is per capture source (not built yet).
 export type OptIn = 'screening' | 'box';
@@ -179,7 +183,7 @@ export interface DecisionRecord extends Decided {
   model_asked: string | null;
   privacy_mode: PrivacyMode;
   egress: 'none' | 'local' | 'remote:typesafe';
-  opt_in: Feature | null;
+  opt_in: OptInFeature | null;
   state_sha256: string;
   state_fields: string[];
   pieces: number;
