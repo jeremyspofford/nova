@@ -43,13 +43,14 @@ test('the registry names every column a release added to a replicated table, the
   assert.deepEqual(ADDED_COLUMNS[19], { receipt: ['opt_in'] });
   assert.deepEqual(ADDED_COLUMNS[20], { device: ['purposes'] });
   assert.deepEqual(ADDED_COLUMNS[21], { problem: ['stops'] });
-  assert.ok(newest >= 21);
+  assert.deepEqual(ADDED_COLUMNS[22], { capture_event: ['sensitivity', 'sensitivity_why', 'sensitivity_decision', 'sensitivity_detail', 'sensitivity_at', 'sensitivity_tries', 'sensitivity_next'] });
+  assert.ok(newest >= 22);
   // Every column a replicated table has on the newest schema is either in the oldest supported
   // schema or registered: a release can't add one and forget to say so.
   const old = new Db(':memory:'); old.migrate({ migrations: upTo(UNSTATED_SCHEMA - 1) });
   const now = new Db(':memory:'); now.migrate({ migrations: all });
   const cols = (db: Db, t: string) => db.all<{ name: string }>(`SELECT name FROM pragma_table_info('${t}')`).map((c) => c.name);
-  for (const t of ['device', 'receipt', 'task', 'memory', 'profile', 'capture_source', 'change_record', 'problem']) {
+  for (const t of ['device', 'receipt', 'task', 'memory', 'profile', 'capture_source', 'capture_event', 'change_record', 'problem']) {
     const added = cols(now, t).filter((c) => !cols(old, t).includes(c));
     const said = Object.values(ADDED_COLUMNS).flatMap((m) => m[t] ?? []);
     assert.deepEqual(added.sort(), [...said].sort(), t);
@@ -100,6 +101,24 @@ test('a hub that didn’t adapt: the standby leaves the column out, says once it
     assert.equal(said.length, 1, JSON.stringify(said));
     assert.match(said[0]!.message, /release behind/);
   } finally { rmSync(s.home, { recursive: true, force: true }); }
+});
+
+test('a 0021 standby against a 0022 hub: the hub leaves out capture_event’s screening columns for it; a 0022 standby gets them', () => {
+  const { hub, sync: hubSync } = hubBatch();
+  hub.run(`INSERT INTO capture_event (id, source_id, device_id, adapter, kind, at, received_at, app, text, via, consent_at, sensitivity, sensitivity_why, sensitivity_decision, sensitivity_detail, sensitivity_at)
+    VALUES ('e1', 'screenpipe:hub', 'hub', 'screenpipe', 'screen', ?, ?, 'Notes', 'kept words', 'pull', ?, 'hold', 'a reason', 'dec-1', '{}', ?)`, at, at, at, at);
+  const cols = ['sensitivity', 'sensitivity_why', 'sensitivity_decision', 'sensitivity_detail', 'sensitivity_at', 'sensitivity_tries', 'sensitivity_next'];
+  const old = standby(21);
+  const now = standby(22);
+  try {
+    const behind = hubSync.batch(0, { peerSchema: 21 });
+    const row = JSON.parse(behind.rows.find((r) => r.tbl === 'capture_event' && r.op === 'put')!.row!);
+    for (const c of cols) assert.equal(Object.hasOwn(row, c), false, `${c} left out by the hub`);
+    old.sync.apply(behind, () => {});
+    assert.equal(old.db.get<{ text: string }>(`SELECT text FROM capture_event WHERE id = 'e1'`)?.text, 'kept words');
+    now.sync.apply(hubSync.batch(0, { peerSchema: 22 }), () => {});
+    assert.deepEqual({ ...now.db.get<Record<string, unknown>>(`SELECT sensitivity, sensitivity_why, sensitivity_decision FROM capture_event WHERE id = 'e1'`) }, { sensitivity: 'hold', sensitivity_why: 'a reason', sensitivity_decision: 'dec-1' });
+  } finally { rmSync(old.home, { recursive: true, force: true }); rmSync(now.home, { recursive: true, force: true }); }
 });
 
 test('the receipt’s triggers carry opt_in always now: the sender adapts, not the trigger', () => {

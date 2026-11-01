@@ -11,7 +11,7 @@
 // A decision seat decides only with a passing eval verdict for the exact template version and
 // model; otherwise it answers as a shadow (evidence in the record, not used). The sorting model
 // decides as it does today ("legacy") until any decision seat passes the template's eval.
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { stricter } from '../workers.ts';
 import { autonomy, bands as bandsOf, qualityOf } from './policy.ts';
 import { buildState } from './state.ts';
@@ -44,6 +44,10 @@ export interface ServiceOptions {
   // Whether a capture source's text may go to the cloud seat in cloud mode (the per-source opt-in,
   // off by default; not built yet, so absent means never).
   captureCloud?: (source: string) => boolean;
+  // A key of this home's own, for the state hash of capture text in the record: an HMAC rather than a
+  // plain hash, so a short captured text can't be confirmed by guessing it (review finding 8).
+  // Absent: the record keeps no hash of capture text at all.
+  stateKey?: () => Buffer | null;
   now?: () => Date;
 }
 
@@ -168,6 +172,17 @@ export class DecisionService {
       ?? all[0]!;
   }
 
+  // The state's hash as the record keeps it. Capture text (a capture template, or capture-derived
+  // text in another) is the most sensitive class Nova holds: its hash is keyed with this home's own
+  // key ("hmac:<hex>"), or not kept ("withheld") when there is no key. Everything else keeps the
+  // plain hash, which receipts name too.
+  #stateHash(t: ServiceTemplate, o: AskOptions, sha: string): string {
+    if (t.feature !== 'capture' && o.content_class !== 'capture-derived') return sha;
+    let key: Buffer | null = null;
+    try { key = this.#o.stateKey?.() ?? null; } catch { key = null; }
+    return key ? `hmac:${createHmac('sha256', key).update(sha).digest('hex')}` : 'withheld';
+  }
+
   // Decided by the template's deterministic checks alone (a known sensitive app): no model is asked,
   // nothing leaves the device, and the record says so.
   #deterministic(t: ServiceTemplate, built: BuiltState, pre: Precheck, mode: PrivacyMode, o: AskOptions): Decided {
@@ -186,7 +201,7 @@ export class DecisionService {
       ...result,
       at: this.#now().toISOString(), task_id: o.task_id ?? null, subsystem: o.subsystem,
       model_asked: null, privacy_mode: mode, egress: 'none', opt_in: null,
-      state_sha256: built.sha256, state_fields: built.fields,
+      state_sha256: this.#stateHash(t, o, built.sha256), state_fields: built.fields,
       pieces: 0, requests: 0, usage: { input_tokens: 0, output_tokens: 0 },
       shadows: [], failures: [], verdict_ref: null,
     });
@@ -306,7 +321,7 @@ export class DecisionService {
       privacy_mode: mode,
       egress: cloud ? 'remote:typesafe' : asked.size ? 'local' : 'none',
       opt_in,
-      state_sha256: built.sha256, state_fields: built.fields,
+      state_sha256: this.#stateHash(t, o, built.sha256), state_fields: built.fields,
       pieces: totals.pieces, requests: totals.requests, usage: totals.usage,
       shadows, failures, verdict_ref: decided?.ref ?? null,
     };

@@ -15,6 +15,10 @@
 //   POST /api/chat                 NDJSON (or one JSON body with stream: false)
 //   POST /api/embed   {model, input}
 //   POST /v1/chat/completions      the OpenAI-compatible endpoint, streamed as SSE or not
+//   POST /v1/systemone             Ollama's decision-model endpoint, only when `systemone` is given:
+//                                  {model, state, questions} → {model, answers: {<name>: {type:
+//                                  'noul', noul}}, usage}, each noul systemone(state as JSON, name);
+//                                  404 for a model that isn't installed (Tev1 needs version ≥ 0.40.4)
 //
 // Asleep (setAsleep(true), or POST /__stand-in/asleep {"asleep": true}) it drops every connection
 // before answering, as a computer that is off would; that is how a test puts a GPU spoke to sleep
@@ -83,7 +87,8 @@ export function fromSchema(s) {
 
 /**
  * @param {{ models?: any[], library?: Record<string, { size?: number, layers?: number, parameter_size?: string, family?: string, capabilities?: string[], digest?: string }>,
- *   reply?: (req: any) => string | Promise<string>, port?: number, version?: string, pullSteps?: number, pullDelayMs?: number, asleep?: boolean, tagsDigest?: (name: string, digest: string) => string }} [opts]
+ *   reply?: (req: any) => string | Promise<string>, port?: number, version?: string, pullSteps?: number, pullDelayMs?: number, asleep?: boolean, tagsDigest?: (name: string, digest: string) => string,
+ *   systemone?: (state: string, question: string) => number }} [opts]
  */
 export function startFakeOllama(opts = {}) {
   const now = new Date().toISOString();
@@ -122,6 +127,13 @@ export function startFakeOllama(opts = {}) {
     if (path === '/__stand-in/reply' && req.method === 'POST') { fixed = body && (body.text !== undefined || body.json !== undefined) ? body : null; return json(200, { ok: true }); }
 
     if (req.method === 'GET' && path === '/api/version') return json(200, { version: opts.version ?? '0.0.0-stand-in' });
+    if (req.method === 'POST' && path === '/v1/systemone' && opts.systemone) {
+      if (!installed.has(body?.model)) return missing(body?.model);
+      const names = Object.keys(body?.questions ?? {});
+      if (!names.length || names.length > 64) return json(400, { error: `questions must have 1 to 64 entries, got ${names.length}` });
+      const state = typeof body.state === 'string' ? body.state : JSON.stringify(body.state);
+      return json(200, { model: body.model, answers: Object.fromEntries(names.map((n) => [n, { type: 'noul', noul: opts.systemone(state, n) }])), usage: { input_tokens: Math.ceil(raw.length / 4), output_tokens: names.length } });
+    }
     if (req.method === 'GET' && path === '/api/tags') {
       const models = [...installed.values()].map((m) => (opts.tagsDigest ? { ...m, digest: opts.tagsDigest(m.name, m.digest) } : m));
       return json(200, { models });

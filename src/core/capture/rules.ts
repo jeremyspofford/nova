@@ -133,6 +133,36 @@ export function checkExclusions(v: unknown): Exclusion[] {
   });
 }
 
+// ---- letting an app back in -----------------------------------------------------------------------
+
+// Nova's own list of sensitive apps and sites (screening, job 1) is a best effort and can be wrong:
+// the person lets one back in, for one source or for all, the same way and through the same checked
+// route as an exclusion (capture settings).
+export type Allow = { app?: string; site?: string; source?: string };
+
+export function checkAllow(v: unknown): Allow[] {
+  if (!Array.isArray(v) || v.length > 200) throw new CoreError('validation', 'allow is a list of up to 200 apps or sites to let back in.');
+  return v.map((x, i): Allow => {
+    const e = (typeof x === 'object' && x !== null ? x : {}) as Record<string, unknown>;
+    const at = `allow[${i}]`;
+    const source = e.source === undefined || e.source === null ? {} : typeof e.source === 'string' && e.source ? { source: e.source } : (() => { throw new CoreError('validation', `${at}.source names a capture source, or is left out for all of them.`); })();
+    if (e.app !== undefined && NAME(e.app)) return { app: String(e.app).trim(), ...source };
+    if (e.site !== undefined) {
+      let site: string;
+      try { site = (checkExclusions([{ kind: 'site', site: e.site }])[0] as { site: string }).site; } catch { throw new CoreError('validation', `${at} names a site, like example.org.`); }
+      return { site, ...source };
+    }
+    throw new CoreError('validation', `${at} names an app or a site that Nova wrongly kept out.`);
+  });
+}
+
+// Whether the person let this event's app or site back in, for its source.
+export function allowedBack(f: { app: string | null; url: string | null; source_id: string }, rules: Allow[]): boolean {
+  const host = hostOf(f.url);
+  return rules.some((r) => (!r.source || r.source === f.source_id)
+    && ((r.app !== undefined && !!f.app && appCovers(r.app, f.app)) || (r.site !== undefined && !!host && (host === r.site || host.endsWith(`.${r.site}`)))));
+}
+
 // A trailing dot ("bank.example.") is the same host, written fully qualified.
 const hostOf = (url: string | null): string | null => {
   if (!url) return null;

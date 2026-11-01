@@ -804,6 +804,10 @@ kbd {
 .capture-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
 .capture-text { overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; }
 .capture .sheet-actions { margin-top: 0; }
+/* How an item was checked (capture screening): a model id or source id is one long word. */
+.capture-record ul { display: grid; gap: var(--space-1); margin-top: var(--space-1); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.capture-record li { overflow-wrap: anywhere; }
+.capture-why { overflow-wrap: anywhere; }
 
 /* A problem's playbook on Health (M7b): what Nova did, then the person's steps. */
 .playbook { margin-top: var(--space-2); }

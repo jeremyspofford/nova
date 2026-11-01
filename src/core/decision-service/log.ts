@@ -55,4 +55,13 @@ export class DbLog implements DecisionLog {
       );
     } catch (e) { this.#onError?.(e as Error); }
   }
+
+  // Records go with what they were about (review finding 8): a forgotten item's records are deleted,
+  // and a subsystem's records older than its retention are swept with it.
+  forget(ids: string[]): void {
+    for (const id of ids) this.#db.run('DELETE FROM decision_record WHERE id = ?', id);
+  }
+  prune(subsystem: string, before: string): void {
+    this.#db.run('DELETE FROM decision_record WHERE subsystem = ? AND at < ?', subsystem, before);
+  }
 }

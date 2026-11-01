@@ -4,7 +4,7 @@
 // untrusted: the seat answers as a shadow, logged as evidence, and doesn't decide. A model bump is
 // a new tuple, so its verdict is missing until the eval runs again. Verdicts are written by eval
 // runs only; CI recomputes Part 1's from its committed per-case results, so a hand edit fails.
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { BOUNDS, type Bounds, type Metrics } from './eval.ts';
 import { BOUNDS_V2 } from './eval-v2.ts';
 import { BOUNDS_CS } from './eval-capture.ts';
@@ -125,11 +125,18 @@ export const RECORD_SETS: { file: URL; bounds: Record<string, number> }[] = [
 // The verdicts the service uses: Part 1's file and the records file, read fresh each time so a new
 // run takes effect.
 export function fileVerdicts(file: URL | string = VERDICTS_FILE, sets: { file: URL | string; bounds: Record<string, number> }[] = RECORD_SETS): VerdictStore {
+  // Read again only when a file changed (its time or size), not on every ask (review, minor: status
+  // and Health ask on every call).
+  let cached: { stamp: string; store: VerdictStore } | null = null;
+  const stampOf = () => [file, ...sets.map((s) => s.file)].map((f) => { try { const s = statSync(f); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } }).join('|');
   const read = () => {
+    const stamp = stampOf();
+    if (cached?.stamp === stamp) return cached.store;
     let all: VerdictRecord[] = [];
     try { all = all.concat(fileRecords(readVerdicts(file))); } catch { /* none yet */ }
     for (const set of sets) { try { all = all.concat(recordsOf(readRecords(set.file), set.bounds)); } catch { /* none yet */ } }
-    return memoryVerdicts(all);
+    cached = { stamp, store: memoryVerdicts(all) };
+    return cached.store;
   };
   return {
     lookup: (...a) => read().lookup(...a),

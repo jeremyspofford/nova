@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #271 · Captured screen text is now checked for private details before Nova keeps it**
+- What changed: before anything captured from your screen or a recording is kept, Nova's own rules run first. Known password managers, banking and payment apps, password vaults and banks' websites are not kept (best effort). Text shaped like a key, a password or a card number is blanked out, in the words, the window title and the web address. Then the trusted local model checks the rest for passwords, keys, and money or health details. Flagged items are held back from memory, or their words aren't kept, and the Capture page says which and why. Nothing is deleted without showing you. On a device with no trusted model, captured text is held, not added to memory, and the page says what fixes it.
+- What you can now do: open any captured item to see how it was checked. Let a wrongly dropped app back in from Settings › Capture. Review "Memories to look at again": memories made from capture before this check that turn out to hold a private detail, to forget or keep.
+- Still unfinished: those older memories still hold their words until you forget them. Held items can't be remembered, even by you; whether you can override that is your call. Checking what Nova recalls from capture is the next job.
+
 **2026-11-01 · #274 · The Memory page says "Nova reads this before every reply" again**
 - What changed: a permanent test now shows that something you tell Nova in one conversation, it knows in the next. Two local models passed it every time (3 of 3 each), and so did the stand-ins. It runs on every change to Nova, so the stronger wording is back.
 - What you can now do: rely on Nova carrying what you've told it into new conversations, with the models tested.
@@ -337,6 +342,53 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-10-31 (capture screening, job 1, switched on: rules first, capture-sensitive on indexing, hold without a trusted model; Track 1).** Owner decision `INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md` and option B (ADR §2.1, PR #269); plan `docs/plans/capture-screening-consumers.md`; template `capture-sensitive` v1 (#264), unchanged.
+- **Rules first, at intake, with no model call:**
+  - Known sensitive apps and sites are dropped like private windows, counted as `sensitive_app` and never stored. The person's exclusions come first. It uses the template's own `sensitiveApp`, exported from the service's `index.ts`.
+  - Pattern findings are redacted in the text, the window title and the address before the row is written, each field whole and only then cut to length. Kinds only are kept.
+- **Then the model** (the check reads the window title and the address with the words): `capture-sensitive` is asked through the Decision Service (subsystem `capture`, the capture source, no evidence-only asks) on every stored event, in each capture tick between the pull and triage, and its outcome is applied:
+  - index;
+  - redact (the stricter of the rules' redaction and the model's answer);
+  - hold (kept under retention only);
+  - exclude (the words, title and address cleared; the row kept).
+
+  Cleared or redacted-in-place words are scrubbed from the write-ahead log and the backups, as a forget does.
+- **Option B:** with no trusted answer (no seat with a passing verdict for v1 on its exact model), every event is held with the owner's notice and one plain line on what stands in the way.
+  - It is never triaged, proposed or remembered, not even by the person (the strict reading; overriding it is the owner's call).
+  - It is checked once a trusted model can answer, and swept by retention.
+- **Only index and redact may be triaged or remembered.** `promote` and `accept` refuse the rest with a 409 in words, and proposals for them aren't listed.
+- **The timeline:**
+  - Every state but index has a label and a reason in Nova's words. Held words are behind a tap; excluded words are gone.
+  - A "Held until checked" card shows the count, the notice when it is true, and a Settings › Models link.
+  - Every item opens to how it was checked: template version, seat and pinned model, scores, decision id, capture source.
+- **Provenance:** `capture_event.sensitivity_detail` (JSON) and `sensitivity_decision` (the `decision_record` id).
+- **Migration 0022, after the orb's 0021**: `capture_event.sensitivity` (default `unscreened`, so older rows are checked, rules first), `_why`, `_decision`, `_detail`, `_at`, `_tries` and `_next`; the `capture_screen_cache` table; one open proposal per event. The sync triggers are remade, and the columns are registered in `ADDED_COLUMNS[22]`.
+- **Routing unchanged:** never a cloud seat in local-first or local-only; in cloud mode only with the per-source opt-in, which is still absent (always off). Tested with Jev set up, opted in and even holding a passing verdict.
+- **Tests (stand-ins only):** `tests/core/capture-screening.test.ts` (10) and `tests/ui/capture-screening.test.ts` (2). The existing capture tests run with a trusted stand-in check: the Tev1 stand-in, or `fake-ollama.js`'s new optional `/v1/systemone`, at the passed build's digest.
+- **The independent review** (`2063c4d8`): nine should-fix findings and some minor ones. Each got a failing test first (`tests/core/capture-screening-review.test.ts`, 12 tests), then its fix; all 12 fail again with the fixes reverted. Evidence: `docs/evidence/capture-screening-review.md`.
+  - **Rules before every check:** Nova's rules redact every field before every check, old rows included, so an at-cap row the model can't take never keeps a detected secret in clear.
+  - **Titles and addresses:** they are judged with the words and scrubbed before they are cut, and an exclude clears them.
+  - **The list:** web vaults, major banks by registrable domain, missed apps, bundle ids, and manager names in window titles. It matches more precisely, so `databank.org` and "Keeper Standings" aren't caught, and the person can let an app back in per source (`allow`, the exclusions' tier).
+  - **Old memories:** memories made from items a later check finds sensitive are listed for review, redacted. They aren't rewritten.
+  - **Failed checks:** a trusted model's failures back off (10 minutes, doubling to a day, 5 tries) and never starve newer events. The owner's notice shows only when it is true.
+  - **One pass at a time:** tick and triage are single-flight, and a unique index allows one open proposal per event.
+  - **The cache and the records:** a content-hash cache keyed by an HMAC with this home's key, per source, for a day. An event's decision records go with it (forget, retention), and capture records keep an HMAC'd state hash, never a plain one.
+  - **The minor findings:**
+    - stream readers and event rules hear an event after its check;
+    - a held record says hold (the template's no-answer default is now hold; its wording and verdict are unchanged);
+    - suggestions are kept for released events;
+    - verdict files are cached;
+    - the UI wording is honest ("Held until checked"; "kept on your devices like the rest of capture … checked or not"; "on this computer or your own network").
+- **Limits:**
+  - events wait up to one tick before their check;
+  - a device's own queue holds text in clear until the hub's intake;
+  - the eval measured words alone, not titles and addresses;
+  - old memories are listed, not rewritten;
+  - a standby's older backups keep words the hub later redacted, until they rotate;
+  - an older standby promoted to hub would triage held events (#272);
+  - nobody can override a hold yet (the owner's question; the code has one place for it);
+  - job 2 (recall-path screening) is separate.
 
 **2026-11-01 (memory recall graduates, PR #274, Track 3).**
 - **The move:** `claim.memory-recalled-next-conversation` is now REGRESSION. It passed 3/3 trials on gemma4:12b (`4eb23ef1…`) and 3/3 on qwen3.8:27b (`aaee06c3…`), with digests in `docs/evidence/evals.md`, and 5/5 with stand-ins.

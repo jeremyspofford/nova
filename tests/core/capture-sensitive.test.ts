@@ -117,15 +117,16 @@ test('patterns redact before the model sees the text, and their outcome stands w
   } finally { await r2.close(); }
 });
 
-test('untrusted: the deterministic checks still run; otherwise today’s behaviour (index), with the model’s answer as a shadow', async () => {
+test('untrusted: the deterministic checks still run; otherwise hold (option B), with the model’s answer as a shadow', async () => {
   const r = await rig();
   try {
     const d = (await r.service.ask('capture-sensitive', item('Team lunch on Friday at noon.'), { subsystem: 'capture' }))!;
     assert.equal(d.trust, 'none');
-    assert.equal(d.outcome, 'index');
+    assert.equal(d.outcome, 'hold', 'no trusted answer: held (option B), never indexed on the rules alone');
     assert.equal(r.log.records[0]!.shadows[0]!.seat, 'tev1');
     const red = (await r.service.ask('capture-sensitive', item('pin: 4821'), { subsystem: 'capture' }))!;
-    assert.equal(red.outcome, 'redact');
+    assert.deepEqual(red.findings!.map((f) => f.kind), ['password'], 'the pattern still redacts');
+    assert.equal(red.outcome, 'hold', 'the stricter of redact and hold');
   } finally { await r.close(); }
 });
 

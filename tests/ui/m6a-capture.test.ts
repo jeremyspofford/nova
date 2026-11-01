@@ -13,6 +13,7 @@ import type { Page } from 'playwright-core';
 import { stop, until } from '../acceptance/support.ts';
 import { startFakeScreenpipe } from '../../scripts/fake-screenpipe.js';
 import { blank, browser, device, finishSetup, ready, shoot, shotsDir } from './support.ts';
+import { captureCheckServer } from '../support/capture-check.ts';
 
 const indicator = (page: Page) => page.locator('#capture-ind');
 
@@ -21,7 +22,10 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
   if (typeof b === 'string') return t.skip(b);
   const sp = await startFakeScreenpipe();
   const m = blank('nova-ui-m6a-');
-  const nova = await m.start({ NOVA_CAPTURE_POLL_MS: '150' });
+  // A trusted capture-sensitive check (the Tev1 stand-in), so what is captured can be remembered
+  // (screening, job 1; tests/ui/capture-screening.test.ts shows a device without one).
+  const check = await captureCheckServer(m.dir);
+  const nova = await m.start({ NOVA_CAPTURE_POLL_MS: '150', ...check.env });
   const m3 = shotsDir();
   const shots = m3 ? join(dirname(m3), 'm6') : null;
   if (shots) mkdirSync(shots, { recursive: true });
@@ -71,7 +75,7 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
       { at: new Date(now + 120_000).toISOString(), app: 'Notes', window: 'list', text: 'Buy a new kettle before the weekend' },
       { at: new Date(now + 180_000).toISOString(), app: 'Browser', window: 'New Incognito Tab - Browser', text: 'PRIVATE-UI-SENTINEL' },
     );
-    await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length === 2, 400);
+    await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length === 2 && l.every((e) => e.sensitivity.state === 'index'), 400);
 
     // The indicator is on every page, in every layout.
     for (const path of ['/', '/chat', '/tasks', '/memory', '/automations', '/skills', '/activity', '/health', '/settings']) {
@@ -137,7 +141,7 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
 
     // A suggestion for something with no space: accepting it asks which space, never a silent one.
     sp.add({ at: new Date(now + 240_000).toISOString(), app: 'Reader', window: 'article', text: 'The library closes early on Fridays' });
-    const library = (await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.some((e: any) => /library/.test(e.text)), 400)).find((e: any) => /library/.test(e.text));
+    const library = (await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.some((e: any) => /library/.test(e.text) && e.sensitivity.state === 'index'), 400)).find((e: any) => /library/.test(e.text));
     assert.equal(library.space, null);
     // A proposal, as a triage decision with a provider would leave it (no model runs in this test).
     const db = new DatabaseSync(join(m.home, 'nova.db'));
@@ -184,6 +188,7 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
   } finally {
     await stop(nova);
     await sp.close();
+    await check.close();
     await b.close();
   }
 });
