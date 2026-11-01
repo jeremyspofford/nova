@@ -12,12 +12,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { dirname, join } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import type { Page } from 'playwright-core';
 import { stop, until } from '../acceptance/support.ts';
 import { startFakeScreenpipe } from '../../scripts/fake-screenpipe.js';
 import { captureCheckServer } from '../support/capture-check.ts';
 import { blank, browser, device, finishSetup, ready, shoot, shotsDir } from './support.ts';
 
+const AWS = 'AKIACANARY0000000000';
 const NOTICE = 'This device can’t check captured text for private details yet, so it’s being held, not kept. Add the Tev1 4B model to fix that.';
 
 async function capturing(m: ReturnType<typeof blank>, sp: Awaited<ReturnType<typeof startFakeScreenpipe>>) {
@@ -49,7 +51,7 @@ test('the capture timeline shows each verdict with its reason; held and excluded
   try {
     await capturing(m, sp);
     const evs = await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length === 4 && l.every((e) => !['unscreened', 'held'].includes(e.sensitivity.state)), 400);
-    assert.deepEqual(Object.fromEntries(evs.map((e: any) => [e.window_title, e.sensitivity.state])), { 'plan.md': 'index', card: 'redact', clinic: 'hold', wifi: 'exclude' });
+    assert.deepEqual(Object.fromEntries(evs.map((e: any) => [e.window_title ?? e.app, e.sensitivity.state])), { 'plan.md': 'index', card: 'redact', clinic: 'hold', Chat: 'exclude' });
 
     const { page, errors } = await device(b, { width: 1280, height: 900 });
     await page.goto(`${m.base}/capture`);
@@ -73,14 +75,17 @@ test('the capture timeline shows each verdict with its reason; held and excluded
     const clinic = item(page, 'clinic');
     assert.equal(await clinic.locator('.pill[data-sensitivity="hold"]').textContent(), 'Sensitive: held, not added to memory');
     assert.match((await clinic.locator('.capture-why').textContent()) ?? '', /a person’s health details/);
-    assert.equal(await clinic.locator('.capture-text').isVisible(), false, 'its words are behind a tap');
+    assert.equal(await clinic.locator('.capture-text').first().isVisible(), false, 'its title and words are behind a tap');
+    assert.equal(((await clinic.locator('.capture-meta').textContent()) ?? '').includes('clinic'), false, 'its window title isn’t in the line above (review finding 2)');
     await clinic.locator('summary', { hasText: 'Show what was captured' }).click();
-    assert.match((await clinic.locator('.capture-text').textContent()) ?? '', /CANARY-GREY-HEALTH/);
+    assert.match((await clinic.locator('.capture-text').first().textContent()) ?? '', /Window: clinic/);
+    assert.match((await clinic.locator('.capture-text').last().textContent()) ?? '', /CANARY-GREY-HEALTH/);
     assert.equal(await clinic.locator('[data-action="capture-remember"]').count(), 0);
     assert.equal(await clinic.locator('[data-action="capture-forget"]').count(), 1);
 
     // Excluded: says its text wasn't kept; there is no text to show.
-    const wifi = item(page, 'wifi');
+    // Excluded: its words, title and address are cleared (review finding 2); it is found by its app.
+    const wifi = item(page, 'Chat');
     assert.equal(await wifi.locator('.pill[data-sensitivity="exclude"]').textContent(), 'Sensitive: excluded, text not kept');
     assert.match((await wifi.locator('.capture-why').textContent()) ?? '', /found a password/);
     assert.equal(await wifi.locator('.capture-text').count(), 0);
@@ -98,6 +103,38 @@ test('the capture timeline shows each verdict with its reason; held and excluded
 
     // Nothing waits, so there is no holding area.
     assert.equal(await page.locator('#cap-held').count(), 0);
+
+    // A memory made from an item before it was checked (an older Nova), which a later check finds
+    // holds a key: listed for the person, redacted, to forget or keep (review finding 5).
+    const planEvent = evs.find((e: any) => e.window_title === 'plan.md');
+    const made = await m.send('POST', '/api/v1/capture/promote', { event_ids: [planEvent.id] });
+    assert.equal(made.status, 201);
+    const db = new DatabaseSync(join(m.home, 'nova.db'));
+    db.prepare(`UPDATE memory SET content = ? WHERE id = ?`).run(`Draft the plan; key ${AWS}`, made.body.memory.id);
+    db.prepare(`UPDATE capture_event SET text = ?, sensitivity = 'unscreened', sensitivity_detail = NULL WHERE id = ?`).run(`Draft the plan; key ${AWS}`, planEvent.id);
+    db.close();
+    await until(() => m.get('/api/v1/capture/memory-review'), (l: any[]) => l.length === 1, 400);
+    await page.goto(`${m.base}/capture`);
+    await ready(page);
+    const review = page.locator('#capture-view .capture-review');
+    await review.waitFor();
+    const said = (await review.textContent()) ?? '';
+    assert.match(said, /Memories to look at again/);
+    assert.match(said, /cloud access key/);
+    assert.equal(said.includes(AWS), false, 'never the value');
+    if (shots) await shoot(page, join(shots, 'capture-memory-review.png'));
+    await review.locator('[data-action="capture-review-keep"]').click();
+    await review.waitFor({ state: 'detached' });
+
+    // Letting a wrongly dropped app back in, in Settings › Capture.
+    await page.goto(`${m.base}/settings#capture`);
+    await ready(page);
+    const allow = page.locator('#capture form[data-form="allow"]');
+    await allow.waitFor();
+    await allow.locator('input[name="value"]').fill('Keeper');
+    await allow.locator('button[type="submit"]').click();
+    await page.locator('#capture .capture-rules li', { hasText: 'The app Keeper, from every source' }).waitFor();
+    assert.deepEqual((await m.get('/api/v1/capture')).settings.allow, [{ app: 'Keeper' }]);
     assert.deepEqual(errors.filter((e) => !/ERR_INCOMPLETE_CHUNKED_ENCODING/.test(e)), []);
   } finally {
     await stop(nova);
@@ -127,16 +164,18 @@ test('option B: with no model on the device, the holding area shows the notice, 
       const held = page.locator('#capture-view .capture-holding');
       await held.waitFor();
       const text = (await held.textContent()) ?? '';
-      assert.match(text, /Held, not kept/);
+      assert.match(text, /Held until checked/);
       assert.ok(text.includes(NOTICE), 'the owner’s notice, word for word');
-      assert.match(text, /4 items are held: not added to memory/);
+      assert.match(text, /4 items are held until checked: not added to memory or suggested. Their words are kept on your devices like the rest of capture, and deleted with it after 14 days, checked or not./);
       assert.equal(await held.locator('a[href="/settings#models"]').count(), 1, 'what fixes it is one tap away');
       const items = page.locator('#capture-view .capture-item');
       assert.equal(await items.count(), 4);
       for (let i = 0; i < 4; i++) {
         assert.equal(await items.nth(i).getAttribute('data-sensitivity'), 'held');
-        assert.equal(await items.nth(i).locator('.pill[data-sensitivity="held"]').textContent(), 'Held, not kept: not checked yet');
+        assert.equal(await items.nth(i).locator('.pill[data-sensitivity="held"]').textContent(), 'Held: not checked yet');
         assert.equal(await items.nth(i).locator('[data-action="capture-remember"]').count(), 0);
+        // Its window title is behind the tap with its words (review finding 2), not in the line above.
+        assert.equal(((await items.nth(i).locator('.capture-meta').textContent()) ?? '').match(/plan\.md|card|clinic|wifi/), null);
       }
       // Nova's own rules still ran: the card number was blanked out before it was kept.
       const all = (await page.locator('#capture-view').textContent()) ?? '';

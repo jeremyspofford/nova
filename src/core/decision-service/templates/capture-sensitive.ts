@@ -24,26 +24,89 @@
 //   any question unsettled                       → hold (when unsure, don't index)
 //   all "no"                                     → index
 // Outcomes from least to most restrictive: index, redact, hold, exclude. Untrusted or unanswered →
-// index after the deterministic checks (today's behaviour: see the plan's open question).
+// hold after the deterministic checks (the policy's default; the owner's option B, ADR §2.1: with
+// no trusted model, captured text is held, not indexed on the rules alone).
 import type { Band, FieldValue, Finding, Precheck, ServiceTemplate } from '../types.ts';
 
 // ---- deterministic: known sensitive apps ---------------------------------------------------------
 
-// Password managers and banking apps, by name, as they title themselves. Matched on whole words,
-// case-insensitive. Best effort; the person's own exclusions (capture settings) come first.
+// Password managers and banking apps, by name, as they title themselves, and their web vaults and
+// sites. Best effort: names change and lists are never complete; the person's own exclusions
+// (capture settings) come first, and a wrongly dropped app can be let back in per source.
+// A name is compared normalised: compatibility forms folded (NFKC), invisible characters removed,
+// lower case, and the separators of file names and bundle ids (. _ - / \) read as spaces, so
+// "1Password.exe", "com.agilebits.onepassword7" and "Bit​warden" are all recognised.
+// Distinctive names count anywhere in the app's name, as whole words.
 export const SENSITIVE_APPS = [
-  '1password', 'bitwarden', 'lastpass', 'keepass', 'keepassxc', 'keepassx', 'dashlane', 'keeper', 'proton pass', 'enpass', 'nordpass', 'roboform',
-  'keychain access', 'passwords', 'credential manager', 'kwallet', 'seahorse', 'gnome keyring',
+  '1password', 'onepassword', 'agilebits', 'bitwarden', 'lastpass', 'keepass', 'keepassxc', 'keepassx', 'keepassdx', 'keepass2android', 'dashlane', 'proton pass',
+  'enpass', 'nordpass', 'roboform', 'strongbox', 'keychain access', 'credential manager', 'kwallet', 'seahorse', 'gnome keyring', 'keeper password manager',
+  'keeper security', 'authy', 'authenticator',
 ];
-const word = (s: string, w: string) => new RegExp(`(?:^|[^a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[^a-z0-9])`, 'i').test(s);
-export function sensitiveApp(app: string, url: string): string | null {
-  const a = app.toLowerCase();
-  const hit = SENSITIVE_APPS.find((n) => word(a, n));
+// Names that are also ordinary words count only as the whole name ("Keeper", not "Keeper Standings").
+export const SENSITIVE_WHOLE_NAMES = ['keeper', 'passwords'];
+// Banks and payment apps, by name, as whole words.
+export const BANK_APPS = [
+  'chase', 'revolut', 'monzo', 'paypal', 'venmo', 'cash app', 'wells fargo', 'bank of america', 'citibank', 'capital one', 'barclays', 'natwest', 'lloyds bank',
+  'halifax', 'santander', 'starling', 'n26', 'hsbc', 'commbank', 'westpac', 'american express', 'schwab',
+];
+// Password managers' web vaults: these hosts and everything under them.
+export const VAULT_HOSTS = ['vault.bitwarden.com', 'vault.bitwarden.eu', 'lastpass.com', 'my.1password.com', 'my.1password.eu', 'my.1password.ca', 'app.dashlane.com', 'keepersecurity.com', 'pass.proton.me', 'app.nordpass.com'];
+// 1Password's team vaults live at <team>.1password.com; these subdomains are its public site.
+const ONEPASSWORD_PUBLIC = new Set(['www', 'support', 'blog', 'developer', 'releases', 'status', 'community']);
+// Major banks and payment services, by registrable domain: the domain and everything under it.
+export const BANK_DOMAINS = [
+  'chase.com', 'bankofamerica.com', 'wellsfargo.com', 'citi.com', 'citibank.com', 'capitalone.com', 'usbank.com', 'pnc.com', 'truist.com', 'schwab.com',
+  'americanexpress.com', 'discover.com', 'paypal.com', 'venmo.com', 'revolut.com', 'monzo.com', 'starlingbank.com', 'n26.com', 'wise.com', 'hsbc.com',
+  'hsbc.co.uk', 'barclays.co.uk', 'natwest.com', 'lloydsbank.com', 'halifax.co.uk', 'santander.co.uk', 'santander.com', 'nationwide.co.uk', 'commbank.com.au',
+  'westpac.com.au', 'anz.com.au', 'nab.com.au', 'rbcroyalbank.com', 'td.com', 'scotiabank.com', 'ing.com', 'ing.nl', 'deutsche-bank.de',
+];
+// A host label that is itself a banking word ("mybank.com", "netbank.example").
+const BANK_LABEL = /^(?:bank|banking|onlinebanking|netbank|netbanking|ebanking|ibank|mybank|internetbanking)$/;
+// The first label of a sign-in host: "online.examplebank.com" is a bank's own site, where
+// "www.databank.org" or a food bank's is not.
+const SIGN_IN_LABEL = /^(?:online|secure|login|ib|netbank|netbanking|ebanking|internetbanking|banking|my|web|mobile|auth|signin|connect)$/;
+
+export const normaliseName = (s: string) => s.normalize('NFKC').replace(/[­​-‏⁠﻿]/g, '').toLowerCase().replace(/[._\-/\\]+/g, ' ').replace(/\s+/g, ' ').trim();
+const word = (s: string, w: string) => new RegExp(`(?:^|[^a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[^a-z0-9])`).test(s);
+const under = (host: string, d: string) => host === d || host.endsWith(`.${d}`);
+
+function managerName(name: string): string | null {
+  const whole = name.replace(/ (?:exe|app)$/, '');
+  return SENSITIVE_APPS.find((n) => word(name, n)) ?? SENSITIVE_WHOLE_NAMES.find((n) => whole === n) ?? null;
+}
+
+// A window title names a password manager when its first or last part is the manager's name, or
+// the name with "web vault", "vault" or "password manager" after it ("Vaults | 1Password",
+// "Bitwarden Web Vault — Mozilla Firefox"), not a page that merely mentions one.
+function managerTitle(title: string): string | null {
+  const parts = title.split(/\s[-–—|·•:]\s/).map((p) => normaliseName(p)).filter(Boolean);
+  for (const p of [parts[0], parts.at(-1)]) {
+    if (!p) continue;
+    const bare = p.replace(/ (?:web vault|vault|vaults|password manager)$/, '');
+    const hit = SENSITIVE_APPS.find((n) => bare === n) ?? SENSITIVE_WHOLE_NAMES.find((n) => bare === n && p !== bare);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+export function sensitiveApp(app: string, url: string, title = ''): string | null {
+  const name = normaliseName(app);
+  const hit = managerName(name);
   if (hit) return `a password manager (${hit})`;
-  if (/\bbank(?:ing)?\b/i.test(app)) return 'a banking app';
-  let host = '';
-  try { host = new URL(url).hostname.toLowerCase(); } catch { /* not a URL */ }
-  if (host && host.split('.').some((l) => /^(?:bank|banking|onlinebanking|netbank|ebanking)$/.test(l) || /bank$/.test(l) && l.length > 4)) return 'a banking site';
+  if (/(?:^| )bank(?:ing)?(?: |$)/.test(name) || BANK_APPS.some((b) => word(name, b))) return 'a banking app';
+  const inTitle = title ? managerTitle(title) : null;
+  if (inTitle) return `a password manager (${inTitle})`;
+  let u: URL | null = null;
+  try { u = new URL(url); } catch { /* not a URL */ }
+  const host = u?.hostname.toLowerCase().replace(/\.$/, '') ?? '';
+  if (!host) return null;
+  if (VAULT_HOSTS.some((h) => under(host, h)) && (host !== 'keepersecurity.com' || u!.pathname.startsWith('/vault'))) return 'a password manager’s web vault';
+  const one = /^([a-z0-9-]+)\.1password\.(?:com|eu|ca)$/.exec(host);
+  if (one && !ONEPASSWORD_PUBLIC.has(one[1]!)) return 'a password manager’s web vault';
+  if (BANK_DOMAINS.some((d) => under(host, d))) return 'a banking site';
+  const labels = host.split('.');
+  if (labels.some((l) => BANK_LABEL.test(l))) return 'a banking site';
+  if (labels.length >= 3 && SIGN_IN_LABEL.test(labels[0]!) && labels.slice(1, -1).some((l) => /bank$/.test(l) && l.length > 4)) return 'a banking site';
   return null;
 }
 
@@ -196,7 +259,9 @@ export const CAPTURE_SENSITIVE_V1: ServiceTemplate = {
       exclude: { action: 'keep it out of the index and the archive, marked excluded in the timeline', tier: 0, restrictive: true },
     },
     table: capturePolicy,
-    default: 'index',
+    // No trusted answer: hold (option B). Not part of the template's wording (registry.wordingOf),
+    // so the eval verdict, measured on the model's answers, still applies.
+    default: 'hold',
     low: 'stop',
     order: ['index', 'redact', 'hold', 'exclude'],
   },

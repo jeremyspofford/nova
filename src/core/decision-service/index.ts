@@ -46,6 +46,8 @@ export interface ServiceSetup {
   // Today's sorting model, and the template as it knows it (the old store), until it is retired.
   legacy?: { provider: DecisionProvider; old: (templateId: string) => Template | null };
   receipt?: (r: RemoteReceipt) => void;
+  // This home's key for capture text's state hash in the record (service.ts #stateHash).
+  stateKey?: () => Buffer | null;
   verdicts?: VerdictStore;
   templates?: readonly ServiceTemplate[];
   now?: () => Date;
@@ -81,6 +83,7 @@ export function createDecisionService(o: ServiceSetup): { service: DecisionServi
     registry, verdicts, settings: o.settings, privacy: o.privacy, log: o.log,
     seats: { tev1, jev, ...(legacy ? { legacy } : {}) },
     ...(o.receipt ? { receipt: o.receipt } : {}),
+    ...(o.stateKey ? { stateKey: o.stateKey } : {}),
     ...(o.now ? { now: o.now } : {}),
   });
   const refresh = async () => { await tev1.refresh(); };

@@ -29,7 +29,7 @@
 //      notice, until a trusted model can check it, or retention deletes it.
 // Every outcome but index is visible in the timeline with its reason; nothing is deleted silently.
 import { EventEmitter } from 'node:events';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { CoreError } from '../errors.ts';
 import { permits } from '../workers.ts';
 import { addressEgress } from '../connectors/index.ts';
@@ -42,8 +42,8 @@ import type { Backups } from '../backups.ts';
 import type { Decisions, TemplateDef, Templates } from '../decide.ts';
 import { findSecrets, redactFindings, sensitiveApp, type Decided } from '../decision-service/index.ts';
 import {
-  KINDS, SPACE, checkExclusions, checkSignals, checkSwitch, classify, describeExclusion, excludedBy, instant, isPrivate,
-  type Exclusion, type Facts, type Kind, type Signal, type Switch,
+  KINDS, SPACE, allowedBack, checkAllow, checkExclusions, checkSignals, checkSwitch, classify, describeExclusion, excludedBy, instant, isPrivate,
+  type Allow, type Exclusion, type Facts, type Kind, type Signal, type Switch,
 } from './rules.ts';
 import { DEFAULT_LOOKBACK_MS, DEFAULT_URL, KeyRefused, Screenpipe, Unreachable, type Cursor, type RawEvent } from './screenpipe.ts';
 
@@ -57,6 +57,12 @@ const MAX_URL = 2000;
 const DAY_MS = 86_400_000;
 const PROPOSE_PER_TICK = 10;
 const SCREEN_PER_TICK = 20;
+// A check a trusted model couldn't answer is tried again later, after 10 minutes, then doubling up
+// to a day, at most MAX_TRIES times in all (review finding 6).
+const MAX_TRIES = 5;
+const BACKOFF_MS = 10 * 60_000;
+// How long a decision on the same words from the same source is reused (the content-hash cache).
+const CACHE_WINDOW_MS = 86_400_000;
 
 // ---- screening, job 1 ------------------------------------------------------------------------------
 
@@ -72,7 +78,7 @@ export const HELD_NOTICE = 'This device can’t check captured text for private 
 // Nova's own words for each state: a label in the timeline, never a model's text.
 export const SENSITIVITY_WORDS: Record<Sensitivity, string> = {
   unscreened: 'Held until it’s checked',
-  held: 'Held, not kept: not checked yet',
+  held: 'Held: not checked yet',
   index: 'Checked',
   redact: 'Redacted',
   hold: 'Sensitive: held, not added to memory',
@@ -94,10 +100,52 @@ export interface ScreeningDetail {
   template: string;
   version: number | null;
   capture_source: string;
-  // Nova's own rules at intake: what they redacted, by kind, and in which fields.
+  // Nova's own rules (at intake, and again before every check): what they redacted, by kind, and
+  // in which fields.
   rules: { redacted: string[]; fields: string[] };
-  // The decision, once one was made.
-  decision?: { id: string; outcome: string; seat: string; model: string | null; trust: string; quality: string; scores: Record<string, number> | null; bands: Record<string, string> | null; findings: string[]; at: string };
+  // The decision, once one was made. `cached`: reused from an earlier decision on the same words
+  // from the same source (the content-hash cache).
+  decision?: { id: string; outcome: string; seat: string; model: string | null; trust: string; quality: string; scores: Record<string, number> | null; bands: Record<string, string> | null; findings: string[]; at: string; cached?: boolean };
+  // Every decision record made about this event, so they all go with it (a forget, retention).
+  records?: string[];
+  // Memories made from this event before the check found it sensitive, for the person to review.
+  memory_review?: { memories: string[]; why: string; kept: string[] };
+}
+
+// The three fields of an event that hold words.
+type Words = { text: string | null; window_title: string | null; url: string | null };
+const WORD_CAPS: Record<keyof Words, number> = { text: MAX_TEXT, window_title: MAX_FIELD, url: MAX_URL };
+
+// Nova's own pattern rules over every field that holds words: each is redacted whole, then cut to
+// its length. The same function at intake and before every check, for old rows and new alike.
+function scrubAll(w: Words): { values: Words; kinds: string[]; fields: string[]; changed: boolean } {
+  const values: Words = { text: null, window_title: null, url: null };
+  const kinds: string[] = [];
+  const fields: string[] = [];
+  let changed = false;
+  for (const k of Object.keys(WORD_CAPS) as (keyof Words)[]) {
+    const v = w[k];
+    if (v === null || v === undefined) continue;
+    const found = findSecrets(v);
+    if (found.length) { kinds.push(...found.map((x) => x.kind)); fields.push(k); }
+    values[k] = clip(found.length ? redactFindings(v, found) : v, WORD_CAPS[k]);
+    if (found.length || v.trim().length > WORD_CAPS[k]) changed = true;
+  }
+  return { values, kinds: [...new Set(kinds)], fields, changed };
+}
+
+// What the check reads: the window title and the address with the words, so a secret or a private
+// detail in the title or the address is judged too (review finding 2). The template's fields are
+// unchanged (its eval verdict stays valid); they ride inside its `text`, under plain labels. A text
+// too long for one check together with them is checked in two: the title and address, then the
+// words.
+export function checkedText(w: Words): string[] {
+  const head = [w.window_title ? `Window title: ${w.window_title}` : '', w.url ? `Address: ${w.url}` : ''].filter(Boolean).join('\n');
+  const body = w.text ?? '';
+  if (!head) return body ? [body] : [];
+  if (!body) return [head];
+  const both = `${head}\n\n${body}`;
+  return both.length <= MAX_TEXT ? [both] : [head, body];
 }
 
 // What each platform can capture, said plainly (CONTEXT-AND-CAPTURE, per-platform posture).
@@ -175,10 +223,11 @@ export interface SourceView {
   has_api_key: boolean | null;
 }
 
-export interface Settings { retention_days: number; exclusions: Exclusion[]; signals: Signal[]; switch: Switch | null; spaces: string[] }
+// allow: apps and sites the person let back in after Nova's own sensitive-app list kept them out.
+export interface Settings { retention_days: number; exclusions: Exclusion[]; signals: Signal[]; switch: Switch | null; spaces: string[]; allow: Allow[] }
 
 interface SourceRow { id: string; device_id: string; adapter: 'screenpipe' | 'device'; name: string; kinds: string; config: string; enabled: number; paused: number; consent_at: string | null; consent_by: string | null; cursor: string | null; status: string; status_detail: string | null; status_at: string | null; counts: string; created_at: string; updated_at: string }
-interface EventRow { id: string; source_id: string; device_id: string; adapter: string; kind: Kind; at: string; ended_at: string | null; received_at: string; app: string | null; window_title: string | null; url: string | null; text: string | null; space: string | null; space_by: string | null; external_id: string | null; via: string; consent_at: string; triaged: number; sensitivity: Sensitivity; sensitivity_why: string | null; sensitivity_decision: string | null; sensitivity_detail: string | null; sensitivity_at: string | null }
+interface EventRow { id: string; source_id: string; device_id: string; adapter: string; kind: Kind; at: string; ended_at: string | null; received_at: string; app: string | null; window_title: string | null; url: string | null; text: string | null; space: string | null; space_by: string | null; external_id: string | null; via: string; consent_at: string; triaged: number; sensitivity: Sensitivity; sensitivity_why: string | null; sensitivity_decision: string | null; sensitivity_detail: string | null; sensitivity_at: string | null; sensitivity_tries: number; sensitivity_next: string | null }
 
 export type Ingested = { kept: string[]; dropped: Record<string, number>; why: Record<string, string> };
 
@@ -226,6 +275,12 @@ export interface CaptureOptions {
   // Whether a model trusted for capture-sensitive can answer on this device now, and if not, why,
   // in plain words. Held events are checked again only once one can.
   screening?: () => { trusted: boolean; why: string };
+  // This home's own key, for the content-hash cache's keys (never a plain hash of captured words).
+  // Absent: no cache.
+  hashKey?: () => Buffer | null;
+  // The decision records about captured events go with them: a forget or retention deletes them
+  // (review finding 8).
+  records?: { forget(ids: string[]): void; prune(before: string): void };
 }
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -245,6 +300,8 @@ export class Capture extends EventEmitter {
   // The screening pass running (or last run), and the one waiting to start after it.
   #screenRun: Promise<unknown> = Promise.resolve();
   #screenNext: Promise<{ checked: number; outcomes: Record<string, number>; waiting: boolean }> | null = null;
+  #ticking: Promise<{ pulled: Record<string, unknown>; swept: number; screened: number; proposed: number }> | null = null;
+  #proposing: Promise<{ looked: number; proposed: string[]; waiting: boolean }> | null = null;
 
   constructor(o: CaptureOptions) {
     super();
@@ -269,7 +326,7 @@ export class Capture extends EventEmitter {
     for (const s of signals) spaces.add(s.space);
     const sw = safe(() => checkSwitch(p.switch ?? null), null);
     if (sw) spaces.add(sw.space);
-    return { retention_days: days, exclusions: safe(() => checkExclusions(p.exclusions ?? []), []), signals, switch: sw, spaces: [...spaces] };
+    return { retention_days: days, exclusions: safe(() => checkExclusions(p.exclusions ?? []), []), signals, switch: sw, spaces: [...spaces], allow: safe(() => checkAllow(p.allow ?? []), []) };
   }
 
   // Each setting is checked before it is kept; a bad one changes nothing.
@@ -280,6 +337,7 @@ export class Capture extends EventEmitter {
       writes.push(['retention_days', body.retention_days]);
     }
     if (body.exclusions !== undefined) writes.push(['exclusions', checkExclusions(body.exclusions)]);
+    if (body.allow !== undefined) writes.push(['allow', checkAllow(body.allow)]);
     if (body.signals !== undefined) writes.push(['signals', checkSignals(body.signals)]);
     if (body.switch !== undefined) {
       const sw = body.switch === null ? null : checkSwitch({ since: this.#now().toISOString(), ...(body.switch as object) });
@@ -289,7 +347,7 @@ export class Capture extends EventEmitter {
       if (!Array.isArray(body.spaces) || body.spaces.length > 50 || !body.spaces.every((s) => typeof s === 'string' && SPACE.test(s))) throw new CoreError('validation', 'spaces is a list of names in lowercase letters, digits, - or _.');
       writes.push(['spaces', [...new Set(body.spaces as string[])]]);
     }
-    if (!writes.length) throw new CoreError('validation', 'Send one or more of retention_days, exclusions, signals, switch, spaces.');
+    if (!writes.length) throw new CoreError('validation', 'Send one or more of retention_days, exclusions, allow, signals, switch, spaces.');
     this.#db.tx(() => { for (const [k, v] of writes) this.#o.profile.set('capture', k, v, 'settings'); });
     this.#changed('settings');
     return this.settings();
@@ -471,7 +529,6 @@ export class Capture extends EventEmitter {
   // (never what they said).
   ingest(sourceId: string, raws: RawEvent[], via: 'pull' | 'inbox' | 'api'): Ingested {
     const out: Ingested = { kept: [], dropped: {}, why: {} };
-    const fired: CaptureEvent[] = [];
     const drop = (reason: string, why?: string) => { out.dropped[reason] = (out.dropped[reason] ?? 0) + 1; if (why) out.why[reason] = why; };
     this.#db.tx(() => {
       const s = this.#source(sourceId);
@@ -505,26 +562,21 @@ export class Capture extends EventEmitter {
         // A known sensitive app or site (a password manager, a bank): dropped like a private window,
         // by Nova's own rules with no model call (screening, job 1), with capture-sensitive's own
         // list, so the two can't drift. The person's own exclusions come first.
-        const sensitive = sensitiveApp(f.app ?? '', f.url ?? '');
-        if (sensitive) { drop('sensitive_app', `Captured from ${sensitive}: password managers and banking apps and sites are never kept.`); continue; }
+        // The window title is read whole (a manager's name is often at its end, past the cut).
+        const rawTitle = typeof raw.window_title === 'string' ? raw.window_title : '';
+        const sensitive = sensitiveApp(f.app ?? '', f.url ?? '', rawTitle);
+        if (sensitive && !allowedBack({ app: f.app, url: f.url, source_id: s.id }, settings.allow)) {
+          drop('sensitive_app', `Captured from ${sensitive}: password managers and banking apps and sites are never kept.`);
+          continue;
+        }
         // Nova's own pattern rules, before anything is stored: what they find is redacted in the
         // words, the window title and the address, so its value never reaches the archive (or, from
-        // there, memory) in clear. Only the kinds are kept. Redacted before the text is cut to its
-        // length, so a secret is never cut in half and missed.
-        const redacted: string[] = [];
-        const fields: string[] = [];
-        const scrub = (name: string, v: string | null, n: number): string | null => {
-          if (v === null) return null;
-          const found = findSecrets(v);
-          if (!found.length) return clip(v, n);
-          redacted.push(...found.map((x) => x.kind));
-          fields.push(name);
-          return clip(redactFindings(v, found), n);
-        };
-        const text = scrub('text', typeof raw.text === 'string' ? raw.text : null, MAX_TEXT);
-        const title = scrub('window_title', f.window_title, MAX_FIELD);
-        const url = scrub('url', f.url, MAX_URL);
-        const detail: ScreeningDetail = { template: SCREEN_TEMPLATE, version: null, capture_source: s.id, rules: { redacted: [...new Set(redacted)], fields } };
+        // there, memory) in clear. Only the kinds are kept. Each field is redacted whole, before it
+        // is cut to its length, so a secret across the cut is never cut in half and missed.
+        const rules = scrubAll({ text: typeof raw.text === 'string' ? raw.text : null, window_title: rawTitle || null, url: typeof raw.url === 'string' ? raw.url : null });
+        const { text, window_title: title, url } = rules.values;
+        const redacted = rules.kinds;
+        const detail: ScreeningDetail = { template: SCREEN_TEMPLATE, version: null, capture_source: s.id, rules: { redacted, fields: rules.fields }, records: [] };
         const why = redacted.length ? `Nova’s own checks redacted ${listed(redacted)} before it was kept. It is held until it’s checked.` : null;
         const id = randomUUID();
         this.#db.run(
@@ -535,15 +587,11 @@ export class Capture extends EventEmitter {
           why, JSON.stringify(detail), received,
         );
         out.kept.push(id);
-        fired.push(this.event(id));
       }
       this.#count(s.id, out);
     });
-    if (out.kept.length) {
-      for (const e of fired) this.emit('event', e);
-      this.#changed('events', { kept: out.kept.length });
-      setImmediate(() => { for (const e of fired) this.#fire(e); });
-    }
+    // Stream readers and event rules hear about an event once it is checked (#screen), never before.
+    if (out.kept.length) this.#changed('events', { kept: out.kept.length });
     return out;
   }
 
@@ -675,6 +723,10 @@ export class Capture extends EventEmitter {
       this.#remove(rows, { tombstone: false });
       this.#changed('events');
     }
+    // No decision record about captured text, and no cached decision, outlives capture's retention
+    // (review finding 8).
+    this.#o.records?.prune(cutoff);
+    this.#db.run('DELETE FROM capture_screen_cache WHERE at < ?', cutoff);
     return { swept: rows.length, cutoff };
   }
 
@@ -710,6 +762,12 @@ export class Capture extends EventEmitter {
         if (o.tombstone && r.external_id) this.#db.run('INSERT OR IGNORE INTO capture_tombstone (source_id, key, at) VALUES (?, ?, ?)', r.source_id, sha(`${r.source_id}\0${r.external_id}`), at);
       }
     });
+    // The decision records about them go too, and any cached decision they made (review finding 8).
+    const records = [...new Set(rows.flatMap((r) => [r.sensitivity_decision, ...(parse<ScreeningDetail | null>(r.sensitivity_detail, null)?.records ?? [])]).filter((x): x is string => !!x))];
+    if (records.length) {
+      try { this.#o.records?.forget(records); } catch (e) { this.#o.log.warn('capture', 'Nova couldn’t delete the screening records of what it forgot.', { error: (e as Error).message }); }
+      for (const id of records) this.#db.run('DELETE FROM capture_screen_cache WHERE decision_id = ?', id);
+    }
     // The freed pages were overwritten (secure_delete, set by memory.ts on this connection); the
     // write-ahead log's copies are folded in now, and every backup is cleaned of the rows.
     this.#scrub(ids);
@@ -723,19 +781,34 @@ export class Capture extends EventEmitter {
     try { return this.#o.screening?.() ?? { trusted: false, why: '' }; } catch { return { trusted: false, why: '' }; }
   }
 
-  // The holding area at a glance, for the timeline: how many events wait, and the notice.
-  holding(): { held: number; unscreened: number; trusted: boolean; notice: string | null; why: string | null } {
-    const n = (state: Sensitivity) => this.#db.get<{ n: number }>('SELECT COUNT(*) AS n FROM capture_event WHERE sensitivity = ?', state)!.n;
+  // The holding area at a glance, for the timeline:
+  //   held        waiting because nothing trusted can check them here (option B);
+  //   failing     a trusted model is set up but couldn't answer for them: tried again later, backing
+  //               off, up to a limit;
+  //   unscreened  taken in after Nova's own rules, not checked yet.
+  // The owner's notice ("add the Tev1 4B model") is shown only when it is true: events are held and
+  // no trusted model can check them here.
+  holding(): { held: number; failing: number; unscreened: number; trusted: boolean; notice: string | null; why: string | null } {
+    const n = (where: string) => this.#db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM capture_event WHERE ${where}`)!.n;
     const can = this.#screening();
-    const held = n('held');
-    return { held, unscreened: n('unscreened'), trusted: can.trusted, notice: held ? HELD_NOTICE : null, why: can.trusted ? null : can.why || null };
+    const held = n(`sensitivity = 'held' AND sensitivity_tries = 0`);
+    return {
+      held, failing: n(`sensitivity = 'held' AND sensitivity_tries > 0`), unscreened: n(`sensitivity = 'unscreened'`), trusted: can.trusted,
+      notice: held && !can.trusted ? HELD_NOTICE : null, why: can.trusted ? null : can.why || null,
+    };
   }
 
-  // Checks the events not checked yet, oldest first, and, once a trusted model can answer, the held
-  // ones too: capture-sensitive through the Decision Service, and its outcome applied. Nova's own
-  // rules ran at intake; the template runs them again (a second wall, for events stored before
-  // them). An answer no trusted model gave (and nothing Nova's rules excluded) holds the event
-  // (option B): it is never indexed on the rules alone.
+  // Checks the events not checked yet, and, once a trusted model can answer, the held ones too:
+  // capture-sensitive through the Decision Service, and its outcome applied.
+  //   - Nova's own rules run again first, over the words, the window title and the address, and what
+  //     they find is redacted and kept that way before any check (an older row's words in clear, at
+  //     any length: review finding 1).
+  //   - The check reads the title and the address with the words (finding 2).
+  //   - The same words from the same source within a day reuse the earlier decision (the
+  //     content-hash cache, keyed by this home's key; finding 8).
+  //   - An answer no trusted model gave holds the event: never indexed on the rules alone (option
+  //     B). When a trusted model is set up but didn't answer, it is tried again later, backing off,
+  //     up to MAX_TRIES (finding 6); newer events go first, so failures never starve them.
   // One pass at a time: a pass asked for while one runs starts when it ends (so it sees what arrived
   // meanwhile), and asks made while it waits share it.
   screen(limit = SCREEN_PER_TICK): Promise<{ checked: number; outcomes: Record<string, number>; waiting: boolean }> {
@@ -747,90 +820,171 @@ export class Capture extends EventEmitter {
   }
 
   async #screen(limit: number): Promise<{ checked: number; outcomes: Record<string, number>; waiting: boolean }> {
+    const now = this.#now();
+    const at = now.toISOString();
+    this.#db.run('DELETE FROM capture_screen_cache WHERE at < ?', new Date(now.getTime() - CACHE_WINDOW_MS).toISOString());
+    const due = `(sensitivity_next IS NULL OR sensitivity_next <= ?)`;
+    const waiting = `(sensitivity = 'unscreened' OR (sensitivity = 'held' AND sensitivity_tries < ${MAX_TRIES})) AND ${due}`;
     // Nothing waits: no need to ask whether anything could check it.
-    if (!this.#db.get(`SELECT 1 FROM capture_event WHERE sensitivity IN ('unscreened', 'held') LIMIT 1`)) return { checked: 0, outcomes: {}, waiting: false };
+    if (!this.#db.get(`SELECT 1 FROM capture_event WHERE ${waiting} LIMIT 1`, at)) return { checked: 0, outcomes: {}, waiting: false };
     const can = this.#screening();
-    const states = can.trusted ? `'unscreened', 'held'` : `'unscreened'`;
-    const rows = this.#db.all<EventRow>(`SELECT * FROM capture_event WHERE sensitivity IN (${states}) ORDER BY at, rowid LIMIT ${Math.max(1, Math.min(200, limit))}`);
+    const rows = this.#db.all<EventRow>(`SELECT * FROM capture_event WHERE ${can.trusted ? waiting : `sensitivity = 'unscreened' AND ${due}`} ORDER BY sensitivity_tries, at, rowid LIMIT ${Math.max(1, Math.min(200, limit))}`, at);
+    const settings = this.settings();
     const outcomes: Record<string, number> = {};
     const scrubbed: string[] = [];
+    const decided: string[] = [];
     let checked = 0;
     for (const r of rows) {
       const detail = parse<ScreeningDetail>(r.sensitivity_detail, { template: SCREEN_TEMPLATE, version: null, capture_source: r.source_id, rules: { redacted: [], fields: [] } });
-      let d: Decided | null = null;
-      let failed = false;
-      if (r.text && this.#o.sensitive) {
-        try {
-          d = await this.#o.sensitive({
-            kind: r.kind === 'audio' || r.kind === 'meeting' ? 'transcript' : 'ocr',
-            app: (r.app ?? '').slice(0, 200), url: (r.url ?? '').slice(0, 2000), text: r.text,
-          }, { capture_source: r.source_id });
-        } catch (e) {
-          failed = true;
-          this.#o.log.warn('capture', 'Nova couldn’t check a captured event for private details.', { error: (e as Error).message });
+      detail.records ??= [];
+      const stored: Words = { text: r.text, window_title: r.window_title, url: r.url };
+      // Nova's own rules, again, before anything else: kept whatever the check does.
+      const rules = scrubAll(stored);
+      let words: Words = rules.changed ? rules.values : stored;
+      if (rules.changed) {
+        detail.rules = { redacted: [...new Set([...detail.rules.redacted, ...rules.kinds])], fields: [...new Set([...detail.rules.fields, ...rules.fields])] };
+        this.#db.run('UPDATE capture_event SET text = ?, window_title = ?, url = ?, sensitivity_detail = ? WHERE id = ?', words.text, words.window_title, words.url, JSON.stringify(detail), r.id);
+        scrubbed.push(r.id);
+      }
+      const parts = checkedText(words);
+      // An app or site the person let back in is checked without its name, so the template's own
+      // list doesn't keep it out again.
+      const allowed = allowedBack({ app: r.app, url: r.url, source_id: r.source_id }, settings.allow);
+      const app = allowed ? '' : (r.app ?? '').slice(0, 200);
+      const url = allowed ? '' : (r.url ?? '').slice(0, 2000);
+      let state: Sensitivity;
+      let why: string | null = null;
+      let tries = r.sensitivity_tries;
+      let next: string | null = null;
+      if (!parts.length) {
+        // No words, no title and no address: nothing for a model to read; it is indexed with no
+        // model check. A sensitive app is still excluded (events stored before the intake rule).
+        const sens = allowed ? null : sensitiveApp(r.app ?? '', r.url ?? '');
+        state = sens ? 'exclude' : 'index';
+        why = sens ? `It was captured from ${sens}, so its words weren’t kept.` : null;
+      } else {
+        const key = this.#cacheKey(r.source_id, app, url, parts);
+        const hit = key ? this.#db.get<{ outcome: string; detail: string }>('SELECT outcome, detail FROM capture_screen_cache WHERE key = ? AND source_id = ?', key, r.source_id) : undefined;
+        let outcome: string | null = null;
+        let failed = false;
+        let crossed = false;
+        if (hit) {
+          outcome = hit.outcome;
+          detail.decision = { ...(JSON.parse(hit.detail) as NonNullable<ScreeningDetail['decision']>), cached: true, at };
+          detail.version = 1;
+        } else if (this.#o.sensitive) {
+          const ds: Decided[] = [];
+          for (const text of parts) {
+            try {
+              const d = await this.#o.sensitive({ kind: r.kind === 'audio' || r.kind === 'meeting' ? 'transcript' : 'ocr', app, url, text }, { capture_source: r.source_id });
+              if (!d) { failed = true; break; }
+              ds.push(d);
+              detail.records.push(d.id);
+            } catch (e) {
+              failed = true;
+              this.#o.log.warn('capture', 'Nova couldn’t check a captured event for private details.', { error: (e as Error).message });
+              break;
+            }
+          }
+          const ruled = (d: Decided) => d.answers === null && d.outcome === 'exclude';
+          if (!failed && ds.length === parts.length && ds.every((d) => d.trust === 'verdict' || ruled(d))) {
+            const d = ds.reduce((a, b) => (stricterOf(a.outcome, b.outcome) === b.outcome && b.outcome !== a.outcome ? b : a));
+            outcome = d.outcome;
+            // Nova's rules already redacted every field; a finding now spans two of them, so it
+            // can't be placed: the stricter course, the words aren't kept.
+            crossed = ds.some((x) => (x.findings ?? []).length > 0);
+            detail.version = d.version;
+            detail.decision = {
+              id: d.id, outcome: d.outcome, seat: d.seat, model: d.model, trust: d.trust, quality: d.quality,
+              scores: d.answers ? Object.fromEntries(Object.entries(d.answers).map(([k, a]) => [k, typeof (a as { noul?: unknown }).noul === 'number' ? (a as { noul: number }).noul : null])) as Record<string, number> : null,
+              bands: d.bands, findings: [...new Set(ds.flatMap((x) => (x.findings ?? []).map((f) => f.kind)))], at,
+            };
+            if (key && !crossed && !ruled(d)) {
+              this.#db.run('INSERT OR REPLACE INTO capture_screen_cache (key, source_id, outcome, decision_id, detail, at) VALUES (?, ?, ?, ?, ?, ?)', key, r.source_id, d.outcome, d.id, JSON.stringify(detail.decision), at);
+            }
+          } else if (ds.length) {
+            const d = ds.at(-1)!;
+            detail.version = d.version;
+            detail.decision = { id: d.id, outcome: 'held', seat: d.seat, model: d.model, trust: d.trust, quality: d.quality, scores: null, bands: null, findings: [], at };
+          }
+        }
+        if (outcome !== null) {
+          state = crossed ? 'exclude' : stricterOf(outcome, detail.rules.redacted.length ? 'redact' : 'index') as Sensitivity;
+          why = crossed
+            ? 'Nova’s own rules found what looks like a secret across its title, address and words, so its words weren’t kept.'
+            : this.#why(state, detail.decision?.bands ?? null, outcome === 'exclude' && !detail.decision?.scores, detail.rules.redacted);
+          tries = 0;
+        } else if (!can.trusted && !failed) {
+          // Option B: nothing trusted can check it here.
+          state = 'held';
+          why = `${HELD_NOTICE}${can.why ? ` ${can.why}` : ''}`;
+        } else {
+          // A trusted model is set up but didn't answer for it: tried again later, backing off.
+          state = 'held';
+          tries += 1;
+          if (tries >= MAX_TRIES) {
+            why = `Nova couldn’t check it after ${MAX_TRIES} tries: a model trusted for this check is set up, but it didn’t answer for this item. It stays held until capture retention deletes it.`;
+          } else {
+            next = new Date(now.getTime() + Math.min(BACKOFF_MS * 2 ** (tries - 1), DAY_MS)).toISOString();
+            why = 'Nova couldn’t check it just now: a model trusted for this check is set up, but it didn’t answer for this item. It is held, not added to memory, and tried again later.';
+          }
         }
       }
       // It may have been forgotten or swept while it was being checked.
       if (!this.#db.get('SELECT 1 FROM capture_event WHERE id = ?', r.id)) continue;
       checked++;
-      const at = this.#now().toISOString();
-      let state: Sensitivity;
-      let why: string | null;
-      let text = r.text;
-      if (!r.text) {
-        // No words: nothing for a model to read. A sensitive app is still excluded (events stored
-        // before the intake rule existed).
-        const app = sensitiveApp(r.app ?? '', r.url ?? '');
-        state = app ? 'exclude' : 'index';
-        why = app ? `It was captured from ${app}, so its words weren’t kept.` : null;
-      } else if (!d) {
-        state = 'held';
-        why = failed ? 'Nova couldn’t check it just now, so it is held, not kept, until it can.' : `${HELD_NOTICE}${can.why ? ` ${can.why}` : ''}`;
-      } else {
-        // What the template's own rules found in the stored words (events stored before intake
-        // redacted them) is redacted whatever else happens.
-        const found = (d.findings ?? []).filter((f) => f.field === 'text');
-        if (found.length) text = redactFindings(r.text, found);
-        detail.version = d.version;
-        detail.decision = {
-          id: d.id, outcome: d.outcome, seat: d.seat, model: d.model, trust: d.trust, quality: d.quality,
-          scores: d.answers ? Object.fromEntries(Object.entries(d.answers).map(([k, a]) => [k, typeof (a as { noul?: unknown }).noul === 'number' ? (a as { noul: number }).noul : null])) as Record<string, number> : null,
-          bands: d.bands, findings: [...new Set(found.map((f) => f.kind))], at,
-        };
-        const ruled = d.answers === null && d.outcome === 'exclude';
-        if (d.trust !== 'verdict' && !ruled) {
-          state = 'held';
-          why = `${HELD_NOTICE}${can.why ? ` ${can.why}` : ''}`;
-        } else {
-          state = stricterOf(d.outcome, detail.rules.redacted.length || found.length ? 'redact' : 'index') as Sensitivity;
-          why = this.#why(state, d, [...detail.rules.redacted, ...found.map((f) => f.kind)]);
-        }
+      if (state === 'exclude') {
+        if (words.text !== null || words.window_title !== null || words.url !== null) scrubbed.push(r.id);
+        words = { text: null, window_title: null, url: null };
       }
-      if (state === 'exclude') text = null;
+      // A memory made from this event before the check (an older Nova) is listed for the person when
+      // the event turns out to hold a secret or private details (finding 5).
+      const memories = this.#db.all<{ memory_id: string }>('SELECT DISTINCT memory_id FROM capture_promotion WHERE event_id = ?', r.id).map((m) => m.memory_id);
+      if (memories.length && (rules.kinds.length || state === 'hold' || state === 'exclude')) {
+        detail.memory_review = {
+          memories, kept: detail.memory_review?.kept ?? [],
+          why: rules.kinds.length
+            ? `The captured item it was made from held ${listed(rules.kinds)}; Nova’s own rules have since redacted it there, but not in this memory.`
+            : `Nova’s check later found the captured item it was made from sensitive (${SENSITIVITY_WORDS[state].toLowerCase()}).`,
+        };
+      }
       outcomes[state] = (outcomes[state] ?? 0) + 1;
-      this.#db.tx(() => {
-        this.#db.run('UPDATE capture_event SET text = ?, sensitivity = ?, sensitivity_why = ?, sensitivity_decision = ?, sensitivity_detail = ?, sensitivity_at = ? WHERE id = ?',
-          text, state, why, d?.id ?? null, JSON.stringify(detail), at, r.id);
-        // What can't be remembered can't stay suggested.
-        if (!USABLE.includes(state)) this.#db.run(`DELETE FROM capture_proposal WHERE event_id = ? AND state = 'proposed'`, r.id);
-      });
-      if (text !== r.text) scrubbed.push(r.id);
+      this.#db.run(
+        'UPDATE capture_event SET text = ?, window_title = ?, url = ?, sensitivity = ?, sensitivity_why = ?, sensitivity_decision = ?, sensitivity_detail = ?, sensitivity_at = ?, sensitivity_tries = ?, sensitivity_next = ? WHERE id = ?',
+        words.text, words.window_title, words.url, state, why, detail.decision?.id ?? null, JSON.stringify(detail), at, tries, next, r.id,
+      );
+      if (state !== 'held') decided.push(r.id);
     }
     // Words taken out of the archive go from its write-ahead log and its backups too, once a pass
     // (cleaning a backup rebuilds the file).
-    if (scrubbed.length) this.#scrub(scrubbed);
+    if (scrubbed.length) this.#scrub([...new Set(scrubbed)]);
     if (checked) this.#changed('events', { screened: checked });
+    // Stream readers and event rules hear about an event once it is checked, never before: a held
+    // one when it is released.
+    for (const id of decided) {
+      let e: CaptureEvent;
+      try { e = this.event(id); } catch { continue; }
+      this.emit('event', e);
+      setImmediate(() => this.#fire(e));
+    }
     return { checked, outcomes, waiting: !can.trusted };
   }
 
+  // The content-hash cache's key: an HMAC, with this home's own key, of the source, the app and
+  // address as the check reads them, and the words with their spacing evened out. No key, no cache.
+  #cacheKey(source: string, app: string, url: string, parts: string[]): string | null {
+    let key: Buffer | null = null;
+    try { key = this.#o.hashKey?.() ?? null; } catch { key = null; }
+    if (!key) return null;
+    return createHmac('sha256', key).update([source, app, url, ...parts.map((p) => p.replace(/\s+/g, ' ').trim())].join('\0')).digest('hex');
+  }
+
   // Nova's own words for a decided state, from the outcome and which question said yes (never the
-  // model's text).
-  #why(state: Sensitivity, d: Decided, redacted: string[]): string | null {
-    const b = d.bands ?? {};
-    const yes = (q: string) => b[q] === 'yes';
-    // The label says what happened (SENSITIVITY_WORDS); this says why.
+  // model's text). The label says what happened (SENSITIVITY_WORDS); this says why.
+  #why(state: Sensitivity, bands: Record<string, string> | null, ruled: boolean, redacted: string[]): string | null {
+    const yes = (q: string) => bands?.[q] === 'yes';
     if (state === 'exclude') {
-      if (d.answers === null) return 'It was captured from a sensitive app or site, so its words weren’t kept.';
+      if (ruled) return 'It was captured from a sensitive app or site, so its words weren’t kept.';
       return `Nova’s check found ${yes('password') ? 'a password' : 'a secret key'} in it, so its words weren’t kept.`;
     }
     if (state === 'hold') {
@@ -848,6 +1002,48 @@ export class Capture extends EventEmitter {
     this.#o.backups.forget('capture_event', ids);
   }
 
+  // Memories made from captured items that a later check found sensitive (finding 5): the person
+  // reviews them in the Capture view. Shown redacted by Nova's own rules, never with a value.
+  memoryReview(): { memory_id: string; event_id: string; excerpt: string; why: string }[] {
+    const out: { memory_id: string; event_id: string; excerpt: string; why: string }[] = [];
+    const seen = new Set<string>();
+    for (const r of this.#db.all<{ id: string; sensitivity_detail: string }>(`SELECT id, sensitivity_detail FROM capture_event WHERE sensitivity_detail LIKE '%"memory_review"%' ORDER BY at DESC`)) {
+      const mr = parse<ScreeningDetail>(r.sensitivity_detail, { template: SCREEN_TEMPLATE, version: null, capture_source: '', rules: { redacted: [], fields: [] } }).memory_review;
+      for (const m of mr?.memories ?? []) {
+        if (seen.has(m) || mr!.kept.includes(m)) continue;
+        let content: string;
+        try { const rec = this.#o.memory.get(m); if (rec.user_state === 'corrected') continue; content = rec.content; } catch { continue; }
+        seen.add(m);
+        const found = findSecrets(content);
+        out.push({ memory_id: m, event_id: r.id, excerpt: (found.length ? redactFindings(content, found) : content).slice(0, 400), why: mr!.why });
+      }
+    }
+    return out;
+  }
+
+  // The person keeps a listed memory as it is: it leaves the list.
+  keepMemory(memoryId: string): { ok: true } {
+    const rows = this.#db.all<{ id: string; sensitivity_detail: string }>(`SELECT id, sensitivity_detail FROM capture_event WHERE sensitivity_detail LIKE '%"memory_review"%'`);
+    let found = false;
+    for (const r of rows) {
+      const d = parse<ScreeningDetail | null>(r.sensitivity_detail, null);
+      if (!d?.memory_review?.memories.includes(memoryId)) continue;
+      found = true;
+      d.memory_review.kept = [...new Set([...d.memory_review.kept, memoryId])];
+      this.#db.run('UPDATE capture_event SET sensitivity_detail = ? WHERE id = ?', JSON.stringify(d), r.id);
+    }
+    if (!found) throw new CoreError('not_found', 'That memory isn’t on the list to review.');
+    this.#changed('events');
+    return { ok: true };
+  }
+
+  // Whether an event may be remembered (triaged, proposed or promoted), and if not, why. The one
+  // gate: only what a trusted check let through. The owner's open question (may the person keep a
+  // held item anyway?) would be answered here: an override at tier 2, shown with the item's words.
+  #rememberable(r: EventRow): string | null {
+    return USABLE.includes(r.sensitivity) ? null : NOT_USABLE[r.sensitivity] ?? 'It can’t be remembered.';
+  }
+
   // ---- promotion -------------------------------------------------------------------------------------
 
   // Deliberate: the person makes a memory from captured events. Its provenance (CONTRACTS §7) is
@@ -858,8 +1054,7 @@ export class Capture extends EventEmitter {
     if (!ids.length || ids.length > 20 || !ids.every((x) => typeof x === 'string')) throw new CoreError('validation', 'event_ids lists the captured events this memory comes from (1 to 20).');
     const rows = (ids as string[]).map((id) => this.#event(id)).sort((a, b) => a.at.localeCompare(b.at));
     // Only what a trusted check let through may become memory (screening, job 1).
-    const blocked = rows.find((r) => !USABLE.includes(r.sensitivity));
-    if (blocked) throw new CoreError('conflict', NOT_USABLE[blocked.sensitivity] ?? 'It can’t be remembered.');
+    for (const r of rows) { const why = this.#rememberable(r); if (why) throw new CoreError('conflict', why); }
     const content = typeof body.content === 'string' && body.content.trim() ? body.content.trim() : rows.map((r) => r.text ?? '').filter(Boolean).join('\n').trim();
     if (!content) throw new CoreError('validation', 'These events have no words to remember; say what to remember as content.');
     const scope = typeof body.scope === 'string' ? body.scope : rows.find((r) => r.space)?.space ?? 'personal';
@@ -888,7 +1083,13 @@ export class Capture extends EventEmitter {
   // one. An unsure answer proposes nothing. When no provider could answer at all, the event isn't
   // marked looked at: the pass stops there, and the next one asks again, so once a provider exists
   // everything waiting is triaged, oldest first.
-  async propose(limit = PROPOSE_PER_TICK): Promise<{ looked: number; proposed: string[]; waiting: boolean }> {
+  // One triage pass at a time (review finding 7): a pass asked for while one runs shares it.
+  propose(limit = PROPOSE_PER_TICK): Promise<{ looked: number; proposed: string[]; waiting: boolean }> {
+    this.#proposing ??= this.#propose(limit).finally(() => { this.#proposing = null; });
+    return this.#proposing;
+  }
+
+  async #propose(limit: number): Promise<{ looked: number; proposed: string[]; waiting: boolean }> {
     // Only events a trusted check let through (screening, job 1): nothing held is triaged.
     const rows = this.#db.all<EventRow>(`SELECT * FROM capture_event WHERE triaged = 0 AND text IS NOT NULL AND sensitivity IN ('index', 'redact') ORDER BY at LIMIT ${Math.max(1, Math.min(100, limit))}`);
     const proposed: string[] = [];
@@ -926,7 +1127,8 @@ export class Capture extends EventEmitter {
         const p = d?.answers.remember;
         if (d && !d.escalate && typeof p === 'number' && p > 0.5) {
           const id = randomUUID();
-          this.#db.run(`INSERT INTO capture_proposal (id, event_id, template_id, version, provider, p, state, at) VALUES (?, ?, ?, ?, ?, ?, 'proposed', ?)`, id, r.id, d.template_id, d.version, d.provider, p, this.#now().toISOString());
+          // One open proposal per event (a unique index, migration 0021): a second is ignored.
+          this.#db.run(`INSERT OR IGNORE INTO capture_proposal (id, event_id, template_id, version, provider, p, state, at) VALUES (?, ?, ?, ?, ?, ?, 'proposed', ?)`, id, r.id, d.template_id, d.version, d.provider, p, this.#now().toISOString());
           proposed.push(id);
         }
       });
@@ -1015,8 +1217,15 @@ export class Capture extends EventEmitter {
   // One heartbeat of capture: pull every source that pulls, sweep, and triage new events. `at` is
   // for test clocks only (the core offers it only under NOVA_TEST_CLOCK): capture then takes that
   // time as now from here on.
-  async tick(at?: Date): Promise<{ pulled: Record<string, unknown>; swept: number; screened: number; proposed: number }> {
+  // One tick at a time (review finding 7): ticks that overlap (a slow check, the timer and the API)
+  // share the one running, so triage never runs twice at once.
+  tick(at?: Date): Promise<{ pulled: Record<string, unknown>; swept: number; screened: number; proposed: number }> {
     if (at) this.#clock = at;
+    this.#ticking ??= this.#tick().finally(() => { this.#ticking = null; });
+    return this.#ticking;
+  }
+
+  async #tick(): Promise<{ pulled: Record<string, unknown>; swept: number; screened: number; proposed: number }> {
     const pulled: Record<string, unknown> = {};
     for (const s of this.sources().filter((x) => x.adapter === 'screenpipe' && x.active)) pulled[s.id] = await this.pull(s.id);
     const { swept } = this.sweep();

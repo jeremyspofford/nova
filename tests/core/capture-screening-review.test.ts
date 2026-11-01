@@ -177,11 +177,13 @@ test('review 6: events the trusted model can’t answer back off and stop, newer
     assert.equal(held.trusted, true);
     assert.equal(held.notice, null, 'the no-model notice isn’t shown when a model is trusted');
     // Backed off, with a limit: after the limit, a failing event isn't asked again.
-    const before = r.check.tev1.requests.length;
+    // Each ask is one decision record (the stand-in counts only the requests it accepts).
+    const asks = () => r.h.core.db.all(`SELECT 1 FROM decision_record WHERE subsystem = 'capture'`).length;
+    const before = asks();
     for (let k = 0; k < 8; k++) { r.h.tick(2 * 86_400_000); await r.screen(); }
-    const after = r.check.tev1.requests.length;
+    const after = asks();
     for (let k = 0; k < 3; k++) { r.h.tick(2 * 86_400_000); await r.screen(); }
-    assert.equal(r.check.tev1.requests.length, after, 'past the limit, nothing more is asked');
+    assert.equal(asks(), after, 'past the limit, nothing more is asked');
     assert.ok(after > before);
     assert.match((await r.byTitle('long0')).sensitivity.why, /stays held until capture retention deletes it/);
   } finally { await r.close(); }

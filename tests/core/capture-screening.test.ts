@@ -121,7 +121,8 @@ test('every outcome end to end through intake: index, redact, hold, exclude, and
 
     const done = await r.screen();
     assert.deepEqual(done.outcomes, { index: 1, redact: 1, hold: 2, exclude: 1 });
-    const ev = Object.fromEntries((await r.events()).map((e) => [e.window_title, e]));
+    // An excluded event keeps no words, title or address (review finding 2): it is found by its app.
+    const ev = Object.fromEntries((await r.events()).map((e) => [e.window_title ?? (e.app === 'Chat' ? 'wifi' : e.app), e]));
     assert.equal(ev['plan.md'].sensitivity.state, 'index');
     assert.equal(ev['plan.md'].sensitivity.why, null);
     assert.equal(ev.card.sensitivity.state, 'redact');
@@ -131,7 +132,7 @@ test('every outcome end to end through intake: index, redact, hold, exclude, and
     assert.equal(ev.odd.sensitivity.state, 'hold');
     assert.match(ev.odd.sensitivity.why, /wasn’t sure/);
     assert.equal(ev.wifi.sensitivity.state, 'exclude');
-    assert.equal(ev.wifi.text, null, 'its words are cleared');
+    assert.deepEqual([ev.wifi.text, ev.wifi.window_title, ev.wifi.url], [null, null, null], 'its words, title and address are cleared');
     assert.equal(ev.wifi.app, 'Chat', 'the row stays: time, app and source');
     assert.match(ev.wifi.sensitivity.why, /^Nova’s check found a password in it, so its words weren’t kept\.$/);
     assert.deepEqual(holding(r.h.home, 'CANARY-GREY-PASSWORD'), [], 'the excluded words are nowhere under the home');
@@ -177,7 +178,7 @@ test('canary secrets never reach the model, memory, the archive, its write-ahead
   } finally { await r.close(); }
 });
 
-test('an event stored before the rules existed is redacted in place by the template’s own rules, its old words scrubbed', async () => {
+test('an event stored before the rules existed is redacted in place by Nova’s own rules before its check, its old words scrubbed', async () => {
   const r = await rig();
   try {
     r.sp.add({ at: min(r.h, 1), app: 'Notes', window: 'old', text: 'placeholder' });
@@ -189,7 +190,7 @@ test('an event stored before the rules existed is redacted in place by the templ
     const after = (await r.h.c('GET', `/capture/events/${e.id}`)).body;
     assert.equal(after.text, 'old note with [redacted: cloud access key] in it');
     assert.equal(after.sensitivity.state, 'redact');
-    assert.deepEqual(after.sensitivity.detail.decision.findings, ['cloud access key']);
+    assert.deepEqual(after.sensitivity.detail.rules.redacted, ['cloud access key'], 'Nova’s own rules redacted it before the check (review finding 1)');
     assert.ok(!r.check.seen().some((s) => s.includes(AWS)), 'the template redacted it before the model saw it');
     assert.deepEqual(holding(r.h.home, AWS), []);
   } finally { await r.close(); }

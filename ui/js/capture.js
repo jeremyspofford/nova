@@ -49,12 +49,12 @@ if (typeof window !== 'undefined') {
 
 export async function loadCaptureView() {
   try {
-    const [recent, unclassified, proposals] = await Promise.all([
-      api('GET', '/capture/events?limit=30'), api('GET', '/capture/events?unclassified=1&limit=50'), api('GET', '/capture/proposals'),
+    const [recent, unclassified, proposals, review] = await Promise.all([
+      api('GET', '/capture/events?limit=30'), api('GET', '/capture/events?unclassified=1&limit=50'), api('GET', '/capture/proposals'), api('GET', '/capture/memory-review'),
     ]);
     // An answer cut off as the page is left reads as null: kept as no answer, not drawn.
-    if (![recent, unclassified, proposals].every(Array.isArray)) throw new Error('Nova’s server didn’t answer.');
-    view = { recent, unclassified, proposals };
+    if (![recent, unclassified, proposals, review].every(Array.isArray)) throw new Error('Nova’s server didn’t answer.');
+    view = { recent, unclassified, proposals, review };
     failed = '';
   } catch (e) {
     failed = e.message || 'Nova’s server didn’t answer.';
@@ -156,6 +156,8 @@ function exclusionText(e) {
   return `${e.window.start}–${e.window.end}${e.window.days ? (e.window.days.join() === '1,2,3,4,5' ? ' on weekdays' : ' on some days') : ' every day'}`;
 }
 const exclusionLine = (e) => `${exclusionText(e)}. ${COVERS[e.kind] ?? ''}`.trim();
+// An app or site let back in after Nova's own list kept it out, and from which source.
+const allowText = (a) => `${a.app ? `The app ${a.app}` : `The site ${a.site}`}${a.source ? ` from ${data?.sources.find((x) => x.id === a.source)?.name ?? a.source}` : ', from every source'}`;
 
 function signalText(s) {
   if (s.kind === 'app') return `${s.app} → ${s.space}`;
@@ -192,13 +194,21 @@ ${screenpipe ? '' : `<form class="capture-form" data-form="screenpipe"><div clas
 <div class="sheet-actions"><button type="submit" class="btn small">Add Screenpipe</button></div></form>`}
 <details class="raw"><summary>What each kind of device can capture</summary><ul class="capture-posture">${posture.map((p) => `<li><p class="settings-label">${esc(p.label)}</p><p class="settings-note">${esc(p.can)}</p></li>`).join('')}</ul></details>
 <h3 class="conn-sub">Never captured</h3>
-<p class="settings-note">Private and incognito windows, always: Nova recognises them by the window’s title, in the major browsers’ common languages. That is a best effort, so also list them in Screenpipe’s own ignored-windows setting, which stops Screenpipe recording them at all. Password managers and banking apps and sites, recognised by their names: also a best effort. And anything you list here.</p>
-<p class="settings-note">Before it is kept, text shaped like a key, a token, a password, a card or bank account number is blanked out. Then a model on this device checks the rest for passwords, keys and someone’s money or health details. Until a model this device trusts for that has checked it, captured text is held, not added to memory.</p>
+<p class="settings-note">Private and incognito windows, always: Nova recognises them by the window’s title, in the major browsers’ common languages. That is a best effort, so also list them in Screenpipe’s own ignored-windows setting, which stops Screenpipe recording them at all. Password managers and banking apps and sites, recognised by their names and addresses: also a best effort. And anything you list here.</p>
+<p class="settings-note">Before it is kept, text shaped like a key, a token, a password, a card or bank account number is blanked out, in the words, the window title and the address. Then a model on this computer or your own network checks the rest for passwords, keys and someone’s money or health details. Until a model trusted for that has checked it, captured text is held: kept on your devices like the rest of capture, not added to memory.</p>
 ${listOf(settings.exclusions, exclusionText, 'capture-unexclude', exclusionLine)}
 <form class="capture-form" data-form="exclusion"><div class="field-row">
 <div><label class="field-label">Kind<select class="field" name="kind"><option value="app">An app</option><option value="site">A site</option><option value="space">A space</option><option value="time">A time of day</option></select></label></div>
 <div><label class="field-label">Which (an app, a site, a space, or 12:00–13:00)<input class="field" name="value" autocomplete="off" spellcheck="false" required></label></div>
 </div><div class="sheet-actions"><button type="submit" class="btn small">Add</button></div></form>
+<h3 class="conn-sub">Let back in</h3>
+<p class="settings-note">If Nova kept out an app or site that isn’t a password manager or a bank, let it back in here, for one source or for all.</p>
+${listOf(settings.allow ?? [], allowText, 'capture-unallow')}
+<form class="capture-form" data-form="allow"><div class="field-row">
+<div><label class="field-label">Kind<select class="field" name="kind"><option value="app">An app</option><option value="site">A site</option></select></label></div>
+<div><label class="field-label">Which (an app’s name, or a site like example.org)<input class="field" name="value" autocomplete="off" spellcheck="false" required></label></div>
+<div><label class="field-label">From<select class="field" name="source"><option value="">Every source</option>${sources.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}${x.device?.name ? ` on ${esc(x.device.name)}` : ''}</option>`).join('')}</select></label></div>
+</div><div class="sheet-actions"><button type="submit" class="btn small">Let it back in</button></div></form>
 <h3 class="conn-sub">Spaces</h3>
 <p class="settings-note">Nova files capture into a space only by what you set here: an app, a device, or your hours. Anything unclear stays unclassified until you say.</p>
 ${listOf(settings.signals, signalText, 'capture-unsignal')}
@@ -252,15 +262,22 @@ function screeningRecord(e) {
   return `<details class="raw capture-record"><summary>How this was checked</summary><ul>${rows.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></details>`;
 }
 
+// A held or sensitive event's window title and address are behind the tap with its words: they are
+// checked with them, and can say as much.
 function eventText(e, n = 220) {
   const s = sensitivity(e);
+  if (HIDDEN.has(s.state)) {
+    const head = [e.window_title ? `Window: ${e.window_title}` : '', e.url ? `Address: ${e.url}` : ''].filter(Boolean);
+    if (!head.length && !e.text) return '';
+    return `<details class="raw"><summary>Show what was captured</summary>${head.map((h) => `<p class="capture-text">${esc(excerpt(h, n))}</p>`).join('')}${e.text ? `<p class="capture-text">${esc(excerpt(e.text, n))}</p>` : ''}</details>`;
+  }
   if (!e.text) return '';
-  if (HIDDEN.has(s.state)) return `<details class="raw"><summary>Show what was captured</summary><p class="capture-text">${esc(excerpt(e.text, n))}</p></details>`;
   return `<p class="capture-text">${esc(excerpt(e.text, n))}</p>`;
 }
 
 function eventLine(e) {
-  const what = [e.app, e.window_title].filter(Boolean).join(' · ') || e.kind;
+  const title = HIDDEN.has(sensitivity(e).state) ? null : e.window_title;
+  const what = [e.app, title].filter(Boolean).join(' · ') || e.kind;
   return `<p class="capture-meta"><span>${esc(when(e.at))}</span><span>${esc(what)}</span>${e.device?.name ? `<span>${esc(e.device.name)}</span>` : ''}${e.space ? `<span class="pill">${esc(e.space)}</span>` : '<span class="pill is-warn">Unclassified</span>'}${e.promoted?.length ? '<span class="pill is-on">Remembered</span>' : ''}${sensitivityPill(e)}</p>`;
 }
 
@@ -278,14 +295,32 @@ function eventItem(e) {
 
 // The holding area (option B): what waits for a trusted check, with the owner's notice and what
 // stands in the way on this device.
+// The holding area (option B): what waits for a trusted check, with the owner's notice when it is
+// true (nothing trusted can check it here), what stands in the way, and what happens meanwhile.
 function holdingCard(s) {
   const h = s.screening;
-  if (!h || !(h.held + h.unscreened)) return '';
-  const lines = h.held ? [h.notice, h.why].filter(Boolean) : ['They are waiting for Nova’s check for private details.'];
-  return `<section class="card capture-card capture-holding" aria-labelledby="cap-held"><h3 class="card-title" id="cap-held">Held, not kept</h3>
-<p class="settings-note">${esc(`${plural(h.held + h.unscreened, 'item')} ${h.held + h.unscreened === 1 ? 'is' : 'are'} held: not added to memory, and deleted with the rest of capture after ${plural(data.settings.retention_days, 'day')} unless checked first.`)}</p>
+  const failing = h?.failing ?? 0;
+  const total = h ? h.held + h.unscreened + failing : 0;
+  if (!total) return '';
+  const lines = [
+    `${plural(total, 'item')} ${total === 1 ? 'is' : 'are'} held until checked: not added to memory or suggested. Their words are kept on your devices like the rest of capture, and deleted with it after ${plural(data.settings.retention_days, 'day')}, checked or not.`,
+    h.notice, h.notice ? h.why : null,
+    failing ? `${plural(failing, 'item')} couldn’t be checked by the model trusted for this; Nova tries again later, a few times.` : null,
+    !h.held && !failing ? 'They are waiting for Nova’s check for private details.' : null,
+  ].filter(Boolean);
+  return `<section class="card capture-card capture-holding" aria-labelledby="cap-held"><h3 class="card-title" id="cap-held">Held until checked</h3>
 ${lines.map((l) => `<p class="settings-note">${esc(l)}</p>`).join('')}
-${h.held && !h.trusted ? '<div class="sheet-actions"><a class="btn small" href="/settings#models">Settings › Models</a></div>' : ''}</section>`;
+${h.notice ? '<div class="sheet-actions"><a class="btn small" href="/settings#models">Settings › Models</a></div>' : ''}</section>`;
+}
+
+// Memories made from captured items that a later check found sensitive: shown redacted, for the
+// person to forget or keep.
+function reviewCard(list) {
+  if (!list?.length) return '';
+  return `<section class="card capture-card capture-review" aria-labelledby="cap-review"><h3 class="card-title" id="cap-review">Memories to look at again</h3>
+<p class="settings-note">These were remembered from captured items before Nova checked them. A later check found something private in the items they came from.</p>
+<ul class="capture-list">${list.map((m) => `<li class="capture-item" data-memory="${esc(m.memory_id)}"><p class="settings-note capture-why">${esc(m.why)}</p><p class="capture-text">${esc(excerpt(m.excerpt))}</p>
+<div class="sheet-actions"><button type="button" class="btn small" data-action="capture-review-forget" data-memory="${esc(m.memory_id)}">Forget the memory</button><button type="button" class="btn small quiet" data-action="capture-review-keep" data-memory="${esc(m.memory_id)}">Keep it</button></div></li>`).join('')}</ul></section>`;
 }
 
 export function renderCaptureView() {
@@ -299,7 +334,7 @@ export function renderCaptureView() {
     out.push(`<div class="card empty-state"><p class="empty-title">${s.active ? 'Nothing captured yet' : 'Nothing is being captured'}</p><p class="empty-sub">${s.active ? 'What your sources capture shows up here as it arrives.' : 'Turn on a source in Settings › Capture, and what it captures shows up here.'}</p></div>`);
     return out.join('');
   }
-  out.push(holdingCard(s));
+  out.push(holdingCard(s), reviewCard(view.review));
   // One standout: remembering what Nova suggests, when it suggests anything.
   if (proposals.length) {
     const [p, ...more] = proposals;
@@ -387,6 +422,9 @@ export function bindCapture(roots, render) {
       else if (a === 'capture-resume') act(() => api('POST', `${src(b)}/resume`), (r) => `${r.name} is capturing again, from now.`);
       else if (a === 'capture-pause-all') act(() => api('POST', '/capture/pause', { paused: true }), 'Capture is paused: Nova takes nothing in. Screenpipe keeps recording until you pause it there too.');
       else if (a === 'capture-resume-all') act(() => api('POST', '/capture/pause', { paused: false }), 'Capture is on again, from now.');
+      else if (a === 'capture-unallow') act(() => api('PUT', '/capture/settings', { allow: (s.allow ?? []).filter((_, i) => i !== Number(b.dataset.index)) }), 'Removed: Nova keeps it out again.');
+      else if (a === 'capture-review-keep') act(() => api('POST', `/capture/memory-review/${enc(b.dataset.memory)}/keep`), 'Kept as it is.');
+      else if (a === 'capture-review-forget') act(() => api('DELETE', `/memory/${enc(b.dataset.memory)}`), 'Forgotten.');
       else if (a === 'capture-unexclude') act(() => api('PUT', '/capture/settings', { exclusions: s.exclusions.filter((_, i) => i !== Number(b.dataset.index)) }), 'Removed.');
       else if (a === 'capture-unsignal') act(() => api('PUT', '/capture/settings', { signals: s.signals.filter((_, i) => i !== Number(b.dataset.index)) }), 'Removed.');
       else if (a === 'capture-switch-on') act(() => api('PUT', '/capture/settings', { switch: { space: document.getElementById('capture-switch-space').value } }), 'Switched.');
@@ -411,6 +449,11 @@ export function bindCapture(roots, render) {
       ev.preventDefault();
       const f = Object.fromEntries(new FormData(form));
       const s = data?.settings;
+      if (form.dataset.form === 'allow') {
+        const value = String(f.value ?? '').trim();
+        act(() => api('PUT', '/capture/settings', { allow: [...(s.allow ?? []), { [f.kind === 'site' ? 'site' : 'app']: value, ...(f.source ? { source: f.source } : {}) }] }), `${value} is let back in.`, form);
+        return;
+      }
       if (form.dataset.form === 'screenpipe') act(() => api('POST', '/capture/sources/screenpipe', { url: f.url, ...(f.api_key ? { api_key: f.api_key } : {}) }), 'Screenpipe is added. It stays off until you turn it on.', form);
       else if (form.dataset.form === 'screenpipe-edit') {
         const body = { url: f.url, lookback_minutes: Number(f.lookback_minutes), ...(f.api_key ? { api_key: f.api_key } : {}) };

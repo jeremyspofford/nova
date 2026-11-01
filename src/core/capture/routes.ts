@@ -55,6 +55,11 @@ export function captureRoutes(capture: Capture): Route[] {
       method: 'GET', path: '/capture/holding', summary: 'The holding area (screening, job 1): how many captured events wait for a trusted check of their text for private details, whether one can check now, and the notice.',
       handle: () => capture.holding(),
     },
+    {
+      method: 'GET', path: '/capture/memory-review', summary: 'Memories made from captured items that a later check found to hold a secret or private details, for the person to review. Shown redacted, never with a value.',
+      handle: () => capture.memoryReview(),
+    },
+    { method: 'POST', path: '/capture/memory-review/{id}/keep', summary: 'Keep a listed memory as it is: it leaves the review list. (Forget it with DELETE /memory/{id}.)', handle: ({ params }) => capture.keepMemory(params.id!) },
     { method: 'POST', path: '/capture/screen', summary: 'Check captured events for private details now: the ones not checked yet, and the held ones once a trusted model can (it also happens on its own).', handle: () => capture.screen() },
     { method: 'POST', path: '/capture/propose', summary: 'Triage the events not yet looked at now (it also happens on its own).', handle: () => capture.propose() },
     {

@@ -42,7 +42,7 @@ test('the registry names every column a release added to a replicated table, the
   const newest = Math.max(...all.map((m) => m.version));
   assert.deepEqual(ADDED_COLUMNS[19], { receipt: ['opt_in'] });
   assert.deepEqual(ADDED_COLUMNS[20], { device: ['purposes'] });
-  assert.deepEqual(ADDED_COLUMNS[21], { capture_event: ['sensitivity', 'sensitivity_why', 'sensitivity_decision', 'sensitivity_detail', 'sensitivity_at'] });
+  assert.deepEqual(ADDED_COLUMNS[21], { capture_event: ['sensitivity', 'sensitivity_why', 'sensitivity_decision', 'sensitivity_detail', 'sensitivity_at', 'sensitivity_tries', 'sensitivity_next'] });
   assert.ok(newest >= 21);
   // Every column a replicated table has on the newest schema is either in the oldest supported
   // schema or registered: a release can't add one and forget to say so.
@@ -106,7 +106,7 @@ test('a 0020 standby against a 0021 hub: the hub leaves out capture_event’s sc
   const { hub, sync: hubSync } = hubBatch();
   hub.run(`INSERT INTO capture_event (id, source_id, device_id, adapter, kind, at, received_at, app, text, via, consent_at, sensitivity, sensitivity_why, sensitivity_decision, sensitivity_detail, sensitivity_at)
     VALUES ('e1', 'screenpipe:hub', 'hub', 'screenpipe', 'screen', ?, ?, 'Notes', 'kept words', 'pull', ?, 'hold', 'a reason', 'dec-1', '{}', ?)`, at, at, at, at);
-  const cols = ['sensitivity', 'sensitivity_why', 'sensitivity_decision', 'sensitivity_detail', 'sensitivity_at'];
+  const cols = ['sensitivity', 'sensitivity_why', 'sensitivity_decision', 'sensitivity_detail', 'sensitivity_at', 'sensitivity_tries', 'sensitivity_next'];
   const old = standby(20);
   const now = standby(21);
   try {

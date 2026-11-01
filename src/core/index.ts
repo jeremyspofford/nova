@@ -73,7 +73,7 @@ import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
 import { Self } from './self.ts';
 import { CODE_ROOT } from './resilience/sandbox.ts';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 
@@ -415,10 +415,26 @@ export function createCore(o: CoreOptions) {
     const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {});
     return v.ok ? v.settings : DEFAULT_DECISION_SETTINGS;
   };
+  // This home's own key for hashing captured text (review finding 8): the decision record's state hash
+  // of capture text, and the capture screening cache's keys, are HMACs with it, so a short text can't
+  // be confirmed by guessing. Kept in the vault; none (no hash kept, no cache) when the vault can't
+  // be read.
+  let homeKey: Buffer | null = null;
+  const captureKey = (): Buffer | null => {
+    if (homeKey) return homeKey;
+    try {
+      let v = vault.get('capture/hash-key');
+      if (!v) { v = randomBytes(32).toString('hex'); vault.put('capture/hash-key', v); }
+      homeKey = Buffer.from(v, 'hex');
+    } catch { return null; }
+    return homeKey;
+  };
+  const decisionLog = new DbLog(db, { onError: (e) => log.warn('decisions', 'Nova couldn’t write a decision record.', { error: e.message }) });
   ds = createDecisionService({
     settings: decisionSettings,
     privacy: () => profile.privacyDefault(),
-    log: new DbLog(db, { onError: (e) => log.warn('decisions', 'Nova couldn’t write a decision record.', { error: e.message }) }),
+    log: decisionLog,
+    stateKey: captureKey,
     ollamaUrl: () => models!.hubUrl(),
     hardware: () => models!.hubHardware(),
     jevKey: () => { try { return vault.get('decisions.jev') ?? null; } catch { return null; } },
@@ -598,6 +614,8 @@ export function createCore(o: CoreOptions) {
     // seat: an answer nobody trusts holds the event anyway (option B).
     sensitive: (fields, a) => decisionService.service.ask(SCREEN_TEMPLATE, fields, { subsystem: 'capture', capture_source: a.capture_source, shadow: false }),
     screening: () => captureScreening(),
+    hashKey: captureKey,
+    records: { forget: (ids) => decisionLog.forget(ids), prune: (before) => decisionLog.prune('capture', before) },
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
     secrets: vault,
