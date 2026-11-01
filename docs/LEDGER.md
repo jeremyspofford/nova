@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-01 · #277 · A tested check for proposed memories, not switched on yet**
+- What changed: the decision service has a memory-gate template that checks whether you said a proposed fact, whether it lasts, and whether it repeats or contradicts a memory. Exact duplicates merge without a model call. The larger tested local model passed the fixed 75-case evaluation: 0 false saves among 49 cases that should not be saved, 25 of 26 useful facts retained, calibration error 0.082. The smaller model failed.
+- What you can now do: nothing new in the app yet. This adds the tested template and its evidence, not the memory-writing connection. It is queued behind #276 and must not merge before it.
+- Still unfinished: Track 1 must connect the runner and server and add candidate reasons. The sample is small (the false-save interval reaches 7.3%), three contradictions were skipped rather than flagged, and one author wrote both questions and cases. The verdict applies only to the tested model digest. The preregistration SHAs remain ancestors; no model was pulled or evaluation rerun.
+
 **2026-11-01 · Handoff · A takeover note for the next builder**
 - What changed: a handoff note (docs/builder-packet/HANDOFF-FROM-BUILDER-2026-11-01.md) records the work in progress, the open questions waiting on you, the next steps, and the quirks of this machine, so a new builder can pick up without losing anything.
 - What you can now do: nothing in the app changed: paperwork only.
@@ -352,6 +357,8 @@ built-ins only.
 | `node:26-trixie@sha256:6d2c7d5d074bf72f81ddc252b4fbb5d625bc028eeda49cb4b8c2ff8eda1ee617` | external (Docker image) | M10a: Nova Computer's one workspace image, Docker's official node image pinned by its index digest (Node 26.13.0, git 2.47.3, a shell, Debian 13; 445 MB). The slim and Alpine images have no git, and installing it on top would be a second download. Pulled once, never built on. The `docker` CLI and a local daemon are needed only for the computer: without them it says so and stays off. |
 
 ## Decisions
+
+**2026-11-01 (DS2: memory gate, #277).** Plan `docs/plans/ds2-memory-gate.md`; evidence `docs/evidence/memory-gate-eval.md`. Template/rule/bounds fixed at `7d587168`, cases at `6392c6b0`, results at `ebae919a`; all remain ancestors after merging main. `tev1:4b` at the recorded digest passes (0/49 false saves, 25/26 recall, ECE 0.082); `tev1:0.8b` fails (0/26 recall). Small sample, three contradictions skipped, one author. No consumer is wired: runner, server and candidate-reason migration remain Track 1 follow-ups. This takeover does not rebase or change the evaluation.
 
 **2026-11-01 (M10g, after the second adversarial review of #272: replays, evidence, ties, the name, long jumps).**
 Branch `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The second review of #272"). Five
