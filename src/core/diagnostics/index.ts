@@ -104,7 +104,8 @@ export function knownSecrets(core: Pick<Core, 'vault'>, o: { home: string; env?:
     const id = JSON.parse(readFileSync(join(o.home, 'mesh', 'identity.json'), 'utf8')) as Record<string, Record<string, unknown>>;
     for (const part of Object.values(id)) if (part && typeof part === 'object') add(part.private);
   } catch { /* no identity yet */ }
-  for (const [k, v] of Object.entries(o.env ?? process.env)) if (/^NOVA_SECRET_/.test(k)) add(v);
+  // The stable name's control token (M10g) is a secret too.
+  for (const [k, v] of Object.entries(o.env ?? process.env)) if (/^NOVA_SECRET_/.test(k) || k === 'NOVA_MESH_NAME_TOKEN') add(v);
   return { secrets, warnings };
 }
 

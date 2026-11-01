@@ -147,6 +147,7 @@ export class MeshRole extends EventEmitter {
   // candidate that did take the role at the next epoch steps down when they meet. Epochs only rise.
   raiseEpoch(by: number): number {
     if (this.role() !== 'hub' || !Number.isInteger(by) || by < 1 || by > 3) throw new CoreError('conflict', 'Only the hub raises its epoch, by 1 to 3.');
+    if (this.#o.devices.state().epoch + by > EPOCH_CEILING) throw new CoreError('conflict', `The epoch would pass ${EPOCH_CEILING}, the highest Nova uses.`);
     this.#o.db.run('UPDATE mesh_state SET epoch = epoch + ?, updated_at = ? WHERE id = 1', by, this.#o.now().toISOString());
     const epoch = this.#o.devices.state().epoch;
     if (this.#file) { this.#file = { ...this.#file, epoch }; writeRole(this.#o.home, this.#file); }
@@ -325,6 +326,14 @@ export class MeshRole extends EventEmitter {
       // A peer still acting as hub at a lower epoch (one that came back while this node was away from
       // it) is asked to check now, rather than at its next round: it finds this node and steps down.
       if (h?.role === 'hub' && Number.isSafeInteger(h.epoch) && typeof h.id === 'string' && !outranks({ epoch: h.epoch!, id: h.id }, { epoch: mine, id: me }) && this.#o.devices.find(h.id)?.trust === 'trusted') {
+        // A tie this node wins (review N3): devices never follow another hub at an equal epoch, so the
+        // computers that followed the other one would follow neither. This node goes one epoch higher
+        // at once, so they follow it; then the other is asked to check, and steps down.
+        const peer = this.#o.devices.find(h.id)!;
+        if (h.epoch === mine && h.roster && verifyRoster(h.roster, [peer.public_key]) && h.roster.roster.hub.id === peer.id && mine < EPOCH_CEILING) {
+          const up = this.raiseEpoch(1);
+          this.#o.log.problem('mesh', `“${peer.name}” at ${a.url} was also the hub at epoch ${mine}. A fixed rule picks this node, so it took epoch ${up}, which devices follow; “${peer.name}” steps down when it sees that, and keeps what it took meanwhile.`);
+        }
         void ask(`${a.url}/api/v1/mesh/promotion/fence`, { method: 'POST', headers: { 'x-nova': '1' }, body: {}, timeoutMs: 3000, caFile: this.#file?.ca_file ?? null }).catch(() => {});
       }
       // A higher epoch wins; at an equal epoch (two hubs, say one promoted from a backup while the other
@@ -519,6 +528,11 @@ export class MeshRole extends EventEmitter {
       await this.#replica?.stop();
       this.#replica = null;
       const epoch = s.epoch + 1;
+      // Epochs are made no higher than any node or device accepts (review, minor).
+      if (epoch > EPOCH_CEILING) throw new CoreError('conflict', `The epoch would pass ${EPOCH_CEILING}, the highest Nova uses.`);
+      // What this node holds when it becomes hub: its own changes as hub come after (handover.ts keeps
+      // them, and only them, if it ever has to step down).
+      const since = this.#o.sync.head();
       const at = this.#o.now().toISOString();
       const previous = o.planned?.previous ?? s.hub_id;
       this.#o.db.tx(() => {
@@ -551,7 +565,7 @@ export class MeshRole extends EventEmitter {
         privacy_mode: 'local-only', approval_tier: 0, idempotency_key: `mesh:promote:${me}:${epoch}`, user_visibility: 'attention',
         inputs: { epoch, roster, previous_hub: previous, by: o.by, auto: !!o.auto, requeued: recovered.requeued.length, ...(o.planned ? { planned: true } : {}) },
       });
-      this.emit('promoted', { epoch, roster, task: task.id, auto: !!o.auto, planned: !!o.planned });
+      this.emit('promoted', { epoch, roster, task: task.id, auto: !!o.auto, planned: !!o.planned, since });
       this.emit('change', this.status());
       // The record runs in its own lane, so recovered work doesn't hold it up; give it a moment.
       for (let i = 0; i < 100 && !this.#closed && !TERMINAL.includes(this.#o.ledger.get(task.id).state); i++) await new Promise((r) => setTimeout(r, 20));

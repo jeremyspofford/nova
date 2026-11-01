@@ -15,7 +15,9 @@ export class AgentError extends Error {
 // Claude Code session, that session's memory, extra CLAUDE.md folders and the
 // signed-in account's email arrive through the environment; strip them so
 // they can't leak in. (A real run signed a draft with a name only that email held.)
-const LEAKY = /^CLAUDE\w*(MEMORY|ADDITIONAL_DIRECTORIES|CLAUDE_MD|USER_EMAIL)/;
+// Nova's own secrets in its environment never reach the agent either: the stable name's control
+// token (M10g) can move where every device goes.
+const LEAKY = /^CLAUDE\w*(MEMORY|ADDITIONAL_DIRECTORIES|CLAUDE_MD|USER_EMAIL)|^NOVA_MESH_NAME_TOKEN$/;
 export function agentEnv(env = process.env) {
   return Object.fromEntries(Object.entries(env).filter(([k]) => !LEAKY.test(k)));
 }

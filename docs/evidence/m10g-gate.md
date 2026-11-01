@@ -33,6 +33,14 @@ new is replicated (the promotion's shared record is its ledger tasks; each node'
   (11 of 11), `tests/core/mesh-promotion.test.ts`, the fresh-user test (first win 4141 ms) and the
   regression evals (29 of 29; the negative control failed every task, as it must).
 - `scripts/ui-test.sh` after the review: **111 tests: 111 pass** (Chromium and WebKit; main brought three more), `tests/ui/m10g-promotion.test.ts` among them, now with `NOVA_DRILL=1` for its short window.
+- **After the second adversarial review** (main unchanged since `77c404ac`): `npm run check`: **1497
+  tests: 1482 pass, 2 fail, 13 skipped**. The two are `tests/core/provider-guard.test.ts` "a coding
+  agent that changes more than Nova takes…" and `tests/skills-api.test.js` "the email summary…", the
+  load-sensitive pair named above; the two files alone: 17 of 17 pass. Every M10g test passed in that
+  run: the drill (with case 11), `m10g-review.test.ts` (11 of 11), `m10g-review2.test.ts` (7 of 7), the
+  device-agent safe-mode test, the promotion core tests, the fresh-user test (first win 10646 ms) and
+  the regression evals.
+- `scripts/ui-test.sh` after the second review: **112 tests: 112 pass** (Chromium and WebKit), `tests/ui/m10g-promotion.test.ts` among them; its screenshots in `docs/screenshots/m10g/` re-taken, the others put back.
 - CI is the record: see the PR.
 
 
@@ -200,6 +208,29 @@ said with the fix undone).
 | 10 | the window and probe pace could be set to seconds in production | Shorter only with `NODE_TEST_CONTEXT` or `NOVA_DRILL=1` on a temp home; else ≥ 30 min and ≥ 5 s, with a warning | "outside a test or the drill…" | it fails (1800 expected) |
 | minor | the name control took an unauthenticated POST; the tap wrote the vault key in clear; the emergency sheet wasn't bound to its backup; a problem could be logged to a closed database; M4 moved the name with no window; the key scan missed encodings | Token plus https or loopback; tap only in tests and the drill, vault key as digest; `backup` id required; `#problem()` guards closing; an automatic failover doesn't move the name (an M4 promotion by the person does, under its tier 3, with no window: stated below); the scan widened (item 4 above) | "outside a test or the drill…", the drill (case 6's 409, case 9) | the token and tap checks fail; the drill fails ("only the backup the sheet showed": 202) |
 
+## The second review of #272
+
+The second adversarial review at `53058d93` found five more (N1–N5) and four minor, with probes
+p10–p15. The same method: each became a test built on its probe (`tests/acceptance/m10g-review2.test.ts`,
+R10–R15, on the helpers now shared in `tests/acceptance/m10g-support.ts`, plus one device-agent test
+and the drill's case 11), and each fix was undone on its own and its test run against it
+(`revert2.py`, below: what the test said with the fix undone; every one failed).
+
+**What M10g guarantees during a split, exactly:** during a split, two hubs can briefly accept writes;
+when contact returns, it settles to one, and the loser's changes are kept and named, never merged
+automatically. Whether ADR-11 is reworded or a lease or third vote is added is the owner's decision;
+none is built (see Limits).
+
+| # | Reproduced (the probe's output) | The fix | The test | With the fix undone |
+|---|---|---|---|---|
+| N1 | p13: a forwarder kept one honest signed "unhealthy" and replayed it three times: A asked B to stand down; later, with replayed answers, A took the role at epoch 3 while B held | Every signed answer (health, stand-down ack, `transfer-status`) carries its request's nonce and time; `answers()` takes it only for that request. Nonces taken are kept in `mesh/promotion-nonces.json` for the freshness window, so a used call is refused after a restart. The comment now says a forwarder can drop or delay answers, not forge or replay one | R13 (a proxy that captures and replays; a signed `ready` call re-sent after B restarts) | binding undone: R13 fails ("a replayed answer counted: unhealthy,unhealthy,unhealthy"); persistence undone: R13 fails (the re-sent call: 200, not 403) |
+| N2 | p10: the old public roster replayed 54 times evicted the real one (max 4 → 1, the emergency epoch 2 under a live hub at 4); junk every 100 ms let a real device through 1 of 10 times; "from 2 devices" after three reports | `/mesh/seen` takes only a report signed by a paired device's own key (id, fresh time, the roster's digest), with the roster signed by a key this node trusts to be hub; `max` only rises; each device's id is kept; once a second per device, after the checks; the count is distinct devices. The boot agent signs its report | R10; the drill's case 6 (the computer's signed report counted once; an unsigned one refused, the max unchanged) | signature undone: R10 fails ("unsigned: refused"); monotonic max undone: fails ("a lower report never lowers it"); one limit for everyone, before the checks: fails; counting reports: fails (count ≠ 1) |
+| N3 | p11: after a tie, A hub at 2, B standby; a computer holding B's roster at 2 refused A ("the same as the hub this device follows") and B (standby): no hub; B's 3 changes in no checkpoint | The winner of a tie raises its epoch by 1 at once, with a problem; every step-down (not only M10g's) keeps what it took that the winner never copied in a named checkpoint, said; the kept list starts where this node last became hub (`mesh/hub-since.json`), so seed rows aren't listed | R11 (either node may win: whichever loses is checked), R12 | raise undone: R11 fails ("the winner went one higher"); keep undone: R11 fails (its changes not named); the hub-since baseline undone: R11 and R12 fail ("no seed rows in the list") |
+| N4 | p12: after a cancel and the heal, the name still led to B, now a standby (a phone's write: 409); p14: a take-back with the name stuck: once settled, the name led to the standby | Every step-down points the name at the winner; the hub checks every few probes' time that the name leads to it (or to a node that outranks it) and points it back; a cancel does so at once. A move to this node is read back through the name; one that didn't take is a problem said plainly | R12 (cancel), R14 (take-back with the name stuck) | settling undone: R12 and R14 fail ("the name leads to the hub once it settles"); read-back undone: R14 fails ("a name that can't be moved is a problem, said plainly") |
+| N5 | p15: after five planned promotions a laptop holding epoch 1 refused the hub at 6 ("more than 3 past the 1 this device knows") | Each planned hand-over and each roll-back's stand-down adds a link signed by the hub handing over; each hub serves the chain (`GET /mesh/roster/chain`); a device follows a jump of any size if every link verifies back to the hub it knows; the 2^31 − 1 ceiling holds | R15 (five promotions; a forged first link refused); the drill's case 11 (the real boot agent, asleep since epoch 1, follows N2 at 6) | `chained` ignored: R15 fails; the chain not served: R15 fails ("the chain: 0 links") |
+| found by case 11 | With case 11 added, the drill's case 4 failed: N2, whose last promotion record (verified, from N1) was over, met N1 as hub after an M4 promotion, took that for a take-back, wiped its copy to copy N1 afresh, and was refused by N1 ("This device isn't the standby"): an empty standby that said "Hub took the hub back", which it hadn't | Only an open promotion (verifying, transferring, failed) is taken back; a verified one is over, and the node keeps its data, read-only, as for any other step-down (what it took is still kept in a checkpoint) | the drill's case 4 (N2 kept its own copy; asked to promote with it: refused, "no copy of the hub's latest data") | with `verified` back in the list, case 4 fails (the refusal said "hasn't copied the hub's device registry", N2's registry empty) |
+| minor | safe mode skipped the roster digest; `NOVA_MESH_NAME_TOKEN` reached the agent and wasn't a diagnostics secret; vault rows named by row; the ceiling enforced only by devices | Safe mode takes a changed roster; the token stripped in `src/agent.js` and added to `knownSecrets`; warnings for a short token and a plain-http control elsewhere; saved secrets named by name; the ceiling at `promote`, `raiseEpoch` and the emergency sheet | "in safe mode too…" (device-agent), "minor: the name token…" (review2) | each undone, its test fails (pinned key kept; token in the env; token not a secret; no exception; promote 200 at 2^31; no sheet reason; the summary) |
+
 ## Guards removed in turn
 
 Each change below was undone on its own, and the named test run against it:
@@ -230,12 +261,20 @@ Each change below was undone on its own, and the named test run against it:
 - **The stable name** moves only through `NOVA_MESH_NAME_CONTROL`, and only a loopback stand-in was
   ever behind it; there is no DNS or tailnet driver. Without one, the sheet says the person moves it
   and the window doesn't check it. M10d's change chain isn't used for it (see the plan).
-- **A partition:** Nova no longer moves the role on a broken link, but the person can (take back,
-  cancel), told plainly; then, and for an old hub cut off from every peer, two nodes can take writes
-  until they meet. When they meet the lower (or, at a tie, the larger id) steps down and keeps what it
-  took in a checkpoint, said, rather than losing it; nothing merges it back automatically. Devices
-  refuse the lower epoch. Two nodes have no third vote; this is ADR-11's one-active-hub rule as M4
-  built it, not solved here.
+- **A split, exactly:** during a split, two hubs can briefly accept writes; when contact returns, it
+  settles to one, and the loser's changes are kept and named, never merged automatically. Nova no
+  longer moves the role on a broken link, but the person can (take back, cancel), told plainly; then,
+  and for an old hub cut off from every peer, two nodes can take writes until they meet. When they
+  meet, the lower epoch (at a tie, the larger id, after the smaller goes one epoch higher) steps down
+  and keeps what it took in a named checkpoint, said; the stable name is pointed at the one left.
+  Devices refuse the lower epoch. Two nodes have no lease and no third vote, so ADR-11's "one active
+  hub" holds only while they can reach each other; whether ADR-11 is reworded or a lease or third
+  vote is added is the owner's decision, and none is built.
+- **The chain of hand-overs** covers planned promotions and roll-backs only; after an emergency or M4
+  promotion a device more than 3 epochs behind, not following the new hub's key, still can't follow
+  until it is paired again or its hub signs the jump. The chain kept is the last 64 links.
+- **The name's read-back** checks only a move to this node, three times over about a second: a real
+  DNS driver slower than that would be reported as not taking (none exists in this build).
 - **An M4 promotion by the person** moves the stable name under its own tier-3 confirmation, with no
   verification window (it is the emergency path with a live standby); an automatic failover doesn't
   move it.
@@ -263,33 +302,33 @@ Each change below was undone on its own, and the named test run against it:
 
 ## The drill's recorded run
 
-Recorded after the review's fixes, with `node scripts/promotion-drill.ts --record <file>` under the no-Kubernetes tripwire:
+Recorded after the second review's fixes, with `node scripts/promotion-drill.ts --record <file>` under the no-Kubernetes tripwire (it never fired). Case 11 runs after case 3, so the epochs of cases 4–10 are 2 higher than in the first recorded run.
 
-Run 2026-11-01T04:55:55.730Z on linux (Node 26.3.1), in 17 s. Every case asserts as it runs: this record exists only if each one held.
+Run 2026-11-01T06:45:43.660Z on linux (Node 26.3.1), in 33 s. Every case asserts as it runs: this record exists only if each one held.
 
-**Case 0.** Two Nova homes, a standby enrolled with its own command at the stable name, a computer and a phone paired there (1.7 s)
-- N1 (hub) http://127.0.0.1:22804, N2 (standby “Spare”) http://127.0.0.1:29776, the stable name http://127.0.0.1:43809 pointing at N1
-- the computer b32bf3d3-8cc0-46c5-bd20-ad492569112d pinned 2 keys at epoch 1
+**Case 0.** Two Nova homes, a standby enrolled with its own command at the stable name, a computer and a phone paired there (1.6 s)
+- N1 (hub) http://127.0.0.1:20049, N2 (standby “Spare”) http://127.0.0.1:30555, the stable name http://127.0.0.1:42589 pointing at N1
+- the computer a8b512c8-a39c-4017-ac97-66ea280ed697 pinned 2 keys at epoch 1
 
-**Case 1.** The pre-checks refuse an ineligible candidate, for each reason the drill can make (0.1 s)
+**Case 1.** The pre-checks refuse an ineligible candidate, for each reason the drill can make (0.2 s)
 - the phone: “Pocket phone” is a phone: a screen onto Nova, never a hub.
 - the computer: “Desk computer” isn’t a hub candidate. Making it one is its own explicit confirmation, in its roles.
 - the standby with no backup: There is no backup. Back up now (Settings › Backups), then try again.
 
-**Case 2.** A planned promotion N1 → N2: every step ledgered, no data lost, devices re-pointed through the stable name, N1 a live standby, the window passed (7.4 s)
-- backup 1 of 2026-11-01T04:55:57.549Z, its drill passed; every pre-check passed (role, follows, disk, memory, version, schema, backup)
+**Case 2.** A planned promotion N1 → N2: every step ledgered, no data lost, devices re-pointed through the stable name, N1 a live standby, the window passed (7.6 s)
+- backup 1 of 2026-11-01T06:45:45.554Z, its drill passed; every pre-check passed (role, follows, disk, memory, version, schema, backup)
 - ledger: “Promotion pre-checks for “Spare””: done
 - ledger: “Copied to the candidate”: done
 - ledger: “Running work finished or handed over”: done
 - ledger: “Hub handed over to this node”: done
 - ledger: ““Hub” is the standby now”: done
 - ledger: “Checks of this node as the hub”: done
-- content hashes equal on both: {"memory":"2ae2ebd6ee776555dfee2774ba0e8e588c0259d2df44f7f9ba89b0b20e6df97a","profile":"2037d98365250bd4da9aebfb8695865d3b7d0311d1185511b3e7ff0c7cfd4999","messages":"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","plan":"118d4acfd69763e68a2d74a7e4a102a2bfacfc42ab41026b193c53ae2b875965"}
-- the computer: epoch 2 at http://127.0.0.1:43809; the phone: session 200 at the stable name
+- content hashes equal on both: {"memory":"a56505614d1f438119790b96539ebfdb0f03b3b25697b66d638796b609087c47","profile":"97f89bbba3ce74df1fbe3b1cdf54bf8ab9d37be595db947a35087f53aa52ae11","messages":"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","plan":"118d4acfd69763e68a2d74a7e4a102a2bfacfc42ab41026b193c53ae2b875965"}
+- the computer: epoch 2 at http://127.0.0.1:42589; the phone: session 200 at the stable name
 - window: 15 probes over 6 s (3 unknown while the link was cut: no roll-back), the last passed
-- while the link was cut, N1 said: Nova can’t reach “Spare”, the hub since the hand-over, to check it (“Spare” doesn’t answer: read ECONNRESET). It stays the hub: a link that doesn’t answer is no proof it failed, and taking the role back by itself could leave two hubs. If “Spare” is gone for good, you can take the hub back here (Settings › Devices, tier 3).
+- while the link was cut, N1 said: Nova can’t reach “Spare”, the hub since the hand-over, to check it (“Spare” doesn’t answer: socket hang up). It stays the hub: a link that doesn’t answer is no proof it failed, and taking the role back by itself could leave two hubs. If “Spare” is gone for good, you can take the hub back here (Settings › Devices, tier 3).
 
-**Case 3.** A planned promotion N2 → N1 whose new hub fails its checks (the stable name didn’t move): N2 hub again by itself at epoch 4 = 2 + 2; N1 stepped down to copy it (2.7 s)
+**Case 3.** A planned promotion N2 → N1 whose new hub fails its checks (the stable name didn’t move): N2 hub again by itself at epoch 4 = 2 + 2; N1 stepped down to copy it (3.5 s)
 - ledger: “Promotion pre-checks for “Hub””: done
 - ledger: “Copied to the candidate”: done
 - ledger: “Running work finished or handed over”: done
@@ -297,44 +336,49 @@ Run 2026-11-01T04:55:55.730Z on linux (Node 26.3.1), in 17 s. Every case asserts
 - ledger: ““Spare” is the standby now”: done
 - ledger: “Promotion rolled back: this node is the hub again”: done
 - ledger: “Checks of “Hub” as the hub”: failed
-- failing probe: http://127.0.0.1:43809 doesn’t lead to it (it answers as another node).
+- failing probe: http://127.0.0.1:42589 doesn’t lead to it (it answers as another node).
 - the computer follows N2 at epoch 4
 
-**Case 4.** N2 killed; N1, its live standby, made the hub (M4’s promotion, epoch 5); N2 back and fenced (0.8 s)
-- N2 says: This node isn’t the hub any more: “Hub” at http://127.0.0.1:42133 became the hub (epoch 5) while it was away, so this one only reads. “Hub” at http://127.0.0.1:42133 is the hub.
-- asked to become the hub with what it had: This node isn’t the hub any more: “Hub” at http://127.0.0.1:42133 became the hub (epoch 5) while it was away, so this one only reads. “Hub” at http://127.0.0.1:42133 is the hub. It has no copy of the hub’s latest data, so it can’t take over. Enroll it again as the standby first.
+**Case 11.** Two more planned promotions (N2 → N1 at 5, N1 → N2 at 6); a computer asleep since epoch 1 follows the jump of 5 by the chain of hand-overs (15.7 s)
+- N2 serves 5 hand-over links (epochs 2, 3, 4, 5, 6), each signed by the hub before it
+- the computer, with the record it held at epoch 1 (N1 its hub), follows N2 at epoch 6: a jump of 5, past the +3 it takes without a chain
 
-**Case 6.** An emergency promotion from the latest backup onto N2 (a hub candidate, not the standby), with N1 unreachable (2.4 s)
-- sheet: The backup: Backup 3, made 2026-11-01T04:56:08.343Z. Nova checked its seal: Nova made it.
-- sheet: What is lost: Everything written after 2026-11-01T04:56:08.343Z: changes, conversations, memories and tasks from then on are not in the backup.
-- sheet: What may come back: Devices revoked and memories forgotten stay that way when the backup or this node knew of it (this node’s own copy is from 2026-11-01T04:56:07.548Z). Anything revoked or forgotten on the old hub after that isn’t known here: check Settings › Devices and Memory afterwards.
+**Case 4.** N2 killed; N1, its live standby, made the hub (M4’s promotion, epoch 7); N2 back and fenced (0.7 s)
+- N2 says: This node isn’t the hub any more: “Hub” at http://127.0.0.1:42091 became the hub (epoch 7) while it was away, so this one only reads. “Hub” at http://127.0.0.1:42091 is the hub.
+- asked to become the hub with what it had: This node isn’t the hub any more: “Hub” at http://127.0.0.1:42091 became the hub (epoch 7) while it was away, so this one only reads. “Hub” at http://127.0.0.1:42091 is the hub. It has no copy of the hub’s latest data, so it can’t take over. Enroll it again as the standby first.
+
+**Case 6.** An emergency promotion from the latest backup onto N2 (a hub candidate, not the standby), with N1 unreachable (2.2 s)
+- sheet: The backup: Backup 5, made 2026-11-01T06:46:12.986Z. Nova checked its seal: Nova made it.
+- sheet: What is lost: Everything written after 2026-11-01T06:46:12.986Z: changes, conversations, memories and tasks from then on are not in the backup.
+- sheet: What may come back: Devices revoked and memories forgotten stay that way when the backup or this node knew of it (this node’s own copy is from 2026-11-01T06:46:12.314Z). Anything revoked or forgotten on the old hub after that isn’t known here: check Settings › Devices and Memory afterwards.
 - sheet: Connectors: Connectors need signing in again. Backups never hold the key to your saved secrets, so they can’t be opened from this backup. The key stays only where it already was: on the old hub, on a standby that copied it, and in their own checkpoints, which never leave those computers.
 - sheet: Devices: Devices paired before the backup find this node without pairing again: its key is in the roster they hold. A device paired after it needs pairing again.
-- sheet: Epoch: This node becomes the hub at epoch 6: higher than its own record (5), the backup’s (5) and the newest roster your devices have shown it (epoch 5, from one device). A device that saw a newer one hasn’t told this node.
-- sheet: The stable name: Devices look for the hub at http://127.0.0.1:43809.
+- sheet: Epoch: This node becomes the hub at epoch 8: higher than its own record (7), the backup’s (7) and the newest roster your devices have shown it (epoch 7, from one device). A device that saw a newer one hasn’t told this node.
+- sheet: The stable name: Devices look for the hub at http://127.0.0.1:42589.
 - sheet: Why it asks: It changes which computer runs Nova and holds your data, so it needs your explicit confirmation every time (tier 3).
-- ledger: “Emergency promotion from the backup of 2026-11-01T04:56:08.343Z”: done
+- ledger: “Emergency promotion from the backup of 2026-11-01T06:46:12.986Z”: done
 - ledger: “Promoted from a backup: this node is the hub”: done
 - memory written after the backup: absent on N2 (lost, as said); the connector secret: not in N2’s vault (1 secrets)
-- the computer follows N2 at epoch 6 with no new pairing; the phone signs in at the stable name
+- the computer follows N2 at epoch 8 with no new pairing; the phone signs in at the stable name
 
-**Case 5.** The old hub back while the new one is down: the computer refuses its lower epoch (0.6 s)
-- the computer says: http://127.0.0.1:43809 can’t be reached (UND_ERR_SOCKET). http://127.0.0.1:42133 says it is hub at epoch 5, older than 6; it was replaced.
+**Case 5.** The old hub back while the new one is down: the computer refuses its lower epoch (0.5 s)
+- the computer says: http://127.0.0.1:42589 can’t be reached (UND_ERR_SOCKET). http://127.0.0.1:42091 says it is hub at epoch 7, older than 8; it was replaced.
 
-**Case 7.** N1 returns, finds N2 at epoch 6 (a pinned candidate), and steps down before it takes any change (0.9 s)
-- N1 says: This node isn’t the hub any more: “Spare” at http://127.0.0.1:43757 became the hub (epoch 6) while it was away, so this one only reads. “Spare” at http://127.0.0.1:43757 is the hub.
+**Case 7.** N1 returns, finds N2 at epoch 8 (a pinned candidate), and steps down before it takes any change (0.9 s)
+- N1 says: This node isn’t the hub any more: “Spare” at http://127.0.0.1:43313 became the hub (epoch 8) while it was away, so this one only reads. “Spare” at http://127.0.0.1:43313 is the hub.
+- asked to become the hub with what it had: This node isn’t the hub any more: “Spare” at http://127.0.0.1:43313 became the hub (epoch 8) while it was away, so this one only reads. “Spare” at http://127.0.0.1:43313 is the hub. It has no copy of the hub’s latest data, so it can’t take over. Enroll it again as the standby first.
 
 **Case 10.** A node with a valid signature from a key that isn’t pinned, at epoch 99, can’t take the role (0.0 s)
-- the computer says: http://127.0.0.1:43809: Its key isn’t one this device pinned.
+- the computer says: http://127.0.0.1:42589: Its key isn’t one this device pinned.
 
-**Case 8.** Throughout: both nodes asked to take a change at the same moment, every 100 ms (0.0 s)
-- 154 ticks; N1 took 44, N2 took 78; both in the same tick: 0
+**Case 8.** Throughout: both nodes asked to take a change at the same moment, every 100 ms (0.1 s)
+- 309 ticks; N1 took 127, N2 took 152; both in the same tick: 0
 
 **Case 9.** No private key left its device (0.2 s)
-- key files byte-identical before and after: n1 28a943a98532…, n2 7248b4599de4…, computer 83b7d8b4c3c5…
-- scanned 232 files (6967 KB), 2279 database rows read one by one, and 5 KB the processes printed: both homes, the computer’s home, every backup and 59 tapped messages (handover, health-answer, hello, ready-answer, stand-down-answer, start, sync, transfer-answer), for 6 private keys in 8 text encodings (JWK, hex both cases, base64, a byte list, PKCS8 DER as hex and base64, PEM) and 2 byte forms (raw, DER): none outside its own key file
+- key files byte-identical before and after: n1 43936d154fcd…, n2 192aa56ad8a7…, computer 60f91eea283a…
+- scanned 317 files (11289 KB), 4718 database rows read one by one, and 6 KB the processes printed: both homes, the computer’s home, every backup and 119 tapped messages (handover, health-answer, hello, ready-answer, stand-down-answer, start, sync, transfer-answer), for 6 private keys in 8 text encodings (JWK, hex both cases, base64, a byte list, PKCS8 DER as hex and base64, PEM) and 2 byte forms (raw, DER): none outside its own key file
 - the vault’s key: no backup, tapped message, database row or output holds it; only the vault key files and their own checkpoints do
 
-**Write probe:** 154 ticks; N1 took a change in 44, N2 in 78, both in the same tick in 0.
+**Write probe:** 309 ticks; N1 took a change in 127, N2 in 152, both in the same tick in 0.
 
-**Key files** (SHA-256 before and after): n1 28a943a9853234d6… → 28a943a9853234d6…; n2 7248b4599de4a3a7… → 7248b4599de4a3a7…; computer 83b7d8b4c3c546db… → 83b7d8b4c3c546db…. Scanned 232 files (6967 KB) and 59 tapped messages; private keys found outside their own key file: 0.
+**Key files** (SHA-256 before and after): n1 43936d154fcd1ddc… → 43936d154fcd1ddc…; n2 192aa56ad8a79b8a… → 192aa56ad8a79b8a…; computer 60f91eea283aaa1a… → 60f91eea283aaa1a…. Scanned 317 files (11289 KB) and 119 tapped messages; private keys found outside their own key file: 0.

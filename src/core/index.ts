@@ -686,6 +686,7 @@ export function createCore(o: CoreOptions) {
     quiet: (on) => { devices.quiet = on; },
     keep: (name) => { const v = checkpoints.take({ kind: 'named', name }); return { id: v.id, label: v.label }; },
     pause: (k) => ledger.pause(k),
+    vaultNames: () => (vault.status().ok ? vault.list() : []),
     cold: {
       drill: (dir) => runDrill({ live: db, backupDir: dir, source: 'folder', migrations: loadMigrations(), ...(o.resilience?.drill?.root ? { root: o.resilience.drill.root } : {}), ...(o.resilience?.drill?.env ? { sandboxEnv: o.resilience.drill.env } : {}), ...(o.resilience?.drill?.timeoutMs ? { timeoutMs: o.resilience.drill.timeoutMs } : {}) }),
       stage: (dir, c) => checkpoints.stageCold(dir, { node: c.node, floor: c.floor, promotion: c.promotion, backup: { id: c.backup.id, seq: c.backup.seq, at: c.backup.at, path: c.backup.path }, by: c.by }),
@@ -694,7 +695,14 @@ export function createCore(o: CoreOptions) {
       folder: () => keep.settings().target,
     },
   });
-  if (nameControl && publicUrl() && !process.env.NOVA_MESH_NAME_TOKEN) log.warn('mesh', 'NOVA_MESH_NAME_CONTROL is set without NOVA_MESH_NAME_TOKEN (16 characters or more), or isn’t https or this machine, so Nova won’t move the stable name: an unauthenticated request must never move it.');
+  if (nameControl && publicUrl()) {
+    const t = process.env.NOVA_MESH_NAME_TOKEN ?? '';
+    let plain = false;
+    try { const u = new URL(nameControl); plain = u.protocol !== 'https:' && !/^(127\.\d+\.\d+\.\d+|localhost|\[::1\])$/.test(u.hostname); } catch { plain = true; }
+    if (!t) log.warn('mesh', 'NOVA_MESH_NAME_CONTROL is set without NOVA_MESH_NAME_TOKEN, so Nova won’t move the stable name: an unauthenticated request must never move it.');
+    else if (t.length < 16) log.warn('mesh', 'NOVA_MESH_NAME_TOKEN is shorter than 16 characters, so Nova won’t move the stable name with it. Use a long random token.');
+    if (plain) log.warn('mesh', 'NOVA_MESH_NAME_CONTROL is plain http to another machine, so Nova won’t use it: anyone on the way could read the token. Use https, or a control on this machine.');
+  }
   // The drill's tap (mesh/tap.ts) writes only in a test or the drill, on a temp home; anywhere else it
   // is refused and said.
   if (process.env.NOVA_DRILL_TAP && !o.sandbox) {

@@ -197,6 +197,9 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     await startNode('n2');
     await enrollWith(['--kind', 'computer', '--name', 'Desk computer'], { HOME: join(root, 'user'), NOVA_DEVICE_HOME: kHome });
     const kId = computer().d.device_id as string;
+    // The computer's record as it is now (epoch 1, following N1): case 11 looks for the hub with it,
+    // as if the computer had been asleep through every promotion until then.
+    const asleep = JSON.parse(JSON.stringify(computer().d));
     // A phone, paired at the stable name.
     const phone = new Joiner(name.url, nowS, { name: 'Pocket phone', kind: 'phone' });
     await phone.join((await n1.send('POST', '/api/v1/mesh/pairings')).body.code);
@@ -307,25 +310,60 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
       `the computer follows N2 at epoch ${k3.ok ? k3.epoch : '?'}`,
     ]);
 
+    // ---- case 11: two more planned promotions; a computer asleep since epoch 1 follows the chain ---
+    // (review N5) N2 → N1 at epoch 5, then N1 → N2 at 6. A computer that slept through all of it holds
+    // epoch 1 and N1 as its hub: epoch 6 from N2 is a jump of 5, past the +3 a device takes from a hub
+    // that isn't its own, so it follows only because every hand-over link, each signed by the hub
+    // before it, leads from N1 at epoch 1 to N2 at 6.
+    const planned = async (from: 'n1' | 'n2', toId: string, epoch: number) => {
+      const f = node[from];
+      const toMesh = from === 'n1' ? mesh2 : mesh1;
+      await wait('the standby to copy the hub', () => f.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.rows === 0 && h.checks.mesh.standby?.lag?.acked_seq > 0, 60_000);
+      await backupAndDrill(from);
+      await wait('the standby to catch up', () => f.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.rows === 0);
+      const s = await f.send('POST', '/api/v1/mesh/promotions', { device_id: toId, confirm: true });
+      assert.equal(s.status, 202, JSON.stringify(s.body));
+      await wait(`the new hub at epoch ${epoch}`, () => hello(toMesh), (h: any) => h.role === 'hub' && h.epoch === epoch);
+      await wait('the window to pass', () => f.get('/api/v1/mesh/promotion'), (v: any) => v.promotion?.state === 'verified', 60_000);
+    };
+    await wait('N1 to copy N2', () => n2.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.acked_seq > 0 && h.checks.mesh.standby.lag.rows === 0);
+    await planned('n2', n1Id, 5);
+    await planned('n1', n2Id, 6);
+    const links11 = (await call(mesh2, 'GET', '/api/v1/mesh/roster/chain')).body.links as { link: { epoch: number } }[];
+    const k11 = await computer().find();
+    assert.ok(k11.ok && k11.epoch === 6, JSON.stringify(k11));
+    assert.deepEqual([asleep.epoch, asleep.roster.roster.hub.id], [1, n1Id], 'the record it slept with');
+    const woke = await findHub(computer().p, JSON.parse(JSON.stringify(asleep)), new Signer(importDeviceKeys(JSON.parse(readFileSync(computer().p.keys, 'utf8')))));
+    assert.ok(woke.ok && woke.epoch === 6, JSON.stringify(woke));
+    assert.equal(computer().d.roster.roster.hub.id, n2Id, 'it follows N2 at epoch 6, without pairing again');
+    step(11, 'Two more planned promotions (N2 → N1 at 5, N1 → N2 at 6); a computer asleep since epoch 1 follows the jump of 5 by the chain of hand-overs', [
+      `N2 serves ${links11.length} hand-over links (epochs ${links11.map((l) => l.link.epoch).join(', ')}), each signed by the hub before it`,
+      `the computer, with the record it held at epoch 1 (N1 its hub), follows N2 at epoch ${woke.ok ? woke.epoch : '?'}: a jump of 5, past the +3 it takes without a chain`,
+    ]);
+
     // ---- case 4: M4's emergency with a live standby; the old hub fenced -------------------------
     await wait('N1 to copy N2 again', () => n2.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.rows === 0 && h.checks.mesh.standby?.lag?.acked_seq > 0);
     await stopNode('n2', 'kill');
     const pr = await n1.send('POST', '/api/v1/mesh/promote', { confirm: true });
     assert.equal(pr.status, 200, JSON.stringify(pr.body));
-    assert.equal(pr.body.epoch, 5);
+    assert.equal(pr.body.epoch, 7);
     await wait('the name to lead to N1', async () => name.target(), (t) => t === addr.n1);
     const k4 = await computer().find();
-    assert.ok(k4.ok && k4.epoch === 5, JSON.stringify(k4));
+    assert.ok(k4.ok && k4.epoch === 7, JSON.stringify(k4));
     await startNode('n2');
     const fenced = await n2.get('/api/v1/mesh/status');
     assert.equal(fenced.role, 'standby');
     const refused4 = await n2.send('POST', '/api/v1/memory', { kind: 'fact', content: 'x' });
     assert.equal(refused4.status, 409);
     // It copies nothing now, so it can't be made the hub with what it had (its role file still says hub).
+    // N1 handed the hub to N2 in case 11, a promotion that was verified and is over: meeting N1 as hub
+    // again isn't a take-back of it, so N2 keeps its own data (it doesn't copy N1 afresh).
     const stale = await n2.send('POST', '/api/v1/mesh/promote', { confirm: true });
     assert.equal(stale.status, 409, JSON.stringify(stale.body));
     assert.match(stale.body.error, /no copy of the hub’s latest data/);
-    step(4, 'N2 killed; N1, its live standby, made the hub (M4’s promotion, epoch 5); N2 back and fenced', [`N2 says: ${refused4.body.error}`, `asked to become the hub with what it had: ${stale.body.error}`]);
+    const st4 = await n2.get('/api/v1/mesh/status');
+    assert.ok(st4.counts.trusted > 0, `N2 kept its own copy: ${JSON.stringify(st4.counts)}`);
+    step(4, 'N2 killed; N1, its live standby, made the hub (M4’s promotion, epoch 7); N2 back and fenced', [`N2 says: ${refused4.body.error}`, `asked to become the hub with what it had: ${stale.body.error}`]);
 
     // ---- case 6: an emergency promotion from the latest backup onto N2, not the standby ---------
     const b6 = await backupAndDrill('n1');
@@ -336,7 +374,13 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     const kLook = await computer().find();
     assert.equal(kLook.ok, false);
     const sheet = await wait('the emergency sheet', () => n2.get('/api/v1/mesh/promotion/cold'), (v: any) => v.eligible === true && (v.facts.seen?.count ?? 0) >= 1, 30_000);
-    assert.equal(sheet.facts.seen.max, 5, 'the computer’s roster, at epoch 5');
+    assert.equal(sheet.facts.seen.max, 7, 'the computer’s roster, at epoch 7');
+    assert.equal(sheet.facts.seen.count, 1, 'from one device: the computer, signed with its own key');
+    // A report that isn't signed by a paired device's key counts for nothing, and a lower one never
+    // lowers what was seen (review N2).
+    const unsigned = await call(mesh2, 'POST', '/api/v1/mesh/seen', { roster: asleep.roster });
+    assert.equal(unsigned.body.kept, false, JSON.stringify(unsigned.body));
+    assert.equal((await n2.get('/api/v1/mesh/promotion/cold')).facts.seen.max, 7);
     const words = sheet.sheet.map((f: any) => `${f.label}: ${f.text}`);
     assert.ok(words.some((w: string) => w.includes(b6.at)), 'the backup’s time');
     assert.ok(words.some((w: string) => /^What is lost: Everything written after/.test(w)), 'what was lost');
@@ -345,7 +389,7 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     assert.equal((await n2.send('POST', '/api/v1/mesh/promotion/cold', { confirm: true, backup: 'nova-backup-000001' })).status, 409, 'only the backup the sheet showed');
     const cold = await n2.send('POST', '/api/v1/mesh/promotion/cold', { confirm: true, backup: sheet.facts.backup.id });
     assert.equal(cold.status, 202, JSON.stringify(cold.body));
-    await wait('N2 to come back as the hub at epoch 6', () => hello(mesh2), (h: any) => h.role === 'hub' && h.epoch === 6, 120_000);
+    await wait('N2 to come back as the hub at epoch 8', () => hello(mesh2), (h: any) => h.role === 'hub' && h.epoch === 8, 120_000);
     await wait('N2’s console after its restart', () => n2.get('/api/v1/mesh/status'), (s: any) => s.role === 'hub');
     const done6 = await wait('the cold chain', () => n2.get('/api/v1/mesh/promotion'), (v: any) => v.promotion?.state === 'done' && v.tasks.length >= 2 && v.tasks.every((t: any) => t.state === 'done'));
     const memories = (await n2.get('/api/v1/memory')) as any[];
@@ -355,7 +399,7 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     assert.ok(!(vault.names ?? []).includes('provider/DRILL_TOKEN'), 'the connector’s secret didn’t come back: it needs signing in again');
     await wait('the name to lead to N2', async () => name.target(), (t) => t === addr.n2);
     const k6 = await computer().find();
-    assert.ok(k6.ok && k6.epoch === 6, JSON.stringify(k6));
+    assert.ok(k6.ok && k6.epoch === 8, JSON.stringify(k6));
     assert.equal(computer().d.roster.roster.hub.id, n2Id);
     assert.equal((await phone.session()).status, 200, 'the phone, paired before the backup, signs in without pairing again');
     step(6, 'An emergency promotion from the latest backup onto N2 (a hub candidate, not the standby), with N1 unreachable', [
@@ -368,11 +412,11 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     // ---- case 5: the old hub back while the new one is down: refused for its lower epoch --------
     await stopNode('n2');
     await startNode('n1');
-    assert.deepEqual([(await hello(mesh1)).role, (await hello(mesh1)).epoch], ['hub', 5], 'it can’t reach anyone, so it can’t know');
+    assert.deepEqual([(await hello(mesh1)).role, (await hello(mesh1)).epoch], ['hub', 7], 'it can’t reach anyone, so it can’t know');
     const k5 = await computer().find();
     assert.equal(k5.ok, false);
-    assert.match((k5 as { reason: string }).reason, /epoch 5, older than 6; it was replaced/);
-    assert.equal(computer().d.epoch, 6, 'the computer still holds epoch 6');
+    assert.match((k5 as { reason: string }).reason, /epoch 7, older than 8; it was replaced/);
+    assert.equal(computer().d.epoch, 8, 'the computer still holds epoch 8');
     await stopNode('n1');
     step(5, 'The old hub back while the new one is down: the computer refuses its lower epoch', [`the computer says: ${(k5 as { reason: string }).reason}`]);
 
@@ -382,8 +426,13 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     assert.equal((await n1.get('/api/v1/mesh/status')).role, 'standby');
     const r7 = await n1.send('POST', '/api/v1/memory', { kind: 'fact', content: 'x' });
     assert.equal(r7.status, 409);
+    // It copies nothing now (it stepped down from a hub no hand-over gave back to), so it can't be made
+    // the hub with what it had.
+    const stale7 = await n1.send('POST', '/api/v1/mesh/promote', { confirm: true });
+    assert.equal(stale7.status, 409, JSON.stringify(stale7.body));
+    assert.match(stale7.body.error, /no copy of the hub’s latest data/);
     assert.deepEqual([(await hello(mesh2)).role, (await hello(mesh1)).role], ['hub', 'standby'], 'one hub');
-    step(7, 'N1 returns, finds N2 at epoch 6 (a pinned candidate), and steps down before it takes any change', [`N1 says: ${r7.body.error}`]);
+    step(7, 'N1 returns, finds N2 at epoch 8 (a pinned candidate), and steps down before it takes any change', [`N1 says: ${r7.body.error}`, `asked to become the hub with what it had: ${stale7.body.error}`]);
 
     // ---- case 10: a key that isn't pinned can't take the role --------------------------------------
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -403,7 +452,7 @@ export async function runDrill(o: { say?: (line: string) => void } = {}): Promis
     const f10 = await findHub(k10.p, { ...k10.d, roster: { ...k10.d.roster, roster: { ...k10.d.roster.roster, hub: { ...k10.d.roster.roster.hub, url: name.url }, candidates: [] } } }, new Signer(importDeviceKeys(JSON.parse(readFileSync(k10.p.keys, 'utf8')))));
     liar.close();
     name.point(addr.n2);
-    assert.equal(computer().d.epoch, 6, 'nothing was taken from it');
+    assert.equal(computer().d.epoch, 8, 'nothing was taken from it');
     const said10 = f10.ok ? '' : f10.reason;
     assert.match(said10, /Its key isn’t one this device pinned/);
     step(10, 'A node with a valid signature from a key that isn’t pinned, at epoch 99, can’t take the role', [`the computer says: ${said10.split(/(?<=\.) /).find((x) => /pinned/.test(x))}`]);

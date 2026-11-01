@@ -338,6 +338,31 @@ built-ins only.
 
 ## Decisions
 
+**2026-11-01 (M10g, after the second adversarial review of #272: replays, evidence, ties, the name, long jumps).**
+Branch `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The second review of #272"). Five
+findings and four minor at `53058d93`, each reproduced from the reviewer's probe (p10–p15) as a test
+(`tests/acceptance/m10g-review2.test.ts` R10–R15, a device-agent test, or the drill's new case 11),
+fixed, and seen failing again with the fix undone.
+- **What M10g guarantees during a split, stated exactly:** during a split, two hubs can briefly accept
+  writes; when contact returns, it settles to one, and the loser's changes are kept and named, never
+  merged automatically. ADR-11's "one active hub" holds only while the nodes can reach each other.
+  Whether ADR-11 is reworded or a lease or third vote is added is the owner's decision (open); no lease
+  is built.
+- **Signed answers are bound to their request** (its nonce and time), so a forwarder can drop or delay
+  them but not replay one; the nonces a node took survive its restart.
+- **Devices' roster reports** (`/mesh/seen`) count only when signed by a paired device's own key; the
+  highest epoch seen only rises; one a second per device, after the checks; devices are counted, not
+  reports.
+- **A tie** is settled with the winner going one epoch higher at once, so devices follow it; every
+  step-down keeps what that node took as hub in a named checkpoint, listing only its own changes.
+- **The stable name** is pointed at whichever node is hub once it settles (every step-down, a cancel,
+  and a periodic check on the hub), and a move that didn't take is said plainly.
+- **Long jumps:** each planned hand-over adds a link signed by the hub handing over; a device follows
+  a jump of any size along that chain back to the hub it knows. Chosen over raising the +3 limit, which
+  would let any pinned key jump far ahead. Emergency promotions add no link.
+- **Minor:** safe mode takes a changed roster; the name token never reaches the agent and is a
+  diagnostics secret; the epoch ceiling is enforced where epochs are made.
+
 **2026-11-01 (M10g, after the adversarial review of #272: split-brain and data loss closed).** Branch
 `m10g/hub-promotion`; evidence `docs/evidence/m10g-gate.md` ("The review of #272"). Two blocking findings
 and seven should-fix, each reproduced from the reviewer's probe as a test (`tests/acceptance/m10g-review.test.ts`

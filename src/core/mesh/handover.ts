@@ -39,12 +39,18 @@ import { ask, readRole } from './replica.ts';
 import { tap } from './tap.ts';
 export { tap };
 import { sealed, type Manifest } from '../resilience/backup.ts';
-import { canonicalJson, freshTime, sessionMessage, verifyDeviceSignature, verifyRoster, type SignedRoster } from './wire.ts';
+import { canonicalJson, freshTime, linkMessage, seenMessage, sessionMessage, verifyDeviceSignature, verifyLink, verifyRoster, type SignedLink, type SignedRoster, type SuccessionLink } from './wire.ts';
+import { EPOCH_CEILING } from './promote.ts';
 
 export const PROMOTION_WORKER = 'mesh-promotion';
 export const PROMOTION_SYSTEM = 'nova-promotion';
 export const PROMOTION_FILE = join('mesh', 'promotion.json');
 export const SEEN_FILE = join('mesh', 'seen-epochs.json');
+export const NONCE_FILE = join('mesh', 'promotion-nonces.json');
+// The chain of succession links ending at this node's lineage (review N5), and the log sequence at
+// which this node last became hub (what it took as hub is what lies past it).
+export const CHAIN_FILE = join('mesh', 'roster-chain.json');
+export const HUB_SINCE_FILE = join('mesh', 'hub-since.json');
 // The verification window: 30 minutes, longer if the person sets it, never shorter (the ADR). A drill
 // or a test may set a shorter one with NOVA_PROMOTION_WINDOW_S; the sheet says which applies.
 export const WINDOW_MIN_S = 30 * 60;
@@ -120,7 +126,9 @@ export function signCall(identity: MeshIdentity, step: string, to: string, epoch
   return { auth: { ...a, signature: identity.sign(callMessage(step, a, payload)) }, payload };
 }
 
-export function verifyCall(step: string, body: unknown, o: { hubId: string; hubKey: string; me: string; nowS: number; seen: Map<string, number> }): { ok: true; payload: Record<string, unknown>; epoch: number } | { ok: false; why: string } {
+// `seen`: nonces already used, kept past a restart by the caller (`onSeen` saves them), so a request
+// can't be replayed after one (review N1). Its window is the signed time's (a minute either way).
+export function verifyCall(step: string, body: unknown, o: { hubId: string; hubKey: string; me: string; nowS: number; seen: Map<string, number>; onSeen?: () => void }): { ok: true; payload: Record<string, unknown>; epoch: number; req: { nonce: string; time: number } } | { ok: false; why: string } {
   const b = body as { auth?: CallAuth; payload?: Record<string, unknown> } | null;
   const a = b?.auth;
   if (!a || typeof a.signature !== 'string' || typeof a.nonce !== 'string' || !Number.isInteger(a.time) || !Number.isInteger(a.epoch)) return { ok: false, why: 'That isn’t a signed request from the hub.' };
@@ -130,7 +138,8 @@ export function verifyCall(step: string, body: unknown, o: { hubId: string; hubK
   if (o.seen.has(a.nonce)) return { ok: false, why: 'That signed request was already used.' };
   if (!verifyDeviceSignature(o.hubKey, callMessage(step, a, b?.payload ?? null), a.signature)) return { ok: false, why: 'The request isn’t signed by the hub’s key.' };
   o.seen.set(a.nonce, o.nowS);
-  return { ok: true, payload: (b?.payload ?? {}) as Record<string, unknown>, epoch: a.epoch };
+  o.onSeen?.();
+  return { ok: true, payload: (b?.payload ?? {}) as Record<string, unknown>, epoch: a.epoch, req: { nonce: a.nonce, time: a.time } };
 }
 
 // The handover (step 4): the old hub names its successor at the next epoch and the last sequence
@@ -141,8 +150,17 @@ export const handoverMessage = (h: Handover) => Buffer.from(`nova-handover-v1|${
 export const verifyHandover = (s: SignedHandover, key: string) => !!s?.handover && typeof s.signature === 'string' && verifyDeviceSignature(key, handoverMessage(s.handover), s.signature);
 
 // What the other node answers with authority (its health, that it stood down, whether it took a
-// hand-over) is signed by its own pinned key, so a forwarder in between can't make either node act.
+// hand-over) is signed by its own pinned key, and bound to the request it answers: the body carries
+// that request's nonce and signed time (`req`), and the asker takes an answer only for the request it
+// just sent (review N1). A forwarder in between can still drop or delay answers (so nothing moves by
+// itself on silence), but it can't forge one, nor replay an old one for a new request.
 export interface SignedAnswer<T> { body: T; signature: string }
+export interface Sent { nonce: string; time: number }
+export const answers = (kind: string, a: unknown, key: string, sent: Sent): boolean => {
+  if (!verifyAnswer(kind, a, key)) return false;
+  const req = ((a as SignedAnswer<{ req?: Sent }>).body as { req?: Sent } | null)?.req;
+  return !!req && req.nonce === sent.nonce && req.time === sent.time;
+};
 const answerMessage = (kind: string, body: unknown) => Buffer.from(`nova-promotion-answer-v1|${kind}|${canonicalJson(body)}`, 'utf8');
 export const signAnswer = <T>(identity: MeshIdentity, kind: string, body: T): SignedAnswer<T> => ({ body, signature: identity.sign(answerMessage(kind, body)) });
 export const verifyAnswer = (kind: string, a: unknown, key: string): boolean => {
@@ -294,6 +312,8 @@ export interface PromotionOptions {
   keep?: (name: string) => { id: string; label: string };
   // The ledger stops starting work, without stopping what runs (a restart while holding: finding 4).
   pause?: (keep: (t: Task) => boolean) => void;
+  // The vault's secret names (never values), to say what a kept checkpoint holds of it.
+  vaultNames?: () => string[];
 }
 
 export const KEEP_OWNERS = (t: Task) => t.owner === PROMOTION_WORKER || t.owner === 'mesh';
@@ -305,7 +325,7 @@ export class Promotions {
   #seen = new Map<string, number>();
   #closed = false;
   #lastFence = 0;
-  #lastSeen = 0;
+  #seenAt = new Map<string, number>();
   #lastTime = 0;
   readonly windowS: number;
   readonly probeMs: number;
@@ -323,14 +343,31 @@ export class Promotions {
     if (!t && (window < WINDOW_MIN_S || pace < PROBE_MIN_MS)) o.log.warn('mesh', `A promotion’s window is never shorter than ${WINDOW_MIN_S / 60} minutes, nor its probes faster than one every ${PROBE_MIN_MS / 1000} s, outside a test or the drill; the shorter setting was ignored.`);
     o.ledger.workers.set(this.worker.id, this.worker);
     o.verifier.registerConfirmation(PROMOTION_SYSTEM, (e, brief) => this.#confirm(e, brief));
+    // Nonces of requests already taken, from before a restart (review N1).
+    try { for (const [n, t] of Object.entries(JSON.parse(readFileSync(join(o.home, NONCE_FILE), 'utf8')) as Record<string, number>)) this.#seen.set(n, t); } catch { /* none yet */ }
     // A roll-back elsewhere: the node this one took over from is hub again at a higher epoch, and this
     // node stepped down (fencing). It follows that hub as its live standby, copying it afresh.
     // Before it copies afresh, whatever it took that the other never copied is kept, never thrown away.
     o.role.on('demoted', (d: { hub: string; epoch: number }) => {
       const r = this.record();
-      if (!r || r.kind !== 'planned' || r.side !== 'to' || !r.from || r.from.id !== d.hub || !['verifying', 'verified', 'transferring', 'failed'].includes(r.state)) return;
+      const winner = o.devices.find(d.hub);
+      // Whichever node won, the stable name goes to it (review N4), from here too: this node may be the
+      // one that can still reach the name's control.
+      if (winner?.address) void this.#pointName(winner.address).catch(() => {});
+      // Only a promotion still open is taken back (a take-back, a roll-back, a cancel). One that was
+      // verified is over: a later step-down to the same node (an M4 promotion of it, say) isn't a
+      // take-back, and that node doesn't count this one as its standby, so copying it afresh would
+      // leave this node empty and refused (found by the drill's case 4 after case 11).
+      if (!r || r.kind !== 'planned' || r.side !== 'to' || !r.from || r.from.id !== d.hub || !['verifying', 'transferring', 'failed'].includes(r.state)) {
+        // Any other step-down (a failover's old hub coming back, a tie lost: review N3): what it took as
+        // hub that the winner never copied is set aside in a named checkpoint too, and said. It stays
+        // read-only, keeping its copy, as before.
+        const kept = this.#keepUncopied(`Changes “${winner?.name ?? 'the hub'}” never got`, `while this node was the hub, before “${winner?.name ?? 'another node'}” was found hub at epoch ${d.epoch}`, this.#baseline());
+        if (kept) this.#problem(kept);
+        return;
+      }
       const from = r.from;
-      const kept = this.#keepUncopied(`Changes “${from.name}” never got`, `while this node was the hub, “${from.name}” took the role back at epoch ${d.epoch}`, o.db.get<{ acked_seq: number }>('SELECT acked_seq FROM sync_state WHERE id = 1')?.acked_seq ?? 0);
+      const kept = this.#keepUncopied(`Changes “${from.name}” never got`, `while this node was the hub, “${from.name}” took the role back at epoch ${d.epoch}`, this.#baseline());
       if (kept === false) {
         this.#save({ ...r, state: 'stepped-down', said: `“${from.name}” took the hub back at epoch ${d.epoch}. This node stepped down and keeps what it had (it couldn’t set aside its own changes first, so it doesn’t copy “${from.name}” yet).` });
         return;
@@ -346,7 +383,8 @@ export class Promotions {
     // Any other promotion (M4's, by the person): the node that became hub points the stable name at
     // itself too, under the person's tier-3 confirmation. An automatic failover doesn't move the name:
     // nobody confirmed that, and no window watches it; it says so instead.
-    o.role.on('promoted', (p: { planned?: boolean; auto?: boolean }) => {
+    o.role.on('promoted', (p: { planned?: boolean; auto?: boolean; since?: number }) => {
+      this.#saveJson(HUB_SINCE_FILE, { seq: p.since ?? 0, at: this.#o.now().toISOString() });
       if (p.planned) return;
       if (p.auto) { if (this.#o.name) this.#problem(`This node became the hub by itself (automatic failover), so Nova didn’t move ${this.#o.publicUrl() ?? 'the stable name'}: nobody confirmed that. Phones and browsers find this hub when you point the name here; computers follow the roster.`); return; }
       void this.#pointName().catch(() => {});
@@ -376,6 +414,52 @@ export class Promotions {
     return next;
   }
 
+  // Where this node's own changes as hub begin: past what its standby acknowledged, and past the log as
+  // it was when it last became hub (what it holds from before is the other node's, or seed data both
+  // have), so a kept list names only real changes made here (review, minor).
+  #baseline(): number {
+    const acked = this.#o.db.get<{ acked_seq: number }>('SELECT acked_seq FROM sync_state WHERE id = 1')?.acked_seq ?? 0;
+    let since = 0;
+    try { since = Number((JSON.parse(readFileSync(join(this.#o.home, HUB_SINCE_FILE), 'utf8')) as { seq?: number }).seq) || 0; } catch { /* never promoted */ }
+    return Math.max(acked, since);
+  }
+
+  #saveJson(rel: string, v: unknown): void {
+    try {
+      const file = join(this.#o.home, rel);
+      mkdirSync(join(this.#o.home, 'mesh'), { recursive: true, mode: 0o700 });
+      writeFileSync(`${file}.tmp`, `${JSON.stringify(v, null, 2)}\n`, { mode: 0o600 });
+      renameSync(`${file}.tmp`, file);
+    } catch { /* said by whoever needed it */ }
+  }
+
+  // ---- the succession chain (review N5) --------------------------------------------------------------
+
+  chain(): SignedLink[] {
+    try { const j = JSON.parse(readFileSync(join(this.#o.home, CHAIN_FILE), 'utf8')) as { links?: SignedLink[] }; return Array.isArray(j.links) ? j.links : []; } catch { return []; }
+  }
+
+  #extendChain(links: SignedLink[]): void {
+    const all = [...this.chain(), ...links].filter((l) => verifyLink(l));
+    const by = new Map(all.map((l) => [`${l.link.epoch}|${l.link.hub_key}|${l.link.by_key}`, l]));
+    this.#saveJson(CHAIN_FILE, { links: [...by.values()].sort((a, b) => a.link.epoch - b.link.epoch).slice(-64) });
+  }
+
+  // This node, the hub at the epoch before, names the next hub's key at `epoch`.
+  #link(hubKey: string, epoch: number): SignedLink {
+    const link: SuccessionLink = { v: 1, epoch, hub_key: hubKey, by_key: this.#o.identity.publicKey, at: this.#o.now().toISOString() };
+    return { link, signature: this.#o.identity.sign(linkMessage(link)) };
+  }
+
+  #saveSeen = (): void => {
+    try {
+      const file = join(this.#o.home, NONCE_FILE);
+      mkdirSync(join(this.#o.home, 'mesh'), { recursive: true, mode: 0o700 });
+      writeFileSync(`${file}.tmp`, JSON.stringify(Object.fromEntries(this.#seen)), { mode: 0o600 });
+      renameSync(`${file}.tmp`, file);
+    } catch { /* the in-memory set still holds until a restart */ }
+  };
+
   // A problem, unless Nova is stopping (the database may be closed by then).
   #problem(message: string, detail?: string): void {
     if (this.#closed) return;
@@ -392,9 +476,11 @@ export class Promotions {
   // named checkpoint before anything copies over them, and said exactly. Returns the words said, null
   // when there was nothing to keep, false when they couldn't be set aside (then nothing may wipe them).
   #keepUncopied(name: string, when: string, after: number): string | null | false {
-    const rows = this.#o.db.all<{ seq: number; tbl: string; pk: string; op: string }>(`SELECT seq, tbl, pk, op FROM sync_log WHERE seq > ? AND tbl != 'vault' ORDER BY seq`, after);
+    const rows = this.#o.db.all<{ seq: number; tbl: string; pk: string; op: string }>(`SELECT seq, tbl, pk, op FROM sync_log WHERE seq > ? ORDER BY seq`, after);
     if (!rows.length) return null;
-    const what = summarize(rows);
+    let names: string[] = [];
+    try { names = this.#o.vaultNames?.() ?? []; } catch { /* a vault that won't open: no names */ }
+    const what = summarize(rows, names);
     let kept: { id: string; label: string };
     try { kept = this.#o.keep ? this.#o.keep(`${name} (${this.#o.now().toISOString().slice(0, 16)})`) : (() => { throw new Error('no way to keep them'); })(); } catch (e) {
       this.#problem(`${rows.length} ${rows.length === 1 ? 'change' : 'changes'} made here ${when} never reached the other node (${what}), and Nova couldn’t set ${rows.length === 1 ? 'it' : 'them'} aside in a checkpoint (${(e as Error).message}). Nothing was deleted: this node keeps them as they are and doesn’t copy the hub until you have looked.`);
@@ -432,7 +518,13 @@ export class Promotions {
     return true;
   }
 
+  #nameTimer: ReturnType<typeof setInterval> | null = null;
+
   start(): void {
+    if (this.#o.name && !this.#nameTimer) {
+      this.#nameTimer = setInterval(() => { void this.settleName().catch(() => {}); }, Math.max(this.probeMs * 4, 500));
+      this.#nameTimer.unref?.();
+    }
     const r = this.record();
     if (!r) return;
     const s = this.#o.devices.state();
@@ -459,6 +551,7 @@ export class Promotions {
 
   close(): void {
     this.#closed = true;
+    if (this.#nameTimer) clearInterval(this.#nameTimer);
     if (this.#watching) clearTimeout(this.#watching);
   }
 
@@ -566,11 +659,12 @@ export class Promotions {
     const epoch = r.epoch_from + 1;
     const h: Handover = { v: 1, id: r.id, parent: r.parent, from: this.#o.identity.id, to: to.id, epoch, last_seq: last, from_address: this.#o.address(), name: this.#o.publicUrl(), at: this.#o.now().toISOString() };
     const signed: SignedHandover = { handover: h, signature: this.#o.identity.sign(handoverMessage(h)) };
+    const link = this.#link(to.public_key, epoch);
     let answer: { status: number; body: any } | null = null;
     let why = '';
-    try { answer = await this.#callCandidate(to, 'transfer', { handover: signed }, 30_000); } catch (e) { why = (e as Error).message; }
+    try { answer = await this.#callCandidate(to, 'transfer', { handover: signed, link, chain: this.chain() }, 30_000); } catch (e) { why = (e as Error).message; }
     const roster = answer?.body?.roster as SignedRoster | undefined;
-    if (answer?.status === 200 && this.#theirs(roster, to, epoch)) { this.#followNew(r, to, epoch, last, roster!); return; }
+    if (answer?.status === 200 && this.#theirs(roster, to, epoch)) { this.#extendChain([link]); this.#followNew(r, to, epoch, last, roster!); return; }
     // Anything else, even a refusal, may come after the candidate took the role (finding 3): only its
     // own signed word that it didn't lets this node carry on as hub.
     why ||= answer ? `it answered ${answer.status}${answer.body?.error ? `: ${answer.body.error}` : ''}` : 'no answer';
@@ -606,7 +700,7 @@ export class Promotions {
     if (!to?.address) return null;
     try {
       const a = await this.#callCandidate(to, 'transfer-status', { id: r.id }, 8000);
-      if (a.status !== 200 || !verifyAnswer('transfer-status', a.body, to.public_key)) return null;
+      if (a.status !== 200 || !answers('transfer-status', a.body, to.public_key, a.sent)) return null;
       const b = (a.body as SignedAnswer<{ id: string; committed: boolean; pending?: boolean; roster?: SignedRoster | null }>).body;
       return b.id === r.id ? b : null;
     } catch { return null; }
@@ -624,7 +718,7 @@ export class Promotions {
       const cur = this.record();
       if (!cur || cur.id !== r.id || !['holding', 'transferring'].includes(cur.state)) return;
       const st = await this.#transferStatus(r);
-      if (st?.committed && to && this.#theirs(st.roster ?? undefined, to, epoch)) { this.#followNew(this.record()!, to, epoch, r.last_seq ?? this.#o.sync.head(), st.roster!); return; }
+      if (st?.committed && to && this.#theirs(st.roster ?? undefined, to, epoch)) { this.#extendChain([this.#link(to.public_key, epoch)]); this.#followNew(this.record()!, to, epoch, r.last_seq ?? this.#o.sync.head(), st.roster!); return; }
       if (st && !st.committed && !st.pending) {
         if (this.#o.role.role() === 'hub') this.#abort(this.record()!, `“${to?.name ?? 'The candidate'}” says it didn’t take the role (${why}).`);
         else this.#save({ ...this.record()!, state: 'failed', said: `“${to?.name ?? 'The candidate'}” didn’t take the role, and this node had stepped down: it copies nothing now. Enroll it again as the standby.` });
@@ -653,6 +747,7 @@ export class Promotions {
     this.#resume();
     this.#save({ ...r, state: 'cancelled', said });
     this.#problem(said);
+    await this.settleName().catch(() => {});
     return { state: 'cancelled', said, epoch };
   }
 
@@ -700,7 +795,7 @@ export class Promotions {
     let result: Probe['result'] = 'unknown';
     try {
       const a = await this.#callCandidate(to, 'health', { id: r.id }, Math.max(2000, Math.min(this.probeMs, 8000)));
-      if (a.status === 200 && verifyAnswer('health', a.body, to.public_key)) {
+      if (a.status === 200 && answers('health', a.body, to.public_key, a.sent)) {
         const h = (a.body as SignedAnswer<{ id: string; ok: boolean; epoch: number; checks: Check[] }>).body;
         if (h.id === r.id && h.epoch >= r.epoch_to!) {
           result = h.ok ? 'ok' : 'unhealthy';
@@ -753,9 +848,11 @@ export class Promotions {
     let acked = false;
     try {
       const a = await this.#callCandidate(to, 'stand-down', { id: r.id }, 8000);
-      if (a.status === 200 && verifyAnswer('stand-down', a.body, to.public_key) && (a.body as SignedAnswer<{ id: string; held: boolean; head: number }>).body.id === r.id) {
+      if (a.status === 200 && answers('stand-down', a.body, to.public_key, a.sent) && (a.body as SignedAnswer<{ id: string; held: boolean; head: number }>).body.id === r.id) {
         acked = true;
         const head = (a.body as SignedAnswer<{ head: number }>).body.head;
+        const back = (a.body as SignedAnswer<{ link?: SignedLink }>).body.link;
+        if (back && verifyLink(back) && back.link.by_key === to.public_key && back.link.hub_key === this.#o.identity.publicKey) this.#extendChain([back]);
         const copied = await this.#until(() => this.#o.sync.cursor() >= head, 10_000);
         stood = copied ? `“${to.name}” stopped taking changes first, and this node had copied all it took (to sequence ${head}).` : `“${to.name}” stopped taking changes first; this node had copied ${this.#o.sync.cursor()} of its ${head}, and “${to.name}” keeps the rest in a checkpoint when it steps down.`;
       } else stood = `“${to.name}” didn’t acknowledge standing down (${a.status}${a.body?.error ? `: ${a.body.error}` : ''}).`;
@@ -800,29 +897,29 @@ export class Promotions {
     const hub = this.#o.devices.find(s.hub_id);
     const key = hub?.public_key ?? (file.hub.id === s.hub_id ? file.hub.public_key : null);
     if (!key) throw new CoreError('conflict', 'This node doesn’t know its hub’s key.');
-    const v = verifyCall(step, body, { hubId: s.hub_id, hubKey: key, me: this.#o.identity.id, nowS: Math.floor(this.#o.now().getTime() / 1000), seen: this.#seen });
+    const v = verifyCall(step, body, { hubId: s.hub_id, hubKey: key, me: this.#o.identity.id, nowS: Math.floor(this.#o.now().getTime() / 1000), seen: this.#seen, onSeen: this.#saveSeen });
     if (!v.ok) throw new CoreError('forbidden', v.why);
     if (v.epoch !== s.epoch) throw new CoreError('conflict', `The hub is at epoch ${v.epoch}; this node knows ${s.epoch}.`);
     return v;
   }
 
   // A call from this hub's standby (the node it took the role from), signed by that node's key.
-  #fromStandby(step: string, body: unknown): { payload: Record<string, unknown>; from: Device; r: PromotionRecord } {
+  #fromStandby(step: string, body: unknown): { payload: Record<string, unknown>; from: Device; r: PromotionRecord; req: Sent } {
     const s = this.#o.devices.state();
     const r = this.record();
     if (s.role !== 'hub' || !r || r.side !== 'to' || !r.from || s.standby_id !== r.from.id) throw new CoreError('conflict', 'This node isn’t a hub that took the role from its standby.');
     const from = this.#o.devices.find(r.from.id);
     if (!from || from.trust !== 'trusted') throw new CoreError('forbidden', 'That node isn’t trusted here.');
-    const v = verifyCall(step, body, { hubId: from.id, hubKey: from.public_key, me: this.#o.identity.id, nowS: Math.floor(this.#o.now().getTime() / 1000), seen: this.#seen });
+    const v = verifyCall(step, body, { hubId: from.id, hubKey: from.public_key, me: this.#o.identity.id, nowS: Math.floor(this.#o.now().getTime() / 1000), seen: this.#seen, onSeen: this.#saveSeen });
     if (!v.ok) throw new CoreError('forbidden', v.why);
     if (v.epoch !== s.epoch || v.payload.id !== r.id) throw new CoreError('conflict', 'That isn’t this node’s promotion.');
-    return { payload: v.payload, from, r };
+    return { payload: v.payload, from, r, req: v.req };
   }
 
   // The new hub's own health, signed (finding 1): it is the hub at the epoch it took; it takes writes
   // (it isn't holding them); and the stable name leads here, when Nova moves the name.
   async #health(body: unknown): Promise<unknown> {
-    const { r } = this.#fromStandby('health', body);
+    const { r, req } = this.#fromStandby('health', body);
     const s = this.#o.devices.state();
     const me = this.#o.identity.id;
     const checks: Check[] = [];
@@ -839,7 +936,7 @@ export class Promotions {
         checks.push({ name: 'name', ok, said: ok ? `${name} leads to it.` : `${name} doesn’t lead to it (it answers as ${h.body?.id ? 'another node' : 'nothing Nova knows'}).` });
       } catch (e) { checks.push({ name: 'name', ok: false, said: `${name} doesn’t answer: ${(e as Error).message}` }); }
     }
-    return signAnswer(this.#o.identity, 'health', { id: r.id, ok: checks.every((c) => c.ok), epoch: s.epoch, at: this.#o.now().toISOString(), checks });
+    return signAnswer(this.#o.identity, 'health', { id: r.id, req, ok: checks.every((c) => c.ok), epoch: s.epoch, at: this.#o.now().toISOString(), checks });
   }
 
   // Whether this node took a hand-over, answered to the hub that sent it (or, once taken, to that same
@@ -854,7 +951,7 @@ export class Promotions {
     const file = readRole(this.#o.home);
     const key = this.#o.devices.find(fromId)?.public_key ?? (file?.hub.id === fromId ? file.hub.public_key : null);
     if (!key) throw new CoreError('forbidden', 'This node doesn’t know that node’s key.');
-    const v = verifyCall('transfer-status', body, { hubId: fromId, hubKey: key, me, nowS: Math.floor(this.#o.now().getTime() / 1000), seen: this.#seen });
+    const v = verifyCall('transfer-status', body, { hubId: fromId, hubKey: key, me, nowS: Math.floor(this.#o.now().getTime() / 1000), seen: this.#seen, onSeen: this.#saveSeen });
     if (!v.ok) throw new CoreError('forbidden', v.why);
     const id = String(v.payload.id ?? '');
     const r = this.record();
@@ -864,7 +961,7 @@ export class Promotions {
       const at = this.#o.now().toISOString();
       this.#save({ v: 1, id, kind: 'planned', side: 'to', state: 'declined', from: null, to: null, epoch_from: s.epoch, epoch_to: null, last_seq: null, window_s: this.windowS, verify_until: null, probes: [], parent: null, said: 'The hub asked whether this node took its hand-over; it hadn’t, and now never will.', started_at: at, updated_at: at });
     }
-    return signAnswer(this.#o.identity, 'transfer-status', { id, committed, ...(pending ? { pending: true } : {}), epoch: s.epoch, roster: committed ? this.#o.devices.roster() : null });
+    return signAnswer(this.#o.identity, 'transfer-status', { id, req: v.req, committed, ...(pending ? { pending: true } : {}), epoch: s.epoch, roster: committed ? this.#o.devices.roster() : null });
   }
 
   #facts(): CandidateFacts {
@@ -881,6 +978,8 @@ export class Promotions {
     if (!hub || !signed || !verifyHandover(signed, hub.public_key)) throw new CoreError('forbidden', 'The handover isn’t signed by the hub’s key.');
     tap('handover', signed);
     const h = signed.handover;
+    const link = v.payload.link as SignedLink | undefined;
+    const chain = Array.isArray(v.payload.chain) ? (v.payload.chain as SignedLink[]).slice(-64) : [];
     const prior = this.record();
     if (prior?.id === h.id && prior.state === 'declined') throw new CoreError('conflict', 'This node already told the hub it didn’t take that hand-over, so it never will.');
     if (h.from !== hub.id || h.to !== this.#o.identity.id) throw new CoreError('forbidden', 'The handover doesn’t name this node.');
@@ -902,6 +1001,8 @@ export class Promotions {
       this.#save({ ...r, state: 'failed', said: `This node couldn’t take the role: ${(e as Error).message}` });
       throw e;
     }
+    // The lineage: the old hub's chain, and its link naming this node (kept only if it verifies).
+    if (link && verifyLink(link) && link.link.by_key === hub.public_key && link.link.hub_key === this.#o.identity.publicKey && link.link.epoch === p.epoch) this.#extendChain([...chain, link]);
     const pointed = await this.#pointName();
     this.#save({ ...r, state: 'verifying', verify_until: new Date(this.#o.now().getTime() + this.windowS * 1000).toISOString(), said: `This node is the hub at epoch ${p.epoch}.${pointed ? ` ${pointed}` : ''}` });
     this.#o.log.info('mesh', 'This node took the hub’s role, handed over.', { promotion: h.id, epoch: p.epoch, from: hub.id });
@@ -912,7 +1013,7 @@ export class Promotions {
   // changes before it takes the role back. It holds writes now, keeps fencing (it steps down when it
   // sees the old hub at the higher epoch) and says how far its log goes, so the old hub can copy it all.
   #standDown(body: unknown): unknown {
-    const { from, r } = this.#fromStandby('stand-down', body);
+    const { from, r, req } = this.#fromStandby('stand-down', body);
     this.#o.role.hold(`Nova is giving the hub back to “${from.name}”, so changes wait a moment. Try again in a minute${this.#o.publicUrl() ? `, at ${this.#o.publicUrl()}` : ''}.`, { fence: true });
     this.#o.quiet?.(true);
     this.#o.role.emit('draining', { promotion: r.id });
@@ -943,17 +1044,51 @@ export class Promotions {
       });
     }, 2000);
     look.unref?.();
-    return signAnswer(this.#o.identity, 'stand-down', { id: r.id, held: true, head: this.#o.sync.head(), epoch: this.#o.devices.state().epoch });
+    return signAnswer(this.#o.identity, 'stand-down', { id: r.id, req, held: true, head: this.#o.sync.head(), epoch: this.#o.devices.state().epoch, link: this.#link(from.public_key, this.#o.devices.state().epoch + 1) });
   }
 
-  // The node that became hub points the stable name at itself.
-  async #pointName(): Promise<string | null> {
+  // The node that became hub points the stable name at itself (or, stepping down, at the winner). A
+  // control that refuses or can't be reached is said plainly, once per kind of failure.
+  #nameFailed = '';
+  async #pointName(to: string | null = this.#o.address()): Promise<string | null> {
     const n = this.#o.name;
-    const me = this.#o.address();
-    if (!n || !me) return null;
-    const r = await n.point(me);
-    if (!r.ok) this.#problem(r.said);
+    if (!n || !to) return null;
+    let r = await n.point(to);
+    // A move that is said to have worked is read back when the name should lead here (review N4): a
+    // control that answers "moved" and leaves it where it was is a failure, said as plainly.
+    const name = this.#o.publicUrl();
+    if (r.ok && name && to === this.#o.address() && name !== to) {
+      let id: unknown = null;
+      for (let i = 0; i < 3 && !this.#closed; i++) {
+        try { id = (await ask(`${name}/api/v1/mesh/hello`, { timeoutMs: 3000 })).body?.id; } catch { id = null; }
+        if (id === this.#o.identity.id) break;
+        await new Promise((res) => setTimeout(res, 300).unref());
+      }
+      if (id !== this.#o.identity.id && !this.#closed) r = { ok: false, said: `What moves it said it did, but ${n.name} still leads ${id ? `to another node (${String(id)})` : 'nowhere that answers'}.` };
+    }
+    if (!r.ok && this.#nameFailed !== r.said) { this.#nameFailed = r.said; this.#problem(`Nova couldn’t point ${n.name} at ${to}: ${r.said} Phones and browsers reach whatever it points at now until it is fixed; computers follow the roster.`); }
+    if (r.ok) this.#nameFailed = '';
     return r.said;
+  }
+
+  // On the hub, every few probes' time (review N4): the stable name should lead here once a split has
+  // settled. If another node answers there and doesn't outrank this one (lower epoch, or a standby, or
+  // nothing answers), Nova points the name here. A node that does outrank this one is left alone: this
+  // one steps down when it meets it.
+  async settleName(): Promise<void> {
+    const n = this.#o.name;
+    const name = this.#o.publicUrl();
+    const me = this.#o.address();
+    if (!n || !name || !me || name === me || this.#closed) return;
+    const s = this.#o.devices.state();
+    if (s.role !== 'hub' || this.#o.role.held()) return;
+    type Hello = { id?: string; role?: string; epoch?: number };
+    let h: Hello | null = null;
+    try { h = (await ask(`${name}/api/v1/mesh/hello`, { timeoutMs: 3000 })).body as Hello; } catch { h = null; }
+    if (h?.id === this.#o.identity.id) return;
+    const theirs = h?.role === 'hub' && Number.isSafeInteger(h.epoch) && typeof h.id === 'string' && (h.epoch! > s.epoch || (h.epoch === s.epoch && h.id < this.#o.identity.id));
+    if (theirs) return;
+    await this.#pointName(me);
   }
 
   #verified(body: Record<string, unknown>, from: Device): unknown {
@@ -998,6 +1133,7 @@ export class Promotions {
     // the rosters its devices showed it (finding 2). Max + 1, so it doesn't tie or trail any of them.
     const seen = this.#seenEpochs();
     const floor = Math.max(s.epoch, epochBackup ?? 0, r?.epoch_to ?? 0, seen.max ?? 0);
+    if (floor + 1 > EPOCH_CEILING) reasons.push(`The epoch would pass ${EPOCH_CEILING}, the highest Nova uses.`);
     const facts: ColdFacts = {
       backup, epoch_now: s.epoch, epoch_backup: epochBackup, epoch_new: floor + 1, pinned,
       lost: backup ? LOST_WORDS(backup.at) : 'Not known: there is no backup to restore.', connectors: CONNECTOR_WORDS, devices: DEVICE_WORDS,
@@ -1006,38 +1142,44 @@ export class Promotions {
     return { eligible: reasons.length === 0, reasons, facts, sheet: coldSheet(facts, { name: this.#stable() }), folder };
   }
 
-  // Rosters this node's devices showed it (`POST /mesh/seen`), each checked against a key this node
-  // trusts to sign one: the highest epoch, and from how many.
+  // Rosters this node's devices showed it (`POST /mesh/seen`, review N2): the highest epoch ever shown
+  // (it only rises: a later report of a lower one never lowers it), and how many distinct devices showed
+  // one.
   #seenEpochs(): { max: number | null; count: number } {
     try {
-      const j = JSON.parse(readFileSync(join(this.#o.home, SEEN_FILE), 'utf8')) as { seen: { device: string | null; epoch: number }[] };
-      const list = Array.isArray(j.seen) ? j.seen : [];
-      return { max: list.length ? Math.max(...list.map((x) => x.epoch)) : null, count: new Set(list.map((x) => x.device ?? x.epoch)).size };
+      const j = JSON.parse(readFileSync(join(this.#o.home, SEEN_FILE), 'utf8')) as { max?: number; devices?: Record<string, { epoch: number }> };
+      const devices = Object.keys(j.devices ?? {});
+      return { max: Number.isSafeInteger(j.max) ? j.max! : null, count: devices.length };
     } catch { return { max: null, count: 0 }; }
   }
 
-  // A device that found this node not to be the hub tells it the roster it holds (finding 2). Kept
-  // only when signed by a key this node trusts to be hub (the hub's, the standby's, a candidate's).
-  seen(body: Record<string, unknown>): { kept: boolean } {
-    const now = Date.now();
-    if (now - this.#lastSeen < 200) return { kept: false };
-    this.#lastSeen = now;
+  // A paired device that found this node not to be its hub shows it the roster it holds. Kept only
+  // when the device signed the report with its own key (a trusted device in this node's registry), the
+  // time is fresh, and the roster is signed by a key this node trusts to be hub. One report per device
+  // a second, counted after those checks, so junk can't crowd out a real report.
+  seen(body: Record<string, unknown>): { kept: boolean; why?: string } {
+    const id = typeof body.device_id === 'string' ? body.device_id : '';
+    const time = Number(body.time);
     const roster = body.roster as SignedRoster | undefined;
+    const d = id ? this.#o.devices.find(id) : null;
+    if (!d || d.trust !== 'trusted' || typeof body.signature !== 'string') return { kept: false, why: 'Only a paired device’s signed report counts.' };
+    if (!Number.isSafeInteger(time) || !freshTime(time, Math.floor(this.#o.now().getTime() / 1000))) return { kept: false, why: 'Its signed time is too far from this node’s clock.' };
+    if (!verifyDeviceSignature(d.public_key, seenMessage(id, time, roster ?? null), body.signature)) return { kept: false, why: 'It isn’t signed by that device’s key.' };
     const ep = roster?.roster?.epoch;
-    if (!roster?.roster?.hub || !Number.isSafeInteger(ep) || ep! < 1 || ep! > 2 ** 31 - 1) return { kept: false };
+    if (!roster?.roster?.hub || !Number.isSafeInteger(ep) || ep! < 1 || ep! > EPOCH_CEILING) return { kept: false, why: 'That isn’t a roster.' };
     const keys = new Set<string>();
-    for (const d of this.#o.devices.list()) if (d.trust === 'trusted' && (d.role === 'hub' || d.kind === 'standby' || d.purposes.includes('hub-candidate'))) keys.add(d.public_key);
+    for (const x of this.#o.devices.list()) if (x.trust === 'trusted' && (x.role === 'hub' || x.kind === 'standby' || x.purposes.includes('hub-candidate'))) keys.add(x.public_key);
     const file = readRole(this.#o.home);
     if (file) keys.add(file.hub.public_key);
-    if (!keys.has(roster.roster.hub.public_key) || !verifyRoster(roster, [roster.roster.hub.public_key])) return { kept: false };
-    const file2 = join(this.#o.home, SEEN_FILE);
-    let seen: { device: string | null; epoch: number; hub: string; at: string }[] = [];
-    try { seen = (JSON.parse(readFileSync(file2, 'utf8')) as { seen: typeof seen }).seen ?? []; } catch { /* first */ }
-    const device = typeof body.device_id === 'string' ? body.device_id.slice(0, 64) : null;
-    seen = [...seen.filter((x) => x.device !== device || device === null), { device, epoch: ep!, hub: roster.roster.hub.id, at: this.#o.now().toISOString() }].slice(-50);
-    mkdirSync(join(this.#o.home, 'mesh'), { recursive: true, mode: 0o700 });
-    writeFileSync(`${file2}.tmp`, `${JSON.stringify({ seen }, null, 2)}\n`, { mode: 0o600 });
-    renameSync(`${file2}.tmp`, file2);
+    if (!keys.has(roster.roster.hub.public_key) || !verifyRoster(roster, [roster.roster.hub.public_key])) return { kept: false, why: 'The roster isn’t signed by a key this node trusts to be hub.' };
+    const now = Date.now();
+    if (now - (this.#seenAt.get(id) ?? 0) < 1000) return { kept: false, why: 'Once a second per device.' };
+    this.#seenAt.set(id, now);
+    let j: { max?: number; devices?: Record<string, { epoch: number; at: string }> } = {};
+    try { j = JSON.parse(readFileSync(join(this.#o.home, SEEN_FILE), 'utf8')); } catch { /* first */ }
+    const devices = j.devices ?? {};
+    devices[id] = { epoch: Math.max(devices[id]?.epoch ?? 0, ep!), at: this.#o.now().toISOString() };
+    this.#saveJson(SEEN_FILE, { max: Math.max(Number.isSafeInteger(j.max) ? j.max! : 0, ep!), devices });
     return { kept: true };
   }
 
@@ -1203,7 +1345,7 @@ export class Promotions {
     const body = signCall(this.#o.identity, step, d.id, this.#o.devices.state().epoch, payload, time);
     const a = await ask(`${d.address!.replace(/\/+$/, '')}/api/v1/mesh/promotion/${step}`, { method: 'POST', headers: { 'x-nova': '1' }, body, timeoutMs });
     tap(`${step}-answer`, a.body);
-    return a;
+    return { ...a, sent: { nonce: body.auth.nonce, time: body.auth.time } as Sent };
   }
 
   // A call to the new hub as this node (its standby): a session signed with this node's key.
@@ -1257,7 +1399,8 @@ export class Promotions {
         summary: 'Take the hub back from the node it was handed to, during its checks, when that node can’t be reached (tier 3: {confirm: true}). It is asked to stand down first.',
         handle: ({ body }) => this.takeBack({ confirm: body.confirm === true }),
       },
-      { method: 'POST', path: '/mesh/seen', access: 'public', body: '{roster, device_id?}', summary: 'A device that found this node not to be its hub tells it the roster it holds, signed by its hub; kept only when signed by a key this node trusts to be hub, for an emergency promotion’s epoch.', handle: ({ body }) => this.seen(body) },
+      { method: 'GET', path: '/mesh/roster/chain', access: 'public', summary: 'The succession links that lead to this node: each hub, signed by the hub before it, so a device away through several promotions can follow the jump (review N5). Public keys and epochs only.', handle: () => ({ links: this.chain() }) },
+      { method: 'POST', path: '/mesh/seen', access: 'public', body: '{roster, device_id, time, signature}', summary: 'A paired device that found this node not to be its hub tells it the roster it holds: the report signed by the device, the roster by a key this node trusts to be hub. The highest epoch shown is kept, for an emergency promotion’s epoch.', handle: ({ body }) => this.seen(body) },
       { method: 'POST', path: '/mesh/promotion/health', access: 'public', body: '{auth, payload: {id}}', summary: 'The node this hub took the role from asks how it is, signed by its key; the answer is signed by this node’s key.', handle: ({ body }) => this.#health(body) },
       { method: 'POST', path: '/mesh/promotion/transfer-status', access: 'public', body: '{auth, payload: {id}}', summary: 'The hub that handed over asks whether this node took the hand-over, signed by its key; the answer is signed by this node’s key, and a hand-over not taken is declined for good.', handle: ({ body }) => this.#transferStatusAnswer(body) },
       // The candidate's side, signed by its hub (public: the signature is the authority).
@@ -1286,10 +1429,14 @@ export class Promotions {
 // ---- helpers --------------------------------------------------------------------------------------
 
 // Log entries, said by kind and with their keys: “2 memories (a1b2…, c3d4…), 1 file (notes/x.md)”.
-export function summarize(rows: { tbl: string; pk: string; op: string }[]): string {
+export function summarize(rows: { tbl: string; pk: string; op: string }[], vaultNames: string[] = []): string {
   const by = new Map<string, string[]>();
-  for (const r of rows) by.set(r.tbl, [...(by.get(r.tbl) ?? []), r.op.endsWith('delete') ? `${r.pk} removed` : r.pk]);
-  const name = (t: string, n: number) => (t === 'file' ? (n === 1 ? 'file' : 'files') : `${t.replace(/_/g, ' ')} ${n === 1 ? 'record' : 'records'}`);
+  for (const r of rows) {
+    // The vault is one entry: said by its secrets' names, never their values.
+    if (r.tbl === 'vault') { by.set('saved secrets', vaultNames.length ? vaultNames : ['the vault']); continue; }
+    by.set(r.tbl, [...(by.get(r.tbl) ?? []), r.op.endsWith('delete') ? `${r.pk} removed` : r.pk]);
+  }
+  const name = (t: string, n: number) => (t === 'file' ? (n === 1 ? 'file' : 'files') : t === 'saved secrets' ? (n === 1 ? 'saved secret' : 'saved secrets') : `${t.replace(/_/g, ' ')} ${n === 1 ? 'record' : 'records'}`);
   return [...by].map(([t, pks]) => `${pks.length} ${name(t, pks.length)} (${pks.slice(0, 8).join(', ')}${pks.length > 8 ? ', …' : ''})`).join('; ');
 }
 

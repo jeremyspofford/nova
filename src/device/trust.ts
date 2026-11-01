@@ -67,24 +67,27 @@ export const EPOCH_MAX = 2 ** 31 - 1;
 // Whether a node at `epoch` with `key` may be this device's hub, when it follows `current` at `known`:
 // the same hub at an epoch no lower; another node only at a strictly higher epoch (never an equal
 // one, so two hubs at the same epoch never both win a device), and at most EPOCH_STEP_MAX higher.
-export function epochVerdict(epoch: number, key: string, o: { known: number; current?: string | null }): Verdict {
+// `chained`: the node proved, with succession links each signed by the hub before (wire.ts
+// chainLeads), that it follows from the hub this device knows; then a jump of any size (up to the
+// ceiling) is followed (review N5).
+export function epochVerdict(epoch: number, key: string, o: { known: number; current?: string | null; chained?: boolean }): Verdict {
   if (!Number.isSafeInteger(epoch) || epoch < 1 || epoch > EPOCH_MAX) return { ok: false, reason: `Epoch ${epoch} isn’t one Nova uses.` };
   if (epoch < o.known) return { ok: false, reason: `epoch ${epoch}, older than ${o.known}; it was replaced.` };
   const same = !o.current || key === o.current;
   if (!same && epoch === o.known) return { ok: false, reason: `epoch ${epoch}, the same as the hub this device follows: a new hub comes at a higher epoch, so it wasn’t followed.` };
-  if (!same && epoch > o.known + EPOCH_STEP_MAX) return { ok: false, reason: `epoch ${epoch}, more than ${EPOCH_STEP_MAX} past the ${o.known} this device knows, and not signed by its hub, so it wasn’t followed.` };
+  if (!same && !o.chained && epoch > o.known + EPOCH_STEP_MAX) return { ok: false, reason: `epoch ${epoch}, more than ${EPOCH_STEP_MAX} past the ${o.known} this device knows, and not signed by its hub, so it wasn’t followed.` };
   return { ok: true };
 }
 
 // Whether to take `next` as the roster: signed by a pinned key, an epoch the rules above allow when
 // following `currentHub` (the hub key of the roster this device holds), and (when given) naming
 // `hubKey`, the key of the node that handed it over, as hub.
-export function acceptRoster(next: SignedRoster, o: { pinned: string[]; epoch: number; hubKey?: string; currentHub?: string | null }): Verdict {
+export function acceptRoster(next: SignedRoster, o: { pinned: string[]; epoch: number; hubKey?: string; currentHub?: string | null; chained?: boolean }): Verdict {
   if (!next?.roster || typeof next.roster.epoch !== 'number' || !next.roster.hub) return { ok: false, reason: 'That isn’t a roster.' };
   if (!verifyRoster(next, o.pinned)) return { ok: false, reason: 'The roster isn’t signed by a key this device pinned.' };
   if (!Number.isInteger(next.roster.epoch) || next.roster.epoch < o.epoch) return { ok: false, reason: `The roster’s epoch (${next.roster.epoch}) is lower than the one this device knows (${o.epoch}); that node is no longer the hub.` };
   if (o.hubKey && next.roster.hub.public_key !== o.hubKey) return { ok: false, reason: 'The roster names a different node as hub.' };
-  const v = epochVerdict(next.roster.epoch, next.roster.hub.public_key, { known: o.epoch, current: o.currentHub ?? null });
+  const v = epochVerdict(next.roster.epoch, next.roster.hub.public_key, { known: o.epoch, current: o.currentHub ?? null, chained: !!o.chained });
   if (!v.ok) return { ok: false, reason: `The roster is at ${v.reason}` };
   return { ok: true };
 }
