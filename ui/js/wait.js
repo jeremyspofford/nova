@@ -63,7 +63,7 @@ export function usually(durations) {
 // scheduled run take what such work takes. The amendment asks for a general estimate after 10 s,
 // so there is always one; this device's own history replaces it as soon as there is some.
 const USUAL = [
-  [/^(view-|capture|changes|checkpoints|connections|browser-sites|health|models|reset|memory-save|send)/, 'under a second'],
+  [/^(view-|capture|changes|checkpoints|services|connections|browser-sites|health|models|reset|memory-save|send)/, 'under a second'],
   [/^(restore-preview|takeover-picture|step-)/, 'a few seconds'],
   [/^reply/, 'about half a minute'],
   [/^(schedule|first-task)/, 'about a minute'],

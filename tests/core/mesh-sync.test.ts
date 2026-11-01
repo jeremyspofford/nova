@@ -395,12 +395,14 @@ test('promotion: a new epoch, a roster signed by the standby’s own key, a veri
     await phone.poll();
     assert.equal((await h.c('POST', `/mesh/devices/${phone.deviceId}/revoke`, { confirm: true })).status, 200);
     // A computer whose queued items reached the hub once.
-    const { dev: computer, token } = await import('./mesh-support.ts').then((m) => m.enroll(h, { kind: 'computer', name: 'Desk computer' }));
+    const { dev: computer, token } = await import('./mesh-support.ts').then((m) => m.enroll(h, { kind: 'computer', name: 'Desk computer', purposes: ['compute'] }));
     const sent = await call(h.mesh, 'POST', '/api/v1/mesh/inbox', { items: [{ key: 'item-0001', kind: 'event', body: { name: 'woke' } }] }, { authorization: `Bearer ${token}` });
     assert.equal(sent.body.results?.[0]?.status, 'accepted', JSON.stringify([sent.status, sent.body]));
     core.start();
     await synced(p);
     assert.equal(core.mesh.devices.get(phone.deviceId).trust, 'revoked');
+    // The standby is on this schema and says so when it pulls, so it gets the roles too (ADDED_COLUMNS).
+    assert.deepEqual(core.mesh.devices.get(computer.deviceId).purposes, ['compute']);
 
     // Promotion is tier 3, and only on the standby.
     assert.equal((await p.s.api('POST', '/mesh/promote', {})).status, 400);
@@ -416,6 +418,12 @@ test('promotion: a new epoch, a roster signed by the standby’s own key, a veri
     assert.equal(core.mesh.sync.logging(), true);
     assert.ok(verifyRoster(r.body.roster, [core.mesh.identity.publicKey]), 'signed with the standby’s own key');
     assert.equal(r.body.roster.roster.hub.id, p.dev.deviceId);
+    // M10f review 4: the new hub holds what a hub always holds, so it can take hub services.
+    assert.deepEqual(core.mesh.devices.get(p.dev.deviceId).purposes, ['hub-candidate', 'general-server']);
+    const service = { service: 'stand-in', version: '1.0.0', artifact: { program: { 'linux-x64': { url: 'file:///opt/stand-in/s.js', sha256: 'a'.repeat(64), command: ['node', 's.js'] } } }, ports: [{ name: 'api', port: 18080 }], health: { http: '/health', every_s: 5 }, contract_tests: [], alongside: 'full', secrets: [], egress: 'local', os_permissions: [] };
+    const placed = await p.s.api('POST', '/services/placement', { definition: { ...service, placement: { mode: 'pinned', device: 'hub' } } });
+    assert.equal(placed.body.resolution.ok, true, JSON.stringify(placed.body));
+    assert.equal(placed.body.resolution.devices[0].id, p.dev.deviceId);
     assert.equal(r.body.roster.roster.hub.public_key, pinned, 'the key devices pinned for the standby');
     const task = r.body.task;
     assert.equal(task.title, 'Standby promoted to hub');

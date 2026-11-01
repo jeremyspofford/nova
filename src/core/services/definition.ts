@@ -13,8 +13,8 @@
 //   health             readiness and liveness probes                 | the supervisor's health loop
 //   contract_tests     not rendered; Nova runs them on the preview   | Nova runs them on the new port
 //   placement pinned   nodeSelector nova/device=<id>                 | that device (this hub only, for now)
-//   placement other    affinity, failover rule, replicas, spread     | the resolver (M10f)
-//   roles, needs       nodeSelector nova/role-<role>, gpu labels     | the device record (M10f)
+//   placement other    affinity, failover rule, replicas, spread     | the resolver (services/placement.ts)
+//   roles, needs       nodeSelector nova/role-<role>, gpu labels     | the device's roles and hardware
 //   resources          requests and limits                           | refused if this machine can't fit it
 //   state              a local-path volume                           | a folder under the service's own folder
 //   secrets            names; the Secret made at apply, never in git | refused for now (no vault hand-off)
@@ -32,6 +32,8 @@
 //
 // Ports below 1024 are refused (they need privileges and belong to the system); the ports Nova uses
 // itself (the console's, the device door's) are refused by the driver, from Nova's configuration.
+import { WORKLOAD_PURPOSES } from '../mesh/purposes.ts';
+
 export const ALONGSIDE = Object.freeze(['full', 'shadow', 'copy', 'none'] as const);
 export type Alongside = (typeof ALONGSIDE)[number];
 export const PLACEMENT_MODES = Object.freeze(['pinned', 'preferred', 'floating'] as const);
@@ -65,8 +67,8 @@ export interface ServiceDefinition {
   soak_s?: number;
 }
 
-// What the validator may know about where a service could go. `roles` is absent for a device whose
-// roles aren't known (devices get roles in M10f); only devices that have them are checked.
+// What the validator may know about where a service could go. `roles` are the device's roles
+// (`purposes`, M10f); absent for a device whose roles aren't known, which isn't held against it.
 export interface DeviceView { id: string; platform: string; roles?: string[] }
 
 const KEYS = new Set(['service', 'version', 'artifact', 'ports', 'health', 'contract_tests', 'alongside', 'placement', 'resources', 'state', 'secrets', 'egress', 'os_permissions', 'soak_s']);
@@ -205,6 +207,10 @@ export function validate(input: unknown, o: { devices?: DeviceView[] } = {}): Va
     if (pl.mode === 'pinned' && (typeof pl.device !== 'string' || !pl.device)) p.push('A pinned service names its device: placement.device.');
     if (pl.mode !== 'pinned' && pl.device !== undefined) p.push('Only a pinned service names one device; use roles for the others.');
     if (pl.roles !== undefined && (!isStrs(pl.roles) || !pl.roles.length)) p.push('placement.roles is a list of roles.');
+    // Only workload roles place a service (M10f): a thin client never receives one, and a hub
+    // candidacy is about the hub, not about what runs where.
+    else if (isStrs(pl.roles)) for (const r of pl.roles) if (!(WORKLOAD_PURPOSES as readonly string[]).includes(r)) p.push(`placement.roles can name ${WORKLOAD_PURPOSES.join(', ')}; “${r}” isn’t a role a service is placed by.`);
+    if (pl.needs !== undefined && isObj(pl.needs)) for (const k of Object.keys(pl.needs)) if (!['gpu_vram_gb', 'memory_gb', 'disk_gb'].includes(k)) p.push(`placement.needs.${k} isn’t something Nova can check on a device (gpu_vram_gb, memory_gb, disk_gb).`);
     if (pl.needs !== undefined && (!isObj(pl.needs) || Object.values(pl.needs).some((v) => typeof v !== 'number' || v < 0))) p.push('placement.needs is numbers, such as {gpu_vram_gb: 8}.');
     if (pl.replicas !== undefined && (pl.mode !== 'floating' || !isInt(pl.replicas, 1, 64))) p.push('Only a floating service has replicas: 1 to 64.');
     if (pl.failover !== undefined && (typeof pl.failover !== 'string' || !pl.failover)) p.push('placement.failover is a device or “any”.');

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { stop } from '../acceptance/support.ts';
 import { blank, browser, shoot, device, ready, shotsDir } from './support.ts';
 
-const ANSWERS = ['Hi! I’m Alex.', 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'yes'];
+const ANSWERS = ['new', 'yes', 'yes', 'Hi! I’m Alex.', 'yes', 'keep', 'plainly, please', 'keep everything on this machine', 'no', 'yes'];
 
 for (const [layout, width] of [['phone', 375], ['tablet', 768], ['desktop', 1280]] as const) {
   test(`M3 gate: blank-profile setup from the PWA alone (${layout}, ${width}px)`, async (t) => {

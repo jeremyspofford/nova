@@ -29,7 +29,7 @@ const chats = (o: { requests: { path: string }[] }) => o.requests.filter((r) => 
 // A paired computer whose heartbeat says it answers at 127.0.0.1 (the stand-ins' address).
 function pairSpoke(core: Core, network = [{ name: 'eth0', mac: '02:00:00:00:00:42', address: '127.0.0.1', netmask: '255.0.0.0' }]) {
   const keys = generateDeviceKeys();
-  const d = core.mesh.devices.add({ name: 'Example desktop', platform: 'linux x64', kind: 'computer', public_key: keys.ed25519.publicKey, x25519_public_key: keys.x25519.publicKey, capabilities: ['heartbeat', 'queue'] }, 'test');
+  const d = core.mesh.devices.add({ name: 'Example desktop', platform: 'linux x64', kind: 'computer', purposes: ['compute'], public_key: keys.ed25519.publicKey, x25519_public_key: keys.x25519.publicKey, capabilities: ['heartbeat', 'queue'] }, 'test');
   core.mesh.spokes.heartbeat(d, { hardware: hubHardware({ hostname: 'example-desktop', network }) });
   return d;
 }

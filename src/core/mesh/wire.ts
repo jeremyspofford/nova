@@ -301,7 +301,10 @@ export function open(fromX25519Pub: string, toX25519Priv: KeyObject, sealed: Uin
 // and accept a roster only when one of the pinned keys signed it, with an epoch at least the one
 // they know (a lower epoch is never accepted: that is how a demoted hub is fenced off).
 export interface RosterMember { id: string; url: string | null; public_key: string; x25519_public_key: string }
-export interface Roster { epoch: number; hub: RosterMember; standby?: RosterMember; issued_at: string }
+// `candidates` (M10f): every other hub candidate the person confirmed at tier 3 (Decision 2), so its
+// key is pinned. Device agents still accept rosters and bundles from the hub's and standby's keys
+// only, until fencing covers every candidate (M10g).
+export interface Roster { epoch: number; hub: RosterMember; standby?: RosterMember; candidates?: RosterMember[]; issued_at: string }
 export interface SignedRoster { roster: Roster; signature: string }
 
 export function rosterMessage(roster: Roster): Buffer {

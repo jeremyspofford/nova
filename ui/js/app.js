@@ -19,6 +19,7 @@ import { bindCapture, captureChanged, loadCapture, loadCaptureView, renderCaptur
 import { bindModels, loadModels, renderModels } from './models.js';
 import { bindChanges, loadChanges, renderChanges } from './changes.js';
 import { bindCheckpoints, loadCheckpoints, renderCheckpoints } from './checkpoints.js';
+import { bindServices, loadServices, renderServices } from './services.js';
 import { bindReset, loadReset, renderReset } from './reset.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
@@ -1635,7 +1636,7 @@ function showSettings() {
   settingsUi.touched = false;
   selectSettings(settingsTarget(location.hash).cat);
   const opened = location.hash;
-  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadReset()]).then(() => {
+  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset()]).then(() => {
     renderSettingsView({ only: 'you' });
     renderSettingsView({ only: 'privacy' });
     // The person has moved on since (typed in search, opened something): leave them be.
@@ -1662,6 +1663,7 @@ const PARTS = {
   // Drawn in place, so its live regions stay the same elements (surfaces.js drawAppearance).
   look: { draw: (box) => core.drawAppearance(box) },
   devices: () => core.renderDevices(),
+  services: () => renderServices(),
   // The Danger zone (M7 amendment §2) stays last, set apart.
   danger: () => renderReset(),
 };
@@ -1893,6 +1895,7 @@ bindModels(el.settings, () => { if (state.view === 'settings' && $('settings-mod
 bindChanges(el.settings, () => { if (state.view === 'settings' && $('settings-changes')) renderSettingsView({ only: 'changes' }); });
 // Settings › Backups › Checkpoints (M7 amendment): take one, restore (the hub's screen only), delete.
 bindCheckpoints(el.settings, () => { if (state.view === 'settings' && $('settings-checkpoints')) renderSettingsView({ only: 'checkpoints' }); });
+bindServices(() => { if (state.view === 'settings' && $('settings-services')) renderSettingsView({ only: 'services' }); });
 // Settings › Danger zone (M7 amendment §2): export, confirm, erase and start over.
 bindReset(el.settings, () => { if (state.view === 'settings' && $('settings-danger')) renderSettingsView({ only: 'danger' }); });
 // A provider was set up, turned on or off, or checked (M5a): Settings shows it at once.
@@ -1926,6 +1929,7 @@ async function coreAction(b) {
   if (action === 'deny-request') return core.denyRequest(b.dataset.request);
   if (action === 'revoke-device') return core.revokeDevice(b.dataset.device);
   if (action === 'allow-approve') return core.allowApprove(b.dataset.device, b.dataset.value);
+  if (action === 'edit-roles') return core.editRoles(b.dataset.device);
   if (action === 'promote') return core.promote();
   if (['backup-now', 'drill-now', 'repair-problem'].includes(action)) return core.resilienceAction(action, b.dataset.problem).then(() => scheduleRefresh(['resilience', 'problems', 'health', 'tasks']));
   try {
@@ -1935,7 +1939,7 @@ async function coreAction(b) {
   } catch (e) { toast(e.message); }
 }
 const CORE_ACTIONS = new Set(['open-task', 'evidence', 'retry-task', 'cancel-task', 'decline-merge', 'decline-change', 'close-sheet', 'pause-rule', 'resume-rule', 'delete-rule', 'resolve-problem', 'read-message', 'send-message',
-  'add-device', 'copy-command', 'review-request', 'deny-request', 'revoke-device', 'allow-approve', 'promote', 'backup-now', 'drill-now', 'repair-problem']);
+  'add-device', 'copy-command', 'review-request', 'deny-request', 'revoke-device', 'allow-approve', 'edit-roles', 'promote', 'backup-now', 'drill-now', 'repair-problem']);
 document.addEventListener('click', (e) => {
   if (e.defaultPrevented || e.target.closest('#setup')) return;
   if (followLink(e)) return;
@@ -1946,6 +1950,8 @@ document.addEventListener('click', (e) => {
 $('sheet').addEventListener('submit', (e) => {
   const settings = e.target.closest('.provider-form');
   if (settings) { e.preventDefault(); core.saveProvider(settings); return; }
+  const roles = e.target.closest('.roles-sheet');
+  if (roles) { e.preventDefault(); core.reviewRoles(roles); return; }
   const form = e.target.closest('.approval-sheet');
   if (!form) return;
   e.preventDefault();
@@ -2080,6 +2086,6 @@ function boot() {
   document.body.dataset.shown = '';
 }
 // A blank profile opens the setup conversation, full screen, before anything else.
-if (!(await startSetup({ done: () => { boot(); navigate('/'); } }))) boot();
+if (!(await startSetup({ done: (path = '/') => { boot(); navigate(path); } }))) boot();
 document.body.dataset.shown = '';
 document.documentElement.dataset.ready = 'true';
