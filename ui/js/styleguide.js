@@ -158,7 +158,7 @@ const takeover = (mode, holder = null) => ({ live: true, mode, url: 'https://sho
 
 // M10i: illustrative presentation fixtures, not the user's machines or a cluster backend.
 const topologyStates = [
-  ['overview', 'Overview'], ['attention', 'Attention / stale'], ['machine', 'Machine services'],
+  ['overview', 'Overview'], ['attention', 'Attention / stale'], ['attention-service', 'Stale service detail'], ['machine', 'Machine services'],
   ['service', 'Service versions / actions'], ['capture', 'Capture versions / actions'],
   ['empty', 'Empty'], ['loading', 'Loading'], ['failed', 'Failed refresh'], ['long-names', 'Long names'],
   ['approval-service', 'Promote service / tier 2'], ['approval-capture', 'Promote capture / tier 3'],
@@ -170,16 +170,16 @@ const topologyVersions = [
   { name: '2.4.0', role: 'Previous', detail: 'Retained for rollback' },
 ];
 const topologyMachines = [
-  { id: 'home', name: 'Home hub', roles: ['Hub', 'Storage'], status: 'quiet', age: 'Observed 1 minute ago', observations: [], services: [
+  { id: 'home', name: 'Home hub', roles: ['Hub', 'Storage'], stale: false, status: 'quiet', age: 'Observed 1 minute ago', observations: [], services: [
     { id: 'notes', name: 'Notes index', status: 'quiet', placement: 'Home hub', capture: false, versions: topologyVersions },
     { id: 'archive', name: 'Archive helper', status: 'quiet', placement: 'Home hub', capture: false, versions: topologyVersions },
   ] },
-  { id: 'study', name: 'Study desktop', roles: ['Compute'], status: 'quiet', age: 'Observed 2 minutes ago', observations: [], services: [
+  { id: 'study', name: 'Study desktop', roles: ['Compute'], stale: false, status: 'quiet', age: 'Observed 2 minutes ago', observations: [], services: [
     { id: 'capture', name: 'Desktop capture', status: 'quiet', placement: 'Native workload on Study desktop', capture: true, versions: topologyVersions },
   ] },
-  { id: 'travel', name: 'Travel notebook', roles: ['Client'], status: 'quiet', age: 'Observed 3 minutes ago', observations: [], services: [] },
+  { id: 'travel', name: 'Travel notebook', roles: ['Client'], stale: false, status: 'quiet', age: 'Observed 3 minutes ago', observations: [], services: [] },
 ];
-const topologyStale = { ...topologyMachines[1], status: 'needs-you', age: 'Last observation is 18 minutes old', observations: [
+const topologyStale = { ...topologyMachines[1], stale: true, status: 'needs-you', age: 'Last observation is 18 minutes old', observations: [
   { source: 'Cluster', reason: 'worker is ready', age: 'Observation is 2 minutes old' },
   { source: 'Heartbeat', reason: 'no response', age: 'Observation is 18 minutes old' },
 ] };
@@ -191,15 +191,15 @@ let topologyApproval = null;
 let topologyReturnFocus = null;
 function selectTopologyState(next) {
   topologyState = next;
-  topologyMachine = ['attention', 'capture'].includes(next) || next.includes('capture') ? 'study' : ['machine', 'service'].includes(next) || next.includes('service') ? 'home' : null;
-  topologyService = next === 'capture' || next.includes('-capture') ? 'capture' : next === 'service' || next.includes('-service') ? 'notes' : null;
+  topologyMachine = ['attention', 'attention-service', 'capture'].includes(next) || next.includes('capture') ? 'study' : ['machine', 'service'].includes(next) || next.includes('service') ? 'home' : null;
+  topologyService = next === 'attention-service' || next === 'capture' || next.includes('-capture') ? 'capture' : next === 'service' || next.includes('-service') ? 'notes' : null;
   topologyApproval = next.startsWith('approval-') ? 'promote' : next.startsWith('rollback-') ? 'rollback' : null;
 }
 selectTopologyState(topologyState);
 function topologyFixture() {
   if (topologyState === 'empty') return [];
   if (topologyState === 'failed') return [topologyStale];
-  if (topologyState === 'attention') return topologyMachines.map((m) => m.id === 'study' ? topologyStale : m);
+  if (['attention', 'attention-service'].includes(topologyState)) return topologyMachines.map((m) => m.id === 'study' ? topologyStale : m);
   if (topologyState === 'long-names') return topologyMachines.map((m) => ({ ...m, name: `${m.name} for shared research and the extended household archive`, roles: [...m.roles, 'LongRunningLocalWorkloadCoordinatorWithoutWordBreaks'], services: m.services.map((s) => ({ ...s, name: `${s.name} for the shared reference library and research annotations` })) }));
   return topologyMachines;
 }

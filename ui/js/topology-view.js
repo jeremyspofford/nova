@@ -9,10 +9,13 @@ import { emptyState, status } from './components.js';
  * @typedef {{id: string, name: string, status: 'quiet'|'working'|'waiting'|'needs-you'|'failed',
  *   placement: string, capture: boolean, versions: TopologyVersion[]}} TopologyService
  * @typedef {{id: string, name: string, roles: string[], status: 'quiet'|'working'|'waiting'|'needs-you'|'failed',
- *   age: string, observations: TopologyObservation[], services: TopologyService[]}} TopologyMachine
+ *   age: string, stale?: boolean, observations: TopologyObservation[], services: TopologyService[]}} TopologyMachine
  * Ordered machines: the first is the hub, the rest connect to it. Ages and reasons are supplied
  * presentation text, never inferred health or a running clock. Verified is deliberately absent:
  * this fixture has no verification evidence. IDs are opaque, escaped attribute values.
+ * `stale` is supplied presentation context, not calculated here. Services have no independent
+ * observation in this shape: when stale, their display inherits the machine's supplied status
+ * and treats version facts as historical. No source-health merge is performed here.
  */
 
 const group = (words) => `<h5 class="topology-group">${esc(words)}</h5>`;
@@ -37,10 +40,12 @@ export function renderTopology({ machines, selectedMachine = null, selectedServi
   const machine = machines.find((m) => m.id === selectedMachine);
   const service = machine?.services.find((s) => s.id === selectedService);
   if (machine && service) {
-    return wrap(`${back('Back to services')}${heading(service.name, service.placement === machine.name ? machine.name : `${machine.name} / ${service.placement}`, service.status)}${group('Versions')}<ul class="topology-versions">${service.versions.map((v) => `<li><div><p class="topology-name">${esc(v.name)}</p><p class="topology-meta">${esc(v.detail)}</p></div><span class="topology-meta">${esc(v.role)}</span></li>`).join('')}</ul>${group('Actions')}<div class="topology-actions"><button type="button" class="btn" data-topology-action="promote">Review promotion</button><button type="button" class="btn quiet" data-topology-action="rollback">Review rollback</button></div><p class="topology-meta">${service.capture ? 'Capture changes need explicit confirmation every time (tier 3).' : 'Service changes ask for approval (tier 2).'}</p>`);
+    const placement = service.placement === machine.name ? machine.name : `${machine.name} / ${service.placement}`;
+    const historical = machine.stale === true;
+    return wrap(`${back('Back to services')}${heading(service.name, `${placement} / ${machine.age}`, historical ? machine.status : service.status)}${historical ? '<p class="topology-meta">Current service health is unknown. These versions describe the last observation.</p>' : ''}${observations(machine)}${group(historical ? 'Last observed versions' : 'Versions')}<ul class="topology-versions">${service.versions.map((v) => `<li><div><p class="topology-name">${esc(v.name)}</p><p class="topology-meta">${historical ? 'Previously reported: ' : ''}${esc(v.detail)}</p></div><span class="topology-meta">${esc(v.role)}</span></li>`).join('')}</ul>${group('Actions')}<div class="topology-actions"><button type="button" class="btn" data-topology-action="promote">Review promotion</button><button type="button" class="btn quiet" data-topology-action="rollback">Review rollback</button></div><p class="topology-meta">${service.capture ? 'Capture changes need explicit confirmation every time (tier 3).' : 'Service changes ask for approval (tier 2).'}</p>`);
   }
   if (machine) {
-    return wrap(`${back('Back to machines')}${heading(machine.name, `${machine.roles.join(', ')} / ${machine.age}`, machine.status)}${observations(machine)}${group('Services')}${machine.services.length ? `<ul class="topology-services">${machine.services.map((s) => `<li><button type="button" class="topology-row" data-topology-service="${esc(s.id)}"><span><strong class="topology-name">${esc(s.name)}</strong><span class="topology-meta">${esc(s.placement)}</span></span>${status(s.status)}</button></li>`).join('')}</ul>` : emptyState({ title: 'No services observed', line: 'Services reported by this machine will appear here.' })}`);
+    return wrap(`${back('Back to machines')}${heading(machine.name, `${machine.roles.join(', ')} / ${machine.age}`, machine.status)}${observations(machine)}${group('Services')}${machine.services.length ? `<ul class="topology-services">${machine.services.map((s) => `<li><button type="button" class="topology-row" data-topology-service="${esc(s.id)}"><span><strong class="topology-name">${esc(s.name)}</strong><span class="topology-meta">${esc(s.placement)}</span></span>${status(machine.stale ? machine.status : s.status)}</button></li>`).join('')}</ul>` : emptyState({ title: 'No services observed', line: 'Services reported by this machine will appear here.' })}`);
   }
   const peers = Math.max(1, machines.length - 1);
   const connections = machines.length > 1 ? `<svg class="topology-connections" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5">${machines.slice(1).map((_, i) => `<path vector-effect="non-scaling-stroke" d="M0 50 H50 V${100 * (i + 0.5) / peers} H100"/>`).join('')}</g></svg>` : '';

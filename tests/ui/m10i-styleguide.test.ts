@@ -34,7 +34,7 @@ const SIZES = {
   desktop: { width: 1440, height: 900 }, phone: { width: 390, height: 844, touch: true },
   tablet: { width: 820, height: 1180, touch: true }, halfopen: { width: 1100, height: 900, touch: true },
 };
-const STATES = ['overview', 'attention', 'machine', 'service', 'capture', 'empty', 'loading', 'failed', 'long-names', 'approval-service', 'approval-capture', 'rollback-service', 'rollback-capture'];
+const STATES = ['overview', 'attention', 'attention-service', 'machine', 'service', 'capture', 'empty', 'loading', 'failed', 'long-names', 'approval-service', 'approval-capture', 'rollback-service', 'rollback-capture'];
 
 async function noOverflow(page: Page, label: string) {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${label}: page overflow`);
@@ -77,7 +77,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               assert.equal(await p.locator('.topology-connections').isVisible(), size !== 'phone');
               assert.equal(await p.locator('.topology-machines').evaluate((e) => e.tagName), 'OL');
             }
-            if (state === 'attention') {
+            if (state === 'attention' || state === 'attention-service') {
               const text = await p.locator('.topology').innerText();
               assert.match(text, /Needs you/);
               assert.match(text, /Cluster: worker is ready/);
@@ -94,9 +94,25 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               assert.match(await p.locator('.topology').innerText(), /last observation is 18 minutes old/i);
               assert.equal(await p.locator('.topology [data-status="failed"]').count(), 0, 'refresh failure does not claim Nova stopped');
             }
+            // Opening detail must not turn an old heartbeat into a fresh healthy service.
+            if (state === 'attention' || state === 'failed') {
+              if (state === 'failed') await p.locator('[data-topology-return]').click();
+              await p.locator('[data-topology-service="capture"]').click();
+              const detail = p.locator('.topology');
+              assert.match(await detail.innerText(), /18 minutes old/, `${state}: service retains the supplied age`);
+              assert.match(await detail.innerText(), /Cluster: worker is ready/);
+              assert.match(await detail.innerText(), /Heartbeat: no response/);
+              assert.match(await detail.innerText(), /Current service health is unknown/);
+              assert.equal(await detail.locator('[data-status="needs-you"]').count(), 1);
+              assert.equal(await detail.locator('[data-status="quiet"]').count(), 0, 'old service status cannot imply fresh health');
+              assert.match(await detail.locator('.topology-versions').innerText(), /Previously reported: Serving on this machine/);
+              assert.equal(await detail.getByText('Serving on this machine', { exact: true }).count(), 0);
+              await noOverflow(p, `${pkg}/${size}/${state}/service`);
+              await p.locator('#topology-state').selectOption(state);
+            }
             if (process.env.NOVA_UI_SHOTS && pkg === 'orb-teal') {
               await p.screenshot({ path: join(out, `${state}-${size}.png`), fullPage: true, animations: 'disabled', caret: 'hide' });
-              if (engine === 'chromium' && ['desktop', 'phone'].includes(size) && ['overview', 'machine', 'service'].includes(state)) await p.locator('.topology').screenshot({ path: join(out, `specimen-${state}-${size}.png`), animations: 'disabled', caret: 'hide' });
+              if (engine === 'chromium' && ['desktop', 'phone'].includes(size) && ['overview', 'machine', 'service', 'attention-service'].includes(state)) await p.locator('.topology').screenshot({ path: join(out, `specimen-${state}-${size}.png`), animations: 'disabled', caret: 'hide' });
             }
           }
         }
