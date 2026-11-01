@@ -328,7 +328,7 @@ export class Network {
       const stopped = t.state === 'failed' || (t.state === 'waiting' && /May already have happened/.test(t.reason ?? ''));
       if (stopped && c.state === 'revert_failed') {
         // Someone else's change is there: Nova doesn't overwrite it, and the person settles it.
-        const pr = this.#o.log.problem('network', `Nova couldn’t put ${target.name} back to the snapshot after “${c.title}”: ${clip(t.reason ?? 'it failed', 400)} Check ${target.name} yourself, then settle the change.`, { taskId: t.id });
+        const pr = this.#o.log.problem('network', `Nova couldn’t put ${target.name} back to the snapshot after “${c.title}”: ${clip(t.reason ?? 'it failed', 400)} Check ${target.name} yourself, then settle the change.`, { taskId: t.id, stops: true });
         if (c.problem_id !== null) this.#o.log.resolve(c.problem_id);
         this.#set(c.id, { problem_id: pr.id });
         this.#tell(`network:${c.id}:revert-failed`, `Nova couldn’t put ${target.name} back after “${c.title}”: ${clip(t.reason ?? 'it failed', 300)} Check ${target.name} yourself.`);
@@ -426,12 +426,13 @@ export class Network {
       const apply = (parse<TaskRef[]>(c.tasks) ?? []).filter((x) => x.step === 'apply').at(-1);
       try { if (apply && !['done', 'failed', 'cancelled'].includes(this.#o.ledger.get(apply.id).state)) this.#o.ledger.cancel(apply.id, 'Nova stopped part-way through the change; the dead-man’s switch puts the snapshot back.'); } catch { /* gone */ }
     }
-    const pr = this.#o.log.problem('network', `Nova lost contact with your devices after “${c.title}” on ${target.name}, so it is putting the snapshot back by itself.`);
+    // The dead-man's switch fired: it stops Nova (DESIGN-SYSTEM §1).
+    const pr = this.#o.log.problem('network', `Nova lost contact with your devices after “${c.title}” on ${target.name}, so it is putting the snapshot back by itself.`, { stops: true });
     this.#set(c.id, { problem_id: pr.id });
     this.#tell(`network:${c.id}:lost`, `Nova heard from none of your devices within ${minutes(c.window_s)} of the change “${c.title}” to ${target.name}, so it is putting the snapshot back by itself.`);
     try { this.#make(this.#change(c.id), 'revert', 'switch'); } catch (e) {
       this.#set(c.id, { state: 'revert_failed', reason: (e as Error).message });
-      this.#o.log.problem('network', `Nova couldn’t start putting ${target.name} back after “${c.title}”: ${(e as Error).message} Check ${target.name} yourself.`);
+      this.#o.log.problem('network', `Nova couldn’t start putting ${target.name} back after “${c.title}”: ${(e as Error).message} Check ${target.name} yourself.`, { stops: true });
     }
   }
 

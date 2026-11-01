@@ -327,7 +327,7 @@ function meshRoleLine(c) {
 export function renderHealth(el) {
   const h = store.health;
   const problem = (p, open) => `<li class="settings-row" id="pr-${esc(String(p.id))}">
-  <div class="settings-text"><p class="settings-label">${esc(p.message)}</p><p class="settings-note">${esc(p.source)} · ${esc(ago(p.at))}${p.task_id ? ` · <a class="link" href="/tasks" data-action="open-task" data-task="${esc(p.task_id)}">the task</a>` : ''}</p>
+  <div class="settings-text"><p class="settings-label">${esc(p.message)}</p><p class="settings-note">${open ? `${status(p.stops ? 'failed' : 'needs-you')} ` : ''}${esc(p.source)} · ${esc(ago(p.at))}${p.task_id ? ` · <a class="link" href="/tasks" data-action="open-task" data-task="${esc(p.task_id)}">the task</a>` : ''}</p>
   ${open ? playbookBlock(p) : ''}
   ${p.detail ? `<details class="raw"><summary>Technical detail</summary><pre tabindex="0">${esc(p.detail)}</pre></details>` : ''}</div>
   ${open ? `<div class="settings-control"><button type="button" class="btn small" data-action="resolve-problem" data-problem="${esc(String(p.id))}">Mark as dealt with</button></div>` : ''}

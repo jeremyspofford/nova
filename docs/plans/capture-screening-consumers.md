@@ -101,7 +101,7 @@ None of the three is part of the wording a verdict is tied to (`registry.wording
 
 ## The migration
 
-**`0022_capture_sensitivity.sql`, after the orb's 0021.** The orb PR (#263) keeps 0021 and merges first. Until it does, this branch carries the file as `0021_capture_sensitivity.sql` with `ADDED_COLUMNS[21]`, because migration numbers can't have gaps: a 0022 with no 0021 on main fails to load. Once #263 is on main, both are renumbered on the next merge of main.
+**`0022_capture_sensitivity.sql`**, the next number after the orb's `0021_problem_stops.sql` (#263, merged first), whose `ADDED_COLUMNS[21]` entry is kept.
 
 It adds these columns to `capture_event`:
 - `sensitivity` (`unscreened | held | index | redact | hold | exclude`, default `unscreened`);
@@ -162,7 +162,7 @@ Each finding got a failing test first, in `tests/core/capture-screening-review.t
 
 **`tests/core/capture-sensitive.test.ts`:** the template with no trusted answer now holds; its pattern still redacts.
 
-**`tests/core/sync-skew.test.ts`:** `capture_event` is registered. A standby a release behind gets capture events without the seven columns, and a current standby gets them.
+**`tests/core/sync-skew.test.ts`:** `capture_event` is registered. A 0021 standby (a release behind) gets capture events from a 0022 hub without the seven columns, and a 0022 standby gets them; the orb's 21 entry is unchanged.
 
 **`tests/ui/capture-screening.test.ts`** (the UI gate, Chromium, real server):
 - **With a trusted check:**

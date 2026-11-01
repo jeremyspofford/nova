@@ -167,7 +167,7 @@ document.addEventListener('keydown', (e) => {
 
 // ---- the live orb ------------------------------------------------------------------------------
 
-const signals = { reachable: true, listening: false, problems: 0, needsYou: 0, speaking: false, working: 0 };
+const signals = { reachable: true, listening: false, stopped: 0, needsYou: 0, speaking: false, working: 0 };
 let orbNow = 'idle';
 export const orbNowState = () => orbNow;
 

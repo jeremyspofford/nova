@@ -1129,7 +1129,7 @@ export class Capture extends EventEmitter {
         const p = d?.answers.remember;
         if (d && !d.escalate && typeof p === 'number' && p > 0.5) {
           const id = randomUUID();
-          // One open proposal per event (a unique index, migration 0021): a second is ignored.
+          // One open proposal per event (a unique index, migration 0022): a second is ignored.
           this.#db.run(`INSERT OR IGNORE INTO capture_proposal (id, event_id, template_id, version, provider, p, state, at) VALUES (?, ?, ?, ?, ?, ?, 'proposed', ?)`, id, r.id, d.template_id, d.version, d.provider, p, this.#now().toISOString());
           proposed.push(id);
         }

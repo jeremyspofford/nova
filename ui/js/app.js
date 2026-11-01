@@ -10,6 +10,7 @@ import { apply as applyTheme } from './theme.js';
 import { fromCache, on as onCore, stream as coreStream } from './core.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
+import { problemTone, stoppingProblems } from './status.js';
 import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js';
 import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
@@ -193,12 +194,15 @@ function showBusy(busy = state.busy) {
 function showSignals() {
   const asking = core.needsYou();
   setBadge('tasks', asking ? { tone: 'attention', label: `${asking} need${asking === 1 ? 's' : ''} you` } : null);
-  setBadge('health', core.store.problems.length ? { tone: 'alert', label: `${core.store.problems.length} problem${core.store.problems.length === 1 ? '' : 's'}` } : null);
+  // Red only for problems that stop Nova; any other open problem needs the person (amber).
+  const problems = core.store.problems;
+  const stopped = stoppingProblems(problems).length;
+  setBadge('health', problems.length ? { tone: problemTone(problems), label: `${problems.length} problem${problems.length === 1 ? '' : 's'}` } : null);
   signal({
     reachable: state.reachable && state.online,
     listening: state.listening,
-    problems: core.store.problems.length,
-    needsYou: asking + state.busy.waiting,
+    stopped,
+    needsYou: asking + state.busy.waiting + (problems.length - stopped),
     speaking: state.view === 'chat' && state.live?.phase === 'streaming',
     working: core.working() + state.busy.working + (state.pending || state.live ? 1 : 0),
   });
@@ -1850,7 +1854,7 @@ function scheduleRefresh(parts) {
 onCore('task', () => scheduleRefresh(['tasks']));
 onCore('problem', (p) => {
   scheduleRefresh(['problems', 'health', 'resilience']);
-  notify(p?.message ?? 'Something went wrong inside Nova.', { tone: 'alert', action: { label: 'See Health', run: () => navigate('/health') } });
+  notify(p?.message ?? 'Something went wrong inside Nova.', { tone: p?.stops ? 'alert' : 'attention', action: { label: 'See Health', run: () => navigate('/health') } });
 });
 onCore('message', () => scheduleRefresh(['messages']));
 // A repair playbook moved (M7b): what Nova did shows under its problem.

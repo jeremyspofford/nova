@@ -64,25 +64,33 @@ export function retryLabel(t) {
   return 'Try again';
 }
 
-// The orb's state, from real signals, most urgent first:
-//   offline   the server isn't answering;
-//   listening the person is talking to Nova;
-//   alert     an open problem (red only for real alerts);
-//   attention something waits for the person's OK;
-//   speaking  a reply is arriving;
-//   working   the ledger or a conversation is busy;
-//   idle      nothing happening: breathing.
-export function orbState({ reachable = true, listening = false, problems = 0, needsYou = 0, speaking = false, working = 0 } = {}) {
+// The orb's state, from real signals, most urgent first. The set is fixed (DESIGN-SYSTEM §1;
+// owner decision 2026-10-31): a design system draws each state its own way, never a different set.
+//   offline    the server isn't answering;
+//   listening  the person is talking to Nova;
+//   stopped    something stopped Nova: a problem raised as stopping (work can't proceed, a
+//              dead-man's switch fired, a security refusal). Red, and only this is;
+//   needs-you  something needs the person while Nova keeps running: an OK waiting, or any other
+//              open problem (a Health item, capture running degraded). Amber;
+//   speaking   a reply is arriving;
+//   working    the ledger or a conversation is busy;
+//   idle       nothing happening: breathing.
+export function orbState({ reachable = true, listening = false, stopped = 0, needsYou = 0, speaking = false, working = 0 } = {}) {
   if (!reachable) return 'offline';
   if (listening) return 'listening';
-  if (problems > 0) return 'alert';
-  if (needsYou > 0) return 'attention';
+  if (stopped > 0) return 'stopped';
+  if (needsYou > 0) return 'needs-you';
   if (speaking) return 'speaking';
   if (working > 0) return 'working';
   return 'idle';
 }
 
-export const ORB_STATES = Object.freeze(['idle', 'listening', 'working', 'speaking', 'attention', 'alert', 'offline']);
+// Open problems, split by the rule above: those raised as stopping Nova, and the rest, which need
+// the person while Nova keeps running. A problem says which it is (`stops`, set where it is raised).
+export const stoppingProblems = (problems = []) => problems.filter((p) => !!p?.stops);
+export const problemTone = (problems = []) => (stoppingProblems(problems).length ? 'alert' : problems.length ? 'attention' : null);
+
+export const ORB_STATES = Object.freeze(['idle', 'listening', 'working', 'speaking', 'needs-you', 'stopped', 'offline']);
 
 // What the orb says to a screen reader.
 export const ORB_WORDS = Object.freeze({
@@ -90,8 +98,8 @@ export const ORB_WORDS = Object.freeze({
   listening: 'Nova is listening',
   working: 'Nova is working',
   speaking: 'Nova is replying',
-  attention: 'Something needs you',
-  alert: 'Something went wrong; see Health',
+  'needs-you': 'Something needs you',
+  stopped: 'Something stopped; see Health',
   offline: 'Nova isn’t reachable',
 });
 
