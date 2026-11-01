@@ -56,3 +56,14 @@ npm run typecheck
 ```
 
 Result: **44/44 passed**; typecheck passed. No-Kubernetes tripwire armed and never fired.
+
+Final strengthened regression run: **6/6 passed**, including direct start/switch hold and explicit
+stop/start recovery; final typecheck passed.
+
+A single full `npm test` run was attempted. It printed no failing assertions through 531 lines of
+output, but did not complete: after more than three minutes the runner was waiting on
+`tests/core/device-agent.test.ts` as its only remaining test-file subprocess. That subprocess had
+already been alive for more than 170 seconds. Only this run's verified npm/test process tree was
+stopped (exit 143). **Full host suite: INCOMPLETE, not a pass.** The same device-agent file passed in
+the focused 44-test run. This note does not claim the stalled full run proves any additional gate;
+CI on the final combined commit is still required.
