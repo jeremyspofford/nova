@@ -1,0 +1,21 @@
+{
+  "viewport": {
+    "width": 1280,
+    "height": 820
+  },
+  "lines": 20,
+  "inputHeight": 205,
+  "scrollHeight": 496,
+  "clientHeight": 205,
+  "radius": "8px",
+  "controlRadius": "8px",
+  "form": {
+    "x": 170,
+    "y": 520,
+    "width": 672,
+    "height": 223,
+    "right": 842,
+    "bottom": 743
+  },
+  "pageWidth": 1280
+}

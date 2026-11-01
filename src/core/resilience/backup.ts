@@ -600,14 +600,19 @@ const unsealWords = (text: string, key: Buffer): string[] => {
 // destroys it. Every path the manifest names is checked first: none may reach outside the backup.
 export function cleanBackup(dir: string, table: string, ids: string[], words: string[], at: Date, sealKey: Buffer): void {
   const m = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as Manifest;
-  const rels = m.files.map((f) => safeRel(f.path));
+  m.files.forEach((f) => safeRel(f.path));
   const db = join(dir, 'nova.db');
-  cleanDbFile(db, table, ids, words);
+  const originals = new Set(cleanDbFile(db, table, ids, words).map((id) => `capture/raw/${id}`));
+  m.files = m.files.filter((f) => {
+    if (!originals.has(f.path)) return true;
+    rmSync(join(dir, 'files', safeRel(f.path)), { force: true });
+    return false;
+  });
   m.db = { path: 'nova.db', sha256: sha256File(db), bytes: statSync(db).size };
   const ws = words.map((w) => w.trim()).filter((w) => w.length >= 3);
   if (ws.length) {
-    m.files.forEach((f, i) => {
-      const p = join(dir, 'files', rels[i]!);
+    m.files.forEach((f) => {
+      const p = join(dir, 'files', safeRel(f.path));
       if (!existsSync(p) || lstatSync(p).isSymbolicLink()) return;
       const raw = readFileSync(p);
       if (!ws.some((w) => raw.includes(Buffer.from(w)))) return;

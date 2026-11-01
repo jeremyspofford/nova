@@ -104,7 +104,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: calc(var(--space-1) / 2);
+  gap: var(--space-1);
   min-width: calc(var(--space-7) + var(--space-1));
   padding: var(--space-2) var(--space-1);
   border: 0;
@@ -362,7 +362,7 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   align-items: center;
   gap: var(--space-1);
   flex: none;
-  padding: calc(var(--space-1) / 2) var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border: 1px solid color-mix(in srgb, var(--status-c) 45%, transparent);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--status-c) 12%, transparent);
@@ -384,7 +384,7 @@ button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transp
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  padding: calc(var(--space-1) / 2) var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-pill);
   background: var(--surface-card-hover);
   font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body);
@@ -404,7 +404,7 @@ button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transp
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: calc(var(--space-1) / 2);
+  gap: var(--space-1);
   padding: var(--space-1);
   margin: calc(-1 * var(--space-1));
   border: 0;
@@ -436,7 +436,7 @@ button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transp
 .device-row > .pill { margin-left: auto; }
 .device-name { color: var(--text-primary); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); overflow-wrap: anywhere; }
 .device-tag { color: var(--text-secondary); font-weight: var(--type-weight-regular); }
-.device-detail { margin-top: calc(var(--space-1) / 2); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); overflow-wrap: anywhere; }
+.device-detail { margin-top: var(--space-1); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); overflow-wrap: anywhere; }
 .device-registry .device-row { flex-wrap: wrap; padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
 .device-registry .row-actions { margin-left: auto; }
 
@@ -468,7 +468,7 @@ button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transp
   min-height: calc(var(--space-6) + var(--space-2));
   padding: var(--space-1) var(--space-4);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-input);
   background: var(--surface-card);
   font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body);
   color: var(--text-primary);
@@ -653,7 +653,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   padding: var(--space-1) var(--space-4);
   min-height: calc(var(--space-6) + var(--space-2));
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-input);
   cursor: pointer;
 }
 .choice:has(input:checked) { border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
@@ -680,19 +680,19 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-input);
   background: color-mix(in srgb, var(--bg-overlay) 85%, transparent);
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(var(--blur-glass));
   -webkit-backdrop-filter: blur(var(--blur-glass));
 }
-/* Grown past one line, the composer keeps the input radius (UX review 1, F0): a pill's radius grows
-   with its height, so a tall pill is an ellipse that clips the text at its sides. Its padding
-   doesn't depend on the radius, and it never takes more than about a quarter of the screen: past
-   that, the field scrolls inside, with Send and the microphone still at its foot. */
-.composer.is-grown { border-radius: var(--radius-input); }
+/* The composer is a control, so it takes the control radius at every height (DESIGN-SYSTEM §2.1:
+   radius by size class, never by rendered height). A pill's radius follows its height, so a tall
+   pill is an ellipse that clips the text at its sides (UX review 1, F0). It never takes more than
+   about a quarter of the screen: past that, the field scrolls inside, with Send and the microphone
+   still at its foot. */
 .composer:focus-within { border-color: var(--accent-primary); }
 .composer textarea {
   flex: 1;
@@ -748,16 +748,14 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 .banner {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: var(--space-2);
   margin: 0 var(--space-4) var(--space-2);
   padding: var(--space-2) var(--space-4);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-card);
   background: var(--surface-card);
   font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body);
   color: var(--text-primary);
-  text-align: center;
 }
 .banner::before { content: ''; flex: none; width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: var(--status-attention); }
 .toast {
@@ -770,9 +768,9 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
   align-items: center;
   gap: var(--space-3);
   max-width: calc(100vw - 2 * var(--space-4));
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-card);
   background: var(--bg-overlay);
   box-shadow: var(--shadow-raised);
   font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body);

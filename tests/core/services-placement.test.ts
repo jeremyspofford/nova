@@ -123,9 +123,10 @@ test('checked twice: a placement on a thin client is refused at proposal, and ag
   assert.equal(out.ok, false);
   assert.match(out.said, /thin client, which never receives workloads/);
   assert.equal(asked, 0, 'no driver was asked to plan it');
-  // A placement that resolves to another device is refused too: native workloads are M10h.
+  // A placement that resolves to another device is refused by a Service Manager with no remote
+  // driver (the supervisor's): native workloads go through the hub's device driver (M10h).
   const away = m.plan({ ...service, placement: { mode: 'preferred', roles: ['compute'], needs: { gpu_vram_gb: 8 } } });
-  assert.match((away as { problems: string[] }).problems.join(' '), /run on gpu-box\. Running services on devices other than the hub comes with native workloads/);
+  assert.match((away as { problems: string[] }).problems.join(' '), /run on gpu-box\. This Service Manager runs services on the hub only/);
   assert.equal(m.plan({ ...service, placement: { mode: 'pinned', device: 'hub' } }).ok, true);
 
   // At the device: the agent's own check, against the roles it holds.

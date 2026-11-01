@@ -1,4 +1,5 @@
-/* The living style reference. Schema tokens only, like everything else. */
+/* The living styleguide (DESIGN-SYSTEM §0, §7). Schema tokens only, like everything else. Each entry
+   is its own block, so it can be captured and approved alone. */
 .sg { height: auto; min-height: 100%; overflow: auto; }
 .sg-head {
   display: flex;
@@ -40,3 +41,29 @@
 .sg-toasts { display: flex; flex-direction: column; gap: var(--space-3); }
 .sg-toasts .toast { position: static; translate: none; }
 .sg .dock { padding: 0; margin: 0; }
+.sg-index { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--space-8) * 3), 1fr)); gap: var(--space-5); padding: var(--space-5) 0; border-bottom: 1px solid var(--border-subtle); }
+.sg-index ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.sg-index a { color: var(--text-primary); text-decoration: none; font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.sg-index a:hover { color: var(--accent-primary); }
+.sg-index .sg-label { margin: 0 0 var(--space-2); }
+.sg-entry { padding: var(--space-6) var(--space-4) var(--space-5); border-top: 1px solid var(--border-subtle); scroll-margin-top: var(--space-4); }
+.sg-section > h2 + .sg-entry { border-top: 0; padding-top: var(--space-3); }
+.sg-section > h2 { padding: 0 var(--space-4); }
+.sg-entry-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); }
+.sg-entry-name { font: var(--type-weight-strong) var(--type-h2)/var(--type-line-tight) var(--font-display); color: var(--text-primary); }
+.sg-alone { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.sg-about { max-width: var(--layout-content-max); margin: var(--space-2) 0 var(--space-5); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body); }
+.sg-state { margin: 0 0 var(--space-5); min-width: 0; }
+.sg-state > .sg-label { margin: 0 0 var(--space-3); }
+.sg-specimen { min-width: 0; }
+.sg-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(calc(var(--space-8) * 4), 1fr)); gap: var(--space-5); }
+.sg-type { font-family: var(--font-display); line-height: var(--type-line-tight); color: var(--text-primary); }
+.sg-hierarchy { display: grid; gap: var(--space-1); max-width: var(--layout-content-max); padding: var(--space-5); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.sg-hierarchy .view-title { margin: 0 0 var(--space-3); }
+.sg-kicker-demo { font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
+.sg-icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--space-8) + var(--space-6)), 1fr)); gap: var(--space-4); color: var(--text-primary); }
+.sg-icon { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+.sg-orb-sizes { align-items: flex-end; gap: var(--space-6); }
+.sg-back { margin-bottom: var(--space-4); }
+.sg-broken { padding: var(--space-3) var(--space-4); border: 1px solid var(--status-error); border-radius: var(--radius-input); color: var(--status-error); }
+.sg-cards > .sg-state { margin: 0; }
