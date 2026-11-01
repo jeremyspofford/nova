@@ -11,7 +11,7 @@
 // connectors/; the copies taken before the migration still hold the old entries until they age out
 // (NOTES for Track 1).
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 
 // Under Node's permission model a folder that doesn't exist can't be granted, so asking about a
 // path in it throws instead of answering false: either way there is nothing there.
@@ -101,4 +101,23 @@ export function readGmailFiles(home: string): Map<string, string> {
 }
 export function removeGmailFiles(home: string, names: string[]): void {
   for (const [file, name] of Object.entries(GMAIL_FILES)) if (names.includes(name) && there(join(home, 'connectors', 'gmail', file))) rmSync(join(home, 'connectors', 'gmail', file), { force: true });
+}
+
+// Shared with vault.ts's writers; never steal a lock left by an interrupted process.
+export function withOldVaultLock<T>(home: string, run: () => T): T {
+  const dir = join(home, 'vault');
+  const lock = join(dir, '.writer-lock');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { mkdirSync(lock, { mode: 0o700 }); }
+  catch { throw new Error('The old vault is busy with a writer or migration; nothing was removed.'); }
+  try { return run(); } finally { rmSync(lock, { recursive: true }); }
+}
+
+// Private to the launcher/broker pipe, never a response or audit field. A changed snapshot is
+// retained wholesale; no secret comparison is exposed through conflict decisions.
+export function migrationSnapshot(home: string) {
+  const old = readOldVault(home);
+  const gmail = readGmailFiles(home);
+  const revision = createHash('sha256').update(JSON.stringify([old?.id ?? null, [...old?.map ?? []], [...gmail]])).digest('hex');
+  return { old, gmail, revision };
 }

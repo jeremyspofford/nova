@@ -31,7 +31,7 @@ The ADR's §13 splits Phase 1 into three PRs. This plan keeps that split, with o
 
 ## 2. What P1a builds
 
-`src/broker/` is 2,614 lines, under the ADR's budget of 3,000. That leaves about 386 lines for P1b's relay, which is tight (§7).
+`src/broker/` is 2,666 lines, under the ADR's budget of 3,000. That leaves 334 lines for P1b's relay, which is tight (§7).
 
 | File | What it is |
 |---|---|
@@ -130,6 +130,7 @@ These are where the ADR left a choice open, or where it didn't fit as written.
   - Nothing on the socket hands out a value, a ticket or a staging slot.
   - This is the ADR's stated hardening step: a small native helper, not in Phase 1.
 - **An echoing target is an oracle.** A target that echoes text core sent it lets core, by seeing whether the echo comes back scrubbed, confirm a guess about the value that use injected. This is bounded by the rate caps, and matters only for a low-entropy value. Generated values aren't guessable.
+- **Authenticated verification is also an oracle (owner finding SEC-06).** The `verify` injection mode returns whether the supplied body/signature pair matches the held HMAC key. A caller with the authenticated core role can therefore test a guessed key locally, without an echoing target. This is an explicit exception to the no-guess-oracle claim, required by the bound n8n callback verification operation; no HMAC or key bytes are returned. An exact bound origin is required, although verification sends no network request. Standard credentials need a standing consent or a tier-2 approval covering `VERIFY` for the task; sensitive credentials always ask first and require a registered passkey when available. `per_use` asks on every call. A task grant covers further body/signature pairs for that ref, origin and version in that task; it does not bind one body or one signature. Standing consent is rate-capped (default 600/hour, configured 1–3,600/hour), and all uses including verification share the hard cap of 3,600/hour per ref. Approval requests are capped at three pending per task and 30/hour, with five-minute single-use approvals. These bounds slow guessing; they do not make low-entropy keys safe. Use generated high-entropy signing keys.
 - **A program does what its inputs say.** Its arguments, working folder and project files are core's, and a program steered by them can send its credential elsewhere. The approval card shows the arguments; a standing consent covers any.
 - **Same-user mode.** Any program running as the person can read the broker's folder, its device key file (where no keychain answers), and its memory. The ADR's threat model says so, and so does Settings' notice.
 - **An old header with the person's passphrase.**
@@ -166,7 +167,7 @@ Each change is unavoidable once a `broker/` folder can exist in a home. Each is 
 ## 7. Questions for the owner
 
 1. **Q6's reveal:** the terminal launcher gated by the passphrase, or a native helper gated by biometrics (§4)?
-2. **The size budget.** P1a uses 2,614 of the 3,000 lines. The browser relay (CDP pass-through, origin checks, scrubbing every message) is the larger part of P1b. Raise the budget to about 3,500 for Phase 1, or have the relay live in the launcher's own file and count it?
+2. **The size budget.** P1a uses 2,666 of the 3,000 lines. The browser relay (CDP pass-through, origin checks, scrubbing every message) is the larger part of P1b. Raise the budget to about 3,500 for Phase 1, or have the relay live in the launcher's own file and count it?
 3. **Adding factors after setup** (§4): `unlock` with `add`, gated by a passkey where one is registered?
 
 ## 8. The tests
@@ -257,7 +258,7 @@ Proposed patches for Track 1 to apply. Nothing below is applied by this PR.
 
 **8. `docs/LEDGER.md`,** a new entry at the top of "## Decisions":
 
-> **2026-11-01 (Track 3: Vault broker Phase 1, PR 1 of 3).** Branch `vault/broker-phase1`. The Credential Broker is built as its own process in `src/broker/`, imports nothing from core, uses Node's standard library only, and is 2,614 lines. It answers the seven fixed verbs and `hello`/`unlock`/`lock`, and nothing else. It starts its own launcher for programs and for reading the old vault.
+> **2026-11-01 (Track 3: Vault broker Phase 1, PR 1 of 3).** Branch `vault/broker-phase1`. The Credential Broker is built as its own process in `src/broker/`, imports nothing from core, uses Node's standard library only, and is 2,666 lines. It answers the seven fixed verbs and `hello`/`unlock`/`lock`, and nothing else. It starts its own launcher for programs and for reading the old vault.
 > - **Nova Vault:** Argon2id from `node:crypto` (RFC 9106's floor), per-item AES-256-GCM, every factor an X25519 key pair, and a root-key rotation on delete. Holder sync carries device wraps and ciphertext only, and backups carry item blobs only.
 > - **Its own authority:** exact origin binding, scopes, classes, standing consent, approvals (core-relayed, or a WebAuthn passkey) and rate caps. A hash-chained audit log, and ledger records with ref, target and outcome.
 > - **Core's side:** the client returns no value. Migration from `vault.ts` goes through the broker's launcher, and core never opens the old vault.

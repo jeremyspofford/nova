@@ -63,7 +63,7 @@ export class Broker {
   #entry = entryKey();
   #approvals: Approvals;
   #rates: Rates;
-  #staged: { vaultId: string | null; items: Map<string, Buffer> } | null = null;
+  #staged: { vaultId: string | null; revision: string; items: Map<string, Buffer> } | null = null;
   #running = 0;
   #grants = new Set<string>();
   #index = new Map<string, Meta & { version: number; pending: boolean }>();
@@ -360,10 +360,10 @@ export class Broker {
       const body = req.body === undefined || req.body === null ? null : typeof req.body === 'string' ? Buffer.from(req.body, 'utf8') : null;
       if (req.body !== undefined && req.body !== null && !body) throw new Refused('out_of_scope', 'A request body is text.');
       if (body && body.length > 1024 * 1024) throw new Refused('out_of_scope', 'A request body is up to 1 MiB.');
-      inject(headers, b.inject, value, m.username, body);
+      const signature = inject(headers, b.inject, value, m.username, body);
       const res = await send({ origin: b.target, method, path, headers, body, lan: !!b.lan, pin: b.pin ?? null, maxBytes: MAX_OUTPUT }, this.#o.resolve);
       // What the target sent back, scrubbed of the value this use sent (and basic auth's user:value).
-      const one = new Scrubber([value.toString('utf8'), ...(b.inject.how === 'basic' ? [`${m.username ?? ''}:${value.toString('utf8')}`] : [])]);
+      const one = new Scrubber([value.toString('utf8'), ...(b.inject.how === 'basic' ? [`${m.username ?? ''}:${value.toString('utf8')}`] : []), ...(signature ? [signature, signature.slice((b.inject.prefix ?? '').length)] : [])]);
       // A body cut at the cap may end in part of a value: the tail that could hold one goes too.
       const text = res.truncated ? res.body.slice(0, Math.max(0, res.body.length - one.longest)) : res.body;
       return { outcome: { status: res.status, headers: one.any(res.headers), body: one.text(text), truncated: res.truncated } };
@@ -428,7 +428,7 @@ export class Broker {
     const meta: Meta = { name: mi.name, aliases: [alias], kind: mi.kind, origin, username: str(mi.username, 300) ? mi.username : null, class: cls, per_use: mi.per_use === true, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings, policy };
     const action = { verb: 'create', name: meta.name, kind: meta.kind, origin, username: meta.username, class: cls, per_use: meta.per_use, bindings: bindings.map(cardBinding), source: kind };
     const flags = bindings.flatMap((b) => this.#flags(b.target, b.kind));
-    const { id: approval, passkey } = this.#approve(ctx, action, { verb: 'create', what: kind === 'generate' ? `Make a new password for ${origin ?? meta.name}` : `Save a credential for ${origin ?? meta.name}`, name: meta.name, origin, username: meta.username, class: cls, flags, tier: 3, approving: `Saves it in Nova Vault${bindings.length ? `, usable only on ${bindings.map((b) => b.target).join(', ')}` : ', unbound (usable nowhere until you bind it)'}. Suggested class: ${suggested}.` }, true, this.#envelopeHash(src));
+    const { id: approval, passkey } = this.#approve(ctx, action, { verb: 'create', what: kind === 'generate' ? `Make a new password for ${origin ?? meta.name}` : `Save a credential for ${origin ?? meta.name}`, name: meta.name, origin, username: meta.username, class: cls, flags, tier: 3, items: bindings.map(cardBinding), approving: `Saves it in Nova Vault${bindings.length ? `, usable only on ${bindings.map((b) => b.target).join(', ')}` : ', unbound (usable nowhere until you bind it)'}. Suggested class: ${suggested}.` }, true, this.#envelopeHash(src));
     for (const b of meta.bindings) if (b.consent) b.consent.approval_id = approval;
     meta.provenance = kind === 'generate' ? 'generated' : passkey ? 'sealed-passkey' : 'sealed';
     const value = kind === 'generate' ? generate(policy) : this.#sealed((src as { sealed: unknown }).sealed, this.#digest(action, ctx));
@@ -468,6 +468,7 @@ export class Broker {
       if (mm.username !== undefined) next.username = str(mm.username, 300) ? mm.username : null;
       if (mm.class !== undefined) { if (mm.class !== 'standard' && mm.class !== 'sensitive') throw new Failed('not a class'); next.class = mm.class; }
       if (mm.per_use !== undefined) next.per_use = mm.per_use === true;
+      if (next.class === 'sensitive' && next.bindings.some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
       this.#approve(ctx, { verb: 'update', ref: id, meta: { name: next.name, username: next.username, class: next.class, per_use: next.per_use } }, { verb: 'update', what: `Change the details of “${m.name}”${next.class !== m.class ? ` (class ${m.class} → ${next.class})` : ''}`, name: next.name, origin: m.origin, username: next.username, class: next.class, tier: 3, approving: 'Saves the new details.' }, true);
       this.store.setMeta(id, stripIndex(next));
       this.#revoked(id);
@@ -564,7 +565,7 @@ export class Broker {
     const flags = this.#flags(b.target, b.kind);
     const before = m.bindings.find((x) => x.target === b.target);
     const { id: id_ } = this.#approve(ctx, { verb: 'bind', ref: id, binding: cardBinding(b) }, {
-      verb: 'bind', what: `${before ? 'Change' : 'Allow'} “${m.name}” ${before ? 'on' : 'to be used on'} ${b.target}`, name: m.name, origin: m.origin, username: m.username, target: b.target, scope: b.scope, class: m.class, flags, tier: 3,
+      verb: 'bind', what: `${before ? 'Change' : 'Allow'} “${m.name}” ${before ? 'on' : 'to be used on'} ${b.target}`, name: m.name, origin: m.origin, username: m.username, target: b.target, scope: b.scope, class: m.class, flags, tier: 3, items: [cardBinding(b)],
       approving: `${b.consent ? `Standing consent: requests inside ${b.consent.scope.methods.join(', ')} ${b.consent.scope.paths.join(', ')} go ahead without asking, up to ${b.consent.rate_per_hour} an hour. ` : 'Every use asks first. '}Nothing else is covered: no other host, subdomain or port.`,
     }, true);
     if (b.consent) b.consent.approval_id = id_;
@@ -633,15 +634,17 @@ export class Broker {
       const out = await this.#launch(['migrate', home], null);
       const items = new Map<string, Buffer>();
       let vaultId: string | null = null;
+      let revision = '';
       for (const line of out.split('\n')) {
         if (!line) continue;
-        let x: { vault_id?: unknown; name?: unknown; value?: unknown };
+        let x: { vault_id?: unknown; revision?: unknown; name?: unknown; value?: unknown };
         try { x = JSON.parse(line); } catch { continue; }
-        if ('vault_id' in x) { vaultId = typeof x.vault_id === 'string' ? x.vault_id : null; continue; }
+        if ('vault_id' in x) { vaultId = typeof x.vault_id === 'string' ? x.vault_id : null; revision = typeof x.revision === 'string' ? x.revision : ''; continue; }
         if (items.size < MAX_STAGED && str(x.name, 200) && NAME.test(x.name) && typeof x.value === 'string' && x.value.length > 0 && x.value.length <= 64 * 1024) items.set(x.name, Buffer.from(x.value, 'utf8'));
       }
       for (const b of this.#staged?.items.values() ?? []) zero(b);
-      this.#staged = { vaultId, items };
+      if (!/^[0-9a-f]{64}$/.test(revision)) throw new Failed('The old vault snapshot is incomplete; nothing was staged.');
+      this.#staged = { vaultId, revision, items };
       return { outcome: { staged: items.size } };
     }
     if (src.migrate !== 'commit') throw new Failed('A migration stages, commits, then proposes bindings.');
@@ -650,16 +653,17 @@ export class Broker {
     const from = st.vaultId ?? 'era2';
     const plan = [...groupStaged(st.items)].map(([name, g]) => {
       const owner = [...this.#index.values()].find((x) => x.aliases.includes(`${ALIAS}${name}`));
-      return { name, g, status: !owner ? 'move' : owner.migrated_from === from ? 'moved' : 'kept' };
+      const revision = createHash('sha256').update(canonical(g.names.map((n) => [n, st.items.get(n)!.toString('base64')]))).digest('hex');
+      return { name, g, revision, status: !owner ? 'move' : owner.provenance === 'migrated' && owner.migrated_from === from && owner.migrated_revision === revision ? 'moved' : 'kept' };
     });
-    this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ name: x.name, kind: x.g.kind, status: x.status })) }, { verb: 'create', what: `Move ${plan.filter((x) => x.status === 'move').length} credential(s) from the old vault into Nova Vault`, tier: 3, items: plan.map((x) => ({ name: x.name, kind: x.g.kind, origin: x.g.origin, status: x.status })), approving: 'Each is moved inside the broker, unbound (usable nowhere until you bind it), read back, and only then removed from the old vault. A name already taken by another credential stays in the old vault.' });
+    this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ name: x.name, kind: x.g.kind, status: x.status })) }, { verb: 'create', what: `Move ${plan.filter((x) => x.status === 'move').length} credential(s) from the old vault into Nova Vault`, tier: 3, items: plan.map((x) => ({ name: x.name, kind: x.g.kind, origin: x.g.origin, status: x.status })), approving: 'Each is moved inside the broker, unbound (usable nowhere until you bind it), read back, and only then removed from the old vault. A name already taken by another credential stays in the old vault.' }, true);
     this.#staged = null;
     const moved: string[] = [];
     let readBack = true;
     for (const x of plan) {
       if (x.status === 'kept') continue;
       if (x.status === 'move') {
-        const meta: Meta = { name: x.name, aliases: [`${ALIAS}${x.name}`], kind: x.g.kind, origin: x.g.origin, username: x.g.username, class: suggestClass(x.g.origin, x.g.kind), per_use: false, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings: [], policy: DEFAULT_POLICY, provenance: 'migrated', migrated_from: from };
+        const meta: Meta = { name: x.name, aliases: [`${ALIAS}${x.name}`], kind: x.g.kind, origin: x.g.origin, username: x.g.username, class: suggestClass(x.g.origin, x.g.kind), per_use: false, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings: [], policy: DEFAULT_POLICY, provenance: 'migrated', migrated_from: from, migrated_revision: x.revision };
         const { id } = this.store.add(meta, x.g.value);
         if (x.g.pending) this.store.setPending(id, x.g.pending);
         const v = this.store.value(id);
@@ -672,18 +676,18 @@ export class Broker {
     this.#reindex();
     ctx.rec.scope_item = `moved ${moved.length}`;
     if (!readBack) throw new Failed('An item didn’t read back from the new store; nothing was removed from the old vault.');
-    const fin = await this.#launch(['finish', home], JSON.stringify({ vault_id: st.vaultId, names: moved }));
+    const fin = await this.#launch(['finish', home], JSON.stringify({ vault_id: st.vaultId, revision: st.revision, names: moved }));
     let removed = 0;
     try { removed = Number(JSON.parse(fin.trim().split('\n').at(-1) ?? '{}').removed) || 0; } catch { removed = 0; }
     return { outcome: { migrated: plan.filter((x) => x.status === 'move').map((x) => x.name), moved: moved.length, kept: plan.filter((x) => x.status === 'kept').map((x) => x.name), read_back: true, removed } };
   }
 
   // The launcher for a migration step: started by the broker, on its own home, output by pipe, with
-  // the old vault's folders added to what it may read (and, to finish, write).
+  // the old vault's folders added to what it may read, plus the writer lock (and finish writes).
   #launch(args: string[], input: string | null): Promise<string> {
     const home = args[1]!;
     const dirs = [join(home, 'vault'), join(home, 'connectors')];
-    const grants = grantsIf([...dirs.map((d) => `--allow-fs-read=${d}/`), ...(args[0] === 'finish' ? dirs.map((d) => `--allow-fs-write=${d}/`) : [])]);
+    const grants = grantsIf([...dirs.map((d) => `--allow-fs-read=${d}/`), ...(args[0] === 'finish' ? dirs : [dirs[0]!]).map((d) => `--allow-fs-write=${d}/`)]);
     return new Promise((ok, fail) => {
       const child = spawn(process.execPath, [...grants, '--disable-sigusr1', '--disable-warning=ExperimentalWarning', LAUNCH, ...args], { env: { TZ: 'UTC', ...(this.#o.keyMode === 'file' ? { NOVA_VAULT_KEY: 'file' } : {}) }, stdio: ['ignore', 'pipe', 'ignore', 'pipe'] });
       child.stdio[3]!.on('error', () => { /* the launcher stopped before reading it */ });
@@ -705,10 +709,10 @@ export class Broker {
       if (x.origin !== undefined && x.origin !== null) { try { origin = canonicalTarget({ kind: 'http', origin: x.origin }).target; } catch { throw new Failed('A proposed site isn’t a canonical https origin.'); } }
       const cls = x.class === 'standard' || x.class === 'sensitive' ? x.class : suggestClass(origin, m.kind);
       const bindings = Array.isArray(x.bind) ? x.bind.slice(0, 5).map((b) => this.#binding(b)) : [];
-      if (cls === 'sensitive' && bindings.some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
+      if (cls === 'sensitive' && [...m.bindings.filter((b) => !bindings.some((n) => n.target === b.target)), ...bindings].some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
       return { id, m, origin, cls, bindings };
     });
-    const items = plan.map((x) => ({ name: x.m.name, kind: x.m.kind, origin: x.origin, username: x.m.username, class: x.cls, target: x.bindings.map((b) => b.target).join(', ') || 'unbound', flags: x.bindings.flatMap((b) => this.#flags(b.target, b.kind)) }));
+    const items = plan.map((x) => ({ name: x.m.name, kind: x.m.kind, origin: x.origin, username: x.m.username, class: x.cls, bindings: x.bindings.map(cardBinding), target: x.bindings.map((b) => b.target).join(', ') || 'unbound', flags: x.bindings.flatMap((b) => this.#flags(b.target, b.kind)) }));
     const { id: approval } = this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ ref: x.id, origin: x.origin, class: x.cls, bindings: x.bindings.map(cardBinding) })) }, { verb: 'create', what: `Bind ${plan.length} credential(s) moved from the old vault`, tier: 3, items, approving: 'Each is usable only on the target shown. Items left unbound can’t be used until you bind them.' }, true);
     for (const x of plan) {
       for (const b of x.bindings) if (b.consent) b.consent.approval_id = approval;
@@ -743,7 +747,7 @@ function programRequest(req: { cwd?: unknown; env?: unknown; stdin?: unknown; ti
 const unlockDigest = (vid: string, factor: string, boot: string) => createHash('sha256').update(`nova-broker-unlock|${vid}|${factor}|${boot}`).digest('hex');
 
 const stripIndex = (m: Meta & { version?: number; pending?: boolean }): Meta => { const { version: _v, pending: _p, ...rest } = m; return rest; };
-const cardBinding = (b: Binding) => ({ target: b.target, kind: b.kind, scope: b.scope, inject: b.inject.how, consent: b.consent ? { scope: b.consent.scope, rate_per_hour: b.consent.rate_per_hour } : null, lan: !!b.lan, pin: b.pin ?? null, embed_on: b.embed_on ?? [] });
+const cardBinding = (b: Binding) => ({ target: b.target, kind: b.kind, scope: b.scope, inject: b.inject, consent: b.consent ? { scope: b.consent.scope, rate_per_hour: b.consent.rate_per_hour } : null, lan: !!b.lan, pin: b.pin ?? null, embed_on: b.embed_on ?? [] });
 
 const REFUSED_HEADERS = /^(authorization|proxy-authorization|cookie|host|content-length|transfer-encoding|connection|upgrade|te|trailer|expect|keep-alive|proxy-connection)$/i;
 function callerHeaders(h: unknown, inj: Inject): Record<string, string> {
@@ -765,7 +769,12 @@ function inject(headers: Record<string, string>, inj: Inject, value: Buffer, use
   if (inj.how === 'bearer') headers.authorization = `Bearer ${v}`;
   else if (inj.how === 'basic') headers.authorization = `Basic ${Buffer.from(`${username ?? ''}:${v}`).toString('base64')}`;
   else if (inj.how === 'header') headers[inj.header!.toLowerCase()] = `${inj.prefix ?? ''}${v}`;
-  else if (inj.how === 'sign') headers[inj.header!.toLowerCase()] = hmac(value, body ?? Buffer.alloc(0), inj);
+  else if (inj.how === 'sign') {
+    const signature = hmac(value, body ?? Buffer.alloc(0), inj);
+    headers[inj.header!.toLowerCase()] = signature;
+    return signature;
+  }
+  return null;
 }
 
 // The old vault's names, grouped into items: a sign-in's username, password and pending parts are

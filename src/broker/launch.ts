@@ -9,9 +9,9 @@
 //     the value in its environment, or in a 0600 file in a 0700 folder named by that variable and
 //     removed on exit. It scrubs stdout and stderr of the value (and its encodings), passes on
 //     signals, and exits with the program's code.
-//   launch.ts migrate <home>   stdout: { vault_id }, then { name, value } per credential
+//   launch.ts migrate <home>   stdout: { vault_id, revision }, then { name, value } per credential
 //     Reads vault.ts's file and key and Era 2's Gmail files. Nova's own keys aren't sent.
-//   launch.ts finish <home>    fd 3: { vault_id, names }
+//   launch.ts finish <home>    fd 3: { vault_id, revision, names }
 //     Takes the names that moved out of the old vault (a new key, or no file and no key) and removes
 //     Era 2's files for them; prints counts only.
 //
@@ -23,7 +23,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OWN_KEYS, readGmailFiles, readOldVault, removeFromOldVault, removeGmailFiles } from './oldvault.ts';
+import { OWN_KEYS, removeFromOldVault, removeGmailFiles, withOldVaultLock, migrationSnapshot } from './oldvault.ts';
 import { fileSha256 } from './origin.ts';
 import { Scrubber, StreamScrubber } from './scrub.ts';
 
@@ -76,22 +76,29 @@ async function run() {
 }
 
 function migrate(home: string) {
-  const old = readOldVault(home);
-  const items = new Map<string, string>([...readGmailFiles(home)]);
-  // The vault's copy wins over an Era 2 file (the file is then a leftover), as gmail.js does.
-  for (const [k, v] of old?.map ?? []) items.set(k, v);
-  line({ vault_id: old?.id ?? null });
-  for (const [name, value] of items) if (!OWN_KEYS.some((r) => r.test(name))) line({ name, value });
+  return withOldVaultLock(home, () => {
+    const { old, gmail, revision } = migrationSnapshot(home);
+    const items = new Map<string, string>(gmail);
+    for (const [k, v] of old?.map ?? []) items.set(k, v);
+    line({ vault_id: old?.id ?? null, revision });
+    for (const [name, value] of items) if (!OWN_KEYS.some((r) => r.test(name))) line({ name, value });
+    old?.key.fill(0);
+  });
 }
 
 async function finish(home: string) {
   const f = await fromParent();
-  const names = Array.isArray(f.names) ? (f.names as unknown[]).filter((n): n is string => typeof n === 'string') : [];
-  const old = readOldVault(home);
-  if (old && old.id !== f.vault_id) fail('the old vault changed since it was read; nothing was removed');
-  const removed = old ? removeFromOldVault(home, old, names) : [];
-  removeGmailFiles(home, names);
-  line({ removed: removed.length, kept: old?.map.size ?? 0 });
+  withOldVaultLock(home, () => {
+    const names = Array.isArray(f.names) ? (f.names as unknown[]).filter((n): n is string => typeof n === 'string') : [];
+    const { old, revision } = migrationSnapshot(home);
+    try {
+      // A newer value was never read back. Keep all entries on any staged revision mismatch.
+      if (revision !== f.revision || (old && old.id !== f.vault_id)) { line({ removed: 0 }); return; }
+      const removed = old ? removeFromOldVault(home, old, names) : [];
+      removeGmailFiles(home, names);
+      line({ removed: removed.length, kept: old?.map.size ?? 0 });
+    } finally { old?.key.fill(0); }
+  });
 }
 
 const [mode, home] = process.argv.slice(2);

@@ -219,10 +219,14 @@ test('update, rotate: metadata and class, a new value, delete; a pending version
   const made = await boundCredential(p, a.origin, { value: C('v1') });
   const ref = made.ref;
   const t = { kind: 'http', origin: a.origin };
+  const forbidden = await p.approve('update', { ref, change: { meta: { username: 'robot', class: 'sensitive' } } });
+  assert.equal(forbidden.refused, 'class_policy', 'withdraw standing consent before making the item sensitive');
+  await call('bind', { ref, remove: { target: t, consent_only: true } });
   const meta = await p.approve('update', { ref, change: { meta: { username: 'robot', class: 'sensitive' } } });
   assert.equal(meta.class, 'sensitive');
   assert.equal((await call('use', { ref, target: t, request: { method: 'GET', path: '/api' } })).refused, 'needs_approval', 'its standing consent no longer covers it');
   await p.approve('update', { ref, change: { meta: { class: 'standard' } } });
+  await p.approve('bind', { ref, add: { target: t, scope: made.bindings[0].scope, inject: made.bindings[0].inject, consent: { scope: made.bindings[0].scope } } });
   const v2 = await p.approve('update', { ref, change: { value: 'sealed' } }, { seal: C('v2'), sealAt: (f, env) => ({ ...f, change: { value: { sealed: env } } }) });
   assert.equal(v2.version, 2);
   await call('use', { ref, target: t, request: { method: 'GET', path: '/api' } });

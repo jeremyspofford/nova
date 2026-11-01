@@ -90,13 +90,16 @@ Every answer is checked against an allow-list of keys (`ANSWER_KEYS`) before it 
 | `bind` remove, consent revoke, rotate abandon, holder remove | At once |
 | A sensitive item with a standing consent | Refused (`class_policy`) |
 
+**Owner findings A follow-up (2026-11-01):** the owner supplied SEC-01..07 in `docs/builder-packet/nova-vault-second-model-findings-2026-11-01-a.md`, copied verbatim. The source excerpts below record the reviewed snapshot and predate the follow-up fixes; see `docs/reviews/vault-owner-findings-notes-2026-11-01.md` and the current source for the delta. This follow-up does not complete the interrupted independent adversarial review or the outstanding second-model findings set. Both remain merge gates.
+
 ## 2. The claims the code must uphold
 
 The honest-claims rule: Nova never says "Nova can never read your passwords". It says exactly C1.
 
 - **C1.** Within Nova, the capability to read a credential's value exists only inside the broker: the broker process, and the launcher the broker itself starts for a program it hands a credential to, or to read the old vault. (Phase 1 runs as the person's own OS account; see the threat model.)
 - **C2.** A value leaves the broker only toward the bound target it is used on: a request to the bound origin, or a program's environment or file at spawn. No answer to core or the supervisor carries a value, a part of one, its length, any encoding of one, or a hash or HMAC of one.
-  - No answer depends on whether text core sent equals a held value. The one exception is stated (limit 2): a target that echoes core's text back, scrubbed.
+  - No answer depends on whether text core sent equals a held value, except for two explicit, rate-capped oracles: a target that echoes core's text back, scrubbed (limit 2), and authenticated local HMAC verification (SEC-06 below). Neither exception permits returning the HMAC itself.
+  - **SEC-06, authenticated verification:** the bound `verify` mode intentionally returns one boolean for the supplied body/signature pair and the held key, without making a target connection. This is a local guess oracle for an authenticated core caller. It needs standing consent for a standard credential or a tier-2 task approval; sensitive credentials ask first (registered passkey required where available), and `per_use` always asks. The task grant covers further body/signature pairs, not just one pair. The standing-consent cap defaults to 600/hour (configurable 1–3,600), and all verification/use calls share a hard 3,600/hour per-ref cap. Approval flood control permits three pending per task, 30/hour; approvals expire after five minutes and are single-use. Rate caps do not make a low-entropy signing key safe. The binding design includes n8n verification, so this documented exception preserves that operation. No signature or key is returned.
 - **C3.** Origin binding is enforced by the broker, on what it computes itself. A credential bound to A is refused for B, even when the request comes from core with a valid token and a valid approval made for a use at A. B may be:
   - another host, a subdomain or parent of A, a homograph, or A with an extra label;
   - another port, or `http` instead of `https`;
