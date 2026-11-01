@@ -228,7 +228,9 @@ const HIDDEN = new Set(['unscreened', 'held', 'hold']);
 function sensitivityPill(e) {
   const s = sensitivity(e);
   if (s.state === 'index') return '';
-  const label = s.state === 'redact' ? 'Redacted' : s.label;
+  // A redaction's label says what was redacted ("Redacted: a card number."), the rest say what
+  // happened and their reason follows.
+  const label = s.state === 'redact' ? (s.why ?? s.label).replace(/\.$/, '') : s.label;
   return `<span class="pill ${SENSITIVE_TONE[s.state] ?? ''}" data-sensitivity="${esc(s.state)}">${esc(label)}</span>`;
 }
 
@@ -264,7 +266,11 @@ function eventLine(e) {
 
 function eventItem(e) {
   const s = sensitivity(e);
-  const why = s.state !== 'index' && s.why ? `<p class="settings-note capture-why">${esc(s.why)}</p>` : '';
+  // The reason, where the label doesn't already say it: a redaction's label names what, and a held
+  // item's notice is on the holding card above.
+  const notice = data?.status?.screening?.notice;
+  const shown = s.state === 'hold' || s.state === 'exclude' || (s.state === 'held' && !!notice && !s.why?.startsWith(notice));
+  const why = shown && s.why ? `<p class="settings-note capture-why">${esc(s.why)}</p>` : '';
   const remember = e.promoted?.length || !s.usable ? '' : `<button type="button" class="btn small" data-action="capture-remember" data-event="${esc(e.id)}">Remember</button>`;
   return `<li class="capture-item" data-event="${esc(e.id)}" data-sensitivity="${esc(s.state)}">${eventLine(e)}${why}${eventText(e)}${screeningRecord(e)}
   <div class="sheet-actions">${remember}<button type="button" class="btn small quiet" data-action="capture-forget" data-event="${esc(e.id)}">Forget</button></div></li>`;

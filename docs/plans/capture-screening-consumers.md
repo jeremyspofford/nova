@@ -41,11 +41,10 @@
 - **The Capture view:**
   - **A "Held, not kept" card** with the count, the notice, that line, and a link to Settings › Models.
   - **Each event's label,** in Nova's own words, never a model's:
-    - "Held until it’s checked" (unscreened)
-    - "Held, not kept: not checked yet" (held)
-    - "Redacted", with the reason "Redacted: a card number and a cloud access key."
-    - "Sensitive: held, not added to memory", with the reason "…: Nova’s check found a person’s health details in it. It is kept only until capture retention deletes it." When the model wasn't sure: "…wasn’t sure it’s free of private details."
-    - "Sensitive: excluded, text not kept", with the reason "…: Nova’s check found a password in it."
+    - "Held until it’s checked" (unscreened) and "Held, not kept: not checked yet" (held). Their reason is the holding card's notice, so it isn't repeated on each item.
+    - "Redacted: a card number and a cloud access key" (the label names what was redacted).
+    - "Sensitive: held, not added to memory", with the reason "Nova’s check found a person’s health details in it. It is kept only until capture retention deletes it." When the model wasn't sure: "Nova’s check wasn’t sure it’s free of private details. …"
+    - "Sensitive: excluded, text not kept", with the reason "Nova’s check found a password in it, so its words weren’t kept."
   - **The words behind a tap:** a held event's words are behind "Show what was captured". An excluded event has none.
   - **How it was checked:** every item opens to "How this was checked": the template and version, what Nova's rules redacted and where, the seat and pinned model that answered (or that none trusted did), the scores, the decision id and time, and the capture source.
   - **Remember** shows only on index and redact. **Forget** is always there.

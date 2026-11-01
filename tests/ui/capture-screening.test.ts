@@ -64,8 +64,7 @@ test('the capture timeline shows each verdict with its reason; held and excluded
 
     // Redacted: says what, shows the redacted words, can be remembered.
     const card = item(page, 'card');
-    assert.equal(await card.locator('.pill[data-sensitivity="redact"]').textContent(), 'Redacted');
-    assert.match((await card.locator('.capture-why').textContent()) ?? '', /^Redacted: a card number\.$/);
+    assert.equal(await card.locator('.pill[data-sensitivity="redact"]').textContent(), 'Redacted: a card number');
     assert.match((await card.locator('.capture-text').textContent()) ?? '', /\[redacted: card number\]/);
     assert.equal(((await card.textContent()) ?? '').includes('4242 4242'), false, 'the number is nowhere on the page');
     assert.equal(await card.locator('[data-action="capture-remember"]').count(), 1);

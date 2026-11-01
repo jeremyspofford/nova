@@ -127,13 +127,13 @@ test('every outcome end to end through intake: index, redact, hold, exclude, and
     assert.equal(ev.card.sensitivity.state, 'redact');
     assert.equal(ev.card.sensitivity.why, 'Redacted: a card number and a cloud access key.');
     assert.equal(ev.clinic.sensitivity.state, 'hold');
-    assert.match(ev.clinic.sensitivity.why, /^Sensitive: held, not added to memory: Nova’s check found a person’s health details in it\. It is kept only until capture retention deletes it\.$/);
+    assert.match(ev.clinic.sensitivity.why, /^Nova’s check found a person’s health details in it\. It is kept only until capture retention deletes it\.$/);
     assert.equal(ev.odd.sensitivity.state, 'hold');
     assert.match(ev.odd.sensitivity.why, /wasn’t sure/);
     assert.equal(ev.wifi.sensitivity.state, 'exclude');
     assert.equal(ev.wifi.text, null, 'its words are cleared');
     assert.equal(ev.wifi.app, 'Chat', 'the row stays: time, app and source');
-    assert.match(ev.wifi.sensitivity.why, /^Sensitive: excluded, text not kept: Nova’s check found a password in it\.$/);
+    assert.match(ev.wifi.sensitivity.why, /^Nova’s check found a password in it, so its words weren’t kept\.$/);
     assert.deepEqual(holding(r.h.home, 'CANARY-GREY-PASSWORD'), [], 'the excluded words are nowhere under the home');
 
     // Only index and redact may be triaged or remembered.

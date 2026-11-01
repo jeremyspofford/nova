@@ -739,6 +739,8 @@ export class Capture extends EventEmitter {
   }
 
   async #screen(limit: number): Promise<{ checked: number; outcomes: Record<string, number>; waiting: boolean }> {
+    // Nothing waits: no need to ask whether anything could check it.
+    if (!this.#db.get(`SELECT 1 FROM capture_event WHERE sensitivity IN ('unscreened', 'held') LIMIT 1`)) return { checked: 0, outcomes: {}, waiting: false };
     const can = this.#screening();
     const states = can.trusted ? `'unscreened', 'held'` : `'unscreened'`;
     const rows = this.#db.all<EventRow>(`SELECT * FROM capture_event WHERE sensitivity IN (${states}) ORDER BY at, rowid LIMIT ${Math.max(1, Math.min(200, limit))}`);
@@ -772,7 +774,7 @@ export class Capture extends EventEmitter {
         // before the intake rule existed).
         const app = sensitiveApp(r.app ?? '', r.url ?? '');
         state = app ? 'exclude' : 'index';
-        why = app ? `${SENSITIVITY_WORDS.exclude}: captured from ${app}.` : null;
+        why = app ? `It was captured from ${app}, so its words weren’t kept.` : null;
       } else if (!d) {
         state = 'held';
         why = failed ? 'Nova couldn’t check it just now, so it is held, not kept, until it can.' : `${HELD_NOTICE}${can.why ? ` ${can.why}` : ''}`;
@@ -818,13 +820,14 @@ export class Capture extends EventEmitter {
   #why(state: Sensitivity, d: Decided, redacted: string[]): string | null {
     const b = d.bands ?? {};
     const yes = (q: string) => b[q] === 'yes';
+    // The label says what happened (SENSITIVITY_WORDS); this says why.
     if (state === 'exclude') {
-      if (d.answers === null) return `${SENSITIVITY_WORDS.exclude}: captured from a sensitive app or site.`;
-      return `${SENSITIVITY_WORDS.exclude}: Nova’s check found ${yes('password') ? 'a password' : 'a secret key'} in it.`;
+      if (d.answers === null) return 'It was captured from a sensitive app or site, so its words weren’t kept.';
+      return `Nova’s check found ${yes('password') ? 'a password' : 'a secret key'} in it, so its words weren’t kept.`;
     }
     if (state === 'hold') {
       const what = [yes('financial_details') ? 'a person’s financial details' : '', yes('health_details') ? 'a person’s health details' : ''].filter(Boolean);
-      return `${SENSITIVITY_WORDS.hold}: ${what.length ? `Nova’s check found ${what.join(' and ')} in it.` : 'Nova’s check wasn’t sure it’s free of private details.'} It is kept only until capture retention deletes it.`;
+      return `${what.length ? `Nova’s check found ${what.join(' and ')} in it.` : 'Nova’s check wasn’t sure it’s free of private details.'} It is kept only until capture retention deletes it.`;
     }
     if (state === 'redact') return `Redacted: ${listed(redacted)}.`;
     return null;
