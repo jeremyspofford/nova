@@ -1,6 +1,6 @@
 {
   "id": "nova",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "kind": "design-system",
   "name": "Nova",
   "description": "A dark workspace that happens to contain a universe. Era 2’s default.",
@@ -105,5 +105,6 @@
       "description": "Nova’s signature surface: memory drawn as a field of stars. Declared here; it arrives in a later phase."
     }
   ],
-  "preview": []
+  "preview": [],
+  "ios_status_bar": "translucent"
 }

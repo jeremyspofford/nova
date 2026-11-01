@@ -45,6 +45,19 @@ export const BUILTIN_DIR = fileURLToPath(new URL('../../design-systems', import.
 export const MODES = ['light', 'dark', 'auto'] as const;
 export type Mode = (typeof MODES)[number];
 
+// DESIGN-SYSTEM §5 (owner decision 2026-10-31, option C): whether the installed iPhone app draws
+// behind the status bar. `translucent` (apple-mobile-web-app-status-bar-style black-translucent):
+// Nova's background runs to the top edge, and iOS draws the time and battery in white over it, so
+// only a dark look can have it. `default`: iOS keeps its own strip above Nova, readable over any
+// look. A package with a light and a dark look declares each ({ light, dark }); one look, one word.
+export const IOS_STATUS_BARS = ['translucent', 'default'] as const;
+export type IosStatusBar = (typeof IOS_STATUS_BARS)[number];
+export const IOS_STATUS_BAR_META: Readonly<Record<IosStatusBar, string>> = Object.freeze({ translucent: 'black-translucent', default: 'default' });
+// What a package that declares nothing gets: what iOS does with no tag, never white text on a
+// light page. The runtime applies it (with a warning); the authoring gate (scripts/check-themes.js)
+// refuses a package that leaves it out.
+export const IOS_STATUS_BAR_UNDECLARED: IosStatusBar = 'default';
+
 // DESIGN-SYSTEM §6 as numbers and switches. A package may tighten these, never loosen them.
 export const CONTENT_RULES = Object.freeze({
   card_max_lines: 3,
@@ -341,6 +354,17 @@ export interface DesignPackage extends Manifest {
   content_rules?: Record<string, number | boolean>;
   extras?: Extra[];
   preview?: string[];
+  ios_status_bar?: IosStatusBar | { light: IosStatusBar; dark: IosStatusBar };
+}
+
+// The status bar each appearance gets: `light` is what the light (or auto-light) look shows, `dark`
+// the dark one. A package with one look has the same word for both.
+export function iosStatusBar(pkg: { ios_status_bar?: unknown }): { light: IosStatusBar; dark: IosStatusBar; declared: boolean } {
+  const ok = (v: unknown): v is IosStatusBar => IOS_STATUS_BARS.includes(v as IosStatusBar);
+  const d = pkg.ios_status_bar;
+  if (ok(d)) return { light: d, dark: d, declared: true };
+  if (isObj(d) && ok(d.light) && ok(d.dark)) return { light: d.light, dark: d.dark, declared: true };
+  return { light: IOS_STATUS_BAR_UNDECLARED, dark: IOS_STATUS_BAR_UNDECLARED, declared: false };
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -458,6 +482,32 @@ export function validatePackage(input: unknown): { ok: boolean; problems: string
     }
   }
 
+  // The iPhone status bar (DESIGN-SYSTEM §5): a word, or one per appearance, and white status text
+  // only over a dark look. Each appearance is the package's tokens with that mode's on top, as
+  // generateCss resolves it.
+  const bar = p.ios_status_bar;
+  const word = (v: unknown) => IOS_STATUS_BARS.includes(v as IosStatusBar);
+  if (bar === undefined) warn.push(`ios_status_bar isn’t declared, so an installed iPhone app keeps iOS’s own status bar strip (${IOS_STATUS_BAR_UNDECLARED}).`);
+  else if (!(word(bar) || (isObj(bar) && Object.keys(bar).sort().join() === 'dark,light' && word(bar.light) && word(bar.dark)))) {
+    out.push(`ios_status_bar must be ${IOS_STATUS_BARS.join(' or ')}, or { light, dark } with one of those each; got ${say(bar)}.`);
+  } else {
+    // Unreadable white status text is a problem; a dark look that keeps iOS's strip only a warning
+    // (the owner's rule says dark designs draw behind it, but nothing is unreadable either way).
+    // A one-look package's light and dark are the same set, so each finding is said once.
+    const declared = iosStatusBar(p);
+    const [bad, odd] = [new Set<string>(), new Set<string>()];
+    for (const m of ['light', 'dark'] as const) {
+      const set = { ...tokens, ...(modes[m] ?? {}) } as Record<string, string>;
+      if (!parseColor(set['bg/base'])) continue;
+      const look = scheme(set);
+      const lead = isObj(bar) ? `ios_status_bar.${m}` : 'ios_status_bar';
+      if (declared[m] === 'translucent' && look === 'light') bad.add(`${lead} is translucent over a light look: iOS then draws the status bar’s time and battery in white, so it must be default.`);
+      if (declared[m] === 'default' && look === 'dark') odd.add(`${lead} is default over a dark look: dark designs draw behind the status bar (translucent), so Nova’s background reaches the top edge.`);
+    }
+    out.push(...bad);
+    warn.push(...odd);
+  }
+
   if (p.preview !== undefined && !(Array.isArray(p.preview) && p.preview.every((x) => typeof x === 'string' && /^(?!\/)(?!.*\.\.)[\w./-]+\.(png|jpe?g|webp)$/.test(x)))) {
     out.push('preview must be a list of image paths inside the package, like previews/home.png.');
   }
@@ -526,7 +576,20 @@ export interface Appearance {
   device_owners: Record<string, string>;
 }
 export interface DeviceFix { design_system: string; nudge: Record<string, number> }
-export interface Active { id: string; name: string; scope: 'device' | 'user' | 'default'; mode: Mode; device_id?: string; fix?: Record<string, number> }
+// `ios_status_bar`: what the installed iPhone app's status bar is in each appearance (§5); the page
+// picks light or dark as its CSS does (the mode, or the system's preference under auto).
+export interface Active { id: string; name: string; scope: 'device' | 'user' | 'default'; mode: Mode; device_id?: string; fix?: Record<string, number>; ios_status_bar: { light: IosStatusBar; dark: IosStatusBar } }
+
+// The app page's status bar tag (ui/index.html) as it ships: iOS's own strip, and the words a
+// script just after it reads to pick light or dark. The server writes the device's design's words
+// in before sending the page, so the value is in place when iOS reads it, at launch.
+export const STATUS_BAR_TAG = '<meta name="apple-mobile-web-app-status-bar-style" id="ios-status-bar" content="default" data-light="default" data-dark="default" data-mode="auto">';
+export function statusBarTag(a: Pick<Active, 'mode' | 'ios_status_bar'>): string {
+  const { light, dark } = a.ios_status_bar;
+  // Under auto with two different words, the script decides from the system's preference.
+  const now = a.mode === 'dark' ? dark : a.mode === 'light' || light === dark ? light : IOS_STATUS_BAR_UNDECLARED;
+  return `<meta name="apple-mobile-web-app-status-bar-style" id="ios-status-bar" content="${IOS_STATUS_BAR_META[now]}" data-light="${light}" data-dark="${dark}" data-mode="${a.mode}">`;
+}
 
 const DEVICE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -637,7 +700,11 @@ export class Design extends EventEmitter {
   // What a device shows: its own override, else the person's choice, else the default.
   active(deviceId?: string | null): Active {
     const a = this.appearance();
-    const named = (id: string, scope: Active['scope'], extra: Partial<Active> = {}): Active => ({ id, name: this.#installed().find((x) => x.id === id)?.manifest.name ?? id, scope, mode: a.mode, ...extra });
+    const named = (id: string, scope: Active['scope'], extra: Partial<Active> = {}): Active => {
+      const m = this.#installed().find((x) => x.id === id)?.manifest;
+      const { light, dark } = iosStatusBar((m ?? {}) as { ios_status_bar?: unknown });
+      return { id, name: m?.name ?? id, scope, mode: a.mode, ...extra, ios_status_bar: { light, dark } };
+    };
     const device = deviceId && DEVICE.test(deviceId) ? deviceId : null;
     const override = device ? a.device_overrides[device] : undefined;
     // This device's contrast fix, while it shows the design system the fix was made for.

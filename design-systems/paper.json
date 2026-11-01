@@ -1,6 +1,6 @@
 {
   "id": "paper",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "kind": "design-system",
   "name": "Paper",
   "description": "Warm paper, ink, and a serif voice.",
@@ -120,5 +120,6 @@
   },
   "content_rules": {},
   "extras": [],
-  "preview": []
+  "preview": [],
+  "ios_status_bar": { "light": "default", "dark": "translucent" }
 }
