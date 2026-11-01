@@ -57,6 +57,7 @@ function form(note = '') {
   <input class="input pair-code" id="code" name="code" value="${esc(given.code)}" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="12" required placeholder="ABCD-EFGH">
   <label class="pair-label" for="name">Call this device</label>
   <input class="input" id="name" name="name" value="${coarse ? 'Phone' : 'Browser'}" maxlength="60" required>
+  <p class="pair-note" id="pair-role">What it is for: a thin client, a screen onto Nova. A phone or browser runs nothing for Nova; your hub confirms this when it approves.</p>
   <p class="pair-note">Only enter a code here if this page is at <strong>${esc(location.origin)}</strong>, the address your hub showed you.${hello ? ` This hub’s fingerprint begins ${esc(hello.fingerprint.slice(0, 9))}.` : ''}</p>
   <div class="pair-actions"><button type="submit" class="btn primary" id="join">Pair this device</button></div>
 </form>`;
@@ -78,7 +79,7 @@ async function join(code, name) {
   const r = await api('POST', '/mesh/join', {
     code, public_key: id.publicKey, x25519_public_key: id.x25519PublicKey,
     x25519_sig: await key.sign(id, `nova-x25519-v1.${id.x25519PublicKey}`),
-    claims: { name, platform: platform(), kind, capabilities: [] },
+    claims: { name, platform: platform(), kind, capabilities: [], purposes: ['thin-client'] },
     commitment: await key.commitment(id.publicKey, nonce),
   });
   if (r.hub_fingerprint !== hello.fingerprint || (given.fingerprint && r.hub_fingerprint !== given.fingerprint)) {

@@ -253,7 +253,7 @@ test('GPU spoke: woken over (loopback) Wake-on-LAN, latency measured and said ho
   const { core } = modelsCore(hubOllama.url);
   try {
     const keys = generateDeviceKeys();
-    const d = core.mesh.devices.add({ name: 'Example desktop', platform: 'linux x64', kind: 'computer', public_key: keys.ed25519.publicKey, x25519_public_key: keys.x25519.publicKey, capabilities: ['heartbeat', 'queue'] }, 'test');
+    const d = core.mesh.devices.add({ name: 'Example desktop', platform: 'linux x64', kind: 'computer', purposes: ['compute'], public_key: keys.ed25519.publicKey, x25519_public_key: keys.x25519.publicKey, capabilities: ['heartbeat', 'queue'] }, 'test');
     core.mesh.spokes.heartbeat(d, { hardware: hubHardware({ hostname: 'example-desktop', network: [{ name: 'eth0', mac: '02:00:00:00:00:42', address: '127.0.0.1', netmask: '255.0.0.0' }] }) });
     core.models.setWake({ target: wol.target, wait_s: 1 });
     await assert.rejects(core.models.assign('reasoner', { device: d.id, model: 'example-deep:32b', url: 'http://198.51.100.7:11434' }), /isn’t one of Example desktop’s addresses/);

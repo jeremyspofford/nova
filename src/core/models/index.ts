@@ -126,6 +126,10 @@ export interface ModelsOptions {
   // How often waiting tasks are checked against returning capacity; how often a waking device is asked.
   watchMs?: number;
   wakePollMs?: number;
+  // The hub's decision model as the Decision Service sees it (DS1 NOTE 4), for the device record.
+  decisionModel?: () => { model: string | null; digest: string | null; why: string } | null;
+  // Called after /models/refresh has read the hub again, so a newly pulled decision model is seen.
+  refreshed?: () => Promise<void>;
   now?: () => Date;
 }
 
@@ -187,6 +191,23 @@ export class Models extends EventEmitter {
     if (device === HUB) return true;
     const d = this.#o.devices.find(device);
     return !!d && d.trust === 'trusted' && d.kind === 'computer' && d.role !== 'hub';
+  }
+
+  // Model work on a paired computer needs its compute role (M10f, the orchestration ADR Point 9:
+  // roles bound what may run there). The hub runs Nova and its own local models whatever its roles.
+  // Checked on every call, like trust: roles can be narrowed at any time.
+  #computes(device: string): boolean {
+    if (device === HUB) return true;
+    return this.#o.devices.find(device)?.purposes.includes('compute') ?? false;
+  }
+
+  #noCompute(device: string): string {
+    return `${this.#deviceName(device)} isn’t a compute device, so Nova sends it no model work. Give it the Compute role in Settings › Devices first`;
+  }
+
+  // The model roles a paired computer serves now: what taking its compute role away stops.
+  rolesOn(device: string): Role[] {
+    return ROLES.filter((r) => this.#stored(r)?.device === device);
   }
 
   // A computer that is no longer trusted loses its roles and the address Nova kept for it, so
@@ -302,6 +323,11 @@ export class Models extends EventEmitter {
     if (ROLES.some((r) => this.placement(r)?.device === device.id)) void this.check();
   }
 
+  // What a paired computer last reported about its hardware, or null (placement reads it, M10f).
+  hardwareOf(id: string): Hardware | null {
+    return this.#spokeHardware(id);
+  }
+
   #spokeHardware(id: string): Hardware | null {
     const r = this.#o.db.get<{ hardware: string }>('SELECT hardware FROM device_hardware WHERE device_id = ?', id);
     return r ? JSON.parse(r.hardware) as Hardware : null;
@@ -383,7 +409,8 @@ export class Models extends EventEmitter {
   async #deviceModels(): Promise<DeviceModels[]> {
     const hub = await this.inventory(HUB);
     const out: DeviceModels[] = [{ id: HUB, name: this.#o.hubName(), hub: true, hardware: await this.hubHardware(), models: hub.ok || hub.models.length ? hub.models : null, url: this.hubUrl() }];
-    for (const d of this.#spokes()) {
+    // Only computers that may run model work are recommended for it.
+    for (const d of this.#spokes().filter((x) => this.#computes(x.id))) {
       const url = this.#urlFor(d.id);
       const inv = url ? await this.inventory(d.id, { timeoutMs: 1200 }) : null;
       out.push({ id: d.id, name: d.name, hub: false, hardware: this.#spokeHardware(d.id), models: inv && (inv.ok || inv.models.length) ? inv.models : null, url });
@@ -408,6 +435,7 @@ export class Models extends EventEmitter {
     if (device !== HUB) {
       const d = this.#o.devices.find(device);
       if (!d || d.trust !== 'trusted' || d.kind !== 'computer') throw new CoreError('validation', 'device is the hub, or one of your paired computers.');
+      if (!this.#computes(device)) throw new CoreError('conflict', `${this.#noCompute(device)}.`);
       url = str(body.url);
       if (!url) throw new CoreError('validation', `url is where ${d.name}’s Ollama answers, like http://<its address>:11434.`);
       const wrong = await this.#spokeAddress(device, url);
@@ -527,6 +555,7 @@ export class Models extends EventEmitter {
   async #local(req: InferRequest, mode: PrivacyMode, notes: string[]): Promise<Omit<InferResult, 'notes'>> {
     const stored = this.#stored(req.role);
     if (stored && !this.#trusted(stored.device)) throw new LocalDown(`${this.#deviceName(stored.device)} is no longer one of your trusted computers, so Nova sends it nothing`);
+    if (stored && !this.#computes(stored.device)) throw new LocalDown(this.#noCompute(stored.device));
     const p = this.placement(req.role);
     if (!p) throw new LocalDown(`no model is assigned to ${ROLE_WORDS[req.role].name.toLowerCase()} yet`);
     if (this.#remote(p.device, p.model)) throw new LocalDown(cloudWords(p.model).replace(/\.$/, ''));
@@ -902,6 +931,7 @@ export class Models extends EventEmitter {
     const model = str(body.model);
     if (!MODEL_NAME.test(model)) throw new CoreError('validation', 'model is the name to download, like nomic-embed-text or qwen3:8b.');
     const device = str(body.device) || HUB;
+    if (!this.#computes(device)) throw new CoreError('conflict', `${this.#noCompute(device)}.`);
     const url = this.#urlFor(device);
     if (!url) throw new CoreError('conflict', `Nova doesn’t know where ${this.#deviceName(device)}’s models answer.`);
     const known = CATALOG.find((c) => c.name === model)?.size;
@@ -1023,6 +1053,8 @@ export class Models extends EventEmitter {
       return report('done', `Removed ${model} from ${name}.`, { evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `${device}/${model}@removed` }] });
     }
     if (i.action !== 'pull') return report('failed', 'The brief asks for something the model manager doesn’t do.');
+    // Checked again when it runs: the computer's roles may have been narrowed since it was asked.
+    if (!this.#computes(device)) return report('failed', `${this.#noCompute(device)}.`);
     const budget = this.diskBudget();
     let used: number;
     try { used = (await rt.tags()).reduce((n, m) => n + m.size, 0); } catch (e) {
@@ -1109,6 +1141,11 @@ export class Models extends EventEmitter {
 
   // ---- the view --------------------------------------------------------------------------------
 
+  // What the hub's runtime has installed, by name and digest, as last read (scorecard targets).
+  installedOnHub(): { name: string; digest: string }[] {
+    return (this.#inventory.get(HUB)?.models ?? []).map((m) => ({ name: m.name, digest: m.digest }));
+  }
+
   async view() {
     const advice = await this.recommendation();
     const hubHw = await this.hubHardware();
@@ -1120,6 +1157,7 @@ export class Models extends EventEmitter {
       const latency = hub ? null : this.wakeLatency(id);
       return {
         id, name, hub, online, hardware: hw, words: hw ? hardwareWords(hw) : 'It hasn’t reported its hardware yet.', capacity: hw ? capacityWords(hw) : '',
+        ...(hub ? { decision_model: this.#o.decisionModel?.() ?? null } : {}),
         runtime: inv ? { url: this.#urlFor(id), ok: inv.ok, version: inv.version, models: inv.models.length, problem: inv.problem, words: inv.ok ? `Ollama ${inv.version} · ${inv.models.length} model${inv.models.length === 1 ? '' : 's'}` : `Ollama isn’t answering${inv.problem ? `: ${inv.problem}` : ''}` } : null,
         wake: hub ? null : { mac: nic?.mac ?? null, latency_ms: latency, words: !nic ? 'Can’t be woken: no network card reported.' : latency !== null ? `Wakes in about ${secs(latency)} (measured).` : 'Can be woken; how long it takes isn’t measured yet.' },
       };
@@ -1162,7 +1200,7 @@ export class Models extends EventEmitter {
       cloud: {
         configured: !!cloud, name: cloud?.name ?? null, model: cloud?.model ?? null, priced: !!cloud && cloud.usd_per_mtok_in !== undefined && cloud.usd_per_mtok_out !== undefined,
         budget: b, spent_period: spentPeriod,
-        words: !cloud ? 'No cloud model is set, so everything runs on your devices.'
+        words: !cloud ? 'No cloud model is set here.'
           : this.#privacy() === 'local-only' ? `${cloud.name} is set, but your privacy setting is local-only, so it is never used.`
           : `${cloud.name} (${cloud.model}) helps ${this.#privacy() === 'local-preferred' ? 'only when your local models can’t' : 'when Nova chooses it'}. This ${b.period}: ${usd(spentPeriod)}${typeof b.per_period_usd === 'number' ? ` of ${usd(b.per_period_usd)}` : ''}.`,
       },
@@ -1171,6 +1209,14 @@ export class Models extends EventEmitter {
   }
 
   // ---- settings through the API ------------------------------------------------------------------
+
+  // Whether System 1 decisions use the local sorting model (model, the default once one is
+  // assigned) or only the rules. PUT /models/decisions with {use} (the core's route, which also
+  // takes the Decision Service's settings).
+  useForDecisions(use: unknown): void {
+    if (use !== 'model' && use !== 'rules') throw new CoreError('validation', 'use is model or rules.');
+    this.#set('decisions', use);
+  }
 
   // Where wake packets go (host:port; the device's own broadcast address by default) and how long
   // to wait for a computer never woken before.
@@ -1244,7 +1290,7 @@ export class Models extends EventEmitter {
     const view = () => this.view();
     return [
       { method: 'GET', path: '/models', summary: 'The model manager: each device’s hardware and runtime, the role recommendation with reasons, assigned roles, downloads with progress, the disk budget and the cloud budget.', handle: view },
-      { method: 'POST', path: '/models/refresh', summary: 'Read the hub’s hardware and every runtime again, now.', handle: async () => { await this.hubHardware(true); return view(); } },
+      { method: 'POST', path: '/models/refresh', summary: 'Read the hub’s hardware and every runtime again, now.', handle: async () => { await this.hubHardware(true); await this.#o.refreshed?.().catch(() => {}); return view(); } },
       { method: 'GET', path: '/models/versions', summary: 'Every model version Nova has seen on a device (?device=hub), by digest, with when it was first and last seen and when it went.', handle: ({ query }) => this.versions(query.get('device') ?? HUB) },
       { method: 'POST', path: '/models/roles/accept', summary: 'Assign every role Nova recommends from installed models. Roles needing a download or a runtime are left, and said.', handle: async () => ({ ...(await this.accept()), view: await view() }) },
       { method: 'PUT', path: '/models/roles/{role}', summary: 'Assign a role (triage-text, reasoner, embedder) to an installed model on the hub or a paired computer. A computer’s url must be one of its own addresses; hub_model is what small jobs use while it sleeps.', body: '{model, device?, url?, hub_model?}', handle: async ({ params, body }) => ({ placement: await this.assign(params.role, body), view: await view() }) },
@@ -1256,7 +1302,6 @@ export class Models extends EventEmitter {
       { method: 'PUT', path: '/models/budget', summary: 'Cloud budgets: per task and per period (day, week or month), in US dollars. Over budget, work waits with the reason; local stays the default.', body: '{per_task_usd?, per_period_usd?, period}', handle: async ({ body }) => { this.setBudget(body); return view(); } },
       { method: 'PUT', path: '/models/prices', summary: 'Prices per million tokens by model, for cloud usage that reports tokens but no cost (a coding agent off your devices). With a budget set, usage Nova can’t price makes the cloud wait.', body: '{"<model>": {usd_per_mtok_in, usd_per_mtok_out}}', handle: async ({ body }) => { this.setPrices(body); return view(); } },
       { method: 'PUT', path: '/models/cloud', summary: 'The cloud model local-preferred and cloud-allowed work may use when it must (an OpenAI-compatible address; its key in the vault). A new address needs {confirm: true}. {cloud: null} removes it.', body: '{cloud, confirm?}', handle: async ({ body }) => { this.setCloud(body.cloud, body.confirm === true); return view(); } },
-      { method: 'PUT', path: '/models/decisions', summary: 'Whether System 1 decisions use the local sorting model (model, the default once one is assigned) or only the rules.', body: '{use: model | rules}', handle: async ({ body }) => { if (body.use !== 'model' && body.use !== 'rules') throw new CoreError('validation', 'use is model or rules.'); this.#set('decisions', body.use); return view(); } },
       { method: 'POST', path: '/models/devices/{id}/wake', summary: 'Wake a paired computer with a Wake-on-LAN packet and wait for its models, as long as waking took last time.', handle: ({ params }) => this.wake(params.id!) },
       {
         method: 'POST', path: '/models/infer', summary: 'Ask the model serving a role (the internal inference API, for tools and tests): a reply to messages, or embeddings of input. It keeps to the privacy mode: local-only never leaves your devices.', body: '{role, messages? | input?, privacy_mode?, task_id?}',

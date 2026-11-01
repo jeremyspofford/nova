@@ -3,15 +3,20 @@
 // nothing outside src/core imports anything but this file.
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
-import { hostname, networkInterfaces } from 'node:os';
+import { homedir, hostname, networkInterfaces } from 'node:os';
 import { CoreError } from './errors.ts';
 import { Db, loadMigrations } from './db.ts';
 import { Log, addSecretValue } from './log.ts';
 import { Profile, SECTIONS, type Section } from './profile.ts';
 import { Workspace, workspaceWorker } from './workspace.ts';
 import { Verifier, type Checker } from './verify.ts';
-import { Ledger, STATES, type LanedWorker, type State, type TaskInput } from './ledger.ts';
-import { Setup } from './setup.ts';
+import { Ledger, STATES, TASK_CONTEXT, type LanedWorker, type State, type TaskInput } from './ledger.ts';
+import type { PrivacyMode as PrivacyModeOf } from './envelope.ts';
+import { Setup, type Onboarding } from './setup.ts';
+import { detectOs, type OsFamily } from './onboard/detect.ts';
+import { discover, realTransport, type DiscoveryTransport } from './onboard/discover.ts';
+import { findSources, importSources } from './onboard/sources.ts';
+import { backendFor } from './onboard/backend.ts';
 import { Extensions } from './extensions.ts';
 import { Design, type Scope } from './design.ts';
 import { Decisions, RulesProvider, Templates } from './decide.ts';
@@ -22,9 +27,13 @@ import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { egressOf, info, permits, stricter, type Egress } from './workers.ts';
 import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
+import { createDecisionService, DbLog, OPT_IN_WORDS, validateSettings, DEFAULT_SETTINGS as DEFAULT_DECISION_SETTINGS, type DecisionSettings, type VerdictStore } from './decision-service/index.ts';
+import { Scorecards, scorecardRoutes, targetsFrom, REGRESSION_FINGERPRINT } from './evals/index.ts';
 import { loadIdentity, replaceIdentityKeys } from './mesh/identity.ts';
 import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/devices.ts';
 import { Enrollment } from './mesh/enroll.ts';
+import { resolvePlacement, type PlacementDevice } from './services/placement.ts';
+import { validate } from './services/definition.ts';
 import { APPROVER_ONLY, Access, allows, loopbackAddress, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
 import { SyncLog } from './mesh/sync.ts';
 import { MeshRole, nodeRole } from './mesh/promote.ts';
@@ -40,9 +49,9 @@ import { browserRoutes } from './browser/routes.ts';
 import { checkers as browserCheckers } from './browser/evidence.ts';
 import { Capture, PROMOTE } from './capture/capture.ts';
 import { captureRoutes } from './capture/routes.ts';
-import { Models, type Hardware } from './models/index.ts';
+import { Models, ROLE_WORDS as MODEL_ROLE_WORDS, type Hardware } from './models/index.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
-import { wireIngest, type ScreenInput } from './ingest/index.ts';
+import { wireIngest, type ScreenInput, type Taint } from './ingest/index.ts';
 import { NovaComputer, type ComputerOptions } from './computer/index.ts';
 import { computerRoutes } from './computer/routes.ts';
 import { Coding, type CodingOptions } from './coding/index.ts';
@@ -85,6 +94,8 @@ export * from './mesh/wire.ts';
 export { SlidingWindowLimiter } from './mesh/limiter.ts';
 export { KINDS as DEVICE_KINDS, ROLE_OF, SESSION_TTL_MS } from './mesh/devices.ts';
 export { JOIN_REVEAL_TTL_MS, JOIN_APPROVE_TTL_MS, rateKey } from './mesh/enroll.ts';
+export { PURPOSES, PURPOSE_WORDS, WORKLOAD_PURPOSES, allowedPurposes, checkPurposes, defaultPurposes, fixedPurposes, mayRunWork, purposeChange } from './mesh/purposes.ts';
+export type { Purpose, PurposeChange } from './mesh/purposes.ts';
 export { BROWSER_TASK_HEADER, PUBLIC_PATHS, SESSION_COOKIE, allows, fromBrowserTask, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
 export { DEVICE_CONFIG_SECTIONS, INBOX_KINDS, MAX_BATCH as INBOX_MAX_BATCH } from './mesh/spokes.ts';
 export { RUNTIME_FILES, agentFiles, agentTar, joinScript, tar } from './mesh/agent.ts';
@@ -134,6 +145,19 @@ export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.
 export { trackChild } from './children.ts';
 // Services (M10e): the definition, the driver interface, the Service Manager.
 export * from './services/index.ts';
+// Onboarding (M10f): device detection, the backend words, discovery and import sources.
+export { OS_FAMILIES, OS_WORDS, detectOs, factsWords, recommendedHubPurposes, standInOs } from './onboard/detect.ts';
+export type { DeviceFacts, OsFamily } from './onboard/detect.ts';
+export { backendFor } from './onboard/backend.ts';
+export type { BackendSummary } from './onboard/backend.ts';
+export { LOCAL_PORTS as DISCOVERY_PORTS, SERVICES as DISCOVERY_SERVICES, discover, loopbackTransport, realTransport, transportFromEnv } from './onboard/discover.ts';
+export type { Discovery, DiscoveryTransport, Found } from './onboard/discover.ts';
+export { decodeMessage as decodeMdns, encodeQuery as encodeMdnsQuery, encodeResponse as encodeMdnsResponse } from './onboard/mdns.ts';
+export type { Answer as MdnsAnswer } from './onboard/mdns.ts';
+export { findSources, importSources } from './onboard/sources.ts';
+export type { Imported, Source as ImportSource } from './onboard/sources.ts';
+export { FIRST_ACTIONS, firstAction } from './onboard/first.ts';
+export type { FirstAction, FirstView } from './onboard/first.ts';
 // The ingest gate (Amendment 2026-10-30-C Part 3): what Era 2's agent loop screens with, escapes
 // with, and says when something is blocked.
 export { Ingest, BLOCK_LINE, DEFAULT_LINK_CAPS, PROTOCOL_NAMES, KIND_WORDS, cleanOrigin, escapeProtocol, fold, wrapData } from './ingest/index.ts';
@@ -194,8 +218,15 @@ export interface CoreOptions {
   // The local model manager (M6b): where the hub's Ollama answers by default, and (tests) a fixed
   // hardware reading and quicker watch and wake polls.
   models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number };
+  // The Decision Service (DS1), for tests: a verdict store in place of the committed eval verdicts
+  // (src/core/decision-service/tev1-verdicts.json), so a stand-in seat can be trusted or not.
+  decisions?: { verdicts?: VerdictStore };
   // The supervisor that started this server, when one did (resilience/link.ts: ipcLink).
   supervisor?: SupervisorLink | null;
+  // Onboarding (M10f): a stand-in OS detection (NOVA_DETECT_OS), discovery's transport (stand-ins on
+  // loopback in tests; the real one sends one multicast query, only when the person asks), and the
+  // person's own home folder, where import sources are found.
+  onboarding?: { os?: OsFamily | null; transport?: DiscoveryTransport | null; userHome?: string; platform?: string };
   // Resilience (M7b), for tests: the clock watch's monotonic time, and the restore drill's sandbox.
   resilience?: { monotonic?: () => number; drill?: { root?: string; env?: Record<string, string>; timeoutMs?: number }; lookup?: (host: string) => Promise<unknown> };
   // This process is a sandbox copy started by the change pipeline (M7a, NOVA_SANDBOX=1): it runs
@@ -274,12 +305,32 @@ export function createCore(o: CoreOptions) {
     policy: () => profile.section('policy') as Policy,
     timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
   });
-  const setup = new Setup({ profile, ledger, now, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
+  // Onboarding's view of the rest of Nova (M10f). Everything here is read when setup asks, not now.
+  const userHome = o.onboarding?.userHome ?? homedir();
+  const deviceOs = o.onboarding?.os ?? detectOs();
+  const onboarding: Onboarding = {
+    os: () => deviceOs,
+    hardware: async () => (models ? await models.hubHardware() : null),
+    hubPurposes: () => devices.find(meshIdentity.id)?.purposes ?? [],
+    setHubPurposes: (p) => devices.setPurposes(meshIdentity.id, p, { confirm: true, approved: true, by: 'setup' }).device.purposes,
+    discover: (scope) => discover({ scope, transport: o.onboarding?.transport ?? realTransport(), now }),
+    sources: () => findSources(userHome, o.onboarding?.platform ?? process.platform),
+    import: (picked) => importSources(picked, {
+      screen: async (text, origin) => { const r = await ingest.screen({ text, source: { kind: 'file', origin } }); return { verdict: r.verdict, taint: r.taint }; },
+      screenNow: (text, origin) => { const r = ingest.screenNow({ text, source: { kind: 'file', origin } }); return { verdict: r.verdict, taint: r.taint, flagged: r.flags.some((f) => f.level !== 'note') }; },
+      candidate: (c) => { ingest.candidate({ op: 'remember', kind: c.kind, content: c.content, source: c.source, taint: c.taint as Taint[] }); },
+      kept: () => new Set([...memory.active().map((r) => r.content.toLowerCase()), ...ingest.candidates().filter((c) => c.op === 'remember' && c.content).map((c) => c.content!.toLowerCase())]),
+    }, { userHome, now: now() }),
+  };
+  const setup = new Setup({ profile, ledger, now, onboarding, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
   const design = new Design({ extensions, profile, ...(o.designSystems ? { dir: o.designSystems } : {}) });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
   const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)) });
-  const receipts = new Receipts({ db, log, now });
+  // A decision model's receipt is checked against the person's settings as they are at the send.
+  // A capture source's own opt-in doesn't exist yet, so it is never on here either.
+  const liveDecisionOptIn = (f: 'screening' | 'box' | 'capture'): boolean => { if (f === 'capture') return false; const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {}); return v.ok && v.settings.opt_in[f]; };
+  const receipts = new Receipts({ db, log, now, live: { mode: () => profile.privacyDefault(), optIn: liveDecisionOptIn } });
   for (const p of design.ensureBuiltins()) log.problem('design', p);
   // Providers (M5a): each enabled one is a ledger worker. A model on one of the person's own
   // devices counts as local.
@@ -303,6 +354,9 @@ export function createCore(o: CoreOptions) {
   // The model manager (M6b) is made once the device registry exists (below); providers reach it
   // through these, for a provider set to a role and for cloud budgets.
   let models: Models | null = null;
+  // The Decision Service (DS1) is made once the model manager exists (below); the model manager's
+  // device record and refresh reach it through this.
+  let ds: ReturnType<typeof createDecisionService> | null = null;
   // Made once the ledger's other parts exist (below); capture asks it whether retention may run.
   let resilience: Resilience | null = null;
   const providers = new Providers({
@@ -331,8 +385,14 @@ export function createCore(o: CoreOptions) {
     secret: (v) => { const n = secretName(v); return n ? providerSecret(n) : null; },
     // The person is told the way proactive messages go: triaged, quiet hours kept.
     notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'models', name: 'Local models', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('models', 'Nova couldn’t tell you about waiting work.', { error: (e as Error).message })); },
+    // The device record's decision model (DS1 NOTE 4), and a newly pulled Tev1 seen without a restart.
+    decisionModel: () => { const d = ds?.tev1(); return d ? { model: d.model, digest: d.digest, why: d.available ? d.size_why : d.why } : null; },
+    refreshed: () => ds?.refresh() ?? Promise.resolve(),
   });
   ledger.workers.set(models.worker.id, models.worker);
+  // The model-swap scorecards (Amendment B Part 4): files under workers/evals/, read by Settings ›
+  // Models before a switch.
+  const scorecards = new Scorecards(o.home);
   // System 1 on the local sorting model (ADR-7): asked first once one is assigned; the rules answer
   // when it isn't, or can't.
   // The person's policy still binds it: what the triage rule decides from a hard setting (a category
@@ -343,13 +403,57 @@ export function createCore(o: CoreOptions) {
     const rule = triageRule(inputs as never).answers.decision;
     return hard && answers.decision !== rule ? `your settings say “${rule}” here (${inputs.category_off ? 'this is turned off' : 'quiet hours'}).` : null;
   };
-  decisions.register(new LocalModelProvider({ infer: (r) => models!.infer(r), ready: (t) => models!.decidesWithModel(rules.has(t.template_id)), guard: triageGuard }), { first: true });
+  const localModel = new LocalModelProvider({ infer: (r) => models!.infer(r), ready: (t) => models!.decidesWithModel(rules.has(t.template_id)), guard: triageGuard });
+  decisions.register(localModel, { first: true });
+  // The Decision Service (DS1, docs/plans/ds1.md): every System One question about outside content
+  // goes through it. Its seats are Tev1 on the hub's Ollama, cloud Jev on the route the person
+  // chose (its key in the vault as decisions.jev, read at call time), and the sorting model above
+  // until a decision model passes a template's eval. It routes by the live privacy mode and the
+  // person's opt-ins, records every decision (decision_record, no content), and takes a receipt
+  // BEFORE anything goes to the cloud, so a refused receipt stops the send.
+  const decisionSettings = (): DecisionSettings => {
+    const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {});
+    return v.ok ? v.settings : DEFAULT_DECISION_SETTINGS;
+  };
+  ds = createDecisionService({
+    settings: decisionSettings,
+    privacy: () => profile.privacyDefault(),
+    log: new DbLog(db, { onError: (e) => log.warn('decisions', 'Nova couldn’t write a decision record.', { error: e.message }) }),
+    ollamaUrl: () => models!.hubUrl(),
+    hardware: () => models!.hubHardware(),
+    jevKey: () => { try { return vault.get('decisions.jev') ?? null; } catch { return null; } },
+    legacy: { provider: localModel, old: (id) => templates.get(id) },
+    // The receipt names the task and the hash of what was judged (never the content).
+    receipt: (r) => { receipts.record({ task_id: r.task_id ?? undefined, provider: 'jev', model: r.model, purpose: r.purpose, privacy_mode: r.privacy_mode, egress: r.egress, context_items: [{ kind: 'outside', ref: r.purpose, sha256: r.state_sha256 }], ...(r.opt_in ? { opt_in: r.opt_in } : {}) }); },
+    ...(o.decisions?.verdicts ? { verdicts: o.decisions.verdicts } : {}),
+    now,
+  });
+  const decisionService = ds;
+  if (!o.sandbox) void decisionService.refresh().catch(() => {});
   // The ingest security gate (Amendment 2026-10-30-C Part 3): every read of outside content is
-  // screened before a model acts on it. The Noul screen is the local sorting model only, and the
-  // outbound guard knows the vault's values, memory and the standing files.
+  // screened before a model acts on it. The Noul screen asks the Decision Service for ingest-screen,
+  // one fenced chunk at a time, and uses an answer only when the service trusts it; otherwise the
+  // deterministic layer plus quarantine decide. The outbound guard knows the vault's values, memory
+  // and the standing files.
   const { ingest } = wireIngest({
-    db, log, home: o.home, now, templates, decisions, ledger, verifier,
-    ready: () => models!.decidesWithModel(false), providerId: LOCAL_MODEL_PROVIDER,
+    db, log, home: o.home, now, templates, ledger, verifier,
+    // The screen is never looser than the run's or the task's own mode: the strictest of the mode
+    // the caller names, the mode of the ledger task it runs inside, and (in the service) the
+    // person's setting. The task is named on the record and the receipt.
+    ask: (fields, a) => {
+      const ctx = TASK_CONTEXT.getStore();
+      const task_id = a?.task_id ?? ctx?.task_id ?? null;
+      let taskMode: PrivacyModeOf | undefined = ctx?.task_id === task_id ? ctx?.privacy_mode : undefined;
+      if (!taskMode && task_id) { try { taskMode = ledger.get(task_id).privacy_mode; } catch { /* not a ledger task */ } }
+      const modes = [a?.privacy_mode, taskMode].filter((m): m is PrivacyModeOf => !!m);
+      const privacy_mode = modes.length ? modes.reduce((x, y) => stricter(x, y)) : undefined;
+      return decisionService.service.ask('ingest-screen', fields, {
+        subsystem: 'ingest', task_id, shadow: a?.shadow ?? true,
+        ...(privacy_mode ? { privacy_mode } : {}),
+        ...(a?.content_class ? { content_class: a.content_class } : {}), ...(a?.capture_source ? { capture_source: a.capture_source } : {}),
+      });
+    },
+    screening: () => decisionService.standing('ingest-screen'),
     infer: (r) => models!.infer(r),
     secrets: () => { try { return vault.list().map((n) => vault.get(n)).filter((v): v is string => typeof v === 'string'); } catch { return []; } },
     memory: () => memory.active().map((r) => r.content),
@@ -465,11 +569,19 @@ export function createCore(o: CoreOptions) {
     timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
     privacy: () => profile.privacyDefault(),
     meshHosts: () => [...meshHosts()],
+    // Capture from a paired computer needs its capture-source role (M10f). The hub's own Screenpipe
+    // isn't a device source.
+    mayCapture: (id) => {
+      const d = devices.find(id);
+      if (!d || d.role === 'hub' || d.purposes.includes('capture-source')) return null;
+      return `${d.name} isn’t a capture source, so Nova takes no capture from it. Give it the Capture source role in Settings › Devices first.`;
+    },
     fire: (topic, payload, key) => triggers.connectorEvent('capture', topic, payload, key),
     proposer: () => (models!.decidesWithModel(rules.has(PROMOTE.template_id)) ? LOCAL_MODEL_PROVIDER : null),
     // Captured text is screened before triage reads it: audio and meetings as transcripts, the rest
     // as screen text (OCR).
-    screen: (r) => ingest.screen({ text: r.text, source: { kind: r.kind === 'audio' || r.kind === 'meeting' ? 'transcript' : 'ocr', origin: r.origin } }),
+    // Capture-derived text: never to a cloud seat until the owner's per-source opt-in exists (§2.1).
+    screen: (r) => ingest.screen({ text: r.text, from: 'capture', source: { kind: r.kind === 'audio' || r.kind === 'meeting' ? 'transcript' : 'ocr', origin: r.origin } }),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
     secrets: vault,
@@ -638,6 +750,29 @@ export function createCore(o: CoreOptions) {
       this: p ? (p.kind === 'device' ? p.device.id === d.id : p.kind === 'console' && d.id === meshIdentity.id) : false,
     };
   }
+  // What taking roles away from a device stops there (M10f): model roles on it without compute,
+  // its capture sources without capture source. Nothing else runs on other devices before M10h.
+  const workStopping = (id: string, removed: string[]): string[] => [
+    ...(removed.includes('compute') && models ? models.rolesOn(id).map((r) => `its ${MODEL_ROLE_WORDS[r].name.toLowerCase()} model`) : []),
+    ...(removed.includes('capture-source') ? capture.sourcesOn(id) : []),
+  ];
+  // And it stops: a computer that is no longer a capture source has its sources turned off.
+  devices.on('change', (e: { action: string; device: Device; removed?: string[] }) => {
+    if (e.action === 'purposes' && e.device.role !== 'hub' && !e.device.purposes.includes('capture-source')) capture.deviceRemoved(e.device.id, 'Turned off: its computer is no longer a capture source (Settings › Devices).');
+  });
+  // The devices placement is resolved against (M10f): roles, hardware and health, as the hub knows
+  // them now.
+  async function placementDevices(): Promise<PlacementDevice[]> {
+    const hubHw = models ? await models.hubHardware().catch(() => null) : null;
+    return devices.list().map((d) => {
+      const hw = d.id === meshIdentity.id ? hubHw : models?.hardwareOf(d.id) ?? null;
+      return {
+        id: d.id, name: d.name, kind: d.kind, role: d.role, platform: d.platform, purposes: d.purposes, trust: d.trust, last_seen: d.last_seen,
+        hardware: hw ? { ram_bytes: hw.ram_bytes, gpus: hw.gpus.map((g) => ({ vram_bytes: g.vram_bytes, unified: g.unified })), disk: hw.disk ? { free_bytes: hw.disk.free_bytes } : null, platform: hw.platform, arch: hw.arch } : null,
+        healthy: deviceView(d).online,
+      };
+    });
+  }
   // A paired device's appearance id is remembered as its, so revoking it forgets its appearance.
   const ownedBy = (w: Who, appearanceId: unknown) => { if (w.principal.kind === 'device' && typeof appearanceId === 'string') design.own(appearanceId, w.principal.device.id); };
   const by = (w: Who) => (w.principal.kind === 'device' ? `device:${w.principal.device.id}` : w.principal.kind);
@@ -650,6 +785,47 @@ export function createCore(o: CoreOptions) {
     if (w.principal.kind !== 'device') throw new CoreError('forbidden', 'Only a paired computer’s device agent sends this.');
     return w.principal.device;
   };
+
+  // The Decision Service's settings as the person sees them: never the key, only whether one is kept.
+  async function decisionsView() {
+    const s = decisionSettings();
+    let key = false;
+    try { key = vault.has('decisions.jev'); } catch { /* a vault that won't open says so in health */ }
+    return { ...(await decisionService.view()), settings: { ...s, key_set: key }, opt_in_words: OPT_IN_WORDS, privacy: profile.privacyDefault() };
+  }
+
+  async function putDecisions(body: Record<string, unknown>) {
+    // Nothing sent is dropped in silence: {use} stands alone, and every field must be one we read.
+    if (body.use !== undefined) {
+      const extra = Object.keys(body).filter((k) => k !== 'use');
+      if (extra.length) return new Reply({ error: 'These decision-model choices can’t be used.', problems: [`{use} chooses between the sorting model and the rules, on its own; send ${extra.join(', ')} separately.`] }, {}, 422);
+      models!.useForDecisions(body.use); return decisionsView();
+    }
+    const unknown = Object.keys(body).filter((k) => !['jev', 'tev1', 'opt_in', 'key', 'confirm'].includes(k));
+    if (unknown.length) return new Reply({ error: 'These decision-model choices can’t be used.', problems: [`Nova doesn’t know ${unknown.join(', ')}; it takes jev, tev1, opt_in, key and confirm.`] }, {}, 422);
+    if (body.opt_in !== undefined && (typeof body.opt_in !== 'object' || body.opt_in === null || Array.isArray(body.opt_in) || Object.keys(body.opt_in).some((k) => k !== 'screening' && k !== 'box'))) return new Reply({ error: 'These decision-model choices can’t be used.', problems: ['opt_in must be {screening, box}, each on or off.'] }, {}, 422);
+    const { key, confirm, ...choices } = body;
+    const was = decisionSettings();
+    // What isn't named stays as it was; each opt-in is its own switch.
+    const named = choices.opt_in && typeof choices.opt_in === 'object' ? choices.opt_in as Record<string, unknown> : {};
+    const v = validateSettings({ jev: was.jev, tev1: was.tev1, ...choices, opt_in: { ...was.opt_in, ...named } });
+    const problems = v.ok ? [] : [...v.problems];
+    if (key !== undefined && key !== null && (typeof key !== 'string' || !key.trim() || key.length > 4096)) problems.push('The Jev key must be the key text TypeSafe gave you.');
+    if (!v.ok || problems.length) return new Reply({ error: 'These decision-model choices can’t be used.', problems }, {}, 422);
+    const next = v.settings;
+    const changed = JSON.stringify(next.jev) !== JSON.stringify(was.jev) || JSON.stringify(next.tev1) !== JSON.stringify(was.tev1)
+      || next.opt_in.screening !== was.opt_in.screening || next.opt_in.box !== was.opt_in.box || key !== undefined;
+    if (changed && confirm !== true) {
+      const words = (await decisionService.noticesFor(next)).map((n) => n.words);
+      throw new CoreError('conflict', 'This changes where outside content may go or which model judges it. Read the notices, then send confirm: true to save it.', words);
+    }
+    if (typeof key === 'string') vault.put('decisions.jev', key.trim());
+    else if (key === null) vault.delete('decisions.jev');
+    profile.set('models', 'decision', next, 'settings');
+    log.info('decisions', 'The decision-model choices changed.', { jev: next.jev?.model ?? null, tev1: next.tev1?.model ?? null, screening: next.opt_in.screening, box: next.opt_in.box });
+    void decisionService.refresh().catch(() => {});
+    return decisionsView();
+  }
 
   function health() {
     let database: { ok: boolean; detail: string };
@@ -758,9 +934,15 @@ export function createCore(o: CoreOptions) {
       // After a factory reset, until setup is done, the browser forgets what it kept of the Nova that
       // was erased (M7 amendment §2).
       method: 'GET', path: '/setup', summary: 'The setup conversation so far, and the question Nova is asking.',
-      handle: ({ who, headers }) => { const v = setup.view(); const h = reset.clearHeaders(who.principal, header(headers, 'cookie')); return Object.keys(h).length ? new Reply(v, h) : v; },
+      handle: async ({ who, headers }) => { await setup.ready(); const v = setup.view(); const h = reset.clearHeaders(who.principal, header(headers, 'cookie')); return Object.keys(h).length ? new Reply(v, h) : v; },
     },
-    { method: 'POST', path: '/setup/messages', summary: 'Answer Nova in the setup conversation.', body: '{text}', handle: ({ body }) => setup.answer(str(body.text, 'text')) },
+    { method: 'POST', path: '/setup/messages', summary: 'Answer Nova in the setup conversation. Discovery and import, when asked for, run before the reply.', body: '{text}', handle: ({ body }) => setup.answer(str(body.text, 'text')) },
+    {
+      // Settings › Services, minimal (M10f): the backend in use and what it means on this OS. The map
+      // and switching come later (M10i, M10k); there is nothing to switch to yet, and it says so.
+      method: 'GET', path: '/services/backend', summary: 'How Nova runs its services on this computer: the backend in use (the supervisor), what it means on this OS, and where switching will be.',
+      handle: () => ({ backend: 'supervisor', ...backendFor(deviceOs), switchable: false }),
+    },
     {
       method: 'GET', path: '/tasks', summary: 'Work Ledger tasks, newest first. Filter with ?state=.',
       handle: ({ query }) => {
@@ -893,6 +1075,21 @@ export function createCore(o: CoreOptions) {
         ...(query.get('egress') ? { egress: query.get('egress') as 'local' | 'remote' } : {}),
       }),
     },
+    {
+      // Tier 0: drafting. Where a definition would run, and why each device may or may not take it.
+      method: 'POST', path: '/services/placement', summary: 'Where a service definition would run, resolved against every device’s roles, hardware and health: the device or devices, and each device’s reason. Nothing is deployed (tier 0).', body: '{definition}',
+      handle: async ({ body }) => {
+        const devs = await placementDevices();
+        // `hub` names whichever node is hub, as the supervisor driver reads it.
+        const views = devs.filter((d) => d.trust === 'trusted').map((d) => ({ id: d.id, platform: d.platform, roles: [...d.purposes] }));
+        const hubView = views.find((d) => d.id === meshIdentity.id);
+        const v = validate(body.definition, { devices: hubView ? [...views, { ...hubView, id: 'hub' }] : views });
+        if (!v.ok) return { valid: false, problems: v.problems, resolution: null };
+        const resolution = resolvePlacement(v.def, devs, { hubId: meshIdentity.id, now: now() });
+        const away = resolution.ok ? resolution.devices.filter((d) => d.id !== meshIdentity.id) : [];
+        return { valid: true, problems: [], resolution, ...(away.length ? { note: 'Running services on devices other than the hub comes with native workloads; nothing is deployed there yet.' } : {}) };
+      },
+    },
     // ---- the device mesh (M4 plan §0–§1) ----
     {
       method: 'GET', path: '/mesh/hello', access: 'public', summary: 'The hub’s fingerprint, epoch, role and public keys. No person data; anyone may ask.',
@@ -918,11 +1115,17 @@ export function createCore(o: CoreOptions) {
     },
     { method: 'GET', path: '/mesh/devices', summary: 'The device registry, the hub first. The device asking is marked `this`.', handle: ({ who }) => devices.list().map((d) => deviceView(d, who.principal)) },
     {
-      method: 'PATCH', path: '/mesh/devices/{id}', summary: 'Rename a device, or let it approve new devices (tier 3: needs {confirm: true}, and only an approver may grant it).', body: '{name?, can_approve?, confirm?}',
+      method: 'PATCH', path: '/mesh/devices/{id}', summary: 'Rename a device, let it approve new devices (tier 3: needs {confirm: true}, and only an approver may grant it), or change its roles (purposes: widening is tier 3, {confirm: true}; narrowing is tier 2, {approved: true}; making a computer a hub candidate also needs {confirm_candidate: true}).', body: '{name?, can_approve?, purposes?, confirm?, approved?, confirm_candidate?}',
       handle: ({ params, body, who }) => {
-        if (body.can_approve !== undefined && allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', 'Only the hub’s own screen, or a device you’ve allowed to approve, can change who approves.');
+        // One change per call (review finding 11): a confirmation is for one change, and a refused one
+        // must not leave another half made.
+        if ([body.name, body.can_approve, body.purposes].filter((v) => v !== undefined).length > 1) throw new CoreError('validation', 'Change one thing at a time: the name, who approves, or the roles. Each is confirmed on its own.');
+        if ((body.can_approve !== undefined || body.purposes !== undefined) && allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', 'Only the hub’s own screen, or a device you’ve allowed to approve, can change who approves or what a device is for.');
         if (body.name !== undefined) devices.rename(params.id!, body.name);
         if (body.can_approve !== undefined) devices.setCanApprove(params.id!, body.can_approve, body.confirm === true);
+        // Nothing runs on other devices before native workloads (M10h), so narrowing stops nothing.
+        if (body.purposes !== undefined && body.dry_run === true) { const r = devices.setPurposes(params.id!, body.purposes, { dry: true, by: by(who), stops: workStopping }); return { ...deviceView(r.device, who.principal), change: r.change, stops: r.stops }; }
+        if (body.purposes !== undefined) devices.setPurposes(params.id!, body.purposes, { confirm: body.confirm === true, approved: body.approved === true, confirm_candidate: body.confirm_candidate === true, by: by(who), stops: workStopping });
         return deviceView(devices.get(params.id!), who.principal);
       },
     },
@@ -933,13 +1136,13 @@ export function createCore(o: CoreOptions) {
     { method: 'POST', path: '/mesh/pairings', status: 201, access: 'approver', summary: 'Make a pairing code: single use, five minutes. The reply has the QR address, the one-line command and the hub’s fingerprint.', handle: ({ who }) => enroll.createPairing(by(who)) },
     { method: 'GET', path: '/mesh/requests', access: 'approver', summary: 'Devices waiting for your OK, each with the six digits it shows.', handle: () => enroll.requests() },
     {
-      method: 'POST', path: '/mesh/requests/{id}/approve', access: 'approver', summary: 'Approve a device (tier 3: needs {confirm: true}) once its digits match. This creates its device record.', body: '{confirm}',
-      handle: ({ params, body, who }) => { const r = enroll.approve(params.id!, { confirm: body.confirm === true, by: by(who) }); return { request: r.request, device: deviceView(r.device, who.principal) }; },
+      method: 'POST', path: '/mesh/requests/{id}/approve', access: 'approver', summary: 'Approve a device (tier 3: needs {confirm: true}) once its digits match, with the roles you settled on (purposes; default: what it asked for). A computer as hub candidate also needs {confirm_candidate: true}. This creates its device record.', body: '{confirm, purposes?, confirm_candidate?}',
+      handle: ({ params, body, who }) => { const r = enroll.approve(params.id!, { confirm: body.confirm === true, by: by(who), ...(body.purposes !== undefined ? { purposes: body.purposes } : {}), confirm_candidate: body.confirm_candidate === true }); return { request: r.request, device: deviceView(r.device, who.principal) }; },
     },
     { method: 'POST', path: '/mesh/requests/{id}/deny', access: 'approver', summary: 'Turn a device away.', handle: ({ params, who }) => enroll.deny(params.id!, by(who)) },
     {
       method: 'POST', path: '/mesh/join', status: 201, access: 'public', summary: 'A device asks to join with a code, its public keys, and a commitment to its nonce. A wrong or spent code is a 400 with no detail.',
-      body: '{code, public_key, x25519_public_key, x25519_sig, claims: {name, platform, kind, capabilities[], address?}, commitment}',
+      body: '{code, public_key, x25519_public_key, x25519_sig, claims: {name, platform, kind, capabilities[], purposes?[], address?}, commitment}',
       handle: ({ body, who }) => { meshOnly(who); enroll.limit('calls', who.address); return enroll.join(body, who.address); },
     },
     {
@@ -1035,6 +1238,18 @@ export function createCore(o: CoreOptions) {
     // ---- capture (M6 plan §1) ----
     ...captureRoutes(capture),
     ...models.routes(),
+    // ---- the Decision Service's settings (DS1 NOTE 4; owner decision 2) ----
+    { method: 'GET', path: '/models/decisions', summary: 'The decision model: Tev1 and Jev as Nova sees them, the person’s choices (the Jev key only as set or not), what Nova recommends, a plain notice for each choice it doesn’t and for each opt-in that is on, each model’s eval scorecard, and what each opt-in means.', handle: () => decisionsView() },
+    {
+      method: 'PUT', path: '/models/decisions', summary: 'Choose the decision models: {jev: {base_url, model} | null, tev1: {model: auto | tev1:4b | tev1:0.8b} | null, opt_in: {screening, box}, key?: the Jev key (kept in the vault) | null}. Changing a seat, an opt-in or the key changes where content goes, so it is tier 2: without confirm: true it is refused with the notices to read first. 422 with problems when a choice can’t be used. {use: model | rules} still says whether System 1 uses the sorting model or only the rules.', body: '{jev?, tev1?, opt_in?, key?, confirm?} | {use}',
+      handle: async ({ body }) => putDecisions(body),
+    },
+    // ---- the eval harness's scorecards (Amendment B Part 4; docs/plans/evals.md NOTE 1) ----
+    ...scorecardRoutes({
+      store: scorecards,
+      fingerprint: REGRESSION_FINGERPRINT,
+      targets: () => targetsFrom(providers.list(), models!.installedOnHub()),
+    }),
     // ---- resilience (M7 plan §2–§3): backups, the drill, playbooks, the supervisor ----
     ...keep.routes((w) => { if (w.principal.kind !== 'console') throw new CoreError('forbidden', 'Releases are deployed and rolled back from the hub’s own screen only.'); }),
     // ---- checkpoints (M7 amendment §1) ----
@@ -1162,7 +1377,10 @@ export function createCore(o: CoreOptions) {
   return {
     self,
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network,
-    ingest, vault, connectors, capture, models, changes, foundry, resilience: keep, checkpoints, restarter, reset,
+    ingest, vault, connectors, capture, models, changes,
+    // The Decision Service (DS1): its view of the seats, a refresh, how a template stands, and
+    // asking for a template. Never a seat: nothing reaches a decision model except through it.
+    decisionService: { view: decisionService.view, refresh: decisionService.refresh, standing: decisionService.standing, ask: decisionService.service.ask.bind(decisionService.service) }, foundry, resilience: keep, checkpoints, restarter, reset,
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
     restartInPlace: (why: string) => restarter.restartInPlace(why),

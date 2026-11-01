@@ -93,10 +93,14 @@ export class Log extends EventEmitter {
     const message = redactText(said);
     if (opts.detail) opts = { ...opts, detail: redactText(opts.detail) };
     const stops = opts.stops ? 1 : 0;
+    // A database from before migration 0021 has no `stops` column (a standby's copy a release
+    // behind, in the skew tests): its problems are written without it, and read as amber.
+    const [col, val] = this.#hasStops() ? [', stops', ', ?'] : ['', ''];
+    const extra = col ? [stops] : [];
     let row: Problem;
     try {
-      if (this.local()) this.#db.run('INSERT INTO problem (id, at, source, message, detail, task_id, stops) VALUES ((SELECT MIN(0, IFNULL(MIN(id), 0)) - 1 FROM problem), ?, ?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null, stops);
-      else this.#db.run('INSERT INTO problem (at, source, message, detail, task_id, stops) VALUES (?, ?, ?, ?, ?, ?)', at, source, message, opts.detail ?? null, opts.taskId ?? null, stops);
+      if (this.local()) this.#db.run(`INSERT INTO problem (id, at, source, message, detail, task_id${col}) VALUES ((SELECT MIN(0, IFNULL(MIN(id), 0)) - 1 FROM problem), ?, ?, ?, ?, ?${val})`, at, source, message, opts.detail ?? null, opts.taskId ?? null, ...extra);
+      else this.#db.run(`INSERT INTO problem (at, source, message, detail, task_id${col}) VALUES (?, ?, ?, ?, ?${val})`, at, source, message, opts.detail ?? null, opts.taskId ?? null, ...extra);
       row = this.#db.get<Problem>('SELECT * FROM problem WHERE id = last_insert_rowid()')!;
     } catch (e) {
       // The database can't take it (the disk is full, M7b's chaos pass): the problem is still
@@ -107,6 +111,14 @@ export class Log extends EventEmitter {
     this.write('error', source, message, { detail: opts.detail, task: opts.taskId });
     this.emit('problem', row);
     return row;
+  }
+
+  #stopsColumn: boolean | null = null;
+  #hasStops(): boolean {
+    if (this.#stopsColumn === null) {
+      try { this.#stopsColumn = this.#db.all<{ name: string }>(`SELECT name FROM pragma_table_info('problem')`).some((c) => c.name === 'stops'); } catch { return false; }
+    }
+    return this.#stopsColumn;
   }
 
   problems(opts: { open?: boolean } = {}): Problem[] {

@@ -4,7 +4,8 @@
 -- (Log.problem's `stops`, or a playbook that stops Nova); a problem raised before this is 0, amber.
 ALTER TABLE problem ADD COLUMN stops INTEGER NOT NULL DEFAULT 0 CHECK (stops IN (0, 1));
 
--- The problem's sync triggers copy the whole row, so they carry the new column too.
+-- The problem's sync triggers copy the whole row, so they carry the new column too, always: a hub
+-- leaves it out for a standby a release behind (ADDED_COLUMNS[21] in mesh/sync.ts).
 DROP TRIGGER sync_problem_insert;
 DROP TRIGGER sync_problem_update;
 DROP TRIGGER sync_problem_delete;

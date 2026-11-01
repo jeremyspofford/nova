@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
+import { fixedPurposes, sortPurposes } from './purposes.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Route } from '../api.ts';
@@ -217,7 +218,7 @@ export class MeshRole extends EventEmitter {
     } catch { /* closing */ }
   }
 
-  async #serve(device: Device, afterRaw: string | null, waitRaw: string | null): Promise<unknown> {
+  async #serve(device: Device, afterRaw: string | null, waitRaw: string | null, schemaRaw: string | null = null): Promise<unknown> {
     const s = this.#o.devices.state();
     if (s.role !== 'hub') throw new CoreError('conflict', this.replica()!.reason);
     if (device.id !== s.standby_id) throw new CoreError('forbidden', 'This device isn’t the standby.');
@@ -229,7 +230,7 @@ export class MeshRole extends EventEmitter {
     while (!this.#closed && !this.resetNotice && Date.now() < until && this.#o.sync.head() <= after) await new Promise((r) => setTimeout(r, 150));
     if (this.#closed) throw new CoreError('conflict', 'Nova is stopping.');
     const reset = this.resetNotice;
-    const payload: SyncPayload = { v: 1, hub_id: this.#o.identity.id, standby_id: device.id, epoch: this.#o.devices.state().epoch, after, ...(reset ? { rows: [], upto: after, more: false, head: this.#o.sync.head(), reset } : this.#o.sync.batch(after)) };
+    const payload: SyncPayload = { v: 1, hub_id: this.#o.identity.id, standby_id: device.id, epoch: this.#o.devices.state().epoch, after, ...(reset ? { rows: [], upto: after, more: false, head: this.#o.sync.head(), reset } : this.#o.sync.batch(after, { peerSchema: schemaRaw && /^\d{1,4}$/.test(schemaRaw) ? Number(schemaRaw) : null })) };
     const sealed = this.#o.identity.seal(device.x25519_public_key, Buffer.from(JSON.stringify(payload), 'utf8'), SYNC_AAD(device.id, after));
     return { hub_id: payload.hub_id, epoch: payload.epoch, sealed: sealed.toString('base64url') };
   }
@@ -402,7 +403,10 @@ export class MeshRole extends EventEmitter {
       this.#o.db.tx(() => {
         this.#o.sync.setLogging(true);
         this.#o.db.run(`UPDATE mesh_state SET epoch = ?, role = 'hub', hub_id = ?, standby_id = NULL, updated_at = ? WHERE id = 1`, epoch, me, at);
-        this.#o.db.run(`UPDATE device SET role = 'hub' WHERE id = ?`, me);
+        // The hub always holds hub candidate and general server (mesh/purposes.ts): it runs Nova and its
+        // services. Promotion, confirmed at tier 3, is what makes it the hub, so it gains them here,
+        // and placement keeps one rule (roles) rather than a special case for whichever node is hub.
+        this.#o.db.run(`UPDATE device SET role = 'hub', purposes = ? WHERE id = ?`, JSON.stringify(sortPurposes([...self.purposes, ...fixedPurposes('computer', { hub: true })])), me);
         // The old hub is still the person's computer, trusted as before, but not hub or standby.
         if (previous && previous !== me) this.#o.db.run(`UPDATE device SET role = 'spoke' WHERE id = ? AND role = 'hub'`, previous);
       });
@@ -470,10 +474,10 @@ export class MeshRole extends EventEmitter {
     return [
       {
         method: 'GET', path: '/mesh/sync', access: 'sync',
-        summary: 'The standby pulls the hub’s sync log after ?after=<seq>: a long poll (?wait= seconds, up to 25), sealed to the standby’s X25519 key.',
+        summary: 'The standby pulls the hub’s sync log after ?after=<seq>: a long poll (?wait= seconds, up to 25), sealed to the standby’s X25519 key. ?schema= is the standby’s schema version: columns it doesn’t have are left out.',
         handle: ({ query, who }) => {
           if (who.principal.kind !== 'device') throw new CoreError('forbidden', 'Only the standby pulls the sync log.');
-          return this.#serve(who.principal.device, query.get('after'), query.get('wait'));
+          return this.#serve(who.principal.device, query.get('after'), query.get('wait'), query.get('schema'));
         },
       },
       {

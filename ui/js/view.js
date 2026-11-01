@@ -88,9 +88,11 @@ export function renderToc(list, currentId, now = new Date()) {
 
 // ---- conversation --------------------------------------------------------
 
-// The front page with nothing on it yet, or a fresh conversation.
+// The front page with nothing on it yet, or a fresh conversation. Empty states orient, say what the
+// place is for, and offer one action (Amendment 2026-10-31-B Part 2): here the one action is the
+// message box right below, so the line points at it.
 export function renderEmpty(now = new Date(), { fresh = false } = {}) {
-  return `<div class="empty"><p class="empty-date">${esc(longDate(now, now))}</p><p class="empty-line">${fresh ? 'A new conversation, apart from the main one.' : 'Nothing needs you yet.'}</p></div>`;
+  return `<div class="empty"><p class="empty-date">${esc(longDate(now, now))}</p><p class="empty-line">${fresh ? 'A new conversation, apart from the main one.' : 'Nothing needs you yet.'}</p><p class="memory-lede">Write to Nova below: ask something, or tell it what to remember.</p></div>`;
 }
 
 // Today's page in the main conversation, before anything has happened today.
@@ -144,7 +146,7 @@ function guardLine(g) {
   if (!g) return '';
   const from = g.sources?.length ? ` It comes after reading ${g.sources.slice(0, 3).map((s) => `<code>${esc(s)}</code>`).join(', ')}.` : '';
   const carries = g.matched?.length ? ` What it would send ${esc(g.matched[0].words)}.` : '';
-  const always = g.what ? ' After reading something from outside, Nova always asks first.' : '';
+  const always = g.what ? ' After reading something from outside, Nova asks first for this.' : '';
   return `${carries}${from}${always}`;
 }
 
@@ -487,12 +489,14 @@ export function renderMemory(data, now = new Date()) {
 <ul class="memory-list">${waiting.map(waitingItem).join('')}</ul></section>` : '';
   const count = sections.reduce((n, s) => n + s.entries.length, 0) + days.reduce((n, d) => n + d.entries.length, 0);
   if (!count) {
+    // Orient, the value, one action; with something waiting, keeping it is the action instead.
+    const act = held ? '' : '<a class="btn" href="/chat" data-nav="chat">Tell Nova something to remember</a>';
     return `<div class="empty memory-empty"><p class="empty-date">What Nova knows</p><p class="empty-line">Nothing kept yet.</p>
-<p class="memory-lede">As you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.</p></div>${held}`;
+<p class="memory-lede">As you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.</p>${act}</div>${held}`;
   }
   const titles = data.titles ?? {};
   const out = [`<header class="memory-intro"><p class="empty-date">What Nova knows</p>
-<p class="memory-lede">Nova reads this before every reply. Change anything, or forget it.</p></header>`];
+<p class="memory-lede">Nova uses this in its conversations with you. Change anything, or forget it.</p></header>`];
   if (held) out.push(held);
   for (const s of sections) {
     const hid = `ms-${s.title.toLowerCase().replace(/\W+/g, '-')}`;
@@ -545,7 +549,7 @@ const CLIENT_STEPS = `<ol class="steps">
 </ol>`;
 
 const APP_PASSWORDS = 'https://myaccount.google.com/apppasswords';
-const PROMISE = 'Nova can read your mail, save drafts and organize it: archive, labels, read or unread. It never sends or deletes anything, and every change waits for your OK unless you turn that off in Settings.';
+const PROMISE = 'With Gmail connected, Nova has tools to read your mail, save drafts and organize it: archive, labels, read or unread. It has no tool to send or delete mail, and each change asks for your OK unless you turn that off in Settings.';
 
 function passwordForm(g, again = false) {
   return `<form class="connection-form" data-form="gmail-password">
@@ -614,7 +618,7 @@ export function renderSkills(data, { local = true } = {}) {
   const available = data?.available ?? [];
   const gmail = data?.connectors?.gmail;
   const out = [`<header class="memory-intro"><p class="empty-date">Skills</p>
-<p class="memory-lede">Playbooks Nova follows for particular kinds of work. Each one is a plain file in your Nova folder, and removing it leaves nothing behind.</p></header>`];
+<p class="memory-lede">Playbooks Nova follows for particular kinds of work. Each one is a plain file in your Nova folder, and removing it deletes its folder.</p></header>`];
   out.push(`<section class="memory-section" aria-labelledby="ks-installed"><h2 class="memory-heading" id="ks-installed">Installed</h2>
 ${installed.length
     ? `<ul class="skill-list">${installed.map((s) => skillItem(s, gmail, true)).join('')}</ul>`
@@ -627,7 +631,7 @@ ${installed.length
 <div class="dropzone" data-drop="skill">
   <p class="skill-about">A skill is a folder with a SKILL.md: a name, a description of when to use it, then the steps. Nova reads its own format and Claude's, so skills made for Claude work here too.</p>
   <div class="connection-actions"><button type="button" class="btn" data-action="add-folder">Choose a folder</button><button type="button" class="btn" data-action="add-zip">Choose a .zip</button><span class="connection-note">or drop one here.</span></div>
-  <p class="connection-note">A skill is instructions Nova follows, so add ones you trust. Anything a skill would run still asks you first.</p>
+  <p class="connection-note">A skill is instructions Nova follows, so add ones you trust. Anything a skill would run follows the same switches in Settings › Without asking.</p>
 </div>
 <input type="file" id="add-folder-input" webkitdirectory multiple hidden>
 <input type="file" id="add-zip-input" accept=".zip,application/zip" hidden></section>`);
@@ -708,7 +712,7 @@ export function renderSchedules(data, now = new Date()) {
   const available = data?.available ?? [];
   const tz = data?.timezone;
   const out = [`<header class="memory-intro"><p class="empty-date">Schedules</p>
-<p class="memory-lede">Work Nova does on its own, at times you choose. Reports arrive in the main conversation, and each schedule is a plain file in your Nova folder.</p></header>`];
+<p class="memory-lede">Work you set Nova to do at times you choose. Reports arrive in the main conversation, and each schedule is a plain file in your Nova folder.</p></header>`];
   out.push(`<section class="memory-section" aria-labelledby="sc-set"><h2 class="memory-heading" id="sc-set">Set</h2>
 ${set.length
     ? `<ul class="skill-list">${set.map((s) => scheduleItem(s, now, tz)).join('')}</ul>`
@@ -858,7 +862,7 @@ export function renderPermissions(list) {
   <button type="button" class="switch" role="switch" aria-checked="${p.yes}" aria-labelledby="pl-${esc(p.id)}" data-action="toggle-permission" data-id="${esc(p.id)}"><span class="switch-word">${p.yes ? 'Without asking' : 'Ask first'}</span><span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span></button>
 </li>`).join('');
   return `<section class="memory-section" id="perms" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
-<p class="memory-lede">Everything Nova can do that changes something outside the conversation asks you first. Turn a switch on and Nova does that without asking, in a conversation or while it works on its own; Activity shows each time.</p>
+<p class="memory-lede">Each kind of step that changes something outside the conversation starts at Ask first. Turn a switch on and Nova does that without asking, in a conversation or while it works on its own; Activity shows each time. A command that follows outside content still asks.</p>
 ${list.length ? `<ul class="perm-list">${rows}</ul>` : '<p class="memory-none">Nothing Nova can do asks first right now.</p>'}
 <p class="perm-foot">When Nova gets a new tool, from an update, a plugin or a connector, anything it can change shows up here, set to Ask first. These switches are kept in permissions.md in your Nova folder.</p></section>`;
 }

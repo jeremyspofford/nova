@@ -1,6 +1,6 @@
 ---
 name: Email summary
-about: Tells you what in your inbox needs you, then drafts replies and tidies up when you ask. It never sends anything.
+about: Tells you what in your inbox needs you, then drafts replies and tidies up when you ask. It has no way to send mail.
 when: The person asks what's in their email or inbox, what needs a reply, for a summary of recent mail, or to draft a reply, archive, label or mark mail read.
 words: email, emails, inbox, gmail, mail, unread, archive, drafts
 needs: gmail
@@ -14,7 +14,7 @@ Tell the person what in their mail needs them, in a few lines, so they don't hav
 ## Before you start
 
 - This skill needs Gmail. If `gmail_search` isn't in your tool list, Gmail isn't connected: say so in one line, link [Connect Gmail](/skills#gmail), and stop. Never guess at what their mail says.
-- Nova reads, drafts and organizes. It never sends or deletes. If they ask to send, draft it and say it's waiting in their Drafts.
+- Nova reads, drafts and organizes. It has no tool to send or delete. If they ask to send, draft it and say it's waiting in their Drafts.
 
 ## Choose the window
 

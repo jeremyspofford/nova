@@ -27,6 +27,34 @@ export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
   // Migration 0011: the change pipeline's records (M7a), so a standby knows what is live and why.
   change_record: ['id'],
 };
+// Columns a release added to a replicated table, by the schema version that added them (M10f review,
+// finding 3: one mechanism for every such column). A standby a release behind doesn't have them:
+//   - the hub leaves them out of what it serves, by the schema the standby says it is on when it
+//     pulls (`batch({ peerSchema })`); a standby that says nothing (code from before this) is taken to
+//     be on UNSTATED_SCHEMA;
+//   - a standby that gets one anyway (a hub that didn't adapt) leaves it out and says once that it is
+//     behind (`#put`).
+// A migration that adds a column to a replicated table adds it here; tests/core/sync-skew.test.ts
+// fails when one is missing. Its triggers carry the column always: the sender adapts, not the trigger.
+export const ADDED_COLUMNS: Readonly<Record<number, Readonly<Record<string, readonly string[]>>>> = Object.freeze({
+  19: { receipt: ['opt_in'] },
+  20: { device: ['purposes'] },
+  // Whether a problem stops Nova (the orb's red; DESIGN-SYSTEM §1). A standby without it shows every
+  // problem amber, as before.
+  21: { problem: ['stops'] },
+});
+export const UNSTATED_SCHEMA = 19;
+
+// The columns a peer on `schema` doesn't have, by table.
+export function columnsAfter(schema: number): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const [v, tables] of Object.entries(ADDED_COLUMNS)) {
+    if (Number(v) <= schema) continue;
+    for (const [t, cols] of Object.entries(tables)) for (const c of cols) out.set(t, new Set([...(out.get(t) ?? []), c]));
+  }
+  return out;
+}
+
 export const FILE = 'file';
 // The vault (vault.ts) is one entry: its ciphertext in the log like a row. Its key is added only
 // when a batch is served, inside the batch sealed to the standby, so the log never holds it.
@@ -106,6 +134,11 @@ export class SyncLog {
     this.#db.run('UPDATE sync_state SET logging = ? WHERE id = 1', on ? 1 : 0);
   }
 
+  // This node's schema version, which a standby tells the hub when it pulls (ADDED_COLUMNS).
+  schema(): number {
+    return this.#db.version();
+  }
+
   head(): number {
     return this.#db.get<{ s: number | null }>('SELECT MAX(seq) AS s FROM sync_log')?.s ?? 0;
   }
@@ -114,7 +147,15 @@ export class SyncLog {
 
   // Entries after `after`, oldest first, up to `limit` entries or about `maxBytes`. `upto` is the
   // seq the reader may move its cursor to: the last entry sent, or the head when nothing is left.
-  batch(after: number, o: { limit?: number; maxBytes?: number } = {}): Batch {
+  batch(after: number, o: { limit?: number; maxBytes?: number; peerSchema?: number | null } = {}): Batch {
+    const drop = columnsAfter(Number.isInteger(o.peerSchema) ? o.peerSchema! : UNSTATED_SCHEMA);
+    const fit = (r: LogRow): LogRow => {
+      const cols = r.op === 'put' && r.row ? drop.get(r.tbl) : undefined;
+      if (!cols) return r;
+      const row = JSON.parse(r.row!) as Record<string, unknown>;
+      for (const c of cols) delete row[c];
+      return { ...r, row: JSON.stringify(row) };
+    };
     const limit = o.limit ?? 500;
     const maxBytes = o.maxBytes ?? 4 * 1024 * 1024;
     const head = this.head();
@@ -122,7 +163,7 @@ export class SyncLog {
     let bytes = 0;
     for (const r of this.#db.raw.prepare('SELECT seq, tbl, pk, op, row, hlc FROM sync_log WHERE seq > ? ORDER BY seq LIMIT ?').iterate(after, limit + 1) as Iterable<LogRow>) {
       if (rows.length >= limit || (rows.length && bytes + (r.row?.length ?? 0) > maxBytes)) return { rows, upto: rows.at(-1)!.seq, more: true, head };
-      rows.push(r.tbl === VAULT && r.op === 'put' ? { ...r, row: this.#withKey(r.row!) } : { ...r });
+      rows.push(r.tbl === VAULT && r.op === 'put' ? { ...r, row: this.#withKey(r.row!) } : fit({ ...r }));
       bytes += r.row?.length ?? 0;
     }
     return { rows, upto: Math.max(after, head), more: false, head };
@@ -444,9 +485,15 @@ export class SyncLog {
       const row = JSON.parse(String(r.row)) as Record<string, unknown>;
       const cols = this.#cols(r.tbl);
       for (const [k, v] of Object.entries(row)) {
-        if (!cols.has(k)) bad(`column ${r.tbl}.${k}`);
+        // A column this node doesn't have yet (the hub is a release ahead) is left out when the row
+        // is applied, and said once; the rest of the batch goes on. Its name must still be a name.
+        if (!cols.has(k)) { if (!/^[a-z_][a-z0-9_]{0,63}$/.test(k)) bad(`column ${r.tbl}.${k}`); continue; }
         if (v !== null && typeof v !== 'string' && typeof v !== 'number') bad(`value of ${r.tbl}.${k}`);
       }
+      // Only a row that is this table's row plus new columns (a newer release's) is taken that way:
+      // one missing any of this node's columns is refused, as before.
+      const extra = Object.keys(row).filter((k) => !cols.has(k));
+      if (extra.length && [...cols].some((c) => !Object.hasOwn(row, c))) bad(`column ${r.tbl}.${extra[0]}`);
     }
   }
 
@@ -469,8 +516,17 @@ export class SyncLog {
     return c;
   }
 
+  #skipped = new Set<string>();
+
   #put(tbl: string, row: Record<string, unknown>): void {
-    const cols = Object.keys(row);
+    const known = this.#cols(tbl);
+    const cols = Object.keys(row).filter((c) => known.has(c));
+    for (const c of Object.keys(row)) {
+      if (known.has(c) || this.#skipped.has(`${tbl}.${c}`)) continue;
+      this.#skipped.add(`${tbl}.${c}`);
+      // Recorded as a problem: the person should update this standby.
+      this.#log.problem('sync', `The hub sent ${tbl}.${c}, which this standby doesn’t have yet: it is a release behind. That column is left out of its copy until it is updated.`);
+    }
     this.#db.run(
       `INSERT OR REPLACE INTO "${tbl}" (${cols.map((c) => `"${c}"`).join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
       ...cols.map((c) => row[c] as string | number | null),

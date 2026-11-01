@@ -39,7 +39,7 @@ const turnDone = {
 };
 const skillSample = {
   installed: [{ id: 'email-summary', name: 'Email summary', about: 'Tells you what in your inbox needs you, without opening Gmail.', needs: ['gmail'], try: 'What in my inbox needs me today?', body: '## Choose the window\n\n- With no window given, cover the inbox since yesterday.' }],
-  available: [{ id: 'shopping', name: 'Shopping research', about: 'Finds and compares things to buy, and recommends one. It never buys anything.', needs: [], body: '## Search\n\n- Search results are leads.' }],
+  available: [{ id: 'shopping', name: 'Shopping research', about: 'Finds and compares things to buy, and recommends one. It researches; you buy.', needs: [], body: '## Search\n\n- Search results are leads.' }],
   connectors: { gmail: { client: true, connected: true, account: 'you@example.com', since: '2026-10-21T09:00:00Z' } },
 };
 const usedSkill = {

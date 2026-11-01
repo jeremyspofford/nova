@@ -118,7 +118,7 @@ export const TOOLS = {
   },
   exec: {
     signature: '{"command": "git status"}',
-    doc: 'Run a shell command in ~/workspace. The user approves every command before it runs.',
+    doc: 'Run a shell command in ~/workspace. The user approves each command before it runs, unless permissions.md lets commands run without asking.',
     needsApproval: true,
     permission: { id: 'commands', label: 'Run commands on this computer', note: 'A command can change anything your account can' },
     run({ command }, { home, signal, timeoutMs }) {
@@ -202,7 +202,7 @@ export const TOOLS = {
   },
   gmail_draft: {
     signature: '{"reply_to": "<id from gmail_search>", "body": "..."} or {"to": "sam@example.com", "subject": "...", "body": "..."}',
-    doc: 'Save a draft in Gmail, as a reply in the same conversation or a new email. It is never sent: the person reviews it and sends it from Gmail. The person approves every draft.',
+    doc: 'Save a draft in Gmail, as a reply in the same conversation or a new email. It is never sent: the person reviews it and sends it from Gmail. The person approves each draft, unless permissions.md lets drafts go ahead.',
     needsApproval: true,
     permission: { id: 'gmail-drafts', label: 'Save Gmail drafts', note: 'Nova has no way to send email' },
     available: (ctx) => ctx.gmail,
@@ -214,7 +214,7 @@ export const TOOLS = {
   },
   gmail_organize: {
     signature: '{"ids": ["<id>", "<id>"], "archive": true, "read": true, "add_labels": ["Bills"], "remove_labels": []}',
-    doc: 'Archive emails (archive false puts them back in the inbox), mark them read or unread, and add or remove labels. Give only what should change. The person approves every change. Nothing is deleted.',
+    doc: 'Archive emails (archive false puts them back in the inbox), mark them read or unread, and add or remove labels. Give only what should change. The person approves each change, unless permissions.md lets changes go ahead. Nothing is deleted.',
     needsApproval: true,
     permission: { id: 'gmail-tidy', label: 'Tidy Gmail: archive, mark read or unread, labels', note: 'Nova has no way to delete email' },
     available: (ctx) => ctx.gmail,
@@ -236,7 +236,7 @@ export const TOOLS = {
   },
   schedule_set: {
     signature: '{"name": "Morning digest", "cron": "0 7 * * 1-5", "prompt": "What to do each time, as instructions to yourself"}',
-    doc: 'Set up work that runs on its own at set times: a five-field cron in the person\'s timezone, and instructions you will follow unattended each time. To change a schedule, give its "id". Reports come to this conversation; add "deliver": "main" to send them to the main conversation. Add "once": true for a one-time reminder. The person approves every schedule.',
+    doc: 'Set up work that runs on its own at set times: a five-field cron in the person\'s timezone, and instructions you will follow unattended each time. To change a schedule, give its "id". Reports come to this conversation; add "deliver": "main" to send them to the main conversation. Add "once": true for a one-time reminder. The person approves each schedule, unless permissions.md lets schedules go ahead.',
     needsApproval: true,
     permission: { id: 'schedules', label: 'Set up, change and remove schedules' },
     preview(args, { schedules, sessionId }) {
@@ -450,7 +450,7 @@ export function availableTools({ gmail = false, skills = 0, delegate = false, se
 }
 
 // Local-only means nothing leaves the person's devices, so tools that reach the internet (the
-// web, Gmail) aren't offered at all. exec is not filtered: it always asks first.
+// web, Gmail) aren't offered at all. exec is not filtered: it asks first unless permissions.md says yes.
 export function withinPrivacy(names, mode) {
   return mode === 'local-only' ? names.filter((n) => !(TOOLS[n]?.online || TOOLS[n]?.mail || n.startsWith('gmail_'))) : names;
 }

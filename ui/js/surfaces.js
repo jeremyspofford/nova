@@ -2,7 +2,7 @@
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request } from './core.js';
-import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
+import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
@@ -22,6 +22,8 @@ export const store = {
   devices: [], mesh: null, requests: [],
   // Settings › Providers: GET /providers, loaded when Settings opens (M5a).
   providers: null,
+  // The recommended chat model’s eval scorecard status, shown before a switch (Amendment B Part 4).
+  chatCard: null,
   // Keeping Nova running (M7b): the supervisor, releases, backups, the last drill, playbooks.
   resilience: null,
 };
@@ -160,8 +162,8 @@ export function renderTasks(el, now = new Date()) {
   <ul class="task-list">${by.get(k).map((t) => taskRow(t, { now })).join('')}</ul>
 </section>`).join('');
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Tasks</h2>
-<p class="view-lede">Everything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.</p></header>
-${groups || emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.' })}`;
+<p class="view-lede">Everything Nova takes on, in plain words. A task shows Verified only after Nova has checked its evidence; tap Verified to see it.</p></header>
+${groups || emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.', action: '<a class="btn" href="/chat" data-nav="chat">Ask Nova to do something</a>' })}`;
 }
 
 // One task in the sheet: the approval when it waits for one, else its evidence and history.
@@ -235,6 +237,7 @@ async function afterBrowser(id) {
 
 export async function approve(form) {
   if (form.dataset.request) return approveJoin(form);
+  if (form.dataset.rolesConfirm) return confirmRoles(form);
   if (form.dataset.revoke) return confirmRevoke(form);
   if (form.dataset.allow) return confirmAllow(form);
   if (form.dataset.promote) return confirmPromote(form);
@@ -300,6 +303,8 @@ function checkLine(key, c) {
   if (key === 'ledger') return Object.entries(c.counts ?? {}).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`).join(', ') || 'No tasks yet.';
   if (key === 'design') return `Showing ${appearance().list.find((d) => d.id === c.active)?.name ?? c.active}.`;
   if (key === 'problems') return c.open ? `${c.open} open.` : 'None open.';
+  // Outside content: how it is screened, then one plain line per decision seat (DS1 NOTE 4).
+  if (key === 'ingest') return [c.detail, ...(c.lines ?? [])].filter(Boolean).join(' ');
   if (key === 'mesh') return `${c.counts.trusted} paired${c.counts.revoked ? `, ${c.counts.revoked} revoked` : ''}. ${c.listening ? 'Other devices can reach Nova.' : 'Other devices can’t reach Nova: no mesh address.'} ${meshRoleLine(c)}`;
   if (c.counts) return Object.entries(c.counts).filter(([, n]) => typeof n === 'number' && n).map(([s, n]) => `${n} ${s.replace(/_/g, ' ').replace(/s$/, n === 1 ? '' : 's')}`).join(', ') || 'Nothing yet.';
   return c.detail ?? (c.ok ? 'Fine.' : 'Not fine.');
@@ -401,7 +406,7 @@ const uptime = (s) => (s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min
 
 export function renderRules(el) {
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Automations</h2>
-<p class="view-lede">Everything that runs on its own. Nothing runs that isn’t listed here, and each can be paused or removed.</p></header>
+<p class="view-lede">Rules Nova runs on its own. Each can be paused or removed.</p></header>
 <section class="panel" aria-labelledby="ru-title"><h3 class="section-title" id="ru-title">Rules</h3>
 ${store.rules.length ? `<ul class="trigger-list">${store.rules.map(triggerRow).join('')}</ul>` : '<p class="settings-note">No rules yet. Rules start work or send a message when something happens or on a schedule.</p>'}</section>`;
 }
@@ -419,7 +424,7 @@ export async function ruleAction(action, id) {
 // ---- Settings: you and Nova, privacy, appearance, devices -------------------------------------
 
 const PRIVACY = [
-  ['local-only', 'Local-only', 'Nothing leaves this machine. Never falls back to the cloud.'],
+  ['local-only', 'Local-only', 'Model calls stay on your own devices.'],
   ['local-preferred', 'Local first', 'Local first; cloud help only when local isn’t enough, and recorded.'],
   ['cloud-allowed', 'Cloud allowed', 'Nova may use cloud services within your policy.'],
 ];
@@ -432,7 +437,7 @@ export function renderYou() {
 <ul class="settings-list">
 ${settingsRow({ id: 'you-name-row', title: 'Your name', note: 'What Nova calls you.', control: `${field('you-name', i.user_name, 'Your name')}<button type="button" class="btn small" data-action="save-profile" data-section="user" data-key="name" data-field="you-name">Save</button>` })}
 ${settingsRow({ id: 'nova-name-row', title: 'Nova’s name', note: 'Only the name changes; the charter stays.', control: `${field('nova-name', i.name, 'Nova’s name')}<button type="button" class="btn small" data-action="save-profile" data-section="identity" data-key="name" data-field="nova-name">Save</button>` })}
-${settingsRow({ id: 'directness-row', title: 'Directness', note: 'Nova always says when it thinks something’s wrong; this is how.', control: `<label class="sr-only" for="directness">Directness</label><select class="input" id="directness" data-action="set-profile" data-section="tuning" data-key="directness">${DIRECTNESS.map(([v, l]) => `<option value="${v}"${i.directness === v ? ' selected' : ''}>${l}</option>`).join('')}</select>` })}
+${settingsRow({ id: 'directness-row', title: 'Directness', note: 'Telling you when Nova thinks something’s wrong isn’t adjustable; this is how it says it.', control: `<label class="sr-only" for="directness">Directness</label><select class="input" id="directness" data-action="set-profile" data-section="tuning" data-key="directness">${DIRECTNESS.map(([v, l]) => `<option value="${v}"${i.directness === v ? ' selected' : ''}>${l}</option>`).join('')}</select>` })}
 </ul></section>`;
 }
 
@@ -645,11 +650,14 @@ export function renderDevices() {
   const all = meshDevices();
   const trusted = all.filter((d) => d.trust !== 'revoked');
   const revoked = all.filter((d) => d.trust === 'revoked');
+  // What it is for (M10f): an approver can change it, the hub's own included.
+  const rolesButton = (d) => (approver && !copy && d.id && d.trust !== 'revoked' && allowedRoles(d).length > 1 ? `<button type="button" class="btn small quiet" data-action="edit-roles" data-device="${esc(d.id)}">Roles</button>` : '');
   const actions = (d) => {
-    if (copy || !d.id || d.role === 'hub' || d.trust === 'revoked') return '';
+    if (copy || !d.id || d.trust === 'revoked') return '';
+    if (d.role === 'hub') return rolesButton(d);
     const allow = approver && (d.kind === 'phone' || d.kind === 'browser') && !d.this
       ? `<button type="button" class="btn small quiet" data-action="allow-approve" data-device="${esc(d.id)}" data-value="${d.can_approve ? 'false' : 'true'}">${d.can_approve ? 'Stop it approving' : 'Let it approve'}</button>` : '';
-    return `${allow}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
+    return `${rolesButton(d)}${allow}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
   };
   const waiting = store.requests.map((r) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(r.name)} is asking to join</p><p class="settings-note">${esc(KIND_WORDS[r.kind] ?? r.kind)} · compare the six digits it shows.</p></div><div class="settings-control"><button type="button" class="btn small primary" data-action="review-request" data-request="${esc(r.id)}">Review</button></div></li>`).join('');
   const lede = !m
@@ -669,7 +677,7 @@ export function renderDevices() {
   return `<section class="memory-section" id="devices" aria-labelledby="set-devices"><h2 class="memory-heading" id="set-devices">Devices</h2>
 <p class="memory-lede">${esc(lede)}</p>
 ${waiting ? `<ul class="settings-list">${waiting}</ul>` : ''}
-<ul class="device-list device-registry">${trusted.map((d) => deviceRow(d, { actions: actions(d) })).join('')}</ul>
+<ul class="device-list device-registry">${trusted.map((d) => deviceRow(d, { actions: actions(d), roles: true })).join('')}</ul>
 ${add}
 ${revoked.length ? `<details class="raw"><summary>Revoked (${revoked.length})</summary><ul class="device-list device-registry">${revoked.map((d) => deviceRow(d)).join('')}</ul></details>` : ''}
 <ul class="settings-list">${installRow}
@@ -735,8 +743,12 @@ export async function openRequest(id) {
 async function approveJoin(form) {
   const confirm = form.querySelector('input[name="confirm"]');
   if (!confirm?.checked) { confirm?.focus(); return; }
+  // The roles as the person left them (M10f); a hub candidacy is confirmed on its own.
+  const purposes = form.querySelector('input[name="purpose"]') ? pickedRoles(form) : undefined;
+  const candidate = form.querySelector('input[name="confirm_candidate"]');
+  if (purposes?.includes('hub-candidate') && candidate && !candidate.checked) { toast('Making it a hub candidate is confirmed on its own: tick that box too, or untick Hub candidate.'); candidate.focus(); return; }
   try {
-    const { device } = await api('POST', `/mesh/requests/${encodeURIComponent(form.dataset.request)}/approve`, { confirm: true });
+    const { device } = await api('POST', `/mesh/requests/${encodeURIComponent(form.dataset.request)}/approve`, { confirm: true, ...(purposes ? { purposes } : {}), confirm_candidate: !!candidate?.checked });
     closeSheet();
     toast(`${device.name} is paired.`);
   } catch (e) { toast(e.message); }
@@ -786,6 +798,60 @@ async function confirmAllow(form) {
   await load(['devices']);
 }
 
+// ---- device roles (M10f) ---------------------------------------------------------------------
+
+// What each kind may hold and must hold: the hub's rules (src/core/mesh/purposes.ts), for the sheet.
+const ALL_ROLES = ['thin-client', 'hub-candidate', 'compute', 'storage', 'capture-source', 'general-server'];
+export function allowedRoles(d) {
+  if (d.role === 'hub' || d.kind === 'standby') return ALL_ROLES.filter((p) => p !== 'thin-client');
+  if (d.kind === 'phone' || d.kind === 'browser') return ['thin-client'];
+  return ALL_ROLES;
+}
+export function fixedRoles(d) {
+  if (d.role === 'hub') return ['hub-candidate', 'general-server'];
+  if (d.kind === 'phone' || d.kind === 'browser') return ['thin-client'];
+  if (d.kind === 'standby') return ['hub-candidate'];
+  return [];
+}
+export function roleChange(before, after) {
+  return { added: after.filter((p) => !before.includes(p)), removed: before.filter((p) => !after.includes(p)) };
+}
+
+export function editRoles(id) {
+  const d = store.devices.find((x) => x.id === id);
+  if (d) openSheet(rolesSheet(d, { allowed: allowedRoles(d), fixed: fixedRoles(d) }), { label: `What ${d.name} is for` });
+}
+
+// Step one done: the review at its tier, or nothing when nothing changed.
+export async function reviewRoles(form) {
+  const d = store.devices.find((x) => x.id === form.dataset.roles);
+  if (!d) return;
+  const next = ALL_ROLES.filter((p) => pickedRoles(form).includes(p) || fixedRoles(d).includes(p));
+  const change = roleChange(d.purposes ?? [], next);
+  if (!change.added.length && !change.removed.length) { closeSheet(); toast('Nothing changed.'); return; }
+  // What taking roles away would stop there, as the hub says (a dry run: nothing changes yet).
+  let stops = [];
+  if (change.removed.length) {
+    try { stops = (await api('PATCH', `/mesh/devices/${encodeURIComponent(d.id)}`, { purposes: next, dry_run: true })).stops ?? []; } catch (e) { toast(e.message); return; }
+  }
+  openSheet(rolesReviewSheet(d, next, change, stops), { label: `Change what ${d.name} is for` });
+}
+
+async function confirmRoles(form) {
+  const tier = Number(form.dataset.tier);
+  const confirm = form.querySelector('input[name="confirm"]');
+  if (tier === 3 && !confirm?.checked) { confirm?.focus(); return; }
+  const candidate = form.querySelector('input[name="confirm_candidate"]');
+  if (candidate && !candidate.checked) { candidate.focus(); toast('Making it a hub candidate is confirmed on its own: tick that box too.'); return; }
+  const purposes = form.dataset.next ? form.dataset.next.split(',') : [];
+  try {
+    const d = await api('PATCH', `/mesh/devices/${encodeURIComponent(form.dataset.rolesConfirm)}`, { purposes, ...(tier === 3 ? { confirm: true } : { approved: true }), confirm_candidate: !!candidate?.checked });
+    closeSheet();
+    toast(`${d.name} is for: ${d.purposes.length ? d.purposes.join(', ').replace(/-/g, ' ') : 'nothing yet'}.`);
+  } catch (e) { toast(e.message); }
+  await load(['devices']);
+}
+
 // ---- the standby: becoming the hub ------------------------------------------------------------
 
 export function promote() {
@@ -821,9 +887,12 @@ export function renderProviders() {
     const rec = c.recommended;
     const better = rec.id && rec.id !== c.current;
     const title = what === 'chat' ? `Chat uses ${name(c.current)}` : c.current ? `Coding tasks go to ${name(c.current)}` : 'Coding tasks';
+    // Before the person switches: the recommended model's scorecard, or that it has none
+    // (Amendment B Part 4).
+    const card = better && what === 'chat' ? store.chatCard : null;
     return settingsRow({
       title,
-      note: better ? `Nova recommends ${name(rec.id)}. ${rec.why}` : rec.why,
+      note: better ? `Nova recommends ${name(rec.id)}. ${rec.why}${card ? ` ${card.words}` : ''}` : rec.why,
       control: better ? `<button type="button" class="btn small${standout ? ' primary' : ''}" data-action="provider-choose" data-for="${what}" data-provider="${esc(rec.id)}">Use ${esc(name(rec.id))}</button>` : '',
     });
   };
@@ -849,6 +918,9 @@ export function renderProviders() {
 export async function loadProviders() {
   try {
     store.providers = await api('GET', '/providers');
+    const rec = store.providers?.chat?.recommended?.id;
+    const target = rec && rec !== store.providers.chat.current ? providerById(rec) : null;
+    store.chatCard = target?.model ? await api('GET', `/evals/scorecards/status?provider=${encodeURIComponent(target.id)}&model=${encodeURIComponent(target.model)}`).catch(() => null) : null;
   } catch { /* the part keeps what it had; the next event tries again */ }
   window.dispatchEvent(new CustomEvent('nova:providers'));
 }

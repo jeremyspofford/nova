@@ -1,6 +1,8 @@
 // First run: on a blank profile, setup is a conversation (/api/v1/setup) that takes the whole
-// screen in every layout. It ends on the welcome task's VerifiedResultCard, with its evidence
-// one tap away, and then the person continues into Nova.
+// screen in every layout. A question with set answers (the device's roles, the backend, whether to
+// look, what to bring in) also offers them as choices; the answer is still the text sent. It ends on
+// the first view (M10f): what was found, what was brought in, this device's roles and backend, the
+// welcome task's VerifiedResultCard with its evidence one tap away, and ONE suggested first action.
 import { Unreachable, api, on } from './core.js';
 import { ICONS, chatBubble, evidenceViewer, lookingIntoItCard, verifiedResultCard } from './components.js';
 import { liveOrb, openSheet, toast } from './shell.js';
@@ -40,12 +42,47 @@ function show() {
   document.getElementById('setup-input')?.focus();
 }
 
-function finish() {
+function finish(path = '/') {
   el.hidden = true;
   el.innerHTML = '';
   document.getElementById('app').inert = false;
   delete document.body.dataset.setup;
-  finished?.();
+  finished?.(path);
+}
+
+// The question's set answers, when it has them. One of: a button each, Nova's recommendation the
+// standout; one not available yet is shown, and can't be pressed. Many of: boxes, and Continue.
+function choices() {
+  const o = view.options;
+  if (!o || !o.choices.length) return '';
+  if (o.kind === 'one') {
+    return `<div class="setup-choices" role="group" aria-label="Answers">${o.choices.map((c) => c.available === false
+      ? `<p class="setup-choice-off"><span class="setup-choice-label">${esc(c.label)}</span> <span class="setup-sub">${esc(c.note)}</span></p>`
+      : `<button type="button" class="btn${c.selected ? ' primary' : ''}" data-action="setup-pick" data-label="${esc(c.label)}" title="${esc(c.note)}">${esc(c.label)}</button>`).join('')}</div>`;
+  }
+  return `<fieldset class="setup-choices setup-many"><legend class="sr-only">Pick any</legend>${o.choices.map((c) => `<label class="confirm"><input type="checkbox" name="setup-choice" value="${esc(c.label)}"${c.selected ? ' checked' : ''}${c.locked ? ' disabled data-locked="1"' : ''}> <span>${esc(c.label)}<span class="setup-sub"> · ${esc(c.note)}</span></span></label>`).join('')}
+<button type="button" class="btn primary" data-action="setup-many">Continue</button></fieldset>`;
+}
+
+// The first view (Amendment 2026-10-31-B Part 2): never a blank chat alone.
+function firstView() {
+  const f = view.first;
+  if (!f) return '';
+  const li = (xs) => xs.map((x) => `<li>${x}</li>`).join('');
+  const found = f.looked
+    ? (f.found.length ? `<ul class="setup-list">${li(f.found.map((x) => `<strong>${esc(x.name)}</strong> · ${esc(x.where)}, ${esc(x.address)} · <span class="setup-sub">found, not connected</span>`))}</ul>` : '<p class="setup-sub">Nova looked and found nothing it knows.</p>')
+    : '<p class="setup-sub">You didn’t ask Nova to look.</p>';
+  const brought = f.imported.length
+    ? `<ul class="setup-list">${li(f.imported.map((r) => `${esc(r.label)}: ${esc(r.said)}`))}</ul>`
+    : '<p class="setup-sub">Nothing yet.</p>';
+  return `<section class="setup-first" aria-labelledby="setup-first-title">
+  <h2 class="setup-first-title" id="setup-first-title">Ready</h2>
+  <h3 class="sheet-heading">This computer</h3>
+  <p class="setup-sub">${esc(f.device.words.replace(/^a /, 'A '))}. It is your hub, for ${esc(f.device.roles_words.toLowerCase())}. Its services run as ${esc(f.device.backend_words.toLowerCase())}; Settings › Services says what that means here.</p>
+  <h3 class="sheet-heading">Found</h3>${found}
+  <h3 class="sheet-heading">Brought in</h3>${brought}
+  <div class="setup-next"><button type="button" class="btn primary" data-action="setup-first" data-go="${esc(f.action.go)}">${esc(f.action.label)}</button><p class="setup-sub">${esc(f.action.why)}</p></div>
+</section>`;
 }
 
 function result() {
@@ -86,12 +123,13 @@ function resetCard() {
 function render() {
   const log = view.transcript.map((t, i) => chatBubble({ from: t.from === 'person' ? 'person' : 'nova', text: t.text, still: i < shown })).join('');
   shown = view.transcript.length;
+  // At the end, the first view's action is the one standout; continuing is the quiet way on.
   const dock = view.done
-    ? '<div class="dock"><button type="button" class="btn primary" data-action="setup-continue">Continue to Nova</button></div>'
-    : `<div class="dock"><form class="composer" id="setup-form"><label class="sr-only" for="setup-input">Answer Nova</label><textarea id="setup-input" rows="1" placeholder="Your answer…" autocomplete="off"></textarea><button type="submit" class="send" aria-label="Send">${ICONS.send}</button></form></div>`;
+    ? `<div class="dock"><button type="button" class="btn${view.first ? '' : ' primary'}" data-action="setup-continue">Continue to Nova</button></div>`
+    : `<div class="dock">${choices()}<form class="composer" id="setup-form"><label class="sr-only" for="setup-input">Answer Nova</label><textarea id="setup-input" rows="1" placeholder="Your answer…" autocomplete="off"></textarea><button type="submit" class="send" aria-label="Send">${ICONS.send}</button></form></div>`;
   el.innerHTML = `<div class="setup-panel" role="dialog" aria-modal="true" aria-labelledby="setup-title">
-  <header class="setup-head">${liveOrb('rail')}<div><h1 class="setup-title" id="setup-title">Setting up Nova</h1><p class="setup-sub">A few quick questions. You can change any answer later just by telling Nova.</p></div></header>
-  <div class="setup-log" id="setup-log" aria-live="polite">${resetCard()}${log}${result()}</div>
+  <header class="setup-head">${liveOrb('rail')}<div><h1 class="setup-title" id="setup-title">Setting up Nova</h1><p class="setup-sub">A few quick questions. You can change most answers later in Settings.</p></div></header>
+  <div class="setup-log" id="setup-log" aria-live="polite">${resetCard()}${log}${firstView()}${result()}</div>
   ${dock}
 </div>`;
   const scroll = document.getElementById('setup-log');
@@ -138,6 +176,12 @@ el.addEventListener('click', (e) => {
   const b = e.target.closest('[data-action]');
   if (!b) return;
   if (b.dataset.action === 'setup-continue') finish();
+  if (b.dataset.action === 'setup-first') finish(`/${b.dataset.go}`);
+  if (b.dataset.action === 'setup-pick') answer(b.dataset.label);
+  if (b.dataset.action === 'setup-many') {
+    const picked = [...el.querySelectorAll('input[name="setup-choice"]')].filter((i) => i.checked).map((i) => i.value);
+    answer(picked.length ? picked.join(', ') : 'none');
+  }
   if (b.dataset.action === 'evidence' && task) openSheet(evidenceViewer(task), { label: task.title });
 });
 

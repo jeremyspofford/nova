@@ -1,7 +1,7 @@
 // The shell around every view: the layout and posture on <body>, the navigation each layout
 // shows (rail, tabs, More), the live orb, toasts and the sheet. The rules themselves are pure
 // and tested (layout.js, nav.js, status.js); this module applies them to the page.
-import { resolve } from './layout.js';
+import { resolve, viewportOf } from './layout.js';
 import { destination, placement } from './nav.js';
 import { ICONS, orb } from './components.js';
 import { ORB_WORDS, orbState } from './status.js';
@@ -20,14 +20,37 @@ export const layout = { layout: null, posture: null, aside: null, room: null };
 
 const asideClosed = () => { try { return localStorage.getItem('nova.aside') === 'closed'; } catch { return false; } };
 
+// The bands' widths, as layout.css derives them from the regions' minimums in the applied design
+// system (F8/F9): measured off three never-seen probes, so a design system swapped live, or a
+// bigger text size, moves the bands with it (the probes resize, and the layout is read again).
+const probes = (() => {
+  const box = document.createElement('div');
+  box.className = 'band-probes';
+  box.setAttribute('aria-hidden', 'true');
+  box.innerHTML = '<div class="band-probe" data-band="two"></div><div class="band-probe" data-band="three"></div><div class="band-probe" data-band="scrollbar"></div>';
+  document.body.append(box);
+  const [two, three, scrollbar] = box.children;
+  return { two, three, scrollbar };
+})();
+let scrollbarWidth = -1;
+export function bands() {
+  // What a scrollbar takes here (0 where scrollbars overlay the content), for the regions' gutters.
+  const sb = probes.scrollbar.offsetWidth - probes.scrollbar.clientWidth;
+  if (sb !== scrollbarWidth) { scrollbarWidth = sb; root.style.setProperty('--scrollbar-room', `${sb}px`); }
+  return { two: probes.two.getBoundingClientRect().width, three: probes.three.getBoundingClientRect().width };
+}
+
 export function readLayout() {
   const cs = getComputedStyle(root);
   const word = (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
-  const room = word('--aside-room', 'no');
+  const segments = word('--segments', 'none');
+  const viewport = viewportOf(root.clientWidth, bands());
+  // Room for a pane beside the conversation: the three-column band, or a real hinge's own screens.
+  const room = viewport === 'wide' || segments === 'horizontal' ? 'yes' : 'no';
   const next = resolve({
-    viewport: word('--viewport', 'narrow'),
+    viewport,
     room,
-    segments: word('--segments', 'none'),
+    segments,
     devicePosture: navigator.devicePosture?.type ?? 'continuous',
     orientation: screen.orientation?.type ?? 'portrait-primary',
     override: postureHook,
@@ -63,6 +86,8 @@ export function toggleAside() {
 let frame = 0;
 const relayout = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(readLayout); };
 window.addEventListener('resize', relayout);
+new ResizeObserver(relayout).observe(probes.three);
+new ResizeObserver(relayout).observe(probes.two);
 screen.orientation?.addEventListener?.('change', relayout);
 navigator.devicePosture?.addEventListener?.('change', relayout);
 

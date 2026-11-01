@@ -254,7 +254,7 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     const lower = (t: string) => t.replace(/^\w/, (c) => c.toLowerCase());
     const yes = p.filter((x) => x.yes).map((x) => lower(x.label));
     const ask = p.filter((x) => !x.yes).map((x) => lower(x.label));
-    return `${ask.length ? `asks first to ${ask.join('; ')}` : 'asks first for nothing listed'}. ${yes.length ? `Goes ahead without asking to ${yes.join('; ')}.` : 'Nothing is allowed without asking.'} Anything that can’t be undone always asks.`;
+    return `${ask.length ? `asks first to ${ask.join('; ')}` : 'asks first for nothing listed'}. ${yes.length ? `Goes ahead without asking to ${yes.join('; ')}.` : 'Nothing is allowed without asking.'} When a step asks, one that looks like it can’t be undone needs an explicit confirm.`;
   }
 
   #appearanceLine(): string {
@@ -374,9 +374,9 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
       },
       permissions: () => {
         const p = this.#era2.permissions?.() ?? [];
-        return ['What Nova may do without asking (Settings › Without asking, ~/permissions.md):', ...(p.length ? p.map((x) => `- ${x.label} [${x.id}]: ${x.yes ? 'yes, without asking' : 'asks first'}`) : ['- nothing listed']), `Running a brief’s test command: ${this.#o.profile.get<string>('policy', 'task_tests') === 'allow' ? 'without asking' : 'asks first'}. Anything that can’t be undone always asks.`].join('\n');
+        return ['What Nova may do without asking (Settings › Without asking, ~/permissions.md):', ...(p.length ? p.map((x) => `- ${x.label} [${x.id}]: ${x.yes ? 'yes, without asking' : 'asks first'}`) : ['- nothing listed']), `Running a brief’s test command: ${this.#o.profile.get<string>('policy', 'task_tests') === 'allow' ? 'without asking' : 'asks first'}. When a step asks, one that looks like it can’t be undone needs an explicit confirm.`].join('\n');
       },
-      privacy: () => `Privacy setting: ${this.#o.profile.privacyDefault()} (local-only: nothing leaves your devices; local-preferred: local first, the cloud when needed; cloud-allowed).`,
+      privacy: () => `Privacy setting: ${this.#o.profile.privacyDefault()} (local-only: model calls stay on your devices; local-preferred: local first, the cloud when needed; cloud-allowed).`,
     };
     const parts = [...new Set([...Object.keys(extra), ...SECTIONS.filter((s) => s !== 'setup')])];
     if (!want) return `Settings parts: ${parts.join(', ')}. Ask for one by name.`;

@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { LAYOUTS, POSTURES, asideOf, layoutOf, postureOf, resolve } from '../ui/js/layout.js';
+import { LAYOUTS, POSTURES, asideOf, layoutOf, postureOf, resolve, viewportOf } from '../ui/js/layout.js';
 import { DESTINATIONS, placement, reachable, routeOf } from '../ui/js/nav.js';
 import { ORB_STATES, STATUS, activityStatus, greeting, label, needsApproval, orbState, problemTone, statusOf, stoppingProblems, toolTier } from '../ui/js/status.js';
 
@@ -12,6 +12,16 @@ test('layout follows the viewport: narrow is phone, medium is tablet, wide is de
   assert.equal(layoutOf({ viewport: 'narrow' }), 'phone');
   assert.equal(layoutOf({ viewport: 'medium' }), 'tablet');
   assert.equal(layoutOf({ viewport: 'wide' }), 'desktop');
+});
+
+test('the bands are the derived widths, not round numbers (UX review 2026-10-31, F8/F9)', () => {
+  const bands = { two: 621.5, three: 916.3 };
+  assert.equal(viewportOf(320, bands), 'narrow');
+  assert.equal(viewportOf(621, bands), 'narrow', 'under the rail and the main column\'s minimum: one column');
+  assert.equal(viewportOf(621.5, bands), 'medium');
+  assert.equal(viewportOf(900, bands), 'medium', 'a fold\'s inner screen under the three-column band: the rail and one column');
+  assert.equal(viewportOf(916.3, bands), 'wide');
+  assert.equal(viewportOf(1024, { two: 600, three: 1100 }), 'medium', 'a design system whose regions need more moves the band');
 });
 
 test('posture overrides width: a folded cover screen is a phone, half-open is two panes', () => {
@@ -33,22 +43,26 @@ test('posture comes from the ?posture= hook first, then viewport segments, then 
   for (const p of POSTURES) assert.equal(postureOf({ override: p }), p);
 });
 
-test('the quiet cards: a desktop right column with room, unless closed; always a tablet pane; never on a phone', () => {
+test('the quiet cards: a desktop right column with room, unless closed; a half-open tablet\'s second pane; never a flat tablet or a phone', () => {
   assert.equal(asideOf({ layout: 'desktop', room: 'yes' }), 'on');
   assert.equal(asideOf({ layout: 'desktop', room: 'yes', closed: true }), 'off');
   assert.equal(asideOf({ layout: 'desktop', room: 'no' }), 'off');
-  assert.equal(asideOf({ layout: 'tablet', room: 'no', closed: true }), 'on');
+  assert.equal(asideOf({ layout: 'tablet', room: 'no' }), 'off', 'under the three-column band there is no right column to crush');
+  assert.equal(asideOf({ layout: 'tablet', posture: 'half-open-vertical', room: 'no', closed: true }), 'on');
+  assert.equal(asideOf({ layout: 'tablet', posture: 'half-open-horizontal', room: 'no' }), 'on');
   assert.equal(asideOf({ layout: 'phone', room: 'yes' }), 'off');
   assert.deepEqual(resolve({ viewport: 'wide', room: 'yes', segments: 'none' }), { layout: 'desktop', posture: 'continuous', aside: 'on' });
   assert.deepEqual(resolve({ viewport: 'wide', room: 'yes', override: 'folded' }), { layout: 'phone', posture: 'folded', aside: 'off' });
   assert.deepEqual(resolve({ viewport: 'wide', room: 'yes', override: 'half-open-vertical' }), { layout: 'tablet', posture: 'half-open-vertical', aside: 'on' });
 });
 
-test('breakpoints live in layout.css only: 600 and 1024 px, plus viewport segments', () => {
+test('breakpoints live in layout.css only: bands derived from the regions, plus viewport segments', () => {
   const css = readFileSync('ui/styles/layout.css', 'utf8');
-  assert.match(css, /@media \(min-width: 600px\) \{ :root \{ --viewport: medium; \} \}/);
-  // M9: from 1024 px a desktop has room for the right column, so no expanded width is one stretched column.
-  assert.match(css, /@media \(min-width: 1024px\) \{ :root \{ --viewport: wide; --aside-room: yes; \} \}/);
+  // F8/F9: each band starts at the sum of its regions' minimums, never a round number; the
+  // compact width class (600 px) stays the floor under which a phone gets tabs.
+  assert.match(css, /--band-two: max\(600px, calc\(var\(--layout-rail-width\) \+ var\(--region-main-min\)\)\);/);
+  assert.match(css, /--band-three: calc\(var\(--layout-rail-width\) \+ var\(--region-main-min\) \+ var\(--region-aside-min\)\);/);
+  assert.doesNotMatch(css, /min-width: 1024px/);
   assert.match(css, /@media \(horizontal-viewport-segments: 2\)/);
   assert.match(css, /@media \(vertical-viewport-segments: 2\)/);
   for (const f of ['ui/styles/base.css', 'ui/styles/components.css', 'ui/styles/views.css']) {

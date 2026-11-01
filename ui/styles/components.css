@@ -92,6 +92,8 @@
   backdrop-filter: blur(var(--blur-glass));
   -webkit-backdrop-filter: blur(var(--blur-glass));
   overflow-y: auto;
+  /* The orb's glow reaches past the rail's edges; it must not make the rail scroll sideways. */
+  overflow-x: hidden;
 }
 .rail-home { display: grid; place-items: center; margin-bottom: var(--space-4); border-radius: 50%; text-decoration: none; }
 .rail-list, .tabs-list { list-style: none; margin: 0; padding: 0; display: flex; }
@@ -422,12 +424,16 @@ button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transp
 .lii-icon { color: var(--accent-primary); }
 
 .device-list { list-style: none; margin: 0; padding: 0; }
-.device-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-1) 0; color: var(--text-secondary); }
+/* A device row keeps its words readable (F8): the name and its line keep at least 12 characters
+   beside the icon, and the pill moves under them when there isn't room for all three, rather than
+   squeezing the words a few letters to a line or sitting on top of them. */
+.device-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); padding: var(--space-1) 0; color: var(--text-secondary); }
 .device-row > .icon { color: var(--accent-primary); }
-.device-text { flex: 1; min-width: 0; }
-.device-name { color: var(--text-primary); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); }
+.device-text { flex: 1 1 12ch; min-width: 0; }
+.device-row > .pill { margin-left: auto; }
+.device-name { color: var(--text-primary); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); overflow-wrap: anywhere; }
 .device-tag { color: var(--text-secondary); font-weight: var(--type-weight-regular); }
-.device-detail { margin-top: calc(var(--space-1) / 2); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); }
+.device-detail { margin-top: calc(var(--space-1) / 2); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); overflow-wrap: anywhere; }
 .device-registry .device-row { flex-wrap: wrap; padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
 .device-registry .row-actions { margin-left: auto; }
 
@@ -812,6 +818,18 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 .setup-log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3) var(--space-5); }
 .setup .dock { padding: var(--space-3) var(--space-4) var(--space-4); }
 .setup-done { display: flex; flex-direction: column; gap: var(--space-3); }
+/* M10f: a question's set answers, and the first view at the end. */
+.setup-choices { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-3); padding: 0; border: 0; }
+.setup-many { flex-direction: column; flex-wrap: nowrap; }
+.setup-many .confirm, .roles-field .role-choice { border-color: var(--border-strong); align-items: flex-start; }
+.setup-choice-off { margin: 0; padding: var(--space-2) var(--space-3); border: 1px dashed var(--border-subtle); border-radius: var(--radius-input); color: var(--text-secondary); }
+.setup-first { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--bg-raised); }
+.setup-first-title { margin: 0; font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-display); }
+.setup-first .sheet-heading { margin: var(--space-2) 0 0; }
+.setup-list { margin: 0; padding-inline-start: var(--space-5); display: flex; flex-direction: column; gap: var(--space-1); }
+.setup-next { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); margin-top: var(--space-3); }
+.roles-field { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; border: 0; min-width: 0; }
+.device-roles { color: var(--text-secondary); }
 
 /* ---- motion: named, brief, from tokens ----------------------------------------------------- */
 

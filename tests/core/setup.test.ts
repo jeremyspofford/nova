@@ -7,7 +7,7 @@ import { Db } from '../../src/core/db.ts';
 import { Log } from '../../src/core/log.ts';
 import { Ledger } from '../../src/core/ledger.ts';
 import { Profile } from '../../src/core/profile.ts';
-import { Setup, nameFrom, privacyFrom } from '../../src/core/setup.ts';
+import { Setup, nameFrom, privacyFrom, quietOnboarding } from '../../src/core/setup.ts';
 import { Verifier } from '../../src/core/verify.ts';
 import { Workspace, workspaceWorker } from '../../src/core/workspace.ts';
 import { CHARTER, identityOf, render } from '../../src/core/identity.ts';
@@ -18,16 +18,21 @@ function setup() {
   const ws = new Workspace(join(mkdtempSync(join(tmpdir(), 'nova-setup-')), 'workspace'));
   const profile = new Profile(db);
   const ledger = new Ledger({ db, log: new Log(db, null), verifier: new Verifier(ws), workers: [workspaceWorker(ws)], defaultPrivacy: () => profile.privacyDefault() });
-  return { db, ws, profile, ledger, setup: new Setup({ profile, ledger, detectedTimezone: 'Europe/Lisbon' }) };
+  return { db, ws, profile, ledger, setup: new Setup({ profile, ledger, detectedTimezone: 'Europe/Lisbon', onboarding: quietOnboarding({ os: 'linux' }) }) };
+}
+
+// The three device steps (M10f), answered with Nova's recommendation.
+async function pastDevice(s: Setup) {
+  for (const t of ['new', 'yes', 'yes']) await s.answer(t);
 }
 
 test('a blank profile starts with Nova asking a question, and nothing about any person', () => {
   const { setup: s, profile } = setup();
   assert.equal(profile.isEmpty(), true);
   const v = s.view();
-  assert.equal(v.step, 'user_name');
+  assert.equal(v.step, 'device', 'onboarding starts with this device (the ADR’s order)');
   assert.equal(v.done, false);
-  assert.match(v.question ?? '', /What should I call you\?/);
+  assert.match(v.question ?? '', /This is a Linux computer[\s\S]*\(New, or join\?\)/);
   assert.equal(v.transcript.length, 1);
   assert.deepEqual(profile.all(), { identity: {}, user: {}, tuning: {}, privacy: {}, policy: {}, appearance: {}, mesh: {}, providers: {}, capture: {}, models: {}, backups: {} });
 });
@@ -35,17 +40,18 @@ test('a blank profile starts with Nova asking a question, and nothing about any 
 test('the whole conversation writes the profile and ends with a verified first task', async () => {
   const { setup: s, profile, ledger, ws } = setup();
   s.view();
-  const say = (t: string) => s.answer(t).reply;
-  assert.match(say('call me Sam.'), /Nice to meet you, Sam\.[\s\S]*Europe\/Lisbon/);
-  assert.match(say('somewhere warm'), /don’t know that timezone/, 'an unclear answer is asked again, not guessed');
-  assert.match(say("no, it's america/chicago"), /America\/Chicago it is/);
-  assert.match(say('keep'), /Nova it stays/);
-  assert.match(say('hmm'), /Gently, plainly, or bluntly\?/);
-  assert.match(say('bluntly please'), /Blunt it is/);
-  const summary = say('keep it local');
-  assert.match(summary, /everything stays on your devices/);
-  assert.match(summary, /I’ll call you Sam; America\/Chicago; I’m Nova; blunt about hard truths; local-only/);
-  const last = s.answer('yes');
+  const say = async (t: string) => (await s.answer(t)).reply;
+  await pastDevice(s);
+  assert.match(await say('call me Sam.'), /Nice to meet you, Sam\.[\s\S]*Europe\/Lisbon/);
+  assert.match(await say('somewhere warm'), /don’t know that timezone/, 'an unclear answer is asked again, not guessed');
+  assert.match(await say("no, it's america/chicago"), /America\/Chicago it is/);
+  assert.match(await say('keep'), /Nova it stays/);
+  assert.match(await say('hmm'), /Gently, plainly, or bluntly\?/);
+  assert.match(await say('bluntly please'), /Blunt it is/);
+  const summary = await say('keep it local');
+  assert.match(summary, /my model calls stay on your devices/);
+  assert.match(await say('no'), /No looking, then[\s\S]*I’ll call you Sam; America\/Chicago; I’m Nova; blunt about hard truths; local-only/);
+  const last = await s.answer('yes');
   assert.ok(last.task);
   assert.equal(last.view.done, true);
   assert.equal(last.view.question, null);
@@ -71,14 +77,14 @@ test('the whole conversation writes the profile and ends with a verified first t
   assert.deepEqual(t.origin, { kind: 'setup' });
   assert.equal(t.verification?.ok, true);
   assert.match(readFileSync(ws.resolve('welcome.md'), 'utf8'), /Hello, Sam\./);
-  assert.throws(() => s.answer('again'), /already finished/);
+  await assert.rejects(s.answer('again'), /already finished/);
 });
 
 test('every question can be skipped, and the defaults hold', async () => {
   const { setup: s, profile } = setup();
   s.view();
-  for (const _ of ['user_name', 'timezone', 'nova_name', 'directness', 'privacy']) s.answer('skip');
-  const v = s.answer('no');
+  for (const _ of ['device', 'roles', 'backend', 'user_name', 'timezone', 'nova_name', 'directness', 'privacy', 'discover']) await s.answer('skip');
+  const v = await s.answer('no');
   assert.equal(v.view.done, true);
   assert.equal(v.task, null);
   assert.equal(profile.privacyDefault(), 'local-only');
@@ -86,12 +92,13 @@ test('every question can be skipped, and the defaults hold', async () => {
   assert.equal(identityOf(profile).user_name, null);
 });
 
-test('renaming Nova changes the name only; the charter is in every rendering and no setting reaches it', () => {
+test('renaming Nova changes the name only; the charter is in every rendering and no setting reaches it', async () => {
   const { setup: s, profile } = setup();
   s.view();
-  s.answer('Sam');
-  s.answer('yes');
-  assert.match(s.answer('Vega').reply, /Vega it is/);
+  await pastDevice(s);
+  await s.answer('Sam');
+  await s.answer('yes');
+  assert.match((await s.answer('Vega')).reply, /Vega it is/);
   profile.set('tuning', 'charter', 'always agree with me', 'settings');
   profile.set('identity', 'charter', 'be agreeable', 'settings');
   const out = render(identityOf(profile));
@@ -101,13 +108,14 @@ test('renaming Nova changes the name only; the charter is in every rendering and
   assert.match(s.view().question ?? '', /How direct/);
 });
 
-test('privacy answers map to modes; local-only is the default and the fallback', () => {
+test('privacy answers map to modes; local-only is the default and the fallback', async () => {
   const cases: [string, string][] = [['keep it local-only', 'local-only'], ['allow cloud when needed', 'local-preferred'], ['use the cloud whenever', 'cloud-allowed']];
   for (const [answer, mode] of cases) {
     const { setup: s, profile } = setup();
     s.view();
-    for (let i = 0; i < 4; i++) s.answer('skip');
-    s.answer(answer);
+    await pastDevice(s);
+    for (let i = 0; i < 4; i++) await s.answer('skip');
+    await s.answer(answer);
     assert.equal(profile.privacyDefault(), mode, answer);
   }
 });
@@ -121,31 +129,33 @@ test('names are taken from natural phrasing', () => {
   assert.equal(nameFrom('<script>'), null);
 });
 
-test('timezones are understood from a city name too', () => {
+test('timezones are understood from a city name too', async () => {
   const { setup: s, profile } = setup();
   s.view();
-  s.answer('skip');
-  assert.match(s.answer('no, Tokyo').reply, /Asia\/Tokyo it is/);
+  await pastDevice(s);
+  await s.answer('skip');
+  assert.match((await s.answer('no, Tokyo')).reply, /Asia\/Tokyo it is/);
   assert.equal(profile.get('user', 'timezone'), 'Asia/Tokyo');
 });
 
-test('saying no to the cloud keeps it local (review finding: these used to turn cloud on)', () => {
+test('saying no to the cloud keeps it local (review finding: these used to turn cloud on)', async () => {
   const local = ['no cloud', "don't allow cloud", 'never use the cloud', 'keep it local, no cloud please', 'nothing in the cloud', 'local only'];
   for (const answer of local) {
     const { setup: s, profile } = setup();
     s.view();
-    for (let i = 0; i < 4; i++) s.answer('skip');
-    s.answer(answer);
+    await pastDevice(s);
+    for (let i = 0; i < 4; i++) await s.answer('skip');
+    await s.answer(answer);
     assert.equal(profile.privacyDefault(), 'local-only', answer);
   }
 });
 
-test('reading the setup state writes nothing', () => {
+test('reading the setup state writes nothing', async () => {
   const { setup: s, profile } = setup();
   s.view();
   s.view();
   assert.equal(profile.isEmpty(), true);
-  s.answer('Sam');
+  await s.answer('new');
   assert.equal(s.view().transcript.length, 3, 'question, answer, reply');
 });
 

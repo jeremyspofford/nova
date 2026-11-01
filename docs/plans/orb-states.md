@@ -20,8 +20,11 @@ Most urgent first (`orbState`): offline, listening, stopped, needs-you, speaking
 
 Before, `orbState()` turned the orb to `alert` (red) whenever **any** problem was open. A problem
 record didn't say whether it stops Nova, so the record now does:
-- **`problem.stops`**: migration `0019_problem_stops.sql` adds the column (default 0) and carries
-  it in the problem's sync triggers. `Log.problem(…, { stops: true })` sets it. A playbook marked
+- **`problem.stops`**: migration `0021_problem_stops.sql` adds the column (default 0) and carries
+  it in the problem's sync triggers. It is registered at version 21 in `ADDED_COLUMNS`
+  (`src/core/mesh/sync.ts`). A hub leaves it out for a standby one release behind, which takes the
+  problem without it and shows it amber. If a hub doesn't adapt, the standby says once that it is
+  behind. Tested in `tests/core/sync-skew.test.ts`. `Log.problem(…, { stops: true })` sets it. A playbook marked
   `stops` sets it on every problem it opens.
 - **The UI.** A problem with `stops` makes the orb **stopped**. Every other open problem counts
   with the waiting approvals and makes it **needs-you**. The same split colours:

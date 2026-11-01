@@ -80,7 +80,7 @@ test('M9 gate, foldable 1: the reader’s place, a draft and a Settings edit sur
   }
 });
 
-test('M9 gate, foldable 2: no stretched single column — prose at 45–75ch, the extra width a second pane', async (t) => {
+test('M9 gate, foldable 2: no stretched single column — prose at 45–75ch, the extra width a second pane in the three-column band', async (t) => {
   const b = await browser();
   if (typeof b === 'string') return t.skip(b);
   const { m, nova } = await seeded('nova-m9-fold2-');
@@ -113,13 +113,19 @@ test('M9 gate, foldable 2: no stretched single column — prose at 45–75ch, th
             probe.remove();
             return Math.round((e.getBoundingClientRect().width - parseFloat(getComputedStyle(e).paddingLeft) - parseFloat(getComputedStyle(e).paddingRight)) / ch);
           });
-          return { second, measures };
+          // Under the three-column band (UX review 2026-10-31, F8/F9: derived from the regions'
+          // minimums) there is no room for the right column; the centre keeps its content width.
+          const room = document.body.dataset.room;
+          const col = document.querySelector('#main .view, #main .thread');
+          const stretched = col ? col.getBoundingClientRect().width - parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--layout-content-max')) : 0;
+          return { second, measures, room, stretched };
         });
-        assert.ok(r.second, `${width}px, ${view}: a second pane takes the extra width`);
+        if (r.room === 'yes' || view === 'settings') assert.ok(r.second, `${width}px, ${view}: a second pane takes the extra width`);
+        else assert.ok(r.stretched <= 1, `${width}px, ${view}: under the three-column band, the centre column keeps its content width (${r.stretched}px over)`);
         for (const n of r.measures) assert.ok(n >= 45 && n <= 75, `${width}px, ${view}: prose is ${n}ch wide (45–75)`);
         const shots = m9Shots();
         if (shots && (view === 'chat' || view === 'settings') && (width === 1024 || width === 1920)) await shoot(d.page, join(shots, `panes-${width}-${view}.png`));
-        rows.push(`${String(width).padStart(4)}px ${view.padEnd(8)} second pane: ${r.second}; prose ${r.measures.length ? `${Math.min(...r.measures)}–${Math.max(...r.measures)}ch` : '(none long)'}`);
+        rows.push(`${String(width).padStart(4)}px ${view.padEnd(8)} second pane: ${r.second || `none (under the three-column band; the column is its content width)`}; prose ${r.measures.length ? `${Math.min(...r.measures)}–${Math.max(...r.measures)}ch` : '(none long)'}`);
       }
       assert.deepEqual(d.errors, [], `${width}px: no errors in the page`);
       await d.ctx.close();

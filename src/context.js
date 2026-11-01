@@ -41,7 +41,7 @@ export function schedulesSection(list = [], timezone = 'UTC') {
   const lines = list.map((s) => `- ${s.id}: ${s.name}. ${s.error ? s.error : `${s.when}${s.paused ? ' (paused)' : ''}`}; reports go to ${where(s)}.`);
   return `# Schedules
 
-Schedules are work you do on your own at set times, kept in ~/schedules/ as files. Each run happens unattended, and its final message arrives as a <handoff> report in the main conversation, or in the conversation where the schedule was asked for. Set one up or change it with schedule_set, and remove one with schedule_remove; the person approves both. Before setting one up, check this list: change an existing schedule instead of adding a second that does the same thing. A one-time reminder is a schedule with "once": true. Times are in ${timezone}.
+Schedules are work you do on your own at set times, kept in ~/schedules/ as files. Each run happens unattended, and its final message arrives as a <handoff> report in the main conversation, or in the conversation where the schedule was asked for. Set one up or change it with schedule_set, and remove one with schedule_remove; the person approves both, unless permissions.md lets them go ahead. Before setting one up, check this list: change an existing schedule instead of adding a second that does the same thing. A one-time reminder is a schedule with "once": true. Times are in ${timezone}.
 
 ${lines.length ? lines.join('\n') : 'None are set yet.'}`;
 }
