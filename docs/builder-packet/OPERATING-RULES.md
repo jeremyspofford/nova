@@ -86,3 +86,11 @@ Where it differs from earlier packet text, the amendment wins: for example, the 
 - **The packet's name:** it sits beside the work, as `docs/reviews/<artifact>-review-packet.md`.
 - **Findings** come back as owner input and are triaged like any review, each with a failing test first where it reproduces.
 - **This doesn't replace** the in-house independent or adversarial review a milestone already has.
+
+## Design-first workflow (stage 1, owner direction 2026-11-01)
+
+- Stage 1 is one design PR: DESIGN-SYSTEM §0, living styleguide, lead values, scale lint, measurable slop self-check and before/after screenshots. **Do not merge until the owner approves its rendered evidence.** This is the explicit design exception to unattended milestone merges.
+- For the next new surface/component after stage 1 merges, deliver its `/styleguide#sg-…` rendering first and obtain owner approval before writing app code. A component absent from the styleguide does not ship. Reuse the app's renderers, tokens and CSS; no parallel mock implementation.
+- Then compose app code from those components. Every UI PR includes screenshots across the posture matrix (phone/cover, tablet/inner, half-open, desktop) and references the matching styleguide anchors. Report any intentional differences.
+- Every UI PR scores each DESIGN-SYSTEM §0 slop-check row pass/fail/N/A with evidence. Run `npm run lint:tokens`, `npm run check:themes`, `npm run typecheck`, appropriate regression checks and the Docker UI gate. No weakening gates to ship a design.
+- Existing surfaces conform opportunistically through the UX fix list. Exemplar set remains **proposed 2026-11-01, owner may amend**. Other packages change values only and need the same bar before peer presentation.

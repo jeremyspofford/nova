@@ -160,8 +160,8 @@ export function overshoots(easing: string): boolean {
 // type scale's shape (six steps on one ratio), two elevation levels, radius by component size class,
 // one motion family. A package picks its own body size, ratio, radii, shadows and durations within
 // those rules. Orb Teal is the lead package: it is held to them first, and a package is presented as
-// Nova's own only once it is at the bar (AT_THE_BAR: these rules, and the owner's approval of its
-// rendered styleguide).
+// a peer only after these rules and owner approval of its rendered styleguide. AT_THE_BAR is
+// the technical scale gate, not an approval record; stage 1's lead still awaits owner review.
 export const LEAD_DESIGN_SYSTEM = 'orb-teal';
 export const AT_THE_BAR: readonly string[] = Object.freeze(['orb-teal']);
 // 4pt spacing, with a name for each step. Off-scale spacing is a lint error in ui/ (lint:tokens).
@@ -179,7 +179,7 @@ export const TYPE_MIN_PX = 11;
 export const RADIUS_CLASSES = Object.freeze({ container: 'radius/card', control: 'radius/input', token: 'radius/pill' });
 // The one icon set (ui/js/components.js ICONS): a 24-unit grid, drawn at one stroke weight.
 export const ICON_STROKE = 1.5;
-// At the bar: named by the owner, and on the scales in every look.
+// Technical bar: selected for the scale gate, and on the scales in every look; never proof of owner approval.
 export const atTheBar = (id: string, pkg: { tokens?: unknown; modes?: unknown }) => AT_THE_BAR.includes(id) && packageScaleFindings(pkg).length === 0;
 
 const px = (v: unknown) => (typeof v === 'string' && /^\d*\.?\d+px$/.test(v) ? Number.parseFloat(v) : v === '0' ? 0 : null);

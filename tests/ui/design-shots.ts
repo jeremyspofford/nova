@@ -5,6 +5,7 @@
 //   node tests/ui/design-shots.ts <folder>      (in scripts/ui-test.sh's image, which has the browser)
 // Each styleguide entry is also captured on its own, from its anchor (#sg-<entry>), so the owner can
 // approve one entry at a time.
+import assert from 'node:assert/strict';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Browser, Page } from 'playwright-core';
@@ -15,7 +16,7 @@ import { withMesh } from './fold-support.ts';
 
 const out = resolve(ROOT, process.argv[2] ?? 'docs/screenshots/design-quality/after');
 mkdirSync(out, { recursive: true });
-const SIZES = { desktop: { width: 1440, height: 900, touch: false }, phone: { width: 390, height: 844, touch: true } } as const;
+const SIZES = { desktop: { width: 1440, height: 900, touch: false }, phone: { width: 390, height: 844, touch: true }, tablet: { width: 820, height: 1180, touch: true }, halfopen: { width: 1100, height: 900, touch: true } } as const;
 const VIEWS: [string, string][] = [['home', '/'], ['chat', '/chat'], ['tasks', '/tasks'], ['health', '/health'], ['activity', '/activity'], ['settings', '/settings'], ['appearance', '/settings#appearance']];
 
 async function open(page: Page, url: string) {
@@ -47,7 +48,11 @@ async function surfaces(b: Browser, base: string) {
     await open(d.page, `${base}/styleguide`);
     await d.page.waitForSelector('.sg-section', { timeout: 15_000 });
     await d.page.waitForTimeout(400);
-    await d.page.screenshot({ path: join(out, `styleguide-${size}.png`), fullPage: true, animations: 'disabled', caret: 'hide' });
+    const anchors = await d.page.$$eval('.sg-entry[id]', (xs) => xs.map((x) => x.id));
+    assert.equal(new Set(anchors).size, anchors.length, 'each entry has a unique direct link');
+    assert.ok(anchors.length >= 40, 'tokens, components and states are individually addressable');
+    assert.equal(d.errors.length, 0, d.errors.join('\n'));
+    await d.page.screenshot({ path: join(out, `styleguide-${size}.png`), fullPage: size === 'desktop' || size === 'phone', animations: 'disabled', caret: 'hide' });
     if (size === 'desktop') {
       const ids = await d.page.$$eval('.sg-entry[id^="sg-"]', (xs) => xs.map((x) => x.id));
       if (ids.length) mkdirSync(join(out, 'styleguide'), { recursive: true });

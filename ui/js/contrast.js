@@ -59,6 +59,10 @@ export function recommend(list, { mode = 'auto', prefers = 'dark' } = {}) {
   const whose = mode === 'auto' ? 'this device’s system setting' : 'your light and dark choice';
   const look = (d) => d.looks?.[want] ?? d.looks?.default ?? null;
   const usable = list.filter((d) => d.valid && d.state !== 'disabled' && look(d));
+  // Stage 1: Orb Teal leads regardless of the OS scheme. Alternatives need the same
+  // scale and rendered-review bar before they can become peer recommendations.
+  const lead = usable.find((d) => d.lead && d.at_bar && look(d).ok);
+  if (lead) return { ...lead, reason: 'Nova’s lead design, with all its text and controls passing the contrast check.' };
   const best = (xs) => [...xs].sort((a, b) => look(b).margin - look(a).margin)[0] ?? null;
   const fits = usable.filter((d) => look(d).scheme === want && look(d).ok);
   const starter = fits.find((d) => d.starter);

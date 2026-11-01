@@ -4,7 +4,7 @@ const schema = await fetch('/api/v1/design-systems/schema').then((r) => r.json()
 const tokensOf = (test) => schema.tokens.filter(test).map((t) => t.css);
 import { MODES, apply, current, previewCss } from './theme.js';
 import { icons, memoryIndex, renderActivity, renderEmpty, renderHandoff, renderMemory, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
-import { ICONS, addDeviceSheet, approvalSheet, briefCard, chatBubble, deviceMeshCard, joinRequestSheet, emptyState, evidenceViewer, handlingCard, healthCard, lookingIntoItCard, memoryHighlightCard, orb, proactiveBanner, settingsRow, status, taskRow, triggerRow, verifiedResultCard, voiceState } from './components.js';
+import { ICONS, addDeviceSheet, approvalSheet, briefCard, chatBubble, deviceMeshCard, deviceRow, joinRequestSheet, emptyState, evidenceViewer, handlingCard, healthCard, lookingIntoItCard, memoryHighlightCard, orb, proactiveBanner, settingsRow, status, taskRow, triggerRow, verifiedResultCard, voiceState } from './components.js';
 import { ORB_STATES } from './status.js';
 
 const sg = document.getElementById('sg');
@@ -29,7 +29,7 @@ terraform plan -out=tfplan
 
 More detail is in the [provider docs](https://registry.terraform.io).`;
 
-const t0 = new Date();
+const t0 = new Date('2026-10-31T12:00:00.000Z');
 const turnDone = {
   id: 'a', text: 'What does Friday look like?', ts: t0.toISOString(), attempt: 0, state: 'done',
   items: [
@@ -89,7 +89,10 @@ const failed = {
 };
 const streaming = { id: 'e', text: 'And the weekend?', ts: t0.toISOString(), attempt: 0, state: 'open', items: [] };
 
-const section = (title, intro, body) => `<section class="sg-section"><h2>${title}</h2><p>${intro}</p>${body}</section>`;
+const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const heading = (title, id, level = 2) => `<h${level}><a class="sg-anchor" href="#${id}">${title}</a></h${level}>`;
+const section = (title, intro, body) => { const id = `sg-${slug(title)}`; return `<section class="sg-section sg-entry" id="${id}">${heading(title, id)}<p>${intro}</p>${body}</section>`; };
+const component = (id, title, body) => `<div class="sg-entry" id="sg-${id}">${heading(title, `sg-${id}`, 3)}${body}</div>`;
 const tokenList = (names) => names.map((n) => `<code>${n}</code>`).join(' ');
 const label = (text) => `<p class="sg-label">${text}</p>`;
 
@@ -158,16 +161,29 @@ function render() {
     section('The orb', 'Nova’s presence: abstract light, no face. One component at every size; its state comes from real signals.', `<div class="sg-grid">${orbs}</div>${label('Hero')}<div class="sg-demo-center">${orb({ state: 'idle', size: 'hero' })}</div>`),
     section('Status', 'One vocabulary everywhere, each with a fixed colour. Verified always opens its evidence.', `<div class="sg-demo-row">${['quiet', 'working', 'waiting', 'needs-you', 'failed'].map((s) => status(s)).join('')}${status('verified', { task: 'v1' })}</div>`),
     section('Cards', 'One job each: a headline, a few lines, one action.', `<div class="sg-cards">
-      ${briefCard()}
-      ${handlingCard({ tasks: workTasks, now: t0 })}
-      ${handlingCard({ tasks: [], now: t0 })}
-      ${verifiedResultCard(doneTask, { now: t0 })}
-      ${lookingIntoItCard(workTasks[0])}
-      ${deviceMeshCard({ devices: [{ id: 'h', name: 'Hub', kind: 'computer', role: 'hub', trust: 'trusted', online: true, this: true }, { id: 'p', name: 'Phone', kind: 'phone', role: 'client', trust: 'trusted', online: false, last_seen: new Date(Date.now() - 600_000).toISOString() }] })}
-      ${healthCard({ health: { ok: true, checks: { database: { ok: true }, workers: { ok: true, workers: [{}, {}, {}] } } } })}
-      ${healthCard({ health: { ok: true, checks: {} }, problems: [{ id: 1, message: 'The heartbeat couldn’t check the schedules.' }] })}
-      ${memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] })}
+      ${component('brief-card', 'Brief · empty', briefCard())}
+      ${component('handling-card', 'Handling · work in progress', handlingCard({ tasks: workTasks, now: t0 }))}
+      ${component('handling-card-empty', 'Handling · nothing needs you', handlingCard({ tasks: [], now: t0 }))}
+      ${component('verified-result-card', 'Verified result · checked', verifiedResultCard(doneTask, { now: t0 }))}
+      ${component('looking-into-it-card', 'Looking into it · working', lookingIntoItCard(workTasks[0]))}
+      ${component('device-mesh-card', 'Device mesh · connected and offline', deviceMeshCard({ devices: [{ id: 'h', name: 'Hub', kind: 'computer', role: 'hub', trust: 'trusted', online: true, this: true }, { id: 'p', name: 'Phone', kind: 'phone', role: 'client', trust: 'trusted', online: false, last_seen: at(-1) }], now: t0 }))}
+      ${component('health-card', 'Health · healthy', healthCard({ health: { ok: true, checks: { database: { ok: true }, workers: { ok: true, workers: [{}, {}, {}] } } } }))}
+      ${component('health-card-needs-you', 'Health · needs you', healthCard({ health: { ok: true, checks: {} }, problems: [{ id: 1, message: 'The heartbeat couldn’t check the schedules.' }] }))}
+      ${component('memory-highlight-card', 'Memory highlight · remembered', memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] }))}
     </div>`),
+    section('Card states', 'Empty, unavailable and attention states use the same production components.', `<div class="sg-cards">
+      ${component('brief-card-ready', 'Brief · ready', briefCard({ brief: { headline: 'The migration draft is ready.', lines: ['One approval needs you.'] } }))}
+      ${component('device-mesh-card-empty', 'Device mesh · this device only', deviceMeshCard())}
+      ${component('health-card-loading', 'Health · checking', healthCard())}
+      ${component('health-card-unreachable', 'Health · offline', healthCard({ reachable: false }))}
+      ${component('memory-highlight-card-empty', 'Memory highlight · nothing kept', memoryHighlightCard())}
+    </div>`),
+    section('Device rows', 'Trusted online, offline, standby and pending device states.', `<div class="panel"><ul class="device-list">${[
+      { id: 'hub', name: 'Hub', kind: 'computer', role: 'hub', trust: 'trusted', online: true, this: true },
+      { id: 'phone', name: 'Phone', kind: 'phone', role: 'client', trust: 'trusted', online: false, last_seen: at(-2) },
+      { id: 'standby', name: 'Standby', kind: 'computer', role: 'standby', trust: 'trusted', online: true },
+      { id: 'pending', name: 'New computer', kind: 'computer', role: 'client', trust: 'pending', online: true },
+    ].map((d) => deviceRow(d, { now: t0 })).join('')}</ul></div>`),
     section('Task rows', 'Every ledger state, mapped once.', `<div class="panel"><ul class="task-list">${workTasks.map((t) => taskRow(t, { now: t0 })).join('')}</ul></div>`),
     section('Sheets', 'Approvals are tiered: tier 3 needs an explicit confirmation. Evidence shows how Nova checked.', `<div class="sg-cards">
       <div class="sheet-inner panel">${approvalSheet(task('a2', 'Send the draft reply', 'waiting', { approval_tier: 2 }))}</div>
@@ -182,12 +198,18 @@ function render() {
       ${label('Toasts')}<div class="sg-frame sg-toasts"><div class="toast">Forgotten.<button type="button" class="toast-btn">Undo</button></div><div class="toast" data-tone="alert">The heartbeat couldn’t check the schedules.<button type="button" class="toast-btn">See Health</button></div></div>
       ${label('Banner')}<div class="banner">You’re offline. What you see was saved earlier; nothing new can arrive or be sent until you’re back.</div>
       ${label('Settings rows')}<ul class="settings-list">${settingsRow({ title: 'Your name', note: 'What Nova calls you.', control: '<input class="input" value="Sam" aria-label="Your name"><button type="button" class="btn small">Save</button>' })}${settingsRow({ title: 'Appearance id', note: 'It lets this browser keep its own appearance.' })}</ul>
-      ${label('Empty state')}${emptyState({ line: 'No tasks yet.' })}
+      ${label('Empty state')}${emptyState({ title: 'No tasks yet', line: 'Ask Nova to check a draft or write a note. Your tasks and their evidence will appear here.', action: '<a class="btn" href="/chat">Ask Nova</a>' })}
       ${label('Buttons')}<div class="sg-demo-row"><button class="btn primary">Approve</button><button class="btn">Not now</button><button class="btn quiet">Cancel</button><button class="btn small">Pause</button><button class="btn" disabled>Disabled</button><button class="send" aria-label="Send">${icons.send}</button><button class="send is-stop" aria-label="Stop">${icons.stop}</button></div>
     </div>`),
-    section('Conversation', 'Nova speaks from beside its orb; your words sit in the accent.', `<div class="sg-demo">
+    section('Conversation', 'Nova’s turns sit on the page; your words sit in the accent. The orb appears once per view.', `<div class="sg-demo">
       ${label('Chat bubbles')}<div class="sg-bubbles">${chatBubble({ from: 'person', text: 'What’s on today?' })}${chatBubble({ from: 'nova', text: 'Two small things. I’ll look into the second.' })}</div>
       ${label('Composer, with voice off in local-only')}<div class="dock"><form class="composer" onsubmit="return false"><textarea rows="1" placeholder="Ask Nova anything…" aria-label="Sample composer"></textarea><button type="button" class="mic" aria-label="Talk to Nova" disabled>${ICONS.mic}</button><button class="send" aria-label="Send">${icons.send}</button></form><p class="voice-note">${voiceState({ privacy: 'local-only' }).reason}</p></div>
+      ${label('Composer, grown without changing its radius')}<div class="dock"><form class="composer" onsubmit="return false"><textarea rows="5" aria-label="Long sample composer">Check the migration draft before Thursday.
+Read back the changes and attach the evidence.
+Keep the old configuration until we approve it.
+Summarise anything that needs a decision.
+Leave the deployment for later.</textarea><button class="send" aria-label="Send long note">${icons.send}</button></form></div>
+      ${label('Composer, reply arriving')}<div class="dock"><form class="composer" onsubmit="return false"><textarea rows="1" aria-label="Reply arriving" disabled>Nova is writing the summary.</textarea><button class="send is-stop" aria-label="Stop reply">${icons.stop}</button></form></div>
       ${label('A reply, with a margin note from memory')}<div class="thread">${renderTurn(turnDone, { isLast: true })}</div>
       ${label('Records, including decided approvals')}<div class="thread">${renderTurn(tools)}</div>
       ${label('A tool approval waiting for you')}<div class="thread">${renderTurn(waiting, { live: { phase: 'approval', text: '' } })}</div>
@@ -207,6 +229,22 @@ function render() {
       ${label('Activity')}<div class="thread memory activity">${renderActivity(activitySample, t0)}</div>
     </div>`),
   ].join('');
+  for (const title of [...sg.querySelectorAll('.sg-label')]) {
+    const id = `sg-${slug(title.textContent)}`;
+    const wrap = document.createElement('div');
+    wrap.className = 'sg-entry';
+    wrap.id = id;
+    title.before(wrap);
+    let node = title;
+    while (node && (node === title || !node.classList?.contains('sg-label'))) {
+      const next = node.nextSibling;
+      wrap.append(node);
+      node = next;
+    }
+    title.innerHTML = `<a class="sg-anchor" href="#${id}">${title.textContent}</a>`;
+  }
+  document.getElementById('sg-index').innerHTML = [...sg.querySelectorAll('.sg-entry')].map((el) => `<a href="#${el.id}">${el.querySelector('h2, h3, .sg-label')?.textContent || el.id.slice(3)}</a>`).join('');
+  if (location.hash.startsWith('#sg-')) requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView());
   sg.querySelector('#motion').addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
 }
 

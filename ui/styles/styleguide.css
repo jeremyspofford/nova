@@ -30,7 +30,7 @@
 .sg-track { position: relative; height: var(--space-5); border-radius: var(--radius-pill); background: var(--surface-card); cursor: pointer; }
 .sg-dot { position: absolute; top: var(--space-1); left: var(--space-1); width: var(--space-4); height: var(--space-4); border-radius: var(--radius-pill); background: var(--accent-primary); }
 .sg-dot.is-moved { translate: calc(var(--space-8) * 3) 0; }
-.sg-label { margin: var(--space-6) 0 var(--space-3); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
+.sg-label { margin: var(--space-6) 0 var(--space-3); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); }
 .sg-demo .thread { min-height: 0; padding: 0; margin: 0; max-width: var(--layout-content-max); }
 .sg-demo-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .sg-demo-center { display: flex; justify-content: center; padding: var(--space-6) 0; }
@@ -40,3 +40,12 @@
 .sg-toasts { display: flex; flex-direction: column; gap: var(--space-3); }
 .sg-toasts .toast { position: static; translate: none; }
 .sg .dock { padding: 0; margin: 0; }
+
+.sg-index { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); max-width: calc(var(--space-8) * 17); margin: 0 auto; padding: var(--space-5); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.sg-index a { color: var(--text-secondary); }
+.sg-entry { min-width: 0; scroll-margin-top: var(--space-4); }
+.sg-entry > h3 { margin-bottom: var(--space-3); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); }
+.sg-anchor { color: inherit; text-decoration: none; }
+.sg-anchor:hover { text-decoration: underline; }
+.sg-anchor:focus-visible, .sg-index a:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.sg-cards { grid-template-columns: repeat(auto-fit, minmax(min(100%, calc(var(--space-8) * 5)), 1fr)); }

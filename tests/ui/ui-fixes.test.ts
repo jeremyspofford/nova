@@ -343,8 +343,8 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
         assert.ok((await look.locator('.ds-card .ds-chips').count()) >= 6, `${where}: each design has its swatch thumbnail`);
         // One recommendation, with a reason; the rest are secondary.
         assert.equal(await look.locator('.ds-recommended .ds-card').count(), 1, `${where}: one recommended design`);
-        assert.equal(await look.locator('.ds-recommended .ds-card').getAttribute('data-ds'), 'companion-light', `${where}: a light system gets the light starter`);
-        assert.match((await look.locator('.ds-reason').textContent()) ?? '', /light.*contrast/i, `${where}: with its reason`);
+        assert.equal(await look.locator('.ds-recommended .ds-card').getAttribute('data-ds'), 'orb-teal', `${where}: Orb Teal leads even on a light system`);
+        assert.match((await look.locator('.ds-reason').textContent()) ?? '', /lead design.*contrast/i, `${where}: with its reason`);
         assert.ok(await look.locator('.ds-others .ds-card').count() >= 5, `${where}: the others listed below it`);
         const sizeOf = (sel: string) => look.locator(sel).first().evaluate((e) => e.getBoundingClientRect().height);
         assert.ok(await sizeOf('.ds-recommended .ds-card') > await sizeOf('.ds-others .ds-card'), `${where}: the others are secondary`);

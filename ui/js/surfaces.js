@@ -544,7 +544,7 @@ export function drawAppearance(box) {
       : '';
   setHtml(bar, barHtml);
   setHtml(box.querySelector('#appearance-design'), `${rec ? `<div class="ds-recommended"><p class="ds-kicker">Recommended</p>${designCard(rec, a, { big: true, showing, want })}<p class="ds-reason">${esc(rec.reason)}</p></div>` : ''}
-${others.length ? `<h3 class="conn-sub">Other designs</h3><ul class="ds-others" aria-label="Other designs">${others.map((d) => `<li>${designCard(d, a, { showing, want })}${d.valid ? '' : `<p class="settings-note">${esc(d.problems.slice(0, 2).join(' '))}</p>`}</li>`).join('')}</ul>` : ''}`);
+${others.length ? `<h3 class="conn-sub">More designs</h3><ul class="ds-others" aria-label="Other designs">${others.map((d) => `<li>${designCard(d, a, { showing, want })}${d.valid ? '' : `<p class="settings-note">${esc(d.problems.slice(0, 2).join(' '))}</p>`}</li>`).join('')}</ul>` : ''}`);
   const check = box.querySelector('#contrast-check');
   const panel = contrastPanel(a);
   if (check.dataset.ok !== panel.ok) check.dataset.ok = panel.ok;

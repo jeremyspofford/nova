@@ -64,7 +64,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       for (const p of problems) console.log(`    ${p}`);
     } else {
       const bar = barCheck(pkg);
-      const where = bar.at ? `at the design bar${pkg.id === LEAD_DESIGN_SYSTEM ? ' (the lead)' : ''}` : `not yet at the design bar (${bar.findings.length} off the scales${bar.named ? '' : ', and not yet approved'})`;
+      const where = bar.at ? `on the designed scales${pkg.id === LEAD_DESIGN_SYSTEM ? ' (lead; rendered owner review required)' : ''}` : `not yet at the design bar (${bar.findings.length} off the scales${bar.named ? '' : ', and not yet approved'})`;
       console.log(`✓ ${basename(f)} (${pkg.name}): complete, values well-formed, contrast passes${modes.length ? ` in default and ${modes.join(', ')} modes` : ''}, reduced motion honoured, the orb’s ${ORB_STATES.length} states distinct in more than colour, ${statusBarLine(pkg)}; ${where}`);
       if (process.env.NOVA_BAR_DETAIL) for (const x of bar.findings) console.log(`    · ${x}`);
     }

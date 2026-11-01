@@ -2,6 +2,43 @@
 
 This is the contract between Nova's product design and every line of UI code. It defines (a) the design language, (b) the token schema all packages must implement, (c) the package/hot-swap mechanism. Approved visual references: concepts E–H (round 2) as one language; A for feature set; B/F for conversational warmth; D/E/H for the ambient home.
 
+## 0. Art direction — one system, one lead
+
+**Exemplar set: proposed 2026-11-01, owner may amend.** These are references for specific qualities, not templates to copy or external dependencies:
+
+| Surface family | Exemplars | What to carry into Nova |
+|---|---|---|
+| Chat | Best-in-class conversational restraint (ChatGPT and Claude conversation views) | A readable conversation column, quiet chrome, full-width Nova turns, one clear composer. No dashboard around an answer. |
+| Home, Tasks, Health, Activity | Linear / Raycast | Crisp left-aligned lists, clear title → summary → detail hierarchy, compact controls, detail on demand. Density means useful information, never a cockpit. |
+| Settings | macOS Settings / Raycast settings | Named categories, a clear selected location, labelled rows, a quiet explanation beside each consequential control. |
+
+**Anti-references:** generic SaaS dashboards, stock Tailwind/shadcn arrangements, purple-gradient AI branding, equal-weight card-grid monotony, and emoji used as icons. A component library is an implementation tool, never Nova's art direction.
+
+**Orb Teal is the lead package.** Perfect its rendered components first. Other packages inherit the same structure, spacing and states and re-express token values only; no package-specific layouts. Only packages that meet §2.1 and pass owner review of their rendered styleguide can become peers. Stage 1 proposes Orb Teal for that review; it does not claim approval has happened. Settings recommends Orb Teal in either system colour scheme while the other packages remain secondary choices. Onboarding uses the lead without asking a new user to choose among six themes.
+
+The visual point of view: a luminous sphere is Nova's identity; the rest stays precise and quiet. Deep teal is the base, mint is the actionable accent, amber means needs-you and red means stopped. Type and grouping do the organising; repeated boxes do not. A centred conversational column is useful; centred task rows and settings labels are not.
+
+### Living styleguide and design-first contract
+
+`/styleguide` is the rendered contract, using the same render functions, token endpoint and CSS as the application, with real Nova tasks, approvals, evidence, failure and empty states. Every entry has a stable `#sg-…` anchor and a direct link in its index. The entry's state labels say what is rendered. Previewing a package or mode changes only that page, never the profile.
+
+A component absent from the styleguide does not ship. For the **next new surface or component after this stage merges**, the first deliverable is its rendered styleguide entry. The owner approves that rendering before app code is written. App code then composes styleguide components; the UI PR compares its posture screenshots with those entries. Existing surfaces conform opportunistically through the UX fix list, not a big-bang rewrite. The owner reviews this initial design PR as screenshots before merge.
+
+### Measurable AI-slop check (every UI PR)
+
+Score each row **pass / fail / N/A** with a screenshot or lint result and a one-line reason; N/A must explain why the surface cannot exercise it. A failure is visible review debt, never silently scored as a pass. The owner-side UX review scores the same rows independently.
+
+| Check | Pass condition |
+|---|---|
+| Equal-weight card grids | No three or more sibling information cards repeat identical visual weight when their priority differs. Each group has a named primary item or uses quiet rows; the styleguide's comparison catalogue is exempt and labelled. |
+| Everything centred | Reading text, tasks and settings rows are left aligned. Centring is confined to the orb, an empty state or the conversation column itself. |
+| Decorative gradients | Zero gradients on cards, buttons or headings. Gradients only express the page's ambient light or the orb's light (`lint:tokens`). |
+| Competing standouts | At most one primary-action treatment per view in its ordinary state. A necessary approval or destructive confirmation becomes the primary action for that state. |
+| Flat type hierarchy | A surface title, item title and supporting detail use distinct roles from the six-step type scale; headings use strong weight and metadata uses a quieter role. Inspect the screenshot, not just token availability. |
+| Off-scale spacing | Zero lint findings: spacing uses one named 4pt step or its negative. Safe-area and measured layout geometry are explicit exceptions; no half steps or sums to invent new spacing. |
+| Mixed icon styles | Zero emoji icons or mixed stroke weights. The single 24-unit SVG set uses stroke 1.5 throughout (`lint:tokens`). |
+| Placeholder empty states | Each empty state names what is absent and gives a useful next action or explicitly says nothing needs doing; zero lorem ipsum, dummy metrics or simulated work. |
+
 ## 1. Design language (applies to every package)
 - **The Orb is Nova's face.** A luminous sphere of abstract light. **No face, no features, ever.** Identity and state are expressed through light: color temperature, brightness, motion (breathing idle, gentle pulse while working, slow swirl while listening, steady bright when speaking, warm amber when it needs you, red only for what stops Nova). Its states are a fixed, semantic set (below, owner decision 2026-10-31). One orb component, token-driven, reused at every size — hero presence on the home, status in the rail. **It appears once per view** (Amendment 2026-10-30-C): never as a per-message avatar in chat.
 - **Cards are the unit of information.** Briefs, tasks, devices, results: rounded cards with one job each, generous padding, one headline, at most a few lines. If content needs more, it gets a detail view — the card never becomes a table.
@@ -69,9 +106,24 @@ Components may reference ONLY these tokens. Raw hex, px, or font names in compon
 
 A package that omits a required token fails validation and cannot be applied (`check:themes`-style completeness gate, extended from the Era 2 scripts).
 
+### 2.1 Designed values and enforcement
+
+Orb Teal's values are intentional, not browser defaults:
+
+| Family | Values and use |
+|---|---|
+| Spacing | `space/1…8` = **4 / 8 / 12 / 16 / 24 / 32 / 48 / 64 px**: hair / tight / snug / base / roomy / group / section / page. Fixed across every package because spacing is structure. |
+| Type | Body **16 px**, ratio approximately **1.2**, rounded to whole pixels: caption **11**, small **13**, body **16**, h3 **19**, h2 **23**, h1 **28**. Regular **400**, strong **600**; tight line height **1.25**, body **1.5**. Body copy stays readable; hierarchy comes from size, weight and space. |
+| Radius | Control **8 px** (`radius/input`, including a growing composer); container **12 px** (`radius/card`, cards, sheets, bubbles); fixed-height pill **999 px** (`radius/pill`, badges and round icon buttons). Never bind radius to rendered height. |
+| Elevation | Exactly two tokens: card **0 1px 2px** and raised **0 12px 32px**, with teal-black alpha shadows. Raised is for sheets/overlays; do not put it on every card. |
+| Motion | Fast **150 ms**, standard **225 ms**, slow **300 ms**, one `cubic-bezier(0.25, 0.1, 0.25, 1)` curve. Pulse **1800 ms**, breathe **6000 ms** are whole multiples of slow. Reduced motion stops loops and uses **1 ms** transitions. |
+| Icons | `ICONS` in `ui/js/components.js`: a single **24-unit**, **1.5-stroke** SVG vocabulary; no emoji or second set. |
+
+`lint:tokens` checks raw values and off-scale spacing/type/radius in CSS and static inline styles, growing pills, gradients, emoji and icon stroke. Safe areas, measured geometry, hairline compensation and fixed layout dimensions are not invented spacing. `check:themes` checks the lead against the spacing, ratio, radius, elevation and motion rules in every mode. Secondary packages' remaining scale findings are reported, not hidden; they are not promoted until the same checks and rendered review pass. Runtime package validity and contrast remain required for all packages.
+
 ## 3. Starter packages (ship in core)
 - **Orb Teal** (default, dark): deep teal living gradient background, luminous orb, frosted glass cards, soft green-teal accent. Source: concepts D/E/H.
-- **Companion Light**: warm cream surfaces, soft coral-warm accent with teal orb retained, serif display + clean sans body. Source: concepts B/F.
+- **Companion Light** (secondary, not yet at the rendered-review bar): warm cream surfaces, soft coral-warm accent with teal orb retained, serif display + clean sans body. Source: concepts B/F.
 Both packages must render EVERY layout and component identically in structure — a package changes values, never layout or features. (Historical exception carried from Era 2: a theme may add one signature extra surface — the Stellar Map in the Nova theme — declared in its manifest as an extra, never as a removal.)
 
 ## 4. Package format and hot swap

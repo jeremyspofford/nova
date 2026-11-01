@@ -145,15 +145,15 @@ function list() {
   return design.list();
 }
 
-test('Nova recommends one design, with a reason: the starter that fits the device and reads well', () => {
+test('Nova recommends the lead design in either system mode; alternatives remain a readable fallback', () => {
   const l = list();
   const dark = recommend(l, { mode: 'auto', prefers: 'dark' });
   assert.equal(dark.id, 'orb-teal');
-  assert.match(dark.reason, /dark/);
+  assert.match(dark.reason, /lead design/);
   assert.match(dark.reason, /contrast/);
   const light = recommend(l, { mode: 'auto', prefers: 'light' });
-  assert.equal(light.id, 'companion-light');
-  assert.match(light.reason, /light/);
+  assert.equal(light.id, 'orb-teal');
+  assert.match(light.reason, /lead design/);
   assert.equal(recommend(l, { mode: 'dark', prefers: 'light' }).id, 'orb-teal', 'an explicit choice beats the system');
   // Without the starters, the best-reading design that fits.
   const others = l.filter((d) => !d.starter);
