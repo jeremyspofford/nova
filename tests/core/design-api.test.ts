@@ -126,7 +126,9 @@ test('a third-party package installs over the API, validates, applies, and is re
   // A package made before M9 (the fixture's motion is 120/320 ms) is valid; its motion is a warning, clamped in the CSS.
   const checked = (await call('POST', '/design-systems/example.slate/validate')).body;
   assert.deepEqual({ ok: checked.ok, problems: checked.problems }, { ok: true, problems: [] });
-  assert.equal(checked.warnings.length, 2);
+  // Made before DESIGN-SYSTEM §5's status bar too: it applies with iOS's own strip, and says so.
+  assert.equal(checked.warnings.length, 3);
+  assert.equal(checked.warnings.filter((w: string) => /ios_status_bar isn’t declared/.test(w)).length, 1);
   await call('POST', '/design-systems/example.slate/apply', { scope: 'user' });
   assert.match((await text(`${root}/design-system.css`)).body, /Example Slate/);
   assert.equal((await call('DELETE', '/extensions/example.slate')).status, 200);

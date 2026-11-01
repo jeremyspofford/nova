@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { checkPackage, contrast } from '../scripts/check-themes.js';
 import { lint, LAYOUT_FILE } from '../scripts/lint-tokens.js';
-import { DEFAULT_DESIGN_SYSTEM } from '../src/core/index.ts';
+import { DEFAULT_DESIGN_SYSTEM, IOS_STATUS_BAR_UNDECLARED, STATUS_BAR_TAG, iosStatusBar, statusBarTag, validatePackage } from '../src/core/index.ts';
 
 const packages = readdirSync('design-systems').filter((f) => f.endsWith('.json'));
 
@@ -62,4 +62,74 @@ test('no file is exempt: the Era 2 aliases and the LEGACY list are gone', () => 
   for (const f of ['ui/styles/views.css', 'ui/styles/base.css']) assert.equal(lint(f, era2).length, 3, f);
   assert.equal(lint('ui/index.html', '<p style="color: var(--text)">').length, 1);
   assert.equal(lint('ui/js/app.js', 'const x = `<p style="color: var(--text-2)">`;').length, 1);
+});
+
+// ---- the installed iPhone app's status bar (DESIGN-SYSTEM §5, owner decision 2026-10-31 C) -------
+
+const pkgOf = (id) => JSON.parse(readFileSync(`design-systems/${id}.json`, 'utf8'));
+
+test('each built-in declares its iPhone status bar by what it is: dark draws behind it, light keeps iOS’s strip', () => {
+  const want = {
+    'orb-teal': { light: 'translucent', dark: 'translucent' }, // dark only
+    nova: { light: 'translucent', dark: 'translucent' }, // dark only
+    obsidian: { light: 'translucent', dark: 'translucent' }, // "always dark"
+    'companion-light': { light: 'default', dark: 'default' }, // light only
+    aurora: { light: 'default', dark: 'translucent' }, // light, with a dark mode
+    paper: { light: 'default', dark: 'translucent' }, // light, with a dark mode
+  };
+  for (const [id, bar] of Object.entries(want)) {
+    const pkg = pkgOf(id);
+    assert.notEqual(pkg.ios_status_bar, undefined, `${id} declares it`);
+    const { declared, ...got } = iosStatusBar(pkg);
+    assert.equal(declared, true, id);
+    assert.deepEqual(got, bar, id);
+    // Nothing the check would warn about: no dark look keeps the strip, no light look draws behind it.
+    assert.deepEqual(validatePackage(pkg).warnings.filter((w) => w.startsWith('ios_status_bar')), [], id);
+  }
+});
+
+// A package that leaves it out: the authoring gate (check-themes) fails it, so everything shipped
+// says what it wants; Nova itself still applies it with iOS's own strip (an older or hand-made
+// package keeps working, and the default is never white text on a light page).
+test('a package without ios_status_bar fails the theme check, and Nova applies it with an explicit default', () => {
+  const { ios_status_bar: _, ...bare } = pkgOf('orb-teal');
+  const gate = checkPackage(bare);
+  assert.equal(gate.ok, false);
+  assert.ok(gate.problems.some((p) => /ios_status_bar must be declared/.test(p)), gate.problems.join(' | '));
+  const runtime = validatePackage(bare);
+  assert.equal(runtime.ok, true, 'still applies');
+  assert.ok(runtime.warnings.some((w) => /ios_status_bar isn’t declared/.test(w)));
+  assert.equal(IOS_STATUS_BAR_UNDECLARED, 'default');
+  assert.deepEqual(iosStatusBar(bare), { light: 'default', dark: 'default', declared: false });
+});
+
+test('the status bar check refuses white status text over a light look, and anything but its two words', () => {
+  const problems = (over) => validatePackage({ ...pkgOf('aurora'), ...over }).problems.filter((p) => p.startsWith('ios_status_bar'));
+  assert.match(problems({ ios_status_bar: 'translucent' }).join(), /translucent over a light look/, 'Aurora’s light look');
+  assert.match(problems({ ios_status_bar: { light: 'translucent', dark: 'translucent' } }).join(), /ios_status_bar\.light is translucent over a light look/);
+  assert.deepEqual(problems({ ios_status_bar: { light: 'default', dark: 'translucent' } }), []);
+  assert.match(problems({ ios_status_bar: 'black-translucent' }).join(), /must be translucent or default/, 'the iOS word is Nova’s to write');
+  assert.match(problems({ ios_status_bar: { light: 'default' } }).join(), /must be/);
+  assert.match(problems({ ios_status_bar: { light: 'default', dark: 'translucent', auto: 'default' } }).join(), /must be/);
+  assert.equal(validatePackage({ ...pkgOf('companion-light'), ios_status_bar: 'translucent' }).ok, false);
+  // A dark design that keeps iOS's strip is allowed, with a warning: nothing is unreadable.
+  const dark = validatePackage({ ...pkgOf('obsidian'), ios_status_bar: 'default' });
+  assert.equal(dark.ok, true);
+  assert.equal(dark.warnings.filter((w) => /default over a dark look/.test(w)).length, 1, 'said once for a one-look design');
+});
+
+test('the app page carries the status bar tag the server fills in, and picks light or dark like the CSS', () => {
+  const html = readFileSync('ui/index.html', 'utf8');
+  assert.ok(html.includes(STATUS_BAR_TAG), 'the server replaces this exact tag');
+  assert.equal(html.match(/name="apple-mobile-web-app-status-bar-style"/g).length, 1);
+  const both = { light: 'default', dark: 'translucent' };
+  const tag = (mode, bar) => statusBarTag({ mode, ios_status_bar: bar }).match(/content="([^"]+)"/)[1];
+  assert.equal(tag('auto', { light: 'translucent', dark: 'translucent' }), 'black-translucent');
+  assert.equal(tag('light', { light: 'default', dark: 'default' }), 'default');
+  assert.equal(tag('dark', both), 'black-translucent');
+  assert.equal(tag('light', both), 'default');
+  assert.equal(tag('auto', both), 'default', 'the page’s script decides from the system’s preference');
+  assert.match(statusBarTag({ mode: 'auto', ios_status_bar: both }), /data-light="default" data-dark="translucent" data-mode="auto"/);
+  // Settings says plainly that iOS may need the app opened again.
+  assert.match(readFileSync('ui/js/surfaces.js', 'utf8'), /may only change once you close Nova and open it again/);
 });

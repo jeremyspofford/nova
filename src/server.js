@@ -20,7 +20,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { KIND_WORDS, createCore, ensureMark, finishReset, fromBrowserTask, ipcLink, originHost, standInOs, transportFromEnv } from './core/index.ts';
+import { KIND_WORDS, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, ipcLink, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -286,11 +286,15 @@ export function createNova(config = loadConfig(), deps = {}) {
 
   // `clear`: after a factory reset, the hub's own screen is told once to forget what its browser
   // kept of the Nova that was erased (core resilience/reset.ts, clearHeaders).
-  function serveFile(res, file, clear = {}) {
+  // `page`: changes an HTML page before it is sent (the app page's status bar tag).
+  function serveFile(res, file, clear = {}, page = null) {
     const type = TYPES[extname(file)] ?? 'application/octet-stream';
-    if (config.dev && file.endsWith('.html')) {
-      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', ...clear });
-      return res.end(readFileSync(file, 'utf8').replace('</body>', '<script type="module" src="/js/dev-reload.js"></script></body>'));
+    if (page || (config.dev && file.endsWith('.html'))) {
+      let html = readFileSync(file, 'utf8');
+      if (page) html = page(html);
+      if (config.dev) html = html.replace('</body>', '<script type="module" src="/js/dev-reload.js"></script></body>');
+      res.writeHead(200, config.dev ? { 'content-type': type, 'cache-control': 'no-store', ...clear } : { 'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...clear });
+      return res.end(html);
     }
     res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...clear });
     createReadStream(file).pipe(res);
@@ -299,7 +303,13 @@ export function createNova(config = loadConfig(), deps = {}) {
   function serveStatic(req, res, path, principal) {
     // The PWA's places (ui/js/nav.js); Era 2's paths keep working.
     if (path === '/pair') return serveFile(res, join(ui, 'pair.html'));
-    if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'), core.reset.clearHeaders(principal, req.headers.cookie));
+    // The app page carries the iPhone status bar of the design this device shows (DESIGN-SYSTEM
+    // §5): its appearance id comes from the cookie theme.js keeps (none yet: the person's design;
+    // theme.js corrects the tag once loaded). If the design can't be read, the page goes as it
+    // ships: iOS's own strip, readable over any design.
+    const appearance = /(?:^|;\s*)nova-appearance=([A-Za-z0-9_-]{8,64})(?:;|$)/.exec(req.headers.cookie ?? '')?.[1] ?? null;
+    const statusBar = (html) => { try { return html.replace(STATUS_BAR_TAG, statusBarTag(core.design.active(appearance))); } catch { return html; } };
+    if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'), core.reset.clearHeaders(principal, req.headers.cookie), statusBar);
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
