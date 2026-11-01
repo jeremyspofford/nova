@@ -163,7 +163,7 @@ export class SupervisorDriver implements ServiceDriver {
       refused.push(def.artifact.program
         ? `It has no program for this computer (${plat}).`
         : 'It comes only as a container image. The supervisor driver runs plain programs; running container services under the supervisor isn’t built yet.');
-    } else if (!prog.url.startsWith('file://')) refused.push('Its program is at a web address. The supervisor driver installs programs from a file on this computer (file:); downloading signed programs comes with native workloads.');
+    } else if (!prog.url.startsWith('file://')) refused.push('Its program is at a web address. The supervisor driver installs programs from a file on this computer (file:); Nova downloads no program in this build.');
     // What runs is the pinned program and nothing else, checked here too, whoever hands the driver
     // a definition.
     if (prog) {
@@ -174,7 +174,7 @@ export class SupervisorDriver implements ServiceDriver {
     if (def.secrets.length) refused.push('It needs secrets. Handing vault secrets to a service the supervisor runs isn’t built yet.');
     const pl = def.placement;
     const hub = this.o.hubId?.() ?? null;
-    if (pl.mode === 'pinned' && pl.device !== 'hub' && pl.device !== hub) refused.push(`It is pinned to ${pl.device}. The supervisor driver runs services on this hub; other devices come with device roles and native workloads.`);
+    if (pl.mode === 'pinned' && pl.device !== 'hub' && pl.device !== hub) refused.push(`It is pinned to ${pl.device}. The supervisor driver runs services on this hub; a service for another device is deployed from the hub as a native workload (POST /api/v1/services/devices/deploy).`);
     if (pl.mode === 'floating' && (pl.replicas ?? 1) > 1) refused.push(`It asks for ${pl.replicas} replicas, one per device, and this hub is the only device that can run it now.`);
     const mem = def.resources?.memory_mb;
     if (mem !== undefined && mem * 1024 * 1024 > totalmem()) refused.push(`It needs ${mem} MB of memory, more than this computer has (${Math.round(totalmem() / 1024 / 1024)} MB).`);

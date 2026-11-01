@@ -80,7 +80,9 @@ test('consent is off by default and per source: nothing is pulled, nothing store
     assert.equal(e.text, 'After consent');
     assert.equal(e.kind, 'screen');
     assert.equal(e.consent.state, 'granted');
-    assert.deepEqual(Object.keys(e.provenance).sort(), ['adapter', 'device_id', 'external_id', 'received_at', 'source_id', 'via']);
+    assert.deepEqual(Object.keys(e.provenance).sort(), ['adapter', 'device_id', 'external_id', 'received_at', 'source_id', 'transfer', 'via']);
+    // Pulled on the hub: it didn't travel the capture data path (M10h), so it has no transfer.
+    assert.equal(e.provenance.transfer, null);
     assert.equal(e.provenance.adapter, 'screenpipe');
     assert.equal(e.provenance.via, 'pull');
     assert.equal(e.device.id, h.core.mesh.identity.id, 'captured on the hub');

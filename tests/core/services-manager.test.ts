@@ -146,7 +146,7 @@ test('deploying a command no approved version has run asks first, typed, and sho
   assert.match(r3.said, /runs a command that 1, the approved version, doesn’t: "\/nova\/node" "fake-service\.js" "--debug"/);
   assert.equal((await m.deploy(v3, undefined, 'stand-in@3')).ok, true);
   // Secrets or OS permissions make it tier 3.
-  const v4 = standIn({ version: '4', port: 18089, flags: ['--x'], extra: { os_permissions: ['screen-recording'] } });
+  const v4 = standIn({ version: '4', port: 18089, flags: ['--x'], extra: { os_permissions: ['notifications'] } });
   assert.equal((await m.deploy(v4)).tier, 3);
 });
 

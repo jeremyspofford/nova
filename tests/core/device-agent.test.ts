@@ -18,7 +18,7 @@ import { Boot, installLocalRuntime, paths, runtimeCommand, runtimeIntact, status
 import { FAST, FakeNode, bundle, joinedHome, sleep, until } from './device-support.ts';
 
 const SRC = join(import.meta.dirname, '../../src/device');
-const goodFiles = () => ({ 'runtime.ts': readFileSync(join(SRC, 'runtime.ts'), 'utf8'), 'queue.ts': readFileSync(join(SRC, 'queue.ts'), 'utf8') });
+const goodFiles = () => ({ 'runtime.ts': readFileSync(join(SRC, 'runtime.ts'), 'utf8'), 'queue.ts': readFileSync(join(SRC, 'queue.ts'), 'utf8'), 'rollout.ts': readFileSync(join(SRC, 'rollout.ts'), 'utf8') });
 
 test('the queue keeps items in order, takes a key once, survives reopening, and drops bodies once answered', () => {
   const file = join(mkdtempSync(join(tmpdir(), 'nova-queue-')), 'queue');

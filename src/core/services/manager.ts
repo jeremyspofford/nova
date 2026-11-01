@@ -28,9 +28,11 @@ export interface ManagerOptions {
   // What the validator may know about devices (their roles, M10f).
   devices?: () => DeviceView[];
   // The devices placement is resolved against (M10f): roles, hardware and health. With it, a
-  // proposal is refused when no device may take it, and when it would go to a device other than the
-  // hub (native workloads on devices come with M10h).
+  // proposal is refused when no device may take it.
   placement?: () => { devices: PlacementDevice[]; hubId: string | null; current?: (service: string) => string | null };
+  // The driver for a definition placed on a device other than the hub (M10h: native workloads, the
+  // `device` driver, services/workloads.ts). Without one, such a placement is refused, as before.
+  remote?: ServiceDriver;
 }
 
 export class ServiceManager {
@@ -38,11 +40,13 @@ export class ServiceManager {
   readonly drivers: readonly ServiceDriver[];
   #devices: () => DeviceView[] | undefined;
   #placement: ManagerOptions['placement'];
+  #remote: ServiceDriver | null;
 
   constructor(o: ManagerOptions) {
-    if (!o.drivers.length) throw new Error('The Service Manager needs a driver.');
+    if (!o.drivers.length && !o.remote) throw new Error('The Service Manager needs a driver.');
     this.dir = o.dir;
-    this.drivers = o.drivers;
+    this.drivers = o.remote && !o.drivers.includes(o.remote) ? [...o.drivers, o.remote] : o.drivers;
+    this.#remote = o.remote ?? null;
     this.#devices = o.devices ?? (() => undefined);
     this.#placement = o.placement;
   }
@@ -70,16 +74,23 @@ export class ServiceManager {
     const where = this.resolve(v.def);
     if (where && !where.ok) return { ok: false, problems: [where.why] };
     const away = where?.ok ? where.devices.filter((d) => d.id !== this.#placement!().hubId) : [];
-    if (away.length) return { ok: false, problems: [`It would run on ${away.map((d) => d.name).join(', ')}. Running services on devices other than the hub comes with native workloads; until then, pin it to the hub.`] };
+    // Placed on another device: that is a native workload, for the remote driver alone (M10h).
+    if (away.length) {
+      if (!this.#remote) return { ok: false, problems: [`It would run on ${away.map((d) => d.name).join(', ')}. This Service Manager runs services on the hub only; services on other devices are deployed from the hub’s Settings › Services, as native workloads.`] };
+      return { ok: true, def: v.def, plan: this.#remote.plan(v.def), driver: this.#remote };
+    }
     let first: { plan: Plan; driver: ServiceDriver } | null = null;
     for (const driver of this.drivers) {
+      if (driver === this.#remote) continue;
       if (!driver.available().ok) continue;
       const plan = driver.plan(v.def);
       if (plan.ok) return { ok: true, def: v.def, plan, driver };
       first ??= { plan, driver };
     }
     if (first) return { ok: true, def: v.def, ...first };
-    return { ok: false, problems: this.drivers.map((d) => `${d.name}: ${d.available().said}`) };
+    const local = this.drivers.filter((d) => d !== this.#remote);
+    if (!local.length) return { ok: false, problems: ['It would run on the hub. The hub runs its own services under its supervisor (the nova services command); here, only services placed on your other devices are deployed.'] };
+    return { ok: false, problems: local.map((d) => `${d.name}: ${d.available().said}`) };
   }
 
   // Tier 1: started alongside, tested, never given traffic. A command not yet approved asks first.

@@ -191,6 +191,9 @@ test('M9 gate, progress: optimistic UI is honest — a slow send says so, a fail
     await d.page.unroute(`**/api/memory/${id}`);
 
     // A failed edit: the old words come back, the reason is said, and what was typed is one tap away.
+    // A correction is a new record (the old one is superseded): wait for the list to show it, so the
+    // item routed below is the one clicked (reading the id before the list refreshed was a race).
+    await d.page.waitForFunction((old) => !document.querySelector(`#memory .memory-item[data-id="${old}"]`), id, { timeout: 10000 });
     const again = d.page.locator('#memory .memory-item').first();
     const id2 = await again.getAttribute('data-id');
     await d.page.route(`**/api/memory/${id2}`, (r) => r.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Nova is restarting.' }) }));
@@ -199,7 +202,11 @@ test('M9 gate, progress: optimistic UI is honest — a slow send says so, a fail
     await d.page.keyboard.press('ControlOrMeta+a');
     await d.page.keyboard.type('A change that will not save.');
     await d.page.keyboard.press('Enter');
-    await d.page.waitForFunction(() => /Nova is restarting/.test(document.getElementById('toast')?.textContent ?? ''), null, { timeout: 10000 });
+    await d.page.waitForFunction(() => /Nova is restarting/.test(document.getElementById('toast')?.textContent ?? ''), null, { timeout: 10000 }).catch(async (e) => {
+      // What the page showed instead, so a failure here says why.
+      console.log('m9 honest: toast was', JSON.stringify(await d.page.locator('#toast').innerText().catch(() => null)), 'ids', id, id2, 'first now', await d.page.locator('#memory .memory-item').first().getAttribute('data-id').catch(() => null), 'text', JSON.stringify(await d.page.locator('#memory .memory-item').first().innerText().catch(() => null)));
+      throw e;
+    });
     assert.equal(await d.page.locator('#memory .memory-item').first().locator('.memory-text').innerText(), before, 'the memory shows what is really saved');
     await d.page.locator('#toast button', { hasText: 'Edit again' }).click();
     assert.equal(await d.page.locator('#memory .memory-edit').inputValue(), 'A change that will not save.', 'what was typed is not lost');

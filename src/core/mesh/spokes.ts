@@ -50,6 +50,9 @@ export interface InboxEffects {
   // A captured event (M6a): kept (ref, the event's id), not kept with the reason (consent off,
   // paused, private, excluded), or refused when it can't be read.
   capture?(device: Device, key: string, body: Record<string, unknown>): { ref?: string; reason?: string; refused?: boolean };
+  // M10h: what a heartbeat reports about the device's native workloads, kept by the device driver;
+  // and what its answer carries back (the device's assignments).
+  workloads?: { report(device: Device, reports: unknown): void; answer(device: Device): Record<string, unknown> };
 }
 
 interface InboxRow { key: string; kind: string; status: InboxStatus; reason: string | null; ref: string | null }
@@ -85,7 +88,7 @@ export class Spokes extends EventEmitter {
   // heartbeat's reply, and `told` is called once it has.
   resetNotice: { id: string; said: string; told: (device: Device) => void } | null = null;
 
-  heartbeat(device: Device, body: Record<string, unknown>): { ok: true; epoch: number; roster_digest: string; runtime: { version: string }; purposes: string[]; restart_runtime?: true; hub_reset?: { id: string; said: string; signature: string; signer: string } } {
+  heartbeat(device: Device, body: Record<string, unknown>): { workloads?: unknown; ok: true; epoch: number; roster_digest: string; runtime: { version: string }; purposes: string[]; restart_runtime?: true; hub_reset?: { id: string; said: string; signature: string; signer: string } } {
     const at = this.#now().toISOString();
     const caps = body.capabilities;
     if (caps !== undefined && (!Array.isArray(caps) || caps.length > 32 || !caps.every((c) => typeof c === 'string' && /^[a-z][a-z0-9._-]{0,39}$/.test(c)))) {
@@ -112,8 +115,14 @@ export class Spokes extends EventEmitter {
     const restart = safe && this.#restart.delete(device.id);
     const reset = this.resetNotice;
     if (reset) reset.told(device);
+    // Its native workloads (M10h): what it reported, kept; what it is assigned, answered.
+    let workloads: Record<string, unknown> = {};
+    if (this.#effects.workloads) {
+      try { this.#effects.workloads.report(device, body.workloads); } catch (e) { if (!(e instanceof CoreError)) throw e; }
+      workloads = this.#effects.workloads.answer(device);
+    }
     // Its roles (M10f), so its agent can refuse an assignment they don't allow.
-    return { ok: true, epoch: this.#devices.state().epoch, roster_digest: rosterDigest(this.#devices.roster()), runtime: { version: this.runtime().manifest.version }, purposes: this.#devices.get(device.id).purposes, ...(restart ? { restart_runtime: true } : {}), ...(reset ? { hub_reset: { id: reset.id, said: reset.said, signature: this.#identity.sign(hubResetMessage(device.id, reset.id)), signer: this.#identity.publicKey } } : {}) };
+    return { ...workloads, ok: true, epoch: this.#devices.state().epoch, roster_digest: rosterDigest(this.#devices.roster()), runtime: { version: this.runtime().manifest.version }, purposes: this.#devices.get(device.id).purposes, ...(restart ? { restart_runtime: true } : {}), ...(reset ? { hub_reset: { id: reset.id, said: reset.said, signature: this.#identity.sign(hubResetMessage(device.id, reset.id)), signer: this.#identity.publicKey } } : {}) };
   }
 
   // Asks a computer's boot agent, at its next heartbeat in safe mode, to start its runtime again
@@ -140,6 +149,9 @@ export class Spokes extends EventEmitter {
     const messages: Record<string, string> = {
       runtime_update_refused: `The device agent on “${device.name}” refused a runtime update because it couldn’t verify it${detail ? `: ${detail}` : '.'} Its current runtime keeps running. If this keeps happening, something between it and Nova may be changing what it downloads.`,
       runtime_install_failed: `The device agent on “${device.name}” couldn’t install a runtime${detail ? `: ${detail}` : '.'}`,
+      // M10h: the boot agent refused a workload (unsigned, a key it didn't pin, a hash that doesn't
+      // match, a verb or a command outside its manifest, a role it doesn't hold).
+      workload_refused: `The device agent on “${device.name}” refused a workload${detail ? `: ${detail}` : '.'} Nothing it refused was run.`,
     };
     const message = messages[what];
     if (!message) throw new CoreError('validation', `problem must be one of ${Object.keys(messages).join(', ')}.`);

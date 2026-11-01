@@ -60,6 +60,11 @@ export class FakeNode {
   // Added to every heartbeat reply (a roster digest, say).
   heartbeatExtra: Record<string, unknown> = {};
   sessionsStarted = 0;
+  // Native workloads (M10h): signed manifests by service@version, the files they pin, and every file
+  // a device downloaded (so a test can tell a rollback downloaded nothing).
+  workloads = new Map<string, unknown>();
+  workloadFiles = new Map<string, Buffer>();
+  downloads: string[] = [];
   url = '';
   #server: Server | null = null;
   #port = 0;
@@ -129,6 +134,17 @@ export class FakeNode {
       return send(200, { ok: true, epoch: this.epoch, runtime: { version: this.bundle?.manifest.version ?? 'none' }, ...this.heartbeatExtra, ...(this.hubReset ? { hub_reset: { ...this.hubReset, signature: signMessage((this.hubResetKey ?? this.keys).ed25519.privateKey, hubResetMessage(device, this.hubReset.id)), signer: (this.hubResetKey ?? this.keys).ed25519.publicKey } } : {}) });
     }
     if (path === '/mesh/devices/me/report') { this.reports.push(body); return send(200, { ok: true }); }
+    const wl = /^\/mesh\/workloads\/([^/]+)\/([^/]+)(?:\/file\/([^/]+))?$/.exec(path);
+    if (wl && req.method === 'GET') {
+      const key = `${decodeURIComponent(wl[1]!)}@${decodeURIComponent(wl[2]!)}`;
+      if (!wl[3]) return this.workloads.has(key) ? send(200, this.workloads.get(key)) : send(404, { error: 'not assigned' });
+      const f = this.workloadFiles.get(`${key}/${decodeURIComponent(wl[3])}`);
+      if (!f) return send(404, { error: 'no such file' });
+      this.downloads.push(`${key}/${wl[3]}`);
+      res.writeHead(200, { 'content-type': 'application/octet-stream' });
+      res.end(f);
+      return;
+    }
     if (path === '/mesh/inbox') {
       const results = (body.items as Received[]).map((it) => {
         const seen = this.inbox.get(it.key);
