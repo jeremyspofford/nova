@@ -19,7 +19,13 @@ Root review then requested inactive/off restart and independent sync-denial chec
 
 Final regression run: **10 passed, 0 failed**. It covers cloud changes in local-only and local-preferred modes, pause/disable during a pending request, real replication and replica checkpoint cleanup, deletion failure followed by inactive/off restart, raw permission changes before read/send, and explicit sync-denial checks.
 
-Existing focused capture, replication and backup checks: **26 passed, 0 failed**. Typecheck and `git diff --check` passed. Full project `npm test` was also launched; its result is recorded separately after completion.
+Existing focused capture, replication and backup checks: **26 passed, 0 failed**. Typecheck and `git diff --check` passed.
+
+## Follow-up: hold derived sync after a mid-tick policy change
+
+Root review identified that raw rechecks updated the saved plan while derived sync still received the initial plan. The regression queues a real outbox event, changes permission during the loopback raw read, and requires both raw and derived transfer to stop. Two changed-policy variants and an unavailable-plan variant failed before the fix (`/tmp/nova-m10h-capture-stale-plan-red.log`). The carrier now refreshes policy immediately before derived sync and retains the queue if refresh is unavailable; its offline local pull still uses saved consent. The final regression/carrier run passed **13 tests** (`/tmp/nova-m10h-capture-stale-plan-green.log`), and typecheck passed again.
+
+Full project `npm test` completed with **1567 tests: 1553 passed, 13 skipped, 1 failed**. The failure was the unchanged email-summary case at `tests/skills-api.test.js:81`, which timed out in its `settle()` helper after about 5973 ms. The no-Kubernetes tripwire never fired. Log: `/tmp/nova-m10h-capture-suite.log`. A focused rerun of that unchanged file is recorded separately; the full run is not claimed as passing.
 
 Commands, from the implementation worktree, using Node 26.3.1:
 

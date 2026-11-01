@@ -132,7 +132,10 @@ export class Carrier {
       if (plan) {
         await this.#tombstones(plan);
         await this.#raw(plan);
-        await this.#send(plan);
+        // Raw work can await local I/O while privacy changes. A failed refresh holds the queue;
+        // offline pulling above still follows the last consent saved on this device.
+        const sending = await this.#plan();
+        if (sending) await this.#send(sending);
       }
     } catch (e) {
       this.#lastError = (e as Error).message;
