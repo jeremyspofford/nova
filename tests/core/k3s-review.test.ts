@@ -218,3 +218,21 @@ test('clock exercises three five-second readiness samples and full 120-second ca
     assert.equal(h.calls().length, calls);
   } finally { await h.close(); }
 });
+
+test('rollback restores all observed replicas of a retained floating version', async () => {
+  const h = await simulatedK3s();
+  const cluster = structuredClone(h.cluster);
+  const extra = structuredClone(cluster.devices[0]!); extra.id = 'linux-two'; extra.name = 'Linux two';
+  cluster.devices = [...cluster.devices, extra];
+  h.change(s => { const node = structuredClone(s.nodes[0]!); node.labels['nova/device'] = 'linux-two'; s.nodes.push(node); });
+  const driver = new K3sDriver({ ...h.options, cluster });
+  try {
+    const def = (version: string) => ({ ...h.definition(version), placement: { mode: 'floating' as const, replicas: 2 } });
+    assert.equal((await driver.apply(def('1'))).ok, true);
+    assert.equal((await driver.switch('echo', '1')).ok, true);
+    assert.equal((await driver.apply(def('2'))).ok, true);
+    assert.equal((await driver.switch('echo', '2')).ok, true);
+    assert.equal((await driver.rollback('echo', { auto: false, reason: 'retain scale' })).ok, true);
+    assert.equal(h.read().services.echo!.versions.find(v => v.version === '1')!.replicas, 2);
+  } finally { await driver.close(); await h.close(); }
+});

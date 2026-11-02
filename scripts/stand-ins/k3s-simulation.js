@@ -92,16 +92,17 @@ export async function simulate(tool) {
           assert.ok(version.ready && version.replicas > 0 && version.status === 'ready' && !state.unhealthy.includes(op.version));
           if (row.previous) { const stale = row.versions.find(v => v.version === row.previous); stale.status = 'removed'; stale.replicas = 0; stale.ready = false; }
           row.previous = row.live; row.live = op.version; row.soak_until = op.soak_until;
-          if (row.previous) { const old = row.versions.find(v => v.version === row.previous); old.status = 'kept'; old.replicas = 0; old.ready = false; }
+          if (row.previous) { const old = row.versions.find(v => v.version === row.previous); state.keptReplicas ??= {}; state.keptReplicas[JSON.stringify([op.service, old.version])] = old.replicas; old.status = 'kept'; old.replicas = 0; old.ready = false; }
           version.status = 'live'; row.assigned = { version: op.version, want: 'live', at: now }; row.held = null;
           break;
         case 'rollback': {
           assert.equal(op.version, row.previous, 'Rollback target must be the approved previous.');
-          if (op.version) assert.ok(!state.unhealthy.includes(op.version) && version.status === 'kept', 'Kept target is not healthy.');
+          const keptCount = op.version ? state.keptReplicas?.[JSON.stringify([op.service, op.version])] : null;
+          if (op.version) assert.ok(!state.unhealthy.includes(op.version) && version.status === 'kept' && Number.isInteger(keptCount) && keptCount > 0 && keptCount <= 64, 'Kept target or retained replica observation is unavailable.');
           const old = row.versions.find(v => v.version === row.live);
           if (old) { old.status = 'rolled_back'; old.replicas = 0; old.ready = false; }
           row.live = op.version; row.previous = null; row.soak_until = null;
-          if (version) { version.status = 'live'; version.replicas = 1; version.ready = true; version.ready_at = now; row.assigned = { version: op.version, want: 'live', at: now }; }
+          if (version) { version.status = 'live'; version.replicas = keptCount; version.ready = true; version.ready_at = now; row.assigned = { version: op.version, want: 'live', at: now }; }
           else { row.held = { reason: 'No kept version; stopped safely.', at: now }; row.assigned = old ? { version: old.version, want: 'stopped', at: now } : null; }
           break;
         }
