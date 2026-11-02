@@ -1,27 +1,91 @@
-# M10i gate evidence — rendered-entry checkpoint only
+# M10i gate evidence — system map
 
-Binding phase: `docs/plans/M10-orchestration.md` Point 7 and Decision 3. Design-first plan: `docs/plans/M10i.md`. The full M10i gate is **NOT PASSED**; no application map is delivered by this checkpoint.
+Binding scope: [orchestration ADR Point 7 and Decision 3](../plans/M10-orchestration.md), [implementation plan](../plans/M10i.md). The owner approved rendered source `690c8458` on 2026-11-01 [before app integration](../builder-packet/INPUT-2026-11-01-M10I-RENDERED-APPROVAL.md).
 
-The first deliverable is a reusable renderer invoked only by `/styleguide?entry=topology` (`#sg-topology`). Machines, services and versions/actions are three layers; desktop has manually drawn SVG connections and semantic machine controls, while phone machines are list rows. The fixtures and demonstration approvals are synthetic and cannot mutate the server.
+**Gate state: pending final integration review and exact-head CI.** Passing focused tests and the historical draft CI are not a passed phase gate. The normal preview remains on merged main until merge.
 
-Source reviewed: `690c8458a528391934e91ea4ccd484947ab39c89`, following initial source `bd98ea9c` and stale-state fix `f614beab`. The first missing-entry test failed before implementation. Review then reproduced lost stale provenance during service drill-in; a browser regression failed before the fix and passed afterward. Stale service detail retains the supplied age/reasons/status and labels historical versions. Reports: `docs/reviews/m10i-styleguide-independent-review.md`, `m10i-styleguide-independent-rereview.md`, and final `m10i-styleguide-independent-rereview2.md`. A later ADR compliance check corrected the capture rollback specimen from tier 3 to tier 2, with observed RED→GREEN assertions in both engines. Ordinary promotion is 2, capture promotion is 3, and both manual rollbacks are 2; the final independent check verified all four.
+## Delivered path and authority
 
-Final focused browser command: `scripts/ui-test.sh tests/ui/m10i-styleguide.test.ts` with Node 26.3.1 selected. Five tests passed, no skips, across 392 state/package/posture/engine combinations: 14 states in all six starter packages at phone/desktop widths in Chromium/WebKit, plus Orb Teal tablet/half-open. No overflow, browser errors or mutation requests. There are 120 actual PNGs (112 full state/posture renders and eight direct component captures), linked in `docs/reviews/m10i-styleguide-review-packet.md`.
+Settings › Services and Health › Devices link to `/topology`, a non-rail route. The approved renderer gives three layers: machines, services, versions/actions. Desktop connections are hand-drawn SVG; phone machines are semantic rows. Production collects actual enrolled device heartbeats, the local supervisor, native workload reports and factual capture-sync lag. Revoked devices are filtered. Local services stay on the local identity even when another device is hub. Missing hub identity produces rows without invented hub connections.
 
-Token lint, theme validation, typecheck, coverage/UI-review checks (13/13) and diff checks pass. The static Node tests emit an existing localStorage ExperimentalWarning, also reproduced on unchanged `92735155` (9/9 pass); it is disclosed and not suppressed. Five alternate designs retain their prior below-bar status; no theme values or approvals changed.
+GET `/api/v1/services/topology` returns a normalized captured-at snapshot and its Mermaid text through existing authenticated read access. Device and service observations retain independent timestamps, reasons and ages. A trusted optional cluster callback supplies tests; production has no cluster driver or invented cluster/site. Failed beats degraded, which beats unknown, which beats healthy. Missing/stale observations are unknown. Workload assignment and observed serving are distinct. An old ready version cannot borrow a new unrelated report’s time or turn unknown live health into Verified. Healthy idle capture is not degraded merely because its last event is old, and workload health does not establish recording consent.
 
-The optional broad host run recorded 1,579 pass, three fail, 14 skip. Its scoped control-outline contrast failure was fixed and the existing regression check passes. The other two failures, provider-guard and skills email-summary timing cases, passed once in isolation (17/17). No final full-host-suite green claim is made. Exact-head CI remains mandatory before any merge.
+The app ages evidence with monotonic elapsed time from before collection, including request latency. Refresh coalesces every ten seconds only on the visible route, pauses during approval, rejects late generations and preserves selection/focus. A failed refresh retains explicitly historical facts and disables actions/export. The service worker caches the shell/modules, but never treats a cached topology response as current. Tests stop the actual loopback server and poison the worker cache before proving offline refusal and recovery.
 
-## CI fixture correction
+Eligible versions use server policy: ordinary promotion tier 2; console, capture and non-capture secret/OS-privileged promotion tier 3; all manual rollback tier 2. Device mutations retain their existing manager path. New fixed approver-only hub routes use typed IPC and the same ServiceManager. There is no command/argv/definition bridge, dependency or third-party script. Hub changes acknowledge **accepted**, then execute through existing manager history/problems; canaries and console restarts are not mislabeled completed. Lost responses remain unknown, with no automatic POST retry. This adds no durable operation queue. The M10e `service` change-kind/GitOps pipeline remains deferred to M10j/M10k.
 
-The first corrected draft head `fd76346c` failed the packet-named R13 timing case twice, including the single permitted rerun; UI121/121 and axe0 passed. A deterministic forced-reconciliation regression then reproduced the cause before a minimal test-only fix at `b4088fcc`. Focused1/1, full review2 file7/7, typecheck and independent scoped review pass. [Cause, RED/GREEN and limits](../reviews/m10g-r13-fixture-fix-2026-11-01.md). No further blind rerun was used. Full-suite and fresh exact-head CI validation remain required separately.
+## Approved-state binding
 
-## Outstanding gate
+The fixed action descriptor carries a closed `expected` object: `{live, previous, assigned}`. `assigned` is null for hub services or exactly `{version, want, at}` for native intent. Versions are bounded and timestamps canonical; unknown/missing fields and malformed values are refused. This is public semantic state, not a credential or permission. The UI sends the descriptor it reviewed, not a replacement from a later read. Fixed hub routes require it; existing device/CLI omission compatibility remains, and any supplied guard is enforced.
 
-- Owner approval of this rendered entry, required by OPERATING-RULES before app code.
-- Real hub/device/native-workload state, merged-health computation with both reasons/ages, and read-only API.
-- Settings/Health entry points, actual promotion/rollback approval paths and same-state Mermaid text export/snapshot.
-- App browser gate in every starter package, M9 performance budgets, dependency/script guards and final independent phase review.
-- Plain-language LEDGER entry reflecting the eventual delivered behavior, exact-head green CI, merge and preview restart.
+The same guard crosses API → typed IPC → manager → actual driver queue. Plain-program checks run inside the per-service queue before effects or choosing rollback's destination. Console comparison and acquisition of its existing busy lock happen synchronously before awaits/effects. Native assignment comparison and write use the same `BEGIN IMMEDIATE` transaction without an intervening await. A deterministic real HTTP→IPC test holds a real synthetic service's readiness response, queues an ahead promotion, observes the acknowledged rollback enter execution, and proves it cannot roll back a different live/previous pair. Native assignment drift and console promotion/rollback have separate regressions. Independent clearance is recorded with the reviews below.
 
-Until owner approval arrives, app integration does not proceed. Latest merged main remains the normal preview; an isolated synthetic review server may serve this styleguide entry for recognition review.
+## Actual renders
+
+These are real synthetic-profile browser captures, not mockups. The fixture injects fixed hardware, a loopback fake model service with zero models and no secrets. It does not inspect real devices, credentials or model runtimes.
+
+| Layer/state | Desktop | Phone |
+|---|---|---|
+| Machines | [Chromium](../screenshots/m10i-app/chromium/machines-desktop.png) | [Chromium](../screenshots/m10i-app/chromium/machines-phone.png) |
+| Services | [Chromium](../screenshots/m10i-app/chromium/services-desktop.png) | [Chromium](../screenshots/m10i-app/chromium/services-phone.png) |
+| Versions | [WebKit](../screenshots/m10i-app/webkit/versions-desktop.png) | [Chromium](../screenshots/m10i-app/chromium/versions-phone.png) |
+| Ordinary approval | [Chromium](../screenshots/m10i-app/chromium/approval-desktop.png) | [Chromium](../screenshots/m10i-app/chromium/approval-phone.png) |
+| Capture promotion | [Chromium](../screenshots/m10i-app/chromium/approval-capture-desktop.png) | [Chromium](../screenshots/m10i-app/chromium/approval-capture-phone.png) |
+| Capture rollback | [WebKit](../screenshots/m10i-app/webkit/rollback-capture-desktop.png) | [WebKit](../screenshots/m10i-app/webkit/rollback-capture-phone.png) |
+
+The 37 app captures also cover lag, fresh failure with another stale source, stale service, failed refresh, loading, empty and unknown hub. The [historical renderer packet](../reviews/m10i-styleguide-review-packet.md) preserves 120 captures and 392 state/package/posture/engine combinations at reviewed source `690c8458`; they are not relabeled live-system proof. Independent app review inspected 16 actual renders and passed all eight DESIGN-SYSTEM §0.4 criteria. Existing rows, typography and approvals were reused; no new CSS, gradient, font or icon family was introduced.
+
+## Same-snapshot text
+
+`tests/core/topology.test.ts` compares literal output, generated IDs and escaped hostile labels. One fixed expected snapshot is:
+
+```text
+flowchart TD
+  m0["Home hub | Verified"]
+  m1["Local#34; click evil #60;script#62;#35;#59;#38; | Verified"]
+  m0 --- m1
+```
+
+The browser download is exactly the displayed response’s `mermaid` field, encoded as a text Blob with its temporary URL revoked. It performs no second GET. A client stale/error overlay disables export because that overlay would differ from the original text; a freshly fetched server snapshot containing unknown/stale observations can export its matching text. Labels never become Mermaid directives or HTML/SVG markup.
+
+## Performance evidence
+
+M9’s exact observers and nearest-rank p75 calculation are shared without changing its five views, interactions or thresholds. Default twelve runs per view; topology has seven trusted drill-in/review interactions per run. Limits remain LCP ≤2500ms, INP ≤200ms, CLS ≤0.1. These are Chromium measurements; WebKit correctness is tested separately.
+
+| View | Viewport | Runs | LCP p75 | INP p75 | CLS p75 |
+|---|---|---|---|---|---|
+| Topology | 390×844, CPU 4× | 12 | 316ms | 64ms | 0.000 |
+| Topology | 1440×900 | 12 | 148ms | 40ms | 0.000 |
+| Home | 390×844, CPU 4× | 12 | 400ms | 64ms | 0.000 |
+| Chat | 390×844, CPU 4× | 12 | 316ms | 80ms | 0.000 |
+| Tasks | 390×844, CPU 4× | 12 | 404ms | 64ms | 0.000 |
+| Settings | 390×844, CPU 4× | 12 | 508ms | 80ms | 0.000 |
+| Memory | 390×844, CPU 4× | 12 | 412ms | 64ms | 0.000 |
+| Home | 1280×820 | 12 | 132ms | 40ms | 0.000 |
+| Chat | 1280×820 | 12 | 156ms | 40ms | 0.000 |
+| Tasks | 1280×820 | 12 | 144ms | 40ms | 0.000 |
+| Settings | 1280×820 | 12 | 196ms | 32ms | 0.000 |
+| Memory | 1280×820 | 12 | 168ms | 40ms | 0.000 |
+
+Topology values are from the focused default-12-run verification after the guard/expiry/sheet corrections; main-view values are the complete 120-sample M9 run. The desktop chat orb-glow shift rounds to 0.000, not a claim of literally zero movement. Final exact-head CI is separate evidence.
+
+## Source pins, review and validation
+
+- Renderer: `690c8458`, following stale-provenance and rollback-tier RED→GREEN corrections; independent initial review and two scoped re-reviews are linked in the historical packet.
+- Backend: `e9062236` initial implementation, fixes `b61ace15` and `9172d9c5`. Independent review found old ready evidence borrowing a fresh unrelated time, then a fix overwriting unknown live health. Both were reproduced before fixes; final scoped review cleared them. [Implementation](../reviews/m10i-backend-implementation-2026-11-01.md), [initial review](../reviews/m10i-backend-independent-review-2026-11-01.md), [round 1](../reviews/m10i-backend-rereview1-2026-11-01.md), [round 2](../reviews/m10i-backend-rereview2-2026-11-01.md).
+- Initial app: `c6df6dfc`; 19/19 correctness, 5/5 historical styleguide (392 combinations), 48/48 static guards, token lint, themes and typecheck passed. Both browser engines cover all six packages, phone/desktop, three layers, tiers, stale reports, exact export, real read-only 403, no POST retry, native assignment vs serving, controlling-worker outage/recovery and focus/visibility/generation behavior.
+- [Initial independent app review](../reviews/m10i-app-independent-review-2026-11-01.md) found three Important defects: unbound execution state after the UI check, expiring one source masking another fresh Failed source, and late request completion closing an unrelated sheet. Consolidated fix `3c1ee828` has observed RED→GREEN regressions for all three; [Scoped independent re-review](../reviews/m10i-app-rereview1-2026-11-01.md) cleared all three with no new blocking defect. Design criteria passed; passing render tests did not waive correctness defects.
+- [App implementation and fix report](../reviews/m10i-app-implementation-2026-11-01.md): after the fix, backend33/33, real queued HTTP→IPC1/1, browser28/28 (23app +5styleguide), static/boundary/legacy driver contract62/62, lint/themes/typecheck and focused topology vitals1/1 all pass, zero skips. Client expiry retains a fresh Failed/degraded source until that source expires too. Held POST/rejected GET tests retain the real replacement approval and focus after the old sheet is dismissed; late receipts remain visible on return. No broad host run is relabeled green.
+- Whole-branch independent review, final exact-head required `gate`, merge and preview verification remain pending.
+
+All commands use Node 26.3.1. UI commands invoke the existing Docker Playwright image through Bash `scripts/ui-test.sh`; no package, image or model was pulled. Runtime dependency/third-party-script guards, Kubernetes tripwire and audit remain required in final CI.
+
+## Failed runs and limits
+
+The initial backend broad host suite was not green: 1591 pass, 3 fail, 14 skip; its own module-boundary failure was fixed, while M6a recovery and onboarding negative-port fixture failures remained disclosed. The initial app broad host suite was also not green: 1593 pass, 4 fail, 14 skip. Its own M9 timer-naming guard was fixed and the 48/48 focused static set passed. M6a capture recovery, provider-guard background-process result and skills email-summary timing failures remain recorded. Provider/skills passed once in isolation (17/17), which does not turn a failed full run green. Final CI is separate evidence.
+
+Node UI tests emit an existing localStorage ExperimentalWarning. DEP0187 appeared near provider-guard in a broad host run but has no proven attribution; it remains a runtime-warning follow-up, not silently suppressed. Alternate themes retain their existing below-bar/off-scale caveats; this phase does not approve them. Fourteen normal full-suite skips retain real-model, real-capture/Relay and desktop-keychain opt-in reasons; none was enabled against owner services.
+
+The historical draft R13 fixture failed twice, including the one allowed rerun. Forced real reconciliation reproduced the cause; `b4088fcc` holds the injected fault until an authentic signed unhealthy answer is observed, preserving replay and restart assertions. [Independent correction](../reviews/m10g-r13-fixture-fix-2026-11-01.md). Historical exact draft `128e1298` passed CI41336228904 (1582 unit pass/14 skip, UI121/121, axe0, audit0). It is not validation of later app/guard code.
+
+No real K3s, cloud site, OS permission flow, Screenpipe installation, physical folding hinge or native capture parity is proven. Backend tests exercise real managers/program stand-ins in disposable homes; browser mutation fixtures retain real authentication/body validation but do not repeat physical workload execution. No service secret delivery, GitOps/work-ledger service change kind, durable acceptance queue, raw archive, or vault broker cutover is delivered. #275 remains parked for owner findings B, with its separate integration obligations unchanged.

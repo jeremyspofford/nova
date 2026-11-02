@@ -1,6 +1,6 @@
 # M10i topology: rendered entry for owner review
 
-This is the first styleguide deliverable, independently reviewed at `690c8458`, pending the owner's rendered approval. It is not the application map or completion of M10i.
+This records the first styleguide deliverable, independently reviewed at `690c8458` and approved by the owner on 2026-11-01. [Owner approval](../builder-packet/INPUT-2026-11-01-M10I-RENDERED-APPROVAL.md) cleared the app-integration gate. The evidence below remains the historical renderer checkpoint; full application evidence is in [the M10i gate](../evidence/m10i-gate.md).
 
 Open `/styleguide?entry=topology` (anchor `#sg-topology`). Each specimen can also open directly with `&state=<state>`; the state picker changes only the local demonstration. The fixtures explicitly describe illustrative machines; no real machines or cluster are connected.
 
@@ -142,4 +142,4 @@ Self-review inspected actual Chromium and WebKit screenshots covering every dist
 - The renderer assumes a hub-first presentation list. Larger/more complex graph layouts and real observation adaptation are future integration work.
 - The styleguide approval buttons deliberately finish with “No change was made.” Existing approval markup is reused, but nothing submits to an action endpoint.
 - The 1100 × 900 capture tests available width, not a physical hinge. Hinge behavior belongs to later application integration.
-- The table above records author self-checks; the linked independent reviews separately cover the final renderer and corrections. The owner's rendered approval is still required before any app integration. This draft has not merged or replaced the normal preview, and no external service change is included.
+- The table above records author self-checks; the linked independent reviews separately cover the final renderer and corrections. The owner subsequently approved this rendered entry on 2026-11-01, before app integration began. This checkpoint did not replace the normal preview or change any external service; the later application evidence and merge state are recorded separately.

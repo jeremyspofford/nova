@@ -14,3 +14,9 @@ Source: `docs/plans/ds2-memory-gate.md` NOTES 1–3 and the owner's 2026-11-01 s
 Acceptance: behavior is covered through the real runner/server path; exact-head CI passes; the same PR updates LEDGER and inventory to distinguish a live consumer from the template. Until then, retain the current “not switched on” claim.
 
 Evaluation limits remain: 0/49 observed false saves has an interval reaching 7.3%; three contradictions were skipped; one author wrote questions and cases; only the recorded tev1:4b digest passed. No model pull or rerun is authorized by this queue entry.
+
+## Broad-host test timing and runtime warnings — retained from M10i
+
+M10i's implementation reports retain failed broad host runs, separately from focused passes and final CI (`docs/evidence/m10i-gate.md`). Investigate M6a capture outage/recovery, onboarding's released negative-fixture port, provider-guard background-process results, and skills email-summary timing under their original full-suite schedule. Isolated passes and the altered-order diagnostic are not resolutions. Fix a demonstrated scheduling/fixture cause with a regression; do not increase waits or rerun until green without diagnosis. The R13 fault-lifetime race was separately fixed at `b4088fcc` and independently reviewed.
+
+The Node-only localStorage ExperimentalWarning is confirmed on the baseline. DEP0187 appeared near provider-guard but remains unattributed without a trace. Attribute and fix these in the test runtime without global warning suppression or unrelated production changes. Preserve real-model/keychain opt-in skips and the no-owner-service test boundary.
