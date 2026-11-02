@@ -280,7 +280,7 @@ export function deviceMeshCard({ devices = [], now = new Date() } = {}) {
   const trusted = devices.filter((d) => d.trust !== 'revoked');
   const alone = trusted.length <= 1;
   const body = `<ul class="device-list">${trusted.slice(0, 3).map((d) => deviceRow(d, { now })).join('')}</ul>${trusted.length > 3 ? `<p class="card-line">and ${trusted.length - 3} more</p>` : ''}${alone ? '<p class="card-line is-faint">Only this device for now. Pair your phone to reach Nova from it.</p>' : ''}`;
-  return card({ kind: 'device-mesh-card', title: 'Devices', icon: 'device', body, action: '<a class="link" href="/settings#devices" data-nav="settings">Devices</a>' });
+  return card({ kind: 'device-mesh-card', title: 'Devices', icon: 'device', body, action: '<a class="link" href="/topology">Machines and services</a>' });
 }
 
 // What each kind of device may do once it is in, said before the person approves it.

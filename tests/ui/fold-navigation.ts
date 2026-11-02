@@ -47,7 +47,7 @@ export async function openFoldView(page: Page, url: string) {
     if (new URL(page.url()).origin !== target.origin) throw new Error('Fold navigation must stay in the seeded app');
     if (target.pathname === '/capture') {
       await openFoldView(page, `${target.origin}/settings`);
-      await page.locator('#settings-nav a[href="/settings#privacy"]').click({ timeout: 15_000 });
+      await page.locator('#settings-nav a[href="/settings#capture"]').click({ timeout: 15_000 });
       await page.locator('#settings-capture a[href="/capture"]').click({ timeout: 15_000 });
     } else {
       const direct = page.locator(`#rail a[href="${target.pathname}"], #tabs a[href="${target.pathname}"]`).filter({ visible: true });

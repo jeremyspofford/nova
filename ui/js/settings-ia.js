@@ -8,10 +8,11 @@
 export const CATEGORIES = Object.freeze([
   { id: 'you', label: 'You and Nova', summary: 'Names and how Nova talks to you', parts: ['you'] },
   { id: 'appearance', label: 'Appearance', summary: 'Theme, light and dark, contrast', parts: ['look'] },
-  { id: 'privacy', label: 'Privacy and permissions', summary: 'What stays here, what asks first, capture', parts: ['privacy', 'perms', 'capture'] },
+  { id: 'privacy', label: 'Privacy and permissions', summary: 'What stays here and what asks first', parts: ['privacy', 'perms'] },
   { id: 'connections', label: 'Connections', summary: 'Accounts and services Nova can reach', parts: ['connections', 'sites'] },
   { id: 'models', label: 'Models and providers', summary: 'Local models and outside help', parts: ['providers', 'models'] },
   { id: 'devices', label: 'Devices', summary: 'Phones and computers paired with Nova', parts: ['devices'] },
+  { id: 'capture', label: 'Capture', summary: 'Sources, consent, and what Nova remembers', parts: ['capture'] },
   { id: 'services', label: 'Services', summary: 'How Nova runs its services here', parts: ['services'] },
   { id: 'backups', label: 'Backups and changes', summary: 'Checkpoints, restores, Nova’s own changes', parts: ['checkpoints', 'changes'] },
   { id: 'danger', label: 'Start over', summary: 'Export everything, or erase Nova here', parts: ['danger'] },
@@ -20,7 +21,7 @@ export const CATEGORIES = Object.freeze([
 // The grouped list's sections.
 export const GROUPS = Object.freeze([
   { title: 'You', cats: ['you', 'appearance', 'privacy'] },
-  { title: 'What Nova works with', cats: ['connections', 'models', 'devices', 'services'] },
+  { title: 'What Nova works with', cats: ['connections', 'models', 'devices', 'capture', 'services'] },
   { title: 'Keeping Nova safe', cats: ['backups', 'danger'] },
 ]);
 
@@ -37,12 +38,13 @@ export const ENTRIES = Object.freeze([
   { cat: 'appearance', label: 'Contrast', target: 'contrast-check', words: ['high contrast', 'low vision', 'hard to see', 'contrast', 'readability', 'readable', 'hard to read', 'accessibility', 'legibility', 'wcag', 'faint'] },
   { cat: 'privacy', label: 'Privacy', target: 'privacy', words: ['privacy mode', 'voice', 'microphone', 'mic', 'dictation', 'speech', 'talk', 'privacy', 'private', 'local', 'local only', 'cloud', 'offline', 'data', 'send data'] },
   { cat: 'privacy', label: 'Without asking', target: 'perms', words: ['permissions', 'permission', 'ask first', 'approvals', 'approve', 'allow', 'trust', 'without asking', 'auto approve'] },
-  { cat: 'privacy', label: 'Capture', target: 'capture', words: ['screenpipe', 'capture source', 'capture sources', 'sources', 'never capture', 'spaces', 'retention', 'capture', 'screen', 'record', 'recording', 'watch', 'clipboard', 'what nova sees', 'notes from apps'] },
+  { cat: 'capture', label: 'Capture', target: 'capture', words: ['screenpipe', 'capture source', 'capture sources', 'sources', 'never capture', 'spaces', 'retention', 'capture', 'screen', 'record', 'recording', 'watch', 'clipboard', 'what nova sees', 'notes from apps'] },
   { cat: 'connections', label: 'Connections', target: 'connections', words: ['connections', 'connection', 'connectors', 'integrations', 'accounts', 'account', 'home assistant', 'gmail', 'email', 'mail', 'calendar', 'services', 'link'] },
   { cat: 'connections', label: 'Site sign-ins', target: 'browser-sites', words: ['site sign-ins', 'site sign-in', 'sign-ins', 'sign ins', 'saved passwords', 'passwords', 'logins', 'login', 'log in', 'cookies', 'browser', 'nova browser', 'websites', 'web sites', 'forget site', 'signed in'] },
   { cat: 'models', label: 'Providers', target: 'providers', words: ['api key', 'api keys', 'token', 'n8n', 'relay', 'providers', 'provider', 'api key', 'claude', 'openai', 'cloud model', 'coding agent', 'outside help'] },
   { cat: 'models', label: 'Models', target: 'models', words: ['models', 'model', 'local models', 'ollama', 'download', 'llm', 'ai', 'gpu', 'disk space'] },
   { cat: 'devices', label: 'Paired devices', target: 'devices', words: ['tailscale', 'mesh address', 'network', 'remote access', 'hub', 'standby', 'devices', 'device', 'phone', 'phones', 'pair', 'pairing', 'add a device', 'add phone', 'qr', 'qr code', 'tablet', 'laptop', 'computer', 'mesh', 'revoke', 'iphone', 'android'] },
+  { cat: 'devices', label: 'Machines and services', target: 'devices-topology', words: ['topology', 'map', 'machine', 'machines', 'workloads', 'versions', 'where services run'] },
   { cat: 'devices', label: 'Device roles', target: 'devices', words: ['roles', 'role', 'purpose', 'what it is for', 'thin client', 'hub candidate', 'compute', 'storage', 'capture source', 'general server'] },
   { cat: 'services', label: 'How services run', target: 'services-backend', words: ['services', 'service', 'backend', 'supervisor', 'k3s', 'kubernetes', 'containers', 'cluster', 'ordinary programs', 'switch backend'] },
   { cat: 'devices', label: 'Install Nova', target: 'install-row', words: ['install', 'app', 'home screen', 'pwa', 'add to home screen', 'shortcut'] },
