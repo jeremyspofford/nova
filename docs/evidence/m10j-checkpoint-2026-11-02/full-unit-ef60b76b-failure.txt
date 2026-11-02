@@ -1,0 +1,39 @@
+Full ordinary pre-main-merge run at ef60b76b; SHA256 832c7f4f4c18fdc3a410f6601e22e906780702ab5e3efb7d2910849c3200ef1f
+
+ℹ tests 1718
+ℹ suites 0
+ℹ pass 1703
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 14
+ℹ todo 0
+ℹ duration_ms 822770.553328
+
+✖ failing tests:
+
+test at tests/supervisor/services-review.test.ts:538:1
+✖ no code in Nova or its scripts names a Kubernetes tool to run (the tripwire sees PATH lookups only) (20.065337ms)
+  AssertionError [ERR_ASSERTION]: src/core/services/k3s/operations.ts:110:        directory: join(this.#o.home, 'services', 'k3s', r.id), workloadOnly: true, devices: current,
+  src/core/services/k3s/operations.ts:274:          attached.push({ service: s.service, driver: 'k3s', placement: identity.id, live: live?.version ?? null, previous: s.previous, assigned: s.assigned, observation,
+  src/core/services/manager.ts:86:      if (driver === this.#remote || driver.name === 'k3s') continue;
+  src/core/services/manager.ts:93:    const local = this.drivers.filter((d) => d !== this.#remote && d.name !== 'k3s');
+
+
+  0 !== 1
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/tests/supervisor/services-review.test.ts:547:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

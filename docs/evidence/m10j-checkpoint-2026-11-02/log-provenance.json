@@ -1,0 +1,50 @@
+[
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-4-focused-final.txt",
+    "raw_sha256": "5620c391f8a4be05fbc799a7971a010186ddb9011720c047a408c2533ccfb1f8",
+    "public_sha256": "5620c391f8a4be05fbc799a7971a010186ddb9011720c047a408c2533ccfb1f8",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-4-typecheck-final.txt",
+    "raw_sha256": "bc64fea1132b63bbe5b76358b0dbad0cf24988dad08de3ac260ec7e6cd74305d",
+    "public_sha256": "bc64fea1132b63bbe5b76358b0dbad0cf24988dad08de3ac260ec7e6cd74305d",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-source-guard-green.txt",
+    "raw_sha256": "a57a3572c089012e79464236ec247afd74c5860dec0b0f40f10fb7686b8af96d",
+    "public_sha256": "a57a3572c089012e79464236ec247afd74c5860dec0b0f40f10fb7686b8af96d",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-source-guard-affected.txt",
+    "raw_sha256": "747338c22fd4406c18b62aa4538bc8bced215e453eb5fd38f201153f62136748",
+    "public_sha256": "747338c22fd4406c18b62aa4538bc8bced215e453eb5fd38f201153f62136748",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-source-guard-typecheck.txt",
+    "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "public_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-source-guard-modules.txt",
+    "raw_sha256": "2f463e9ecaababa7ac6e95aed3873a3e5bda113d1feb2bd6e24d60e440bcf91c",
+    "public_sha256": "2f463e9ecaababa7ac6e95aed3873a3e5bda113d1feb2bd6e24d60e440bcf91c",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-main-282-typecheck.txt",
+    "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "public_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-main-282-browser.txt",
+    "raw_sha256": "d16a009a01820cfdf8375ad20d2a4140bf7ac603e86c31d4850c2fb065ea9c5e",
+    "public_sha256": "d16a009a01820cfdf8375ad20d2a4140bf7ac603e86c31d4850c2fb065ea9c5e",
+    "normalization": "trailing whitespace only"
+  }
+]

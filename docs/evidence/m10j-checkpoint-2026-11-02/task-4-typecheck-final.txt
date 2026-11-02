@@ -1,0 +1,4 @@
+npm notice run nova@0.1.0 typecheck
+npm notice run tsc -p tsconfig.json
+
+EXIT_STATUS=0

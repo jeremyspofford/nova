@@ -1,0 +1,11 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ no code in Nova or its scripts names a Kubernetes tool to run (the tripwire sees PATH lookups only) (11.243191ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 346.462175
+no-Kubernetes tripwire: never fired

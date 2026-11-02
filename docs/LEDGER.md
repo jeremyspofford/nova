@@ -368,6 +368,13 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What they delivered: sealed-off workspaces on this machine (Nova Computer), Nova's own browser with vault logins and a hard stop before paying, and coding through chat with tests, a preview and a merge only on your yes.
 - Still unfinished: all tested against stand-ins (pretend sites and shops, stand-in coding agents), never real sites, accounts or agents; the browser can't start on this machine outside a container; no chat tool drives the workspaces yet; the infrastructure phase (M10d) isn't merged.
 
+## Pending branch checkpoint — not merged
+
+**2026-11-02 · M10j · Simulated cluster work; credentials still blocked**
+- What changed on this branch: a chart values compiler and simulated cluster driver, with durable task requests, independently aged observations and network changes governed by the existing approval/dead-man path. Tests keep missing, unavailable, wrong-cluster and hostile ambient configurations from starting work or reading old vault values. The default app still has no cluster launcher.
+- What you can do on this branch: run the controlled stand-ins and inspect their recorded outcomes. Nothing new is switched on in the live app; this is a draft checkpoint for the owner-authorized uncredentialed work, not a completed M10j merge or a real Kubernetes deployment.
+- Still unfinished: actual broker/launcher phases P1a/P1b/P1c, per-cluster credential isolation/tickets/cleanup and their adversarial proof, with #275 parked for findings B. Whole-branch checkpoint review and exact-head ordinary CI are separate from that missing production gate. The initial full local run's one source-guard failure and reviewed narrow repair stay recorded; full phase acceptance remains NOT PASSED. No M10k or preview change follows from this checkpoint. Evidence: docs/evidence/m10j-gate.md.
+
 ## Dependencies
 
 Runtime: **none**. The server, runner, markdown renderer and tests use Node 22

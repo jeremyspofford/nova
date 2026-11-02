@@ -1,0 +1,45 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M10i: real seeded topology route, Settings Services and Health Devices entry points (2339.631896ms)
+✔ M10i: chromium real app, all six active themes at phone/desktop, layers, focus and exact snapshot export (7640.189005ms)
+✔ M10i: webkit real app, all six active themes at phone/desktop, layers, focus and exact snapshot export (8588.529051ms)
+✔ M10i: server policy tiers, exact fixed action bodies, all rollbacks, revalidation, refusal and acknowledgement (7080.654377ms)
+✔ M10i: fresh machine never freshens old service, capture lag is factual and aged, failed refresh remains unknown (1477.179103ms)
+✔ M10i: a real controlling service worker never revives cached topology as current offline (1490.851405ms)
+✔ M10i: coalesced visible polling, expired sources, preserved focus, approval pause and late response protection (3009.52591ms)
+✔ M10i: real device assignment acknowledgement never claims serving and read-only device refuses mutation (2364.372454ms)
+✔ M10i: real eligible version selection honors each policy and a lost acknowledgement never retries (2012.823851ms)
+✔ M10i: real empty observations and pending collection remain truthful (1165.371968ms)
+✔ M10i: shell modules and runtime scripts stay local with no production dependency (2.246163ms)
+✔ M10i: merged current failure remains worse than stale heartbeat and preserves both reasons and export (1103.721593ms)
+✔ M10i: time spent collecting cannot freshen near-expired service evidence (1175.472121ms)
+✔ M10i: moving the wall clock backward cannot make retained service evidence fresh (1232.794522ms)
+✔ M10i: pending approval keeps confirmation controls disabled until its one request finishes (1524.934798ms)
+✔ M10i: optional live retained context leaves the approved stale-machine fixture unchanged (3.351489ms)
+✔ M10i: review follows the displayed eligible candidate after the prior selection disappears (1603.790635ms)
+✔ M10i: an unknown active hub never invents graph links or mutation authority (1132.772994ms)
+✔ M10i: null or absent live hub uses existing rows while undefined preserves the approved fixture (0.650814ms)
+✔ M10i I2: independently expired heartbeat preserves current failed machine and service evidence (1667.859591ms)
+✔ M10i I2: independently expired heartbeat preserves current degraded machine and service evidence (1633.396055ms)
+✔ M10i I3: late post cannot close or focus a replacement approval (2050.945157ms)
+✔ M10i I3: late get-rejection cannot close or focus a replacement approval (2025.791954ms)
+✔ M10i: serving labels require current healthy evidence, including held and null-health live versions (1766.699366ms)
+✔ selected empty destination cannot borrow hidden previous-view content (410.75199ms)
+✔ hidden active root and hidden active content cannot receive coverage credit (423.532665ms)
+✔ actual visible empty-state content is ready; only active visible pending markers block it (391.847546ms)
+DOCUMENT GUARD: same-document requests=1 reload requests=2 current navigation entries=1
+✔ document guard preserves real same-document history and hash changes, then rejects reload (414.801591ms)
+NAVIGATION phone: registered=11 reached=11 missing=[] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true} states=26
+DOCUMENT phone: main-document requests=1
+✔ navigation reachability and required homes: phone (26849.858737ms)
+NAVIGATION rail: registered=11 reached=11 missing=[] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true} states=26
+DOCUMENT rail: main-document requests=1
+✔ navigation reachability and required homes: rail (21050.173852ms)
+ℹ tests 30
+ℹ suites 0
+ℹ pass 30
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 104612.494826
+no-Kubernetes tripwire: never fired

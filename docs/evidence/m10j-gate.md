@@ -72,3 +72,26 @@ The sole failure was the existing source guard at tests/supervisor/services-revi
 [Implementation](../reviews/m10j-source-guard-fix-2026-11-02.md) and [independent scoped review](../reviews/m10j-source-guard-review-2026-11-02.md): spec/quality PASS, zero C/I/M. The unchanged guard passes1/1; thirteen affected actual driver/operations/chart/manager/placement/topology/supervisor suites pass159/159 with zero skips/cancellations/warnings and tripwire never fired. Two added assertions check the persisted cluster registry path and public topology driver field rather than importing the constant. Typecheck, diff and a tripwire-armed manager-first module initialization check pass. The driver's nine-module import closure has no manager/operations/index return edge or module-import tool/filesystem effect. Optional reviewer type introspection was unavailable through the installed TypeScript7 root API; source inference and the existing project typecheck were used, without changing dependencies.
 
 The full1718 run was not repeated to erase its failure. Final combined-tree/full ordinary CI and fresh whole-branch adversarial acceptance remain required for a checkpoint; actual P1a/P1b/P1c and #275 findings B remain required for the **full phase gate, still NOT PASSED**. No real Kubernetes tool, credentialed path, owner service/data, image pull, preview change or phase merge is proved here.
+
+
+## Combined main checkpoint after navigation repair
+
+Main #282 merged as `048eea0ee043f43d01bc9a36bed601ce9805373b` after exact reviewed-head ordinary CI and authorized preview verification. It was merged into this branch (never rebased) as `87000830c6c5d018757a4c6a58a1e29db2fdc959`, preserving every source/eval/review pin. That merge changes only navigation UI, tests and records relative to the already-reviewed source-guard repair; no K3s source changed. The combined project typecheck passes. Cached Playwright actual navigation/guard and topology suites pass **30/30, zero skips**, 104.61s, tripwire never fired, with no screenshot flag or replacement of approved captures. This proves compatibility with the complete Home-start navigation gate, not broker credentials or a passed full phase.
+
+Current inventory marks this work as backend implementation on the branch, with current app-shipping C23 unchanged: K3s is not app-shipped. The plain-language LEDGER entry is in an explicitly unmerged checkpoint section. Final independent whole-branch adversarial review, exact-head ordinary full CI and checkpoint publication remain controller work. A green draft checkpoint cannot authorize a full phase merge while Task4's actual dependency/proof is missing.
+
+## Controller rulings carried into checkpoint review
+
+| Ruling | Reason / cost if wrong |
+|---|---|
+| The owner's ADR, explicit uncredentialed scope and standing autonomous order authorize implementation without a second plan-confirmation round. | No extra owner policy is invented; internal engineering choices may need independently reviewed rework. New rendered patterns and #275 B keep their explicit gates. |
+| Reuse our own already-isolated suitable worktree. | No owner/root/old worktree is modified; the filesystem name still says M10i while the branch and plan identify M10j. |
+| Encode resource/selector identities with 160 bits derived from SHA-256. | Accepted service names exceed Kubernetes name/label limits. Generated names are less readable; original identity stays in escaped metadata. Collision/closure tests remain required. |
+| Require actual P1a/P1b/P1c before credentialed M10j; continue only explicitly authorized uncredentialed work while absent. | No legacy value bridge or parallel broker. The full phase cannot merge until the real foundation and required proof exist. |
+| Refuse unsupported copy/singleton/shadow/state semantics without actual capability/proof. | Do not share writers or relax readiness to make a simulation pass; some otherwise valid definitions remain unavailable and limits stay explicit. |
+| Keep service-change-kind/GitOps in M10k under the accepted M10e deferral. | Current work uses existing manager/ledger authority and recorded artifacts; it does not claim the full Changes/GitOps pipeline. |
+| Use existing service canary/probe defaults, with injected clocks only for deterministic stand-in proof. | No weaker public K3s gate is invented; physical cluster timing/behavior remains unproven and Task4/full-phase gates stay open. |
+
+These are all seven `Ruling:` entries from the running plan ledger, including their practical costs; none is silently discarded or used as an owner credential decision.
+
+Archived [selected actual checkpoint outputs and provenance](m10j-checkpoint-2026-11-02/) include the full-run failure excerpt, unchanged guard and159affected passes, safe Step1 proof and combined30browser/typecheck. Raw hashes distinguish disclosed trailing-whitespace normalization; all original failed logs remain in the owned plan audit. The pre-final-review source manifest pins the concrete uncredentialed code against merged main048e.
