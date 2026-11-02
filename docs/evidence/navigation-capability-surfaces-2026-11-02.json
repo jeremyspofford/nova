@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "baseline": "6d0a74a58a3a20df7f3718b2ade2413c1ba84e8a",
   "scope": "Normal onboarded Home, real click/tap navigation only; source of expected views is actual production app VIEWS. Surface presence is not operation/security proof. No effectful actions, hidden controls or conditional record sheets counted.",
   "crawls": {
@@ -4036,6 +4036,4146 @@
           }
         ]
       }
+    },
+    "guarded_green": {
+      "phone": {
+        "registered": [
+          "activity",
+          "automations",
+          "capture",
+          "chat",
+          "health",
+          "home",
+          "memory",
+          "settings",
+          "skills",
+          "tasks",
+          "topology"
+        ],
+        "reached": {
+          "home": [],
+          "tasks": [
+            {
+              "href": "/tasks",
+              "label": "All tasks",
+              "section": "home"
+            }
+          ],
+          "topology": [
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "home"
+            }
+          ],
+          "memory": [
+            {
+              "href": "/memory",
+              "label": "Memory",
+              "section": "home"
+            }
+          ],
+          "health": [
+            {
+              "href": "/health",
+              "label": "Health",
+              "section": "home"
+            }
+          ],
+          "chat": [
+            {
+              "href": "/chat",
+              "label": "Chat",
+              "section": "tabs"
+            }
+          ],
+          "automations": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/automations",
+              "label": "Automations",
+              "section": "more"
+            }
+          ],
+          "skills": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/skills",
+              "label": "Skills",
+              "section": "more"
+            }
+          ],
+          "activity": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/activity",
+              "label": "Activity",
+              "section": "more"
+            }
+          ],
+          "settings": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "more"
+            }
+          ],
+          "capture": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "more"
+            },
+            {
+              "href": "/settings#capture",
+              "label": "CaptureSources, consent, and what Nova remembers",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/capture",
+              "label": "Open Capture",
+              "section": "capture"
+            }
+          ]
+        },
+        "required": {
+          "homeTopology": true,
+          "devicesTopology": true,
+          "captureCategory": true
+        },
+        "missing": [],
+        "healthMesh": true,
+        "forbidden": [],
+        "documentRequests": [
+          "http://127.0.0.1:46147/"
+        ],
+        "required_paths": {
+          "homeTopology": [
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "home"
+            }
+          ],
+          "devicesTopology": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "more"
+            },
+            {
+              "href": "/settings#devices",
+              "label": "DevicesPhones and computers paired with Nova",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "devices-topology"
+            }
+          ],
+          "captureCategory": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "more"
+            },
+            {
+              "href": "/settings#capture",
+              "label": "Capture",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/capture",
+              "label": "Open Capture",
+              "section": "capture"
+            }
+          ]
+        },
+        "states": [
+          {
+            "path": "/",
+            "view": "home",
+            "steps": [],
+            "sections": []
+          },
+          {
+            "path": "/tasks",
+            "view": "tasks",
+            "steps": [
+              {
+                "href": "/tasks",
+                "label": "All tasks",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/topology",
+            "view": "topology",
+            "steps": [
+              {
+                "href": "/topology",
+                "label": "Machines and services",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/memory",
+            "view": "memory",
+            "steps": [
+              {
+                "href": "/memory",
+                "label": "Memory",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/health",
+            "view": "health",
+            "steps": [
+              {
+                "href": "/health",
+                "label": "Health",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/chat",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/|More",
+            "view": "home",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/chat|Conversations",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/automations",
+            "view": "automations",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/automations",
+                "label": "Automations",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/skills",
+            "view": "skills",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/skills",
+                "label": "Skills",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/activity",
+            "view": "activity",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/activity",
+                "label": "Activity",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/c/2026-11-02-nav001",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/new",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "button": "#new-chat",
+                "label": "New conversation"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings#you",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#you",
+                "label": "You and NovaNames and how Nova talks to you",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-you",
+              "you",
+              "set-you",
+              "you-name-row",
+              "you-name",
+              "nova-name-row",
+              "nova-name",
+              "directness-row",
+              "directness"
+            ]
+          },
+          {
+            "path": "/settings#appearance",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#appearance",
+                "label": "AppearanceTheme, light and dark, contrast",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-look",
+              "appearance",
+              "set-look",
+              "appearance-scope",
+              "appearance-where",
+              "appearance-bar",
+              "appearance-design",
+              "contrast-check",
+              "appearance-mode",
+              "appearance-iphone"
+            ]
+          },
+          {
+            "path": "/settings#privacy",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#privacy",
+                "label": "Privacy and permissionsWhat stays here and what asks first",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-privacy",
+              "privacy",
+              "set-privacy",
+              "settings-perms",
+              "perms",
+              "set-perms",
+              "p-commands",
+              "pl-commands",
+              "p-gmail-drafts",
+              "pl-gmail-drafts",
+              "p-gmail-tidy",
+              "pl-gmail-tidy",
+              "p-schedules",
+              "pl-schedules",
+              "p-memory-import",
+              "pl-memory-import"
+            ]
+          },
+          {
+            "path": "/settings#connections",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#connections",
+                "label": "ConnectionsAccounts and services Nova can reach",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-connections",
+              "connections",
+              "set-connections",
+              "conn-home-assistant-token-hint",
+              "settings-sites",
+              "browser-sites",
+              "set-browser-sites"
+            ]
+          },
+          {
+            "path": "/settings#models",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#models",
+                "label": "Models and providersLocal models and outside help",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-providers",
+              "providers",
+              "set-providers",
+              "settings-models",
+              "models",
+              "set-models",
+              "decision-model"
+            ]
+          },
+          {
+            "path": "/settings#devices",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#devices",
+                "label": "DevicesPhones and computers paired with Nova",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-devices",
+              "devices",
+              "set-devices",
+              "devices-topology",
+              "install-row"
+            ]
+          },
+          {
+            "path": "/settings#capture",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#capture",
+                "label": "CaptureSources, consent, and what Nova remembers",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-capture",
+              "capture",
+              "set-capture",
+              "capture-switch-space",
+              "capture-days"
+            ]
+          },
+          {
+            "path": "/settings#services",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#services",
+                "label": "ServicesHow Nova runs its services here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-services",
+              "services",
+              "set-services",
+              "services-backend"
+            ]
+          },
+          {
+            "path": "/settings#backups",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#backups",
+                "label": "Backups and changesCheckpoints, restores, Nova\u2019s own changes",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-checkpoints",
+              "checkpoints",
+              "set-checkpoints",
+              "settings-changes",
+              "changes",
+              "set-changes"
+            ]
+          },
+          {
+            "path": "/settings#danger",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#danger",
+                "label": "Start overExport everything, or erase Nova here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-danger",
+              "danger-zone",
+              "set-danger"
+            ]
+          },
+          {
+            "path": "/schedules#sc-navigation-example",
+            "view": "automations",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              },
+              {
+                "href": "/schedules#sc-navigation-example",
+                "label": "Navigation schedule",
+                "section": "h-navigation-report"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/capture",
+            "view": "capture",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#capture",
+                "label": "CaptureSources, consent, and what Nova remembers",
+                "section": "settings-nav"
+              },
+              {
+                "href": "/capture",
+                "label": "Open Capture",
+                "section": "capture"
+              }
+            ],
+            "sections": []
+          }
+        ]
+      },
+      "rail": {
+        "registered": [
+          "activity",
+          "automations",
+          "capture",
+          "chat",
+          "health",
+          "home",
+          "memory",
+          "settings",
+          "skills",
+          "tasks",
+          "topology"
+        ],
+        "reached": {
+          "home": [],
+          "chat": [
+            {
+              "href": "/chat",
+              "label": "Chat",
+              "section": "rail"
+            }
+          ],
+          "tasks": [
+            {
+              "href": "/tasks",
+              "label": "Tasks",
+              "section": "rail"
+            }
+          ],
+          "memory": [
+            {
+              "href": "/memory",
+              "label": "Memory",
+              "section": "rail"
+            }
+          ],
+          "automations": [
+            {
+              "href": "/automations",
+              "label": "Automations",
+              "section": "rail"
+            }
+          ],
+          "settings": [
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "rail"
+            }
+          ],
+          "topology": [
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "aside"
+            }
+          ],
+          "health": [
+            {
+              "href": "/health",
+              "label": "Health",
+              "section": "aside"
+            }
+          ],
+          "skills": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/skills",
+              "label": "Skills",
+              "section": "more"
+            }
+          ],
+          "activity": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/activity",
+              "label": "Activity",
+              "section": "more"
+            }
+          ],
+          "capture": [
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "rail"
+            },
+            {
+              "href": "/settings#capture",
+              "label": "CaptureSources, consent, and what Nova remembers",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/capture",
+              "label": "Open Capture",
+              "section": "capture"
+            }
+          ]
+        },
+        "required": {
+          "homeTopology": true,
+          "devicesTopology": true,
+          "captureCategory": true
+        },
+        "missing": [],
+        "healthMesh": true,
+        "forbidden": [],
+        "documentRequests": [
+          "http://127.0.0.1:38645/"
+        ],
+        "required_paths": {
+          "homeTopology": [
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "aside"
+            }
+          ],
+          "devicesTopology": [
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "rail"
+            },
+            {
+              "href": "/settings#devices",
+              "label": "DevicesPhones and computers paired with Nova",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "devices-topology"
+            }
+          ],
+          "captureCategory": [
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "rail"
+            },
+            {
+              "href": "/settings#capture",
+              "label": "Capture",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/capture",
+              "label": "Open Capture",
+              "section": "capture"
+            }
+          ]
+        },
+        "states": [
+          {
+            "path": "/",
+            "view": "home",
+            "steps": [],
+            "sections": []
+          },
+          {
+            "path": "/chat",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/tasks",
+            "view": "tasks",
+            "steps": [
+              {
+                "href": "/tasks",
+                "label": "Tasks",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/memory",
+            "view": "memory",
+            "steps": [
+              {
+                "href": "/memory",
+                "label": "Memory",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/automations",
+            "view": "automations",
+            "steps": [
+              {
+                "href": "/automations",
+                "label": "Automations",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              }
+            ],
+            "sections": [
+              "settings-you",
+              "you",
+              "set-you",
+              "you-name-row",
+              "you-name",
+              "nova-name-row",
+              "nova-name",
+              "directness-row",
+              "directness"
+            ]
+          },
+          {
+            "path": "/topology",
+            "view": "topology",
+            "steps": [
+              {
+                "href": "/topology",
+                "label": "Machines and services",
+                "section": "aside"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/health",
+            "view": "health",
+            "steps": [
+              {
+                "href": "/health",
+                "label": "Health",
+                "section": "aside"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/|More",
+            "view": "home",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/chat|Conversations",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings#you",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#you",
+                "label": "You and NovaNames and how Nova talks to you",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-you",
+              "you",
+              "set-you",
+              "you-name-row",
+              "you-name",
+              "nova-name-row",
+              "nova-name",
+              "directness-row",
+              "directness"
+            ]
+          },
+          {
+            "path": "/settings#appearance",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#appearance",
+                "label": "AppearanceTheme, light and dark, contrast",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-look",
+              "appearance",
+              "set-look",
+              "appearance-scope",
+              "appearance-where",
+              "appearance-bar",
+              "appearance-design",
+              "contrast-check",
+              "appearance-mode",
+              "appearance-iphone"
+            ]
+          },
+          {
+            "path": "/settings#privacy",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#privacy",
+                "label": "Privacy and permissionsWhat stays here and what asks first",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-privacy",
+              "privacy",
+              "set-privacy",
+              "settings-perms",
+              "perms",
+              "set-perms",
+              "p-commands",
+              "pl-commands",
+              "p-gmail-drafts",
+              "pl-gmail-drafts",
+              "p-gmail-tidy",
+              "pl-gmail-tidy",
+              "p-schedules",
+              "pl-schedules",
+              "p-memory-import",
+              "pl-memory-import"
+            ]
+          },
+          {
+            "path": "/settings#connections",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#connections",
+                "label": "ConnectionsAccounts and services Nova can reach",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-connections",
+              "connections",
+              "set-connections",
+              "conn-home-assistant-token-hint",
+              "settings-sites",
+              "browser-sites",
+              "set-browser-sites"
+            ]
+          },
+          {
+            "path": "/settings#models",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#models",
+                "label": "Models and providersLocal models and outside help",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-providers",
+              "providers",
+              "set-providers",
+              "settings-models",
+              "models",
+              "set-models",
+              "decision-model"
+            ]
+          },
+          {
+            "path": "/settings#devices",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#devices",
+                "label": "DevicesPhones and computers paired with Nova",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-devices",
+              "devices",
+              "set-devices",
+              "devices-topology",
+              "install-row"
+            ]
+          },
+          {
+            "path": "/settings#capture",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#capture",
+                "label": "CaptureSources, consent, and what Nova remembers",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-capture",
+              "capture",
+              "set-capture",
+              "capture-switch-space",
+              "capture-days"
+            ]
+          },
+          {
+            "path": "/settings#services",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#services",
+                "label": "ServicesHow Nova runs its services here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-services",
+              "services",
+              "set-services",
+              "services-backend"
+            ]
+          },
+          {
+            "path": "/settings#backups",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#backups",
+                "label": "Backups and changesCheckpoints, restores, Nova\u2019s own changes",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-checkpoints",
+              "checkpoints",
+              "set-checkpoints",
+              "settings-changes",
+              "changes",
+              "set-changes"
+            ]
+          },
+          {
+            "path": "/settings#danger",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#danger",
+                "label": "Start overExport everything, or erase Nova here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-danger",
+              "danger-zone",
+              "set-danger"
+            ]
+          },
+          {
+            "path": "/skills",
+            "view": "skills",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/skills",
+                "label": "Skills",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/activity",
+            "view": "activity",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/activity",
+                "label": "Activity",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/c/2026-11-02-nav001",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/new",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "button": "#new-chat",
+                "label": "New conversation"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/capture",
+            "view": "capture",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#capture",
+                "label": "CaptureSources, consent, and what Nova remembers",
+                "section": "settings-nav"
+              },
+              {
+                "href": "/capture",
+                "label": "Open Capture",
+                "section": "capture"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/schedules#sc-navigation-example",
+            "view": "automations",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              },
+              {
+                "href": "/schedules#sc-navigation-example",
+                "label": "Navigation schedule",
+                "section": "h-navigation-report"
+              }
+            ],
+            "sections": []
+          }
+        ]
+      }
+    },
+    "guarded_baseline": {
+      "phone": {
+        "registered": [
+          "activity",
+          "automations",
+          "capture",
+          "chat",
+          "health",
+          "home",
+          "memory",
+          "settings",
+          "skills",
+          "tasks",
+          "topology"
+        ],
+        "reached": {
+          "home": [],
+          "tasks": [
+            {
+              "href": "/tasks",
+              "label": "All tasks",
+              "section": "home"
+            }
+          ],
+          "settings": [
+            {
+              "href": "/settings#devices",
+              "label": "Devices",
+              "section": "home"
+            }
+          ],
+          "memory": [
+            {
+              "href": "/memory",
+              "label": "Memory",
+              "section": "home"
+            }
+          ],
+          "health": [
+            {
+              "href": "/health",
+              "label": "Health",
+              "section": "home"
+            }
+          ],
+          "chat": [
+            {
+              "href": "/chat",
+              "label": "Chat",
+              "section": "tabs"
+            }
+          ],
+          "topology": [
+            {
+              "href": "/health",
+              "label": "Health",
+              "section": "home"
+            },
+            {
+              "href": "/topology",
+              "label": "View machines and services",
+              "section": "health-view"
+            }
+          ],
+          "automations": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/automations",
+              "label": "Automations",
+              "section": "more"
+            }
+          ],
+          "skills": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/skills",
+              "label": "Skills",
+              "section": "more"
+            }
+          ],
+          "activity": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/activity",
+              "label": "Activity",
+              "section": "more"
+            }
+          ],
+          "capture": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "more"
+            },
+            {
+              "href": "/settings#privacy",
+              "label": "Privacy and permissionsWhat stays here, what asks first, capture",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/capture",
+              "label": "Open Capture",
+              "section": "capture"
+            }
+          ]
+        },
+        "required": {
+          "homeTopology": false,
+          "devicesTopology": false,
+          "captureCategory": false
+        },
+        "missing": [],
+        "healthMesh": true,
+        "forbidden": [],
+        "documentRequests": [
+          "http://127.0.0.1:39387/"
+        ],
+        "required_paths": {},
+        "states": [
+          {
+            "path": "/",
+            "view": "home",
+            "steps": [],
+            "sections": []
+          },
+          {
+            "path": "/tasks",
+            "view": "tasks",
+            "steps": [
+              {
+                "href": "/tasks",
+                "label": "All tasks",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings#devices",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings#devices",
+                "label": "Devices",
+                "section": "home"
+              }
+            ],
+            "sections": [
+              "settings-devices",
+              "devices",
+              "set-devices",
+              "install-row"
+            ]
+          },
+          {
+            "path": "/memory",
+            "view": "memory",
+            "steps": [
+              {
+                "href": "/memory",
+                "label": "Memory",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/health",
+            "view": "health",
+            "steps": [
+              {
+                "href": "/health",
+                "label": "Health",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/chat",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/|More",
+            "view": "home",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/topology",
+            "view": "topology",
+            "steps": [
+              {
+                "href": "/health",
+                "label": "Health",
+                "section": "home"
+              },
+              {
+                "href": "/topology",
+                "label": "View machines and services",
+                "section": "health-view"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/chat|Conversations",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/automations",
+            "view": "automations",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/automations",
+                "label": "Automations",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/skills",
+            "view": "skills",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/skills",
+                "label": "Skills",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/activity",
+            "view": "activity",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/activity",
+                "label": "Activity",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/c/2026-11-02-nav001",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/new",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "button": "#new-chat",
+                "label": "New conversation"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings#you",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#you",
+                "label": "You and NovaNames and how Nova talks to you",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-you",
+              "you",
+              "set-you",
+              "you-name-row",
+              "you-name",
+              "nova-name-row",
+              "nova-name",
+              "directness-row",
+              "directness"
+            ]
+          },
+          {
+            "path": "/settings#appearance",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#appearance",
+                "label": "AppearanceTheme, light and dark, contrast",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-look",
+              "appearance",
+              "set-look",
+              "appearance-scope",
+              "appearance-where",
+              "appearance-bar",
+              "appearance-design",
+              "contrast-check",
+              "appearance-mode",
+              "appearance-iphone"
+            ]
+          },
+          {
+            "path": "/settings#privacy",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#privacy",
+                "label": "Privacy and permissionsWhat stays here, what asks first, capture",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-privacy",
+              "privacy",
+              "set-privacy",
+              "settings-perms",
+              "perms",
+              "set-perms",
+              "p-commands",
+              "pl-commands",
+              "p-gmail-drafts",
+              "pl-gmail-drafts",
+              "p-gmail-tidy",
+              "pl-gmail-tidy",
+              "p-schedules",
+              "pl-schedules",
+              "p-memory-import",
+              "pl-memory-import",
+              "settings-capture",
+              "capture",
+              "set-capture",
+              "capture-switch-space",
+              "capture-days"
+            ]
+          },
+          {
+            "path": "/settings#connections",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#connections",
+                "label": "ConnectionsAccounts and services Nova can reach",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-connections",
+              "connections",
+              "set-connections",
+              "conn-home-assistant-token-hint",
+              "settings-sites",
+              "browser-sites",
+              "set-browser-sites"
+            ]
+          },
+          {
+            "path": "/settings#models",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#models",
+                "label": "Models and providersLocal models and outside help",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-providers",
+              "providers",
+              "set-providers",
+              "settings-models",
+              "models",
+              "set-models",
+              "decision-model"
+            ]
+          },
+          {
+            "path": "/settings#services",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#services",
+                "label": "ServicesHow Nova runs its services here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-services",
+              "services",
+              "set-services",
+              "services-backend"
+            ]
+          },
+          {
+            "path": "/settings#backups",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#backups",
+                "label": "Backups and changesCheckpoints, restores, Nova\u2019s own changes",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-checkpoints",
+              "checkpoints",
+              "set-checkpoints",
+              "settings-changes",
+              "changes",
+              "set-changes"
+            ]
+          },
+          {
+            "path": "/settings#danger",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#danger",
+                "label": "Start overExport everything, or erase Nova here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-danger",
+              "danger-zone",
+              "set-danger"
+            ]
+          },
+          {
+            "path": "/schedules#sc-navigation-example",
+            "view": "automations",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              },
+              {
+                "href": "/schedules#sc-navigation-example",
+                "label": "Navigation schedule",
+                "section": "h-navigation-report"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/capture",
+            "view": "capture",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#privacy",
+                "label": "Privacy and permissionsWhat stays here, what asks first, capture",
+                "section": "settings-nav"
+              },
+              {
+                "href": "/capture",
+                "label": "Open Capture",
+                "section": "capture"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings#capture",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#privacy",
+                "label": "Privacy and permissionsWhat stays here, what asks first, capture",
+                "section": "settings-nav"
+              },
+              {
+                "href": "/capture",
+                "label": "Open Capture",
+                "section": "capture"
+              },
+              {
+                "href": "/settings#capture",
+                "label": "Capture settings",
+                "section": "capture-view"
+              }
+            ],
+            "sections": [
+              "settings-privacy",
+              "privacy",
+              "set-privacy",
+              "settings-perms",
+              "perms",
+              "set-perms",
+              "p-commands",
+              "pl-commands",
+              "p-gmail-drafts",
+              "pl-gmail-drafts",
+              "p-gmail-tidy",
+              "pl-gmail-tidy",
+              "p-schedules",
+              "pl-schedules",
+              "p-memory-import",
+              "pl-memory-import",
+              "settings-capture",
+              "capture",
+              "set-capture",
+              "capture-switch-space",
+              "capture-days"
+            ]
+          }
+        ]
+      },
+      "rail": {
+        "registered": [
+          "activity",
+          "automations",
+          "capture",
+          "chat",
+          "health",
+          "home",
+          "memory",
+          "settings",
+          "skills",
+          "tasks",
+          "topology"
+        ],
+        "reached": {
+          "home": [],
+          "chat": [
+            {
+              "href": "/chat",
+              "label": "Chat",
+              "section": "rail"
+            }
+          ],
+          "tasks": [
+            {
+              "href": "/tasks",
+              "label": "Tasks",
+              "section": "rail"
+            }
+          ],
+          "memory": [
+            {
+              "href": "/memory",
+              "label": "Memory",
+              "section": "rail"
+            }
+          ],
+          "automations": [
+            {
+              "href": "/automations",
+              "label": "Automations",
+              "section": "rail"
+            }
+          ],
+          "settings": [
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "rail"
+            }
+          ],
+          "health": [
+            {
+              "href": "/health",
+              "label": "Health",
+              "section": "aside"
+            }
+          ],
+          "topology": [
+            {
+              "href": "/health",
+              "label": "Health",
+              "section": "aside"
+            },
+            {
+              "href": "/topology",
+              "label": "View machines and services",
+              "section": "health-view"
+            }
+          ],
+          "skills": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/skills",
+              "label": "Skills",
+              "section": "more"
+            }
+          ],
+          "activity": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/activity",
+              "label": "Activity",
+              "section": "more"
+            }
+          ],
+          "capture": [
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "rail"
+            },
+            {
+              "href": "/settings#privacy",
+              "label": "Privacy and permissionsWhat stays here, what asks first, capture",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/capture",
+              "label": "Open Capture",
+              "section": "capture"
+            }
+          ]
+        },
+        "required": {
+          "homeTopology": false,
+          "devicesTopology": false,
+          "captureCategory": false
+        },
+        "missing": [],
+        "healthMesh": true,
+        "forbidden": [],
+        "documentRequests": [
+          "http://127.0.0.1:41311/"
+        ],
+        "required_paths": {},
+        "states": [
+          {
+            "path": "/",
+            "view": "home",
+            "steps": [],
+            "sections": []
+          },
+          {
+            "path": "/chat",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/tasks",
+            "view": "tasks",
+            "steps": [
+              {
+                "href": "/tasks",
+                "label": "Tasks",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/memory",
+            "view": "memory",
+            "steps": [
+              {
+                "href": "/memory",
+                "label": "Memory",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/automations",
+            "view": "automations",
+            "steps": [
+              {
+                "href": "/automations",
+                "label": "Automations",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              }
+            ],
+            "sections": [
+              "settings-you",
+              "you",
+              "set-you",
+              "you-name-row",
+              "you-name",
+              "nova-name-row",
+              "nova-name",
+              "directness-row",
+              "directness"
+            ]
+          },
+          {
+            "path": "/settings#devices",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings#devices",
+                "label": "Devices",
+                "section": "aside"
+              }
+            ],
+            "sections": [
+              "settings-devices",
+              "devices",
+              "set-devices",
+              "install-row"
+            ]
+          },
+          {
+            "path": "/health",
+            "view": "health",
+            "steps": [
+              {
+                "href": "/health",
+                "label": "Health",
+                "section": "aside"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/|More",
+            "view": "home",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/chat|Conversations",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings#you",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#you",
+                "label": "You and NovaNames and how Nova talks to you",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-you",
+              "you",
+              "set-you",
+              "you-name-row",
+              "you-name",
+              "nova-name-row",
+              "nova-name",
+              "directness-row",
+              "directness"
+            ]
+          },
+          {
+            "path": "/settings#appearance",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#appearance",
+                "label": "AppearanceTheme, light and dark, contrast",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-look",
+              "appearance",
+              "set-look",
+              "appearance-scope",
+              "appearance-where",
+              "appearance-bar",
+              "appearance-design",
+              "contrast-check",
+              "appearance-mode",
+              "appearance-iphone"
+            ]
+          },
+          {
+            "path": "/settings#privacy",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#privacy",
+                "label": "Privacy and permissionsWhat stays here, what asks first, capture",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-privacy",
+              "privacy",
+              "set-privacy",
+              "settings-perms",
+              "perms",
+              "set-perms",
+              "p-commands",
+              "pl-commands",
+              "p-gmail-drafts",
+              "pl-gmail-drafts",
+              "p-gmail-tidy",
+              "pl-gmail-tidy",
+              "p-schedules",
+              "pl-schedules",
+              "p-memory-import",
+              "pl-memory-import",
+              "settings-capture",
+              "capture",
+              "set-capture",
+              "capture-switch-space",
+              "capture-days"
+            ]
+          },
+          {
+            "path": "/settings#connections",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#connections",
+                "label": "ConnectionsAccounts and services Nova can reach",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-connections",
+              "connections",
+              "set-connections",
+              "conn-home-assistant-token-hint",
+              "settings-sites",
+              "browser-sites",
+              "set-browser-sites"
+            ]
+          },
+          {
+            "path": "/settings#models",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#models",
+                "label": "Models and providersLocal models and outside help",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-providers",
+              "providers",
+              "set-providers",
+              "settings-models",
+              "models",
+              "set-models",
+              "decision-model"
+            ]
+          },
+          {
+            "path": "/settings#services",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#services",
+                "label": "ServicesHow Nova runs its services here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-services",
+              "services",
+              "set-services",
+              "services-backend"
+            ]
+          },
+          {
+            "path": "/settings#backups",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#backups",
+                "label": "Backups and changesCheckpoints, restores, Nova\u2019s own changes",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-checkpoints",
+              "checkpoints",
+              "set-checkpoints",
+              "settings-changes",
+              "changes",
+              "set-changes"
+            ]
+          },
+          {
+            "path": "/settings#danger",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#danger",
+                "label": "Start overExport everything, or erase Nova here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-danger",
+              "danger-zone",
+              "set-danger"
+            ]
+          },
+          {
+            "path": "/topology",
+            "view": "topology",
+            "steps": [
+              {
+                "href": "/health",
+                "label": "Health",
+                "section": "aside"
+              },
+              {
+                "href": "/topology",
+                "label": "View machines and services",
+                "section": "health-view"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/skills",
+            "view": "skills",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/skills",
+                "label": "Skills",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/activity",
+            "view": "activity",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/activity",
+                "label": "Activity",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/c/2026-11-02-nav001",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/new",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "button": "#new-chat",
+                "label": "New conversation"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/capture",
+            "view": "capture",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#privacy",
+                "label": "Privacy and permissionsWhat stays here, what asks first, capture",
+                "section": "settings-nav"
+              },
+              {
+                "href": "/capture",
+                "label": "Open Capture",
+                "section": "capture"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/schedules#sc-navigation-example",
+            "view": "automations",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              },
+              {
+                "href": "/schedules#sc-navigation-example",
+                "label": "Navigation schedule",
+                "section": "h-navigation-report"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings#capture",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#privacy",
+                "label": "Privacy and permissionsWhat stays here, what asks first, capture",
+                "section": "settings-nav"
+              },
+              {
+                "href": "/capture",
+                "label": "Open Capture",
+                "section": "capture"
+              },
+              {
+                "href": "/settings#capture",
+                "label": "Capture settings",
+                "section": "capture-view"
+              }
+            ],
+            "sections": [
+              "settings-privacy",
+              "privacy",
+              "set-privacy",
+              "settings-perms",
+              "perms",
+              "set-perms",
+              "p-commands",
+              "pl-commands",
+              "p-gmail-drafts",
+              "pl-gmail-drafts",
+              "p-gmail-tidy",
+              "pl-gmail-tidy",
+              "p-schedules",
+              "pl-schedules",
+              "p-memory-import",
+              "pl-memory-import",
+              "settings-capture",
+              "capture",
+              "set-capture",
+              "capture-switch-space",
+              "capture-days"
+            ]
+          }
+        ]
+      }
+    },
+    "guarded_orphan": {
+      "phone": {
+        "registered": [
+          "activity",
+          "automations",
+          "capture",
+          "chat",
+          "health",
+          "home",
+          "memory",
+          "orphaned",
+          "settings",
+          "skills",
+          "tasks",
+          "topology"
+        ],
+        "reached": {
+          "home": [],
+          "tasks": [
+            {
+              "href": "/tasks",
+              "label": "All tasks",
+              "section": "home"
+            }
+          ],
+          "topology": [
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "home"
+            }
+          ],
+          "memory": [
+            {
+              "href": "/memory",
+              "label": "Memory",
+              "section": "home"
+            }
+          ],
+          "health": [
+            {
+              "href": "/health",
+              "label": "Health",
+              "section": "home"
+            }
+          ],
+          "chat": [
+            {
+              "href": "/chat",
+              "label": "Chat",
+              "section": "tabs"
+            }
+          ],
+          "automations": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/automations",
+              "label": "Automations",
+              "section": "more"
+            }
+          ],
+          "skills": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/skills",
+              "label": "Skills",
+              "section": "more"
+            }
+          ],
+          "activity": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/activity",
+              "label": "Activity",
+              "section": "more"
+            }
+          ],
+          "settings": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "more"
+            }
+          ],
+          "capture": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "more"
+            },
+            {
+              "href": "/settings#capture",
+              "label": "CaptureSources, consent, and what Nova remembers",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/capture",
+              "label": "Open Capture",
+              "section": "capture"
+            }
+          ]
+        },
+        "required": {
+          "homeTopology": true,
+          "devicesTopology": true,
+          "captureCategory": true
+        },
+        "missing": [
+          "orphaned"
+        ],
+        "healthMesh": true,
+        "forbidden": [],
+        "documentRequests": [
+          "http://127.0.0.1:45013/"
+        ],
+        "required_paths": {
+          "homeTopology": [
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "home"
+            }
+          ],
+          "devicesTopology": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "more"
+            },
+            {
+              "href": "/settings#devices",
+              "label": "DevicesPhones and computers paired with Nova",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "devices-topology"
+            }
+          ],
+          "captureCategory": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "more"
+            },
+            {
+              "href": "/settings#capture",
+              "label": "Capture",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/capture",
+              "label": "Open Capture",
+              "section": "capture"
+            }
+          ]
+        },
+        "states": [
+          {
+            "path": "/",
+            "view": "home",
+            "steps": [],
+            "sections": []
+          },
+          {
+            "path": "/tasks",
+            "view": "tasks",
+            "steps": [
+              {
+                "href": "/tasks",
+                "label": "All tasks",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/topology",
+            "view": "topology",
+            "steps": [
+              {
+                "href": "/topology",
+                "label": "Machines and services",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/memory",
+            "view": "memory",
+            "steps": [
+              {
+                "href": "/memory",
+                "label": "Memory",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/health",
+            "view": "health",
+            "steps": [
+              {
+                "href": "/health",
+                "label": "Health",
+                "section": "home"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/chat",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/|More",
+            "view": "home",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/chat|Conversations",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/automations",
+            "view": "automations",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/automations",
+                "label": "Automations",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/skills",
+            "view": "skills",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/skills",
+                "label": "Skills",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/activity",
+            "view": "activity",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/activity",
+                "label": "Activity",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/c/2026-11-02-nav001",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/new",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "button": "#new-chat",
+                "label": "New conversation"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings#you",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#you",
+                "label": "You and NovaNames and how Nova talks to you",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-you",
+              "you",
+              "set-you",
+              "you-name-row",
+              "you-name",
+              "nova-name-row",
+              "nova-name",
+              "directness-row",
+              "directness"
+            ]
+          },
+          {
+            "path": "/settings#appearance",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#appearance",
+                "label": "AppearanceTheme, light and dark, contrast",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-look",
+              "appearance",
+              "set-look",
+              "appearance-scope",
+              "appearance-where",
+              "appearance-bar",
+              "appearance-design",
+              "contrast-check",
+              "appearance-mode",
+              "appearance-iphone"
+            ]
+          },
+          {
+            "path": "/settings#privacy",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#privacy",
+                "label": "Privacy and permissionsWhat stays here and what asks first",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-privacy",
+              "privacy",
+              "set-privacy",
+              "settings-perms",
+              "perms",
+              "set-perms",
+              "p-commands",
+              "pl-commands",
+              "p-gmail-drafts",
+              "pl-gmail-drafts",
+              "p-gmail-tidy",
+              "pl-gmail-tidy",
+              "p-schedules",
+              "pl-schedules",
+              "p-memory-import",
+              "pl-memory-import"
+            ]
+          },
+          {
+            "path": "/settings#connections",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#connections",
+                "label": "ConnectionsAccounts and services Nova can reach",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-connections",
+              "connections",
+              "set-connections",
+              "conn-home-assistant-token-hint",
+              "settings-sites",
+              "browser-sites",
+              "set-browser-sites"
+            ]
+          },
+          {
+            "path": "/settings#models",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#models",
+                "label": "Models and providersLocal models and outside help",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-providers",
+              "providers",
+              "set-providers",
+              "settings-models",
+              "models",
+              "set-models",
+              "decision-model"
+            ]
+          },
+          {
+            "path": "/settings#devices",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#devices",
+                "label": "DevicesPhones and computers paired with Nova",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-devices",
+              "devices",
+              "set-devices",
+              "devices-topology",
+              "install-row"
+            ]
+          },
+          {
+            "path": "/settings#capture",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#capture",
+                "label": "CaptureSources, consent, and what Nova remembers",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-capture",
+              "capture",
+              "set-capture",
+              "capture-switch-space",
+              "capture-days"
+            ]
+          },
+          {
+            "path": "/settings#services",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#services",
+                "label": "ServicesHow Nova runs its services here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-services",
+              "services",
+              "set-services",
+              "services-backend"
+            ]
+          },
+          {
+            "path": "/settings#backups",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#backups",
+                "label": "Backups and changesCheckpoints, restores, Nova\u2019s own changes",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-checkpoints",
+              "checkpoints",
+              "set-checkpoints",
+              "settings-changes",
+              "changes",
+              "set-changes"
+            ]
+          },
+          {
+            "path": "/settings#danger",
+            "view": "settings",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#danger",
+                "label": "Start overExport everything, or erase Nova here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-danger",
+              "danger-zone",
+              "set-danger"
+            ]
+          },
+          {
+            "path": "/schedules#sc-navigation-example",
+            "view": "automations",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "tabs"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              },
+              {
+                "href": "/schedules#sc-navigation-example",
+                "label": "Navigation schedule",
+                "section": "h-navigation-report"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/capture",
+            "view": "capture",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "more"
+              },
+              {
+                "href": "/settings#capture",
+                "label": "CaptureSources, consent, and what Nova remembers",
+                "section": "settings-nav"
+              },
+              {
+                "href": "/capture",
+                "label": "Open Capture",
+                "section": "capture"
+              }
+            ],
+            "sections": []
+          }
+        ]
+      },
+      "rail": {
+        "registered": [
+          "activity",
+          "automations",
+          "capture",
+          "chat",
+          "health",
+          "home",
+          "memory",
+          "orphaned",
+          "settings",
+          "skills",
+          "tasks",
+          "topology"
+        ],
+        "reached": {
+          "home": [],
+          "chat": [
+            {
+              "href": "/chat",
+              "label": "Chat",
+              "section": "rail"
+            }
+          ],
+          "tasks": [
+            {
+              "href": "/tasks",
+              "label": "Tasks",
+              "section": "rail"
+            }
+          ],
+          "memory": [
+            {
+              "href": "/memory",
+              "label": "Memory",
+              "section": "rail"
+            }
+          ],
+          "automations": [
+            {
+              "href": "/automations",
+              "label": "Automations",
+              "section": "rail"
+            }
+          ],
+          "settings": [
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "rail"
+            }
+          ],
+          "topology": [
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "aside"
+            }
+          ],
+          "health": [
+            {
+              "href": "/health",
+              "label": "Health",
+              "section": "aside"
+            }
+          ],
+          "skills": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/skills",
+              "label": "Skills",
+              "section": "more"
+            }
+          ],
+          "activity": [
+            {
+              "button": "#more-btn[aria-expanded=\"false\"]",
+              "label": "More"
+            },
+            {
+              "href": "/activity",
+              "label": "Activity",
+              "section": "more"
+            }
+          ],
+          "capture": [
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "rail"
+            },
+            {
+              "href": "/settings#capture",
+              "label": "CaptureSources, consent, and what Nova remembers",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/capture",
+              "label": "Open Capture",
+              "section": "capture"
+            }
+          ]
+        },
+        "required": {
+          "homeTopology": true,
+          "devicesTopology": true,
+          "captureCategory": true
+        },
+        "missing": [
+          "orphaned"
+        ],
+        "healthMesh": true,
+        "forbidden": [],
+        "documentRequests": [
+          "http://127.0.0.1:41215/"
+        ],
+        "required_paths": {
+          "homeTopology": [
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "aside"
+            }
+          ],
+          "devicesTopology": [
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "rail"
+            },
+            {
+              "href": "/settings#devices",
+              "label": "DevicesPhones and computers paired with Nova",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/topology",
+              "label": "Machines and services",
+              "section": "devices-topology"
+            }
+          ],
+          "captureCategory": [
+            {
+              "href": "/settings",
+              "label": "Settings",
+              "section": "rail"
+            },
+            {
+              "href": "/settings#capture",
+              "label": "Capture",
+              "section": "settings-nav"
+            },
+            {
+              "href": "/capture",
+              "label": "Open Capture",
+              "section": "capture"
+            }
+          ]
+        },
+        "states": [
+          {
+            "path": "/",
+            "view": "home",
+            "steps": [],
+            "sections": []
+          },
+          {
+            "path": "/chat",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/tasks",
+            "view": "tasks",
+            "steps": [
+              {
+                "href": "/tasks",
+                "label": "Tasks",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/memory",
+            "view": "memory",
+            "steps": [
+              {
+                "href": "/memory",
+                "label": "Memory",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/automations",
+            "view": "automations",
+            "steps": [
+              {
+                "href": "/automations",
+                "label": "Automations",
+                "section": "rail"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              }
+            ],
+            "sections": [
+              "settings-you",
+              "you",
+              "set-you",
+              "you-name-row",
+              "you-name",
+              "nova-name-row",
+              "nova-name",
+              "directness-row",
+              "directness"
+            ]
+          },
+          {
+            "path": "/topology",
+            "view": "topology",
+            "steps": [
+              {
+                "href": "/topology",
+                "label": "Machines and services",
+                "section": "aside"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/health",
+            "view": "health",
+            "steps": [
+              {
+                "href": "/health",
+                "label": "Health",
+                "section": "aside"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/|More",
+            "view": "home",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/chat|Conversations",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/settings#you",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#you",
+                "label": "You and NovaNames and how Nova talks to you",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-you",
+              "you",
+              "set-you",
+              "you-name-row",
+              "you-name",
+              "nova-name-row",
+              "nova-name",
+              "directness-row",
+              "directness"
+            ]
+          },
+          {
+            "path": "/settings#appearance",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#appearance",
+                "label": "AppearanceTheme, light and dark, contrast",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-look",
+              "appearance",
+              "set-look",
+              "appearance-scope",
+              "appearance-where",
+              "appearance-bar",
+              "appearance-design",
+              "contrast-check",
+              "appearance-mode",
+              "appearance-iphone"
+            ]
+          },
+          {
+            "path": "/settings#privacy",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#privacy",
+                "label": "Privacy and permissionsWhat stays here and what asks first",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-privacy",
+              "privacy",
+              "set-privacy",
+              "settings-perms",
+              "perms",
+              "set-perms",
+              "p-commands",
+              "pl-commands",
+              "p-gmail-drafts",
+              "pl-gmail-drafts",
+              "p-gmail-tidy",
+              "pl-gmail-tidy",
+              "p-schedules",
+              "pl-schedules",
+              "p-memory-import",
+              "pl-memory-import"
+            ]
+          },
+          {
+            "path": "/settings#connections",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#connections",
+                "label": "ConnectionsAccounts and services Nova can reach",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-connections",
+              "connections",
+              "set-connections",
+              "conn-home-assistant-token-hint",
+              "settings-sites",
+              "browser-sites",
+              "set-browser-sites"
+            ]
+          },
+          {
+            "path": "/settings#models",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#models",
+                "label": "Models and providersLocal models and outside help",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-providers",
+              "providers",
+              "set-providers",
+              "settings-models",
+              "models",
+              "set-models",
+              "decision-model"
+            ]
+          },
+          {
+            "path": "/settings#devices",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#devices",
+                "label": "DevicesPhones and computers paired with Nova",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-devices",
+              "devices",
+              "set-devices",
+              "devices-topology",
+              "install-row"
+            ]
+          },
+          {
+            "path": "/settings#capture",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#capture",
+                "label": "CaptureSources, consent, and what Nova remembers",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-capture",
+              "capture",
+              "set-capture",
+              "capture-switch-space",
+              "capture-days"
+            ]
+          },
+          {
+            "path": "/settings#services",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#services",
+                "label": "ServicesHow Nova runs its services here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-services",
+              "services",
+              "set-services",
+              "services-backend"
+            ]
+          },
+          {
+            "path": "/settings#backups",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#backups",
+                "label": "Backups and changesCheckpoints, restores, Nova\u2019s own changes",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-checkpoints",
+              "checkpoints",
+              "set-checkpoints",
+              "settings-changes",
+              "changes",
+              "set-changes"
+            ]
+          },
+          {
+            "path": "/settings#danger",
+            "view": "settings",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#danger",
+                "label": "Start overExport everything, or erase Nova here",
+                "section": "settings-nav"
+              }
+            ],
+            "sections": [
+              "settings-danger",
+              "danger-zone",
+              "set-danger"
+            ]
+          },
+          {
+            "path": "/skills",
+            "view": "skills",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/skills",
+                "label": "Skills",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/activity",
+            "view": "activity",
+            "steps": [
+              {
+                "button": "#more-btn[aria-expanded=\"false\"]",
+                "label": "More"
+              },
+              {
+                "href": "/activity",
+                "label": "Activity",
+                "section": "more"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/c/2026-11-02-nav001",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/new",
+            "view": "chat",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "button": "#new-chat",
+                "label": "New conversation"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/capture",
+            "view": "capture",
+            "steps": [
+              {
+                "href": "/settings",
+                "label": "Settings",
+                "section": "rail"
+              },
+              {
+                "href": "/settings#capture",
+                "label": "CaptureSources, consent, and what Nova remembers",
+                "section": "settings-nav"
+              },
+              {
+                "href": "/capture",
+                "label": "Open Capture",
+                "section": "capture"
+              }
+            ],
+            "sections": []
+          },
+          {
+            "path": "/schedules#sc-navigation-example",
+            "view": "automations",
+            "steps": [
+              {
+                "href": "/chat",
+                "label": "Chat",
+                "section": "rail"
+              },
+              {
+                "button": "#menu",
+                "label": "Conversations"
+              },
+              {
+                "href": "/c/2026-11-02-nav001",
+                "label": "Navigation example",
+                "section": "toc"
+              },
+              {
+                "href": "/schedules#sc-navigation-example",
+                "label": "Navigation schedule",
+                "section": "h-navigation-report"
+              }
+            ],
+            "sections": []
+          }
+        ]
+      }
     }
   },
   "mappings": [
@@ -8000,5 +12140,1771 @@
       "name": null,
       "type": "button"
     }
-  ]
+  ],
+  "guarded_source_head": "da46f8ec7f8e0557dd58e77b17e4ededb109dc51",
+  "current_mapping_phase": "guarded_green",
+  "current_snapshot_set": "guarded_visible_snapshots",
+  "guarded_visible_snapshots": {
+    "phone": {
+      "/": {
+        "headings": [
+          "Home",
+          "Good evening, Alex",
+          "Brief",
+          "Nova is handling",
+          "Devices",
+          "Memory",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/tasks": {
+        "headings": [
+          "Tasks",
+          "Tasks",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          13,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/topology": {
+        "headings": [
+          "Topology",
+          "Topology",
+          "Your machines",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          14,
+          15,
+          16,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/memory": {
+        "headings": [
+          "Memory",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          17,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/health": {
+        "headings": [
+          "Health",
+          "Health",
+          "Problems",
+          "Keeping Nova running",
+          "Checks",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          18,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/chat": {
+        "headings": [
+          "Nova",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          19,
+          20,
+          21,
+          22,
+          23,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/|More": {
+        "headings": [
+          "Home",
+          "Good evening, Alex",
+          "Brief",
+          "Nova is handling",
+          "Devices",
+          "Memory",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12,
+          24,
+          25,
+          26,
+          4,
+          27
+        ]
+      },
+      "/chat|Conversations": {
+        "headings": [
+          "Nova",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          19,
+          20,
+          21,
+          22,
+          23,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/automations": {
+        "headings": [
+          "Automations",
+          "Automations",
+          "Rules",
+          "Set",
+          "Ready to set up",
+          "Morning digest",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          28,
+          29,
+          30,
+          31,
+          32,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/skills": {
+        "headings": [
+          "Skills",
+          "Installed",
+          "Available",
+          "Email summary",
+          "Shopping research",
+          "Add your own",
+          "Connections",
+          "Gmail",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          33,
+          34,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/activity": {
+        "headings": [
+          "Activity",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/c/2026-11-02-nav001": {
+        "headings": [
+          "Navigation example",
+          "Monday, the second of November",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          19,
+          55,
+          56,
+          20,
+          21,
+          22,
+          23,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/new": {
+        "headings": [
+          "Nova",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          19,
+          20,
+          21,
+          22,
+          23,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#you": {
+        "headings": [
+          "Settings",
+          "You and Nova",
+          "You and Nova",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          57,
+          44,
+          58,
+          59,
+          60,
+          59,
+          61,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#appearance": {
+        "headings": [
+          "Settings",
+          "Appearance",
+          "Appearance",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          57,
+          44,
+          62,
+          62,
+          63,
+          64,
+          65,
+          65,
+          65,
+          66,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#privacy": {
+        "headings": [
+          "Settings",
+          "Privacy and permissions",
+          "Privacy",
+          "Without asking",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          57,
+          44,
+          67,
+          67,
+          67,
+          68,
+          68,
+          68,
+          68,
+          68,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#connections": {
+        "headings": [
+          "Settings",
+          "Connections",
+          "Connections",
+          "Nova suggests",
+          "Site sign-ins",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          57,
+          44,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#models": {
+        "headings": [
+          "Settings",
+          "Models and providers",
+          "Providers",
+          "Models",
+          "Your devices",
+          "What runs where",
+          "Decision model",
+          "Disk",
+          "Cloud",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          57,
+          44,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          86,
+          89,
+          90,
+          91,
+          92,
+          93,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#devices": {
+        "headings": [
+          "Settings",
+          "Devices",
+          "Devices",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          57,
+          44,
+          2,
+          94,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#capture": {
+        "headings": [
+          "Settings",
+          "Capture",
+          "Capture",
+          "Sources",
+          "Never captured",
+          "Let back in",
+          "Spaces",
+          "Keep capture for",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          57,
+          44,
+          95,
+          96,
+          97,
+          98,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          102,
+          103,
+          106,
+          107,
+          108,
+          102,
+          103,
+          109,
+          104,
+          110,
+          111,
+          112,
+          113,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#services": {
+        "headings": [
+          "Settings",
+          "Services",
+          "Services",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          57,
+          44,
+          18,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#backups": {
+        "headings": [
+          "Settings",
+          "Backups and changes",
+          "Backups",
+          "Changes",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          57,
+          44,
+          114,
+          115,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#danger": {
+        "headings": [
+          "Settings",
+          "Start over",
+          "Danger zone",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          57,
+          44,
+          116,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/schedules#sc-navigation-example": {
+        "headings": [
+          "Automations",
+          "Automations",
+          "Rules",
+          "Set",
+          "Ready to set up",
+          "Morning digest",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          28,
+          29,
+          30,
+          31,
+          32,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/capture": {
+        "headings": [
+          "Capture",
+          "Capture",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          117,
+          5,
+          6,
+          7,
+          3,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      }
+    },
+    "rail": {
+      "/": {
+        "headings": [
+          "Home",
+          "Good evening, Alex",
+          "Brief",
+          "Memory",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          3,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/chat": {
+        "headings": [
+          "Nova",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          19,
+          119,
+          20,
+          21,
+          22,
+          23,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/tasks": {
+        "headings": [
+          "Tasks",
+          "Tasks",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          13,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/memory": {
+        "headings": [
+          "Memory",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          17,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/automations": {
+        "headings": [
+          "Automations",
+          "Automations",
+          "Rules",
+          "Set",
+          "Ready to set up",
+          "Morning digest",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          28,
+          29,
+          30,
+          31,
+          32,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "You and Nova",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          58,
+          59,
+          60,
+          59,
+          61,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/topology": {
+        "headings": [
+          "Topology",
+          "Topology",
+          "Your machines",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          14,
+          15,
+          16,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/health": {
+        "headings": [
+          "Health",
+          "Health",
+          "Problems",
+          "Keeping Nova running",
+          "Checks",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          18,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/|More": {
+        "headings": [
+          "Home",
+          "Good evening, Alex",
+          "Brief",
+          "Memory",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          3,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12,
+          25,
+          26,
+          4
+        ]
+      },
+      "/chat|Conversations": {
+        "headings": [
+          "Nova",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          19,
+          119,
+          20,
+          21,
+          22,
+          23,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#you": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "You and Nova",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          58,
+          59,
+          60,
+          59,
+          61,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#appearance": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "Appearance",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          62,
+          62,
+          63,
+          64,
+          65,
+          65,
+          65,
+          66,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#privacy": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "Privacy",
+          "Without asking",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          67,
+          67,
+          67,
+          68,
+          68,
+          68,
+          68,
+          68,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#connections": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "Connections",
+          "Nova suggests",
+          "Site sign-ins",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#models": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "Providers",
+          "Models",
+          "Your devices",
+          "What runs where",
+          "Decision model",
+          "Disk",
+          "Cloud",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          86,
+          89,
+          90,
+          91,
+          92,
+          93,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#devices": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "Devices",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          2,
+          94,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#capture": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "Capture",
+          "Sources",
+          "Never captured",
+          "Let back in",
+          "Spaces",
+          "Keep capture for",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          95,
+          96,
+          97,
+          98,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          102,
+          103,
+          106,
+          107,
+          108,
+          102,
+          103,
+          109,
+          104,
+          110,
+          111,
+          112,
+          113,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#services": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "Services",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          18,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#backups": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "Backups",
+          "Changes",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          114,
+          115,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/settings#danger": {
+        "headings": [
+          "Settings",
+          "Settings",
+          "You",
+          "What Nova works with",
+          "Keeping Nova safe",
+          "Danger zone",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          116,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/skills": {
+        "headings": [
+          "Skills",
+          "Installed",
+          "Available",
+          "Email summary",
+          "Shopping research",
+          "Add your own",
+          "Connections",
+          "Gmail",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          33,
+          34,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/activity": {
+        "headings": [
+          "Activity",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/c/2026-11-02-nav001": {
+        "headings": [
+          "Navigation example",
+          "Monday, the second of November",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          19,
+          119,
+          55,
+          56,
+          20,
+          21,
+          22,
+          23,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/new": {
+        "headings": [
+          "Nova",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          19,
+          119,
+          20,
+          21,
+          22,
+          23,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/capture": {
+        "headings": [
+          "Capture",
+          "Capture",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          117,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "/schedules#sc-navigation-example": {
+        "headings": [
+          "Automations",
+          "Automations",
+          "Rules",
+          "Set",
+          "Ready to set up",
+          "Morning digest",
+          "Nova is handling",
+          "Devices",
+          "System health",
+          "Conversations",
+          "Today"
+        ],
+        "control_refs": [
+          0,
+          118,
+          6,
+          7,
+          3,
+          24,
+          8,
+          27,
+          119,
+          28,
+          29,
+          30,
+          31,
+          32,
+          1,
+          2,
+          4,
+          9,
+          10,
+          11,
+          12
+        ]
+      }
+    }
+  }
 }

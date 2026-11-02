@@ -1,0 +1,320 @@
+{
+  "commit": "da46f8ec7f8e0557dd58e77b17e4ededb109dc51",
+  "artifacts": [
+    {
+      "file": "final-fix-baseline/phone-home-devices.png",
+      "sha256": "5f562eeeacd30e2ce414505c9bd903e307f34efe42cdd9ad3a7fe16bc29d07d9",
+      "bytes": 176957
+    },
+    {
+      "file": "final-fix-baseline/phone-home.png",
+      "sha256": "4ea6aa70e1fd2162063f5f2ab3af286d5d54aaf065686f33be9fd8d37357265c",
+      "bytes": 176764
+    },
+    {
+      "file": "final-fix-baseline/phone-report.json",
+      "sha256": "869436336266b260829f1c3a829f28f8888296400c5509abddaa5c1fe14f2129",
+      "bytes": 157597
+    },
+    {
+      "file": "final-fix-baseline/phone-settings-capture.png",
+      "sha256": "167e8c11a3e99c3e4933fb37324fd9214149ae09aa368e17302f479ab4d422e2",
+      "bytes": 180292
+    },
+    {
+      "file": "final-fix-baseline/phone-settings-devices.png",
+      "sha256": "731e52f69b10c046dc33cbd00475b2ae38eec0cee59a333f55b1a5749c41dc02",
+      "bytes": 149457
+    },
+    {
+      "file": "final-fix-baseline/phone-settings-list.png",
+      "sha256": "3e7c2a89f7d12bae8a52cd420b1161349ee589440a4d8c1dd72d01ed6c96b2b3",
+      "bytes": 158138
+    },
+    {
+      "file": "final-fix-baseline/rail-home-devices.png",
+      "sha256": "49346ac4bed71f7fbda3f0a3ceb92f8fd66a059f86b44b52c5cc6ac9146bb777",
+      "bytes": 375882
+    },
+    {
+      "file": "final-fix-baseline/rail-home.png",
+      "sha256": "2b3877d17247c0240800ba54eb51af9c3c7f899dba60eb7755efefd665fe317b",
+      "bytes": 375899
+    },
+    {
+      "file": "final-fix-baseline/rail-report.json",
+      "sha256": "138d1de943f9a5d13a30f34ac1b0426cf8226dae549ab3dbabbd3af97459a97b",
+      "bytes": 252979
+    },
+    {
+      "file": "final-fix-baseline/rail-settings-capture.png",
+      "sha256": "c1ca3228432f629febf1d3773012ad631f24fdc0e2dc1c52236ac48a06cd1d85",
+      "bytes": 457315
+    },
+    {
+      "file": "final-fix-baseline/rail-settings-devices.png",
+      "sha256": "4965dcb04bba7184e43949ed42bb1240c2c4b0aad7dfab0c3c7dc9018d4da889",
+      "bytes": 355010
+    },
+    {
+      "file": "final-fix-baseline/rail-settings-list.png",
+      "sha256": "e8f2359ca9305939ccf4d365f92558b0a9b504ac55177b4d057a6744aead2b12",
+      "bytes": 336397
+    },
+    {
+      "file": "final-fix-baseline-bytes.json",
+      "sha256": "483d5eabf0e92bc231060cd33f6a82562988a0ef7c261ef9b3bd536eb051827c",
+      "bytes": 1056
+    },
+    {
+      "file": "final-fix-baseline.log",
+      "sha256": "786866946ab4a79bf942edcca2b512d2c729d34066f24d35d21398367fcb9fdd",
+      "bytes": 3391
+    },
+    {
+      "file": "final-fix-baseline.test.ts",
+      "sha256": "dcaa0732de92f2a71a1e0659087688bf535356d580962302c7ca9179c45d034c",
+      "bytes": 15048
+    },
+    {
+      "file": "final-fix-brief.md",
+      "sha256": "b6cbd308b8aab0795c336f7bac81ac550fe22e11f543afb5b02626a25ffa2825",
+      "bytes": 5830
+    },
+    {
+      "file": "final-fix-browser.log",
+      "sha256": "a7c94ee11b200ff3d9c547efb4c80c4e9b21eff0ba5e5c8263b65056e9341116",
+      "bytes": 1278
+    },
+    {
+      "file": "final-fix-canonical/phone-home-devices.png",
+      "sha256": "eda90e966cb45b38037cf42ecfac8598509be6fd501c29116d561ad4589f0f02",
+      "bytes": 177960
+    },
+    {
+      "file": "final-fix-canonical/phone-home.png",
+      "sha256": "7f0c347ad5c3d815802baa1bd6fb35fae6b229f2ac1163c8135679298db9d6a3",
+      "bytes": 176864
+    },
+    {
+      "file": "final-fix-canonical/phone-report.json",
+      "sha256": "1cf8fac0dbb3910610a0398e8d59d16ec00e9e749c298d08963d5f10dec7bd11",
+      "bytes": 151012
+    },
+    {
+      "file": "final-fix-canonical/phone-settings-capture.png",
+      "sha256": "ab02750950bb5c02717689da20221b6724e180255997daa0fb818b77c061bd5e",
+      "bytes": 159549
+    },
+    {
+      "file": "final-fix-canonical/phone-settings-devices.png",
+      "sha256": "e2a5521322e96522f7b0b2dff282fe10aa72e337d1fa980918bd8a72ec27952f",
+      "bytes": 152179
+    },
+    {
+      "file": "final-fix-canonical/phone-settings-list.png",
+      "sha256": "71dea458b335e619029932c6d5a6bbf2fc73c6e639c54cae67cbe2f195ecd11a",
+      "bytes": 155272
+    },
+    {
+      "file": "final-fix-canonical/rail-home-devices.png",
+      "sha256": "b1da4ddac974bbddf1d18d5ab0afffc9447514864376549fd147050df378f06d",
+      "bytes": 377215
+    },
+    {
+      "file": "final-fix-canonical/rail-home.png",
+      "sha256": "674339d3ec7a5040e48b6a5955371f9a7ecac7e8e0f63de36fa37c8a66fea8ba",
+      "bytes": 377223
+    },
+    {
+      "file": "final-fix-canonical/rail-report.json",
+      "sha256": "bf4f338bdccf831608204590bff8cca5f352df49bbb6b43cd63f552c58adec0a",
+      "bytes": 252077
+    },
+    {
+      "file": "final-fix-canonical/rail-settings-capture.png",
+      "sha256": "2dc685b84b325297b5d3d516cf7c7358d7f0d55d34bde128e34e11f43f66bbef",
+      "bytes": 439113
+    },
+    {
+      "file": "final-fix-canonical/rail-settings-devices.png",
+      "sha256": "94e35fc63cecc6207b839871c0fa4449b8670a4e82fdb57bdb5edb8ed8707814",
+      "bytes": 359481
+    },
+    {
+      "file": "final-fix-canonical/rail-settings-list.png",
+      "sha256": "f39ee7f3bbc86a0c014a381174066bbb5eb0f4151bc6ba09b26c56b44d187d4d",
+      "bytes": 338149
+    },
+    {
+      "file": "final-fix-canonical.log",
+      "sha256": "fbffc0c02507dabc04235bddea2ea388f9fc25500096ca4a61e9943e752ee7bc",
+      "bytes": 1259
+    },
+    {
+      "file": "final-fix-diff-check-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "file": "final-fix-diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "file": "final-fix-green/phone-home-devices.png",
+      "sha256": "eda90e966cb45b38037cf42ecfac8598509be6fd501c29116d561ad4589f0f02",
+      "bytes": 177960
+    },
+    {
+      "file": "final-fix-green/phone-home.png",
+      "sha256": "7f0c347ad5c3d815802baa1bd6fb35fae6b229f2ac1163c8135679298db9d6a3",
+      "bytes": 176864
+    },
+    {
+      "file": "final-fix-green/phone-report.json",
+      "sha256": "9bdeae46ed5d1e551dbb595cf99ee5537e4894802ec04ff8216b57fb59801d1c",
+      "bytes": 150953
+    },
+    {
+      "file": "final-fix-green/phone-settings-capture.png",
+      "sha256": "165a81f6d65ba93f835ab6b098a4333a85c7bc37db0bfbed2c9c8eae1db4c712",
+      "bytes": 159544
+    },
+    {
+      "file": "final-fix-green/phone-settings-devices.png",
+      "sha256": "c039ed276fe3013027e28906d2c1eaa4dfcf0a06612353c4f7c277f524be6077",
+      "bytes": 151941
+    },
+    {
+      "file": "final-fix-green/phone-settings-list.png",
+      "sha256": "71dea458b335e619029932c6d5a6bbf2fc73c6e639c54cae67cbe2f195ecd11a",
+      "bytes": 155272
+    },
+    {
+      "file": "final-fix-green/rail-home-devices.png",
+      "sha256": "487b1cb9e7d1b45aa0ab75c42eea0d503e533a7db0fe5cc994a6ad3742744809",
+      "bytes": 377214
+    },
+    {
+      "file": "final-fix-green/rail-home.png",
+      "sha256": "94b4c4a7859159a949319df45322d33aeeb55f00ee16cf351ee387ad7bc37348",
+      "bytes": 377189
+    },
+    {
+      "file": "final-fix-green/rail-report.json",
+      "sha256": "53777ccbf9c262181d0d9d63f0560e6ae250410deb9e9c058283a95a7b86430c",
+      "bytes": 252018
+    },
+    {
+      "file": "final-fix-green/rail-settings-capture.png",
+      "sha256": "2dc685b84b325297b5d3d516cf7c7358d7f0d55d34bde128e34e11f43f66bbef",
+      "bytes": 439113
+    },
+    {
+      "file": "final-fix-green/rail-settings-devices.png",
+      "sha256": "e1c90b03eea8d2821f22e5591eb13455484cff9c565998f76e25abd96f058137",
+      "bytes": 359674
+    },
+    {
+      "file": "final-fix-green/rail-settings-list.png",
+      "sha256": "8d612d64a8b1656fd959d5037fd238528d69f3e0e035cb48848dcd8bafc11e49",
+      "bytes": 338130
+    },
+    {
+      "file": "final-fix-guards-green.log",
+      "sha256": "c65729c7e054fba3272429654b43cf9ab7252d14d7ddd266fcc37982700576f0",
+      "bytes": 667
+    },
+    {
+      "file": "final-fix-guards-red.log",
+      "sha256": "c91194fcb44baee74aad548e4fd51a69aa95dce217db57dc8d7693a02852c204",
+      "bytes": 2656
+    },
+    {
+      "file": "final-fix-oracle-red.log",
+      "sha256": "ffeb87586c57c4d447166382c39d267cb043e6a5b97f8c412d4be6eb6ee991bb",
+      "bytes": 2489
+    },
+    {
+      "file": "final-fix-oracle-settings-green.log",
+      "sha256": "bb9f81a882d33847526245a5fb6e3970520a4d8294eecc063094573267309c7d",
+      "bytes": 3956
+    },
+    {
+      "file": "final-fix-original-drawn.txt",
+      "sha256": "586a79961c9e76701113c34453d35286860b41830fef1e9e98a0745097757cff",
+      "bytes": 692
+    },
+    {
+      "file": "final-fix-orphan/phone-report.json",
+      "sha256": "4bd6728cc32e786ece6ff3343edd6f709ee64fcd2dbdc56bb42b252b1a21450b",
+      "bytes": 151202
+    },
+    {
+      "file": "final-fix-orphan/rail-report.json",
+      "sha256": "d0a74658028ce48b7ecabd71770038183a8b1a6db4d315136a43cfa96e61d7ad",
+      "bytes": 252267
+    },
+    {
+      "file": "final-fix-orphan.log",
+      "sha256": "1d21d59013337b74fbf368b9f64f077d730e124876715bcd27666b63b12fd1b7",
+      "bytes": 2631
+    },
+    {
+      "file": "final-fix-orphan.test.ts",
+      "sha256": "060e50c992f4d00b99e7b37f3c11c91da485c73dfd0f94739ba5c4960debeaaf",
+      "bytes": 15648
+    },
+    {
+      "file": "final-fix-release-status.txt",
+      "sha256": "9de692e2bb3f88d3d135ac75ef07aed6b31bc58faa356eae77664f2468d16036",
+      "bytes": 264
+    },
+    {
+      "file": "final-fix-report.md",
+      "sha256": "052e59fadb89e6bf45fbdcbe3c6a62427573fdc549a92ad059bebf30de58d558",
+      "bytes": 14852
+    },
+    {
+      "file": "final-fix-source-sha256.json",
+      "sha256": "df5c8b7fcf238c0b004682c3fdcca7b5a5b27931811bffc07ffe78c529932fbb",
+      "bytes": 2049
+    },
+    {
+      "file": "final-fix-summary.json",
+      "sha256": "9f6eac1f9ef03305d0ce1f33972f4a38152df4dce987ca5694c6e19307b090c9",
+      "bytes": 3192
+    },
+    {
+      "file": "final-fix-typecheck-complete.log",
+      "sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+      "bytes": 72
+    },
+    {
+      "file": "final-fix-typecheck-final.log",
+      "sha256": "cacffaf5b0745c2409843b6ccc915e3ab9bcb39c2f40d1ac0f815d20f15e0a35",
+      "bytes": 324
+    },
+    {
+      "file": "final-fix-typecheck-green.log",
+      "sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+      "bytes": 72
+    },
+    {
+      "file": "final-fix-typecheck.log",
+      "sha256": "8d9b9d11e6dac61e191f86b41fe6a0c0c9a1cd3e1e698fdfa9189e28779d5577",
+      "bytes": 691
+    },
+    {
+      "file": "final-fix-unit-tripwire.log",
+      "sha256": "08f0efd62f715523a5d32cbaa8ea22647240c11122605de0859e7daf325db3c7",
+      "bytes": 4104
+    },
+    {
+      "file": "final-fix-unit.log",
+      "sha256": "07831929d89465c914ecce4367356fa02d0b385381766acefa681b80de113ace",
+      "bytes": 1873
+    }
+  ]
+}

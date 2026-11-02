@@ -1,3 +1,5 @@
+> Historical checkpoint `7c872496`, before whole-branch findings I1/M1. Its old navigation-entry assertion did not establish zero reloads, and its readiness could accept hidden sibling content. The [fresh review](navigation-whole-branch-review-2026-11-02.md) preserves both findings; the [guarded fix](navigation-final-fix-2026-11-02.md) adds actual negative controls and new source-pinned evidence. Old runs below remain historical, not passes of the corrected guards.
+
 # Task 1 — navigation reachability implementation report
 
 Source checkout: `/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build`. Branch: `codex/navigation-reachability`. Baseline: `6d0a74a58a3a20df7f3718b2ade2413c1ba84e8a`. Final source commit: `7c8724965a34428b5267de3070d5e94895772956` (10 source/test files only).

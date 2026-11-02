@@ -1,0 +1,51 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ navigation model accounts for every app view, including Settings children (2.387561ms)
+✔ adding an app registration extends the missing-view oracle (1.512958ms)
+✔ rendered-root oracle derives DOM IDs from actual registration and element mapping (2.848516ms)
+✔ rendered-root oracle fails closed on unresolved, duplicate and uninventoried mappings (0.658052ms)
+✔ chat: no orb or avatar on any message; Nova’s turn is un-bubbled, yours is a bubble with no tail (14.379153ms)
+✔ chat: a group is one author within five minutes; its first message shows the time (2.939675ms)
+✔ chat: every message’s exact time is there to reveal; dividers mark days and long gaps (2.090451ms)
+✔ chat: a work-trail entry says how long it took and when it finished (1.944089ms)
+✔ settings: one structure, grouped by task, one level deep, every part in exactly one place (4.090002ms)
+✔ settings search knows people’s words, not just labels, and shows the path (4.75888ms)
+✔ the page’s live check reads colours the way the core does, and agrees with it (3.166323ms)
+✔ Nova recommends one design, with a reason: its own design at the bar first, else the starter that fits and reads well (61.697292ms)
+✔ timestamps use a colour that passes 4.5:1 in every package, never the faint one (2.688407ms)
+✔ scrolling: the OS scrollbar, a stable gutter, and no vertical scroller inside a view (1.548308ms)
+✔ the service worker caches every module the app imports (2.692191ms)
+✔ layout follows the viewport: narrow is phone, medium is tablet, wide is desktop (0.789534ms)
+✔ the bands are the derived widths, not round numbers (UX review 2026-10-31, F8/F9) (0.142229ms)
+✔ posture overrides width: a folded cover screen is a phone, half-open is two panes (0.118235ms)
+✔ posture comes from the ?posture= hook first, then viewport segments, then the Device Posture API (0.127318ms)
+✔ the quiet cards: a desktop right column with room, unless closed; a half-open tablet's second pane; never a flat tablet or a phone (0.812413ms)
+✔ breakpoints live in layout.css only: bands derived from the regions, plus viewport segments (0.902003ms)
+✔ every layout models the same eleven destinations, including Settings children (0.89951ms)
+✔ phone has five tabs (four destinations and More); the rail has the orb and at most six (1.475611ms)
+✔ paths map to destinations, and Era 2 paths keep working (0.44468ms)
+✔ ledger states map onto the one status vocabulary (0.302ms)
+✔ Era 2 activity states use the same words, and never claim Verified (0.153136ms)
+✔ the orb takes its state from real signals, most urgent first (0.104569ms)
+✔ a problem turns the orb red only when it stops Nova; any other is amber (0.168965ms)
+✔ the greeting follows the hour (0.218496ms)
+✔ Era 2 tool steps: deletions and irreversible-looking commands are tier 3 (0.682705ms)
+(node:2035936) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Undo after Save undoes exactly what Save changed, and nothing it didn’t (1.044434ms)
+✔ the live check covers every colour the UI draws as a control’s outline (5.636443ms)
+✔ every built-in passes the widened check in every look (2.494981ms)
+✔ nothing that shows a time or a date is drawn in the faint grey (4.474639ms)
+✔ the contrast panel says when it couldn’t check, never that it passed (0.208041ms)
+✔ a fix is offered only where it helps, and once applied it can always be undone (0.769984ms)
+✔ search knows more of people’s words, and “mode” means light and dark (3.98923ms)
+✔ an approval’s letter is not a tab stop now that it doesn’t scroll (11.453598ms)
+✔ revoking a device forgets its own design, its rollback and its contrast fix (63.277305ms)
+ℹ tests 39
+ℹ suites 0
+ℹ pass 39
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 457.060516
+no-Kubernetes tripwire: never fired
