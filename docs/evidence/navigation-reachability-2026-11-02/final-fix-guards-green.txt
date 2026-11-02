@@ -1,0 +1,14 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ selected empty destination cannot borrow hidden previous-view content (439.192959ms)
+✔ hidden active root and hidden active content cannot receive coverage credit (418.641095ms)
+✔ actual visible empty-state content is ready; only active visible pending markers block it (390.897957ms)
+✔ document guard preserves real same-document history and hash changes, then rejects reload (438.750084ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1911.160725
+no-Kubernetes tripwire: never fired

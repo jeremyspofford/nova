@@ -1,0 +1,57 @@
+✖ navigation model accounts for every app view, including Settings children (6.541994ms)
+✔ adding a registered view without a rendered door is missing from the crawl (1.87404ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 49.30158
+
+✖ failing tests:
+
+test at tests/navigation-registry.test.js:7:1
+✖ navigation model accounts for every app view, including Settings children (6.541994ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    [
+      'activity',
+      'automations',
+  -   'capture',
+      'chat',
+      'health',
+      'home',
+      'memory',
+      'settings',
+      'skills',
+      'tasks',
+  -   'topology'
+    ]
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/navigation-registry.test.js:9:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [
+      'activity', 'automations',
+      'chat',     'health',
+      'home',     'memory',
+      'settings', 'skills',
+      'tasks'
+    ],
+    expected: [
+      'activity', 'automations',
+      'capture',  'chat',
+      'health',   'home',
+      'memory',   'settings',
+      'skills',   'tasks',
+      'topology'
+    ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

@@ -1,0 +1,74 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+NAVIGATION phone: registered=12 reached=11 missing=["orphaned"] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true} states=25
+NAVIGATION FAILED phone: AssertionError [ERR_ASSERTION]: every production registered view has a rendered door
++ actual - expected
+
++ [
++   'orphaned'
++ ]
+- []
+
+✖ navigation reachability and required homes: phone (26383.657077ms)
+NAVIGATION rail: registered=12 reached=11 missing=["orphaned"] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true} states=25
+NAVIGATION FAILED rail: AssertionError [ERR_ASSERTION]: every production registered view has a rendered door
++ actual - expected
+
++ [
++   'orphaned'
++ ]
+- []
+
+✖ navigation reachability and required homes: rail (20959.660317ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 47586.347742
+
+✖ failing tests:
+
+test at .superpowers/sdd/navigation-reachability-2026-11-02/orphan-probe.test.ts:64:3
+✖ navigation reachability and required homes: phone (26383.657077ms)
+  AssertionError [ERR_ASSERTION]: every production registered view has a rendered door
+  + actual - expected
+
+  + [
+  +   'orphaned'
+  + ]
+  - []
+
+      at TestContext.<anonymous> (file:///work/.superpowers/sdd/navigation-reachability-2026-11-02/orphan-probe.test.ts:198:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'orphaned' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at .superpowers/sdd/navigation-reachability-2026-11-02/orphan-probe.test.ts:64:3
+✖ navigation reachability and required homes: rail (20959.660317ms)
+  AssertionError [ERR_ASSERTION]: every production registered view has a rendered door
+  + actual - expected
+
+  + [
+  +   'orphaned'
+  + ]
+  - []
+
+      at TestContext.<anonymous> (file:///work/.superpowers/sdd/navigation-reachability-2026-11-02/orphan-probe.test.ts:198:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'orphaned' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

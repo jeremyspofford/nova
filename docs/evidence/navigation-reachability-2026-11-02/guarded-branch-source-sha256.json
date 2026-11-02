@@ -1,0 +1,53 @@
+{
+  "source_head": "da46f8ec7f8e0557dd58e77b17e4ededb109dc51",
+  "source_files": [
+    {
+      "file": "tests/navigation-registry.test.js",
+      "sha256": "a6254c2193afa8ad742d35f59049bc92b215d56dabf6b1f296873d9d6ea26d3a"
+    },
+    {
+      "file": "tests/support/navigation-registry.js",
+      "sha256": "2832848a145b7e528ef241a49b0237862994e13d1ee3a93c065c23e92b1c716c"
+    },
+    {
+      "file": "tests/ui-logic.test.js",
+      "sha256": "2d8b4ff6d1fc1690451a624d9cde390e510744c6f43af5f6e5bc5956607b9a4d"
+    },
+    {
+      "file": "tests/ui-review.test.js",
+      "sha256": "16c6dd2dbc96c68d22d46cbe320238dbc5fd673bc063170cd5a9c6eada453aa1"
+    },
+    {
+      "file": "tests/ui/fold-navigation.ts",
+      "sha256": "2941ec668eb858de393cab55a9881baf80d3b982c6038a8a56a623e7edb387cc"
+    },
+    {
+      "file": "tests/ui/navigation-guards.test.ts",
+      "sha256": "998ba7d57e34b7c33e150af03479df11f17243aafdf993d32e4e20f5a1c06acb"
+    },
+    {
+      "file": "tests/ui/navigation-reachability.test.ts",
+      "sha256": "880152fdf5c43ba889047b98d369a470c360986c45e3ed6574545fded299dca1"
+    },
+    {
+      "file": "tests/ui/navigation-support.ts",
+      "sha256": "edc596a4e86fa8a82639abba44dcbbd49eb38d65a662ec68a7718e001b74dfef"
+    },
+    {
+      "file": "ui/js/components.js",
+      "sha256": "a0d6391e0e8d8c0dfebe5e2c666e60980e410c69af6a6f80f82fa85939ce261f"
+    },
+    {
+      "file": "ui/js/nav.js",
+      "sha256": "23bed73116418665245cdaa3cd11634baba9432bb639a0ebfb62df5db22bec09"
+    },
+    {
+      "file": "ui/js/settings-ia.js",
+      "sha256": "7b16c0d6f0dffda4c70c3fa754c450438b46939f5ab8d98375a779af9aef0e99"
+    },
+    {
+      "file": "ui/js/surfaces.js",
+      "sha256": "3b689aa7b3379c2b874f75997d25f69086e81b206b49fdf291699473935a03f5"
+    }
+  ]
+}

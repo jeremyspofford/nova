@@ -11,6 +11,8 @@ export const DESTINATIONS = Object.freeze([
   { id: 'activity', label: 'Activity', path: '/activity' },
   { id: 'health', label: 'Health', path: '/health' },
   { id: 'settings', label: 'Settings', path: '/settings' },
+  { id: 'capture', label: 'Capture', path: '/capture', parent: 'settings' },
+  { id: 'topology', label: 'Machines and services', path: '/topology', parent: 'settings' },
 ]);
 
 export const destination = (id) => DESTINATIONS.find((d) => d.id === id) ?? null;
@@ -25,13 +27,14 @@ const PLACES = {
 
 export function placement(layout) {
   const p = layout === 'phone' ? PLACES.phone : PLACES.rail;
-  return { home: p.home, primary: [...p.primary], more: [...p.more], foot: [...p.foot] };
+  return { home: p.home, primary: [...p.primary], more: [...p.more], foot: [...p.foot], secondary: DESTINATIONS.filter(d => d.parent === 'settings').map(d => d.id) };
 }
 
-// Every destination a layout can reach, directly or through More.
+// Modelled homes, including Settings children. The rendered UI gate independently checks
+// actual doors against app.js VIEWS; this model alone cannot prove reachability.
 export function reachable(layout) {
   const p = placement(layout);
-  return [...new Set([...(p.home === 'orb' ? ['home'] : []), ...p.primary, ...p.more, ...p.foot])];
+  return [...new Set([...(p.home === 'orb' ? ['home'] : []), ...p.primary, ...p.more, ...p.foot, ...p.secondary])];
 }
 
 // The path → what to show. Era 2 paths keep working: /schedules is Automations.
@@ -43,9 +46,6 @@ export function routeOf(pathname) {
   const c = /^\/c\/([\w-]+)$/.exec(path);
   if (c) return { dest: 'chat', conversation: c[1] };
   if (path === '/schedules') return { dest: 'automations' };
-  // Capture (M6a) is part of Settings: its own view, reached from Settings and the indicator.
-  if (path === '/capture') return { dest: 'capture' };
-  if (path === '/topology') return { dest: 'topology' };
   const d = DESTINATIONS.find((x) => x.path === path);
   return d ? { dest: d.id } : { dest: 'home', unknown: true };
 }

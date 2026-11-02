@@ -701,6 +701,7 @@ export function renderDevices() {
       : '<p class="memory-lede">This device can’t add devices. To pair another, use the hub’s own screen, or let this device approve from there.</p>';
   return `<section class="memory-section" id="devices" aria-labelledby="set-devices"><h2 class="memory-heading" id="set-devices">Devices</h2>
 <p class="memory-lede">${esc(lede)}</p>
+<p class="memory-lede" id="devices-topology"><a class="link" href="/topology">Machines and services</a></p>
 ${waiting ? `<ul class="settings-list">${waiting}</ul>` : ''}
 ${promotionRow ? `<ul class="settings-list">${promotionRow}</ul>` : ''}
 <ul class="device-list device-registry">${trusted.map((d) => deviceRow(d, { actions: actions(d), roles: true })).join('')}</ul>

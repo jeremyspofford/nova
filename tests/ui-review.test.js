@@ -155,7 +155,7 @@ test('a fix is offered only where it helps, and once applied it can always be un
 test('search knows more of people’s words, and “mode” means light and dark', () => {
   const top = (q) => searchSettings(q)[0];
   assert.equal(top('mode').path, 'Appearance › Light and dark');
-  for (const [q, path] of [['screenpipe', 'Privacy and permissions › Capture'], ['capture source', 'Privacy and permissions › Capture'], ['API key', 'Models and providers › Providers'],
+  for (const [q, path] of [['screenpipe', 'Capture › Capture'], ['capture source', 'Capture › Capture'], ['API key', 'Models and providers › Providers'],
     ['privacy mode', 'Privacy and permissions › Privacy'], ['tailscale', 'Devices › Paired devices'], ['voice', 'Privacy and permissions › Privacy'],
     ['text size', 'Appearance › Theme'], ['high contrast', 'Appearance › Contrast'], ['microphone', 'Privacy and permissions › Privacy'], ['restore', 'Backups and changes › Backups']]) {
     assert.equal(top(q)?.path, path, q);

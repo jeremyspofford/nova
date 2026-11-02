@@ -1,0 +1,68 @@
+{
+  "base": "e6ba2e2fbc50caf96e79de6b93f4bde889a535a2",
+  "changed": [
+    {
+      "file": "tests/navigation-registry.test.js",
+      "sha256": "a6254c2193afa8ad742d35f59049bc92b215d56dabf6b1f296873d9d6ea26d3a",
+      "bytes": 2477
+    },
+    {
+      "file": "tests/support/navigation-registry.js",
+      "sha256": "2832848a145b7e528ef241a49b0237862994e13d1ee3a93c065c23e92b1c716c",
+      "bytes": 2284
+    },
+    {
+      "file": "tests/ui/navigation-reachability.test.ts",
+      "sha256": "880152fdf5c43ba889047b98d369a470c360986c45e3ed6574545fded299dca1",
+      "bytes": 14202
+    },
+    {
+      "file": "tests/ui/navigation-support.ts",
+      "sha256": "edc596a4e86fa8a82639abba44dcbbd49eb38d65a662ec68a7718e001b74dfef",
+      "bytes": 2149
+    },
+    {
+      "file": "tests/ui/navigation-guards.test.ts",
+      "sha256": "998ba7d57e34b7c33e150af03479df11f17243aafdf993d32e4e20f5a1c06acb",
+      "bytes": 4163
+    }
+  ],
+  "unchanged_app": [
+    {
+      "file": "ui/js/components.js",
+      "sha256": "a0d6391e0e8d8c0dfebe5e2c666e60980e410c69af6a6f80f82fa85939ce261f",
+      "bytes": 60993,
+      "exact_base_bytes": true
+    },
+    {
+      "file": "ui/js/nav.js",
+      "sha256": "23bed73116418665245cdaa3cd11634baba9432bb639a0ebfb62df5db22bec09",
+      "bytes": 2769,
+      "exact_base_bytes": true
+    },
+    {
+      "file": "ui/js/settings-ia.js",
+      "sha256": "7b16c0d6f0dffda4c70c3fa754c450438b46939f5ab8d98375a779af9aef0e99",
+      "bytes": 8677,
+      "exact_base_bytes": true
+    },
+    {
+      "file": "ui/js/surfaces.js",
+      "sha256": "3b689aa7b3379c2b874f75997d25f69086e81b206b49fdf291699473935a03f5",
+      "bytes": 71887,
+      "exact_base_bytes": true
+    },
+    {
+      "file": "ui/js/app.js",
+      "sha256": "c5b7a1b46fb6cf1f20f266a1677b663e7b115acaa4f14e3881cfcc33f89ff953",
+      "bytes": 105175,
+      "exact_base_bytes": true
+    },
+    {
+      "file": "ui/index.html",
+      "sha256": "6431b1731fff3d77fb0c4042cb345eaf58005e54fa417e67c32eb15a0001b799",
+      "bytes": 6805,
+      "exact_base_bytes": true
+    }
+  ]
+}

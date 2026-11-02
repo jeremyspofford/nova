@@ -1,0 +1,38 @@
+[
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/local-full-failure-excerpts.txt",
+    "raw_sha256": "e5a3048679dbacb893b0228356384660877a714097a50cb085a0eab17a6e09bd",
+    "normalized_sha256": "2bea951862f2ba60608033e596255d8a117ee014f29436e30cb1925f50ef35bc",
+    "normalization": "trailing whitespace and surplus terminal blank lines only"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/orphan.txt",
+    "raw_sha256": "a9fdcf438b18d29b00fff9d42b8693a23f71b63776e08d2c0691af42ab15afc4",
+    "normalized_sha256": "8b6a6631b6655616d263574dc4f8e314f17761761422752609c747aab367d201",
+    "normalization": "trailing whitespace and surplus terminal blank lines only"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/red-final-harness.txt",
+    "raw_sha256": "f303601fe5a2ef146109a88e9b20edb64335296901f50739eb014441d2c0d0f8",
+    "normalized_sha256": "8f2a92708cc390b289f5e63ccff6f1c30d51d9ccabc036b603fa49a6cd0b5034",
+    "normalization": "trailing whitespace and surplus terminal blank lines only"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/red-model.txt",
+    "raw_sha256": "21da6381b0e8309064ee3ef33633d856438a55a461c3bf695ca590b6eb9cf182",
+    "normalized_sha256": "c07ed5e780177715b324ef9ec3656b5c64bde1acdac6be7ec8b1144e729f43b0",
+    "normalization": "trailing whitespace and surplus terminal blank lines only"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/red.txt",
+    "raw_sha256": "385a2491b797900020edfa3e677f067a75987cd817c727881a4ec14b6c889140",
+    "normalized_sha256": "893b86eeea9a99934fc0c164fb5d4dc17febec1986b3a144b15968a3f710de2f",
+    "normalization": "trailing whitespace and surplus terminal blank lines only"
+  },
+  {
+    "file": "docs/reviews/navigation-capability-audit-2026-11-02.md",
+    "raw_sha256": "c01a6d41b95f9a4347a41cf543af582adf837f8ececc1593598d62c404e0a4f2",
+    "normalized_sha256": "e27af30fa2206ab7fb47a960a9afc12e5cb008d7ab769936fe5c608f413b6dd9",
+    "normalization": "trailing whitespace and surplus terminal blank lines only"
+  }
+]
