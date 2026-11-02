@@ -1,7 +1,7 @@
 // Settings › Services, minimal (M10f, docs/plans/M10f.md §4): how Nova runs its services on this
 // computer, from /api/v1/services/backend: the backend in use, what it means on this OS, and where
 // switching will be. There is no switch to press, because the K3s driver isn't built: it says so,
-// rather than offering a choice that does nothing. The map and what runs where come later (M10i).
+// rather than offering a choice that does nothing. The live map is reached from this section.
 import { api } from './core.js';
 import { settingsRow } from './components.js';
 import { escapeHtml as esc } from './markdown.js';
@@ -25,7 +25,7 @@ export async function loadServices() {
 }
 
 export function renderServices() {
-  const head = '<h2 class="memory-heading" id="set-services">Services</h2>';
+  const head = '<h2 class="memory-heading" id="set-services">Services</h2><p class="memory-lede"><a class="link" href="/topology">View machines and services</a></p>';
   if (!data) {
     return `<section class="memory-section" id="services" aria-labelledby="set-services">${head}${failed
       ? `<p class="memory-lede">${esc(failed)}</p>`
