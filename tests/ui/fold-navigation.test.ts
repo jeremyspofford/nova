@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { stop } from '../acceptance/support.ts';
 import { reviewProfile } from './axe-support.ts';
 import { withMesh } from './fold-support.ts';
-import { foldDesignReady, openFoldView } from './fold-navigation.ts';
+import { foldCardRadius, foldDesignReady, openFoldView } from './fold-navigation.ts';
 import { browser, device, webkitBrowser } from './support.ts';
 
 test('fold navigation keeps the document and completes a real playbook refresh', { timeout: 120_000 }, async (t) => {
@@ -76,13 +76,16 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     const captured = new Promise<void>((resolve) => { held = resolve; });
     let delivery: Promise<void> | undefined;
     let readiness: Promise<void> | undefined;
+    let resumeRead: (() => void) | undefined;
+    let styleRead: Promise<string> | undefined;
+    let restoreRead: (() => void) | undefined;
     let css = '';
     try {
       const d = await device(b, { serviceWorkers: 'block' });
       await withMesh(d.ctx);
       await openFoldView(d.page, `${m.base}/`);
       await d.page.waitForFunction(() => !!document.getElementById('ds')?.textContent && !document.getElementById('ds-boot'));
-      const before = await d.page.locator('#home .card').first().evaluate((card) => getComputedStyle(card).borderTopLeftRadius);
+      const before = await foldCardRadius(d.page);
       const cssUrl = `${m.base}/design-system.css?device=${encodeURIComponent(d.id)}`;
       // Hold the real response to the production event's fetch, without changing its CSS.
       await d.page.route(cssUrl, (route) => {
@@ -106,19 +109,47 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         d.page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))).then(() => 'held'),
       ]);
       assert.equal(outcome, 'held', 'the actual boundary must not resolve while the intended CSS response is held');
-      assert.equal(await d.page.locator('#home .card').first().evaluate((card) => getComputedStyle(card).borderTopLeftRadius), before, 'the previous design is still painted');
+      assert.equal(before, '12px');
+      const oldCard = await d.page.locator('#home .card').first().elementHandle();
+      assert.ok(oldCard);
+      let started!: () => void;
+      const readStarted = new Promise<void>((resolve) => { started = resolve; });
+      const readGate = new Promise<void>((resolve) => { resumeRead = resolve; });
+      const selected = d.page.locator('#home .card').first();
+      // Hold the actual Locator.evaluate post-resolution phase, or the atomic page read before
+      // it begins. The real core refresh replaces the card while either operation is held.
+      const instrumented = selected as typeof selected & { _withElement: (task: (...args: any[]) => Promise<unknown>, options: unknown) => Promise<unknown> };
+      const originalMethod = instrumented._withElement;
+      const original = originalMethod.bind(instrumented);
+      let sampledCard: typeof oldCard | undefined;
+      instrumented._withElement = (task, options) => original(async (handle, ...args) => { sampledCard = handle; started(); await readGate; return task(handle, ...args); }, options);
+      restoreRead = () => { instrumented._withElement = originalMethod; };
+      const controlledPage = {
+        locator: (selector: string) => { assert.equal(selector, '#home .card'); return { first: () => selected }; },
+        evaluate: async (fn: () => string) => { started(); await readGate; return d.page.evaluate(fn); },
+      } as unknown as typeof d.page;
+      styleRead = foldCardRadius(controlledPage);
+      await readStarted;
+      const replacedCard = sampledCard ?? oldCard;
+      await d.page.evaluate(async () => { const core = await import(String('/js/core.js')); core.stream().dispatchEvent(new MessageEvent('task', { data: '{}' })); });
+      await d.page.waitForFunction((card) => !card.isConnected, replacedCard);
+      const evidence = await replacedCard.evaluate((card) => ({ oldConnected: card.isConnected, oldRadius: getComputedStyle(card).borderTopLeftRadius, currentConnected: document.querySelector('#home .card')!.isConnected, currentRadius: getComputedStyle(document.querySelector('#home .card')!).borderTopLeftRadius }));
+      console.log(`FOLD held card refresh ${JSON.stringify({ engine, ...evidence })}`);
+      assert.deepEqual(evidence, { oldConnected: false, oldRadius: '', currentConnected: true, currentRadius: before });
+      resumeRead!();
+      assert.equal(await styleRead, before, 'the previous design is still painted');
       release();
       await delivery;
       await readiness;
       assert.equal(await d.page.locator('#ds').textContent(), css, 'the exact real response is installed');
       const design = await m.get('/api/v1/design-systems/nova');
-      const after = await d.page.locator('#home .card').first().evaluate((card) => getComputedStyle(card).borderTopLeftRadius);
+      const after = await foldCardRadius(d.page);
       assert.equal(after, design.manifest.tokens['radius/card'], 'the intended design is rendered');
       assert.notEqual(after, before);
       assert.deepEqual(d.errors, []);
     } finally {
-      release();
-      try { await delivery; await readiness; } finally { await b.close(); await stop(nova); }
+      release(); resumeRead?.(); restoreRead?.();
+      try { await delivery; await readiness; await styleRead; } finally { await b.close(); await stop(nova); }
     }
   });
 }

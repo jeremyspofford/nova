@@ -77,3 +77,12 @@ export async function foldDesignReady(page: Page, id: string, device: string) {
   await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
   await still(page);
 }
+
+// Resolve and measure in the same browser turn: a real core refresh can replace Home's cards.
+export async function foldCardRadius(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const card = document.querySelector('#home .card');
+    if (!card?.isConnected) throw new Error('No connected Home card to measure');
+    return getComputedStyle(card).borderTopLeftRadius;
+  });
+}
