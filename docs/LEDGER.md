@@ -6,7 +6,7 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
-**2026-11-02 · Navigation reachability · Real doors for the map and capture**
+**2026-11-02 · #282 · Real doors for the map and capture**
 - What changed: the Home Devices card and Settings › Devices now open Machines and services. Capture has its own visible Settings category beside Devices. A required browser check starts at Home and follows real clicks or taps through every registered app view on phone and desktop rail, including these ordinary doors. A new view without a door fails the check.
 - What you can now do: find both views through ordinary navigation. The audit also gives every one of the inventory's 51 capabilities an explicit app-surface status and records 70 smaller gaps or scope limits. API-only starts, conditional task screens and unbuilt work are no longer implied fully available because a broad page exists.
 - Still unfinished: main already had buried Health/Services/Privacy links and the before crawl reached 11 views; its failure was the missing ordinary doors. This does not add the other missing workflows or prove every conditional operation, real device or credentialed deployment. Home's inherited card hierarchy stays in stage 2. Exact-head CI/final review and preview completion are recorded in this PR; evidence and the full mapping are in docs/evidence/navigation-reachability-2026-11-02.md. #275 still waits for findings B; M10j's credential gate remains open.
