@@ -1,0 +1,120 @@
+[
+  {
+    "family": "final-fix-canonical",
+    "layout": "phone",
+    "registered": 11,
+    "reached": 11,
+    "missing": [],
+    "required": {
+      "homeTopology": true,
+      "devicesTopology": true,
+      "captureCategory": true
+    },
+    "states": 26,
+    "documentRequests": [
+      "http://127.0.0.1:46147/"
+    ],
+    "healthMesh": true,
+    "forbidden": [],
+    "error": null
+  },
+  {
+    "family": "final-fix-canonical",
+    "layout": "rail",
+    "registered": 11,
+    "reached": 11,
+    "missing": [],
+    "required": {
+      "homeTopology": true,
+      "devicesTopology": true,
+      "captureCategory": true
+    },
+    "states": 26,
+    "documentRequests": [
+      "http://127.0.0.1:38645/"
+    ],
+    "healthMesh": true,
+    "forbidden": [],
+    "error": null
+  },
+  {
+    "family": "final-fix-orphan",
+    "layout": "phone",
+    "registered": 12,
+    "reached": 11,
+    "missing": [
+      "orphaned"
+    ],
+    "required": {
+      "homeTopology": true,
+      "devicesTopology": true,
+      "captureCategory": true
+    },
+    "states": 26,
+    "documentRequests": [
+      "http://127.0.0.1:45013/"
+    ],
+    "healthMesh": true,
+    "forbidden": [],
+    "error": "AssertionError [ERR_ASSERTION]: every production registered view has a rendered door\n+ actual - expected\n\n+ [\n+   'orphaned'\n+ ]\n- []\n"
+  },
+  {
+    "family": "final-fix-orphan",
+    "layout": "rail",
+    "registered": 12,
+    "reached": 11,
+    "missing": [
+      "orphaned"
+    ],
+    "required": {
+      "homeTopology": true,
+      "devicesTopology": true,
+      "captureCategory": true
+    },
+    "states": 26,
+    "documentRequests": [
+      "http://127.0.0.1:41215/"
+    ],
+    "healthMesh": true,
+    "forbidden": [],
+    "error": "AssertionError [ERR_ASSERTION]: every production registered view has a rendered door\n+ actual - expected\n\n+ [\n+   'orphaned'\n+ ]\n- []\n"
+  },
+  {
+    "family": "final-fix-baseline",
+    "layout": "phone",
+    "registered": 11,
+    "reached": 11,
+    "missing": [],
+    "required": {
+      "homeTopology": false,
+      "devicesTopology": false,
+      "captureCategory": false
+    },
+    "states": 26,
+    "documentRequests": [
+      "http://127.0.0.1:39387/"
+    ],
+    "healthMesh": true,
+    "forbidden": [],
+    "error": "AssertionError [ERR_ASSERTION]: required ordinary Home and Settings doors\n+ actual - expected\n\n  {\n+   captureCategory: false,\n+   devicesTopology: false,\n+   homeTopology: false\n-   captureCategory: true,\n-   devicesTopology: true,\n-   homeTopology: true\n  }\n"
+  },
+  {
+    "family": "final-fix-baseline",
+    "layout": "rail",
+    "registered": 11,
+    "reached": 11,
+    "missing": [],
+    "required": {
+      "homeTopology": false,
+      "devicesTopology": false,
+      "captureCategory": false
+    },
+    "states": 26,
+    "documentRequests": [
+      "http://127.0.0.1:41311/"
+    ],
+    "healthMesh": true,
+    "forbidden": [],
+    "error": "AssertionError [ERR_ASSERTION]: required ordinary Home and Settings doors\n+ actual - expected\n\n  {\n+   captureCategory: false,\n+   devicesTopology: false,\n+   homeTopology: false\n-   captureCategory: true,\n-   devicesTopology: true,\n-   homeTopology: true\n  }\n"
+  }
+]

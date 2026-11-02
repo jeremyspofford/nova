@@ -1,0 +1,58 @@
+✔ navigation model accounts for every app view, including Settings children (2.005712ms)
+✔ adding an app registration extends the missing-view oracle (1.093569ms)
+✖ rendered-root oracle derives DOM IDs from actual registration and element mapping (0.91243ms)
+✖ rendered-root oracle fails closed on unresolved, duplicate and uninventoried mappings (0.201551ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 47.784437
+
+✖ failing tests:
+
+test at tests/navigation-registry.test.js:22:1
+✖ rendered-root oracle derives DOM IDs from actual registration and element mapping (0.91243ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+  + {}
+  - {
+  -   chat: 'chat-panel',
+  -   first: 'actual-panel'
+  - }
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/navigation-registry.test.js:24:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: {},
+    expected: { first: 'actual-panel', chat: 'chat-panel' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/navigation-registry.test.js:32:1
+✖ rendered-root oracle fails closed on unresolved, duplicate and uninventoried mappings (0.201551ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/navigation-registry.test.js:40:13)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /inventoried|registration|mapping/,
+    operator: 'throws',
+    diff: 'simple'
+  }

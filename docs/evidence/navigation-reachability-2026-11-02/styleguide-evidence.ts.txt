@@ -1,0 +1,48 @@
+// One-off, read-only screenshot evidence; this is separate from the Home-only crawl.
+import assert from 'node:assert/strict';
+import { mkdirSync, rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { blank, browser, device, finishSetup, still } from '../../../tests/ui/support.ts';
+import { stop } from '../../../tests/acceptance/support.ts';
+
+const out = resolve('.superpowers/sdd/navigation-reachability-2026-11-02/styleguide');
+mkdirSync(out, { recursive: true });
+const b = await browser();
+assert.notEqual(typeof b, 'string');
+if (typeof b === 'string') throw new Error(b);
+const m = blank('nova-navigation-styleguide-');
+const nova = await m.start({ NOVA_AGENT_CMD: 'node scripts/fake-agent.js', NOVA_AGENT_EGRESS: 'none' });
+try {
+  await finishSetup(m);
+  for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false]] as const) {
+    const d = await device(b, { width, height: 900, touch, serviceWorkers: 'block' });
+    await d.ctx.route('**/*', async route => {
+      assert.equal(new URL(route.request().url()).origin, m.base);
+      assert.equal(route.request().method(), 'GET');
+      await route.continue();
+    });
+    for (const entry of ['devices', 'settings-row']) {
+      await d.page.goto(`${m.base}/styleguide?entry=${entry}`);
+      // Initial render precedes theme.apply()'s async CSS/metadata and its scheduled render.
+      await d.page.waitForFunction(() => !document.getElementById('ds-boot') && !!document.getElementById('ds')?.textContent && !!document.documentElement.dataset.theme && (document.querySelector('#sg-ds') as HTMLSelectElement)?.value === document.documentElement.dataset.theme);
+      await d.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      const specimen = d.page.locator(`#sg-${entry}`);
+      await specimen.waitFor({ state: 'visible' });
+      await d.page.evaluate(() => document.fonts.ready);
+      await still(d.page);
+      assert.equal(await d.page.locator('.sg-broken').count(), 0);
+      if (entry === 'devices') {
+        assert.equal(await specimen.locator('a[href="/topology"]').count(), 2);
+        assert.deepEqual(await specimen.locator('a[href="/topology"]').allTextContents(), ['Machines and services', 'Machines and services']);
+      }
+      await specimen.screenshot({ path: join(out, `${layout}-${entry}.png`), animations: 'disabled' });
+      assert.deepEqual(d.errors, []);
+      console.log(`STYLEGUIDE ${layout} ${entry}: shared real renderer, no browser errors`);
+    }
+    await d.ctx.close();
+  }
+} finally {
+  await b.close();
+  await stop(nova);
+  rmSync(m.dir, { recursive: true, force: true });
+}

@@ -1,0 +1,46 @@
+{
+  "source_commit": "7c8724965a34428b5267de3070d5e94895772956",
+  "source_files": [
+    {
+      "file": "tests/navigation-registry.test.js",
+      "sha256": "539a1d903ac5fc2a158ff447de59082256cfe09388fd515e5522a5223ff82f53"
+    },
+    {
+      "file": "tests/support/navigation-registry.js",
+      "sha256": "4a9db22b85b4b72bdef92ff5bfc3cafa281be3e18d893260bcdbb1f02ff814ac"
+    },
+    {
+      "file": "tests/ui-logic.test.js",
+      "sha256": "2d8b4ff6d1fc1690451a624d9cde390e510744c6f43af5f6e5bc5956607b9a4d"
+    },
+    {
+      "file": "tests/ui-review.test.js",
+      "sha256": "16c6dd2dbc96c68d22d46cbe320238dbc5fd673bc063170cd5a9c6eada453aa1"
+    },
+    {
+      "file": "tests/ui/fold-navigation.ts",
+      "sha256": "2941ec668eb858de393cab55a9881baf80d3b982c6038a8a56a623e7edb387cc"
+    },
+    {
+      "file": "tests/ui/navigation-reachability.test.ts",
+      "sha256": "c3d0df8637687ed78a68bd9ced8ec835ef287fb9fbb3ccfa96f7244517ed0bb0"
+    },
+    {
+      "file": "ui/js/components.js",
+      "sha256": "a0d6391e0e8d8c0dfebe5e2c666e60980e410c69af6a6f80f82fa85939ce261f"
+    },
+    {
+      "file": "ui/js/nav.js",
+      "sha256": "23bed73116418665245cdaa3cd11634baba9432bb639a0ebfb62df5db22bec09"
+    },
+    {
+      "file": "ui/js/settings-ia.js",
+      "sha256": "7b16c0d6f0dffda4c70c3fa754c450438b46939f5ab8d98375a779af9aef0e99"
+    },
+    {
+      "file": "ui/js/surfaces.js",
+      "sha256": "3b689aa7b3379c2b874f75997d25f69086e81b206b49fdf291699473935a03f5"
+    }
+  ],
+  "source_worktree_clean": true
+}

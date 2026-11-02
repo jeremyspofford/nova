@@ -1,0 +1,72 @@
+[
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-guards-red.txt",
+    "raw_sha256": "c91194fcb44baee74aad548e4fd51a69aa95dce217db57dc8d7693a02852c204",
+    "normalized_sha256": "8c24d9a6a4b1f643ed4c106109ddcc93c33889055a6df98e9692d6540059d95d"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-guards-green.txt",
+    "raw_sha256": "c65729c7e054fba3272429654b43cf9ab7252d14d7ddd266fcc37982700576f0",
+    "normalized_sha256": "c65729c7e054fba3272429654b43cf9ab7252d14d7ddd266fcc37982700576f0"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-oracle-red.txt",
+    "raw_sha256": "ffeb87586c57c4d447166382c39d267cb043e6a5b97f8c412d4be6eb6ee991bb",
+    "normalized_sha256": "1762474f0c4faf71a061878aec1d296339acb1fa07cb045fc6f15c84bb297feb"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-canonical.txt",
+    "raw_sha256": "fbffc0c02507dabc04235bddea2ea388f9fc25500096ca4a61e9943e752ee7bc",
+    "normalized_sha256": "fbffc0c02507dabc04235bddea2ea388f9fc25500096ca4a61e9943e752ee7bc"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-orphan.txt",
+    "raw_sha256": "1d21d59013337b74fbf368b9f64f077d730e124876715bcd27666b63b12fd1b7",
+    "normalized_sha256": "16b7bb744ed1c36bbc3a33ddf1bbb6ebcd164e393efe546c16cf8df5c8d001ad"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-baseline.txt",
+    "raw_sha256": "786866946ab4a79bf942edcca2b512d2c729d34066f24d35d21398367fcb9fdd",
+    "normalized_sha256": "f1702472016f2cf463243b14884daaab632918bcd3796044c762f5186cfb82d0"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-unit-tripwire.txt",
+    "raw_sha256": "08f0efd62f715523a5d32cbaa8ea22647240c11122605de0859e7daf325db3c7",
+    "normalized_sha256": "08f0efd62f715523a5d32cbaa8ea22647240c11122605de0859e7daf325db3c7"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-typecheck-complete.txt",
+    "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "normalized_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-typecheck.txt",
+    "raw_sha256": "8d9b9d11e6dac61e191f86b41fe6a0c0c9a1cd3e1e698fdfa9189e28779d5577",
+    "normalized_sha256": "8d9b9d11e6dac61e191f86b41fe6a0c0c9a1cd3e1e698fdfa9189e28779d5577"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-typecheck-final.txt",
+    "raw_sha256": "cacffaf5b0745c2409843b6ccc915e3ab9bcb39c2f40d1ac0f815d20f15e0a35",
+    "normalized_sha256": "cacffaf5b0745c2409843b6ccc915e3ab9bcb39c2f40d1ac0f815d20f15e0a35"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-original-drawn.txt",
+    "raw_sha256": "586a79961c9e76701113c34453d35286860b41830fef1e9e98a0745097757cff",
+    "normalized_sha256": "586a79961c9e76701113c34453d35286860b41830fef1e9e98a0745097757cff"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-browser.txt",
+    "raw_sha256": "a7c94ee11b200ff3d9c547efb4c80c4e9b21eff0ba5e5c8263b65056e9341116",
+    "normalized_sha256": "a7c94ee11b200ff3d9c547efb4c80c4e9b21eff0ba5e5c8263b65056e9341116"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-orphan.test.ts.txt",
+    "raw_sha256": "060e50c992f4d00b99e7b37f3c11c91da485c73dfd0f94739ba5c4960debeaaf",
+    "normalized_sha256": "060e50c992f4d00b99e7b37f3c11c91da485c73dfd0f94739ba5c4960debeaaf"
+  },
+  {
+    "file": "docs/evidence/navigation-reachability-2026-11-02/final-fix-baseline.test.ts.txt",
+    "raw_sha256": "dcaa0732de92f2a71a1e0659087688bf535356d580962302c7ca9179c45d034c",
+    "normalized_sha256": "dcaa0732de92f2a71a1e0659087688bf535356d580962302c7ca9179c45d034c"
+  }
+]

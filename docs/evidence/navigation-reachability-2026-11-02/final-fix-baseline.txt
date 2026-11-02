@@ -1,0 +1,92 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+NAVIGATION phone: registered=11 reached=11 missing=[] required={"homeTopology":false,"devicesTopology":false,"captureCategory":false} states=26
+DOCUMENT phone: main-document requests=1
+NAVIGATION FAILED phone: AssertionError [ERR_ASSERTION]: required ordinary Home and Settings doors
++ actual - expected
+
+  {
++   captureCategory: false,
++   devicesTopology: false,
++   homeTopology: false
+-   captureCategory: true,
+-   devicesTopology: true,
+-   homeTopology: true
+  }
+
+✖ navigation reachability and required homes: phone (25068.843486ms)
+NAVIGATION rail: registered=11 reached=11 missing=[] required={"homeTopology":false,"devicesTopology":false,"captureCategory":false} states=26
+DOCUMENT rail: main-document requests=1
+NAVIGATION FAILED rail: AssertionError [ERR_ASSERTION]: required ordinary Home and Settings doors
++ actual - expected
+
+  {
++   captureCategory: false,
++   devicesTopology: false,
++   homeTopology: false
+-   captureCategory: true,
+-   devicesTopology: true,
+-   homeTopology: true
+  }
+
+✖ navigation reachability and required homes: rail (20630.020523ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 45926.419349
+
+✖ failing tests:
+
+test at .superpowers/sdd/navigation-reachability-2026-11-02/final-fix-baseline.test.ts:50:3
+✖ navigation reachability and required homes: phone (25068.843486ms)
+  AssertionError [ERR_ASSERTION]: required ordinary Home and Settings doors
+  + actual - expected
+
+    {
+  +   captureCategory: false,
+  +   devicesTopology: false,
+  +   homeTopology: false
+  -   captureCategory: true,
+  -   devicesTopology: true,
+  -   homeTopology: true
+    }
+
+      at TestContext.<anonymous> (file:///work/.superpowers/sdd/navigation-reachability-2026-11-02/final-fix-baseline.test.ts:193:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { homeTopology: false, devicesTopology: false, captureCategory: false },
+    expected: { homeTopology: true, captureCategory: true, devicesTopology: true },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at .superpowers/sdd/navigation-reachability-2026-11-02/final-fix-baseline.test.ts:50:3
+✖ navigation reachability and required homes: rail (20630.020523ms)
+  AssertionError [ERR_ASSERTION]: required ordinary Home and Settings doors
+  + actual - expected
+
+    {
+  +   captureCategory: false,
+  +   devicesTopology: false,
+  +   homeTopology: false
+  -   captureCategory: true,
+  -   devicesTopology: true,
+  -   homeTopology: true
+    }
+
+      at TestContext.<anonymous> (file:///work/.superpowers/sdd/navigation-reachability-2026-11-02/final-fix-baseline.test.ts:193:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { homeTopology: false, devicesTopology: false, captureCategory: false },
+    expected: { homeTopology: true, captureCategory: true, devicesTopology: true },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

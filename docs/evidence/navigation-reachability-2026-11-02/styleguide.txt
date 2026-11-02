@@ -1,0 +1,6 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+STYLEGUIDE phone devices: shared real renderer, no browser errors
+STYLEGUIDE phone settings-row: shared real renderer, no browser errors
+STYLEGUIDE rail devices: shared real renderer, no browser errors
+STYLEGUIDE rail settings-row: shared real renderer, no browser errors
+no-Kubernetes tripwire: never fired

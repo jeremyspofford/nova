@@ -1,0 +1,31 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+FOLD baseline chromium duo-cover / {"share":0}
+FOLD baseline chromium duo-cover /chat {"share":0.4}
+FOLD baseline chromium duo-cover /settings {"share":1.3}
+FOLD baseline chromium duo-inner / {"share":0.04}
+FOLD baseline chromium duo-inner /chat {"share":0.2}
+FOLD baseline chromium duo-inner /settings {"share":0.3}
+FOLD baseline chromium duo-inner-landscape / {"share":0.04}
+FOLD baseline chromium duo-inner-landscape /chat {"share":0.23}
+FOLD baseline chromium duo-inner-820 / {"share":0.05}
+FOLD baseline chromium duo-inner-820 /settings {"share":0.92}
+FOLD baseline webkit duo-cover / {"share":0}
+FOLD baseline webkit duo-cover /chat {"share":0.42}
+FOLD baseline webkit duo-cover /settings {"share":1.75}
+FOLD baseline webkit duo-inner / {"share":0.07}
+FOLD baseline webkit duo-inner /chat {"share":0.23}
+FOLD baseline webkit duo-inner /settings {"share":0.43}
+FOLD baseline webkit duo-inner-landscape / {"share":0.07}
+FOLD baseline webkit duo-inner-landscape /chat {"share":0.27}
+FOLD baseline webkit duo-inner-820 / {"share":0.08}
+FOLD baseline webkit duo-inner-820 /settings {"share":1.14}
+✔ F8/F9 gate: the fold postures match their baselines (Chromium and WebKit) (14400.984972ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14674.823579
+no-Kubernetes tripwire: never fired
