@@ -34,6 +34,7 @@ import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/d
 import { Enrollment } from './mesh/enroll.ts';
 import { resolvePlacement, type PlacementDevice } from './services/placement.ts';
 import { validate } from './services/definition.ts';
+import { validServiceExpected } from './services/expected.ts';
 import { buildTopology, supervisorServices, type ClusterObservation, type MachineInput } from './services/topology.ts';
 import { DeviceWorkloads } from './services/workloads.ts';
 import { ServiceManager } from './services/manager.ts';
@@ -1278,11 +1279,12 @@ export function createCore(o: CoreOptions) {
       summary: 'A fixed service change through the supervisor’s current Service Manager; confirmation and readiness remain authoritative.',
       handle: async ({ params, body }: { params: Record<string, string>; body: Record<string, unknown> }) => {
         const service = params.service!;
-        const allowed = action === 'promote' ? ['version', 'confirm'] : ['confirm'];
+        const allowed = action === 'promote' ? ['version', 'confirm', 'expected'] : ['confirm', 'expected'];
         if (!/^[a-z][a-z0-9-]{0,127}$/.test(service) || Object.keys(body).some(k => !allowed.includes(k)) || typeof body.confirm !== 'string' || (action === 'promote' && (typeof body.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.version)))) throw new CoreError('validation', 'Only a service version and typed confirmation are accepted.');
+        if (!validServiceExpected(body.expected)) throw new CoreError('validation', 'A closed approved service state is required.');
         if (body.confirm !== (action === 'promote' ? `${service}@${body.version}` : 'rollback')) throw new CoreError('validation', 'The typed confirmation does not match this action.');
         if (!o.supervisor?.service) throw new CoreError('conflict', 'The supervisor service authority is unavailable.');
-        const r = await o.supervisor.service(action === 'promote' ? { action, service, version: body.version as string, confirm: body.confirm } : { action, service, confirm: body.confirm });
+        const r = await o.supervisor.service(action === 'promote' ? { action, service, version: body.version as string, confirm: body.confirm, expected: body.expected } : { action, service, confirm: body.confirm, expected: body.expected });
         if (!r.ok) throw new CoreError('conflict', r.said);
         return r;
       },
@@ -1312,7 +1314,9 @@ export function createCore(o: CoreOptions) {
       method: 'POST', path: '/services/devices/{device}/{service}/promote', access: 'approver', body: '{version, confirm}',
       summary: 'Move a device’s workload to a version that passed its health there (tier 2; tier 3 for anything with OS permissions, such as capture, every time): type <service>@<version>.',
       handle: async ({ params, body }) => {
-        const r = await deviceServices(params.device!).promote(params.service!, String(body.version ?? ''), body.confirm);
+        const expected = body.expected;
+        if (Object.keys(body).some(k => !['version', 'confirm', 'expected'].includes(k)) || (expected !== undefined && !validServiceExpected(expected))) throw new CoreError('validation', 'Only a version, confirmation and closed approved service state are accepted.');
+        const r = await deviceServices(params.device!).promote(params.service!, String(body.version ?? ''), body.confirm, () => {}, expected);
         if (!r.ok) throw new CoreError(r.tier && body.confirm !== `${params.service}@${body.version}` ? 'validation' : 'conflict', r.said);
         return r;
       },
@@ -1321,7 +1325,9 @@ export function createCore(o: CoreOptions) {
       method: 'POST', path: '/services/devices/{device}/{service}/rollback', access: 'approver', body: '{confirm: "rollback"}',
       summary: 'Back to the version kept on the device, in one step: nothing is downloaded (tier 2).',
       handle: async ({ params, body }) => {
-        const r = await deviceServices(params.device!).rollback(params.service!, body.confirm);
+        const expected = body.expected;
+        if (Object.keys(body).some(k => !['confirm', 'expected'].includes(k)) || (expected !== undefined && !validServiceExpected(expected))) throw new CoreError('validation', 'Only confirmation and closed approved service state are accepted.');
+        const r = await deviceServices(params.device!).rollback(params.service!, body.confirm, () => {}, expected);
         if (!r.ok) throw new CoreError(body.confirm === 'rollback' ? 'conflict' : 'validation', r.said);
         return r;
       },

@@ -1,4 +1,5 @@
 // One safe, captured-at topology. Pure normalization and Mermaid serialization: no I/O or cluster client.
+import { serviceExpected, type ServiceExpectedState } from './expected.ts';
 import type { ServiceStatus, VersionStatus } from './driver.ts';
 import { consoleStatus, type SupervisorState } from '../resilience/link.ts';
 
@@ -7,7 +8,7 @@ export type TopologyStatus = 'Quiet' | 'Working' | 'Waiting' | 'Verified' | 'Nee
 export type TopologySource = 'heartbeat' | 'local' | 'cluster' | 'supervisor' | 'workload';
 export interface ObservationInput { source: TopologySource; health: TopologyHealth; at: string | null; reason: string }
 export interface TopologyObservation extends ObservationInput { age_ms: number | null; stale: boolean }
-export interface TopologyAction { available: boolean; tier: 2 | 3 | null; path: string | null; confirm: string | null; reason: string | null }
+export interface TopologyAction { available: boolean; tier: 2 | 3 | null; path: string | null; confirm: string | null; reason: string | null; expected: ServiceExpectedState }
 export interface TopologyVersion { version: string; status: VersionStatus; since: string | null; observed_at: string | null; promote: TopologyAction }
 export interface TopologyService {
   id: string; service: string; driver: string; placement: string; live: string | null; previous: string | null;
@@ -55,8 +56,8 @@ function observation(o: ObservationInput, now: number): TopologyObservation {
   const at = timestamp(o.at), age_ms = age(at, now), stale = age_ms === null || age_ms >= FRESH_MS;
   return { source: o.source, at, age_ms, stale, health: stale || !healths.includes(o.health) ? 'unknown' : o.health, reason: text(o.reason) || 'No observation available.' };
 }
-function action(tier: 2 | 3 | null, path: string | null, confirm: string, reason: string | null): TopologyAction {
-  return { tier, path, confirm, reason, available: reason === null && path !== null && tier !== null };
+function action(tier: 2 | 3 | null, path: string | null, confirm: string, reason: string | null, expected: ServiceExpectedState): TopologyAction {
+  return { tier, path, confirm, reason, expected, available: reason === null && path !== null && tier !== null };
 }
 function service(s: ServiceInput, machine: TopologyMachine, now: number): TopologyService {
   const observations = [s.observation, ...(s.observations ?? [])].map(o => observation(o, now));
@@ -64,6 +65,7 @@ function service(s: ServiceInput, machine: TopologyMachine, now: number): Topolo
   const base = validService(s.service) ? s.authority === 'hub' ? `/services/hub/${s.service}` : s.authority === 'device' ? `/services/devices/${encodeURIComponent(machine.id)}/${s.service}` : null : null;
   const unavailable = !base ? 'No supported mutation authority.' : machine.observations.some(o => o.stale) || machine.health === 'unknown' || machine.health === 'failed' ? 'The machine observation is unavailable or stale.' : observations.some(o => o.stale) || sourceHealth === 'unknown' ? 'The service observation is unavailable or stale.' : null;
   const health = worst([sourceHealth, machine.health]);
+  const expected = serviceExpected({ live: s.live, previous: s.previous, assigned: s.assigned });
   return {
     id: `${machine.id}/${s.service}`, service: text(s.service, 128), driver: text(s.driver, 64), placement: text(s.placement),
     live: s.live === null ? null : text(s.live, 128), previous: s.previous === null ? null : text(s.previous, 128),
@@ -73,9 +75,9 @@ function service(s: ServiceInput, machine: TopologyMachine, now: number): Topolo
       const observed_at = timestamp(v.observed_at), ago = age(observed_at, now);
       const tier = v.promotion_tier === 2 || v.promotion_tier === 3 ? v.promotion_tier : null;
       const why = unavailable ?? (!validVersion(v.version) ? 'Invalid version.' : tier === null ? 'Promotion policy is unavailable.' : ago === null || ago >= FRESH_MS ? 'The version observation is unavailable or stale.' : v.status !== 'ready' ? 'Only a ready version can be promoted.' : null);
-      return { version: text(v.version, 128), status: v.status, since: timestamp(v.since), observed_at, promote: action(tier, base ? `${base}/promote` : null, `${s.service}@${v.version}`, why) };
+      return { version: text(v.version, 128), status: v.status, since: timestamp(v.since), observed_at, promote: action(tier, base ? `${base}/promote` : null, `${s.service}@${v.version}`, why, expected) };
     }),
-    rollback: action(2, base ? `${base}/rollback` : null, 'rollback', unavailable ?? (!s.previous ? 'No previous version is kept.' : null)),
+    rollback: action(2, base ? `${base}/rollback` : null, 'rollback', unavailable ?? (!s.previous ? 'No previous version is kept.' : null), expected),
   };
 }
 const versionStatuses: readonly string[] = ['installed', 'alongside', 'ready', 'live', 'kept', 'failed', 'rolled_back', 'removed'];

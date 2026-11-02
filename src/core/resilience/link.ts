@@ -10,6 +10,7 @@
 //     upgraded and before any work runs (core.start()), so a release that changed the database
 //     knows exactly what going back would undo: everything after this, the work's own records too.
 import { readFileSync } from 'node:fs';
+import type { ServiceExpectedState } from '../services/expected.ts';
 import type { ServicePolicy } from '../services/topology.ts';
 import type { ServiceStatus } from '../services/driver.ts';
 
@@ -60,7 +61,7 @@ export interface SupervisorLink {
   mark?(m: { seq: number; problem: number }): void;
 }
 
-export type HubServiceRequest = { action: 'promote'; service: string; version: string; confirm: string } | { action: 'rollback'; service: string; confirm: string };
+export type HubServiceRequest = { action: 'promote'; service: string; version: string; confirm: string; expected: ServiceExpectedState } | { action: 'rollback'; service: string; confirm: string; expected: ServiceExpectedState };
 
 // The link for a server the supervisor started (server.js passes it to the core), or null.
 export function ipcLink(proc: NodeJS.Process, env: NodeJS.ProcessEnv = process.env): SupervisorLink | null {
@@ -96,7 +97,7 @@ export function ipcLink(proc: NodeJS.Process, env: NodeJS.ProcessEnv = process.e
     },
     request,
     service(r) {
-      return r.action === 'promote' ? request('service-promote', { service: r.service, version: r.version, confirm: r.confirm }) : request('service-rollback', { service: r.service, confirm: r.confirm });
+      return r.action === 'promote' ? request('service-promote', { service: r.service, version: r.version, confirm: r.confirm, expected: r.expected }) : request('service-rollback', { service: r.service, confirm: r.confirm, expected: r.expected });
     },
     onProblem(fn) { problems.push(fn); },
     mark(m) {

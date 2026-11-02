@@ -18,7 +18,7 @@ import { finishSetup } from './support.ts';
 
 export async function topologyFixture() {
   const dir = mkdtempSync(join(tmpdir(), 'nova-m10i-app-'));
-  const controls = { oldService: false, serviceAgeMs: 1000, partial: false, long: false, refusal: false, extraReady: false, conflict: false, policy: 2 as 2|3, candidate: '2.0.0', calls: [] as HubServiceRequest[] };
+  const controls = { oldService: false, serviceAgeMs: 1000, partial: false, long: false, refusal: false, extraReady: false, conflict: false, conflictHealth: 'failed' as 'failed'|'degraded', policy: 2 as 2|3, candidate: '2.0.0', calls: [] as HubServiceRequest[] };
   let captureDeviceId: string | null = null;
   const at = () => new Date(Date.now() - 1000).toISOString();
   const old = () => new Date(Date.now() - 18 * 60_000).toISOString();
@@ -37,7 +37,7 @@ export async function topologyFixture() {
     async service(r: HubServiceRequest) {
       assert.ok(['ordinary', 'capture-demo', 'privileged'].includes(r.service), `Unexpected service ${r.service}`);
       if (r.action === 'promote') assert.ok(r.version === controls.candidate || (controls.extraReady && r.service === 'ordinary' && r.version === '2.1.0'), 'Unexpected promotion version');
-      assert.deepEqual(r, r.action === 'promote' ? { action: 'promote', service: r.service, version: r.version, confirm: `${r.service}@${r.version}` } : { action: 'rollback', service: r.service, confirm: 'rollback' });
+      assert.deepEqual(r, r.action === 'promote' ? { action: 'promote', service: r.service, version: r.version, confirm: `${r.service}@${r.version}`, expected: { live: '1.0.0', previous: '0.9.0', assigned: null } } : { action: 'rollback', service: r.service, confirm: 'rollback', expected: { live: '1.0.0', previous: '0.9.0', assigned: null } });
       controls.calls.push(r);
       return controls.refusal ? { ok: false, said: 'The target is no longer ready.' } : { ok: true, accepted: true, said: 'The change was accepted; this does not confirm that the version is serving.' };
     },
@@ -51,7 +51,7 @@ export async function topologyFixture() {
   let nova: ReturnType<typeof createNova>;
   try { nova = createNova(config, { supervisor, secrets: () => null, models: { ollamaUrl: runtime.url, hardware: async () => hubHardware() as Hardware }, topologyCluster: (): ClusterObservation => {
     if (controls.partial) throw new Error('fixture unavailable');
-    return { machines: [{ id: 'synthetic-site', name: controls.long ? 'A synthetic cloud site with an exceptionally long descriptive name '.repeat(3) : 'Synthetic site', kind: 'cloud', roles: ['read-only observation'], observation: { health: 'unknown', at: at(), reason: 'No workload health observation is available.' }, services: [] }, ...(controls.conflict && captureDeviceId ? [{ id: captureDeviceId, name: 'Synthetic capture desktop', kind: 'machine' as const, roles: ['worker'], observation: { health: 'failed' as const, at: at(), reason: 'Synthetic cluster reports the node stopped.' }, services: [] }] : [])] };
+    return { machines: [{ id: 'synthetic-site', name: controls.long ? 'A synthetic cloud site with an exceptionally long descriptive name '.repeat(3) : 'Synthetic site', kind: 'cloud', roles: ['read-only observation'], observation: { health: 'unknown', at: at(), reason: 'No workload health observation is available.' }, services: [] }, ...(controls.conflict && captureDeviceId ? [{ id: captureDeviceId, name: 'Synthetic capture desktop', kind: 'machine' as const, roles: ['worker'], observation: { health: controls.conflictHealth, at: at(), reason: 'Synthetic cluster reports the node stopped.' }, services: [{ service: 'observed-worker', driver: 'cluster', placement: 'Synthetic capture desktop', live: '1', previous: null, authority: null, observation: { source: 'cluster' as const, health: 'healthy' as const, at: at(), reason: 'Worker observed.' }, versions: [{ version: '1', status: 'live' as const, since: at(), observed_at: at(), promotion_tier: null }] }] }] : [])] };
   } }); } finally { if (before === undefined) delete process.env.NOVA_VAULT_KEY; else process.env.NOVA_VAULT_KEY = before; }
   await new Promise<void>((r) => nova.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(nova.server.address() as AddressInfo).port}`;

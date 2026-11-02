@@ -2,9 +2,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { releaseRepo, scratch, supervise, cli, api, until } from '../supervisor/support.ts';
+import { releaseRepo, scratch, supervise, cli, api as rawApi, until } from '../supervisor/support.ts';
 import { SERVICE_TIMINGS } from '../supervisor/services-support.ts';
 import { freePort, standIn } from '../support/services.ts';
+
+// Fixed topology routes require the guard projected by the currently observed service.
+// Explicit supplied guards are never replaced, so stale/race tests reach the real authority.
+async function api(base: string, method: string, path: string, body?: any) {
+  if (method === 'POST' && path.startsWith('/api/v1/services/hub/') && body && !Object.hasOwn(body, 'expected')) {
+    const service = path.split('/')[5];
+    const snapshot = await rawApi(base, 'GET', '/api/v1/services/topology');
+    const row = snapshot.body.machines.flatMap((m: any) => m.services).find((s: any) => s.service === service);
+    body = { ...body, expected: row?.rollback.expected ?? { live: null, previous: null, assigned: null } };
+  }
+  return rawApi(base, method, path, body);
+}
 
 test('fixed hub API reaches supervisor IPC and actual manager: tiers, confirmations, readiness and rollback', async () => {
   const dir = scratch('nova-topology-actions-');

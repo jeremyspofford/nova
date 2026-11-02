@@ -21,7 +21,7 @@ import { createServer as createNet, type Server as NetServer, type Socket } from
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
+import { sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
 import { runningPid } from '../home.js';
 import { ServerProcess } from './server.ts';
 import { CrashWindow } from './crashes.ts';
@@ -123,7 +123,7 @@ export class Supervisor {
         definition: () => this.console(),
         status: () => consoleStatus(this.state),
         prepare: (v) => this.#prepare(v),
-        deploy: (v, say) => this.deploy(v, say),
+        deploy: (v, say, expected) => this.deploy(v, say, expected),
         rollback: (r, say) => {
           if (this.#deploying) return Promise.resolve({ ok: false, said: 'A deploy is running; it rolls back by itself if its canary fails.' });
           return this.rollback({ ...r, target: this.state.releases.previous, say });
@@ -365,7 +365,7 @@ export class Supervisor {
   // ---- the server's requests (the console's API) -----------------------------------------------
 
   async #onMessage(s: ServerProcess, m: unknown): Promise<void> {
-    const msg = m as { nova?: string; id?: string; type?: string; version?: string; seq?: unknown; problem?: unknown; staged?: unknown; service?: unknown; confirm?: unknown };
+    const msg = m as { nova?: string; id?: string; type?: string; version?: string; seq?: unknown; problem?: unknown; staged?: unknown; service?: unknown; confirm?: unknown; expected?: unknown };
     if (msg?.nova === 'mark') {
       if (Number.isInteger(msg.seq) && Number.isInteger(msg.problem)) this.#marks.set(s, { seq: msg.seq as number, problem: msg.problem as number });
       return;
@@ -373,10 +373,12 @@ export class Supervisor {
     if (msg?.nova !== 'request' || typeof msg.id !== 'string') return;
     const reply = (ok: boolean, said: string) => s.send({ nova: 'reply', id: msg.id, ok, said });
     if (msg.type === 'service-promote' || msg.type === 'service-rollback') {
-      const allowed = msg.type === 'service-promote' ? ['nova', 'id', 'type', 'service', 'version', 'confirm'] : ['nova', 'id', 'type', 'service', 'confirm'];
+      const allowed = msg.type === 'service-promote' ? ['nova', 'id', 'type', 'service', 'version', 'confirm', 'expected'] : ['nova', 'id', 'type', 'service', 'confirm', 'expected'];
       if (Object.keys(msg).some(k => !allowed.includes(k)) || typeof msg.service !== 'string' || !/^[a-z][a-z0-9-]{0,127}$/.test(msg.service) || typeof msg.confirm !== 'string' || (msg.type === 'service-promote' && (typeof msg.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(msg.version)))) return void reply(false, 'Invalid service request.');
+      if (!validServiceExpected(msg.expected)) return void reply(false, 'Invalid approved service state.');
+      const expected = msg.expected;
       const service = msg.service, version = msg.version, confirm = msg.confirm, promote = msg.type === 'service-promote';
-      const checked = promote ? this.manager.promotionCheck(service, version!, confirm) : this.manager.rollbackCheck(service, confirm);
+      const checked = promote ? this.manager.promotionCheck(service, version!, confirm, expected) : this.manager.rollbackCheck(service, confirm, expected);
       if (!checked.ok) return void reply(false, 'The service manager refused the change: check confirmation, readiness and the kept version.');
       if (service === CONSOLE && this.#deploying) return void reply(false, 'A console deploy is already running.');
       s.send({ nova: 'reply', id: msg.id, ok: true, accepted: true, said: 'The service change was accepted. Refresh to observe the outcome; this does not confirm it is serving.' });
@@ -386,7 +388,7 @@ export class Supervisor {
         if (this.#closed) return;
         void (async () => {
           try {
-            const result = promote ? await this.manager.promote(service, version!, confirm) : await this.manager.rollback(service, confirm);
+            const result = promote ? await this.manager.promote(service, version!, confirm, () => {}, expected) : await this.manager.rollback(service, confirm, () => {}, expected);
             if (!result.ok) this.#problem({ source: 'supervisor', playbook: 'service-stopped', subject: service, said: `The accepted change to ${service} was refused when it ran. Refresh its service status before trying again.` });
           } catch {
             this.#problem({ source: 'supervisor', playbook: 'service-stopped', subject: service, said: `The accepted change to ${service} stopped unexpectedly. Refresh its service status before trying again.` });
@@ -439,8 +441,9 @@ export class Supervisor {
 
   // ---- deploying ---------------------------------------------------------------------------------
 
-  async deploy(version: string, say: Say = () => {}): Promise<{ ok: boolean; said: string }> {
+  async deploy(version: string, say: Say = () => {}, expected?: ServiceExpectedState): Promise<{ ok: boolean; said: string }> {
     if (this.#deploying) return { ok: false, said: 'A deploy is already running.' };
+    if (expected !== undefined && !sameServiceExpected(expected, consoleStatus(this.state))) return { ok: false, said: SERVICE_CHANGED };
     if (!isRelease(version)) return { ok: false, said: 'That isn’t a release’s tag.' };
     if (version === this.state.releases.current) return { ok: false, said: `${version} is already running.` };
     this.#deploying = true;
@@ -636,7 +639,9 @@ export class Supervisor {
 
   // ---- going back ---------------------------------------------------------------------------------
 
-  async rollback(o: { auto: boolean; reason: string; target: string | null; say?: Say }): Promise<{ ok: boolean; said: string }> {
+  async rollback(o: { auto: boolean; reason: string; target: string | null; say?: Say; expected?: ServiceExpectedState }): Promise<{ ok: boolean; said: string }> {
+    if (!o.auto && this.#deploying) return { ok: false, said: 'A console deploy is already running.' };
+    if (o.expected !== undefined && !sameServiceExpected(o.expected, consoleStatus(this.state))) return { ok: false, said: SERVICE_CHANGED };
     const say = o.say ?? (() => {});
     const cur = this.state.releases.current ?? BASE;
     const target = o.target;

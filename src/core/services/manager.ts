@@ -17,6 +17,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promotionTier, validate, type DeviceView, type ServiceDefinition } from './definition.ts';
+import { sameServiceExpected, SERVICE_CHANGED, type ServiceExpectedState } from './expected.ts';
 import type { ServicePolicy } from './topology.ts';
 import type { Outcome, Plan, Say, ServiceDriver, ServiceStatus } from './driver.ts';
 import { resolvePlacement, type PlacementDevice, type Resolution } from './placement.ts';
@@ -123,7 +124,7 @@ export class ServiceManager {
   }
 
   // Tier 2 or 3: asked every time. `confirm` is what the person typed: <service>@<version>.
-  promotionCheck(service: string, version: string, confirm: unknown): Outcome & { tier?: 2 | 3 } {
+  promotionCheck(service: string, version: string, confirm: unknown, expected?: ServiceExpectedState): Outcome & { tier?: 2 | 3 } {
     const def = this.definition(service, version);
     if (!def) return { ok: false, said: `${service} ${version} isn’t registered: deploy it first.` };
     const tier = promotionTier(def);
@@ -132,31 +133,33 @@ export class ServiceManager {
     }
     const found = this.#find(service);
     if (!found) return { ok: false, tier, said: `No driver runs ${service}.` };
+    if (expected !== undefined && !sameServiceExpected(expected, found.status)) return { ok: false, tier, said: SERVICE_CHANGED };
     const v = found.status.versions.find((x) => x.version === version);
     // Only a version that passed its contract tests and health is ever offered.
     if (!v || v.status !== 'ready') return { ok: false, tier, said: `${service} ${version} isn’t ready to promote${v ? ` (it is ${v.status.replace('_', ' ')}${v.said ? `: ${v.said}` : ''})` : ''}. Only a version that passed its contract tests and health takes traffic.` };
     return { ok: true, tier, said: 'The version is ready and its promotion is confirmed.' };
   }
 
-  async promote(service: string, version: string, confirm: unknown, say: Say = () => {}): Promise<Outcome & { tier?: 2 | 3 }> {
-    const checked = this.promotionCheck(service, version, confirm);
+  async promote(service: string, version: string, confirm: unknown, say: Say = () => {}, expected?: ServiceExpectedState): Promise<Outcome & { tier?: 2 | 3 }> {
+    const checked = this.promotionCheck(service, version, confirm, expected);
     if (!checked.ok) return checked;
-    return { tier: checked.tier, ...(await this.#find(service)!.driver.switch(service, version, say)) };
+    return { tier: checked.tier, ...(await this.#find(service)!.driver.switch(service, version, say, expected)) };
   }
 
   // Tier 2: asked. `confirm` is the word "rollback".
-  rollbackCheck(service: string, confirm: unknown): Outcome {
+  rollbackCheck(service: string, confirm: unknown, expected?: ServiceExpectedState): Outcome {
     if (confirm !== 'rollback') return { ok: false, said: `Going back to ${service}’s previous version asks first: type rollback.` };
     const found = this.#find(service);
     if (!found) return { ok: false, said: `No driver runs ${service}.` };
+    if (expected !== undefined && !sameServiceExpected(expected, found.status)) return { ok: false, said: SERVICE_CHANGED };
     if (!found.status.previous) return { ok: false, said: `${service} has no previous version kept to go back to.` };
     return { ok: true, said: 'A previous version is kept and rollback is confirmed.' };
   }
 
-  async rollback(service: string, confirm: unknown, say: Say = () => {}): Promise<Outcome> {
-    const checked = this.rollbackCheck(service, confirm);
+  async rollback(service: string, confirm: unknown, say: Say = () => {}, expected?: ServiceExpectedState): Promise<Outcome> {
+    const checked = this.rollbackCheck(service, confirm, expected);
     if (!checked.ok) return checked;
-    return this.#find(service)!.driver.rollback(service, { auto: false, reason: 'You asked to go back.' }, say);
+    return this.#find(service)!.driver.rollback(service, { auto: false, reason: 'You asked to go back.', ...(expected === undefined ? {} : { expected }) }, say);
   }
 
   // Tier 1, on the person's word: the held service's live version, started again.

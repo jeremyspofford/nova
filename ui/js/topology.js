@@ -8,9 +8,8 @@ import { openSheet, closeSheet } from './shell.js';
 
 let root, snapshot = null, snapshotSince = 0, selectedMachine = null, selectedService = null;
 let visible = false, timer = null, generation = 0, pending = null, failed = '', last = false;
-let approval = null, submitting = false, notice = '', chosen = null;
+let approval = null, approvalForm = null, submitting = false, notice = '', chosen = null;
 const POLL_MS = 10_000;
-const tones = { Quiet: 'quiet', Working: 'working', Waiting: 'waiting', Verified: 'verified', 'Needs you': 'needs-you', Failed: 'failed' };
 const elapsed = () => Math.max(0, performance.now() - snapshotSince);
 const ago = (ms) => ms == null ? 'Observation age unknown' : ms < 60_000 ? `${Math.floor(ms / 1000)} seconds old` : `${Math.floor(ms / 60_000)} minutes old`;
 const ageOf = (o) => o.age_ms == null ? null : Math.max(0, o.age_ms) + elapsed();
@@ -22,6 +21,15 @@ const ageLine = (items) => {
 const sourceRows = (items) => items.map(o => ({ source: o.source[0].toUpperCase() + o.source.slice(1), reason: o.reason, age: `${ago(ageOf(o))}${o.at ? ` / ${o.at}` : ''}${expired(o) ? ' / stale; current health unknown' : ''}` }));
 const isOverlay = () => !!snapshot && (!!failed || elapsed() >= snapshot.fresh_for_ms || snapshot.machines.some(m => [...m.observations, ...m.services.flatMap(s => s.observations)].some(o => !o.stale && expired(o)) || m.services.some(s => s.versions.some(v => { const age = Date.parse(snapshot.captured_at) - Date.parse(v.observed_at); return Number.isFinite(age) && age >= 0 && age < snapshot.fresh_for_ms && age + elapsed() >= snapshot.fresh_for_ms; }))));
 const globallyStale = () => !!failed || elapsed() >= (snapshot?.fresh_for_ms ?? 0);
+const severity = { healthy: 0, unknown: 1, degraded: 2, failed: 3 };
+const healthTone = { healthy: 'verified', unknown: 'waiting', degraded: 'needs-you', failed: 'failed' };
+function mergedHealth(observations, parent = null) {
+  const healths = observations.length ? observations.map(o => expired(o) || !Object.hasOwn(severity, o.health) ? 'unknown' : o.health) : ['unknown'];
+  if (parent) healths.push(parent);
+  if (failed) healths.push('unknown');
+  return healths.reduce((a, b) => severity[a] >= severity[b] ? a : b, 'healthy');
+}
+
 const selected = (data = snapshot) => {
   const machine = data?.machines.find(m => m.id === selectedMachine);
   return { machine, service: machine?.services.find(s => s.id === selectedService) };
@@ -29,10 +37,9 @@ const selected = (data = snapshot) => {
 function presentation() {
   return (snapshot?.machines ?? []).map(m => {
     const stale = globallyStale() || m.observations.some(expired);
-    const machineOverlay = globallyStale() || m.observations.some(o => !o.stale && expired(o));
-    const tone = tones[m.status] ?? 'waiting';
+    const machineHealth = mergedHealth(m.observations);
     return { id: m.id, name: m.name, roles: m.roles, age: ageLine(m.observations), observations: sourceRows(m.observations), stale, lastObservation: globallyStale(),
-      status: machineOverlay || (stale && tone === 'verified') ? 'waiting' : tone,
+      status: healthTone[machineHealth],
       captureFacts: m.capture_lag ? [{ reason: `${m.capture_lag.queued} pending events${m.capture_lag.paused ? `. ${m.capture_lag.paused}` : ''}. Last synchronized event: ${m.capture_lag.synced_to ?? 'unknown'}.`, age: `${ago(ageOf(m.capture_lag))}${ageOf(m.capture_lag) == null || ageOf(m.capture_lag) >= snapshot.fresh_for_ms ? ' / stale report' : ''}` }, { reason: 'Recording consent is unknown from workload status.', age: 'Capture content is not shown here.' }] : [{ reason: 'Capture lag is unknown: no report is available.', age: 'Recording consent is unknown from workload status.' }],
       services: m.services.map(s => {
         const serviceStale = stale || s.observations.some(expired);
@@ -41,7 +48,7 @@ function presentation() {
         const version = eligible.find(v => v.version === chosen) ?? eligible[0];
         const promote = version?.promote;
         const reason = serviceStale ? 'Current service health is unknown. Refresh before changing versions.' : s.versions.find(v => v.status === 'ready')?.promote.reason ?? 'No ready version is available.';
-        return { id: s.id, name: s.service, placement: s.placement === m.id ? m.name : s.placement, status: machineOverlay || s.observations.some(o => !o.stale && expired(o)) || (serviceStale && s.status === 'Verified') ? 'waiting' : tones[s.status] ?? 'waiting', stale: serviceStale,
+        return { id: s.id, name: s.service, placement: s.placement === m.id ? m.name : s.placement, status: healthTone[mergedHealth(s.observations, machineHealth)], stale: serviceStale,
           age: ageLine(s.observations), observations: sourceRows(s.observations), capture: false,
           versions: s.versions.map(v => ({ name: v.version, role: v.status, detail: v.version === s.live ? 'Serving on this machine' : v.status === 'ready' ? 'Passed readiness checks' : v.version === s.previous ? 'Kept for rollback' : `Reported ${v.status}` })),
           actions: { promote: { available: !!promote, tier: promote?.tier, selected: version?.version, versions: eligible, reason }, rollback: { ...s.rollback, available: s.rollback.available && !unavailable, reason: serviceStale ? reason : s.rollback.reason } },
@@ -82,7 +89,7 @@ async function collect() {
   if (!data || !Array.isArray(data.machines) || !Number.isFinite(Date.parse(data.captured_at)) || !(data.fresh_for_ms > 0) || typeof data.mermaid !== 'string') throw new Error('Nova’s topology answer was incomplete.');
   return { data, startedAt };
 }
-function accept({ data, startedAt }) { snapshot = data; snapshotSince = startedAt; failed = ''; last = false; notice = ''; }
+function accept({ data, startedAt }) { snapshot = data; snapshotSince = startedAt; failed = ''; last = false; }
 async function refresh() {
   if (!visible || document.hidden || approval) return;
   if (pending?.generation === generation) return pending.promise;
@@ -103,8 +110,9 @@ function schedule() {
 }
 export function topologyVisible(yes) {
   if (yes === visible) return;
+  const ownsSheet = approval && approvalForm?.isConnected && document.getElementById('sheet').open && document.getElementById('sheet-body').contains(approvalForm);
   visible = yes; generation++;
-  if (!visible && approval) closeSheet();
+  if (!visible && ownsSheet) closeSheet();
   schedule();
 }
 export function showTopology() { draw(); refresh(); }
@@ -134,34 +142,42 @@ function signature(t) { return JSON.stringify(t); }
 function review(kind) {
   if (submitting) return;
   const t = target(kind); if (!t) return;
-  generation++; approval = t; schedule();
+  generation++; approval = t; notice = ''; schedule();
   const verb = kind === 'promote' ? 'Promote' : 'Roll back';
   // Reuse the existing tiered sheet, with a scoped form so generic ledger handlers cannot act.
   const html = approvalSheet({ id: 'topology-change', title: `${verb} ${t.name}`, owner: selected().machine.name, approval_tier: t.action.tier, privacy_mode: 'local-only', brief: { goal: `${verb} ${t.name}${t.live ? ` from ${t.live}` : ''} to ${t.version}. This asks the current authority to change the version. Acceptance does not verify that it is serving.` } }).replace('data-task="topology-change"', 'data-topology-approval').replace('<button type="button" class="btn" data-action="cancel-task">Cancel the task</button>', '');
-  openSheet(html, { label: `${verb} ${t.name}`, onClose: () => { approval = null; schedule(); draw(['data-topology-action', kind]); } });
+  openSheet(html, { label: `${verb} ${t.name}`, onClose: () => { if (approval !== t) return; approval = null; approvalForm = null; schedule(); if (visible && !document.getElementById('sheet').open) draw(['data-topology-action', kind]); } });
+  approvalForm = document.getElementById('sheet-body').querySelector('[data-topology-approval]');
+}
+function ownsApproval(before, form) {
+  return visible && approval === before && approvalForm === form && form.isConnected && document.getElementById('sheet').open && document.getElementById('sheet-body').contains(form);
 }
 export async function submitTopology(form) {
-  if (!approval || submitting || (approval.action.tier === 3 && !form.querySelector('[name="confirm"]')?.checked)) return;
+  if (!approval || !ownsApproval(approval, form) || submitting || (approval.action.tier === 3 && !form.querySelector('[name="confirm"]')?.checked)) return;
   submitting = true;
   form.querySelectorAll('button, input, select').forEach(control => { control.disabled = true; });
   const before = approval;
   try {
     const fresh = await collect();
-    if (approval !== before || !visible) return;
+    if (!ownsApproval(before, form)) return;
     accept(fresh);
     submitting = false;
     const next = target(before.kind, before.kind === 'promote' ? before.version : null);
-    if (!next || signature(next) !== signature(before)) { notice = 'The target or its policy changed. Review the refreshed versions before asking again.'; closeSheet(); return; }
+    if (!next || signature(next) !== signature(before)) { notice = 'The target or its policy changed. Review the refreshed versions before asking again.'; if (ownsApproval(before, form)) closeSheet(); return; }
     submitting = true;
     // No retry: a lost acknowledgement may still have changed an assignment or restarted Nova.
-    const response = await request('POST', next.action.path, { ...(next.kind === 'promote' ? { version: next.version } : {}), confirm: next.action.confirm }, true);
+    const response = await request('POST', next.action.path, { ...(next.kind === 'promote' ? { version: next.version } : {}), confirm: next.action.confirm, expected: next.action.expected }, true);
     notice = response.data.accepted ? 'Accepted by the supervisor. This does not confirm that the version is serving. Refresh to observe the outcome.' : next.action.path.startsWith('/services/devices/') ? 'The device assignment was acknowledged. This does not confirm that the version is serving. Refresh to observe the outcome.' : 'The authority acknowledged the request. Refresh to observe whether the version is serving.';
-    closeSheet();
+    if (ownsApproval(before, form)) closeSheet();
   } catch (e) {
     failed = e.message; last = true;
     notice = `${e.message} The outcome is unknown until refreshed; Nova will not retry this request automatically.`;
-    closeSheet();
-  } finally { submitting = false; if (!approval) draw(); }
+    if (ownsApproval(before, form)) closeSheet();
+  } finally {
+    submitting = false;
+    if (approval === before && !ownsApproval(before, form)) { approval = null; approvalForm = null; schedule(); }
+    if (visible && !approval && !document.getElementById('sheet').open) draw();
+  }
 }
 export function bindTopology(element) {
   root = element;
@@ -172,7 +188,7 @@ export function bindTopology(element) {
     else if (b.hasAttribute('data-topology-back')) {
       if (selectedService) { const id = selectedService; drill(selectedMachine, null, ['data-topology-service', id]); }
       else { const id = selectedMachine; drill(null, null, ['data-topology-machine', id]); }
-    } else if (b.hasAttribute('data-topology-refresh')) refresh();
+    } else if (b.hasAttribute('data-topology-refresh')) { notice = ''; refresh(); }
     else if (b.hasAttribute('data-topology-return')) { last = true; draw(); }
     else if (b.hasAttribute('data-topology-export')) exportMap();
     else if (b.hasAttribute('data-topology-action')) review(b.dataset.topologyAction);

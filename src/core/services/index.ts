@@ -11,3 +11,6 @@ export { FAILOVER_AFTER_MS, NEEDS as PLACEMENT_NEEDS, devicePlatform, ineligible
 export type { Considered as PlacementConsidered, PlacementDevice, PlacementHardware, Resolution as PlacementResolution, ResolveOptions as PlacementOptions } from './placement.ts';
 export type { ManagerOptions as ServiceManagerOptions } from './manager.ts';
 export { CONSOLE_HEALTH, consoleDefinition } from './console.ts';
+
+export { serviceExpected, validServiceExpected, sameServiceExpected, SERVICE_CHANGED } from './expected.ts';
+export type { ServiceExpectedState, ServiceAssignment } from './expected.ts';

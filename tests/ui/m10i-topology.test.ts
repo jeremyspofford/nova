@@ -115,7 +115,7 @@ test('M10i: server policy tiers, exact fixed action bodies, all rollbacks, reval
       await p.locator('#sheet:not([open])').waitFor({ state: 'attached' });
       assert.match(await p.locator('[data-topology-notice]').innerText(), /Accepted.*not.*serving/i);
       assert.equal(posts.length, n + 1, 'pending double click sends only once');
-      assert.deepEqual(posts.at(-1), { path: `/api/v1/services/hub/${service}/${action}`, body: action === 'promote' ? { version: '2.0.0', confirm: `${service}@2.0.0` } : { confirm: 'rollback' } });
+      assert.deepEqual(posts.at(-1), { path: `/api/v1/services/hub/${service}/${action}`, body: action === 'promote' ? { version: '2.0.0', confirm: `${service}@2.0.0`, expected: { live: '1.0.0', previous: '0.9.0', assigned: null } } : { confirm: 'rollback', expected: { live: '1.0.0', previous: '0.9.0', assigned: null } } });
     }
     await map(p, f.base); await detail(p, f.hubId); await p.locator('[data-topology-action="promote"]').click();
     const before = posts.length; f.controls.policy = 3;
@@ -282,7 +282,7 @@ test('M10i: real eligible version selection honors each policy and a lost acknow
     await p.locator('.approval-sheet[data-tier="3"]').waitFor(); assert.match(await p.locator('.sheet-line').innerText(), /2.1.0/);
     await p.locator('[name="confirm"]').check(); await p.locator('[data-action="approve"]').click();
     await p.locator('#sheet:not([open])').waitFor({ state: 'attached' });
-    assert.deepEqual(f.controls.calls, [{ action: 'promote', service: 'ordinary', version: '2.1.0', confirm: 'ordinary@2.1.0' }]);
+    assert.deepEqual(f.controls.calls, [{ action: 'promote', service: 'ordinary', version: '2.1.0', confirm: 'ordinary@2.1.0', expected: { live: '1.0.0', previous: '0.9.0', assigned: null } }]);
     await p.route('**/api/v1/services/hub/ordinary/promote', async r => { await r.fetch(); await r.abort(); });
     await p.locator('[data-topology-action="promote"]').click(); await p.locator('[name="confirm"]').check(); await p.locator('[data-action="approve"]').click();
     await p.locator('#sheet:not([open])').waitFor({ state: 'attached' });
@@ -421,7 +421,7 @@ test('M10i: review follows the displayed eligible candidate after the prior sele
     await p.locator('.approval-sheet[data-tier="2"]').waitFor({ timeout: 1500 });
     assert.match(await p.locator('.sheet-line').innerText(), /to 2.0.0/);
     await p.locator('[data-action="approve"]').click(); await p.locator('#sheet:not([open])').waitFor({ state: 'attached' });
-    assert.deepEqual(f.controls.calls, [{ action: 'promote', service: 'ordinary', version: '2.0.0', confirm: 'ordinary@2.0.0' }]);
+    assert.deepEqual(f.controls.calls, [{ action: 'promote', service: 'ordinary', version: '2.0.0', confirm: 'ordinary@2.0.0', expected: { live: '1.0.0', previous: '0.9.0', assigned: null } }]);
   } finally { await b.close(); await f.close(); }
 });
 
@@ -454,4 +454,56 @@ test('M10i: null or absent live hub uses existing rows while undefined preserves
     assert.ok(!live.includes('topology-connections'), `${hubId}: no invented connections`);
     assert.match(live, /class="topology-services"/); assert.match(live, /class="topology-row"/);
   }
+});
+
+for (const health of ['failed', 'degraded'] as const) test(`M10i I2: independently expired heartbeat preserves current ${health} machine and service evidence`, async t => {
+  const b = await browser(); if (typeof b === 'string') return t.skip(b);
+  const f = await topologyFixture();
+  try {
+    f.controls.conflict = true; f.controls.conflictHealth = health;
+    f.nova.core.db.run('UPDATE device SET last_seen = ? WHERE id = ?', new Date(Date.now() - 115000).toISOString(), f.deviceId);
+    const d = await device(b, { serviceWorkers: 'block' }); const p = d.page; await p.clock.install(); await map(p, f.base);
+    await p.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+    await p.clock.runFor(8000); await p.locator(`[data-topology-machine="${f.deviceId}"]`).click();
+    const tone = health === 'failed' ? 'failed' : 'needs-you';
+    assert.equal(await p.locator('.topology-heading [data-status]').getAttribute('data-status'), tone, 'a fresh worse source survives another source expiring');
+    assert.equal(await p.locator(`[data-topology-service="${f.deviceId}/observed-worker"] [data-status]`).getAttribute('data-status'), tone);
+    await p.locator(`[data-topology-service="${f.deviceId}/observed-worker"]`).click();
+    assert.equal(await p.locator('.topology-heading [data-status]').getAttribute('data-status'), tone);
+    assert.equal(await p.locator('[data-topology-export]').isDisabled(), true);
+    assert.match(await p.locator('.topology').innerText(), /2 minutes old.*stale/s); assert.match(await p.locator('.topology').innerText(), /9 seconds old/);
+    await p.clock.runFor(111100); await p.locator('[data-topology-back]').click();
+    assert.equal(await p.locator('.topology-heading [data-status]').getAttribute('data-status'), 'waiting', 'the failed/degraded source itself eventually expires');
+    assert.equal(await p.locator(`[data-topology-service="${f.deviceId}/observed-worker"] [data-status]`).getAttribute('data-status'), 'waiting');
+  } finally { await b.close(); await f.close(); }
+});
+
+for (const kind of ['post', 'get-rejection']) test(`M10i I3: late ${kind} cannot close or focus a replacement approval`, async t => {
+  const b = await browser(); if (typeof b === 'string') return t.skip(b);
+  const f = await topologyFixture();
+  try {
+    const d = await device(b, { serviceWorkers: 'block' }); const p = d.page;
+    await map(p, f.base); await detail(p, f.hubId); await p.locator('[data-topology-action="promote"]').click();
+    let release!: () => void, captured!: () => void, finished!: () => void;
+    const held = new Promise<void>(r => { release = r; }), collected = new Promise<void>(r => { captured = r; }), done = new Promise<void>(r => { finished = r; });
+    await p.route(kind === 'post' ? '**/api/v1/services/hub/ordinary/promote' : '**/api/v1/services/topology', async r => {
+      const response = await r.fetch(); captured(); await held;
+      if (kind === 'post') await r.fulfill({ response }); else await r.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Held topology read was rejected.' }) });
+      finished();
+    }, { times: 1 });
+    await p.locator('[data-action="approve"]').click(); await collected; await p.keyboard.press('Escape');
+    // Real SPA navigation and real tier-3 revoke sheet, in the same document/global dialog.
+    await p.evaluate(() => { const a = document.createElement('a'); a.href = '/settings#devices'; document.body.append(a); a.click(); a.remove(); });
+    await p.locator(`#devices [data-action="revoke-device"][data-device="${f.deviceId}"]`).click();
+    const replacement = p.locator(`.approval-sheet[data-revoke="${f.deviceId}"]`); await replacement.waitFor();
+    await replacement.locator('[name="confirm"]').focus();
+    release(); await done; await p.waitForTimeout(150);
+    assert.equal(await p.locator('#sheet').getAttribute('open'), '', 'the replacement sheet remains open');
+    assert.equal(await replacement.count(), 1); assert.equal(await replacement.locator('[name="confirm"]').evaluate(e => e === document.activeElement), true, 'late work does not steal replacement focus');
+    assert.equal(f.controls.calls.length, kind === 'post' ? 1 : 0);
+    await p.keyboard.press('Escape');
+    await p.evaluate(() => { const a = document.createElement('a'); a.href = '/topology'; document.body.append(a); a.click(); a.remove(); });
+    await p.waitForFunction(() => !document.querySelector<HTMLButtonElement>('[data-topology-refresh]')?.disabled);
+    assert.match(await p.locator('[data-topology-notice]').innerText(), kind === 'post' ? /Accepted/ : /Held topology read was rejected/, 'late result remains available after return and refresh');
+  } finally { await b.close(); await f.close(); }
 });

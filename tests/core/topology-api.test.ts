@@ -14,7 +14,7 @@ test('topology read is authenticated, unsupervised is honest, and missing mutati
     assert.equal(console.rollback.available, false);
     assert.match(console.observations[0].reason, /unsupervised/i);
     assert.equal((await call(h.mesh, 'GET', '/api/v1/services/topology')).status, 401);
-    assert.equal((await h.c('POST', '/services/hub/worker/promote', { version: 'v1', confirm: 'worker@v1' })).status, 409);
+    assert.equal((await h.c('POST', '/services/hub/worker/promote', { version: 'v1', confirm: 'worker@v1', expected: { live: null, previous: null, assigned: null } })).status, 409);
     const phone = await enroll(h);
     assert.equal((await call(h.mesh, 'POST', '/api/v1/services/hub/worker/rollback', { confirm: 'rollback' }, { authorization: `Bearer ${phone.token}` })).status, 403);
   } finally { await h.stop(); }

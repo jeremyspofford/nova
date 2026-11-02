@@ -26,6 +26,7 @@ import { sha256Hex, workloadManifestMessage, type SignedWorkload, type WorkloadM
 import { isCaptureService, programName, promotionTier, validate, type ServiceDefinition } from './definition.ts';
 import type { Outcome, Plan, Say, ServiceDriver, ServiceStatus, VersionStatus, VersionView } from './driver.ts';
 import { devicePlatform, resolvePlacement, wantedRoles, type PlacementDevice } from './placement.ts';
+import { sameServiceExpected, SERVICE_CHANGED, type ServiceExpectedState } from './expected.ts';
 import { projectService, type ServiceInput } from './topology.ts';
 import { SCREENPIPE } from './screenpipe.ts';
 
@@ -69,7 +70,7 @@ export class DeviceWorkloads {
       plan: (def) => this.#plan(deviceId, def),
       apply: (def, say) => this.#apply(deviceId, def, say),
       status: (service) => this.status(service, deviceId),
-      switch: (service, version, say) => this.#switch(deviceId, service, version, say),
+      switch: (service, version, say, expected) => this.#switch(deviceId, service, version, say, expected),
       rollback: (service, o, say) => this.#rollback(deviceId, service, o, say),
     };
     this.#drivers.set(deviceId, d);
@@ -150,35 +151,44 @@ export class DeviceWorkloads {
     return { ok: true, said };
   }
 
-  async #switch(deviceId: string, service: string, version: string, say: Say = () => {}): Promise<Outcome> {
-    const row = this.#row(deviceId, service);
-    if (!row) return { ok: false, said: `${service} isn’t assigned to ${this.#name(deviceId)}.` };
-    const def = JSON.parse(row.definition) as ServiceDefinition;
-    if (row.version !== version) return { ok: false, said: `${version} isn’t the version deployed to that device (${row.version} is).` };
-    // The version kept for one step back: the one live before this (recorded when this one was sent).
-    const prev = row.previous && row.previous !== version ? row.previous : null;
-    const prevDef = prev ? row.previous_definition : null;
-    const at = this.#o.now().toISOString();
-    this.#o.db.run(`UPDATE device_workload SET want = 'live', previous = ?, previous_definition = ?, assigned_at = ?, updated_at = ? WHERE device_id = ? AND service = ?`, prev, prevDef, at, at, row.device_id, service);
-    const name = this.#name(row.device_id);
-    this.#event(row.device_id, service, version, 'promoted', `Promoted: ${name} switches to it and checks its health${prev ? `; ${prev} is kept for one step back` : ''}.`);
-    const said = `Promoted ${service} ${version}: ${name} switches to it and checks its health, and goes back to ${prev ?? 'nothing'} by itself if it fails.${isCaptureService(def) ? ' Capture stays as you set it: promoting doesn’t turn it on.' : ''}`;
-    say(said);
-    return { ok: true, said };
+  async #switch(deviceId: string, service: string, version: string, say: Say = () => {}, expected?: ServiceExpectedState): Promise<Outcome> {
+    // BEGIN IMMEDIATE holds the actual report/assignment comparison and write together.
+    return this.#o.db.tx(() => {
+      const row = this.#row(deviceId, service);
+      if (!row) return { ok: false, said: `${service} isn’t assigned to ${this.#name(deviceId)}.` };
+      if (expected !== undefined && !sameServiceExpected(expected, this.status(service, deviceId)[0]!)) return { ok: false, said: SERVICE_CHANGED };
+      const def = JSON.parse(row.definition) as ServiceDefinition;
+      if (row.version !== version) return { ok: false, said: `${version} isn’t the version deployed to that device (${row.version} is).` };
+      // The version kept for one step back: the one live before this (recorded when this one was sent).
+      const prev = row.previous && row.previous !== version ? row.previous : null;
+      const prevDef = prev ? row.previous_definition : null;
+      const at = this.#o.now().toISOString();
+      this.#o.db.run(`UPDATE device_workload SET want = 'live', previous = ?, previous_definition = ?, assigned_at = ?, updated_at = ? WHERE device_id = ? AND service = ?`, prev, prevDef, at, at, row.device_id, service);
+      const name = this.#name(row.device_id);
+      this.#event(row.device_id, service, version, 'promoted', `Promoted: ${name} switches to it and checks its health${prev ? `; ${prev} is kept for one step back` : ''}.`);
+      const said = `Promoted ${service} ${version}: ${name} switches to it and checks its health, and goes back to ${prev ?? 'nothing'} by itself if it fails.${isCaptureService(def) ? ' Capture stays as you set it: promoting doesn’t turn it on.' : ''}`;
+      say(said);
+      return { ok: true, said };
+    });
   }
 
-  async #rollback(deviceId: string, service: string, o: { auto: boolean; reason: string }, say: Say = () => {}): Promise<Outcome> {
-    const row = this.#row(deviceId, service);
-    if (!row || !row.previous) return { ok: false, said: `${service} has no previous version kept on its device to go back to.` };
-    const at = this.#o.now().toISOString();
-    const to = row.previous;
-    this.#o.db.run(`UPDATE device_workload SET version = ?, definition = ?, want = 'live', previous = ?, previous_definition = ?, assigned_at = ?, updated_at = ? WHERE device_id = ? AND service = ?`,
-      to, row.previous_definition ?? row.definition, row.version, row.definition, at, at, row.device_id, service);
-    const said = `Going back to ${service} ${to} on ${this.#name(row.device_id)}: ${o.reason} It is kept there, so nothing is downloaded.`;
-    this.#event(row.device_id, service, to, o.auto ? 'rolled_back' : 'rollback', said);
-    say(said);
-    return { ok: true, said };
+  async #rollback(deviceId: string, service: string, o: { auto: boolean; reason: string; expected?: ServiceExpectedState }, say: Say = () => {}): Promise<Outcome> {
+    // BEGIN IMMEDIATE holds the actual report/assignment comparison and write together.
+    return this.#o.db.tx(() => {
+      const row = this.#row(deviceId, service);
+      if (!row || !row.previous) return { ok: false, said: `${service} has no previous version kept on its device to go back to.` };
+      if (o.expected !== undefined && !sameServiceExpected(o.expected, this.status(service, deviceId)[0]!)) return { ok: false, said: SERVICE_CHANGED };
+      const at = this.#o.now().toISOString();
+      const to = row.previous;
+      this.#o.db.run(`UPDATE device_workload SET version = ?, definition = ?, want = 'live', previous = ?, previous_definition = ?, assigned_at = ?, updated_at = ? WHERE device_id = ? AND service = ?`,
+        to, row.previous_definition ?? row.definition, row.version, row.definition, at, at, row.device_id, service);
+      const said = `Going back to ${service} ${to} on ${this.#name(row.device_id)}: ${o.reason} It is kept there, so nothing is downloaded.`;
+      this.#event(row.device_id, service, to, o.auto ? 'rolled_back' : 'rollback', said);
+      say(said);
+      return { ok: true, said };
+    });
   }
+
 
   // Per device and service; `device` on each says where.
   status(service?: string, deviceId?: string): (ServiceStatus & { device: { id: string; name: string } })[] {
@@ -192,7 +202,7 @@ export class DeviceWorkloads {
       const history = this.#o.db.all<{ at: string; version: string; outcome: string; said: string | null }>('SELECT at, version, outcome, said FROM device_workload_event WHERE device_id = ? AND service = ? ORDER BY seq DESC LIMIT 30', row.device_id, row.service);
       return {
         service: row.service, driver: 'device', device: { id: row.device_id, name: this.#name(row.device_id) },
-        live: live?.version ?? null, previous: row.previous, soak_until: null, held: null,
+        live: live?.version ?? null, previous: row.previous, assigned: { version: row.version, want: row.want, at: row.assigned_at }, soak_until: null, held: null,
         health: { ok: live ? (live.health === null ? null : live.health === 1) : null, checked_at: live?.at ?? null, said: live?.said ?? null },
         stable: {}, versions, history: history.map((h) => ({ at: h.at, version: h.version, outcome: h.outcome, said: h.said ?? '' })),
       };
