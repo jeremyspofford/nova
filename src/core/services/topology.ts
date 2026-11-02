@@ -162,7 +162,8 @@ export function projectService(s: ServiceStatus, o: { placement: string; at: str
     const at = timestamp(r.at);
     return at && (!latest || at > latest) ? at : latest;
   }, null) ?? null;
-  const readiness = !s.held && s.health.ok === null && ready.size > 0;
+  // A candidate's readiness cannot establish health for an observed serving version.
+  const readiness = s.live === null && !s.held && s.health.ok === null && ready.size > 0;
   const observedAt = readiness && o.reports ? readyAt : o.at;
   const health: TopologyHealth = s.held ? 'failed' : s.health.ok === false ? 'degraded' : s.health.ok === true || readiness ? 'healthy' : 'unknown';
   return { service: s.service, driver: s.driver, live: s.live, previous: s.previous, placement: o.placement, assigned: o.assigned ?? null, authority: o.authority,

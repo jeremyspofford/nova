@@ -98,3 +98,28 @@ test('no-live readiness health keeps the receipt time of its evidence, not anoth
     assert.deepEqual(service.versions.map(v => v.observed_at), [old, at]);
   }
 });
+
+test('ready candidates cannot replace stale or fresh null-health observations of a live version', () => {
+  for (const liveAt of ['2026-11-01T11:00:00.000Z', at]) {
+    const status: ServiceStatus = {
+      service: 'worker', driver: 'device', live: 'v1', previous: 'v0', soak_until: null, held: null,
+      health: { ok: null, checked_at: liveAt, said: null }, stable: {}, history: [],
+      versions: [
+        { version: 'v1', status: 'live', since: '2020-01-01T00:00:00.000Z', said: null, ports: null, pid: null },
+        { version: 'v2', status: 'ready', since: at, said: null, ports: null, pid: null },
+      ],
+    };
+    const data = input();
+    data.machines[0]!.services = [projectService(status, { source: 'workload', placement: 'local', at: liveAt, authority: 'device', policies: [{ service: 'worker', version: 'v2', promotion_tier: 2 }], reports: [{ version: 'v1', at: liveAt }, { version: 'v2', at }] })];
+    const service = buildTopology(data).machines[1]!.services[0]!;
+    assert.equal(service.live, 'v1');
+    assert.equal(service.health, 'unknown', liveAt);
+    assert.equal(service.status, 'Waiting');
+    assert.equal(service.observations[0]!.at, liveAt);
+    assert.equal(service.observations[0]!.age_ms, liveAt === at ? 0 : 3600000);
+    assert.equal(service.observations[0]!.stale, liveAt !== at);
+    assert.match(service.observations[0]!.reason, /No verified service health/);
+    assert.equal(service.versions.find(v => v.version === 'v2')!.promote.available, false);
+    assert.equal(service.rollback.available, false);
+  }
+});

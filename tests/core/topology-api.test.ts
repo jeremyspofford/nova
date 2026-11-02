@@ -87,7 +87,7 @@ test('remote active hub leads, local supervisor stays local; cloud sites require
   } finally { await h.stop(); }
 });
 
-test('fresh unrelated native reports do not refresh an older ready version when none is live', async () => {
+test('native readiness health follows its own reports without replacing a live version’s observation', async () => {
   const { standInUrl, standInSha, STAND_IN_NAME } = await import('../support/workloads.ts');
   const h = await hub();
   try {
@@ -120,5 +120,25 @@ test('fresh unrelated native reports do not refresh an older ready version when 
     await heartbeat([{ service: 'worker', version: '1', status: 'ready', health: null, since: '2020-01-01T00:00:00.000Z' }]);
     assert.equal((await read()).status, 'Verified');
     assert.equal((await read()).observations[0].at, new Date(h.clock.t).toISOString());
+    // Once a version is live, its missing health is not supplied by candidate readiness.
+    const liveAt = new Date(h.clock.t).toISOString();
+    await heartbeat([{ service: 'worker', version: '1', status: 'live', health: null, since: '2020-01-01T00:00:00.000Z' }]);
+    h.tick(3600000);
+    await heartbeat([{ service: 'worker', version: '2', status: 'ready', health: null, since: '2020-01-01T00:00:00.000Z' }]);
+    let service = await read();
+    assert.equal(service.live, '1');
+    assert.equal(service.health, 'unknown');
+    assert.equal(service.status, 'Waiting');
+    assert.equal(service.observations[0].at, liveAt);
+    assert.equal(service.observations[0].age_ms, 3600000);
+    assert.equal(service.versions.find((v: any) => v.version === '2').promote.available, false);
+    // Even a fresh null-health live report stays unknown until serving health is observed.
+    await heartbeat([{ service: 'worker', version: '1', status: 'live', health: null, since: '2020-01-01T00:00:00.000Z' }]);
+    service = await read();
+    assert.equal(service.health, 'unknown');
+    assert.equal(service.observations[0].age_ms, 0);
+    assert.equal(service.versions.find((v: any) => v.version === '2').promote.available, false);
+    await heartbeat([{ service: 'worker', version: '1', status: 'live', health: true, since: '2020-01-01T00:00:00.000Z' }]);
+    assert.equal((await read()).status, 'Verified');
   } finally { await h.stop(); }
 });
