@@ -6,6 +6,11 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-02 · CI fixture synchronization · Checks wait for saved work and rendered views**
+- What changed: the history check waits for its actual Git commit, and layout checks follow the app’s real navigation and wait for data, the applied design and scheduled rendering. Direct page loads, genuine error checks and the original picture baselines remain covered.
+- What you can now do: run these checks against the completion boundaries they intend to measure. No app feature changes in this repair. The affected browser gate passes364 layout audits and20 unchanged pictures; the vault-history secrecy checks pass.
+- Still unfinished: these controlled tests do not recover the original failure’s event trace or prove a real phone, cluster or credentialed deployment. The desktop-keychain check remains an existing environment-only skip. Full public CI is checked on this PR’s final head; evidence and independent findings are in docs/evidence/main-ci-fixtures-2026-11-02.md.
+
 **2026-11-02 · #280 · A map of Nova’s computers, services and versions**
 - What changed: Settings › Services and Health › Devices open a system map. Pick a computer, then a service, to see its reported managed-service versions, health, placement and capture-sync lag. Each source keeps its own age and reason; missing or old evidence never becomes a healthy report. The phone uses rows and the desktop uses the approved diagram. The text download describes the displayed snapshot.
 - What you can now do: inspect reported state and review eligible promotions or manual rollbacks through the existing approval sheets. The service’s policy chooses the promotion tier; every manual rollback is tier 2. An acknowledgement means accepted or assigned, not proved serving; refreshed observations show the result. Changed targets require a new review.
