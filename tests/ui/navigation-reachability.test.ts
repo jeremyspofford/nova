@@ -8,7 +8,8 @@ import type { Locator, Page } from 'playwright-core';
 import { registeredViews, missingViews } from '../support/navigation-registry.js';
 import { routeOf } from '../../ui/js/nav.js';
 import { stop } from '../acceptance/support.ts';
-import { blank, browser, device, finishSetup, ready, still } from './support.ts';
+import { blank, browser, device, finishSetup } from './support.ts';
+import { drawn, trackDocument, assertRetainedDocument, documentRequests } from './navigation-support.ts';
 
 type Door = { href: string; label: string; section: string };
 type Step = Door | { button: string; label: string };
@@ -17,20 +18,9 @@ type CrawlState = { path: string; view: string; steps: Step[]; sections: string[
 type Report = {
   layout: string; registered: string[]; reached: Record<string, Step[]>; states: CrawlState[];
   doors: Record<string, Door[]>; required: { homeTopology: boolean; devicesTopology: boolean; captureCategory: boolean };
-  requiredPaths: Record<string, Step[]>; forbidden: string[]; healthMesh?: boolean; attempting?: Step[]; missing?: string[]; error?: string;
+  requiredPaths: Record<string, Step[]>; forbidden: string[]; documentRequests?: string[]; healthMesh?: boolean; attempting?: Step[]; missing?: string[]; error?: string;
 };
 const at = (page: Page) => new URL(page.url()).pathname + new URL(page.url()).hash;
-
-async function drawn(page: Page) {
-  await ready(page);
-  await page.waitForFunction(async () => {
-    const { store } = await import(String('/js/surfaces.js'));
-    const root = [...document.querySelectorAll<HTMLElement>('#scroller > *, #main > *')].find(e => !e.hidden && e.checkVisibility() && e.querySelector('h2, .card, .empty, .empty-state, .turn'));
-    const pending = [...document.querySelectorAll<HTMLElement>('[data-skeleton], .view-waiting, [data-waiting], [data-topology-wait]')].some(e => e.checkVisibility());
-    return store.loaded && !!store.health && !!root && !pending && !document.querySelector('#thread.no-anim');
-  }, null, { timeout: 20_000 });
-  await still(page);
-}
 
 async function doors(page: Page): Promise<Door[]> {
   const found = await page.locator('a[href]').evaluateAll(links => links.filter(a => {
@@ -63,6 +53,7 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
     const report: Report = { layout, registered: registeredViews(), reached: {}, states: [], doors: {}, required: { homeTopology: false, devicesTopology: false, captureCategory: false }, requiredPaths: {}, forbidden: [] };
     const output = process.env.NOVA_NAV_EVIDENCE ?? (process.env.NOVA_UI_SHOTS ? join(process.env.NOVA_UI_SHOTS, 'navigation') : null);
     const evidence = output ? resolve(output) : null;
+    let crawlPage: Page | undefined;
     if (evidence) mkdirSync(evidence, { recursive: true });
     try {
       await finishSetup(m);
@@ -81,6 +72,8 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
         } else await route.continue();
       });
       const page = d.page;
+      crawlPage = page;
+      trackDocument(page);
       await page.goto(`${m.base}/`); // The sole document navigation per layout.
       await drawn(page);
       await page.waitForSelector('#toc a[href="/c/2026-11-02-nav001"]', { state: 'attached' });
@@ -188,7 +181,8 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
       console.log(`NAVIGATION ${layout}: registered=${report.registered.length} reached=${Object.keys(report.reached).length} missing=${JSON.stringify(report.missing)} required=${JSON.stringify(report.required)} states=${report.states.length}`);
       assert.deepEqual(report.forbidden, [], 'crawl never submits or leaves the isolated app');
       assert.deepEqual(d.errors, [], 'no browser errors');
-      assert.equal(await page.evaluate(() => performance.getEntriesByType('navigation').length), 1, 'actual router retains the document');
+      await assertRetainedDocument(page);
+      console.log(`DOCUMENT ${layout}: main-document requests=${documentRequests(page).length}`);
       for (const family of ['/new', '/c/2026-11-02-nav001', '/schedules#sc-navigation-example']) assert.ok(report.states.some(s => s.path === family), `actual conversation family: ${family}`);
       assert.deepEqual(report.missing, [], 'every production registered view has a rendered door');
       assert.deepEqual(report.required, { homeTopology: true, captureCategory: true, devicesTopology: true }, 'required ordinary Home and Settings doors');
@@ -196,6 +190,7 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
     } catch (error) {
       report.error = String(error); console.log(`NAVIGATION FAILED ${layout}: ${report.error}`); throw error;
     } finally {
+      if (crawlPage) report.documentRequests = documentRequests(crawlPage);
       if (evidence) writeFileSync(join(evidence, `${layout}-report.json`), JSON.stringify(report, null, 2));
       await b.close(); await stop(nova); rmSync(m.dir, { recursive: true, force: true });
     }
