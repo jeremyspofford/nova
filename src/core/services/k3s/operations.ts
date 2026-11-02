@@ -17,7 +17,7 @@ import { promotionTier, validate, type ServiceDefinition } from '../definition.t
 import { sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState } from '../expected.ts';
 import type { PlacementDevice } from '../placement.ts';
 import type { ClusterObservation, ServiceInput } from '../topology.ts';
-import { K3sDriver, type K3sClock, type K3sExecution } from './driver.ts';
+import { K3S_DRIVER_NAME, K3sDriver, type K3sClock, type K3sExecution } from './driver.ts';
 import { k3sDeviceLabel, type K3sChartValues } from './values.ts';
 import { unavailableClusterTools, type ClusterTools, type ClusterSnapshot } from './tools.ts';
 
@@ -107,7 +107,7 @@ export class K3sOperations {
         },
       };
       const driver = new K3sDriver({ cluster: { id: r.id, namespace: r.namespace, hubId: r.hubId, devices: [] },
-        directory: join(this.#o.home, 'services', 'k3s', r.id), workloadOnly: true, devices: current,
+        directory: join(this.#o.home, 'services', K3S_DRIVER_NAME, r.id), workloadOnly: true, devices: current,
         tools,
         ...(this.#o.probeOrigin?.(r.id) ? { probeOrigin: this.#o.probeOrigin(r.id)! } : {}),
         clock: { now: () => this.#o.now().getTime(), sleep: this.#o.clock?.sleep.bind(this.#o.clock) ?? (async (ms, signal) => { await sleep(ms, undefined, { signal }); }), schedule: this.#o.clock?.schedule.bind(this.#o.clock) ?? (() => () => {}) },
@@ -271,7 +271,7 @@ export class K3sOperations {
           const health = live?.health;
           const observation = { source: 'workload' as const, health: health?.ok === true ? 'healthy' as const : health?.ok === false ? 'failed' as const : 'unknown' as const, at: health?.checked_at ?? null, reason: 'Actual cluster workload health measurement.' };
           const readiness = observed.filter(v => v.ready_at !== null).map(v => ({ source: 'workload' as const, health: v.ready ? 'healthy' as const : v.status === 'failed' ? 'failed' as const : 'unknown' as const, at: v.ready_at, reason: `Observed readiness of ${v.version}.` }));
-          attached.push({ service: s.service, driver: 'k3s', placement: identity.id, live: live?.version ?? null, previous: s.previous, assigned: s.assigned, observation,
+          attached.push({ service: s.service, driver: K3S_DRIVER_NAME, placement: identity.id, live: live?.version ?? null, previous: s.previous, assigned: s.assigned, observation,
             observations: [...readiness, ...(failure ? [{ source: 'cluster' as const, health: 'unknown' as const, at: failure.at, reason: 'Control plane collection unavailable; workload evidence retains its own age.' }] : [])],
             versions: observed.map(v => ({ version: v.version, status: v.status, since: v.since, observed_at: v.ready_at, promotion_tier: null })), authority: null });
         }

@@ -363,6 +363,7 @@ test('trusted topology preserves independent node, readiness, workload and contr
     s.sim.change(x => { x.nodes.push({ healthy: true, labels: { 'nova/device': 'cloud-site' } }); x.nodes.push({ healthy: true, labels: { 'nova/device': 'untrusted-node' } }); });
     assert.equal((await deploy(s)).state, 'done');
     assert.equal((await promote(s)).state, 'done');
+    assert.ok(existsSync(join(s.h.home, 'services', 'k3s', 'simulation')), 'registered definitions retain the existing cluster directory');
     const effects = s.sim.calls().filter(c => c.operation !== 'status').length;
     const read = async () => (await s.h.c('GET', '/services/topology')).body;
     const before = await read();
@@ -373,6 +374,7 @@ test('trusted topology preserves independent node, readiness, workload and contr
     assert.ok(before.machines.some((m: any) => m.id === native.dev.deviceId));
     assert.ok(!before.machines.some((m: any) => m.id === 'untrusted-node'));
     const service = row.services.find((v: any) => v.service === 'echo');
+    assert.equal(service.driver, 'k3s', 'public topology retains the concrete backend identity');
     assert.equal(service.assigned.want, 'live');
     assert.ok(service.observations.some((o: any) => /readiness/.test(o.reason)));
     const health = service.observations.find((o: any) => /health measurement/.test(o.reason));

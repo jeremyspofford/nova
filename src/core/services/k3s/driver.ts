@@ -9,6 +9,8 @@ import { buildK3sValues, type K3sChartValues } from './values.ts';
 import { K3sRegistry } from './registry.ts';
 import { unavailableClusterTools, type ClusterOperation, type ClusterSnapshot, type ClusterTools, type K3sCluster, type K3sStatus } from './tools.ts';
 
+export const K3S_DRIVER_NAME = 'k3s';
+
 export interface K3sClock {
   now(): number;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
@@ -51,7 +53,7 @@ const date = (v: unknown): v is string => typeof v === 'string' && Number.isFini
 const safePath = (path: string) => /^\/(?!\/)[^\s\\#]*$/.test(path) && !/%(?:2f|5c|2e)/i.test(path) && !path.split(/[/?]/).includes('..');
 const statuses = new Set(['alongside', 'ready', 'live', 'kept', 'failed', 'removed', 'rolled_back']);
 export class K3sDriver implements ServiceDriver {
-  readonly name = 'k3s';
+  readonly name = K3S_DRIVER_NAME;
   readonly registry: K3sRegistry;
   readonly #o: K3sDriverOptions;
   readonly #tools: ClusterTools;
