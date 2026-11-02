@@ -12,21 +12,13 @@ import { join } from 'node:path';
 import type { Browser, Page } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
 import { decodePng } from '../../src/core/browser/png.ts';
-import { ROOT, browser, device, shotsDir, still, webkitBrowser } from './support.ts';
+import { ROOT, browser, device, shotsDir, webkitBrowser } from './support.ts';
+import { foldDesignReady, openFoldView as open } from './fold-navigation.ts';
 import { POSTURES, VIEWS, reviewProfile } from './axe-support.ts';
 import { audit, problems, summary, withMesh, type FoldAudit } from './fold-support.ts';
 
 const record = (what: string, v: unknown) => console.log(`FOLD ${what} ${JSON.stringify(v)}`);
 const DESIGNS = ['orb-teal', 'companion-light', 'nova', 'obsidian', 'aurora', 'paper'];
-
-// A view, drawn from its data and still.
-async function open(page: Page, url: string) {
-  await page.goto(url, { waitUntil: 'load' });
-  await page.waitForSelector('html[data-ready]', { timeout: 20_000 });
-  await page.waitForFunction(() => !document.querySelector('[data-skeleton]'), null, { timeout: 15_000 }).catch(() => {});
-  await page.waitForTimeout(400);
-  await still(page);
-}
 
 // One device with the review's mesh. Service workers are blocked so the mesh reaches the page in
 // both engines (a worker's fetch would pass Playwright's route by); nothing here is about offline.
@@ -65,6 +57,19 @@ test('F8/F9 gate: ten postures × every main view, in Chromium and WebKit', { ti
         }
         bad.push(...d.errors.map((e) => `${engine} ${posture}: page error ${e}`));
         await d.ctx.close();
+        // Direct deep links still boot at every posture. A fresh context per link keeps full-load
+        // coverage without tearing down a live document whose event refresh may just have begun.
+        for (const view of VIEWS) {
+          const direct = await folded(b, { width: p.width, height: p.height, touch: !!p.touch });
+          try {
+            await open(direct.page, `${m.base}${view}`);
+            const a = await audit(direct.page);
+            n++;
+            record(`direct ${engine} ${posture} ${view}`, summary(a));
+            for (const pr of problems(a)) bad.push(`direct ${engine} ${posture} (${p.width}×${p.height}) ${view}: ${pr}`);
+            bad.push(...direct.errors.map((e) => `direct ${engine} ${posture} ${view}: page error ${e}`));
+          } finally { await direct.ctx.close(); }
+        }
       }
       // F9: the fold on its side, short enough that the right column holds more than it shows.
       // It must scroll inside the viewport, never run off its bottom edge.
@@ -81,6 +86,7 @@ test('F8/F9 gate: ten postures × every main view, in Chromium and WebKit', { ti
         const end = await d.page.evaluate(() => { const s = document.getElementById('aside')!; s.scrollTop = s.scrollHeight; const last = s.lastElementChild!.getBoundingClientRect(); return { last: Math.round(last.bottom), bottom: Math.round(s.getBoundingClientRect().bottom) }; });
         if (end.last > end.bottom + 1) bad.push(`${engine} 1100×560 ${view}: scrolled to its end, the last card still runs past the column (${end.last} > ${end.bottom})`);
       }
+      bad.push(...d.errors.map((e) => `${engine} short-landscape: page error ${e}`));
       await d.ctx.close();
     }
     record('matrix combinations', n);
@@ -109,6 +115,7 @@ test('F8/F9 gate: the bands are derived from the regions, in every design system
         assert.equal((await m.send('POST', `/api/v1/design-systems/${ds}/apply`, { scope: 'device', device_id: d.id })).status, 200);
         for (const view of ['/', '/chat', '/settings']) {
           await open(d.page, `${m.base}${view}`);
+          await foldDesignReady(d.page, ds, d.id);
           let bands: FoldAudit['bands'] = null;
           for (const w of widths) {
             await d.page.setViewportSize({ width: w, height: 860 });
@@ -134,11 +141,13 @@ test('F8/F9 gate: the bands are derived from the regions, in every design system
       await open(d.page, `${m.base}/`);
       const before = (await audit(d.page)).bands!.three;
       assert.equal((await m.send('POST', '/api/v1/design-systems/companion-light/apply', { scope: 'device', device_id: d.id })).status, 200);
+      await foldDesignReady(d.page, 'companion-light', d.id);
       await d.page.waitForFunction((x) => {
         const p = document.createElement('div'); p.style.cssText = 'position:absolute;visibility:hidden;width:var(--band-three)'; document.body.append(p);
         const w = p.getBoundingClientRect().width; p.remove(); return Math.abs(w - x) > 0.5;
-      }, before, { timeout: 10_000 }).catch(() => {});
+      }, before, { timeout: 10_000 });
       record(`bands ${engine} live swap`, { before, after: (await audit(d.page)).bands?.three });
+      bad.push(...d.errors.map((e) => `${engine} design bands: page error ${e}`));
       await d.ctx.close();
     }
     assert.deepEqual(bad, [], `${bad.length} problem(s)`);
@@ -213,6 +222,7 @@ test('F8/F9 gate: the fold postures match their baselines (Chromium and WebKit)'
             if (dir) writeFileSync(join(dir, `fold-actual-${engine}-${posture}-${view === '/' ? 'home' : view.slice(1)}.png`), png);
           }
         }
+        bad.push(...d.errors.map((e) => `${engine} ${posture} baselines: page error ${e}`));
         await d.ctx.close();
       }
     }
@@ -263,6 +273,7 @@ test('F8: the iOS standalone safe area — no inset added twice, none ignored', 
         record(`safe-area webkit ${posture} ${view}`, { paddingTop: band.paddingTop, topbar: band.topbar, firstContent: band.firstContent });
         if (band.paddingTop > 0) bad.push(`webkit ${posture} ${view}: ${band.paddingTop}px of top padding with no inset reported`);
       }
+      bad.push(...d.errors.map((e) => `webkit ${posture} safe area: page error ${e}`));
       await d.ctx.close();
     }
     // Chromium: an installed app on a notched phone and on the fold, upright and on its side.
@@ -289,6 +300,7 @@ test('F8: the iOS standalone safe area — no inset added twice, none ignored', 
         // And no inset kept clear twice.
         if (band.paddingTop > inset.top + 0.5) bad.push(`chromium ${what} ${view}: ${band.paddingTop}px kept clear at the top for a ${inset.top}px inset`);
       }
+      bad.push(...d.errors.map((e) => `chromium ${what} safe area: page error ${e}`));
       await d.ctx.close();
     }
     assert.deepEqual(bad, [], 'the safe area');
