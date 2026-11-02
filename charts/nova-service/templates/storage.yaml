@@ -1,0 +1,22 @@
+{{- $claims := dict }}
+{{- range .Values.versions }}
+{{- if and .state (not (hasKey $claims .state.claimName)) }}
+{{- $_ := set $claims .state.claimName true }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .state.claimName | toJson }}
+  namespace: {{ $.Values.namespace | toJson }}
+  annotations:
+    nova/service: {{ $.Values.service.identity | toJson }}
+    nova/volume: {{ .state.volume | toJson }}
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: local-path
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ printf "%vGi" .state.sizeGi | toJson }}
+{{- end }}
+{{- end }}

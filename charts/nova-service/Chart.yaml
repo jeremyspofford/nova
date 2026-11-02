@@ -1,0 +1,6 @@
+apiVersion: v2
+name: nova-service
+description: Repository-owned chart for Nova's validated, pinned Linux container services
+type: application
+version: 0.1.0
+appVersion: "M10j"

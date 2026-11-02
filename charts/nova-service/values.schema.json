@@ -1,0 +1,565 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Nova K3s chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "namespace": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "identity": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,52}$"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^service-[0-9a-f]{40}$"
+        },
+        "selector": {
+          "type": "string",
+          "pattern": "^selector-[0-9a-f]{40}$"
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/port"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "identity",
+        "name",
+        "selector",
+        "ports"
+      ]
+    },
+    "live": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        }
+      ]
+    },
+    "stableSelector": {
+      "$ref": "#/definitions/selector"
+    },
+    "versions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/version"
+      }
+    }
+  },
+  "required": [
+    "namespace",
+    "service",
+    "live",
+    "stableSelector",
+    "versions"
+  ],
+  "definitions": {
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nova/service": {
+          "type": "string",
+          "pattern": "^selector-[0-9a-f]{40}$"
+        },
+        "nova/version": {
+          "type": "string",
+          "pattern": "^(?:version|unselected)-[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "nova/service",
+        "nova/version"
+      ]
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z](?:[a-z0-9-]{0,13}[a-z0-9])?$"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "name",
+        "port"
+      ]
+    },
+    "nodeExpression": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "enum": [
+                "nova/gpu-vram-gb",
+                "nova/memory-gb",
+                "nova/disk-gb"
+              ]
+            },
+            "operator": {
+              "enum": [
+                "Gt"
+              ]
+            },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9]{1,10}$"
+              },
+              "minItems": 1,
+              "maxItems": 1
+            }
+          },
+          "required": [
+            "key",
+            "operator",
+            "values"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "enum": [
+                "nova/device"
+              ]
+            },
+            "operator": {
+              "enum": [
+                "In"
+              ]
+            },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,61}[A-Za-z0-9])?$"
+              },
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "key",
+            "operator",
+            "values"
+          ]
+        }
+      ]
+    },
+    "version": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "identity": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^deployment-[0-9a-f]{40}$"
+        },
+        "previewName": {
+          "type": "string",
+          "pattern": "^preview-[0-9a-f]{40}$"
+        },
+        "selector": {
+          "$ref": "#/definitions/selector"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._/:-]*$"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "repository",
+            "digest"
+          ]
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/port"
+          },
+          "minItems": 1
+        },
+        "probe": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "httpGet": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "pattern": "^/[A-Za-z0-9._~!$&\\x27()*+,;=:@/?%-]*$"
+                },
+                "port": {
+                  "type": "string",
+                  "pattern": "^[a-z](?:[a-z0-9-]{0,13}[a-z0-9])?$"
+                },
+                "scheme": {
+                  "enum": [
+                    "HTTP"
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "port",
+                "scheme"
+              ]
+            },
+            "periodSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            }
+          },
+          "required": [
+            "httpGet",
+            "periodSeconds"
+          ]
+        },
+        "placement": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "pinned",
+                "preferred",
+                "floating"
+              ]
+            },
+            "device": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "roles": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "general-server",
+                  "compute",
+                  "storage",
+                  "capture-source"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "needs": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "gpu_vram_gb": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000000000
+                },
+                "memory_gb": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000000000
+                },
+                "disk_gb": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000000000
+                }
+              },
+              "required": []
+            },
+            "failover": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "allowedDevices": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxItems": 64,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "mode",
+            "device",
+            "roles",
+            "needs",
+            "failover",
+            "allowedDevices"
+          ]
+        },
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kubernetes.io/os": {
+              "enum": [
+                "linux"
+              ]
+            },
+            "nova/device": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,61}[A-Za-z0-9])?$"
+            },
+            "nova/role-general-server": {
+              "enum": [
+                "true"
+              ]
+            },
+            "nova/role-compute": {
+              "enum": [
+                "true"
+              ]
+            },
+            "nova/role-storage": {
+              "enum": [
+                "true"
+              ]
+            },
+            "nova/role-capture-source": {
+              "enum": [
+                "true"
+              ]
+            }
+          },
+          "required": [
+            "kubernetes.io/os"
+          ]
+        },
+        "requiredNodeExpressions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/nodeExpression"
+          }
+        },
+        "preferredNodeExpressions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "enum": [
+                  "nova/device"
+                ]
+              },
+              "operator": {
+                "enum": [
+                  "In"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,61}[A-Za-z0-9])?$"
+                },
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "key",
+              "operator",
+              "values"
+            ]
+          }
+        },
+        "spread": {
+          "type": "boolean"
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requests": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "memory": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]{0,6}Mi$"
+                }
+              },
+              "required": []
+            },
+            "limits": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "memory": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]{0,6}Mi$"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "requests",
+            "limits"
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "claimName": {
+                  "type": "string",
+                  "pattern": "^pvc-[0-9a-f]{40}$"
+                },
+                "volume": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,52}$"
+                },
+                "sizeGi": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000
+                },
+                "mountPath": {
+                  "enum": [
+                    "/var/lib/nova/state"
+                  ]
+                }
+              },
+              "required": [
+                "claimName",
+                "volume",
+                "sizeGi",
+                "mountPath"
+              ]
+            }
+          ]
+        },
+        "secretRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "reference": {
+                "type": "string",
+                "pattern": "^secret://[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^secret-[0-9a-f]{40}$"
+              }
+            },
+            "required": [
+              "reference",
+              "name"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "alongside": {
+          "enum": [
+            "full",
+            "none"
+          ]
+        },
+        "egress": {
+          "enum": [
+            "none",
+            "internet"
+          ]
+        },
+        "soakSeconds": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2592000
+            }
+          ]
+        },
+        "networkPolicyName": {
+          "type": "string",
+          "pattern": "^network-[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "identity",
+        "name",
+        "previewName",
+        "selector",
+        "replicas",
+        "image",
+        "ports",
+        "probe",
+        "placement",
+        "nodeSelector",
+        "requiredNodeExpressions",
+        "preferredNodeExpressions",
+        "spread",
+        "resources",
+        "state",
+        "secretRefs",
+        "alongside",
+        "egress",
+        "soakSeconds",
+        "networkPolicyName"
+      ]
+    }
+  }
+}

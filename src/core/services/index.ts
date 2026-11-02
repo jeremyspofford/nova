@@ -14,3 +14,6 @@ export { CONSOLE_HEALTH, consoleDefinition } from './console.ts';
 
 export { serviceExpected, validServiceExpected, sameServiceExpected, SERVICE_CHANGED } from './expected.ts';
 export type { ServiceExpectedState, ServiceAssignment } from './expected.ts';
+
+export { buildK3sValues } from './k3s/values.ts';
+export type { K3sChartContext, K3sChartValues, K3sVersionValues, K3sSelector, K3sNodeExpression } from './k3s/values.ts';
