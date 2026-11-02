@@ -29,8 +29,11 @@ export async function foldViewReady(page: Page, url: string) {
   await page.waitForFunction(([view, selector, text]) => {
     const root = document.querySelector<HTMLElement>(`body[data-view="${view}"]`);
     const drawn = document.querySelector<HTMLElement>(selector!);
-    return !!root && !!drawn && drawn.checkVisibility() && (!text || root.innerText.includes(text)) && !document.querySelector('[data-skeleton], .view-waiting');
+    const renderPending = view === 'chat' && document.getElementById('thread')?.classList.contains('no-anim');
+    return !!root && !!drawn && drawn.checkVisibility() && (!text || root.innerText.includes(text)) && !renderPending && !document.querySelector('[data-skeleton], .view-waiting');
   }, content, { timeout: 15_000 });
+  // renderAll enables entrance animations on a scheduled frame. Register them before draining.
+  if (path === '/chat') await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
   await still(page);
 }
 
