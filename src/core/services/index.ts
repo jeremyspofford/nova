@@ -23,3 +23,7 @@ export { K3sDriver, type K3sDriverOptions, type K3sClock } from './k3s/driver.ts
 export { K3sRegistry, type K3sDefinitionRecord } from './k3s/registry.ts';
 export { unavailableClusterTools, type ClusterTools, type ClusterOperation, type ClusterSnapshot, type ClusterVersion, type ClusterExpectation, type K3sCluster, type K3sStatus } from './k3s/tools.ts';
 export { k3sDeviceLabel } from './k3s/values.ts';
+
+export { K3sOperations, type K3sOptions, type K3sRegistration } from './k3s/operations.ts';
+export type { K3sExecution } from './k3s/driver.ts';
+export { renderClusterNetwork, type ClusterNetworkDocument, type ClusterNetworkPort } from './k3s/network.ts';

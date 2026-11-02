@@ -54,7 +54,7 @@ export async function simulatedK3s() {
   const tools: ClusterTools = {
     available: () => ({ ok: true, said: 'Explicit test-only simulation port.' }),
     execute: async (op, signal) => {
-      if (op.operation === 'prepare') await raw('helm', op, signal);
+      if (op.operation === 'prepare' || op.operation === 'prepare-workload') await raw('helm', op, signal);
       if (op.operation === 'status') await raw('flux', op, signal);
       return await raw('kubectl', op, signal) as ClusterSnapshot;
     },

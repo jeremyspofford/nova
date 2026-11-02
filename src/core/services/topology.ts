@@ -1,5 +1,5 @@
 // One safe, captured-at topology. Pure normalization and Mermaid serialization: no I/O or cluster client.
-import { serviceExpected, type ServiceExpectedState } from './expected.ts';
+import { serviceExpected, validServiceExpected, type ServiceExpectedState } from './expected.ts';
 import type { ServiceStatus, VersionStatus } from './driver.ts';
 import { consoleStatus, type SupervisorState } from '../resilience/link.ts';
 
@@ -36,7 +36,7 @@ export interface ServiceInput {
 }
 export interface MachineInput { id: string; name: string; kind?: 'machine' | 'cloud'; roles: string[]; observations: ObservationInput[]; services: ServiceInput[]; capture_lag?: Omit<TopologyCaptureLag, 'age_ms'> }
 /** Trusted in-process stand-in/future cluster adapter. No public write route. Names/health still validated. */
-export interface ClusterObservation { machines: { id: string; name: string; kind: 'machine' | 'cloud'; roles: string[]; observation: Omit<ObservationInput, 'source'>; services: ServiceInput[] }[] }
+export interface ClusterObservation { machines: { id: string; name: string; kind: 'machine' | 'cloud'; roles: string[]; observation: Omit<ObservationInput, 'source'>; observations?: Omit<ObservationInput, 'source'>[]; services: ServiceInput[] }[] }
 export interface TopologyInput { captured_at: string; hub_id: string | null; local_id: string; machines: MachineInput[]; cluster?: ClusterObservation | null; cluster_error?: boolean; issues?: string[]; excluded_ids?: string[] }
 export interface ServicePolicy { service: string; version: string; promotion_tier: 2 | 3 }
 
@@ -81,17 +81,21 @@ function service(s: ServiceInput, machine: TopologyMachine, now: number): Topolo
   };
 }
 const versionStatuses: readonly string[] = ['installed', 'alongside', 'ready', 'live', 'kept', 'failed', 'rolled_back', 'removed'];
+const validObservation = (o: ObservationInput | undefined): boolean => !!o && healths.includes(o.health) && typeof o.reason === 'string' && (o.at === null || !!timestamp(o.at));
 function validClusterMachine(m: ClusterObservation['machines'][number]): boolean {
   return !!m && validId(m.id) && typeof m.name === 'string'
     && (m.kind === 'machine' || m.kind === 'cloud')
     && Array.isArray(m.roles) && m.roles.every(r => typeof r === 'string')
     && !!m.observation && healths.includes(m.observation.health)
-    && typeof m.observation.reason === 'string' && !!timestamp(m.observation.at)
+    && typeof m.observation.reason === 'string' && (m.observation.at === null || !!timestamp(m.observation.at))
+    && (m.observations === undefined || Array.isArray(m.observations) && m.observations.length <= 64 && m.observations.every(o => validObservation({ ...o, source: 'cluster' })))
     && Array.isArray(m.services) && m.services.every(s => !!s && validService(s.service)
       && typeof s.driver === 'string' && typeof s.placement === 'string'
       && (s.live === null || validVersion(s.live)) && (s.previous === null || validVersion(s.previous))
       && !!s.observation && healths.includes(s.observation.health)
       && typeof s.observation.reason === 'string'
+      && (s.assigned === undefined || validServiceExpected({ live: s.live, previous: s.previous, assigned: s.assigned }))
+      && (s.observations === undefined || Array.isArray(s.observations) && s.observations.length <= 128 && s.observations.every(o => validObservation(o) && ['cluster', 'workload'].includes(o.source)))
       && Array.isArray(s.versions) && s.versions.every(v => !!v && validVersion(v.version) && versionStatuses.includes(v.status)));
 }
 export function buildTopology(input: TopologyInput): TopologySnapshot {
@@ -106,24 +110,26 @@ export function buildTopology(input: TopologyInput): TopologySnapshot {
       if (excluded.has(m.id)) continue;
       const row = rows.get(m.id);
       const obs: ObservationInput = { ...m.observation, source: 'cluster' };
+      const additional: ObservationInput[] = (m.observations ?? []).map(o => ({ ...o, source: 'cluster' }));
       // Cluster services are read-only until a cluster driver supplies an actual mutation authority.
       const services: ServiceInput[] = m.services.map(s => ({
         service: s.service, driver: s.driver, placement: s.placement, live: s.live, previous: s.previous,
-        authority: null, observation: { source: 'cluster', health: s.observation.health, at: s.observation.at, reason: s.observation.reason },
+        assigned: s.assigned ?? null, observations: (s.observations ?? []).map(o => ({ ...o })),
+        authority: null, observation: { source: s.observation.source === 'workload' ? 'workload' : 'cluster', health: s.observation.health, at: s.observation.at, reason: s.observation.reason },
         versions: s.versions.map(v => ({ version: v.version, status: v.status, since: v.since, observed_at: v.observed_at, promotion_tier: null })),
       }));
       if (row) {
-        row.observations.push(obs);
+        row.observations.push(obs, ...additional);
         row.roles = [...new Set([...row.roles, ...m.roles])];
         for (const s of services) {
           const existing = row.services.find(r => r.service === s.service);
           if (existing) {
             const index = row.services.indexOf(existing);
-            row.services[index] = { ...existing, observations: [...(existing.observations ?? []), s.observation] };
+            row.services[index] = { ...existing, observations: [...(existing.observations ?? []), s.observation, ...(s.observations ?? [])] };
           } else row.services.push(s);
         }
       }
-      else rows.set(m.id, { ...m, observations: [obs], services });
+      else rows.set(m.id, { ...m, observations: [obs, ...additional], services });
     }
   }
   const machines: TopologyMachine[] = [...rows.values()].sort((a, b) => Number(b.id === input.hub_id) - Number(a.id === input.hub_id) || a.id.localeCompare(b.id)).map(m => {

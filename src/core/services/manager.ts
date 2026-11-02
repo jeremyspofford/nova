@@ -83,14 +83,14 @@ export class ServiceManager {
     }
     let first: { plan: Plan; driver: ServiceDriver } | null = null;
     for (const driver of this.drivers) {
-      if (driver === this.#remote) continue;
+      if (driver === this.#remote || driver.name === 'k3s') continue;
       if (!driver.available().ok) continue;
       const plan = driver.plan(v.def);
       if (plan.ok) return { ok: true, def: v.def, plan, driver };
       first ??= { plan, driver };
     }
     if (first) return { ok: true, def: v.def, ...first };
-    const local = this.drivers.filter((d) => d !== this.#remote);
+    const local = this.drivers.filter((d) => d !== this.#remote && d.name !== 'k3s');
     if (!local.length) return { ok: false, problems: ['It would run on the hub. The hub runs its own services under its supervisor (the nova services command); here, only services placed on your other devices are deployed.'] };
     return { ok: false, problems: local.map((d) => `${d.name}: ${d.available().said}`) };
   }

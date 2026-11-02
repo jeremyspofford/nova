@@ -45,10 +45,11 @@ export async function simulate(tool) {
     for await (const chunk of process.stdin) { input += chunk; assert.ok(input.length <= 262144); }
     const op = JSON.parse(input);
     assert.equal(op.namespace, args[3]); assert.equal(op.service, args[5]); assert.equal(op.operation, args[1]);
-    const keys = { status: [], prepare: ['expected', 'values'], validate: ['expected', 'version', 'passed'], switch: ['expected', 'version', 'soak_until'], rollback: ['expected', 'version', 'reason'], scale: ['expected', 'version', 'replicas'], remove: ['expected', 'version'] };
+    const keys = { status: [], prepare: ['expected', 'values'], 'prepare-workload': ['expected', 'values'], validate: ['expected', 'version', 'passed'], switch: ['expected', 'version', 'soak_until'], rollback: ['expected', 'version', 'reason'], scale: ['expected', 'version', 'replicas'], remove: ['expected', 'version'] };
     assert.ok(Object.hasOwn(keys, op.operation));
-    assert.ok(only(op, ['cluster', 'namespace', 'service', 'operation', ...keys[op.operation]]));
-    assert.ok(tool === 'kubectl' || tool === 'helm' && op.operation === 'prepare' || tool === 'flux' && op.operation === 'status');
+    assert.ok(only(op, ['cluster', 'namespace', 'service', 'operation', ...keys[op.operation], ...(Object.hasOwn(op, 'task_id') ? ['task_id'] : [])]));
+    if (op.task_id !== undefined) assert.ok(/^[0-9a-f-]{36}$/.test(op.task_id));
+    assert.ok(tool === 'kubectl' || tool === 'helm' && ['prepare', 'prepare-workload'].includes(op.operation) || tool === 'flux' && op.operation === 'status');
     assert.ok(process.env.NOVA_SIM_STATE && process.env.HOME && process.env.PATH);
     lock = `${process.env.NOVA_SIM_STATE}.lock`;
     mkdirSync(lock); ownsLock = true; // One actual server-side transaction across all child processes.
@@ -70,13 +71,14 @@ export async function simulate(tool) {
       assert.equal(op.expected.revision, row.revision, 'Resource revision changed.');
       assert.deepEqual(op.expected.state, { live: row.live, previous: row.previous, assigned: row.assigned }, 'Approved state changed.');
       const version = row.versions.find(v => v.version === op.version);
-      if (op.operation !== 'prepare' && op.version !== null) assert.ok(versionName.test(op.version) && version);
+      if (!['prepare', 'prepare-workload'].includes(op.operation) && op.version !== null) assert.ok(versionName.test(op.version) && version);
       switch (op.operation) {
-        case 'prepare': {
+        case 'prepare':
+        case 'prepare-workload': {
           valuesValid(op.values, state, op);
           for (const v of op.values.versions) {
             if (row.versions.some(x => x.version === v.identity)) continue;
-            row.versions.push({ version: v.identity, replicas: v.replicas, ready: false, ready_at: null, health: { ok: null, checked_at: null, said: null }, status: 'alongside', since: now, ports: Object.fromEntries(v.ports.map(p => [p.name, p.port])), state_refs: [] });
+            row.versions.push({ version: v.identity, replicas: v.replicas, ready: false, ready_at: null, health: { ok: null, checked_at: null, said: null }, status: 'alongside', since: now, device_ids: v.placement.allowedDevices, ports: Object.fromEntries(v.ports.map(p => [p.name, p.port])), state_refs: [] });
             row.assigned = { version: v.identity, want: 'alongside', at: now };
           }
           break;
@@ -118,7 +120,9 @@ export async function simulate(tool) {
           break;
       }
       row.revision++;
+      if (op.task_id) row.last_mutation = { task_id: op.task_id, operation: op.operation };
     }
+    row.nodes = state.nodes.map(n => ({ device_id: n.labels['nova/device'], ready: n.healthy, at: now }));
     row.sequence++; row.observed_at = now;
     for (const version of row.versions) if (version.replicas > 0) {
       version.health = { ok: state.unknown.includes(version.version) ? null : !state.unhealthy.includes(version.version), checked_at: now, said: null };

@@ -66,6 +66,8 @@ type Reporter = (status: Report['status'], summary: string, more?: Partial<Repor
 export interface NetworkOptions {
   db: Db; log: Log; home: string; ledger: Ledger; verifier: Verifier; vault: Vault; devices: Devices;
   privacy: () => PrivacyMode;
+  // Trusted, exact-bound cluster adapter. Persisted bindings never fall back to a legacy token.
+  clusterTarget?: (id: string) => NetworkTarget | null;
   checkpoint: (reason: string) => { id: string };
   notify?: (key: string, text: string) => void;
   // The switch's window in seconds, from the person's settings (mesh.contact_window_s).
@@ -175,7 +177,15 @@ export class Network {
     return { id: t.id, name: t.name, kind: t.kind, adapter: t.adapter, url: t.url, token: this.#o.vault.has(this.#tokenName(t.id)), egress: urlEgress(t.url), created_at: t.created_at };
   }
 
+  bindClusterTarget(id: string): void {
+    const t = this.#target(id);
+    if (t.adapter !== 'k3s-public') this.#o.db.run("UPDATE network_target SET adapter = 'k3s-public' WHERE id = ?", id);
+  }
+
   #adapter(t: TargetRow): NetworkTarget {
+    const bound = this.#o.clusterTarget?.(t.id);
+    if (bound) return bound;
+    if (t.adapter === 'k3s-public') throw new CoreError('conflict', 'The bound cluster network capability is unavailable; legacy credentials cannot be used.');
     const token = () => this.#o.vault.get(this.#tokenName(t.id));
     return this.#o.target ? this.#o.target({ id: t.id, url: t.url, token }) : httpConfig({ url: t.url, token });
   }
@@ -730,6 +740,25 @@ export class Network {
       checkpoint: c.checkpoint,
       apply: c.snapshot_sha ? `Applying writes this change to ${this.#target(c.target_id).name}, after a checkpoint. If Nova can’t hear from one of your devices within ${minutes(c.window_s)} afterwards, it puts the snapshot back by itself.` : null,
     };
+  }
+
+  // A fixed internal consumer may rely on an already reviewed/applied change only after checking
+  // its exact patch, task evidence and a NEW readback. This neither approves nor writes a target.
+  async appliedBinding(id: string, target: string, patch: Config, signal?: AbortSignal): Promise<boolean> {
+    const c = this.#change(id);
+    if (c.target_id !== target || !['watching', 'kept'].includes(c.state)) return false;
+    const sealed = this.#readSealed<Config>(c, 'patch.json');
+    const proposed = this.#readSealed<{ sha: string; config: Config }>(c, 'proposed.json');
+    if (!sealed || digest(sealed) !== digest(patch) || !proposed || proposed.sha !== c.proposed_sha || digest(proposed.config) !== c.proposed_sha) return false;
+    const ref = (parse<TaskRef[]>(c.tasks) ?? []).find(t => t.step === 'apply');
+    if (!ref) return false;
+    const task = this.#o.ledger.get(ref.id);
+    if (task.state !== 'done' || task.approval_tier !== 3 || !task.approved_at || !task.verification?.ok) return false;
+    const evidence: Evidence = { kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `applied:${id}:${ref.id}` };
+    if (!this.#confirm(evidence, task.brief).ok) return false;
+    const back = await this.#adapter(this.#target(target)).read(signal);
+    // Fixed consumers require an exact document: target-added fields are not additional authority.
+    return digest(back.config) === c.proposed_sha && ['watching', 'kept'].includes(this.#change(id).state);
   }
 
   changeOf(taskId: string): string | null {
