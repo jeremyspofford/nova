@@ -2,6 +2,12 @@
 
 Build in this order. A milestone is complete only when its gate passes with evidence (OPERATING-RULES). **Continue through milestones autonomously** — do not stop after each one to ask what to do next. Stop only at a gate failure you cannot resolve, a genuine packet conflict, or a Tier-3 decision reserved for the user.
 
+## Cross-cutting gate — rendered app reachability (owner escalation, 2026-11-02)
+
+- Every registered app view must have a real door from Home in phone and rail arrangements. The required UI gate crawls actual clicks/taps against production VIEWS, independently of the navigation placement model; new orphan views fail it. Topology has ordinary Home Devices and Settings Devices homes; Capture has its own visible Settings category.
+- CAPABILITY-INVENTORY's current app-shipping column and [51-row mapping / 70-item scope register](../evidence/navigation-capability-surfaces-2026-11-02.md) govern discoverable app claims. Backend history, API-only work and conditional task/data controls are not blanket app-shipping evidence. Normal-Home, onboarding-only and external pairing boundaries stay explicit.
+- [Evidence](../evidence/navigation-reachability-2026-11-02.md) preserves real before/after and new-orphan failures. This repair does not reorder M10j → M10k, pass credentialed K3s, lift #275's findings-B hold or approve stage-2 visual work.
+
 ## M0 — Baseline and inventory (no new features)
 - Fresh clone of `origin/main`; verify Era 1/Era 2 state against CAPABILITY-INVENTORY; correct the inventory where code disagrees.
 - Environment baseline: toolchain pinned (Mise), lint/typecheck/tests running in CI.
