@@ -86,3 +86,39 @@ test('remote active hub leads, local supervisor stays local; cloud sites require
     assert.deepEqual(map.machines.filter((m: any) => m.kind === 'cloud').map((m: any) => m.id), ['site']);
   } finally { await h.stop(); }
 });
+
+test('fresh unrelated native reports do not refresh an older ready version when none is live', async () => {
+  const { standInUrl, standInSha, STAND_IN_NAME } = await import('../support/workloads.ts');
+  const h = await hub();
+  try {
+    const d = await enroll(h, { name: 'Study desktop', kind: 'computer', platform: 'linux x64', purposes: ['general-server'], capabilities: ['heartbeat'] });
+    const headers = { authorization: `Bearer ${d.token}` };
+    const heartbeat = (workloads: unknown[] = []) => call(h.mesh, 'POST', '/api/v1/mesh/devices/me/heartbeat', { version: '0.1.0', capabilities: ['heartbeat'], workloads }, headers);
+    const definition = (version: string) => ({ service: 'worker', version, artifact: { program: { 'linux-x64': { url: standInUrl(), sha256: standInSha(), command: ['node', STAND_IN_NAME] } } }, ports: [{ name: 'api', port: 18790 }], health: { http: '/health', every_s: 5 }, contract_tests: [], alongside: 'none', placement: { mode: 'pinned', device: d.dev.deviceId }, secrets: [], os_permissions: [], egress: 'none' });
+    const deploy = (version: string) => h.c('POST', '/services/devices/deploy', { definition: definition(version), confirm: `worker@${version}` });
+    const read = async () => (await h.c('GET', '/services/topology')).body.machines.find((m: any) => m.id === d.dev.deviceId).services[0];
+    await heartbeat();
+    assert.equal((await deploy('1')).status, 200);
+    const readyAt = new Date(h.clock.t).toISOString();
+    await heartbeat([{ service: 'worker', version: '1', status: 'ready', health: null, since: '2020-01-01T00:00:00.000Z' }]);
+    assert.equal((await read()).status, 'Verified');
+    h.tick(3600000);
+    await heartbeat();
+    assert.equal((await deploy('2')).status, 200);
+    for (const status of ['failed', 'installed']) {
+      await heartbeat([{ service: 'worker', version: '2', status, health: false, since: '2020-01-01T00:00:00.000Z' }]);
+      const service = await read();
+      assert.equal(service.live, null);
+      assert.equal(service.health, 'unknown', status);
+      assert.equal(service.status, 'Waiting');
+      assert.equal(service.observations[0].at, readyAt);
+      assert.equal(service.observations[0].age_ms, 3600000);
+      assert.equal(service.observations[0].stale, true);
+      assert.equal(service.versions.find((v: any) => v.version === '2').observed_at, new Date(h.clock.t).toISOString());
+    }
+    // A fresh report of the actual ready version can establish readiness again.
+    await heartbeat([{ service: 'worker', version: '1', status: 'ready', health: null, since: '2020-01-01T00:00:00.000Z' }]);
+    assert.equal((await read()).status, 'Verified');
+    assert.equal((await read()).observations[0].at, new Date(h.clock.t).toISOString());
+  } finally { await h.stop(); }
+});

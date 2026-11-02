@@ -155,9 +155,18 @@ export function serializeTopology(snapshot: Pick<TopologySnapshot, 'machines'>):
 
 /** Safe projection: never copies said/history/process output, paths, ports, argv, env or definitions. */
 export function projectService(s: ServiceStatus, o: { placement: string; at: string | null; source: 'supervisor' | 'workload'; authority: ServiceInput['authority']; policies: ServicePolicy[]; reports?: { version: string; at: string }[]; assigned?: TopologyService['assigned'] }): ServiceInput {
-  const health: TopologyHealth = s.held ? 'failed' : s.health.ok === false ? 'degraded' : s.health.ok === true ? 'healthy' : s.versions.some(v => v.status === 'ready') ? 'healthy' : 'unknown';
+  const ready = new Set(s.versions.filter(v => v.status === 'ready').map(v => v.version));
+  // Readiness is evidence from that version's report, never a fresh unrelated report. With
+  // several ready versions, the most recently received readiness report supplies the claim.
+  const readyAt = o.reports?.filter(r => ready.has(r.version)).reduce<string | null>((latest, r) => {
+    const at = timestamp(r.at);
+    return at && (!latest || at > latest) ? at : latest;
+  }, null) ?? null;
+  const readiness = !s.held && s.health.ok === null && ready.size > 0;
+  const observedAt = readiness && o.reports ? readyAt : o.at;
+  const health: TopologyHealth = s.held ? 'failed' : s.health.ok === false ? 'degraded' : s.health.ok === true || readiness ? 'healthy' : 'unknown';
   return { service: s.service, driver: s.driver, live: s.live, previous: s.previous, placement: o.placement, assigned: o.assigned ?? null, authority: o.authority,
-    observation: { source: o.source, at: o.at, health, reason: s.held ? 'The service is held after stopping repeatedly.' : s.health.ok === false ? 'The service health check failed.' : s.health.ok === true ? 'The service reported healthy.' : s.versions.some(v => v.status === 'ready') ? 'A version passed its readiness checks.' : 'No verified service health observation.' },
+    observation: { source: o.source, at: observedAt, health, reason: s.held ? 'The service is held after stopping repeatedly.' : s.health.ok === false ? 'The service health check failed.' : s.health.ok === true ? 'The service reported healthy.' : readiness ? 'A version passed its readiness checks.' : 'No verified service health observation.' },
     versions: s.versions.map(v => ({ version: v.version, status: v.status, since: v.since, observed_at: o.reports ? o.reports.find(r => r.version === v.version)?.at ?? null : o.at, promotion_tier: o.policies.find(p => p.service === s.service && p.version === v.version)?.promotion_tier ?? null })),
   };
 }

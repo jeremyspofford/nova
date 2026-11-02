@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTopology, serializeTopology, type TopologyInput } from '../../src/core/services/topology.ts';
+import type { ServiceStatus } from '../../src/core/services/driver.ts';
+import { buildTopology, serializeTopology, projectService, type TopologyInput } from '../../src/core/services/topology.ts';
 
 const at = '2026-11-01T12:00:00.000Z';
 const input = (): TopologyInput => ({ captured_at: at, hub_id: 'remote', local_id: 'local', machines: [
@@ -73,4 +74,27 @@ test('cluster service disagreement retains both reasons and blocks stale actions
   assert.equal(svc.health, 'failed');
   assert.deepEqual(svc.observations.map(o => o.reason), ['Native healthy', 'Pod stopped']);
   assert.ok(!s.machines.some(m => m.id === 'revoked'));
+});
+
+test('no-live readiness health keeps the receipt time of its evidence, not another version’s fresh report', () => {
+  const old = '2026-11-01T11:00:00.000Z';
+  for (const unrelatedStatus of ['failed', 'installed'] as const) {
+    const status: ServiceStatus = {
+      service: 'worker', driver: 'device', live: null, previous: null, soak_until: null, held: null,
+      health: { ok: null, checked_at: null, said: null }, stable: {}, history: [],
+      versions: [
+        { version: 'v1', status: 'ready', since: '2020-01-01T00:00:00.000Z', said: null, ports: null, pid: null },
+        { version: 'v2', status: unrelatedStatus, since: old, said: null, ports: null, pid: null },
+      ],
+    };
+    const data = input();
+    data.machines[0]!.services = [projectService(status, { source: 'workload', placement: 'local', at, authority: 'device', policies: [], reports: [{ version: 'v1', at: old }, { version: 'v2', at }] })];
+    const service = buildTopology(data).machines[1]!.services[0]!;
+    assert.equal(service.health, 'unknown', unrelatedStatus);
+    assert.equal(service.status, 'Waiting');
+    assert.equal(service.observations[0]!.at, old);
+    assert.equal(service.observations[0]!.age_ms, 3600000);
+    assert.equal(service.observations[0]!.stale, true);
+    assert.deepEqual(service.versions.map(v => v.observed_at), [old, at]);
+  }
 });
