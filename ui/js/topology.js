@@ -43,14 +43,15 @@ function presentation() {
       captureFacts: m.capture_lag ? [{ reason: `${m.capture_lag.queued} pending events${m.capture_lag.paused ? `. ${m.capture_lag.paused}` : ''}. Last synchronized event: ${m.capture_lag.synced_to ?? 'unknown'}.`, age: `${ago(ageOf(m.capture_lag))}${ageOf(m.capture_lag) == null || ageOf(m.capture_lag) >= snapshot.fresh_for_ms ? ' / stale report' : ''}` }, { reason: 'Recording consent is unknown from workload status.', age: 'Capture content is not shown here.' }] : [{ reason: 'Capture lag is unknown: no report is available.', age: 'Recording consent is unknown from workload status.' }],
       services: m.services.map(s => {
         const serviceStale = stale || s.observations.some(expired);
+        const serviceHealth = mergedHealth(s.observations, machineHealth);
         const unavailable = submitting || serviceStale;
         const eligible = s.versions.filter(v => v.status === 'ready' && v.promote.available && !unavailable && currentVersion(v));
         const version = eligible.find(v => v.version === chosen) ?? eligible[0];
         const promote = version?.promote;
         const reason = serviceStale ? 'Current service health is unknown. Refresh before changing versions.' : s.versions.find(v => v.status === 'ready')?.promote.reason ?? 'No ready version is available.';
-        return { id: s.id, name: s.service, placement: s.placement === m.id ? m.name : s.placement, status: healthTone[mergedHealth(s.observations, machineHealth)], stale: serviceStale,
+        return { id: s.id, name: s.service, placement: s.placement === m.id ? m.name : s.placement, status: healthTone[serviceHealth], stale: serviceStale,
           age: ageLine(s.observations), observations: sourceRows(s.observations), capture: false,
-          versions: s.versions.map(v => ({ name: v.version, role: v.status, detail: v.version === s.live ? 'Serving on this machine' : v.status === 'ready' ? 'Passed readiness checks' : v.version === s.previous ? 'Kept for rollback' : `Reported ${v.status}` })),
+          versions: s.versions.map(v => ({ name: v.version, role: v.status, detail: v.version === s.live ? serviceHealth === 'healthy' && !serviceStale ? 'Serving on this machine' : 'Last reported live; current serving is unverified' : v.status === 'ready' ? 'Passed readiness checks' : v.version === s.previous ? 'Kept for rollback' : `Reported ${v.status}` })),
           actions: { promote: { available: !!promote, tier: promote?.tier, selected: version?.version, versions: eligible, reason }, rollback: { ...s.rollback, available: s.rollback.available && !unavailable, reason: serviceStale ? reason : s.rollback.reason } },
         };
       }),

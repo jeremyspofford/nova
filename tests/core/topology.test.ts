@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ServiceStatus } from '../../src/core/services/driver.ts';
-import { buildTopology, serializeTopology, projectService, type TopologyInput } from '../../src/core/services/topology.ts';
+import { buildTopology, serializeTopology, projectService, supervisorServices, type TopologyInput } from '../../src/core/services/topology.ts';
 
 const at = '2026-11-01T12:00:00.000Z';
 const input = (): TopologyInput => ({ captured_at: at, hub_id: 'remote', local_id: 'local', machines: [
@@ -121,5 +121,97 @@ test('ready candidates cannot replace stale or fresh null-health observations of
     assert.match(service.observations[0]!.reason, /No verified service health/);
     assert.equal(service.versions.find(v => v.version === 'v2')!.promote.available, false);
     assert.equal(service.rollback.available, false);
+  }
+});
+
+function supervisorState(heldAt: string | null, observedAt = at, healthAt: string | null = '2026-11-01T11:50:00.000Z'): import('../../src/core/resilience/link.ts').SupervisorState {
+  return {
+    v: 1, pid: 1, mode: 'running', since: at,
+    server: { pid: 2, port: 0, started_at: at, restarts: 0, last_exit: null, code: 'SECRET path' },
+    safe_mode: null, health: { last_check_at: healthAt, last_ok_at: healthAt, failing: 0, said: 'SECRET health' },
+    releases: { current: 'base', previous: null, last_good: null, slots: [] }, deploy: null, history: [], observed_at: observedAt, service_policies: [],
+    services: [{ service: 'worker', driver: 'supervisor', live: 'v1', previous: null, soak_until: null,
+      held: heldAt ? { at: heldAt, reason: 'SECRET process output' } : null,
+      health: { ok: healthAt ? true : null, checked_at: healthAt, said: 'SECRET health' }, stable: {}, history: [],
+      versions: [{ version: 'v1', status: 'live', since: at, said: null, ports: null, pid: null }],
+    }],
+  };
+}
+
+test('supervisor hold attestation is independent of hold occurrence and measured health', () => {
+  const old = '2026-11-01T11:50:00.000Z';
+  for (const heldAt of [at, old]) for (const healthAt of [old, at, null]) {
+    const data = input();
+    data.machines[0]!.services = supervisorServices(supervisorState(heldAt, at, healthAt), true, 'local', at, 'base').services;
+    const snapshot = buildTopology(data), service = snapshot.machines[1]!.services.find(s => s.service === 'worker')!;
+    assert.equal(service.status, 'Failed', `held ${heldAt}, health ${healthAt}`);
+    const held = service.observations.find(o => /held/.test(o.reason))!;
+    assert.equal(held.at, at);
+    assert.equal(held.stale, false);
+    assert.match(held.reason, new RegExp(heldAt.replaceAll('.', '\\.')), 'hold occurrence remains available');
+    const health = service.observations.find(o => /healthy|No verified/.test(o.reason))!;
+    assert.equal(health.at, healthAt);
+    assert.equal(health.age_ms, healthAt === at ? 0 : healthAt ? 600000 : null);
+    assert.equal(health.health, healthAt === at ? 'healthy' : 'unknown');
+    assert.match(snapshot.mermaid, /worker.*Failed/);
+    assert.ok(!JSON.stringify(service).includes('SECRET'));
+  }
+});
+
+test('stale supervisor hold attestations expire and recovery cannot refresh old health', () => {
+  const old = '2026-11-01T11:50:00.000Z';
+  for (const heldAt of [old, null]) for (const healthAt of [old, at]) {
+    const state = supervisorState(heldAt, heldAt ? old : at, healthAt);
+    const data = input();
+    data.machines[0]!.services = supervisorServices(state, true, 'local', at, 'base').services;
+    const service = buildTopology(data).machines[1]!.services.find(s => s.service === 'worker')!;
+    assert.equal(service.status, !heldAt && healthAt === at ? 'Verified' : 'Waiting');
+    assert.equal(service.observations[0]!.at, healthAt);
+    if (heldAt) assert.equal(service.observations.find(o => /held/.test(o.reason))!.health, 'unknown');
+  }
+});
+
+test('stopped console attestation expires independently of its last health check', () => {
+  const old = '2026-11-01T11:50:00.000Z';
+  for (const observedAt of [at, old]) {
+    const state = supervisorState(null, observedAt); state.mode = 'stopped';
+    const data = input();
+    data.machines[0]!.services = supervisorServices(state, true, 'local', at, 'base').services;
+    const service = buildTopology(data).machines[1]!.services.find(s => s.service === 'nova-console')!;
+    assert.equal(service.status, observedAt === at ? 'Failed' : 'Waiting');
+    assert.equal(service.observations.find(o => /console stopped/.test(o.reason))!.at, observedAt);
+    const health = service.observations.find(o => /healthy/.test(o.reason))!;
+    assert.equal(health.at, old);
+    assert.equal(health.age_ms, 600000);
+  }
+});
+
+test('only the assigned live native version can attest a current stopped workload', () => {
+  const old = '2026-11-01T11:50:00.000Z';
+  for (const c of [
+    { want: 'live', assigned: 'v1', live: null, reportAt: at, assignedAt: old, expected: 'Failed' },
+    { want: 'live', assigned: 'v1', live: null, reportAt: old, assignedAt: old, expected: 'Waiting' },
+    { want: 'live', assigned: 'v1', live: null, reportAt: old, assignedAt: at, expected: 'Waiting' },
+    { want: 'alongside', assigned: 'v1', live: null, reportAt: at, assignedAt: old, expected: 'Waiting' },
+    { want: 'stopped', assigned: 'v1', live: null, reportAt: at, assignedAt: old, expected: 'Waiting' },
+    { want: 'live', assigned: 'v2', live: null, reportAt: at, assignedAt: old, expected: 'Waiting' },
+    { want: 'live', assigned: 'v1', live: 'v2', reportAt: at, assignedAt: old, expected: 'Verified' },
+  ] as const) {
+    const status: ServiceStatus = { service: 'worker', driver: 'device', live: c.live, previous: null, soak_until: null, held: null,
+      health: { ok: c.live ? true : null, checked_at: c.live ? at : null, said: null }, stable: {}, history: [],
+      versions: [{ version: 'v1', status: 'failed', since: old, said: 'SECRET output', ports: null, pid: null }, { version: 'v0', status: 'ready', since: old, said: null, ports: null, pid: null }],
+    };
+    const data = input();
+    data.machines[0]!.services = [projectService(status, { source: 'workload', placement: 'local', at: status.health.checked_at, authority: 'device', policies: [], reports: [{ version: 'v1', at: c.reportAt }, { version: 'v0', at: old }], assigned: { version: c.assigned, want: c.want, at: c.assignedAt } })];
+    const service = buildTopology(data).machines[1]!.services[0]!;
+    assert.equal(service.status, c.expected, JSON.stringify(c));
+    assert.equal(service.live, c.live);
+    if (c.expected === 'Failed') {
+      assert.equal(service.observations.find(o => o.health === 'failed')!.at, c.reportAt);
+      assert.equal(service.observations[0]!.at, old, 'current failure does not refresh readiness');
+      assert.equal(service.observations[0]!.age_ms, 600000);
+      assert.equal(service.observations[0]!.health, 'unknown');
+      assert.ok(!JSON.stringify(service).includes('SECRET'));
+    }
   }
 });

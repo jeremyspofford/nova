@@ -148,7 +148,7 @@ test('M10i: fresh machine never freshens old service, capture lag is factual and
     f.controls.oldService = true; f.controls.partial = true;
     await map(p, f.base); assert.match(await p.locator('#topology-view').innerText(), /Cluster observations unavailable/);
     await detail(p, f.hubId);
-    const text = await p.locator('.topology').innerText(); assert.match(text, /18 minutes old/); assert.match(text, /Current service health is unknown/); assert.match(text, /Previously reported: Serving/);
+    const text = await p.locator('.topology').innerText(); assert.match(text, /18 minutes old/); assert.match(text, /Current service health is unknown/); assert.match(text, /Previously reported: Last reported live; current serving is unverified/);
     assert.equal(await p.locator('.topology [data-status="verified"]').count(), 0);
     assert.equal(await p.locator('[data-topology-action="promote"]').isDisabled(), true);
     await shot(p, 'chromium', 'desktop', 'stale-service');
@@ -505,5 +505,33 @@ for (const kind of ['post', 'get-rejection']) test(`M10i I3: late ${kind} cannot
     await p.evaluate(() => { const a = document.createElement('a'); a.href = '/topology'; document.body.append(a); a.click(); a.remove(); });
     await p.waitForFunction(() => !document.querySelector<HTMLButtonElement>('[data-topology-refresh]')?.disabled);
     assert.match(await p.locator('[data-topology-notice]').innerText(), kind === 'post' ? /Accepted/ : /Held topology read was rejected/, 'late result remains available after return and refresh');
+  } finally { await b.close(); await f.close(); }
+});
+
+test('M10i: serving labels require current healthy evidence, including held and null-health live versions', async (t) => {
+  const b = await browser(); if (typeof b === 'string') return t.skip(b);
+  const f = await topologyFixture();
+  try {
+    const d = await device(b, { serviceWorkers: 'block' }); const p = d.page;
+    for (const scenario of ['held', 'stopped', 'unknown', 'healthy']) {
+      await p.route('**/api/v1/services/topology', async r => {
+        const response = await r.fetch(), data = await response.json();
+        const s = data.machines.find((m: any) => m.id === f.hubId).services.find((s: any) => s.service === 'ordinary');
+        if (scenario === 'unknown') { s.observations[0].health = 'unknown'; s.observations[0].reason = 'No verified service health observation.'; }
+        if (scenario === 'held' || scenario === 'stopped') s.observations.push({ source: 'supervisor', at: data.captured_at, age_ms: 0, stale: false, health: 'failed', reason: scenario === 'held' ? 'The service is held after stopping repeatedly.' : 'The supervisor reports that the console stopped.' });
+        await r.fulfill({ response, json: data });
+      });
+      await map(p, f.base); await detail(p, f.hubId);
+      const content = await p.locator('.topology').innerText();
+      if (scenario === 'healthy') assert.match(content, /Serving on this machine/);
+      else {
+        assert.doesNotMatch(content, /Serving on this machine/, scenario);
+        assert.equal(await p.locator('.topology [data-status="verified"]').count(), 0);
+        assert.match(content, /current serving is unverified/i);
+      }
+      if (scenario === 'held' || scenario === 'stopped') assert.equal(await p.locator('.topology [data-status="failed"]').count(), 1);
+      await p.unroute('**/api/v1/services/topology');
+    }
+    assert.deepEqual(d.errors, []);
   } finally { await b.close(); await f.close(); }
 });

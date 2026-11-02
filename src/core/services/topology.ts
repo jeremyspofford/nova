@@ -156,7 +156,7 @@ export function serializeTopology(snapshot: Pick<TopologySnapshot, 'machines'>):
 }
 
 /** Safe projection: never copies said/history/process output, paths, ports, argv, env or definitions. */
-export function projectService(s: ServiceStatus, o: { placement: string; at: string | null; source: 'supervisor' | 'workload'; authority: ServiceInput['authority']; policies: ServicePolicy[]; reports?: { version: string; at: string }[]; assigned?: TopologyService['assigned'] }): ServiceInput {
+export function projectService(s: ServiceStatus, o: { placement: string; at: string | null; source: 'supervisor' | 'workload'; authority: ServiceInput['authority']; policies: ServicePolicy[]; state_at?: string | null; reports?: { version: string; at: string }[]; assigned?: TopologyService['assigned'] }): ServiceInput {
   const ready = new Set(s.versions.filter(v => v.status === 'ready').map(v => v.version));
   // Readiness is evidence from that version's report, never a fresh unrelated report. With
   // several ready versions, the most recently received readiness report supplies the claim.
@@ -167,9 +167,23 @@ export function projectService(s: ServiceStatus, o: { placement: string; at: str
   // A candidate's readiness cannot establish health for an observed serving version.
   const readiness = s.live === null && !s.held && s.health.ok === null && ready.size > 0;
   const observedAt = readiness && o.reports ? readyAt : o.at;
-  const health: TopologyHealth = s.held ? 'failed' : s.health.ok === false ? 'degraded' : s.health.ok === true || readiness ? 'healthy' : 'unknown';
+  const health: TopologyHealth = s.health.ok === false ? 'degraded' : s.health.ok === true || readiness ? 'healthy' : 'unknown';
+  // A latched stop is currently attested by the supervisor, independently of when the
+  // hold happened or health was measured. Never reuse a health check as that attestation.
+  const observations: ObservationInput[] = s.held ? [{ source: o.source, at: o.state_at ?? null, health: 'failed', reason: `The supervisor reports that the service is held. Hold recorded at ${timestamp(s.held.at)}.` }] : [];
+  // A failed candidate is not a failed serving workload. Only a failed report for the
+  // current live assignment, received since that assignment and with no observed serving
+  // version, establishes stopped work. Its receipt expires even if other reports arrive.
+  const assigned = o.assigned;
+  if (o.source === 'workload' && s.live === null && assigned?.want === 'live'
+    && s.versions.some(v => v.version === assigned.version && v.status === 'failed')) {
+    const failedAt = timestamp(o.reports?.find(r => r.version === assigned.version)?.at);
+    const assignedAt = timestamp(assigned.at);
+    if (failedAt && assignedAt && failedAt >= assignedAt) observations.push({ source: o.source, at: failedAt, health: 'failed', reason: 'The version assigned live reported failed; no serving version is observed.' });
+  }
   return { service: s.service, driver: s.driver, live: s.live, previous: s.previous, placement: o.placement, assigned: o.assigned ?? null, authority: o.authority,
-    observation: { source: o.source, at: observedAt, health, reason: s.held ? 'The service is held after stopping repeatedly.' : s.health.ok === false ? 'The service health check failed.' : s.health.ok === true ? 'The service reported healthy.' : readiness ? 'A version passed its readiness checks.' : 'No verified service health observation.' },
+    observation: { source: o.source, at: observedAt, health, reason: s.health.ok === false ? 'The service health check failed.' : s.health.ok === true ? 'The service reported healthy.' : readiness ? 'A version passed its readiness checks.' : 'No verified service health observation.' },
+    observations,
     versions: s.versions.map(v => ({ version: v.version, status: v.status, since: v.since, observed_at: o.reports ? o.reports.find(r => r.version === v.version)?.at ?? null : o.at, promotion_tier: o.policies.find(p => p.service === s.service && p.version === v.version)?.promotion_tier ?? null })),
   };
 }
@@ -188,8 +202,8 @@ export function supervisorServices(state: SupervisorState | null, managed: boole
     if (state && managed) {
       const rows = [consoleStatus(state), ...state.services!];
       if (!rows.every(validStatus) || !['starting', 'running', 'restarting', 'safe_mode', 'deploying', 'stopped'].includes(state.mode)) throw new Error('malformed');
-      const services = rows.map(s => projectService(s, { placement: localId, source: 'supervisor', at: s.health.checked_at ?? state.observed_at ?? null, authority: canMutate ? 'hub' : null, policies: state.service_policies ?? [] }));
-      if (state.mode === 'stopped') services[0]!.observation = { ...services[0]!.observation, health: 'failed', reason: 'The supervisor reports that the console stopped.' };
+      const services = rows.map(s => projectService(s, { placement: localId, source: 'supervisor', at: s.health.checked_at, state_at: state.observed_at ?? null, authority: canMutate ? 'hub' : null, policies: state.service_policies ?? [] }));
+      if (state.mode === 'stopped') services[0]!.observations!.push({ source: 'supervisor', at: state.observed_at ?? null, health: 'failed', reason: 'The supervisor reports that the console stopped.' });
       return { services, issue: null };
     }
   } catch { /* A managed but unreadable state is not an intentionally unsupervised server. */ }

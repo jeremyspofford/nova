@@ -217,7 +217,7 @@ export class DeviceWorkloads {
       const policies = [row.definition, row.previous_definition].flatMap(raw => {
         try { const checked = validate(JSON.parse(raw ?? 'null')); return checked.ok ? [{ service: checked.def.service, version: checked.def.version, promotion_tier: promotionTier(checked.def) }] : []; } catch { return []; }
       });
-      return { device_id: s.device.id, service: projectService(s, { placement: s.device.id, source: 'workload', at: s.live ? s.health.checked_at : reports[0]?.at ?? null, authority: 'device', policies, reports, assigned: { version: row.version, want: row.want, at: row.assigned_at } }) };
+      return { device_id: s.device.id, service: projectService(s, { placement: s.device.id, source: 'workload', at: s.health.checked_at, authority: 'device', policies, reports, assigned: { version: row.version, want: row.want, at: row.assigned_at } }) };
     });
   }
 
