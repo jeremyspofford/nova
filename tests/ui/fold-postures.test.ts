@@ -13,7 +13,7 @@ import type { Browser, Page } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
 import { decodePng } from '../../src/core/browser/png.ts';
 import { ROOT, browser, device, shotsDir, webkitBrowser } from './support.ts';
-import { openFoldView as open } from './fold-navigation.ts';
+import { foldDesignReady, openFoldView as open } from './fold-navigation.ts';
 import { POSTURES, VIEWS, reviewProfile } from './axe-support.ts';
 import { audit, problems, summary, withMesh, type FoldAudit } from './fold-support.ts';
 
@@ -115,7 +115,7 @@ test('F8/F9 gate: the bands are derived from the regions, in every design system
         assert.equal((await m.send('POST', `/api/v1/design-systems/${ds}/apply`, { scope: 'device', device_id: d.id })).status, 200);
         for (const view of ['/', '/chat', '/settings']) {
           await open(d.page, `${m.base}${view}`);
-          await d.page.waitForFunction((id) => document.documentElement.dataset.theme === id, ds);
+          await foldDesignReady(d.page, ds, d.id);
           let bands: FoldAudit['bands'] = null;
           for (const w of widths) {
             await d.page.setViewportSize({ width: w, height: 860 });
@@ -141,6 +141,7 @@ test('F8/F9 gate: the bands are derived from the regions, in every design system
       await open(d.page, `${m.base}/`);
       const before = (await audit(d.page)).bands!.three;
       assert.equal((await m.send('POST', '/api/v1/design-systems/companion-light/apply', { scope: 'device', device_id: d.id })).status, 200);
+      await foldDesignReady(d.page, 'companion-light', d.id);
       await d.page.waitForFunction((x) => {
         const p = document.createElement('div'); p.style.cssText = 'position:absolute;visibility:hidden;width:var(--band-three)'; document.body.append(p);
         const w = p.getBoundingClientRect().width; p.remove(); return Math.abs(w - x) > 0.5;

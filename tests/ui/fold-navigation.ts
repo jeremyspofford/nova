@@ -1,4 +1,5 @@
 // Navigation/readiness for the seeded fold review, owned by the tests.
+import assert from 'node:assert/strict';
 import type { Page } from 'playwright-core';
 import { still } from './support.ts';
 
@@ -55,4 +56,21 @@ export async function openFoldView(page: Page, url: string) {
     }
   }
   await foldViewReady(page, url);
+}
+
+// Metadata and CSS arrive independently. Compare the installed sheet with the server's actual
+// generation for this device/design; production's event handler must still perform the swap.
+export async function foldDesignReady(page: Page, id: string, device: string) {
+  await page.waitForFunction((id) => document.documentElement.dataset.theme === id, id);
+  const response = await page.request.get(`${new URL(page.url()).origin}/design-system.css?device=${encodeURIComponent(device)}`);
+  assert.equal(response.status(), 200, 'the applied device CSS is available');
+  const css = await response.text();
+  assert.ok(css.split('\n')[0]?.includes(`(${id}), mode `), `the CSS generation belongs to ${id}`);
+  await page.waitForFunction(({ css, id, device }) => {
+    const style = document.querySelector<HTMLStyleElement>('#ds');
+    return document.documentElement.dataset.theme === id && localStorage.getItem('nova.device') === device &&
+      !!style?.sheet && !style.sheet.disabled && style.sheet.cssRules.length > 0 && style.textContent === css && !document.getElementById('ds-boot');
+  }, { css, id, device }, { timeout: 15_000 });
+  await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  await still(page);
 }

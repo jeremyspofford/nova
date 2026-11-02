@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { stop } from '../acceptance/support.ts';
 import { reviewProfile } from './axe-support.ts';
 import { withMesh } from './fold-support.ts';
-import { openFoldView } from './fold-navigation.ts';
-import { device, webkitBrowser } from './support.ts';
+import { foldDesignReady, openFoldView } from './fold-navigation.ts';
+import { browser, device, webkitBrowser } from './support.ts';
 
 test('fold navigation keeps the document and completes a real playbook refresh', { timeout: 120_000 }, async (t) => {
   const b = await webkitBrowser();
@@ -63,3 +63,62 @@ test('fold error collector still detects genuine CORS and refused mutations', { 
     await d.ctx.close();
   } finally { await b.close(); await stop(nova); }
 });
+
+
+for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]] as const) {
+  test(`fold design readiness waits for installed CSS while ${engine} metadata arrives first`, { timeout: 120_000 }, async (t) => {
+    const b = await launch();
+    if (typeof b === 'string') return t.skip(b);
+    const { m, nova } = await reviewProfile('nova-fold-css-');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let held!: () => void;
+    const captured = new Promise<void>((resolve) => { held = resolve; });
+    let delivery: Promise<void> | undefined;
+    let readiness: Promise<void> | undefined;
+    let css = '';
+    try {
+      const d = await device(b, { serviceWorkers: 'block' });
+      await withMesh(d.ctx);
+      await openFoldView(d.page, `${m.base}/`);
+      await d.page.waitForFunction(() => !!document.getElementById('ds')?.textContent && !document.getElementById('ds-boot'));
+      const before = await d.page.locator('#home .card').first().evaluate((card) => getComputedStyle(card).borderTopLeftRadius);
+      const cssUrl = `${m.base}/design-system.css?device=${encodeURIComponent(d.id)}`;
+      // Hold the real response to the production event's fetch, without changing its CSS.
+      await d.page.route(cssUrl, (route) => {
+        delivery = (async () => {
+          const response = await route.fetch();
+          assert.equal(response.status(), 200);
+          css = await response.text();
+          held();
+          await gate;
+          await route.fulfill({ response, body: css });
+        })();
+        return delivery;
+      });
+      assert.equal((await m.send('POST', '/api/v1/design-systems/nova/apply', { scope: 'device', device_id: d.id })).status, 200);
+      await captured;
+      await d.page.waitForFunction(() => document.documentElement.dataset.theme === 'nova');
+      assert.notEqual(await d.page.locator('#ds').textContent(), css, 'metadata completed while the old CSS is still installed');
+      readiness = foldDesignReady(d.page, 'nova', d.id);
+      const outcome = await Promise.race([
+        readiness.then(() => 'early'),
+        d.page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))).then(() => 'held'),
+      ]);
+      assert.equal(outcome, 'held', 'the actual boundary must not resolve while the intended CSS response is held');
+      assert.equal(await d.page.locator('#home .card').first().evaluate((card) => getComputedStyle(card).borderTopLeftRadius), before, 'the previous design is still painted');
+      release();
+      await delivery;
+      await readiness;
+      assert.equal(await d.page.locator('#ds').textContent(), css, 'the exact real response is installed');
+      const design = await m.get('/api/v1/design-systems/nova');
+      const after = await d.page.locator('#home .card').first().evaluate((card) => getComputedStyle(card).borderTopLeftRadius);
+      assert.equal(after, design.manifest.tokens['radius/card'], 'the intended design is rendered');
+      assert.notEqual(after, before);
+      assert.deepEqual(d.errors, []);
+    } finally {
+      release();
+      try { await delivery; await readiness; } finally { await b.close(); await stop(nova); }
+    }
+  });
+}
