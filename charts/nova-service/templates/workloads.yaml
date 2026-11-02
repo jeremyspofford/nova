@@ -1,0 +1,147 @@
+{{- if ne .Release.Namespace .Values.namespace }}
+{{- fail "Release namespace must equal the validated values namespace" }}
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.service.name | toJson }}
+  namespace: {{ .Values.namespace | toJson }}
+  annotations:
+    nova/service: {{ .Values.service.identity | toJson }}
+spec:
+  type: ClusterIP
+  selector: {{ .Values.stableSelector | toJson }}
+  ports:
+  {{- range .Values.service.ports }}
+    - name: {{ .name | toJson }}
+      port: {{ .port }}
+      targetPort: {{ .name | toJson }}
+      protocol: TCP
+  {{- end }}
+{{- range .Values.versions }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .previewName | toJson }}
+  namespace: {{ $.Values.namespace | toJson }}
+  annotations:
+    nova/service: {{ $.Values.service.identity | toJson }}
+    nova/version: {{ .identity | toJson }}
+spec:
+  type: ClusterIP
+  selector: {{ .selector | toJson }}
+  ports:
+  {{- range .ports }}
+    - name: {{ .name | toJson }}
+      port: {{ .port }}
+      targetPort: {{ .name | toJson }}
+      protocol: TCP
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name | toJson }}
+  namespace: {{ $.Values.namespace | toJson }}
+  labels: {{ .selector | toJson }}
+  annotations:
+    nova/service: {{ $.Values.service.identity | toJson }}
+    nova/version: {{ .identity | toJson }}
+    nova/alongside: {{ .alongside | toJson }}
+    nova/soak-seconds: {{ .soakSeconds | toJson | toJson }}
+spec:
+  replicas: {{ .replicas }}
+  strategy: {{ .strategy | toJson }}
+  selector:
+    matchLabels: {{ .selector | toJson }}
+  template:
+    metadata:
+      labels: {{ .selector | toJson }}
+      annotations:
+        nova/service: {{ $.Values.service.identity | toJson }}
+        nova/version: {{ .identity | toJson }}
+        nova/placement: {{ .placement | toJson | toJson }}
+        nova/secret-references: {{ .secretRefs | toJson | toJson }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector: {{ .nodeSelector | toJson }}
+      {{- if or .requiredNodeExpressions .preferredNodeExpressions .spread }}
+      affinity:
+        {{- if or .requiredNodeExpressions .preferredNodeExpressions }}
+        nodeAffinity:
+          {{- if .requiredNodeExpressions }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions: {{ .requiredNodeExpressions | toJson }}
+          {{- end }}
+          {{- if .preferredNodeExpressions }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions: {{ .preferredNodeExpressions | toJson }}
+          {{- end }}
+        {{- end }}
+        {{- if .spread }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {{ .selector | toJson }}
+              topologyKey: kubernetes.io/hostname
+        {{- end }}
+      {{- end }}
+      {{- if .spread }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels: {{ .selector | toJson }}
+      {{- end }}
+      containers:
+        - name: workload
+          image: {{ printf "%s@%s" .image.repository .image.digest | toJson }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+          {{- range .ports }}
+            - name: {{ .name | toJson }}
+              containerPort: {{ .port }}
+              protocol: TCP
+          {{- end }}
+          readinessProbe: {{ .probe | toJson }}
+          livenessProbe: {{ .probe | toJson }}
+          resources: {{ .resources | toJson }}
+          {{- if or .state .secretRefs }}
+          volumeMounts:
+            {{- if .state }}
+            - name: state
+              mountPath: {{ .state.mountPath | toJson }}
+            {{- end }}
+            {{- range .secretRefs }}
+            - name: {{ .name | toJson }}
+              mountPath: {{ printf "/var/run/nova/secrets/%s" .name | toJson }}
+              readOnly: true
+            {{- end }}
+          {{- end }}
+      {{- if or .state .secretRefs }}
+      volumes:
+        {{- if .state }}
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ .state.claimName | toJson }}
+        {{- end }}
+        {{- range .secretRefs }}
+        - name: {{ .name | toJson }}
+          secret:
+            secretName: {{ .name | toJson }}
+        {{- end }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,54 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"before":{"id":"6840bb3e-bb3a-445e-b49b-ef20a48f65bb/echo","service":"echo","driver":"k3s","placement":"6840bb3e-bb3a-445e-b49b-ef20a48f65bb","live":"1","previous":null,"assigned":{"version":"1","want":"live","at":"2026-11-02T12:00:10.000Z"},"health":"unknown","status":"Waiting","observations":[{"source":"workload","at":"2026-11-02T12:02:10.000Z","age_ms":0,"stale":false,"health":"healthy","reason":"Actual cluster workload health measurement."},{"source":"workload","at":"2026-11-02T12:00:10.000Z","age_ms":120000,"stale":true,"health":"unknown","reason":"Observed readiness of 1."}],"versions":[{"version":"1","status":"live","since":"2026-11-02T12:00:00.000Z","observed_at":"2026-11-02T12:00:10.000Z","promote":{"tier":null,"path":null,"confirm":"echo@1","reason":"No supported mutation authority.","expected":{"live":"1","previous":null,"assigned":{"version":"1","want":"live","at":"2026-11-02T12:00:10.000Z"}},"available":false}}],"rollback":{"tier":2,"path":null,"confirm":"rollback","reason":"No supported mutation authority.","expected":{"live":"1","previous":null,"assigned":{"version":"1","want":"live","at":"2026-11-02T12:00:10.000Z"}},"available":false}},"after":{"id":"6840bb3e-bb3a-445e-b49b-ef20a48f65bb/echo","service":"echo","driver":"k3s","placement":"6840bb3e-bb3a-445e-b49b-ef20a48f65bb","live":"1","previous":null,"assigned":{"version":"2","want":"alongside","at":"2026-11-02T12:02:10.000Z"},"health":"failed","status":"Failed","observations":[{"source":"workload","at":"2026-11-02T12:02:10.000Z","age_ms":0,"stale":false,"health":"healthy","reason":"Actual cluster workload health measurement."},{"source":"workload","at":"2026-11-02T12:00:10.000Z","age_ms":120000,"stale":true,"health":"unknown","reason":"Observed readiness of 1."},{"source":"workload","at":"2026-11-02T12:02:10.000Z","age_ms":0,"stale":false,"health":"failed","reason":"Observed readiness of 2."}],"versions":[{"version":"1","status":"live","since":"2026-11-02T12:00:00.000Z","observed_at":"2026-11-02T12:00:10.000Z","promote":{"tier":null,"path":null,"confirm":"echo@1","reason":"No supported mutation authority.","expected":{"live":"1","previous":null,"assigned":{"version":"2","want":"alongside","at":"2026-11-02T12:02:10.000Z"}},"available":false}},{"version":"2","status":"failed","since":"2026-11-02T12:02:10.000Z","observed_at":"2026-11-02T12:02:10.000Z","promote":{"tier":null,"path":null,"confirm":"echo@2","reason":"No supported mutation authority.","expected":{"live":"1","previous":null,"assigned":{"version":"2","want":"alongside","at":"2026-11-02T12:02:10.000Z"}},"available":false}}],"rollback":{"tier":2,"path":null,"confirm":"rollback","reason":"No supported mutation authority.","expected":{"live":"1","previous":null,"assigned":{"version":"2","want":"alongside","at":"2026-11-02T12:02:10.000Z"}},"available":false}},"failedTaskState":"waiting","serving":"1"}
+✖ final review: fresh live health must survive old readiness and a failed preview (5640.042709ms)
+{"applied":{"ok":false,"said":"The cluster operation failed or its completion is unknown. Refresh before any new action."},"observed":{"ok":false,"said":"The cluster operation failed or its completion is unknown. Refresh before any new action."},"rows":65,"last":{"version":"next","replicas":1,"ready":false,"ready_at":null,"health":{"ok":true,"checked_at":"2026-11-02T12:00:10.000Z","said":null},"status":"alongside","since":"2026-11-02T12:00:10.000Z","device_ids":["linux"],"ports":{"http":18080},"state_refs":[]}}
+✖ final review: retired history must not strand the service after the 64-row boundary (1096.247598ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7104.967584
+
+✖ failing tests:
+
+test at .superpowers/sdd/M10j/task-5-review-adversarial.test.ts:100:1
+✖ final review: fresh live health must survive old readiness and a failed preview (5640.042709ms)
+  AssertionError [ERR_ASSERTION]: fresh live health must not be overridden by historical readiness
+  + actual - expected
+
+  + 'unknown'
+  - 'healthy'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/.superpowers/sdd/M10j/task-5-review-adversarial.test.ts:114:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'unknown',
+    expected: 'healthy',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at .superpowers/sdd/M10j/task-5-review-adversarial.test.ts:119:1
+✖ final review: retired history must not strand the service after the 64-row boundary (1096.247598ms)
+  AssertionError [ERR_ASSERTION]: normal retirement history must not cause every later observation to fail
+
+  false !== true
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/.superpowers/sdd/M10j/task-5-review-adversarial.test.ts:133:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

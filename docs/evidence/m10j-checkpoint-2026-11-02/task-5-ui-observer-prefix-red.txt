@@ -1,0 +1,29 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ topology diagnostics: bounded output redacts URL credentials and opaque URLs, and disposal detaches all listeners (415.98776ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 636.016047
+
+✖ failing tests:
+
+test at tests/ui/topology-diagnostics.test.ts:60:1
+✖ topology diagnostics: bounded output redacts URL credentials and opaque URLs, and disposal detaches all listeners (415.98776ms)
+  AssertionError [ERR_ASSERTION]: PREFIX_CANARY
+      at TestContext.<anonymous> (file:///work/tests/ui/topology-diagnostics.test.ts:79:267)
+      at runNextTicks (node:internal/process/task_queues:65:5)
+      at process.processImmediate (node:internal/timers:472:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

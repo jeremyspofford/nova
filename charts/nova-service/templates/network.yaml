@@ -1,0 +1,18 @@
+{{- range .Values.versions }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .networkPolicyName | toJson }}
+  namespace: {{ $.Values.namespace | toJson }}
+spec:
+  podSelector:
+    matchLabels: {{ .selector | toJson }}
+  policyTypes: [Egress]
+  {{- if eq .egress "none" }}
+  egress: []
+  {{- else }}
+  egress:
+    - {}
+  {{- end }}
+{{- end }}

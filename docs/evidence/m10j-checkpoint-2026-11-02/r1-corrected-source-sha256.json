@@ -1,0 +1,126 @@
+{
+  "source_head": "72199e0af4dd0f1ea4033faa1e362d9802f4b57a",
+  "base_main": "048eea0ee043f43d01bc9a36bed601ce9805373b",
+  "files": [
+    {
+      "file": "charts/nova-service/Chart.yaml",
+      "sha256": "45b5c7dcdd759f9b585135fe67d236800f02037fa799f576b5228cbf6694546c"
+    },
+    {
+      "file": "charts/nova-service/README.md",
+      "sha256": "0ac19083316c4f33af0293372bdf74bc29740cc2a3daa9948bf8250dac1f756f"
+    },
+    {
+      "file": "charts/nova-service/templates/network.yaml",
+      "sha256": "b97cfe552e97131d7a00e99d5ca80ab93b8b7dc194e88c5d7a0979f0d44138be"
+    },
+    {
+      "file": "charts/nova-service/templates/storage.yaml",
+      "sha256": "438feb151fafc26a9173894006a871bd10a1dc8e0856323abc84aa1fb21cd86e"
+    },
+    {
+      "file": "charts/nova-service/templates/workloads.yaml",
+      "sha256": "2329e3e6fa73ff7bafadc639b11d7f487cbb6e57d258692f66dc2c2ab292f366"
+    },
+    {
+      "file": "charts/nova-service/values.schema.json",
+      "sha256": "729fae00f61f823f5b5a7191668d97843609804aefb4205f8eb8e6424565e67a"
+    },
+    {
+      "file": "charts/nova-service/values.yaml",
+      "sha256": "2a0953515f3f35b834f2ba40e6c60bc53665295e48213e22431ef7f360a479ca"
+    },
+    {
+      "file": "scripts/stand-ins/fake-flux.js",
+      "sha256": "4ccc0d30c88d17402387c177b854eeae57311196c36cdfb003c0e926faccf1ee"
+    },
+    {
+      "file": "scripts/stand-ins/fake-helm.js",
+      "sha256": "87ac9be5828aca28faab970adf2933f70326f2dd907f9ef56c2a9a3f30b08ed8"
+    },
+    {
+      "file": "scripts/stand-ins/fake-kubectl.js",
+      "sha256": "b1c4d3aece6964438e8e5f2238cb147bae3c6fb5cfe160900e5e163d55f901b1"
+    },
+    {
+      "file": "scripts/stand-ins/k3s-schema.ts",
+      "sha256": "d5e74fb6186d60869aa989738a89258e4d6435ab1f4e8bc8f4dddb022be8f94f"
+    },
+    {
+      "file": "scripts/stand-ins/k3s-simulation.js",
+      "sha256": "655080a1a317d8dbb7e7a96f3f8714dfbc973c70e17e780c0399677b1b53b940"
+    },
+    {
+      "file": "src/core/index.ts",
+      "sha256": "a4ba98d8176f2fe853bffa3d04701e6b69f434dc0f5fbd8764ebcca4260a434d"
+    },
+    {
+      "file": "src/core/network/index.ts",
+      "sha256": "22ac683fd558cd7727605edf3fe44b6660f8c8123dde5541ed23de502f9407a7"
+    },
+    {
+      "file": "src/core/services/index.ts",
+      "sha256": "a8c65b5027e8b60a3c4d4c8d001c2f59607383ea9c56e3adfbda19ee5c75cc46"
+    },
+    {
+      "file": "src/core/services/k3s/driver.ts",
+      "sha256": "e76ccd494d303a2c828e0a4d8aed00e45529bdf48721ed911ae4bcbb56a84eac"
+    },
+    {
+      "file": "src/core/services/k3s/network.ts",
+      "sha256": "ddace28296ebb0703c2f4c47b9c90a08a7747719936455455d5f6e2b50eb326b"
+    },
+    {
+      "file": "src/core/services/k3s/operations.ts",
+      "sha256": "40584f16fd688305163a5d8e3e4eca65a29454ee821d5ae2c38e0e866b8aeda8"
+    },
+    {
+      "file": "src/core/services/k3s/registry.ts",
+      "sha256": "4e433d32c993f7f90e6fb76a2f3122c804d01e980bf5c1153bd4ea12f91e6ac5"
+    },
+    {
+      "file": "src/core/services/k3s/tools.ts",
+      "sha256": "73d1bb5750be7c8779458266432f5f24423483cc98b59ae1b9fe41a0538ba6e6"
+    },
+    {
+      "file": "src/core/services/k3s/values.ts",
+      "sha256": "ecc0ee750212c370967121bb01e38c81f19dd7b2ac89baedd527ed715f11dcfd"
+    },
+    {
+      "file": "src/core/services/manager.ts",
+      "sha256": "4a18e609e9311b5fd1d6842f13c2cdbe46c1e64377e43be51b2f2e186e5e1361"
+    },
+    {
+      "file": "src/core/services/topology.ts",
+      "sha256": "cf8b8af4e67928f58aa36ba94eaca88d2070f098e8f5d45288fa559a68d1f575"
+    },
+    {
+      "file": "tests/core/k3s-chart.test.ts",
+      "sha256": "7ff08cacbd3abcc845be8e8b7ee3c1f35402611c8c711c1e4d86a89049307d01"
+    },
+    {
+      "file": "tests/core/k3s-driver.test.ts",
+      "sha256": "e42d60e6ef8ecc6cde61f1cfe72a689ba0e1bb22e00215e460c11afba4ac05ed"
+    },
+    {
+      "file": "tests/core/k3s-operations.test.ts",
+      "sha256": "730439ea3f31c03aa0211881fc3792825199af02df95dc5d6c21bec6aa6e6dad"
+    },
+    {
+      "file": "tests/core/k3s-review.test.ts",
+      "sha256": "df68d63a2bffca83c2439e9a38817895ddc9e105468f4e58c8b6d68de0f02db9"
+    },
+    {
+      "file": "tests/core/k3s-tools.test.ts",
+      "sha256": "f40f3ba1d822b7c74c00cde2f5ec54f8f43851c58a6087a69e22d8a40ddbe82e"
+    },
+    {
+      "file": "tests/supervisor/services-review.test.ts",
+      "sha256": "605f2e66e8aac3fddf749966ae4ba09905bb52bb5f0cf2fd323a28d75ae03d50"
+    },
+    {
+      "file": "tests/support/k3s.ts",
+      "sha256": "ee00799a820f00e348ebc86fca914f0f31ba0e327e45f9c065f120a1b669f05d"
+    }
+  ]
+}

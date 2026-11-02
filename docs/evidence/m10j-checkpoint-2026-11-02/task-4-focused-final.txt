@@ -1,0 +1,23 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ the OpenAPI document lists every route the core serves (143.868747ms)
+✔ changes need Nova’s own header; unknown paths and methods are refused plainly (341.6406ms)
+✔ module boundary: outside src/core, only src/core/index.ts is imported (src/device: only mesh/wire.ts and models/hardware.ts) (2.957358ms)
+✔ read-only callers, unknown cluster and forged internal tasks cannot perform cluster mutations (396.719842ms)
+✔ Step1 missing: fixed Core APIs refuse before any tool, legacy value read or target I/O (181.301477ms)
+✔ Step1 explicit-unavailable: fixed Core APIs refuse before any tool, legacy value read or target I/O (174.036096ms)
+✔ Step1 wrong-api-cluster: fixed Core APIs refuse before any tool, legacy value read or target I/O (174.723923ms)
+✔ Step1 hostile-ambient: fixed Core APIs refuse before any tool, legacy value read or target I/O (167.148591ms)
+✔ bound cluster targets never fall back to legacy credentials after configuration or capability removal (581.92564ms)
+✔ fix1 I1: replacing the provider stops warm-driver collection and promotion; restoration retries only the same approved state (4799.552044ms)
+✔ fix1 I1: provider removal during awaited network preflight prevents workload prepare (693.360539ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7623.998537
+no-Kubernetes tripwire: never fired
+
+EXIT_STATUS=0

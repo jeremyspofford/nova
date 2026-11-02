@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { browser, device, ready } from './support.ts';
 import { topologyFixture } from './m10i-support.ts';
+import { observeTopology } from './topology-diagnostics.ts';
 
 test('M10i: real seeded topology route, Settings Services and Health Devices entry points', async (t) => {
   const b = await browser(); if (typeof b === 'string') return t.skip(b);
@@ -50,46 +51,63 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
       assert.equal(packages.length, 6);
       for (const [size, vp] of [['phone', { width: 390, height: 844, touch: true }], ['desktop', { width: 1440, height: 900 }]] as const) {
         const d = await device(b, { ...vp, serviceWorkers: 'block' }); const p = d.page;
-        for (const pkg of packages) {
-          const applied = await f.send('POST', `/api/v1/design-systems/${pkg.id}/apply`, { scope: 'user' }); assert.equal(applied.status, 200);
-          await map(p, f.base);
-          const bg = String((await f.send('GET', `/api/v1/design-systems/${pkg.id}`)).body.manifest.tokens['bg/base']).toLowerCase();
-          await p.waitForFunction(w => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim().toLowerCase() === w, bg);
-          await noOverflow(p);
-          assert.equal(await p.locator('.topology-connections').isVisible(), size === 'desktop');
-          if (pkg.id === 'orb-teal') await shot(p, engine, size, 'machines');
-          // Export is the exact server snapshot already displayed; clicking export does not GET again.
-          let reads = 0; let expected = '';
-          p.on('response', async r => { if (r.url().endsWith('/api/v1/services/topology') && r.status() === 200) { reads++; expected = (await r.json()).mermaid; } });
-          await p.locator('[data-topology-refresh]').click();
-          await p.waitForFunction(() => !document.querySelector<HTMLButtonElement>('[data-topology-refresh]')?.disabled);
-          const before = reads;
-          const download = p.waitForEvent('download'); await p.locator('[data-topology-export]').click();
-          const file = await (await download).path(); assert.ok(file); assert.equal(readFileSync(file, 'utf8'), expected); assert.equal(reads, before);
-          const hub = p.locator(`[data-topology-machine="${f.hubId}"]`); await hub.focus(); await p.keyboard.press('Enter');
-          const ordinary = p.locator(`[data-topology-service="${f.hubId}/ordinary"]`);
-          if (pkg.id === 'orb-teal') await shot(p, engine, size, 'services');
-          await p.keyboard.press('Tab'); assert.equal(await ordinary.evaluate(e => e === document.activeElement), false, 'console is the first service');
-          await ordinary.focus(); await p.keyboard.press('Enter'); await noOverflow(p);
-          assert.match(await p.locator('.topology').innerText(), /Serving on this machine/);
-          if (pkg.id === 'orb-teal') await shot(p, engine, size, 'versions');
-          await p.locator('[data-topology-action="promote"]').click(); await p.locator('.approval-sheet[data-tier="2"]').waitFor();
-          if (pkg.id === 'orb-teal') await shot(p, engine, size, 'approval');
-          await p.keyboard.press('Escape'); await p.locator('[data-topology-back]').click();
-          assert.equal(await ordinary.evaluate(e => e === document.activeElement), true);
-          await p.locator('[data-topology-back]').click(); assert.equal(await hub.evaluate(e => e === document.activeElement), true);
-          if (pkg.id === 'orb-teal') {
-            await detail(p, f.hubId, 'capture-demo');
-            await p.locator('[data-topology-action="promote"]').click(); await p.locator('.approval-sheet[data-tier="3"]').waitFor();
-            await shot(p, engine, size, 'approval-capture'); await p.keyboard.press('Escape');
-            await p.locator('[data-topology-action="rollback"]').click(); await p.locator('.approval-sheet[data-tier="2"]').waitFor();
-            await shot(p, engine, size, 'rollback-capture'); await p.keyboard.press('Escape');
-            await p.locator('[data-topology-back]').click(); await p.locator('[data-topology-back]').click();
+        const diagnostics = observeTopology(p);
+        try {
+          for (const pkg of packages) {
+            const stage = (name: string) => diagnostics.stage({ layout: size, theme: pkg.id, stage: name });
+            stage('apply-theme');
+            const applied = await f.send('POST', `/api/v1/design-systems/${pkg.id}/apply`, { scope: 'user' }); assert.equal(applied.status, 200);
+            stage('map-navigation');
+            await map(p, f.base);
+            stage('theme-readiness');
+            const bg = String((await f.send('GET', `/api/v1/design-systems/${pkg.id}`)).body.manifest.tokens['bg/base']).toLowerCase();
+            await p.waitForFunction(w => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim().toLowerCase() === w, bg);
+            stage('overview-layout');
+            await noOverflow(p);
+            assert.equal(await p.locator('.topology-connections').isVisible(), size === 'desktop');
+            if (pkg.id === 'orb-teal') await shot(p, engine, size, 'machines');
+            // Export is the exact server snapshot already displayed; clicking export does not GET again.
+            stage('refresh-and-exact-export');
+            let reads = 0; let expected = '';
+            p.on('response', async r => { if (r.url().endsWith('/api/v1/services/topology') && r.status() === 200) { reads++; expected = (await r.json()).mermaid; } });
+            await p.locator('[data-topology-refresh]').click();
+            await p.waitForFunction(() => !document.querySelector<HTMLButtonElement>('[data-topology-refresh]')?.disabled);
+            const before = reads;
+            const download = p.waitForEvent('download'); await p.locator('[data-topology-export]').click();
+            const file = await (await download).path(); assert.ok(file); assert.equal(readFileSync(file, 'utf8'), expected); assert.equal(reads, before);
+            stage('machine-and-service-layers');
+            const hub = p.locator(`[data-topology-machine="${f.hubId}"]`); await hub.focus(); await p.keyboard.press('Enter');
+            const ordinary = p.locator(`[data-topology-service="${f.hubId}/ordinary"]`);
+            if (pkg.id === 'orb-teal') await shot(p, engine, size, 'services');
+            await p.keyboard.press('Tab'); assert.equal(await ordinary.evaluate(e => e === document.activeElement), false, 'console is the first service');
+            await ordinary.focus(); await p.keyboard.press('Enter'); await noOverflow(p);
+            assert.match(await p.locator('.topology').innerText(), /Serving on this machine/);
+            if (pkg.id === 'orb-teal') await shot(p, engine, size, 'versions');
+            stage('approval-and-focus-return');
+            await p.locator('[data-topology-action="promote"]').click(); await p.locator('.approval-sheet[data-tier="2"]').waitFor();
+            if (pkg.id === 'orb-teal') await shot(p, engine, size, 'approval');
+            await p.keyboard.press('Escape'); await p.locator('[data-topology-back]').click();
+            assert.equal(await ordinary.evaluate(e => e === document.activeElement), true);
+            await p.locator('[data-topology-back]').click(); assert.equal(await hub.evaluate(e => e === document.activeElement), true);
+            if (pkg.id === 'orb-teal') {
+              stage('capture-approvals');
+              await detail(p, f.hubId, 'capture-demo');
+              await p.locator('[data-topology-action="promote"]').click(); await p.locator('.approval-sheet[data-tier="3"]').waitFor();
+              await shot(p, engine, size, 'approval-capture'); await p.keyboard.press('Escape');
+              await p.locator('[data-topology-action="rollback"]').click(); await p.locator('.approval-sheet[data-tier="2"]').waitFor();
+              await shot(p, engine, size, 'rollback-capture'); await p.keyboard.press('Escape');
+              await p.locator('[data-topology-back]').click(); await p.locator('[data-topology-back]').click();
+            }
+            stage('long-name-refresh');
+            f.controls.long = true; await p.locator('[data-topology-refresh]').click();
+            await p.getByText(/A synthetic cloud site with/).waitFor(); await noOverflow(p); f.controls.long = false;
           }
-          f.controls.long = true; await p.locator('[data-topology-refresh]').click();
-          await p.getByText(/A synthetic cloud site with/).waitFor(); await noOverflow(p); f.controls.long = false;
+          diagnostics.stage({ layout: size, theme: packages.at(-1)?.id ?? 'unknown', stage: 'strict-error-assertion' });
+          assert.deepEqual(d.errors, []);
+        } finally {
+          try { console.log('M10i topology diagnostics', JSON.stringify({ engine, ...diagnostics.snapshot() })); }
+          finally { diagnostics.dispose(); await d.ctx.close(); }
         }
-        assert.deepEqual(d.errors, []); await d.ctx.close();
       }
     } finally { await b.close(); await f.close(); }
   });

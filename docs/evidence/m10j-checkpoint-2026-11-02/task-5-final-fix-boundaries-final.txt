@@ -1,0 +1,12 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ module boundary: outside src/core, only src/core/index.ts is imported (src/device: only mesh/wire.ts and models/hardware.ts) (3.261674ms)
+✔ no code in Nova or its scripts names a Kubernetes tool to run (the tripwire sees PATH lookups only) (10.835477ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 354.747615
+no-Kubernetes tripwire: never fired

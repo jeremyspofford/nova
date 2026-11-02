@@ -368,6 +368,13 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What they delivered: sealed-off workspaces on this machine (Nova Computer), Nova's own browser with vault logins and a hard stop before paying, and coding through chat with tests, a preview and a merge only on your yes.
 - Still unfinished: all tested against stand-ins (pretend sites and shops, stand-in coding agents), never real sites, accounts or agents; the browser can't start on this machine outside a container; no chat tool drives the workspaces yet; the infrastructure phase (M10d) isn't merged.
 
+## Pending branch checkpoint — not merged
+
+**2026-11-02 · draft #283 · M10j simulated cluster work; credentials still blocked**
+- What changed on this branch: a chart compiler and simulated cluster driver, using existing task approvals, independently aged observations and network safety controls. Independent reviews caught and corrected misleading live/candidate health, history-limit overflow and native platform eligibility in container plans. Tests keep missing or hostile configuration from launching work or reading old vault values. The default app has no cluster launcher.
+- What you can do on this branch: run controlled stand-ins and inspect their outcomes. The simulator safely refuses new versions after 64 historical/resource versions, preserving rollback and old evidence. Nothing new is switched on in the live app; this is an unmerged checkpoint. A full browser run also caught a WebKit error whose cause remains unproven; bounded, redacted test diagnostics now collect the missing context without changing assertions or claiming a repair.
+- Still unfinished: actual broker/launcher phases P1a/P1b/P1c, credential isolation/tickets/cleanup and their proof, with #275 parked for findings B. Backend source findings are independently closed; diagnostic review and a fresh complete CI run remain required for this checkpoint. Historical failed runs stay recorded. No full phase pass, merge, preview change or M10k follows. Evidence: docs/evidence/m10j-gate.md.
+
 ## Dependencies
 
 Runtime: **none**. The server, runner, markdown renderer and tests use Node 22

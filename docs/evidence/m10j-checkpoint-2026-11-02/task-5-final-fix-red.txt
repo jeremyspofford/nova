@@ -1,0 +1,165 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ final M1: dual native/image win32-x64 targets refuse K3s before tools (57.728928ms)
+✔ final M1: dual native/image darwin-arm64 targets refuse K3s before tools (12.456865ms)
+✖ final M1: dual native/image preferred and floating placement choose eligible Linux over a larger native host (154.023465ms)
+✖ trusted topology preserves independent node, readiness, workload and control-plane ages; GET never mutates (4980.721045ms)
+✖ final I1: failed previews and retained or removed readiness cannot corrupt healthy live topology (4797.181254ms)
+✖ final I1: readiness fallback belongs only to the current assigned candidate and retains its age (1367.863695ms)
+✖ final I2: retired history at capacity refuses admission before effects and stays observable (8270.2093ms)
+✖ final I2: active resources at capacity refuses admission before effects and stays observable (8155.315968ms)
+✖ final I2: simulator prepare independently rejects a racing capacity overflow before commit (4260.80301ms)
+✖ final I2: simulator prepare-workload independently rejects a racing capacity overflow before commit (4237.063651ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 2
+ℹ fail 8
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 25303.60782
+
+✖ failing tests:
+
+test at tests/core/k3s-driver.test.ts:103:1
+✖ final M1: dual native/image preferred and floating placement choose eligible Linux over a larger native host (154.023465ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + {
+  +   digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  +   repository: 'example/echo'
+  + }
+  - 'example/echo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/tests/core/k3s-driver.test.ts:118:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { repository: 'example/echo', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+    expected: 'example/echo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/k3s-operations.test.ts:358:1
+✖ trusted topology preserves independent node, readiness, workload and control-plane ages; GET never mutates (4980.721045ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'unknown'
+  - 'healthy'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/tests/core/k3s-operations.test.ts:381:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'unknown',
+    expected: 'healthy',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/k3s-operations.test.ts:874:1
+✖ final I1: failed previews and retained or removed readiness cannot corrupt healthy live topology (4797.181254ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'unknown'
+  - 'healthy'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/tests/core/k3s-operations.test.ts:886:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'unknown',
+    expected: 'healthy',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/k3s-operations.test.ts:924:1
+✖ final I1: readiness fallback belongs only to the current assigned candidate and retains its age (1367.863695ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'unknown'
+  - 'healthy'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/tests/core/k3s-operations.test.ts:931:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'unknown',
+    expected: 'healthy',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/k3s-review.test.ts:317:41
+✖ final I2: retired history at capacity refuses admission before effects and stays observable (8270.2093ms)
+  AssertionError [ERR_ASSERTION]: known admission refusal must not be reported as unknown completion
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/tests/core/k3s-review.test.ts:334:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'The cluster operation failed or its completion is unknown. Refresh before any new action.',
+    expected: /capacity/i,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/core/k3s-review.test.ts:317:41
+✖ final I2: active resources at capacity refuses admission before effects and stays observable (8155.315968ms)
+  AssertionError [ERR_ASSERTION]: known admission refusal must not be reported as unknown completion
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/tests/core/k3s-review.test.ts:334:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'The cluster operation failed or its completion is unknown. Refresh before any new action.',
+    expected: /capacity/i,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/core/k3s-review.test.ts:353:67
+✖ final I2: simulator prepare independently rejects a racing capacity overflow before commit (4260.80301ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/tests/core/k3s-review.test.ts:368:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /capacity/i,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests/core/k3s-review.test.ts:353:67
+✖ final I2: simulator prepare-workload independently rejects a racing capacity overflow before commit (4237.063651ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/tests/core/k3s-review.test.ts:368:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /capacity/i,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

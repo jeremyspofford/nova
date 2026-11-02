@@ -1,0 +1,32 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"planOk":true,"refused":[],"calls":0}
+✖ final review: native artifact availability must not make a Windows node eligible for K3s (11.180062ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 332.047878
+
+✖ failing tests:
+
+test at .superpowers/sdd/M10j/task-5-review-adversarial.test.ts:137:1
+✖ final review: native artifact availability must not make a Windows node eligible for K3s (11.180062ms)
+  AssertionError [ERR_ASSERTION]: K3s must plan the image, whose Windows target is ineligible
+
+  true !== false
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/.superpowers/sdd/M10j/task-5-review-adversarial.test.ts:145:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

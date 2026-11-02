@@ -1,0 +1,38 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ topology diagnostics: chromium records failures without suppressing device errors and retains navigation-request sequences (581.213948ms)
+✔ topology diagnostics: webkit records failures without suppressing device errors and retains navigation-request sequences (647.11008ms)
+✖ topology diagnostics: bounded output redacts URL credentials and opaque URLs, and disposal detaches all listeners (30001.340406ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 1
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 31447.782916
+
+✖ failing tests:
+
+test at tests/ui/topology-diagnostics.test.ts:8:3
+✖ topology diagnostics: chromium records failures without suppressing device errors and retains navigation-request sequences (581.213948ms)
+  AssertionError [ERR_ASSERTION]: browser error codes are diagnostic evidence, not opaque URLs
+  + actual - expected
+
+  + '[opaque-url]'
+  - 'net::ERR_ABORTED'
+
+      at TestContext.<anonymous> (file:///work/tests/ui/topology-diagnostics.test.ts:47:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '[opaque-url]',
+    expected: 'net::ERR_ABORTED',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ui/topology-diagnostics.test.ts:59:1
+✖ topology diagnostics: bounded output redacts URL credentials and opaque URLs, and disposal detaches all listeners (30001.340406ms)
+  'test timed out after 30000ms'
+no-Kubernetes tripwire: never fired

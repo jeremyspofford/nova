@@ -1,0 +1,21 @@
+# Inert defaults: the driver supplies validated JSON values. No image or pods by default.
+{
+  "namespace": "nova-services",
+  "service": {
+    "identity": "unconfigured",
+    "name": "service-c7f444514bb1cb2e4c041f2cc78fe0efe713b08d",
+    "selector": "selector-f2f5dabdac524dde2e80cd4d13a94b5664cd235f",
+    "ports": [
+      {
+        "name": "api",
+        "port": 11434
+      }
+    ]
+  },
+  "live": null,
+  "stableSelector": {
+    "nova/service": "selector-f2f5dabdac524dde2e80cd4d13a94b5664cd235f",
+    "nova/version": "unselected-2c20bf07278a497eeca9046cbafa6eaab82a6136"
+  },
+  "versions": []
+}

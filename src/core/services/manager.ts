@@ -21,6 +21,7 @@ import { sameServiceExpected, SERVICE_CHANGED, type ServiceExpectedState } from 
 import type { ServicePolicy } from './topology.ts';
 import type { Outcome, Plan, Say, ServiceDriver, ServiceStatus } from './driver.ts';
 import { resolvePlacement, type PlacementDevice, type Resolution } from './placement.ts';
+import { K3S_DRIVER_NAME } from './k3s/driver.ts';
 
 export interface ManagerOptions {
   // The registry's folder: <dir>/<service>/<version>.json.
@@ -83,14 +84,14 @@ export class ServiceManager {
     }
     let first: { plan: Plan; driver: ServiceDriver } | null = null;
     for (const driver of this.drivers) {
-      if (driver === this.#remote) continue;
+      if (driver === this.#remote || driver.name === K3S_DRIVER_NAME) continue;
       if (!driver.available().ok) continue;
       const plan = driver.plan(v.def);
       if (plan.ok) return { ok: true, def: v.def, plan, driver };
       first ??= { plan, driver };
     }
     if (first) return { ok: true, def: v.def, ...first };
-    const local = this.drivers.filter((d) => d !== this.#remote);
+    const local = this.drivers.filter((d) => d !== this.#remote && d.name !== K3S_DRIVER_NAME);
     if (!local.length) return { ok: false, problems: ['It would run on the hub. The hub runs its own services under its supervisor (the nova services command); here, only services placed on your other devices are deployed.'] };
     return { ok: false, problems: local.map((d) => `${d.name}: ${d.available().said}`) };
   }

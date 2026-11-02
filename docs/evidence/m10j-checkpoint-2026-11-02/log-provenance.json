@@ -1,0 +1,224 @@
+[
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-4-focused-final.txt",
+    "raw_sha256": "5620c391f8a4be05fbc799a7971a010186ddb9011720c047a408c2533ccfb1f8",
+    "public_sha256": "5620c391f8a4be05fbc799a7971a010186ddb9011720c047a408c2533ccfb1f8",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-4-typecheck-final.txt",
+    "raw_sha256": "bc64fea1132b63bbe5b76358b0dbad0cf24988dad08de3ac260ec7e6cd74305d",
+    "public_sha256": "bc64fea1132b63bbe5b76358b0dbad0cf24988dad08de3ac260ec7e6cd74305d",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-source-guard-green.txt",
+    "raw_sha256": "a57a3572c089012e79464236ec247afd74c5860dec0b0f40f10fb7686b8af96d",
+    "public_sha256": "a57a3572c089012e79464236ec247afd74c5860dec0b0f40f10fb7686b8af96d",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-source-guard-affected.txt",
+    "raw_sha256": "747338c22fd4406c18b62aa4538bc8bced215e453eb5fd38f201153f62136748",
+    "public_sha256": "747338c22fd4406c18b62aa4538bc8bced215e453eb5fd38f201153f62136748",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-source-guard-typecheck.txt",
+    "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "public_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-source-guard-modules.txt",
+    "raw_sha256": "2f463e9ecaababa7ac6e95aed3873a3e5bda113d1feb2bd6e24d60e440bcf91c",
+    "public_sha256": "2f463e9ecaababa7ac6e95aed3873a3e5bda113d1feb2bd6e24d60e440bcf91c",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-main-282-typecheck.txt",
+    "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "public_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-main-282-browser.txt",
+    "raw_sha256": "d16a009a01820cfdf8375ad20d2a4140bf7ac603e86c31d4850c2fb065ea9c5e",
+    "public_sha256": "d16a009a01820cfdf8375ad20d2a4140bf7ac603e86c31d4850c2fb065ea9c5e",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-review-adversarial.txt",
+    "raw_sha256": "d649f77c544652d175d567214ac27c22666517b8533507db49fc0010f7d632a3",
+    "public_sha256": "cdd065235e0aa0114ce35e38ca3d45015611cec919a03c69253987c6a4558736",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-review-retention-live.txt",
+    "raw_sha256": "05d265847f995564f7510b72611e0442573cf39abf05aa188690cc82d1105a70",
+    "public_sha256": "8d5368863d9df3270f2426522d3344aaf606b181f35cd180cbafd58ec5855f29",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-review-platform.txt",
+    "raw_sha256": "62238195d1cd2c10b3db7cec18f322560bc9913615bd54cc13b6fcd5c08cf95a",
+    "public_sha256": "5a4a6ee4c9254e9b0c9a2ec8840d840a4d2a28fac171ee160422cc449ff898d1",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-red.txt",
+    "raw_sha256": "e2e9d5313d71e192ff625f01c6352e516136fc5556923392aff5285b6c5cf916",
+    "public_sha256": "280ac7958955c8114deb547b70f534828973787c3afd9a5955a8ec932838bab9",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-platform-red.txt",
+    "raw_sha256": "8cf8c524c5bbfd54fba605fee86e420d233c6558838de1781001eea91fedc6e4",
+    "public_sha256": "4c43f05318e2c8881e49f71ac02dffbca3bd3c4abdfeca9b4bae4017ecba7c58",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-network-red.txt",
+    "raw_sha256": "a41e655e1f52cfc28e1c2fadb1bfd1f715512ea9b60784a81570b73e128584c9",
+    "public_sha256": "76579ab87a09893e3c8d19a0652a41b0c1b1cd67871d7c20a655d575da52acb7",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-stopped-live-proven-red.txt",
+    "raw_sha256": "372085d01a21520eac4ac84fd4b541f82f90fa905a78f790d0dbfc987326ab11",
+    "public_sha256": "b7a67789966832bc4c385b62b1fe0f7767820e853fd2004d346164f900c02657",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-capacity-registry-red.txt",
+    "raw_sha256": "2e319eb69b9d4ed24843d04472312f3cd694ced98b4985e0e12137379cfc649a",
+    "public_sha256": "f86490d9381affd2748ba2207c43754f59ccf55eea6a2f5474273423dff2b3af",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-stopped-healthy-red.txt",
+    "raw_sha256": "a9ea38dae49b7ab74c88068d6424d4f63e3c4d74abef40da3937b1e71d63213d",
+    "public_sha256": "9ddc703bb7a2387db4b2f91c7f7529a2135efa1b3a342f863df0c402e255ebf7",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-green-complete.txt",
+    "raw_sha256": "83e629617ba6f4344299dee9cd611de0859c7bd70395ef89c338a15bebaabdff",
+    "public_sha256": "83e629617ba6f4344299dee9cd611de0859c7bd70395ef89c338a15bebaabdff",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-covering.txt",
+    "raw_sha256": "94562500394c0f2a5fba28d09cbf4a3adebd5c6048e431c105384e34f07aa374",
+    "public_sha256": "94562500394c0f2a5fba28d09cbf4a3adebd5c6048e431c105384e34f07aa374",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-operations-final.txt",
+    "raw_sha256": "20f94f07ad39ba09a9084de31d541bafdd66f0dd7ba070c6338d732512e1bc4c",
+    "public_sha256": "20f94f07ad39ba09a9084de31d541bafdd66f0dd7ba070c6338d732512e1bc4c",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-boundaries-final.txt",
+    "raw_sha256": "eaa3406300f677e0f6b87476c32d0835c32f81ad92f9a0e8787f5c479827f5c7",
+    "public_sha256": "eaa3406300f677e0f6b87476c32d0835c32f81ad92f9a0e8787f5c479827f5c7",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-typecheck-complete.txt",
+    "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "public_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-rereview-candidate.txt",
+    "raw_sha256": "2875f971c60d2e4f1f7f1b41a5088eda6c67a9a16f74a69e7293c469183866b0",
+    "public_sha256": "2875f971c60d2e4f1f7f1b41a5088eda6c67a9a16f74a69e7293c469183866b0",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-r1-fix-red.txt",
+    "raw_sha256": "acb053ea4290ebce230a967343a1260ef2c8054726f457567d1e9cd62c9a7f44",
+    "public_sha256": "14141a31f35d5080b44436bd97ab3f31ef9a7d8e9854f8fb44ca38af3d2626f6",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-r1-fix-green.txt",
+    "raw_sha256": "abb331fabd2b7d9946dbbef64b78e15e7d5e870f5b90b1e9593ba352237ae684",
+    "public_sha256": "abb331fabd2b7d9946dbbef64b78e15e7d5e870f5b90b1e9593ba352237ae684",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-r1-fix-operations.txt",
+    "raw_sha256": "872b359b4aa50b8c6ccaf81fdd3a7dfafa713f799c3ffa891138374f10cb652b",
+    "public_sha256": "872b359b4aa50b8c6ccaf81fdd3a7dfafa713f799c3ffa891138374f10cb652b",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-r1-fix-boundaries.txt",
+    "raw_sha256": "b9bfc32534f40da10e84bbde6e81a441b295f833bd988c7e30469245c7bf8347",
+    "public_sha256": "b9bfc32534f40da10e84bbde6e81a441b295f833bd988c7e30469245c7bf8347",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-r1-fix-typecheck.txt",
+    "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "public_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-ui-diagnostic-v1.txt",
+    "raw_sha256": "cd7293b0f874a4f2f71e5490750360a0c63f7122c263a9fe32b904e6dc1d4d65",
+    "public_sha256": "ed31fab4b953f1a37bbb0c961118df7518bba630b5ec0524efd287a3153de1ea",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-ui-diagnostic-v2.txt",
+    "raw_sha256": "f23461a743a64526b39201bc85b7553f1a9c452f8efe6d7b1ba47b7cc1ec58cd",
+    "public_sha256": "f23461a743a64526b39201bc85b7553f1a9c452f8efe6d7b1ba47b7cc1ec58cd",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-ui-ordinary-diagnostic.txt",
+    "raw_sha256": "bd5b9e3763a33252e6c43fd33c82a02267eaf96165d180e51a06375ab491b92d",
+    "public_sha256": "bd5b9e3763a33252e6c43fd33c82a02267eaf96165d180e51a06375ab491b92d",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-ui-observer-red.txt",
+    "raw_sha256": "eccfbe725328ccf80d2d76b5941295ef895ed93ee88e547fae7c605e32ecdc54",
+    "public_sha256": "d861bc8b113bfc834300860eccb66c6dfddf8d5a1bd4233e4663f3dc55b73a1a",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-ui-observer-errorcode-red.txt",
+    "raw_sha256": "14d71574571e473edb0208c70df7333ef22083a56eb680edcdef4d575f9fa6da",
+    "public_sha256": "6f7e702478792dd9e8773d06364b3cd6f599e0b0a3dc189e385b5273e944f7be",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-ui-observer-prefix-red.txt",
+    "raw_sha256": "4ad3c0aa446301a0f5e81dc1f959fd3f1d9347dd751d02d5b292792389b300d8",
+    "public_sha256": "4ad3c0aa446301a0f5e81dc1f959fd3f1d9347dd751d02d5b292792389b300d8",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-ui-observer-covering.txt",
+    "raw_sha256": "2c076d7d2ec69ddca23f173ca058aeda57832459d3d4765c07bc6ee74c09ec9b",
+    "public_sha256": "2c076d7d2ec69ddca23f173ca058aeda57832459d3d4765c07bc6ee74c09ec9b",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-ui-observer-covering-final-2.txt",
+    "raw_sha256": "2c76cf2f4454f0416b83418fe22b3f5c9c972aa07c56dd0813259c82d519b6a0",
+    "public_sha256": "2c76cf2f4454f0416b83418fe22b3f5c9c972aa07c56dd0813259c82d519b6a0",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-ui-observer-types-final-3.txt",
+    "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "public_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "normalization": "trailing whitespace only"
+  }
+]

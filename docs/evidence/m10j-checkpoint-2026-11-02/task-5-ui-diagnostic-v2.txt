@@ -1,0 +1,14 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"mode":"hard-navigation","captured":4,"paths":["/design-system.css?device=ui-test-3t05lgz2","/api/v1/design-systems","/api/v1/design-systems/active?device=ui-test-3t05lgz2","/api/v1/profile"],"documents":["http://127.0.0.1:44813/topology","http://127.0.0.1:44813/topology"],"failed":[{"url":"http://127.0.0.1:44813/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44813/design-system.css?device=ui-test-3t05lgz2","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44813/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44813/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44813/api/v1/design-systems/active?device=ui-test-3t05lgz2","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44813/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}],"consoles":[],"errors":[]}
+✔ controlled WebKit theme response disposal: hard-navigation (1749.443287ms)
+{"mode":"spa-control","captured":4,"paths":["/design-system.css?device=ui-test-3j3berhk","/api/v1/design-systems","/api/v1/design-systems/active?device=ui-test-3j3berhk","/api/v1/profile"],"documents":["http://127.0.0.1:46345/topology"],"failed":[],"consoles":[],"errors":[]}
+✔ controlled WebKit theme response disposal: spa-control (1280.186585ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3483.780833
+no-Kubernetes tripwire: never fired

@@ -37,6 +37,7 @@ import { validate } from './services/definition.ts';
 import { validServiceExpected } from './services/expected.ts';
 import { buildTopology, supervisorServices, type ClusterObservation, type MachineInput } from './services/topology.ts';
 import { DeviceWorkloads } from './services/workloads.ts';
+import { K3sOperations, type K3sOptions } from './services/k3s/operations.ts';
 import { ServiceManager } from './services/manager.ts';
 import { CaptureSync } from './capture/sync.ts';
 import { APPROVER_ONLY, Access, allows, loopbackAddress, sessionCookie, type Listener, type MeshListenerInfo, type Principal } from './mesh/access.ts';
@@ -241,6 +242,7 @@ export interface CoreOptions {
   // The supervisor that started this server, when one did (resilience/link.ts: ipcLink).
   supervisor?: SupervisorLink | null;
   // Trusted adapter only; no cluster is invented or contacted when absent.
+  k3s?: K3sOptions;
   topologyCluster?: () => ClusterObservation | null | Promise<ClusterObservation | null>;
   // Onboarding (M10f): a stand-in OS detection (NOVA_DETECT_OS), discovery's transport (stand-ins on
   // loopback in tests; the real one sends one multicast query, only when the person asks), and the
@@ -569,15 +571,26 @@ export function createCore(o: CoreOptions) {
   // Networking through chat (M10d): snapshot and diff (tier 1), apply (tier 3) after a checkpoint,
   // then the dead-man's switch on the device mesh: no contact from the person's devices within the
   // window (mesh.contact_window_s), and Nova puts the snapshot back by itself.
+  let k3s: K3sOperations | null = null;
+  const clusterNetworkKey = Symbol('cluster-network-origin');
   const network = new Network({
     db, log, home: o.home, ledger, verifier, vault, devices, now, privacy: () => profile.privacyDefault(),
     checkpoint: (reason) => checkpoints.auto(reason),
     windowS: () => { const v = profile.get<number>('mesh', 'contact_window_s'); return typeof v === 'number' ? v : 300; },
     contactKinds: () => profile.get<unknown>('mesh', 'contact_kinds'),
     ...(o.network ?? {}),
+    clusterTarget: id => k3s?.networkTarget(id) ?? null,
+    clusterAuthority: { key: clusterNetworkKey, check: (target, binding, restore) => {
+      if (!k3s) throw new CoreError('conflict', 'Cluster network authority is unavailable.');
+      k3s.checkNetworkAuthority(target, binding, restore);
+    } },
     notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'network', name: 'Network', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('network', 'Nova couldn’t tell you about a network change.', { error: (e as Error).message })); },
   });
   ledger.workers.set(network.worker.id, network.worker);
+  k3s = o.k3s ? new K3sOperations({ ...o.k3s, home: o.home, ledger, verifier, network, devices, now, networkKey: clusterNetworkKey,
+    placement: () => placementDevicesNow(), activeHub: () => role.role() === 'hub' && devices.state().hub_id === meshIdentity.id,
+  }) : null;
+  if (k3s) ledger.workers.set(k3s.worker.id, k3s.worker);
   // Every forget reaches each checkpoint (and a restore that is staged).
   backups.also((table, ids, words) => checkpoints.forget(table, ids, words));
   // The change pipeline and the foundry (M7a): changes to Nova go through gates, never live edits.
@@ -1252,7 +1265,15 @@ export function createCore(o: CoreOptions) {
       method: 'GET', path: '/services/topology', summary: 'One observed topology snapshot, safe version policy and matching Mermaid text.',
       handle: async () => {
         let cluster: ClusterObservation | null = null, cluster_error = false;
-        try { cluster = await o.topologyCluster?.() ?? null; } catch { cluster_error = true; }
+        try { cluster = await k3s?.collect() ?? null; } catch { cluster_error = true; }
+        try {
+          const other = await o.topologyCluster?.();
+          if (other && !cluster) cluster = other;
+          else if (other && cluster) {
+            if (Array.isArray(other.machines)) cluster = { machines: [...cluster.machines, ...other.machines] };
+            else cluster_error = true;
+          }
+        } catch { cluster_error = true; }
         const captured_at = now().toISOString();
         const registry = devices.list();
         const canMutate = role.role() === 'hub' && devices.state().hub_id === meshIdentity.id;
@@ -1525,6 +1546,7 @@ export function createCore(o: CoreOptions) {
     ...infraRoutes(infra),
     // ---- networking through chat (M10d) ----
     ...networkRoutes(network),
+    ...(k3s?.routes() ?? []),
     // ---- browser work with takeover (M5 plan §3) ----
     ...browserRoutes(browser, {
       home: o.home,
@@ -1637,7 +1659,7 @@ export function createCore(o: CoreOptions) {
 
   return {
     self,
-    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network, k3s,
     ingest, vault, connectors, capture, models, changes,
     // The Decision Service (DS1): its view of the seats, a refresh, how a template stands, and
     // asking for a template. Never a seat: nothing reaches a decision model except through it.
@@ -1729,6 +1751,7 @@ export function createCore(o: CoreOptions) {
       computer.close();
       coding.close();
       network.close();
+      await k3s?.close();
       await capture.stop();
       await Promise.race([ticking.then(() => ledger.idle()), new Promise((r) => setTimeout(r, 2000).unref())]);
       db.close();

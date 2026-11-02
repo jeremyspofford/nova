@@ -1,0 +1,25 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"mode":"hard-navigation","captured":4,"paths":["http://127.0.0.1:44735/design-system.css?device=ui-test-rm8nf1v0","http://127.0.0.1:44735/api/v1/design-systems","http://127.0.0.1:44735/api/v1/design-systems/active?device=ui-test-rm8nf1v0","http://127.0.0.1:44735/api/v1/profile"],"documents":["http://127.0.0.1:44735/topology","http://127.0.0.1:44735/topology"],"failed":[{"url":"http://127.0.0.1:44735/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44735/api/v1/design-systems/active?device=ui-test-rm8nf1v0","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44735/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44735/design-system.css?device=ui-test-rm8nf1v0","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44735/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44735/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}],"consoles":[],"errors":[]}
+✔ controlled WebKit theme response disposal: hard-navigation (2228.965627ms)
+✖ controlled WebKit theme response disposal: spa-control (30896.793955ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 33718.073146
+
+✖ failing tests:
+
+test at .superpowers/sdd/M10j/task-5-ui-diagnostic.test.ts:6:65
+✖ controlled WebKit theme response disposal: spa-control (30896.793955ms)
+  locator.click: Timeout 30000ms exceeded.
+  Call log:
+    - waiting for locator('#rail [data-dest="settings"]')
+
+      at TestContext.<anonymous> (/work/.superpowers/sdd/M10j/task-5-ui-diagnostic.test.ts:26:60) {
+    name: 'TimeoutError'
+  }
+no-Kubernetes tripwire: never fired
