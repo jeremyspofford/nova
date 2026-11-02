@@ -52,10 +52,7 @@ metadata:
     nova/soak-seconds: {{ .soakSeconds | toJson | toJson }}
 spec:
   replicas: {{ .replicas }}
-  {{- if .state }}
-  strategy:
-    type: Recreate
-  {{- end }}
+  strategy: {{ .strategy | toJson }}
   selector:
     matchLabels: {{ .selector | toJson }}
   template:

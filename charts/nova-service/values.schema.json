@@ -92,7 +92,8 @@
       "properties": {
         "name": {
           "type": "string",
-          "pattern": "^[a-z](?:[a-z0-9-]{0,13}[a-z0-9])?$"
+          "pattern": "^[a-z]([a-z0-9]|-[a-z0-9])*$",
+          "maxLength": 15
         },
         "port": {
           "type": "integer",
@@ -235,7 +236,8 @@
                 },
                 "port": {
                   "type": "string",
-                  "pattern": "^[a-z](?:[a-z0-9-]{0,13}[a-z0-9])?$"
+                  "pattern": "^[a-z]([a-z0-9]|-[a-z0-9])*$",
+                  "maxLength": 15
                 },
                 "scheme": {
                   "enum": [
@@ -536,6 +538,21 @@
         "networkPolicyName": {
           "type": "string",
           "pattern": "^network-[0-9a-f]{40}$"
+        },
+        "strategy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "Recreate",
+                "RollingUpdate"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ]
         }
       },
       "required": [
@@ -558,7 +575,8 @@
         "alongside",
         "egress",
         "soakSeconds",
-        "networkPolicyName"
+        "networkPolicyName",
+        "strategy"
       ]
     }
   }

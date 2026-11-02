@@ -20,6 +20,7 @@ export interface K3sVersionValues {
   networkPolicyName: string;
   selector: K3sSelector;
   replicas: number;
+  strategy: { type: 'Recreate' | 'RollingUpdate' };
   image: { repository: string; digest: string };
   ports: Port[];
   probe: { httpGet: { path: string; port: string; scheme: 'HTTP' }; periodSeconds: number };
@@ -44,7 +45,7 @@ export interface K3sChartValues {
 }
 
 const DNS = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-const PORT = /^[a-z](?:[a-z0-9-]{0,13}[a-z0-9])?$/;
+const PORT = /^[a-z]([a-z0-9]|-[a-z0-9])*$/;
 const REPOSITORY = /^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[a-z0-9_][a-z0-9_.-]{0,127})?$/;
 const LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,61}[A-Za-z0-9])?$/;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) && [null, Object.prototype].includes(Object.getPrototypeOf(value));
@@ -91,7 +92,7 @@ export function buildK3sValues(definitions: readonly ServiceDefinition[], contex
     const at = def.artifact.image.lastIndexOf('@');
     const repository = def.artifact.image.slice(0, at);
     if (repository.length > 255 || !REPOSITORY.test(repository)) throw new Error('The image repository cannot be rendered as a container image.');
-    if (def.ports.some((port) => !PORT.test(port.name) || port.port < 1024)) throw new Error('A port cannot be rendered safely as a Kubernetes named port.');
+    if (def.ports.some((port) => !PORT.test(port.name) || port.name.length > 15 || port.port < 1024)) throw new Error('A port cannot be rendered safely as a Kubernetes named port.');
     if (def.os_permissions.length) throw new Error('OS permissions cannot be rendered safely as a pod.');
     if (def.alongside === 'copy' || def.alongside === 'shadow') throw new Error('K3s cannot provide copy or shadow alongside semantics.');
     if (def.egress === 'local') throw new Error('Local egress needs an explicit network policy capability.');
@@ -131,6 +132,7 @@ export function buildK3sValues(definitions: readonly ServiceDefinition[], contex
     return {
       identity: def.version, name: token('deployment', def.service, def.version), previewName: token('preview', def.service, def.version), networkPolicyName: token('network', def.service, def.version),
       selector: { 'nova/service': serviceSelector, 'nova/version': token('version', def.service, def.version) }, replicas,
+      strategy: { type: def.alongside === 'none' || def.state ? 'Recreate' : 'RollingUpdate' },
       image: { repository, digest: def.artifact.image.slice(at + 1) },
       ports: def.ports.map((p) => ({ name: p.name, port: p.port })),
       probe: { httpGet: { path: def.health.http, port: def.ports[0]!.name, scheme: 'HTTP' }, periodSeconds: def.health.every_s },
@@ -141,6 +143,7 @@ export function buildK3sValues(definitions: readonly ServiceDefinition[], contex
       alongside: def.alongside, egress: def.egress, soakSeconds: def.soak_s ?? null,
     };
   });
+  if (rendered.some((v) => v.alongside === 'none' && v.replicas > 0) && rendered.reduce((sum, v) => sum + v.replicas, 0) > 1) throw new Error('An active alongside none version permits at most one desired instance across all versions.');
   // A single local-path claim has one size and one pinned device, including across stopped versions.
   const claims = new Map<string, { signature: string; writers: number }>();
   for (const v of rendered) if (v.state) {

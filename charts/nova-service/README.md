@@ -9,8 +9,16 @@ or pods, and a stable Service whose selector matches nothing. The driver supplie
 Each retained version has one Deployment and preview ClusterIP Service. The stable ClusterIP
 Service selects exactly the explicitly live version; `live: null` uses a domain-separated token
 that no version receives. Kept versions and `alongside: none` candidates have zero desired
-replicas. Soak seconds are descriptive metadata; the driver owns expiration and removal.
-Version port lists must agree so the public contract stays stable.
+replicas. An active `alongside: none` version permits at most one aggregate desired instance
+across all versions, including floating replicas and explicit overrides; conflicting counts refuse
+instead of being clamped. Every `none` Deployment uses `Recreate`, including stateless workloads
+whose resolved placement changes. Stateless full deployments explicitly use `RollingUpdate`.
+The driver must observe all old instances stopped before starting a replacement; desired counts
+and `Recreate` do not prove runtime singleton exclusion. Soak seconds are descriptive metadata;
+the driver owns expiration and removal.
+Version port lists must agree so the public contract stays stable. Named ports start with a lowercase
+letter, end in a letter/digit, have at most 15 characters, and contain no adjacent hyphens;
+this K3s-specific restriction does not change the generic/native definition validator.
 
 Names are domain-separated SHA256 tokens retaining 160 bits: hash the UTF-8 JSON array
 `[kind, service, version]`, using compact JSON, and prefix the first 40 lowercase hex digits with

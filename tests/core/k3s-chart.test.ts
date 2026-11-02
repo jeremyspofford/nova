@@ -97,7 +97,7 @@ const literalValues = {
   versions: [{
     identity: '1.4.2', name: 'deployment-dd330cc4d8b63dbdbd236b95606c27779999a6ba', previewName: 'preview-8c280df3ddbe85755210f65e314093532e2b306c', networkPolicyName: 'network-6f133be8f2240420c4cb512c96a76e713014014c',
     selector: { 'nova/service': 'selector-2d571c62ef00c5813578d5dd8b5e52396719ade6', 'nova/version': 'version-5e5b18e3b3d6153fa86ba4dfdd722b766b8d58ca' },
-    replicas: 1, image: { repository: 'registry.example/runtime', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+    replicas: 1, strategy: { type: 'RollingUpdate' }, image: { repository: 'registry.example/runtime', digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
     ports: [{ name: 'api', port: 11434 }], probe: { httpGet: { path: '/api/version', port: 'api', scheme: 'HTTP' }, periodSeconds: 30 },
     placement: { mode: 'pinned', device: 'hub-one', roles: ['compute'], needs: { gpu_vram_gb: 8 }, failover: null, allowedDevices: [] },
     nodeSelector: { 'kubernetes.io/os': 'linux', 'nova/role-compute': 'true', 'nova/device': 'hub-one' },
@@ -124,7 +124,7 @@ test('repository chart has closed local schema and fixed namespace, Linux, PVC, 
   assert.equal(schema.additionalProperties, false);
   const source = chart('templates/workloads.yaml');
   assert.match(chart('Chart.yaml'), /name: nova-service/);
-  for (const needle of ['.Release.Namespace', '.Values.namespace', 'kind: Deployment', 'kind: Service', 'stableSelector', 'previewName', 'readinessProbe', 'livenessProbe', 'runAsNonRoot', 'allowPrivilegeEscalation: false', 'RuntimeDefault', 'type: Recreate', 'persistentVolumeClaim', 'requiredDuringSchedulingIgnoredDuringExecution', 'preferredDuringSchedulingIgnoredDuringExecution', 'podAntiAffinity']) assert.ok(source.includes(needle), needle);
+  for (const needle of ['.Release.Namespace', '.Values.namespace', 'kind: Deployment', 'kind: Service', 'stableSelector', 'previewName', 'readinessProbe', 'livenessProbe', 'runAsNonRoot', 'allowPrivilegeEscalation: false', 'RuntimeDefault', 'strategy: {{ .strategy | toJson }}', 'persistentVolumeClaim', 'requiredDuringSchedulingIgnoredDuringExecution', 'preferredDuringSchedulingIgnoredDuringExecution', 'podAntiAffinity']) assert.ok(source.includes(needle), needle);
   const storage = chart('templates/storage.yaml');
   assert.match(storage, /storageClassName: local-path/);
   assert.match(storage, /ReadWriteOnce/);
@@ -141,12 +141,41 @@ test('repository chart has closed local schema and fixed namespace, Linux, PVC, 
 // Test-only evaluator for the exact local draft-07 vocabulary used by this schema. This checks
 // data/schema drift; it does not stand in for a Helm process or Kubernetes API validation.
 type Schema = { [key: string]: unknown };
+// Keywords below are the complete supported constraint vocabulary; these four annotations are
+// understood as inert metadata. A new semantic keyword must gain evaluator support before use.
+const SCHEMA_KEYWORDS = new Set(['$ref', 'type', 'anyOf', 'enum', 'minimum', 'maximum', 'pattern', 'minLength', 'maxLength', 'minItems', 'maxItems', 'uniqueItems', 'items', 'required', 'properties', 'additionalProperties', 'definitions']);
+const SCHEMA_ANNOTATIONS = new Set(['$schema', 'title', 'description', '$comment']);
+function schemaVocabulary(schema: Schema): void {
+  assert.ok(schema && typeof schema === 'object' && !Array.isArray(schema), 'A supported schema node is an object.');
+  for (const key of Object.keys(schema)) {
+    if (!SCHEMA_KEYWORDS.has(key) && !SCHEMA_ANNOTATIONS.has(key)) throw new Error(`Unsupported schema keyword: ${key}`);
+    if (SCHEMA_ANNOTATIONS.has(key)) assert.equal(typeof schema[key], 'string', `Annotation ${key} is a string.`);
+  }
+  if (schema.$ref !== undefined) assert.match(String(schema.$ref), /^#\/definitions\/[A-Za-z]+$/);
+  // Map keys are property/definition names, not semantic keywords. Visit their schema values.
+  for (const key of ['properties', 'definitions']) if (schema[key] !== undefined) {
+    const map = schema[key];
+    assert.ok(map && typeof map === 'object' && !Array.isArray(map), `${key} is a schema map.`);
+    for (const child of Object.values(map)) schemaVocabulary(child as Schema);
+  }
+  if (schema.anyOf !== undefined) {
+    assert.ok(Array.isArray(schema.anyOf) && schema.anyOf.length > 0);
+    for (const child of schema.anyOf) schemaVocabulary(child as Schema);
+  }
+  if (schema.items !== undefined) schemaVocabulary(schema.items as Schema);
+  if (schema.additionalProperties !== undefined) assert.equal(typeof schema.additionalProperties, 'boolean', 'Only boolean additionalProperties is implemented.');
+}
 function conforms(value: unknown, schema: Schema, root: Schema): boolean {
+  schemaVocabulary(root);
+  if (schema !== root) schemaVocabulary(schema);
+  return evaluateSchema(value, schema, root);
+}
+function evaluateSchema(value: unknown, schema: Schema, root: Schema): boolean {
   if (typeof schema.$ref === 'string') {
     assert.match(schema.$ref, /^#\/definitions\/[A-Za-z]+$/);
-    return conforms(value, (root.definitions as Record<string, Schema>)[schema.$ref.slice('#/definitions/'.length)]!, root);
+    return evaluateSchema(value, (root.definitions as Record<string, Schema>)[schema.$ref.slice('#/definitions/'.length)]!, root);
   }
-  if (Array.isArray(schema.anyOf) && !schema.anyOf.some((s) => conforms(value, s as Schema, root))) return false;
+  if (Array.isArray(schema.anyOf) && !schema.anyOf.some((s) => evaluateSchema(value, s as Schema, root))) return false;
   if (Array.isArray(schema.enum) && !schema.enum.includes(value)) return false;
   const matches = (type: unknown) => type === 'null' ? value === null : type === 'array' ? Array.isArray(value) : type === 'object' ? typeof value === 'object' && value !== null && !Array.isArray(value) : type === 'integer' ? Number.isInteger(value) : typeof value === type;
   if (schema.type && !(Array.isArray(schema.type) ? schema.type : [schema.type]).some(matches)) return false;
@@ -155,14 +184,14 @@ function conforms(value: unknown, schema: Schema, root: Schema): boolean {
   if (Array.isArray(value)) {
     if ((typeof schema.minItems === 'number' && value.length < schema.minItems) || (typeof schema.maxItems === 'number' && value.length > schema.maxItems)) return false;
     if (schema.uniqueItems && new Set(value.map((v) => JSON.stringify(v))).size !== value.length) return false;
-    if (schema.items && !value.every((v) => conforms(v, schema.items as Schema, root))) return false;
+    if (schema.items && !value.every((v) => evaluateSchema(v, schema.items as Schema, root))) return false;
   }
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     const obj = value as Record<string, unknown>;
     if (Array.isArray(schema.required) && schema.required.some((k) => !Object.hasOwn(obj, k as string))) return false;
     const props = schema.properties as Record<string, Schema> | undefined;
     for (const [k, v] of Object.entries(obj)) {
-      if (props && Object.hasOwn(props, k)) { if (!conforms(v, props[k]!, root)) return false; }
+      if (props && Object.hasOwn(props, k)) { if (!evaluateSchema(v, props[k]!, root)) return false; }
       else if (schema.additionalProperties === false) return false;
     }
   }
@@ -282,4 +311,65 @@ test('cast placement results cannot contain duplicate/missing devices or contrad
   for (const result of [cast([{ id: 'a', name: 'A' }, { id: 'a', name: 'A' }]), cast([,]), cast([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }])]) assert.throws(() => build([preferred], { ...context, placements: { '1.4.2': result } }), /resolved/);
   assert.throws(() => build([definition()], { ...context, placements: { '1.4.2': { ...resolution, devices: [...resolution.devices] } } }), /pinned/);
   assert.throws(() => build([definition()], { ...context, placements: { '1.4.2': undefined as unknown as core.PlacementResolution } }));
+});
+
+test('fix1 I1: Kubernetes refuses adjacent hyphens without changing native definition validation', () => {
+  const def = definition({ ports: [{ name: 'api--http', port: 11434 }] });
+  assert.equal(core.validate(def).ok, true, 'the generic/native contract remains unchanged');
+  assert.throws(() => build([def], context), /port/);
+  for (const name of ['a', 'api-http', 'api-123-http', 'a23456789012345']) assert.equal(build([definition({ ports: [{ name, port: 11434 }] })], context).versions[0]!.probe.httpGet.port, name);
+});
+
+for (const target of ['service', 'container']) test(`fix1 I1: schema independently refuses adjacent hyphens in ${target} port list`, () => {
+  const schema = JSON.parse(chart('values.schema.json')) as Schema;
+  const values = structuredClone(literalValues);
+  if (target === 'service') values.service.ports[0]!.name = 'api--http';
+  else values.versions[0]!.ports[0]!.name = 'api--http';
+  assert.equal(conforms(values, schema, schema), false, target);
+});
+
+test('fix1 I1: schema independently refuses adjacent hyphens in HTTP probe port', () => {
+  const schema = JSON.parse(chart('values.schema.json')) as Schema;
+  const values = structuredClone(literalValues);
+  values.versions[0]!.probe.httpGet.port = 'api--http';
+  assert.equal(conforms(values, schema, schema), false);
+});
+
+test('fix1 I2: stateless none retains Recreate when resolved preferred placement changes pod inputs', () => {
+  const def = definition({ alongside: 'none', placement: { mode: 'preferred' } });
+  const resolve = (id: string): core.PlacementResolution => ({ ok: true, mode: 'preferred', devices: [{ id, name: id }], moved: false, why: 'selected', considered: [] });
+  const a = build([def], { ...context, live: def.version, placements: { [def.version]: resolve('node-a') } }).versions[0]!;
+  const b = build([def], { ...context, live: def.version, placements: { [def.version]: resolve('node-b') } }).versions[0]!;
+  assert.equal(a.state, null);
+  assert.equal(a.replicas, 1);
+  assert.equal(a.name, b.name);
+  assert.notDeepEqual(a.requiredNodeExpressions, b.requiredNodeExpressions);
+  assert.deepEqual(a.strategy, { type: 'Recreate' });
+  assert.deepEqual(b.strategy, { type: 'Recreate' });
+  assert.match(chart('templates/workloads.yaml'), /strategy: \{\{ \.strategy \| toJson \}\}/);
+  const full = build([definition()], context).versions[0]!;
+  assert.deepEqual(full.strategy, { type: 'RollingUpdate' });
+});
+
+test('fix1 I2: an active none version rejects replica and cross-version desired overlap', () => {
+  const one = definition({ alongside: 'none', placement: { mode: 'floating', replicas: 2 } });
+  assert.throws(() => build([one], { ...context, live: one.version }), /alongside none/);
+  const single = { ...one, placement: { mode: 'floating' as const } };
+  assert.throws(() => build([single], { ...context, live: single.version, replicas: { [single.version]: 2 } }), /alongside none/);
+  const candidate = definition({ version: '2.0.0' });
+  assert.throws(() => build([single, candidate], { ...context, live: single.version }), /alongside none/);
+  const stoppedCandidate = build([single, candidate], { ...context, live: single.version, replicas: { [candidate.version]: 0 } });
+  assert.deepEqual(stoppedCandidate.versions.map((v) => v.replicas), [1, 0]);
+  assert.deepEqual(build([single, candidate], { ...context, live: candidate.version, kept: [single.version] }).versions.map((v) => v.replicas), [0, 1]);
+});
+
+test('fix1 M1: the schema evaluator refuses unimplemented semantic keywords', () => {
+  const unknown: Schema = { type: 'string', minLength: 1, not: { enum: ['forbidden'] } };
+  assert.throws(() => conforms('forbidden', unknown, unknown), /unsupported.*not/i);
+});
+
+test('fix1 M1: properties/definitions names are data and understood annotations remain accepted', () => {
+  const schema: Schema = { $schema: 'http://json-schema.org/draft-07/schema#', title: 'Example', description: 'Test vocabulary', $comment: 'No network resolution', type: 'object', properties: { not: { $ref: '#/definitions/if' } }, required: ['not'], additionalProperties: false, definitions: { if: { type: 'string', minLength: 1 } } };
+  assert.equal(conforms({ not: 'literal property name' }, schema, schema), true);
+  assert.equal(conforms({ not: '' }, schema, schema), false);
 });
