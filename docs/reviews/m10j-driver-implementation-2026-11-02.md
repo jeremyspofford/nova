@@ -1,8 +1,8 @@
 # M10j Task 2 implementation report — 2026-11-02
 
-Controller gate note: independent Task2 review found one Important stale-health automatic-effects defect; Task2 is NOT accepted yet. This is the initial implementation report, retained without rewriting its historical evidence. See [independent review](m10j-driver-independent-review-2026-11-02.md).
+Controller gate note: initial independent review found one Important stale-health automatic-effects defect; fix1 at ac2ba786 is approved by [scoped rereview](m10j-driver-rereview1-2026-11-02.md). The initial report and its historical runs remain below. Task2 is accepted within the uncredentialed simulation scope; the full M10j gate remains NOT PASSED.
 
-Status: implementation and final checks complete; Task2 implementation ownership released. Final head aa78db6721462132f4348093f2923e98f6cd55b9. Baseline e72d920e193dff7e12376de7eea75e30ead4d828 remains immutable for its already-dispatched independent review; one narrow follow-up delta is recorded below. Production capability remains unavailable; this is the authorized uncredentialed simulation checkpoint only. No source push, merge, preview, credential, host Kubernetes, image, installation, external-network, cloud or owner-data action occurred.
+Status: Task2 fix round 1 is complete and ready for scoped rereview at ac2ba786505f6c3d4e837e741507449c32ce68e4. All implementation writes and checks have ended; ownership is released. Earlier source/report milestones below are retained as history, not superseding this final status.
 
 ## Source contract
 
@@ -90,3 +90,25 @@ A final self-check caught a concrete simulation bug: rollback restarted a retain
 `task-2-green-floating.log`: targeted actual-process shared apply/switch/rollback contract, canary/first-live failure, and two-node/two-replica floating rollback, 3 passed, exit 0, tripwire never fired. `task-2-floating-typecheck.log`: final `npm run typecheck`, exit 0. Diff check clean. `task-2-floating-commit.log` records the follow-up commit. The earlier 47-test focused run + final targeted replica checks cover 49 distinct focused tests; no single 49-test invocation is claimed.
 
 Review delta is precisely `e72d920e..aa78db67`. Main contract/source pins for Task3 are final head above; interrupted-canary, broker/network integration and storage limitations remain exactly as documented.
+
+## Task2 fix round 1 — Important I1: independently stale health
+
+Dispatch base: `dac0fad6b30d9bbcbe20601554ba79f1aaf82dd9` (controller documentation only; prior implementation source remained aa78db67). Follow-up source commit: `ac2ba786505f6c3d4e837e741507449c32ce68e4`. All earlier cited commits are preserved unchanged. Commit scope is exactly `src/core/services/k3s/driver.ts` and `tests/core/k3s-review.test.ts`; no controller public records, report/log workspace, credential/queue/API/schema or other-checkout edits were committed.
+
+Independent review found that `refresh()` trusted `live.health.ok` without checking its independent measurement age. A fresh control-plane snapshot carrying ten-minute-old true health could remove the only kept rollback resource; old false health could change routing through automatic rollback. The three added actual-process behavioral tests observed those wrong mutations before implementation: stale true issued `remove`, stale false issued `rollback`, and the 15001ms boundary issued `remove`. Raw RED output is retained, not reconstructed.
+
+The fix names the existing internal bound `OBSERVATION_FRESHNESS_MS = 15000` and shares it with snapshot freshness validation. Automatic rollback and kept-version removal now additionally require an independent health age in the inclusive range 0..15000ms at the time of decision. A future measurement is not current evidence, even within the existing snapshot clock-skew tolerance. Missing timestamps and unknown health cannot authorize either effect. This is an internal conservative evidence gate; no configuration/API field, owner policy or new authorization mechanism was introduced.
+
+Cached stale/future/unknown health is still returned with its actual source timestamp. The fix does not restamp, reject otherwise displayable stale measurements, fabricate health, or alter control-plane/readiness/failure provenance. The new tests assert exact health/readiness preservation and fresh snapshot time independently. Later current true evidence permits normal cleanup; false evidence exactly 15000ms old permits normal rollback. The test matrix also verifies true and false at 15001ms and 1ms in the permitted future window, plus accepted null evidence, cause zero mutations and retain live/previous/resources. Existing normal soak, shared contract and serialized/server-side CAS behavior remain covered.
+
+All following commands ran with `PATH=/home/jeremy/.local/share/mise/installs/node/26.3.1/bin:$PATH` in `/home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build`; test flags precede paths:
+
+- `sh scripts/test.sh --test-name-pattern='fix1 I1:' tests/core/k3s-review.test.ts`: 3 observed behavioral failures, exit 1, `task-2-fix1-red.log`. Outer Kubernetes tripwire never fired.
+- `sh scripts/test.sh --test-name-pattern='fix1 I1:|soak uses observed health|driver contract:|queued approved state|two driver owners|server rejects drift|default tripwire' tests/core/k3s-review.test.ts tests/core/k3s-driver.test.ts tests/core/k3s-tools.test.ts`: 10 passed, 0 failed, exit 0, `task-2-fix1-green.log`. This includes actual fake children, the unchanged shared driver contract, queued and concurrent approval-state checks, server-side drift, normal soak effects, all new regressions, and the positive nested tripwire check. Outer tripwire never fired.
+- `npm run typecheck`: exit 0, `task-2-fix1-typecheck.log`.
+- `git diff --check`: exit 0 and exact two-file stat, `task-2-fix1-diff.log`.
+- Follow-up commit output and exit 0: `task-2-fix1-commit.log`. Working tree was clean after commit.
+
+No unexplained warnings occurred. Ordinary npm command notices and asserted negative-test evidence are preserved. No broad host suite or redundant old suite was run. Existing production broker/network-authority integration, stateful/singleton refusal, and conservative interrupted-canary/WorkLedger reconciliation limits are unchanged; no real-resource proof is claimed.
+
+Final status: every Task2 fix1 source write, report write, child-process test and check has ended. Implementation ownership is explicitly released to the controller for scoped rereview. No additional implementation actions are pending.
