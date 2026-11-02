@@ -1,0 +1,58 @@
+// Navigation/readiness for the seeded fold review, owned by the tests.
+import type { Page } from 'playwright-core';
+import { still } from './support.ts';
+
+const CONTENT: Record<string, [string, string, string?]> = {
+  '/': ['home', '#home .home-cards .card'],
+  '/chat': ['chat', '#thread .turn table', 'And plan 3?'],
+  '/tasks': ['tasks', '#tasks-view .task-list', 'Save the shopping list'],
+  '/memory': ['memory', '#memory .memory-item', 'Prefers tea in the afternoon.'],
+  '/automations': ['automations', '#schedules #sc-set'],
+  '/activity': ['activity', '#activity .act-entry, #activity .act-empty'],
+  '/health': ['health', '#health-view [data-resilience]'],
+  '/settings': ['settings', '#settings-view .settings-cat'],
+  '/capture': ['capture', '#capture-view .empty-state, #capture-view .capture-card'],
+};
+
+export async function foldViewReady(page: Page, url: string) {
+  const path = new URL(url).pathname;
+  const content = CONTENT[path];
+  if (!content) throw new Error(`No fold readiness contract for ${path}`);
+  await page.waitForURL(url);
+  await page.waitForSelector('html[data-ready]', { timeout: 20_000 });
+  // The aside renders cards even before its first answers: no-skeleton alone is insufficient.
+  await page.waitForFunction(async () => {
+    const { store } = await import(String('/js/surfaces.js'));
+    return store.loaded && store.health && store.tasks.some((task: { title: string }) => task.title === 'Save the shopping list');
+  }, null, { timeout: 15_000 });
+  await page.waitForFunction(([view, selector, text]) => {
+    const root = document.querySelector<HTMLElement>(`body[data-view="${view}"]`);
+    const drawn = document.querySelector<HTMLElement>(selector!);
+    return !!root && !!drawn && drawn.checkVisibility() && (!text || root.innerText.includes(text)) && !document.querySelector('[data-skeleton], .view-waiting');
+  }, content, { timeout: 15_000 });
+  await still(page);
+}
+
+// One full boot; subsequent view changes click the app's real links/router. Repeated document
+// teardown cannot synchronize an EventSource refresh that may begin after any drain of reads.
+export async function openFoldView(page: Page, url: string) {
+  const target = new URL(url);
+  if (page.url() === 'about:blank') {
+    await page.goto(url, { waitUntil: 'load' });
+  } else {
+    if (new URL(page.url()).origin !== target.origin) throw new Error('Fold navigation must stay in the seeded app');
+    if (target.pathname === '/capture') {
+      await openFoldView(page, `${target.origin}/settings`);
+      await page.locator('#settings-nav a[href="/settings#privacy"]').click({ timeout: 15_000 });
+      await page.locator('#settings-capture a[href="/capture"]').click({ timeout: 15_000 });
+    } else {
+      const direct = page.locator(`#rail a[href="${target.pathname}"], #tabs a[href="${target.pathname}"]`).filter({ visible: true });
+      if (await direct.count()) await direct.first().click({ timeout: 15_000 });
+      else {
+        await page.locator('#more-btn').click({ timeout: 15_000 });
+        await page.locator(`#more a[href="${target.pathname}"]`).click({ timeout: 15_000 });
+      }
+    }
+  }
+  await foldViewReady(page, url);
+}
