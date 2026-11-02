@@ -236,3 +236,79 @@ test('rollback restores all observed replicas of a retained floating version', a
     assert.equal(h.read().services.echo!.versions.find(v => v.version === '1')!.replicas, 2);
   } finally { await driver.close(); await h.close(); }
 });
+
+for (const ok of [true, false]) test(`fix1 I1: fresh control-plane status with stale ${ok} health cannot authorize automatic effects`, async () => {
+  const h = await simulatedK3s();
+  let observer: K3sDriver | undefined;
+  try {
+    await livePair(h, 30); await h.driver.switch('echo', '2');
+    const original = h.driver.status('echo')[0]!;
+    let checkedAt = original.health.checked_at!;
+    h.clock.advance(600_000);
+    const tools: ClusterTools = { available: h.tools.available, execute: async (op, signal) => {
+      const snapshot = await h.tools.execute(op, signal);
+      if (op.operation === 'status') snapshot.versions.find(v => v.version === snapshot.live)!.health = { ok, checked_at: checkedAt, said: null };
+      return snapshot;
+    } };
+    observer = new K3sDriver({ ...h.options, tools });
+    const before = h.calls().length;
+    assert.equal((await observer.refresh('echo')).ok, true);
+    assert.deepEqual(h.calls().slice(before).filter(c => c.operation !== 'status'), [], 'old health cannot change routing or remove the kept resource');
+    assert.equal(await h.serving(), '2');
+    const stale = observer.status('echo')[0]!;
+    assert.deepEqual([stale.live, stale.previous], ['2', '1']);
+    assert.equal(stale.observed_at, new Date(h.clock.now()).toISOString());
+    assert.deepEqual(stale.health, { ok, checked_at: original.health.checked_at, said: null });
+    assert.deepEqual(stale.readiness, original.readiness);
+    assert.equal(stale.failure, null);
+    assert.equal(h.read().services.echo!.versions.find(v => v.version === '1')!.status, 'kept');
+
+    // The inclusive 15-second boundary is independently measured evidence, not snapshot time.
+    checkedAt = new Date(h.clock.now() - (ok ? 0 : 15_000)).toISOString();
+    if (!ok) h.change(s => { s.unhealthy = ['2']; });
+    const beforeFresh = h.calls().length;
+    assert.equal((await observer.refresh('echo')).ok, true);
+    assert.deepEqual(h.calls().slice(beforeFresh).filter(c => c.operation !== 'status').map(c => c.operation), [ok ? 'remove' : 'rollback']);
+    assert.equal(await h.serving(), ok ? '2' : '1');
+    assert.equal(observer.status('echo')[0]!.previous, null);
+  } finally { await observer?.close(); await h.close(); }
+});
+
+test('fix1 I1: stale boundary, future and absent health evidence preserve their source ages without effects', async () => {
+  const h = await simulatedK3s();
+  try {
+    await livePair(h, 30); await h.driver.switch('echo', '2');
+    h.clock.advance(600_000);
+    const originalReadiness = h.driver.status('echo')[0]!.readiness;
+    const cases = [
+      { ok: true, offset: -15_001 }, { ok: false, offset: -15_001 },
+      { ok: true, offset: 1 }, { ok: false, offset: 1 },
+      { ok: null, offset: null },
+    ];
+    for (const evidence of cases) {
+      const health = { ok: evidence.ok, checked_at: evidence.offset === null ? null : new Date(h.clock.now() + evidence.offset).toISOString(), said: null };
+      const tools: ClusterTools = { available: h.tools.available, execute: async (op, signal) => {
+        const snapshot = await h.tools.execute(op, signal);
+        if (op.operation === 'status') {
+          // Existing snapshot validation tolerates <=1s clock skew. A measurement in that
+          // permitted future window must still never authorize an automatic health effect.
+          snapshot.observed_at = new Date(h.clock.now() + Math.max(0, evidence.offset ?? 0)).toISOString();
+          snapshot.versions.find(v => v.version === snapshot.live)!.health = health;
+        }
+        return snapshot;
+      } };
+      const observer = new K3sDriver({ ...h.options, tools });
+      try {
+        const before = h.calls().length;
+        assert.equal((await observer.refresh('echo')).ok, true);
+        assert.deepEqual(h.calls().slice(before).filter(c => c.operation !== 'status'), [], JSON.stringify(evidence));
+        const status = observer.status('echo')[0]!;
+        assert.deepEqual([status.live, status.previous], ['2', '1']);
+        assert.deepEqual(status.health, health);
+        assert.deepEqual(status.readiness, originalReadiness);
+        assert.equal(status.failure, null);
+        assert.equal(await h.serving(), '2');
+      } finally { await observer.close(); }
+    }
+  } finally { await h.close(); }
+});

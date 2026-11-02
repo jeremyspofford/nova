@@ -32,6 +32,9 @@ export interface K3sDriverOptions {
 }
 const queues = new Map<string, Promise<unknown>>();
 const fail = (said: string): Outcome => ({ ok: false, said });
+// Three default polling intervals. Snapshot freshness and measured-health freshness are
+// independent; only a timely measurement may authorize automatic workload changes.
+const OBSERVATION_FRESHNESS_MS = 15_000;
 const iso = (n: number) => new Date(n).toISOString();
 const date = (v: unknown): v is string => typeof v === 'string' && Number.isFinite(Date.parse(v)) && iso(Date.parse(v)) === v;
 const safePath = (path: string) => /^\/(?!\/)[^\s\\#]*$/.test(path) && !/%(?:2f|5c|2e)/i.test(path) && !path.split(/[/?]/).includes('..');
@@ -83,7 +86,7 @@ export class K3sDriver implements ServiceDriver {
   #expected(s: ClusterSnapshot) { return { revision: s.revision, state: serviceExpected(s) }; }
   #accept(raw: ClusterSnapshot, service: string): ClusterSnapshot {
     const old = this.#cache.get(service);
-    if (!raw || raw.schema !== 1 || raw.cluster !== this.#o.cluster.id || raw.namespace !== this.#o.cluster.namespace || raw.service !== service || !validServiceExpected(serviceExpected(raw)) || !Number.isSafeInteger(raw.revision) || raw.revision < 0 || !Number.isSafeInteger(raw.sequence) || raw.sequence < 1 || !date(raw.observed_at) || Date.parse(raw.observed_at) > this.#clock.now() + 1000 || this.#clock.now() - Date.parse(raw.observed_at) > 15_000 || (old && (raw.sequence <= old.sequence || raw.revision < old.revision || raw.observed_at < old.observed_at)) || !Array.isArray(raw.versions) || raw.versions.length > 64 || new Set(raw.versions.map(v => v.version)).size !== raw.versions.length || (raw.soak_until !== null && !date(raw.soak_until)) || (raw.held !== null && (!raw.held || typeof raw.held.reason !== 'string' || !date(raw.held.at)))) throw new Error('Invalid, stale or out-of-order cluster observation.');
+    if (!raw || raw.schema !== 1 || raw.cluster !== this.#o.cluster.id || raw.namespace !== this.#o.cluster.namespace || raw.service !== service || !validServiceExpected(serviceExpected(raw)) || !Number.isSafeInteger(raw.revision) || raw.revision < 0 || !Number.isSafeInteger(raw.sequence) || raw.sequence < 1 || !date(raw.observed_at) || Date.parse(raw.observed_at) > this.#clock.now() + 1000 || this.#clock.now() - Date.parse(raw.observed_at) > OBSERVATION_FRESHNESS_MS || (old && (raw.sequence <= old.sequence || raw.revision < old.revision || raw.observed_at < old.observed_at)) || !Array.isArray(raw.versions) || raw.versions.length > 64 || new Set(raw.versions.map(v => v.version)).size !== raw.versions.length || (raw.soak_until !== null && !date(raw.soak_until)) || (raw.held !== null && (!raw.held || typeof raw.held.reason !== 'string' || !date(raw.held.at)))) throw new Error('Invalid, stale or out-of-order cluster observation.');
     for (const v of raw.versions) {
       if (!v || typeof v.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(v.version) || !statuses.has(v.status) || !Number.isInteger(v.replicas) || v.replicas < 0 || v.replicas > 64 || typeof v.ready !== 'boolean' || (v.ready && (!v.replicas || !date(v.ready_at))) || (v.ready_at !== null && (!date(v.ready_at) || v.ready_at > raw.observed_at)) || !date(v.since) || !v.health || ![true, false, null].includes(v.health.ok) || (v.health.ok !== null && !date(v.health.checked_at)) || (v.health.checked_at !== null && (!date(v.health.checked_at) || v.health.checked_at > raw.observed_at)) || !v.ports || !Object.values(v.ports).every(p => Number.isInteger(p) && p >= 1024 && p <= 65535) || !Array.isArray(v.state_refs) || v.state_refs.some(r => typeof r !== 'string')) throw new Error('Invalid cluster version observation.');
       const previous = old?.versions.find(p => p.version === v.version);
@@ -196,8 +199,10 @@ export class K3sDriver implements ServiceDriver {
       let s = await this.#read(service);
       if (s.live) {
         const live = s.versions.find(v => v.version === s.live)!;
-        if (live.health.ok === false) s = await this.#back(s, s.previous, 'Observed live health failed.');
-        else if (live.health.ok === true && s.previous && s.soak_until && Date.parse(s.soak_until) <= this.#clock.now()) {
+        const healthAge = live.health.checked_at === null ? Infinity : this.#clock.now() - Date.parse(live.health.checked_at);
+        const currentHealth = healthAge >= 0 && healthAge <= OBSERVATION_FRESHNESS_MS;
+        if (currentHealth && live.health.ok === false) s = await this.#back(s, s.previous, 'Observed live health failed.');
+        else if (currentHealth && live.health.ok === true && s.previous && s.soak_until && Date.parse(s.soak_until) <= this.#clock.now()) {
           s = await this.#mutate({ ...this.#target(service), operation: 'remove', expected: this.#expected(s), version: s.previous });
         }
       }
