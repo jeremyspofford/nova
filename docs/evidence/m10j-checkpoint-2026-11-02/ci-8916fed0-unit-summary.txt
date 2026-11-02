@@ -1,0 +1,13 @@
+2026-11-02T21:14:29.4229649Z found 0 vulnerabilities
+2026-11-02T21:14:35.6075605Z no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+2026-11-02T21:23:06.8568694Z (node:59292) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+2026-11-02T21:25:06.4088479Z (node:62830) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+2026-11-02T21:25:06.4093725Z (node:62838) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+2026-11-02T21:25:06.4100043Z ℹ tests 1735
+2026-11-02T21:25:06.4100394Z ℹ pass 1721
+2026-11-02T21:25:06.4100557Z ℹ fail 0
+2026-11-02T21:25:06.4100719Z ℹ cancelled 0
+2026-11-02T21:25:06.4100897Z ℹ skipped 14
+2026-11-02T21:25:06.4101356Z ℹ duration_ms 630771.172211
+2026-11-02T21:25:06.4101565Z no-Kubernetes tripwire: never fired
+2026-11-02T21:25:11.9900593Z found 0 vulnerabilities

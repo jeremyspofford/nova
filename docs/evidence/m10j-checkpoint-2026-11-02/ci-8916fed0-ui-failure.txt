@@ -1,0 +1,44 @@
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1375476Z ℹ tests 157
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1375937Z ℹ suites 0
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1376311Z ℹ pass 156
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1376881Z ℹ fail 1
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1377248Z ℹ cancelled 0
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1377634Z ℹ skipped 0
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1378055Z ℹ todo 0
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1378447Z ℹ duration_ms 2028974.617657
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1391434Z
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1392037Z ✖ failing tests:
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1392362Z
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1392664Z test at tests/ui/m10i-topology.test.ts:45:3
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1394249Z ✖ M10i: webkit real app, all six active themes at phone/desktop, layers, focus and exact snapshot export (14811.284321ms)
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1395381Z   AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1396054Z   + actual - expected
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1396400Z
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1397031Z   + [
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1397492Z   +   'Failed to load resource: WebKit encountered an internal error',
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1398238Z   +   'Failed to load resource: WebKit encountered an internal error',
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1398953Z   +   'Failed to load resource: WebKit encountered an internal error',
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1399656Z   +   'Failed to load resource: WebKit encountered an internal error',
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1400926Z   +   'Failed to load resource: WebKit encountered an internal error',
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1401623Z   +   'Failed to load resource: WebKit encountered an internal error',
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1402316Z   +   'Failed to load resource: WebKit encountered an internal error',
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1403014Z   +   'Failed to load resource: WebKit encountered an internal error',
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1403701Z   +   'Failed to load resource: WebKit encountered an internal error'
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1404241Z   + ]
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1404511Z   - []
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1404802Z
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1405369Z       at TestContext.<anonymous> (file:///__w/nova/nova/tests/ui/m10i-topology.test.ts:92:16)
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1406281Z       at runNextTicks (node:internal/process/task_queues:65:5)
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1407473Z       at process.processImmediate (node:internal/timers:472:9)
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1408259Z       at async Test.run (node:internal/test_runner/test:1389:7)
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1408981Z       at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1409548Z     generatedMessage: true,
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1409834Z     code: 'ERR_ASSERTION',
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1412478Z     actual: [ 'Failed to load resource: WebKit encountered an internal error', 'Failed to load resource: WebKit encountered an internal error', 'Failed to load resource: WebKit encountered an internal error', 'Failed to load resource: WebKit encountered an internal error', 'Failed to load resource: WebKit encountered an internal error', 'Failed to load resource: WebKit encountered an internal error', 'Failed to load resource: WebKit encountered an internal error', 'Failed to load resource: WebKit encountered an internal error', 'Failed to load resource: WebKit encountered an internal error' ],
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1415135Z     expected: [],
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1415411Z     operator: 'deepStrictEqual',
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1415711Z     diff: 'simple'
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1415952Z   }
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1451833Z no-Kubernetes tripwire: never fired
+UI gate (Chromium and WebKit)	Run npm run test:ui	2026-11-02T21:48:39.1614270Z ##[error]Process completed with exit code 1.
+UI gate (Chromium and WebKit)	accessibility (advisory, never fails)	2026-11-02T21:50:47.5569482Z axe-core 4.14.0, default rules, 9 views × 10 postures. **0 nodes** in violation. Advisory only: this never fails the build.

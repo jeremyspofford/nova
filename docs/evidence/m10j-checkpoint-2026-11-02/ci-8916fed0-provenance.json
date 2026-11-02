@@ -1,0 +1,24 @@
+[
+  {
+    "run": 41526385841,
+    "source_head": "8916fed0d726345ca7a9accb79012d75d87aa799",
+    "job": 125555336477,
+    "raw_file": ".superpowers/sdd/M10j/ci-final-unit-125555336477.log",
+    "raw_whole_sha256": "5bffe1871d17c839ff426f00261db6bf56cc70f707f25b054a376407501dfde2",
+    "public_excerpt": "docs/evidence/m10j-checkpoint-2026-11-02/ci-8916fed0-unit-summary.txt",
+    "public_sha256": "c2ba7645d2c1edb6b37ab0846658a271aeab417c78023f44aa3851b9b5389547",
+    "selection": "unit totals/warnings/audit/tripwire lines",
+    "normalization": "selected original lines; trailing whitespace only"
+  },
+  {
+    "run": 41526385841,
+    "source_head": "8916fed0d726345ca7a9accb79012d75d87aa799",
+    "job": 125555336561,
+    "raw_file": ".superpowers/sdd/M10j/ci-final-ui-125555336561.log",
+    "raw_whole_sha256": "c0ceac1472225c9c46d1d9478f078704150cb8afa3507bf34c9fc7d6ca5b9f45",
+    "public_excerpt": "docs/evidence/m10j-checkpoint-2026-11-02/ci-8916fed0-ui-failure.txt",
+    "public_sha256": "395d4235d251c32a30c80fc45907eaf6d2fcbc9ff538c314043bea810027922e",
+    "selection": "complete final UI summary and failure block plus axe conclusion",
+    "normalization": "selected original lines; trailing whitespace only"
+  }
+]

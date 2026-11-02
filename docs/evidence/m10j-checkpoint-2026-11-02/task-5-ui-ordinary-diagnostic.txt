@@ -1,0 +1,85 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+DOCUMENT http://127.0.0.1:44959/topology
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}}
+DOCUMENT http://127.0.0.1:44959/topology
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}
+DOCUMENT http://127.0.0.1:44959/topology
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+DOCUMENT http://127.0.0.1:44959/topology
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}
+DOCUMENT http://127.0.0.1:44959/topology
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}
+DOCUMENT http://127.0.0.1:44959/topology
+OBSERVATIONS {"size":"phone","documents":["http://127.0.0.1:44959/topology","http://127.0.0.1:44959/topology","http://127.0.0.1:44959/topology","http://127.0.0.1:44959/topology","http://127.0.0.1:44959/topology","http://127.0.0.1:44959/topology"],"failed":[{"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-91dgvyw5","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}],"consoles":[],"errors":[]}
+DOCUMENT http://127.0.0.1:44959/topology
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}}
+DOCUMENT http://127.0.0.1:44959/topology
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+DOCUMENT http://127.0.0.1:44959/topology
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+DOCUMENT http://127.0.0.1:44959/topology
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}
+DOCUMENT http://127.0.0.1:44959/topology
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}}
+REQUESTFAILED {"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}
+DOCUMENT http://127.0.0.1:44959/topology
+OBSERVATIONS {"size":"desktop","documents":["http://127.0.0.1:44959/topology","http://127.0.0.1:44959/topology","http://127.0.0.1:44959/topology","http://127.0.0.1:44959/topology","http://127.0.0.1:44959/topology","http://127.0.0.1:44959/topology"],"failed":[{"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems/active?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/design-system.css?device=ui-test-cc5yibna","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/events","type":"eventsource","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/design-systems","type":"fetch","error":{"errorText":"Load request cancelled"}},{"url":"http://127.0.0.1:44959/api/v1/profile","type":"fetch","error":{"errorText":"Load request cancelled"}}],"consoles":[],"errors":[]}
+✔ M10i: webkit real app, all six active themes at phone/desktop, layers, focus and exact snapshot export (8258.795099ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8717.419418
+no-Kubernetes tripwire: never fired
