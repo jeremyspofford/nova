@@ -45,6 +45,7 @@ export function routeOf(pathname) {
   if (path === '/schedules') return { dest: 'automations' };
   // Capture (M6a) is part of Settings: its own view, reached from Settings and the indicator.
   if (path === '/capture') return { dest: 'capture' };
+  if (path === '/topology') return { dest: 'topology' };
   const d = DESTINATIONS.find((x) => x.path === path);
   return d ? { dest: d.id } : { dest: 'home', unknown: true };
 }

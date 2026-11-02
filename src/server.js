@@ -83,6 +83,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     ...(deps.decisions ? { decisions: deps.decisions } : {}),
     // Started by the supervisor (src/supervisor), it can ask for a deploy or rollback (M7b).
     supervisor: deps.supervisor ?? ipcLink(process),
+    ...(deps.topologyCluster ? { topologyCluster: deps.topologyCluster } : {}),
     // A sandbox copy started by the change pipeline (M7a): no outside work, no changes taken.
     sandbox: process.env.NOVA_SANDBOX === '1',
     // Onboarding (M10f): NOVA_DETECT_OS is a stand-in detection (tests, demos: only the words
@@ -309,7 +310,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     // ships: iOS's own strip, readable over any design.
     const appearance = /(?:^|;\s*)nova-appearance=([A-Za-z0-9_-]{8,64})(?:;|$)/.exec(req.headers.cookie ?? '')?.[1] ?? null;
     const statusBar = (html) => { try { return html.replace(STATUS_BAR_TAG, statusBarTag(core.design.active(appearance))); } catch { return html; } };
-    if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'), core.reset.clearHeaders(principal, req.headers.cookie), statusBar);
+    if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture', '/topology'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'), core.reset.clearHeaders(principal, req.headers.cookie), statusBar);
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
