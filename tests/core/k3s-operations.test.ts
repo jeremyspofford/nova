@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { hub, enroll, call } from './mesh-support.ts';
 import { simulatedK3s } from '../support/k3s.ts';
@@ -8,8 +10,10 @@ import { createCore, renderClusterNetwork, unavailableClusterTools, type Cluster
 import { fakeToken } from '../support/infra.ts';
 
 const empty = { live: null, previous: null, assigned: null };
-async function setup(o: { capability?: boolean } = {}) {
+async function setup(o: { capability?: boolean; beforeCore?: (sim: Awaited<ReturnType<typeof simulatedK3s>>) => void } = {}) {
   const sim = await simulatedK3s();
+  try { o.beforeCore?.(sim); }
+  catch (error) { await sim.close(); throw error; }
   let registrations: any[] = [];
   let provider: ClusterTools | undefined = sim.tools;
   const h = await hub({ core: { now: () => new Date(sim.clock.now()), k3s: {
@@ -151,23 +155,87 @@ async function promote(s: Awaited<ReturnType<typeof setup>>, version = '1') {
   return s.settle(r.body.id);
 }
 
-test('absent launcher refuses actual cluster network and deploy APIs before credential reads or effects', async () => {
-  const s = await setup({ capability: false });
-  try {
-    let reads = 0;
-    const get = s.h.core.vault.get.bind(s.h.core.vault);
-    s.h.core.vault.get = name => { reads++; return get(name); };
-    for (const operation of ['network', 'deploy']) {
-      const r = await s.h.c('POST', `${s.base}/${operation}`, { version: '1', expected: empty, ...(operation === 'deploy' ? { network_change: 'c0000000000' } : {}) });
-      assert.equal(r.status, 409, JSON.stringify(r.body));
-      assert.match(r.body.error, /broker|capability/i);
+for (const scenario of ['missing', 'explicit-unavailable', 'wrong-api-cluster', 'hostile-ambient'] as const) {
+  // Catch discovery/fallback before even a status child, token read or target snapshot.
+  // Wrong API identity is not proof of a future broker's endpoint/grant binding.
+  test(`Step1 ${scenario}: fixed Core APIs refuse before any tool, legacy value read or target I/O`, async () => {
+    const saved = { HOME: process.env.HOME, PATH: process.env.PATH, KUBECONFIG: process.env.KUBECONFIG, NOVA_SIM_STATE: process.env.NOVA_SIM_STATE };
+    const canary = 'step1-private-credential-canary';
+    let marker = '';
+    let kubeconfig = '';
+    let config = '';
+    let s: Awaited<ReturnType<typeof setup>> | undefined;
+    try {
+      s = await setup({ capability: scenario === 'explicit-unavailable' || scenario === 'wrong-api-cluster', beforeCore(sim) {
+        const bin = join(sim.home, 'refusal-bin');
+        mkdirSync(bin, { mode: 0o700 });
+        marker = join(sim.home, 'unexpected-spawn');
+        for (const tool of ['kubectl', 'helm', 'flux', 'k3s', 'credential-plugin']) {
+          writeFileSync(join(bin, tool), `#!${process.execPath}\nconst { appendFileSync } = require('node:fs');\nappendFileSync(${JSON.stringify(marker)}, ${JSON.stringify(tool)} + '\\n');\nconsole.log(${JSON.stringify(canary)});\nconsole.error(${JSON.stringify(canary)});\nprocess.exit(97);\n`, { mode: 0o700 });
+        }
+        // Validate the private tripwire before Core exists, then clear its planted hit.
+        const planted = spawnSync(join(bin, 'kubectl'), [], { encoding: 'utf8', timeout: 3000 });
+        assert.equal(planted.status, 97, planted.stderr);
+        assert.equal(readFileSync(marker, 'utf8'), 'kubectl\n');
+        assert.equal(planted.stdout.trim(), canary);
+        assert.equal(planted.stderr.trim(), canary);
+        rmSync(marker);
+        process.env.HOME = sim.home;
+        process.env.PATH = bin; // Only this K3s test's disposable marker executables.
+        if (scenario === 'hostile-ambient') {
+          mkdirSync(join(sim.home, '.kube'), { mode: 0o700 });
+          kubeconfig = join(sim.home, '.kube', 'config');
+          config = JSON.stringify({ apiVersion: 'v1', kind: 'Config', 'current-context': 'simulation', contexts: [{ name: 'simulation', context: { cluster: 'simulation', user: 'hostile' } }], clusters: [{ name: 'simulation', cluster: { server: sim.origin } }], users: [{ name: 'hostile', user: { token: canary, exec: { apiVersion: 'client.authentication.k8s.io/v1', command: join(bin, 'credential-plugin'), interactiveMode: 'Never' } } }] });
+          writeFileSync(kubeconfig, config, { mode: 0o600 });
+          process.env.KUBECONFIG = kubeconfig;
+          process.env.NOVA_SIM_STATE = join(sim.home, 'cluster.json');
+          sim.change(state => { state.statusOverride = { credential: canary }; });
+        }
+      } });
+      let toolCalls = 0;
+      const execute = s.sim.tools.execute;
+      s.sim.tools.execute = async (...args) => { toolCalls++; return execute(...args); };
+      if (scenario === 'explicit-unavailable') s.setProvider({
+        available: unavailableClusterTools.available,
+        execute: async (...args) => { toolCalls++; return unavailableClusterTools.execute(...args); },
+      });
+      let reads = 0;
+      s.h.core.vault.get = () => { reads++; throw new Error(canary); };
+      s.h.core.vault.resolve = () => { reads++; throw new Error(canary); };
+      const before = s.sim.read();
+      const target = s.net.text();
+      const tasks = s.h.core.ledger.list();
+      const output: unknown[] = [];
+      const base = scenario === 'wrong-api-cluster' ? '/services/clusters/other-cluster/echo' : s.base;
+      for (const operation of ['network', 'deploy', 'promote', 'rollback'] as const) {
+        const r = await s.h.c('POST', `${base}/${operation}`, {
+          version: '1', expected: operation === 'rollback' ? { live: '2', previous: '1', assigned: null } : empty,
+          ...(operation === 'deploy' ? { network_change: 'c0000000000' } : {}),
+        });
+        output.push(r.body);
+        assert.equal(r.status, scenario === 'wrong-api-cluster' ? 404 : 409, `${operation}: ${JSON.stringify(r.body)}`);
+        assert.match(r.body.error, scenario === 'wrong-api-cluster' ? /not registered/i : /broker|capability/i);
+        assert.equal(toolCalls, 0, `${operation}: even status must not execute`);
+        assert.equal(existsSync(marker), false, `${operation}: no ambient tool or exec plugin spawn`);
+        assert.equal(reads, 0, `${operation}: no legacy value lookup`);
+        assert.equal(s.net.hits.length, 0, `${operation}: no target read or write`);
+        assert.deepEqual(s.sim.calls(), []);
+        assert.deepEqual(s.sim.transcript, []);
+        assert.deepEqual(s.h.core.ledger.list(), tasks, 'refusal does not create approvable work');
+        assert.equal(s.h.core.network.list().changes.length, 0);
+        assert.equal(s.net.text(), target);
+        assert.deepEqual(s.sim.read(), before);
+      }
+      await s.h.core.ledger.idle();
+      const log = s.h.core.log.file;
+      assert.ok(!JSON.stringify({ output, tasks: s.h.core.ledger.list(), transcript: s.sim.transcript, log: log && existsSync(log) ? readFileSync(log, 'utf8') : '' }).includes(canary), 'private config/tool/vault canary never reaches Core output, ledger, transcript or log');
+      if (kubeconfig) assert.equal(readFileSync(kubeconfig, 'utf8'), config, 'hostile ambient kubeconfig remains untouched');
+    } finally {
+      try { await s?.stop(); }
+      finally { for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     }
-    assert.equal(reads, 0);
-    assert.equal(s.net.hits.length, 0);
-    assert.deepEqual(s.sim.calls(), []);
-    assert.equal(s.h.core.network.list().changes.length, 0);
-  } finally { await s.stop(); }
-});
+  });
+}
 
 test('M10d lost network acknowledgement arms dead-man and restores exact original snapshot without cluster workload effects', async () => {
   const s = await setup();
