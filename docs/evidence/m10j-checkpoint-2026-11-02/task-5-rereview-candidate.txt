@@ -1,0 +1,29 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"live":null,"health":"healthy","status":"Verified","observations":[{"source":"workload","at":"2026-11-02T12:00:10.000Z","age_ms":0,"stale":false,"health":"healthy","reason":"Observed readiness of 1."}],"actualReady":true,"actualHealth":{"ok":false,"checked_at":"2026-11-02T12:00:10.000Z","said":null}}
+✖ scoped rereview: candidate readiness must not hide its fresh measured failure (1454.697157ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1776.883823
+
+✖ failing tests:
+
+test at .superpowers/sdd/M10j/task-5-rereview-candidate.test.ts:100:1
+✖ scoped rereview: candidate readiness must not hide its fresh measured failure (1454.697157ms)
+  AssertionError [ERR_ASSERTION]: freshly measured failed current candidate cannot be Verified by older readiness
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/.superpowers/sdd/M10j/task-5-rereview-candidate.test.ts:109:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'healthy',
+    expected: 'healthy',
+    operator: 'notStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

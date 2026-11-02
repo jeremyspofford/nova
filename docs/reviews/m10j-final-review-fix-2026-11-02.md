@@ -149,3 +149,94 @@ git commit -m "fix(services): address K3s checkpoint review findings"
 Actual output: `[codex/m10j-k3s e6e77325] fix(services): address K3s checkpoint review findings`, `9 files changed, 301 insertions(+), 14 deletions(-)`. `git rev-parse HEAD` returns `e6e7732515c48149d8e2240639c15aacf8254f75`; `git status --short` is empty; `git diff HEAD^ HEAD --check` exits 0 with no output. The commit contains exactly the assigned nine source/test files, without controller docs, logs, plans, dependencies or policy changes.
 
 All owned test processes/commands have finished, disposable fixture homes were closed by the existing fixtures/wrappers, and this report is the final owned write. **RELEASE source ownership to root** for the single scoped rereview and controller handoff. No further source commands/writes or review/publication actions will be performed by this implementer.
+
+
+## R1 corrective follow-up — candidate measured-health evidence
+
+Date: 2026-11-02. This is a separately authorized corrective follow-up after the scoped rereview rejected the first fix; it is not represented as the original single final fix wave. The preceding report remains byte-for-byte intact, including its original commits, failures, passes and ownership release. Its exact prior prefix was 18270 bytes, SHA-256 `01f43cb912a95a2721484869bc79f3c44e44cbc84a0fda3294c6b28c6129655d`.
+
+### Identity, ruling and scope
+
+- Exact checkout: `/home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build`; branch `codex/m10j-k3s`.
+- Starting HEAD: `7a8f5bf5aa854e3d65d8af7cc77d488345c07f56`, tracked worktree/index clean. Original source fix remains `e6e7732515c48149d8e2240639c15aacf8254f75`.
+- R1 source/test commit: `72199e0af4dd0f1ea4033faa1e362d9802f4b57a`, `fix(services): preserve measured candidate health in topology`.
+- Read the R1 brief, complete `task-5-final-rereview.md`, actual `task-5-rereview-candidate.test.ts`/`.log`, and constraints before editing. Original I1/I2/M1 were judged addressed; R1 alone is this corrective assignment. The rejected report/probe and all earlier source pins/logs were left intact.
+- Root explicitly authorized departure from SDD's normal one-final-wave cap under the owner's standing authorization to continue necessary fixes without waiting. This introduced correctness regression has a precise existing-spec correction and requires no new owner policy or external authority. Root owns publication of that deviation and cost as Ruling 9, the single R1-scoped independent review, and a fresh exact corrected-head ordinary CI cycle. No review/CI/security gate is waived by this work.
+- Sole source writer; no subagents. Continued the receiving-review, debugging, TDD and verification workflow. Exactly two assigned files changed: `src/core/services/k3s/operations.ts` and `tests/core/k3s-operations.test.ts`. No driver/schema/network/capacity policy/approval/credentials/dependency/scanner/mask/allowlist/tripwire/baseline change or history rewrite.
+
+### Cause and correction
+
+The prior fallback replaced the primary measured-health observation with the current candidate's successful readiness receipt. The committed simulator correctly leaves `ready:true` after validation even when subsequent actual status observes `health.ok:false`; equal fresh timestamps are possible under the deterministic clock. Replacing one independent source with the other manufactured healthy/Verified status.
+
+The correction retains the existing no-live/current-assignment/receipt-at-or-after-assignment binding. For that selected candidate, its actual measured health supplies the primary observation and readiness supplies a separate additional observation. Existing topology normalization/aggregation evaluates both using their own actual timestamps. A fresh failed measurement therefore remains failed/Failed despite successful readiness, while unknown, stale or future health remains unknown/Waiting. Fresh healthy measurement and fresh successful readiness can still be healthy/Verified. Fresh health does not refresh old readiness; stale readiness still shows its own age and cannot be made fresh by a new health measurement.
+
+The selected measured resource is the current live resource or, only when nothing is live, the already bound candidate. Unrelated failed previews and historical/kept/removed resources remain excluded from live health. Zero-replica successful measurements cannot establish availability; measured failures remain evidence with their own timestamp. No observed timestamp, health value or successful completion is invented. Read-only collection, independent node/control-plane failures, prior assignment binding and existing stale/future rules are unchanged.
+
+### Permanent regression coverage and actual RED
+
+Two permanent actual-Core/API tests reuse the existing fixture and real network/WorkLedger deploy setup:
+
+1. `R1: current candidate readiness cannot replace its measured failure or unknown health`: deploy/validate without promotion, then use the actual committed simulator's unhealthy state to produce the reviewer's equal-time fresh failure while `ready:true` remains. Assert failed/Failed and separate measured/readiness observations, then a later fresh failure with measured age 0/readiness age 5000, fresh unknown health remaining Waiting, recovery with independent ages, old readiness expiring at 120000 despite fresh healthy measurement, zero-replica uncertainty and no read-side effects/timers.
+2. `R1: candidate measured-health age remains independent from fresh readiness`: actual children continue to collect status; controlled timestamps at the existing trusted fixture port model independently aged sources. Assert a 120000 ms old measured-health timestamp cannot borrow a fresh readiness time, a permitted 1 ms future measurement stays unknown with null age while readiness remains at its actual time, and the same measurement becomes current only as the clock reaches it. The controlled source-time fixture is not claimed as an actual new cluster validation or physical measurement.
+
+Before changing production logic, both permanent tests failed behaviorally on the reviewed base (exit 1):
+
+- Actual equal-time failed candidate: actual `healthy`, expected `failed` (`k3s-operations.test.ts:1016` at that run).
+- Stale measured candidate health with fresh readiness: actual `healthy`, expected `unknown` (`k3s-operations.test.ts:1088` at that run).
+
+Full RED assertions are retained in `task-5-r1-fix-red.log`. This reproduces the reviewer's actual `task-5-rereview-candidate.log` and expands the same source-selection family; the reviewer artifacts were not edited or relabeled. No fixture-failure or blind retry occurred in this R1 follow-up.
+
+### Exact commands and outputs
+
+All commands ran with explicit workdir `/home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build`. Each test used the existing tripwire wrapper and Node 26.3.1 PATH prefix. Default tripwire remained armed and every completed test log ends `no-Kubernetes tripwire: never fired`. Only the pre-existing K3s-owned fake child PATH/disposable homes/loopback fixtures were used.
+
+Permanent RED, before the source correction:
+
+```sh
+PATH=/home/jeremy/.local/share/mise/installs/node/26.3.1/bin:$PATH sh scripts/test.sh --test-name-pattern='R1:' tests/core/k3s-operations.test.ts > .superpowers/sdd/M10j/task-5-r1-fix-red.log 2>&1
+```
+
+Focused GREEN, covering both new tests plus existing I1 live/history, assignment-binding and independent-provenance cases:
+
+```sh
+PATH=/home/jeremy/.local/share/mise/installs/node/26.3.1/bin:$PATH sh scripts/test.sh --test-name-pattern='R1:|final I1:|trusted topology preserves' tests/core/k3s-operations.test.ts > .superpowers/sdd/M10j/task-5-r1-fix-green.log 2>&1
+```
+
+Complete operations covering suite, after final source/test changes:
+
+```sh
+PATH=/home/jeremy/.local/share/mise/installs/node/26.3.1/bin:$PATH sh scripts/test.sh tests/core/k3s-operations.test.ts > .superpowers/sdd/M10j/task-5-r1-fix-operations.log 2>&1
+```
+
+Unchanged module boundary and supervisor source guard:
+
+```sh
+PATH=/home/jeremy/.local/share/mise/installs/node/26.3.1/bin:$PATH sh scripts/test.sh --test-name-pattern='module boundary|no code in Nova or its scripts names a Kubernetes tool to run' tests/core/api.test.ts tests/supervisor/services-review.test.ts > .superpowers/sdd/M10j/task-5-r1-fix-boundaries.log 2>&1
+```
+
+Actual summaries below use log prefix `.superpowers/sdd/M10j/task-5-r1-fix-<suffix>.log`. All four runs have cancelled 0, skipped 0 and todo 0. A filtered run is not claimed as a full package run.
+
+| Log suffix | Tests | Pass | Fail | Exit | Duration ms |
+|---|---:|---:|---:|---:|---:|
+| `red` | 2 | 0 | 2 | 1 | 3210.408449 |
+| `green` | 5 | 5 | 0 | 0 | 17546.4566 |
+| `operations` | 47 | 47 | 0 | 0 | 70445.558111 |
+| `boundaries` | 2 | 2 | 0 | 0 | 494.950983 |
+
+Typecheck (exit 0):
+
+```sh
+PATH=/home/jeremy/.local/share/mise/installs/node/26.3.1/bin:$PATH npm run typecheck > .superpowers/sdd/M10j/task-5-r1-fix-typecheck.log 2>&1
+```
+
+Actual output: `npm notice run nova@0.1.0 typecheck` and `npm notice run tsc -p tsconfig.json`; no compiler errors/warnings. R1 test logs contain no runtime warnings. `git diff --check`, `git diff --cached --check`, and `git diff HEAD^ HEAD --check` each exit 0 with no output.
+
+Commit command: `git commit -m "fix(services): preserve measured candidate health in topology"`. Actual output: `[codex/m10j-k3s 72199e0a] fix(services): preserve measured candidate health in topology`, `2 files changed, 126 insertions(+), 7 deletions(-)`. `git rev-parse HEAD` returns `72199e0af4dd0f1ea4033faa1e362d9802f4b57a`; `git status --short` is empty. The commit contains only those two source/test files; this append and raw logs remain ignored controller evidence.
+
+### Limits and release
+
+This is scoped R1 implementation evidence, not acceptance of the checkpoint. No 162-test covering package, full unit suite or browser suite/baseline was repeated. Earlier passed/failed runs and source pins remain in the preserved preceding report and reviewer evidence; root retains the fresh exact corrected-head ordinary CI gate and one R1-scoped independent validation.
+
+No real tools/images/cluster/cloud/accounts/spending/credentials/owner data/preview/other worktree was touched. No production capability was added and no unknown completion was converted into success. Original capacity policy and its intentional 64-retained-version lifetime limitation remain unchanged. Production credential paths remain fail-closed; #275 findings B remain parked, actual P1a/P1b/P1c are absent, full M10j phase remains **NOT PASSED**, and no M10j merge/M10k/deployment is authorized by these results.
+
+All owned processes and commands have completed and this append is the final owned write. **RELEASE source ownership to root** for records, the R1-scoped independent review and corrected-head CI. No further writes, commands, reviews or publication actions will be performed by this implementer under this assignment.

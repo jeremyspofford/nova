@@ -130,5 +130,41 @@
     "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
     "public_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
     "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-rereview-candidate.txt",
+    "raw_sha256": "2875f971c60d2e4f1f7f1b41a5088eda6c67a9a16f74a69e7293c469183866b0",
+    "public_sha256": "2875f971c60d2e4f1f7f1b41a5088eda6c67a9a16f74a69e7293c469183866b0",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-r1-fix-red.txt",
+    "raw_sha256": "acb053ea4290ebce230a967343a1260ef2c8054726f457567d1e9cd62c9a7f44",
+    "public_sha256": "14141a31f35d5080b44436bd97ab3f31ef9a7d8e9854f8fb44ca38af3d2626f6",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-r1-fix-green.txt",
+    "raw_sha256": "abb331fabd2b7d9946dbbef64b78e15e7d5e870f5b90b1e9593ba352237ae684",
+    "public_sha256": "abb331fabd2b7d9946dbbef64b78e15e7d5e870f5b90b1e9593ba352237ae684",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-r1-fix-operations.txt",
+    "raw_sha256": "872b359b4aa50b8c6ccaf81fdd3a7dfafa713f799c3ffa891138374f10cb652b",
+    "public_sha256": "872b359b4aa50b8c6ccaf81fdd3a7dfafa713f799c3ffa891138374f10cb652b",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-r1-fix-boundaries.txt",
+    "raw_sha256": "b9bfc32534f40da10e84bbde6e81a441b295f833bd988c7e30469245c7bf8347",
+    "public_sha256": "b9bfc32534f40da10e84bbde6e81a441b295f833bd988c7e30469245c7bf8347",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-r1-fix-typecheck.txt",
+    "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "public_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "normalization": "trailing whitespace only"
   }
 ]

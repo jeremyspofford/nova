@@ -1,0 +1,15 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ trusted topology preserves independent node, readiness, workload and control-plane ages; GET never mutates (5342.876022ms)
+✔ final I1: failed previews and retained or removed readiness cannot corrupt healthy live topology (6138.683176ms)
+✔ final I1: readiness fallback belongs only to the current assigned candidate and retains its age (1781.540042ms)
+✔ R1: current candidate readiness cannot replace its measured failure or unknown health (2051.344521ms)
+✔ R1: candidate measured-health age remains independent from fresh readiness (1894.30059ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 17546.4566
+no-Kubernetes tripwire: never fired
