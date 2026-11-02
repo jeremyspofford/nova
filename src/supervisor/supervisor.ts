@@ -21,7 +21,7 @@ import { createServer as createNet, type Server as NetServer, type Socket } from
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { CONSOLE, ServiceManager, consoleDefinition, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type ServiceStatus, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
+import { CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
 import { runningPid } from '../home.js';
 import { ServerProcess } from './server.ts';
 import { CrashWindow } from './crashes.ts';
@@ -121,7 +121,7 @@ export class Supervisor {
       timings: { ...t, healthEveryMs: o.timings?.healthEveryMs },
       console: {
         definition: () => this.console(),
-        status: () => this.#consoleStatus(),
+        status: () => consoleStatus(this.state),
         prepare: (v) => this.#prepare(v),
         deploy: (v, say) => this.deploy(v, say),
         rollback: (r, say) => {
@@ -365,14 +365,35 @@ export class Supervisor {
   // ---- the server's requests (the console's API) -----------------------------------------------
 
   async #onMessage(s: ServerProcess, m: unknown): Promise<void> {
-    const msg = m as { nova?: string; id?: string; type?: string; version?: string; seq?: unknown; problem?: unknown; staged?: unknown };
+    const msg = m as { nova?: string; id?: string; type?: string; version?: string; seq?: unknown; problem?: unknown; staged?: unknown; service?: unknown; confirm?: unknown };
     if (msg?.nova === 'mark') {
       if (Number.isInteger(msg.seq) && Number.isInteger(msg.problem)) this.#marks.set(s, { seq: msg.seq as number, problem: msg.problem as number });
       return;
     }
     if (msg?.nova !== 'request' || typeof msg.id !== 'string') return;
     const reply = (ok: boolean, said: string) => s.send({ nova: 'reply', id: msg.id, ok, said });
-    if (msg.type === 'deploy') {
+    if (msg.type === 'service-promote' || msg.type === 'service-rollback') {
+      const allowed = msg.type === 'service-promote' ? ['nova', 'id', 'type', 'service', 'version', 'confirm'] : ['nova', 'id', 'type', 'service', 'confirm'];
+      if (Object.keys(msg).some(k => !allowed.includes(k)) || typeof msg.service !== 'string' || !/^[a-z][a-z0-9-]{0,127}$/.test(msg.service) || typeof msg.confirm !== 'string' || (msg.type === 'service-promote' && (typeof msg.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(msg.version)))) return void reply(false, 'Invalid service request.');
+      const service = msg.service, version = msg.version, confirm = msg.confirm, promote = msg.type === 'service-promote';
+      const checked = promote ? this.manager.promotionCheck(service, version!, confirm) : this.manager.rollbackCheck(service, confirm);
+      if (!checked.ok) return void reply(false, 'The service manager refused the change: check confirmation, readiness and the kept version.');
+      if (service === CONSOLE && this.#deploying) return void reply(false, 'A console deploy is already running.');
+      s.send({ nova: 'reply', id: msg.id, ok: true, accepted: true, said: 'The service change was accepted. Refresh to observe the outcome; this does not confirm it is serving.' });
+      // Give the requesting server a chance to return HTTP before a console switch stops it.
+      // Revalidate through the same manager at execution; acceptance is never a cached grant.
+      setTimeout(() => {
+        if (this.#closed) return;
+        void (async () => {
+          try {
+            const result = promote ? await this.manager.promote(service, version!, confirm) : await this.manager.rollback(service, confirm);
+            if (!result.ok) this.#problem({ source: 'supervisor', playbook: 'service-stopped', subject: service, said: `The accepted change to ${service} was refused when it ran. Refresh its service status before trying again.` });
+          } catch {
+            this.#problem({ source: 'supervisor', playbook: 'service-stopped', subject: service, said: `The accepted change to ${service} stopped unexpectedly. Refresh its service status before trying again.` });
+          } finally { this.#save(); }
+        })();
+      }, 300).unref();
+    } else if (msg.type === 'deploy') {
       if (!isRelease(msg.version)) return void reply(false, 'That isn’t a release’s tag.');
       if (this.#deploying) return void reply(false, 'A deploy is already running.');
       if (!(await this.slots.commit(msg.version))) return void reply(false, `There is no release tagged ${msg.version}.`);
@@ -727,22 +748,6 @@ export class Supervisor {
     }
   }
 
-  #consoleStatus(): ServiceStatus {
-    const s = this.state;
-    const kind: Record<ReleaseSlot['status'], ServiceStatus['versions'][number]['status']> = { ready: 'ready', live: 'live', previous: 'kept', failed: 'failed', rolled_back: 'rolled_back' };
-    const cur = s.releases.current ?? BASE;
-    const versions = s.releases.slots.map((r) => ({ version: r.version, status: kind[r.status], since: r.created_at, said: null as string | null, ports: r.version === cur && s.server.port ? { console: s.server.port } : null, pid: r.version === cur ? s.server.pid : null }));
-    if (!versions.some((v) => v.version === cur)) versions.unshift({ version: cur, status: 'live', since: s.server.started_at ?? s.since, said: cur === BASE ? 'The code the supervisor started from.' : null, ports: s.server.port ? { console: s.server.port } : null, pid: s.server.pid });
-    return {
-      service: CONSOLE, driver: 'supervisor', live: cur, previous: s.releases.previous, soak_until: null,
-      held: s.safe_mode ? { reason: s.safe_mode.reason, at: s.safe_mode.at } : null,
-      health: { ok: s.health.last_check_at ? s.health.failing === 0 : null, checked_at: s.health.last_check_at, said: s.health.said },
-      stable: s.server.port ? { console: s.server.port } : {},
-      versions,
-      history: s.history.map((h) => ({ at: h.at, version: h.version, outcome: h.outcome, said: h.said })),
-    };
-  }
-
   // ---- the state file ------------------------------------------------------------------------------
 
   #load(): SupervisorState {
@@ -766,6 +771,8 @@ export class Supervisor {
 
   #save(): void {
     if (this.services) this.state.services = this.services.status().filter((x) => x.service !== CONSOLE);
+    this.state.observed_at = nowIso();
+    if (this.manager) this.state.service_policies = this.manager.policies();
     const tmp = `${this.stateFile}.tmp`;
     writeFileSync(tmp, `${JSON.stringify(this.state, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, this.stateFile);
@@ -839,7 +846,11 @@ export class Supervisor {
           const p = this.manager.plan(req.definition);
           return end(p.ok ? { ok: p.plan.ok, said: JSON.stringify(p.plan) } : { ok: false, said: `The definition can’t be used: ${p.problems.join(' ')}` });
         }
-        if (req.cmd === 'service-deploy') return end(await this.manager.deploy(req.definition, say, req.confirm));
+        if (req.cmd === 'service-deploy') {
+          const result = await this.manager.deploy(req.definition, say, req.confirm);
+          this.#save(); // The manager registers policy only after the driver passed.
+          return end(result);
+        }
         if (req.cmd === 'service-recover') return end(await this.manager.recover(String(req.service ?? ''), say));
         if (req.cmd === 'service-promote') return end(await this.manager.promote(String(req.service ?? ''), String(req.version ?? ''), req.confirm, say));
         if (req.cmd === 'service-rollback') return end(await this.manager.rollback(String(req.service ?? ''), req.confirm, say));

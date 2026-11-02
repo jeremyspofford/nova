@@ -34,6 +34,7 @@ import { Devices, ONLINE_WINDOW_MS, SESSION_TTL_MS, type Device } from './mesh/d
 import { Enrollment } from './mesh/enroll.ts';
 import { resolvePlacement, type PlacementDevice } from './services/placement.ts';
 import { validate } from './services/definition.ts';
+import { buildTopology, supervisorServices, type ClusterObservation, type MachineInput } from './services/topology.ts';
 import { DeviceWorkloads } from './services/workloads.ts';
 import { ServiceManager } from './services/manager.ts';
 import { CaptureSync } from './capture/sync.ts';
@@ -132,7 +133,7 @@ export type { Connector, ConnectorContext, ConnectorFactory, ConnectorStatus, Co
 export { HA_ID, HA_MANIFEST, DEFAULT_TIER3, tokenIssuer } from './connectors/home-assistant.ts';
 export { redactText } from './log.ts';
 // Resilience (M7b): the supervisor's link and shared pieces (src/supervisor imports only this file).
-export { ipcLink } from './resilience/link.ts';
+export { ipcLink, consoleStatus } from './resilience/link.ts';
 export type { SupervisorLink, SupervisorState, SupervisorProblem, ReleaseSlot, Stage as DeployStage, ProbeLine, ServerMode } from './resilience/link.ts';
 export { PLAYBOOKS } from './resilience/playbooks.ts';
 export { CODE_ROOT, copyHome, smoke, startSandbox, sandboxEnv } from './resilience/sandbox.ts';
@@ -238,6 +239,8 @@ export interface CoreOptions {
   decisions?: { verdicts?: VerdictStore };
   // The supervisor that started this server, when one did (resilience/link.ts: ipcLink).
   supervisor?: SupervisorLink | null;
+  // Trusted adapter only; no cluster is invented or contacted when absent.
+  topologyCluster?: () => ClusterObservation | null | Promise<ClusterObservation | null>;
   // Onboarding (M10f): a stand-in OS detection (NOVA_DETECT_OS), discovery's transport (stand-ins on
   // loopback in tests; the real one sends one multicast query, only when the person asks), and the
   // person's own home folder, where import sources are found.
@@ -1244,6 +1247,46 @@ export function createCore(o: CoreOptions) {
         return { valid: true, problems: [], resolution, ...(away.length ? { note: 'On a device other than the hub it runs as a native workload, deployed with POST /services/devices/deploy; this only says where.' } : {}) };
       },
     },
+    {
+      method: 'GET', path: '/services/topology', summary: 'One observed topology snapshot, safe version policy and matching Mermaid text.',
+      handle: async () => {
+        let cluster: ClusterObservation | null = null, cluster_error = false;
+        try { cluster = await o.topologyCluster?.() ?? null; } catch { cluster_error = true; }
+        const captured_at = now().toISOString();
+        const registry = devices.list();
+        const canMutate = role.role() === 'hub' && devices.state().hub_id === meshIdentity.id;
+        const native = deviceWorkloads.topology().map(n => ({ ...n, service: { ...n.service, authority: canMutate ? n.service.authority : null } }));
+        const lag = captureSync?.lag() ?? [];
+        let state = null;
+        try { state = o.supervisor?.state() ?? null; } catch { /* explicit managed-unavailable below */ }
+        const local = supervisorServices(state, !!o.supervisor, meshIdentity.id, captured_at, o.version, canMutate && typeof o.supervisor?.service === 'function');
+        const machines: MachineInput[] = registry.filter(d => d.trust === 'trusted').map(d => {
+          const here = d.id === meshIdentity.id, streaming = access.isLive(d.id);
+          const at = here || streaming ? captured_at : d.last_seen;
+          const fresh = at !== null && Date.parse(captured_at) - Date.parse(at) < ONLINE_WINDOW_MS;
+          const capture = lag.find(l => l.device_id === d.id);
+          return { id: d.id, name: d.name, roles: [d.role, ...d.purposes], observations: [{ source: here ? 'local' : 'heartbeat', at, health: fresh ? 'healthy' : 'unknown', reason: here ? 'This Nova process is answering.' : streaming ? 'The device has an active connection.' : fresh ? 'A heartbeat was received recently.' : 'No recent heartbeat is available.' }],
+            services: [...(here ? local.services : []), ...native.filter(n => n.device_id === d.id).map(n => n.service)],
+            ...(capture ? { capture_lag: { queued: capture.queued, synced_to: capture.synced_to, at: capture.at, paused: capture.paused } } : {}),
+          };
+        });
+        return buildTopology({ captured_at, hub_id: devices.state().hub_id, local_id: meshIdentity.id, machines, cluster, cluster_error, excluded_ids: registry.filter(d => d.trust !== 'trusted').map(d => d.id), issues: local.issue ? [local.issue] : [] });
+      },
+    },
+    ...(['promote', 'rollback'] as const).map(action => ({
+      method: 'POST' as const, path: `/services/hub/{service}/${action}`, access: 'approver' as const,
+      summary: 'A fixed service change through the supervisor’s current Service Manager; confirmation and readiness remain authoritative.',
+      handle: async ({ params, body }: { params: Record<string, string>; body: Record<string, unknown> }) => {
+        const service = params.service!;
+        const allowed = action === 'promote' ? ['version', 'confirm'] : ['confirm'];
+        if (!/^[a-z][a-z0-9-]{0,127}$/.test(service) || Object.keys(body).some(k => !allowed.includes(k)) || typeof body.confirm !== 'string' || (action === 'promote' && (typeof body.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.version)))) throw new CoreError('validation', 'Only a service version and typed confirmation are accepted.');
+        if (body.confirm !== (action === 'promote' ? `${service}@${body.version}` : 'rollback')) throw new CoreError('validation', 'The typed confirmation does not match this action.');
+        if (!o.supervisor?.service) throw new CoreError('conflict', 'The supervisor service authority is unavailable.');
+        const r = await o.supervisor.service(action === 'promote' ? { action, service, version: body.version as string, confirm: body.confirm } : { action, service, confirm: body.confirm });
+        if (!r.ok) throw new CoreError('conflict', r.said);
+        return r;
+      },
+    })),
     // ---- native workloads on devices (M10h) ----
     {
       method: 'GET', path: '/services/devices', summary: 'Native workloads on your other devices: per service, its device, the live version, the one kept for one step back, each version’s status as the device reported it, and what happened.',

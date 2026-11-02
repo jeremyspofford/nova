@@ -23,9 +23,10 @@ import { CoreError } from '../errors.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import { sha256Hex, workloadManifestMessage, type SignedWorkload, type WorkloadManifest } from '../mesh/wire.ts';
-import { isCaptureService, programName, promotionTier, type ServiceDefinition } from './definition.ts';
+import { isCaptureService, programName, promotionTier, validate, type ServiceDefinition } from './definition.ts';
 import type { Outcome, Plan, Say, ServiceDriver, ServiceStatus, VersionStatus, VersionView } from './driver.ts';
 import { devicePlatform, resolvePlacement, wantedRoles, type PlacementDevice } from './placement.ts';
+import { projectService, type ServiceInput } from './topology.ts';
 import { SCREENPIPE } from './screenpipe.ts';
 
 export interface DeviceWorkloadsOptions {
@@ -195,6 +196,18 @@ export class DeviceWorkloads {
         health: { ok: live ? (live.health === null ? null : live.health === 1) : null, checked_at: live?.at ?? null, said: live?.said ?? null },
         stable: {}, versions, history: history.map((h) => ({ at: h.at, version: h.version, outcome: h.outcome, said: h.said ?? '' })),
       };
+    });
+  }
+
+  // Reports are timed when the hub receives them, not when the version first changed status.
+  topology(): { device_id: string; service: ServiceInput }[] {
+    return this.status().map(s => {
+      const row = this.#o.db.get<Row>('SELECT * FROM device_workload WHERE device_id = ? AND service = ?', s.device.id, s.service)!;
+      const reports = this.#o.db.all<ReportRow>('SELECT * FROM device_workload_report WHERE device_id = ? AND service = ? ORDER BY at DESC', s.device.id, s.service);
+      const policies = [row.definition, row.previous_definition].flatMap(raw => {
+        try { const checked = validate(JSON.parse(raw ?? 'null')); return checked.ok ? [{ service: checked.def.service, version: checked.def.version, promotion_tier: promotionTier(checked.def) }] : []; } catch { return []; }
+      });
+      return { device_id: s.device.id, service: projectService(s, { placement: s.device.id, source: 'workload', at: s.live ? s.health.checked_at : reports[0]?.at ?? null, authority: 'device', policies, reports, assigned: { version: row.version, want: row.want, at: row.assigned_at } }) };
     });
   }
 

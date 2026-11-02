@@ -17,6 +17,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promotionTier, validate, type DeviceView, type ServiceDefinition } from './definition.ts';
+import type { ServicePolicy } from './topology.ts';
 import type { Outcome, Plan, Say, ServiceDriver, ServiceStatus } from './driver.ts';
 import { resolvePlacement, type PlacementDevice, type Resolution } from './placement.ts';
 
@@ -122,7 +123,7 @@ export class ServiceManager {
   }
 
   // Tier 2 or 3: asked every time. `confirm` is what the person typed: <service>@<version>.
-  async promote(service: string, version: string, confirm: unknown, say: Say = () => {}): Promise<Outcome & { tier?: 2 | 3 }> {
+  promotionCheck(service: string, version: string, confirm: unknown): Outcome & { tier?: 2 | 3 } {
     const def = this.definition(service, version);
     if (!def) return { ok: false, said: `${service} ${version} isn’t registered: deploy it first.` };
     const tier = promotionTier(def);
@@ -134,16 +135,28 @@ export class ServiceManager {
     const v = found.status.versions.find((x) => x.version === version);
     // Only a version that passed its contract tests and health is ever offered.
     if (!v || v.status !== 'ready') return { ok: false, tier, said: `${service} ${version} isn’t ready to promote${v ? ` (it is ${v.status.replace('_', ' ')}${v.said ? `: ${v.said}` : ''})` : ''}. Only a version that passed its contract tests and health takes traffic.` };
-    return { tier, ...(await found.driver.switch(service, version, say)) };
+    return { ok: true, tier, said: 'The version is ready and its promotion is confirmed.' };
+  }
+
+  async promote(service: string, version: string, confirm: unknown, say: Say = () => {}): Promise<Outcome & { tier?: 2 | 3 }> {
+    const checked = this.promotionCheck(service, version, confirm);
+    if (!checked.ok) return checked;
+    return { tier: checked.tier, ...(await this.#find(service)!.driver.switch(service, version, say)) };
   }
 
   // Tier 2: asked. `confirm` is the word "rollback".
-  async rollback(service: string, confirm: unknown, say: Say = () => {}): Promise<Outcome> {
+  rollbackCheck(service: string, confirm: unknown): Outcome {
     if (confirm !== 'rollback') return { ok: false, said: `Going back to ${service}’s previous version asks first: type rollback.` };
     const found = this.#find(service);
     if (!found) return { ok: false, said: `No driver runs ${service}.` };
     if (!found.status.previous) return { ok: false, said: `${service} has no previous version kept to go back to.` };
-    return found.driver.rollback(service, { auto: false, reason: 'You asked to go back.' }, say);
+    return { ok: true, said: 'A previous version is kept and rollback is confirmed.' };
+  }
+
+  async rollback(service: string, confirm: unknown, say: Say = () => {}): Promise<Outcome> {
+    const checked = this.rollbackCheck(service, confirm);
+    if (!checked.ok) return checked;
+    return this.#find(service)!.driver.rollback(service, { auto: false, reason: 'You asked to go back.' }, say);
   }
 
   // Tier 1, on the person's word: the held service's live version, started again.
@@ -156,6 +169,15 @@ export class ServiceManager {
 
   status(): ServiceStatus[] {
     return this.drivers.flatMap((d) => (d.available().ok ? d.status() : []));
+  }
+
+  // Safe policy projection, per version: absence never grants an ordinary promotion.
+  policies(): ServicePolicy[] {
+    return this.status().flatMap(s => s.versions.flatMap(v => {
+      const def = this.definition(s.service, v.version);
+      const checked = def ? this.check(def) : null;
+      return checked?.ok ? [{ service: s.service, version: v.version, promotion_tier: promotionTier(checked.def) }] : [];
+    }));
   }
 
   // ---- the registry ------------------------------------------------------------------------------
