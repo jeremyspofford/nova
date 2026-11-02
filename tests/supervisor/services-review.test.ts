@@ -539,7 +539,10 @@ test('no code in Nova or its scripts names a Kubernetes tool to run (the tripwir
   // Onboarding's backend words (M10f, src/core/onboard/backend.ts) name K3s as a backend to choose,
   // not a program: that file runs nothing, so it is left out.
   const root = join(import.meta.dirname, '..', '..');
-  const r = spawnSync('git', ['-C', root, 'grep', '-nE', `['"\`](kubectl|helm|flux|k3s)['"\` ]`, '--', 'src', 'scripts', ':!scripts/tripwire.sh', ':!src/core/onboard/backend.ts'], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' } });
+  const r = spawnSync('git', ['-C', root, 'grep', '-nE', `['"\`](kubectl|helm|flux|k3s)['"\` ]`, '--', 'src', 'scripts', ':!scripts/tripwire.sh', ':!src/core/onboard/backend.ts', ':!src/core/services/k3s/driver.ts', ':!scripts/stand-ins/fake-kubectl.js', ':!scripts/stand-ins/fake-helm.js', ':!scripts/stand-ins/fake-flux.js', ':!scripts/stand-ins/k3s-simulation.js'], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' } });
+  // Keep a positive planted-command assertion: only the exact adapter/fake paths above
+  // are exceptions; the literal-command pattern must still detect arbitrary callers.
+  assert.match("spawn('kubectl', ['get', 'pods'])", /['"`](kubectl|helm|flux|k3s)['"` ]/);
   // git grep: 1 when nothing matches, 0 when something does.
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.equal(r.stdout, '');

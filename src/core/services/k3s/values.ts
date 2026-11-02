@@ -51,7 +51,7 @@ const LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,61}[A-Za-z0-9])?$/;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) && [null, Object.prototype].includes(Object.getPrototypeOf(value));
 // Domain-separated, unambiguous identities, with 160 bits retained even at maximum input length.
 const token = (kind: string, ...ids: string[]): string => `${kind}-${createHash('sha256').update(JSON.stringify([kind, ...ids])).digest('hex').slice(0, 40)}`;
-const deviceToken = (id: string) => LABEL.test(id) && !/^device-[0-9a-f]{40}$/.test(id) ? id : token('device', id);
+export const k3sDeviceLabel = (id: string) => LABEL.test(id) && !/^device-[0-9a-f]{40}$/.test(id) ? id : token('device', id);
 const only = (value: unknown, keys: string[]): boolean => object(value) && Object.keys(value).every((key) => keys.includes(key));
 function closedDefinition(def: ServiceDefinition): boolean {
   // The shared validator intentionally tolerates some future nested fields. This chart must not
@@ -117,14 +117,14 @@ export function buildK3sValues(definitions: readonly ServiceDefinition[], contex
     const nodeSelector: Record<string, string> = { 'kubernetes.io/os': 'linux' };
     for (const role of roles) nodeSelector[`nova/role-${role}`] = 'true';
     const device = p.device === 'hub' ? context.hubId : p.device ?? null;
-    if (device !== null) nodeSelector['nova/device'] = deviceToken(device);
+    if (device !== null) nodeSelector['nova/device'] = k3sDeviceLabel(device);
     const needs = { ...p.needs };
     const allowedDevices = resolution?.ok ? resolution.devices.map((d) => d.id) : [];
     const keys: Record<string, string> = { gpu_vram_gb: 'nova/gpu-vram-gb', memory_gb: 'nova/memory-gb', disk_gb: 'nova/disk-gb' };
     const requiredNodeExpressions: K3sNodeExpression[] = Object.entries(needs).filter(([, n]) => n > 0).map(([k, n]) => ({ key: keys[k]!, operator: 'Gt', values: [String(Math.ceil(n) - 1)] }));
     const preferredNodeExpressions: K3sNodeExpression[] = [];
     if (allowedDevices.length) {
-      const boundary: K3sNodeExpression = { key: 'nova/device', operator: 'In', values: allowedDevices.map(deviceToken) };
+      const boundary: K3sNodeExpression = { key: 'nova/device', operator: 'In', values: allowedDevices.map(k3sDeviceLabel) };
       requiredNodeExpressions.push(boundary);
       if (p.mode === 'preferred') preferredNodeExpressions.push({ ...boundary, values: [...boundary.values] });
     }
