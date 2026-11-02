@@ -1,0 +1,32 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"applied":{"ok":false,"said":"The cluster operation failed or its completion is unknown. Refresh before any new action."},"observed":{"ok":false,"said":"The cluster operation failed or its completion is unknown. Refresh before any new action."},"rows":65,"serving":"seed","last":{"version":"next","replicas":1,"ready":false,"ready_at":null,"health":{"ok":true,"checked_at":"2026-11-02T12:02:10.000Z","said":null},"status":"alongside","since":"2026-11-02T12:02:10.000Z","device_ids":["linux"],"ports":{"http":18080},"state_refs":[]}}
+✖ final review: retired history must not strand the service after the 64-row boundary (4316.683991ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4671.158098
+
+✖ failing tests:
+
+test at .superpowers/sdd/M10j/task-5-review-adversarial.test.ts:119:1
+✖ final review: retired history must not strand the service after the 64-row boundary (4316.683991ms)
+  AssertionError [ERR_ASSERTION]: normal retirement history must not cause every later observation to fail
+
+  false !== true
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/.superpowers/sdd/M10j/task-5-review-adversarial.test.ts:133:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

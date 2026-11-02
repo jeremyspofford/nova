@@ -46,5 +46,89 @@
     "raw_sha256": "d16a009a01820cfdf8375ad20d2a4140bf7ac603e86c31d4850c2fb065ea9c5e",
     "public_sha256": "d16a009a01820cfdf8375ad20d2a4140bf7ac603e86c31d4850c2fb065ea9c5e",
     "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-review-adversarial.txt",
+    "raw_sha256": "d649f77c544652d175d567214ac27c22666517b8533507db49fc0010f7d632a3",
+    "public_sha256": "cdd065235e0aa0114ce35e38ca3d45015611cec919a03c69253987c6a4558736",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-review-retention-live.txt",
+    "raw_sha256": "05d265847f995564f7510b72611e0442573cf39abf05aa188690cc82d1105a70",
+    "public_sha256": "8d5368863d9df3270f2426522d3344aaf606b181f35cd180cbafd58ec5855f29",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-review-platform.txt",
+    "raw_sha256": "62238195d1cd2c10b3db7cec18f322560bc9913615bd54cc13b6fcd5c08cf95a",
+    "public_sha256": "5a4a6ee4c9254e9b0c9a2ec8840d840a4d2a28fac171ee160422cc449ff898d1",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-red.txt",
+    "raw_sha256": "e2e9d5313d71e192ff625f01c6352e516136fc5556923392aff5285b6c5cf916",
+    "public_sha256": "280ac7958955c8114deb547b70f534828973787c3afd9a5955a8ec932838bab9",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-platform-red.txt",
+    "raw_sha256": "8cf8c524c5bbfd54fba605fee86e420d233c6558838de1781001eea91fedc6e4",
+    "public_sha256": "4c43f05318e2c8881e49f71ac02dffbca3bd3c4abdfeca9b4bae4017ecba7c58",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-network-red.txt",
+    "raw_sha256": "a41e655e1f52cfc28e1c2fadb1bfd1f715512ea9b60784a81570b73e128584c9",
+    "public_sha256": "76579ab87a09893e3c8d19a0652a41b0c1b1cd67871d7c20a655d575da52acb7",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-stopped-live-proven-red.txt",
+    "raw_sha256": "372085d01a21520eac4ac84fd4b541f82f90fa905a78f790d0dbfc987326ab11",
+    "public_sha256": "b7a67789966832bc4c385b62b1fe0f7767820e853fd2004d346164f900c02657",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-capacity-registry-red.txt",
+    "raw_sha256": "2e319eb69b9d4ed24843d04472312f3cd694ced98b4985e0e12137379cfc649a",
+    "public_sha256": "f86490d9381affd2748ba2207c43754f59ccf55eea6a2f5474273423dff2b3af",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-stopped-healthy-red.txt",
+    "raw_sha256": "a9ea38dae49b7ab74c88068d6424d4f63e3c4d74abef40da3937b1e71d63213d",
+    "public_sha256": "9ddc703bb7a2387db4b2f91c7f7529a2135efa1b3a342f863df0c402e255ebf7",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-green-complete.txt",
+    "raw_sha256": "83e629617ba6f4344299dee9cd611de0859c7bd70395ef89c338a15bebaabdff",
+    "public_sha256": "83e629617ba6f4344299dee9cd611de0859c7bd70395ef89c338a15bebaabdff",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-covering.txt",
+    "raw_sha256": "94562500394c0f2a5fba28d09cbf4a3adebd5c6048e431c105384e34f07aa374",
+    "public_sha256": "94562500394c0f2a5fba28d09cbf4a3adebd5c6048e431c105384e34f07aa374",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-operations-final.txt",
+    "raw_sha256": "20f94f07ad39ba09a9084de31d541bafdd66f0dd7ba070c6338d732512e1bc4c",
+    "public_sha256": "20f94f07ad39ba09a9084de31d541bafdd66f0dd7ba070c6338d732512e1bc4c",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-boundaries-final.txt",
+    "raw_sha256": "eaa3406300f677e0f6b87476c32d0835c32f81ad92f9a0e8787f5c479827f5c7",
+    "public_sha256": "eaa3406300f677e0f6b87476c32d0835c32f81ad92f9a0e8787f5c479827f5c7",
+    "normalization": "trailing whitespace only"
+  },
+  {
+    "file": "docs/evidence/m10j-checkpoint-2026-11-02/task-5-final-fix-typecheck-complete.txt",
+    "raw_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "public_sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "normalization": "trailing whitespace only"
   }
 ]

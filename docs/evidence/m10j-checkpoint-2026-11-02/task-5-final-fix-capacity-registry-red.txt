@@ -1,0 +1,60 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ final I2: retired history at capacity refuses admission before effects and stays observable (8375.01049ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8702.6084
+
+✖ failing tests:
+
+test at tests/core/k3s-review.test.ts:317:41
+✖ final I2: retired history at capacity refuses admission before effects and stays observable (8375.01049ms)
+  AssertionError [ERR_ASSERTION]: refused admission does not persist new definitions
+  + actual - expected
+
+  + {
+  +   alongside: 'full',
+  +   artifact: {
+  +     image: 'example/echo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  +   },
+  +   contract_tests: [
+  +     'http:/contract'
+  +   ],
+  +   egress: 'none',
+  +   health: {
+  +     every_s: 5,
+  +     http: '/health'
+  +   },
+  +   os_permissions: [],
+  +   placement: {
+  +     device: 'hub',
+  +     mode: 'pinned'
+  +   },
+  +   ports: [
+  +     {
+  +       name: 'http',
+  +       port: 18080
+  +     }
+  +   ],
+  +   secrets: [],
+  +   service: 'echo',
+  +   version: 'beyond0'
+  + }
+  - null
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-m10i-topology/nova-build/tests/core/k3s-review.test.ts:336:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { service: 'echo', version: 'beyond0', artifact: { image: 'example/echo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }, ports: [ [Object] ], health: { http: '/health', every_s: 5 }, contract_tests: [ 'http:/contract' ], alongside: 'full', placement: { mode: 'pinned', device: 'hub' }, secrets: [], egress: 'none', os_permissions: [] },
+    expected: null,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

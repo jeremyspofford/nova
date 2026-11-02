@@ -1,0 +1,22 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ final M1: dual native/image win32-x64 targets refuse K3s before tools (22.83164ms)
+✔ final M1: dual native/image darwin-arm64 targets refuse K3s before tools (42.575063ms)
+✔ final M1: dual native/image preferred and floating placement choose eligible Linux over a larger native host (305.084329ms)
+✔ trusted topology preserves independent node, readiness, workload and control-plane ages; GET never mutates (5587.893652ms)
+✔ final I1: failed previews and retained or removed readiness cannot corrupt healthy live topology (6748.417375ms)
+✔ final I1: readiness fallback belongs only to the current assigned candidate and retains its age (1856.794819ms)
+✔ final I2: capacity blocks network proposals and approved deploy before any new effects (5498.992858ms)
+✔ final I2: retired history at capacity refuses admission before effects and stays observable (10010.923127ms)
+✔ final I2: active resources at capacity refuses admission before effects and stays observable (9983.413277ms)
+✔ final I2: simulator prepare independently rejects a racing capacity overflow before commit (4379.430119ms)
+✔ final I2: simulator prepare-workload independently rejects a racing capacity overflow before commit (4404.300935ms)
+✔ final I2: the 64th retained version can prepare, promote and roll back without deleting history (8457.875957ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 37616.756898
+no-Kubernetes tripwire: never fired
