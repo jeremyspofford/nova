@@ -267,12 +267,19 @@ export class K3sOperations {
         for (const s of snapshots) {
           const observed = s.versions.filter(v => v.device_ids?.includes(identity.id));
           if (!observed.length) continue;
-          const live = observed.find(v => v.version === s.live && v.replicas > 0);
-          const health = live?.health;
+          const current = observed.find(v => v.version === s.live);
+          const live = current && current.replicas > 0 ? current : undefined;
+          // A stopped resource cannot prove serving health, but its measured failure is
+          // still real evidence. Keep that failure's own timestamp rather than readiness.
+          const health = live?.health ?? (current?.health.ok === false ? current.health : undefined);
           const observation = { source: 'workload' as const, health: health?.ok === true ? 'healthy' as const : health?.ok === false ? 'failed' as const : 'unknown' as const, at: health?.checked_at ?? null, reason: 'Actual cluster workload health measurement.' };
-          const readiness = observed.filter(v => v.ready_at !== null).map(v => ({ source: 'workload' as const, health: v.ready ? 'healthy' as const : v.status === 'failed' ? 'failed' as const : 'unknown' as const, at: v.ready_at, reason: `Observed readiness of ${v.version}.` }));
-          attached.push({ service: s.service, driver: K3S_DRIVER_NAME, placement: identity.id, live: live?.version ?? null, previous: s.previous, assigned: s.assigned, observation,
-            observations: [...readiness, ...(failure ? [{ source: 'cluster' as const, health: 'unknown' as const, at: failure.at, reason: 'Control plane collection unavailable; workload evidence retains its own age.' }] : [])],
+          // Readiness belongs to its version, not the serving workload. Only the current
+          // candidate can provide fallback evidence when there is no live workload at all.
+          const candidate = s.live === null ? observed.find(v => v.version === s.assigned?.version
+            && s.assigned.want !== 'stopped' && v.ready_at !== null && v.ready_at >= s.assigned.at) : undefined;
+          const readiness = candidate ? { source: 'workload' as const, health: candidate.ready ? 'healthy' as const : candidate.status === 'failed' ? 'failed' as const : 'unknown' as const, at: candidate.ready_at, reason: `Observed readiness of ${candidate.version}.` } : null;
+          attached.push({ service: s.service, driver: K3S_DRIVER_NAME, placement: identity.id, live: live?.version ?? null, previous: s.previous, assigned: s.assigned, observation: readiness ?? observation,
+            observations: failure ? [{ source: 'cluster' as const, health: 'unknown' as const, at: failure.at, reason: 'Control plane collection unavailable; workload evidence retains its own age.' }] : [],
             versions: observed.map(v => ({ version: v.version, status: v.status, since: v.since, observed_at: v.ready_at, promotion_tier: null })), authority: null });
         }
         machines.push({ ...identity, observation: { health: node?.ready ? 'healthy' : node ? 'failed' : 'unknown', at: node?.at ?? null, reason: node ? 'Actual registered cluster node observation.' : 'No node observation is available.' }, observations: failure ? [{ health: 'unknown', at: failure.at, reason: 'Control plane unavailable; last node observation retained.' }] : [], services: attached });

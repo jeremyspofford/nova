@@ -376,7 +376,10 @@ test('trusted topology preserves independent node, readiness, workload and contr
     const service = row.services.find((v: any) => v.service === 'echo');
     assert.equal(service.driver, 'k3s', 'public topology retains the concrete backend identity');
     assert.equal(service.assigned.want, 'live');
-    assert.ok(service.observations.some((o: any) => /readiness/.test(o.reason)));
+    const readyAt = service.versions.find((v: any) => v.version === '1').observed_at;
+    assert.equal(Date.parse(before.captured_at) - Date.parse(readyAt), 120000);
+    assert.equal(service.health, 'healthy');
+    assert.equal(service.status, 'Verified');
     const health = service.observations.find((o: any) => /health measurement/.test(o.reason));
     s.sim.change(x => { x.reachable = false; }); s.sim.clock.advance(30000);
     let map = await read();
@@ -393,7 +396,9 @@ test('trusted topology preserves independent node, readiness, workload and contr
     after = map.machines.find((m: any) => m.id === row.id).services.find((v: any) => v.service === 'echo');
     assert.equal(after.observations.find((o: any) => /health measurement/.test(o.reason)).health, 'healthy');
     assert.ok(!after.observations.some((o: any) => /Control plane/.test(o.reason)));
-    assert.equal(after.observations.find((o: any) => /readiness/.test(o.reason)).stale, true, 'recovery does not invent new readiness timestamps');
+    assert.equal(after.versions.find((v: any) => v.version === '1').observed_at, readyAt, 'recovery does not invent new readiness timestamps');
+    assert.equal(after.health, 'healthy');
+    assert.equal(after.status, 'Verified');
     assert.equal(s.sim.calls().filter(c => c.operation !== 'status').length, effects);
     assert.equal(s.sim.clock.timers.size, 0);
     s.h.core.db.run("UPDATE device SET trust = 'revoked' WHERE id = ?", row.id);
@@ -862,5 +867,132 @@ test('fix1 I2: a manual network restore still requires current authority after i
     assert.equal((await s.settle(revert.task.id)).state, 'failed');
     assert.equal(s.net.hits.filter((h: any) => h.method === 'PUT').length, writes);
     assert.equal(s.net.text(), before);
+  } finally { await s.stop(); }
+});
+
+test('final I1: failed previews and retained or removed readiness cannot corrupt healthy live topology', async () => {
+  const s = await setup();
+  try {
+    s.registrations[0].services[1].contract_tests = ['http:/fail-contract'];
+    assert.equal((await deploy(s)).state, 'done');
+    assert.equal((await promote(s)).state, 'done');
+    const view = async () => {
+      const map = (await s.h.c('GET', '/services/topology')).body;
+      const machine = map.machines.find((m: any) => m.id === s.h.core.mesh.identity.id);
+      return { map, machine, service: machine.services.find((v: any) => v.service === 'echo') };
+    };
+    const before = await view();
+    assert.equal(before.service.health, 'healthy');
+    assert.equal(before.service.status, 'Verified');
+    const readyAt = before.service.versions[0].observed_at;
+    assert.equal(Date.parse(before.map.captured_at) - Date.parse(readyAt), 120000);
+    assert.equal((await deploy(s, '2')).state, 'waiting');
+    const failed = await view();
+    assert.equal(await s.sim.serving(), '1');
+    assert.equal(failed.service.health, 'healthy');
+    assert.equal(failed.service.status, 'Verified');
+    assert.equal(failed.service.versions.find((v: any) => v.version === '2').status, 'failed');
+    assert.equal(failed.service.versions.find((v: any) => v.version === '1').observed_at, readyAt);
+    s.sim.change(state => {
+      const row = state.services.echo!;
+      const prior = structuredClone(row.versions[0]!);
+      row.versions.push({ ...prior, version: 'kept-history', replicas: 0, ready: false, status: 'kept' },
+        { ...prior, version: 'removed-history', replicas: 0, ready: false, status: 'removed' });
+      row.previous = 'kept-history'; row.revision++;
+    });
+    const history = await view();
+    assert.equal(history.service.health, 'healthy');
+    assert.equal(history.service.status, 'Verified');
+    for (const version of ['kept-history', 'removed-history']) assert.equal(history.service.versions.find((v: any) => v.version === version).observed_at, readyAt);
+    // Read-only collection must still expose actual fresh serving and node failures.
+    s.sim.change(state => { state.unhealthy = ['1']; });
+    const badLive = await view();
+    assert.equal(badLive.service.health, 'failed');
+    assert.equal(badLive.service.status, 'Failed');
+    assert.equal(badLive.service.live, '1');
+    assert.equal(badLive.machine.observations.find((o: any) => o.source === 'local').health, 'healthy');
+    s.sim.change(state => { const current = state.services.echo!.versions.find(v => v.version === '1')!; current.replicas = 0; current.ready = false; });
+    const stoppedLive = await view();
+    assert.equal(stoppedLive.service.live, null, 'desired selector is not a serving replica');
+    assert.equal(stoppedLive.service.health, 'failed', 'actual fresh failure survives a stopped live resource');
+    assert.equal(stoppedLive.service.status, 'Failed');
+    s.sim.change(state => { state.services.echo!.versions.find(v => v.version === '1')!.health.ok = true; });
+    const stoppedHealthy = await view();
+    assert.equal(stoppedHealthy.service.health, 'unknown', 'past healthy measurement cannot claim serving without any replica');
+    assert.equal(stoppedHealthy.service.status, 'Waiting');
+    s.sim.change(state => { state.services.echo!.versions.find(v => v.version === '1')!.replicas = 1; state.unhealthy = []; state.nodes[0]!.healthy = false; });
+    const badNode = await view();
+    assert.equal(badNode.service.observations.find((o: any) => /health measurement/.test(o.reason)).health, 'healthy');
+    assert.equal(badNode.service.health, 'failed');
+    assert.equal(badNode.service.status, 'Failed');
+    assert.equal(badNode.machine.health, 'failed');
+  } finally { await s.stop(); }
+});
+
+test('final I1: readiness fallback belongs only to the current assigned candidate and retains its age', async () => {
+  const s = await setup();
+  try {
+    assert.equal((await deploy(s)).state, 'done');
+    const view = async () => (await s.h.c('GET', '/services/topology')).body.machines.find((m: any) => m.id === s.h.core.mesh.identity.id).services.find((v: any) => v.service === 'echo');
+    const before = await view();
+    assert.equal(before.live, null);
+    assert.equal(before.health, 'healthy');
+    assert.equal(before.status, 'Verified');
+    const at = before.versions[0].observed_at;
+    s.sim.change(state => {
+      const row = state.services.echo!;
+      row.versions.push({ ...structuredClone(row.versions[0]!), version: 'obsolete-failure', replicas: 0, ready: false, status: 'failed' });
+      row.revision++;
+    });
+    assert.equal((await view()).health, 'healthy');
+    s.sim.clock.advance(120000);
+    const stale = await view();
+    assert.equal(stale.health, 'unknown');
+    assert.equal(stale.status, 'Waiting');
+    assert.equal(stale.observations.find((o: any) => /readiness/.test(o.reason)).age_ms, 120000);
+    assert.equal(stale.versions[0].observed_at, at);
+    // A historical ready candidate cannot stand in for an unrelated current assignment.
+    s.sim.change(state => {
+      const row = state.services.echo!;
+      row.versions = row.versions.filter(v => v.version === '1');
+      row.versions[0]!.ready_at = new Date(s.sim.clock.now()).toISOString();
+      row.assigned = { version: 'missing', want: 'alongside', at: new Date(s.sim.clock.now()).toISOString() }; row.revision++;
+    });
+    assert.equal((await view()).health, 'unknown');
+  } finally { await s.stop(); }
+});
+
+test('final I2: capacity blocks network proposals and approved deploy before any new effects', async () => {
+  const s = await setup();
+  try {
+    assert.equal((await deploy(s)).state, 'done');
+    assert.equal((await promote(s)).state, 'done');
+    const expected = expectedOf(s);
+    const change = await s.network('2', expected as typeof empty);
+    s.sim.change(state => {
+      const row = state.services.echo!;
+      row.versions.push(...Array.from({ length: 63 }, (_, i) => ({ ...structuredClone(row.versions[0]!), version: `old${i}`, status: 'removed' as const, replicas: 0, ready: false })));
+      row.revision++;
+    });
+    const before = s.sim.read().services.echo!;
+    const calls = s.sim.calls().length;
+    const hits = s.net.hits.length;
+    const network = await s.h.c('POST', `${s.base}/network`, { version: '2', expected });
+    assert.equal(network.status, 409);
+    assert.equal(s.net.hits.length, hits, 'admission refuses before even a network target snapshot');
+    const proposed = await s.h.c('POST', `${s.base}/deploy`, { version: '2', expected, network_change: change });
+    assert.equal(proposed.status, 200);
+    s.h.core.ledger.approve(proposed.body.id, { confirm: true });
+    const task = await s.settle(proposed.body.id);
+    assert.equal(task.state, 'waiting');
+    assert.match(task.reason!, /capacity/i);
+    assert.equal(s.h.core.ledger.events(task.id).some(e => e.kind === 'commit_point'), false);
+    assert.ok(s.sim.calls().slice(calls).every(c => c.operation === 'status'));
+    const after = s.sim.read().services.echo!;
+    assert.equal(after.revision, before.revision);
+    assert.deepEqual(after.versions, before.versions);
+    assert.deepEqual(after.last_mutation, before.last_mutation);
+    assert.deepEqual(expectedOf(s), expected);
+    assert.equal(await s.sim.serving(), '1');
   } finally { await s.stop(); }
 });

@@ -76,6 +76,12 @@ export async function simulate(tool) {
         case 'prepare':
         case 'prepare-workload': {
           valuesValid(op.values, state, op);
+          // Retain resource and tombstone identities for replay/reconciliation. Refuse new
+          // admission atomically under CAS rather than commit an unobservable 65th row.
+          if (new Set([...row.versions.map(v => v.version), ...op.values.versions.map(v => v.identity)]).size > 64) {
+            process.stderr.write('Simulation version capacity reached before effects.\n');
+            process.exitCode = 73; return;
+          }
           for (const v of op.values.versions) {
             if (row.versions.some(x => x.version === v.identity)) continue;
             row.versions.push({ version: v.identity, replicas: v.replicas, ready: false, ready_at: null, health: { ok: null, checked_at: null, said: null }, status: 'alongside', since: now, device_ids: v.placement.allowedDevices, ports: Object.fromEntries(v.ports.map(p => [p.name, p.port])), state_refs: [] });

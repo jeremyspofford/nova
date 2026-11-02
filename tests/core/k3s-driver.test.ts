@@ -81,3 +81,45 @@ test('canary failure restores kept selector without prepare/download; first live
     assert.ok(first.driver.status('echo')[0]!.held);
   } finally { await first.close(); }
 });
+
+for (const platform of ['win32-x64', 'darwin-arm64']) test(`final M1: dual native/image ${platform} targets refuse K3s before tools`, async () => {
+  const h = await harness();
+  let driver: core.K3sDriver | undefined;
+  try {
+    const node = { ...h.cluster.devices[1]!, id: 'native', platform: platform.replace('-', ' ') };
+    h.cluster.devices = [...h.cluster.devices, node];
+    const def = h.definition('dual');
+    def.artifact.program = { [platform]: { url: 'file:///runtime', sha256: 'b'.repeat(64), command: ['runtime'] } };
+    def.placement = { mode: 'pinned', device: 'native' };
+    driver = new core.K3sDriver({ ...h.options, cluster: h.cluster });
+    assert.equal(core.resolvePlacement(def, h.cluster.devices).ok, true, 'native eligibility remains available to generic placement');
+    const plan = driver.plan(def);
+    assert.equal(plan.ok, false);
+    assert.match(plan.refused.join(' '), /Linux/);
+    assert.equal((await driver.apply(def)).ok, false);
+    assert.deepEqual(h.calls(), []);
+  } finally { await driver?.close(); await h.close(); }
+});
+
+test('final M1: dual native/image preferred and floating placement choose eligible Linux over a larger native host', async () => {
+  const h = await harness();
+  let driver: core.K3sDriver | undefined;
+  try {
+    const native = { ...structuredClone(h.cluster.devices[0]!), id: 'native', name: 'Large Mac', platform: 'darwin arm64' };
+    native.hardware!.platform = 'darwin'; native.hardware!.arch = 'arm64'; native.hardware!.ram_bytes = 64 * 1024 ** 3;
+    h.cluster.devices = [...h.cluster.devices, native];
+    driver = new core.K3sDriver({ ...h.options, cluster: h.cluster });
+    for (const mode of ['preferred', 'floating'] as const) {
+      const def = h.definition(mode);
+      def.artifact.program = { 'darwin-arm64': { url: 'file:///runtime', sha256: 'b'.repeat(64), command: ['runtime'] } };
+      def.placement = { mode };
+      const nativePlan = core.resolvePlacement(def, h.cluster.devices);
+      assert.equal(nativePlan.ok && nativePlan.devices[0]!.id, 'native');
+      assert.equal(driver.plan(def).ok, true);
+      const values = await driver.preview(def, { live: null, previous: null, assigned: null });
+      assert.deepEqual(values.versions[0]!.placement.allowedDevices, ['linux']);
+      assert.deepEqual(values.versions[0]!.image, { repository: 'example/echo', digest: `sha256:${'a'.repeat(64)}` });
+    }
+    assert.ok(h.calls().every(c => c.operation === 'status'), 'pure planning and preview perform no effects');
+  } finally { await driver?.close(); await h.close(); }
+});

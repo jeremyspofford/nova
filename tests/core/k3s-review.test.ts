@@ -312,3 +312,89 @@ test('fix1 I1: stale boundary, future and absent health evidence preserve their 
     }
   } finally { await h.close(); }
 });
+
+for (const historical of [true, false]) test(`final I2: ${historical ? 'retired history' : 'active resources'} at capacity refuses admission before effects and stays observable`, async () => {
+  const h = await simulatedK3s();
+  try {
+    await livePair(h);
+    assert.equal((await h.driver.switch('echo', '2')).ok, true);
+    h.change(state => {
+      const row = state.services.echo!;
+      const template = row.versions[0]!;
+      row.versions.push(...Array.from({ length: 62 }, (_, i) => ({ ...structuredClone(template), version: `old${i}`, status: historical ? 'removed' as const : 'alongside' as const, replicas: historical ? 0 : 1, ready: false })));
+      row.revision++;
+    });
+    assert.equal((await h.driver.observe('echo')).ok, true);
+    const before = h.read().services.echo!;
+    assert.equal(before.versions.length, 64);
+    for (let i = 0; i < 3; i++) {
+      const calls = h.calls().length;
+      const result = await h.driver.apply(h.definition(`beyond${i}`));
+      assert.equal(result.ok, false);
+      assert.match(result.said, /capacity/i, 'known admission refusal must not be reported as unknown completion');
+      assert.equal(h.driver.registry.get('echo', `beyond${i}`), null, 'refused admission does not persist new definitions');
+      assert.ok(h.calls().slice(calls).every(c => c.operation === 'status'), 'no Helm, workload or network mutation after admission refusal');
+      const row = h.read().services.echo!;
+      assert.equal(row.revision, before.revision);
+      assert.deepEqual(row.versions, before.versions);
+      assert.deepEqual(serviceExpected(row), serviceExpected(before));
+      assert.deepEqual(row.last_mutation, before.last_mutation);
+      assert.equal((await h.driver.observe('echo')).ok, true);
+      assert.equal(await h.serving(), '2');
+    }
+    // Stopped historical identities are retained for replay protection and definitions stay immutable.
+    assert.equal((await h.driver.apply(h.definition('1'))).ok, false);
+    assert.equal((await h.driver.apply(h.definition('old0'))).ok, false);
+    assert.equal((await h.driver.apply({ ...h.definition('2'), health: { http: '/changed', every_s: 5 } })).ok, false);
+    assert.equal((await h.driver.rollback('echo', { auto: false, reason: 'capacity still permits rollback' })).ok, true);
+    assert.equal(await h.serving(), '1');
+    assert.equal(h.read().services.echo!.versions.length, 64);
+  } finally { await h.close(); }
+});
+
+for (const operation of ['prepare', 'prepare-workload'] as const) test(`final I2: simulator ${operation} independently rejects a racing capacity overflow before commit`, async () => {
+  const h = await simulatedK3s();
+  try {
+    assert.equal((await h.driver.apply(h.definition('seed'))).ok, true);
+    assert.equal((await h.driver.switch('echo', 'seed')).ok, true);
+    const values = await h.driver.preview(h.definition('next'), serviceExpected(h.read().services.echo!));
+    h.change(state => {
+      const row = state.services.echo!;
+      row.versions.push(...Array.from({ length: 63 }, (_, i) => ({ ...structuredClone(row.versions[0]!), version: `old${i}`, status: 'removed' as const, replicas: 0, ready: false })));
+      row.revision++;
+    });
+    const before = h.read().services.echo!;
+    const request = { cluster: h.cluster.id, namespace: h.cluster.namespace, service: 'echo', operation, values, expected: { revision: before.revision, state: serviceExpected(before) } };
+    await assert.rejects(h.raw('kubectl', { ...request, expected: { ...request.expected, revision: before.revision - 1 } }));
+    assert.deepEqual(h.read().services.echo, before, 'stale CAS changes no resource evidence');
+    await assert.rejects(h.raw('kubectl', request), /capacity/i);
+    assert.deepEqual(h.read().services.echo, before, 'capacity admission changes no selector, revision, assignment, history or task evidence');
+    assert.equal((await h.driver.observe('echo')).ok, true);
+    assert.equal(await h.serving(), 'seed');
+  } finally { await h.close(); }
+});
+
+test('final I2: the 64th retained version can prepare, promote and roll back without deleting history', async () => {
+  const h = await simulatedK3s();
+  try {
+    assert.equal((await h.driver.apply(h.definition('seed'))).ok, true);
+    assert.equal((await h.driver.switch('echo', 'seed')).ok, true);
+    h.change(state => {
+      const row = state.services.echo!;
+      row.versions.push(...Array.from({ length: 62 }, (_, i) => ({ ...structuredClone(row.versions[0]!), version: `old${i}`, status: 'removed' as const, replicas: 0, ready: false })));
+      row.revision++;
+    });
+    const history = h.read().services.echo!.versions.slice(1);
+    assert.equal((await h.driver.apply(h.definition('next'))).ok, true);
+    const row = h.read().services.echo!;
+    assert.equal(row.versions.length, 64);
+    assert.equal(row.live, 'seed');
+    assert.equal(row.assigned!.version, 'next');
+    assert.deepEqual(row.versions.slice(1, -1), history);
+    assert.equal((await h.driver.switch('echo', 'next')).ok, true);
+    assert.equal((await h.driver.rollback('echo', { auto: false, reason: 'boundary rollback' })).ok, true);
+    assert.equal(await h.serving(), 'seed');
+    assert.equal((await h.driver.observe('echo')).ok, true);
+    assert.equal(h.read().services.echo!.versions.length, 64);
+  } finally { await h.close(); }
+});

@@ -7,7 +7,7 @@ import { sameServiceExpected, serviceExpected, SERVICE_CHANGED, validServiceExpe
 import { resolvePlacement } from '../placement.ts';
 import { buildK3sValues, type K3sChartValues } from './values.ts';
 import { K3sRegistry } from './registry.ts';
-import { unavailableClusterTools, type ClusterOperation, type ClusterSnapshot, type ClusterTools, type K3sCluster, type K3sStatus } from './tools.ts';
+import { CLUSTER_VERSION_CAPACITY, ClusterCapacityError, unavailableClusterTools, type ClusterOperation, type ClusterSnapshot, type ClusterTools, type K3sCluster, type K3sStatus } from './tools.ts';
 
 export const K3S_DRIVER_NAME = 'k3s';
 
@@ -91,7 +91,8 @@ export class K3sDriver implements ServiceDriver {
       steps: ['prepare', 'alongside', 'tests', 'health', 'approval', 'switch', 'canary', 'promote'].map(step => ({ step: step as Plan['steps'][number]['step'], said: ({ prepare: 'Validate immutable pinned image values.', alongside: 'Start a preview without changing stable traffic.', tests: 'Run HTTP contract checks.', health: 'Require three successful readiness probes.', approval: 'Require the existing approval authority.', switch: 'Atomically compare approved state and change the selector.', canary: 'Observe health for 120 seconds at five-second intervals.', promote: 'Keep the stopped prior version for rollback.' } as Record<string, string>)[step]! })) };
   }
   #values(defs: ServiceDefinition[], live: string | null, kept: string[], replicas: Record<string, number> = {}) {
-    const placements = Object.fromEntries(defs.map(def => [def.version, resolvePlacement(def, (this.#o.devices?.() ?? this.#o.cluster.devices), { hubId: this.#o.cluster.hubId, now: new Date(this.#clock.now()) })]));
+    // K3s renders the pinned image only; native programs cannot grant container eligibility.
+    const placements = Object.fromEntries(defs.map(def => [def.version, resolvePlacement({ ...def, artifact: { image: def.artifact.image } }, (this.#o.devices?.() ?? this.#o.cluster.devices), { hubId: this.#o.cluster.hubId, now: new Date(this.#clock.now()) })]));
     if (Object.values(placements).some(p => !p.ok)) throw new Error('Placement refused.');
     return buildK3sValues(defs, { namespace: this.#o.cluster.namespace, hubId: this.#o.cluster.hubId, live, kept, placements, replicas });
   }
@@ -99,7 +100,7 @@ export class K3sDriver implements ServiceDriver {
   #expected(s: ClusterSnapshot) { return { revision: s.revision, state: serviceExpected(s) }; }
   #accept(raw: ClusterSnapshot, service: string): ClusterSnapshot {
     const old = this.#cache.get(service);
-    if (!raw || raw.schema !== 1 || raw.cluster !== this.#o.cluster.id || raw.namespace !== this.#o.cluster.namespace || raw.service !== service || !validServiceExpected(serviceExpected(raw)) || !Number.isSafeInteger(raw.revision) || raw.revision < 0 || !Number.isSafeInteger(raw.sequence) || raw.sequence < 1 || !date(raw.observed_at) || Date.parse(raw.observed_at) > this.#clock.now() + 1000 || this.#clock.now() - Date.parse(raw.observed_at) > OBSERVATION_FRESHNESS_MS || (old && (raw.sequence <= old.sequence || raw.revision < old.revision || raw.observed_at < old.observed_at)) || !Array.isArray(raw.versions) || raw.versions.length > 64 || new Set(raw.versions.map(v => v.version)).size !== raw.versions.length || (raw.soak_until !== null && !date(raw.soak_until)) || (raw.held !== null && (!raw.held || typeof raw.held.reason !== 'string' || !date(raw.held.at)))) throw new Error('Invalid, stale or out-of-order cluster observation.');
+    if (!raw || raw.schema !== 1 || raw.cluster !== this.#o.cluster.id || raw.namespace !== this.#o.cluster.namespace || raw.service !== service || !validServiceExpected(serviceExpected(raw)) || !Number.isSafeInteger(raw.revision) || raw.revision < 0 || !Number.isSafeInteger(raw.sequence) || raw.sequence < 1 || !date(raw.observed_at) || Date.parse(raw.observed_at) > this.#clock.now() + 1000 || this.#clock.now() - Date.parse(raw.observed_at) > OBSERVATION_FRESHNESS_MS || (old && (raw.sequence <= old.sequence || raw.revision < old.revision || raw.observed_at < old.observed_at)) || !Array.isArray(raw.versions) || raw.versions.length > CLUSTER_VERSION_CAPACITY || new Set(raw.versions.map(v => v.version)).size !== raw.versions.length || (raw.soak_until !== null && !date(raw.soak_until)) || (raw.held !== null && (!raw.held || typeof raw.held.reason !== 'string' || !date(raw.held.at)))) throw new Error('Invalid, stale or out-of-order cluster observation.');
     if (raw.nodes !== undefined && (!Array.isArray(raw.nodes) || raw.nodes.length > 256 || raw.nodes.some(n => !n || typeof n.device_id !== 'string' || n.device_id.length > 256 || typeof n.ready !== 'boolean' || !date(n.at) || n.at > raw.observed_at))) throw new Error('Invalid node evidence.');
     if (raw.nodes && (new Set(raw.nodes.map(n => n.device_id)).size !== raw.nodes.length || raw.nodes.some(n => { const previous = old?.nodes?.find(p => p.device_id === n.device_id); return previous && n.at < previous.at; }))) throw new Error('Regressed or duplicate node evidence.');
     if (raw.last_mutation !== undefined && (!raw.last_mutation || !/^[0-9a-f-]{36}$/.test(raw.last_mutation.task_id) || !['prepare-workload', 'validate', 'switch', 'rollback'].includes(raw.last_mutation.operation))) throw new Error('Invalid task evidence.');
@@ -151,7 +152,12 @@ export class K3sDriver implements ServiceDriver {
         return available;
       }
       try { return await (context ? execution.run(context, work) : work()); }
-      catch { const said = 'The cluster operation failed or its completion is unknown. Refresh before any new action.'; if (!this.#failures.has(service)) this.#failures.set(service, { at: iso(this.#clock.now()), said }); return fail(said); }
+      catch (error) {
+        if (error instanceof ClusterCapacityError) return fail(error.message);
+        const said = 'The cluster operation failed or its completion is unknown. Refresh before any new action.';
+        if (!this.#failures.has(service)) this.#failures.set(service, { at: iso(this.#clock.now()), said });
+        return fail(said);
+      }
     });
     queues.set(key, pending);
     void pending.finally(() => { if (queues.get(key) === pending) queues.delete(key); });
@@ -182,6 +188,7 @@ export class K3sDriver implements ServiceDriver {
       if (!plan.ok) return fail(plan.refused.join(' '));
       let s = await this.#read(copy.service);
       if (expected !== undefined && !sameServiceExpected(expected, s)) return fail(SERVICE_CHANGED);
+      if (!s.versions.some(v => v.version === copy.version) && s.versions.length >= CLUSTER_VERSION_CAPACITY) throw new ClusterCapacityError();
       this.registry.register(copy);
       if (s.versions.some(v => v.version === copy.version)) return fail('This version already has cluster state; refresh instead of replaying apply.');
       const defs = s.versions.filter(v => v.status !== 'removed').map(v => { const d = this.registry.get(copy.service, v.version); if (!d) throw new Error('Definition missing.'); return d; });
@@ -252,6 +259,7 @@ export class K3sDriver implements ServiceDriver {
     const out = await this.#queue(def.service, async () => {
       const s = await this.#read(def.service);
       if (!sameServiceExpected(expected, s)) return fail(SERVICE_CHANGED);
+      if (!s.versions.some(v => v.version === def.version) && s.versions.length >= CLUSTER_VERSION_CAPACITY) throw new ClusterCapacityError();
       const defs = s.versions.filter(v => v.status !== 'removed').map(v => this.registry.get(def.service, v.version)!);
       values = this.#values([...defs, def], s.live, s.previous ? [s.previous] : [], Object.fromEntries(s.versions.filter(v => v.status !== 'removed').map(v => [v.version, v.replicas])));
       return { ok: true, said: 'Prepared the public network document without effects.' };

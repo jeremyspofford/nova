@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:http';
-import { K3sDriver, k3sDeviceLabel, type K3sClock, type ClusterTools, type ClusterOperation, type ClusterSnapshot, type K3sCluster, type ServiceDefinition } from '../../src/core/index.ts';
+import { ClusterCapacityError, K3sDriver, k3sDeviceLabel, type K3sClock, type ClusterTools, type ClusterOperation, type ClusterSnapshot, type K3sCluster, type ServiceDefinition } from '../../src/core/index.ts';
 export class SimulationClock implements K3sClock {
   time = Date.parse('2026-11-02T12:00:00.000Z');
   onSleep: (() => void | Promise<void>) | null = null;
@@ -47,7 +47,7 @@ export async function simulatedK3s() {
     child.stdout.on('data', chunk => { total += chunk.length; if (total > 262144) child.kill('SIGKILL'); else out += chunk; });
     child.stderr.on('data', chunk => { total += chunk.length; if (total > 262144) child.kill('SIGKILL'); else err += chunk; });
     child.on('error', reject);
-    child.on('close', code => { clearTimeout(timer); transcript.push({ tool, argv: ['nova-simulation', operation.operation, '--namespace', operation.namespace, '--service', operation.service], stdout: out, stderr: err, exit: code }); if (code !== 0) reject(new Error(`Fake child failed (${code}): ${err}`)); else { try { resolveResult(JSON.parse(out)); } catch { reject(new Error('Invalid child JSON.')); } } });
+    child.on('close', code => { clearTimeout(timer); transcript.push({ tool, argv: ['nova-simulation', operation.operation, '--namespace', operation.namespace, '--service', operation.service], stdout: out, stderr: err, exit: code }); if (code === 73 && err === 'Simulation version capacity reached before effects.\n') reject(new ClusterCapacityError()); else if (code !== 0) reject(new Error(`Fake child failed (${code}): ${err}`)); else { try { resolveResult(JSON.parse(out)); } catch { reject(new Error('Invalid child JSON.')); } } });
     child.stdin.on('error', () => {});
     child.stdin.end(JSON.stringify(operation));
   });

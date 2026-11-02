@@ -5,6 +5,12 @@ import type { ServiceExpectedState } from '../expected.ts';
 import type { PlacementDevice } from '../placement.ts';
 import type { K3sChartValues } from './values.ts';
 
+export const CLUSTER_VERSION_CAPACITY = 64;
+// An adapter may emit this only after a known pre-effect admission refusal. Other errors
+// remain unknown completion; neither stderr text nor an unverified response establishes it.
+export class ClusterCapacityError extends Error {
+  constructor() { super('Cluster version capacity reached (64 retained versions); no new version was started.'); }
+}
 export interface K3sCluster { id: string; namespace: string; hubId: string; devices: readonly PlacementDevice[] }
 export interface ClusterVersion {
   version: string; replicas: number; ready: boolean; ready_at: string | null;
