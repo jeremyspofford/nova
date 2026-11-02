@@ -68,6 +68,8 @@ export interface NetworkOptions {
   privacy: () => PrivacyMode;
   // Trusted, exact-bound cluster adapter. Persisted bindings never fall back to a legacy token.
   clusterTarget?: (id: string) => NetworkTarget | null;
+  // Private Core composition authority; never accepted from a route or worker input.
+  clusterAuthority?: { key: symbol; check: (target: string, binding: unknown, restore: boolean) => void };
   checkpoint: (reason: string) => { id: string };
   notify?: (key: string, text: string) => void;
   // The switch's window in seconds, from the person's settings (mesh.contact_window_s).
@@ -204,11 +206,16 @@ export class Network {
 
   // ---- changes -------------------------------------------------------------------------------------
 
-  start(input: Record<string, unknown>, o: { session?: string | null; origin?: TaskInput['origin'] } = {}) {
+  start(input: Record<string, unknown>, o: { session?: string | null; origin?: TaskInput['origin']; cluster?: { as: symbol; binding: Record<string, string> } } = {}) {
     const ref = typeof input.target === 'string' ? input.target.trim() : '';
     const t = this.#o.db.get<TargetRow>('SELECT * FROM network_target WHERE id = ? OR name = ? ORDER BY created_at LIMIT 1', ref, ref);
     if (!t) throw new CoreError('validation', `There is no network target “${ref}”. ${this.#targetNames()}`);
     const patch = validatePatch(input.patch);
+    const cluster = !!this.#o.clusterTarget?.(t.id) || t.adapter === 'k3s-public';
+    if (cluster) {
+      if (!this.#o.clusterAuthority || o.cluster?.as !== this.#o.clusterAuthority.key) throw new CoreError('forbidden', 'Cluster network changes require the trusted cluster facade.');
+      this.#o.clusterAuthority.check(t.id, o.cluster.binding, false);
+    } else if (o.cluster) throw new CoreError('forbidden', 'Cluster authority requires its exact bound target.');
     if (!this.#o.vault.has(this.#tokenName(t.id))) throw new CoreError('conflict', `${t.name}’s token isn’t in the vault yet. The person saves it with PUT /network/targets/${t.id}/token (never in chat).`);
     // No device, no change: its contact could never be confirmed, so the switch would always fire.
     if (!this.#counted().length) throw new CoreError('conflict', `Nova confirms a network change by hearing from one of your devices afterwards (${this.#kinds().join(' or ')}), and none is paired. Pair your phone first (Devices), then ask again.`);
@@ -228,7 +235,7 @@ export class Network {
     try {
       // The patch itself is sealed in Nova's own folder; the record keeps its shape (review B1).
       this.#writeSealed({ id, target_id: t.id }, 'patch.json', patch);
-      task = this.#make(this.#change(id), 'prepare', 'chat', o.origin ?? { kind: 'user' });
+      task = this.#make(this.#change(id), 'prepare', 'chat', o.origin ?? { kind: 'user' }, o.cluster?.binding);
     } catch (e) {
       this.#dropFiles(id);
       this.#o.db.run('DELETE FROM network_change WHERE id = ?', id);
@@ -248,9 +255,12 @@ export class Network {
     return c;
   }
 
-  #make(c: ChangeRow, step: Step, by: 'chat' | 'switch' | 'person' = 'chat', origin: TaskInput['origin'] = { kind: 'user' }): Task {
+  #make(c: ChangeRow, step: Step, by: 'chat' | 'switch' | 'person' = 'chat', origin: TaskInput['origin'] = { kind: 'user' }, binding?: Record<string, string>): Task {
     const t = this.#target(c.target_id);
     const tasks = parse<TaskRef[]>(c.tasks) ?? [];
+    const root = tasks[0] ? this.#o.ledger.get(tasks[0].id) : null;
+    const clusterBinding = root ? root.brief.inputs?.cluster_binding : binding;
+    if (root && clusterBinding !== undefined) origin = root.origin;
     const n = tasks.filter((x) => x.step === step).length;
     const titles: Record<Step, string> = { prepare: `Snapshot and diff: ${c.title}`, apply: `Apply to ${t.name}: ${c.title}`, revert: `Put ${t.name} back as it was: ${c.title}` };
     const goals: Record<Step, string> = {
@@ -264,7 +274,7 @@ export class Network {
       title: titles[step], owner: NETWORK_WORKER, goal: goals[step], origin,
       evidence_required: [{ kind: 'confirmation', note: step === 'prepare' ? 'the snapshot, as Nova recorded it' : `Nova reads ${t.name} back` }],
       privacy_mode: c.privacy_mode, approval_tier: step === 'prepare' || (step === 'revert' && by === 'switch') ? 1 : 3,
-      inputs: { step, change_id: c.id, target_id: t.id, ...(step === 'revert' ? { by } : {}), ...(step !== 'prepare' ? { snapshot_sha: c.snapshot_sha, proposed_sha: c.proposed_sha } : {}) },
+      inputs: { step, change_id: c.id, target_id: t.id, ...(clusterBinding !== undefined ? { cluster_binding: clusterBinding } : {}), ...(step === 'revert' ? { by } : {}), ...(step !== 'prepare' ? { snapshot_sha: c.snapshot_sha, proposed_sha: c.proposed_sha } : {}) },
       idempotency_key: `network:${c.id}:${step}:${n + (step === 'revert' ? 1 : 0)}:${by}`,
       ...(tasks[0] ? { parent_id: tasks[0].id } : {}),
     }, { as: this.#key });
@@ -576,6 +586,24 @@ export class Network {
     });
   }
 
+  #clusterWrite(c: ChangeRow, t: TargetRow, brief: Brief, restore = false): void {
+    if (this.#target(t.id).adapter !== 'k3s-public' && brief.inputs?.cluster_binding === undefined && !this.#o.clusterTarget?.(t.id)) return;
+    const refs = parse<TaskRef[]>(c.tasks) ?? [];
+    const ref = refs.find(r => r.id === brief.task_id);
+    const root = refs[0] ? this.#o.ledger.get(refs[0].id) : null;
+    const binding = root?.brief.inputs?.cluster_binding;
+    if (!this.#o.clusterAuthority || !root || root.owner !== NETWORK_WORKER || refs[0]?.step !== 'prepare' || root.brief.inputs?.step !== 'prepare'
+      || !ref || ref.step !== brief.inputs?.step || root.brief.inputs?.change_id !== c.id || root.brief.inputs?.target_id !== t.id
+      || brief.inputs?.change_id !== c.id || brief.inputs?.target_id !== t.id || !binding || JSON.stringify(binding) !== JSON.stringify(brief.inputs?.cluster_binding)
+      || brief.inputs?.snapshot_sha !== c.snapshot_sha || brief.inputs?.proposed_sha !== c.proposed_sha
+      || restore && (ref.step !== 'revert' || brief.inputs?.by !== 'switch' || c.state !== 'reverting')) {
+      throw new CoreError('forbidden', 'Missing or invalid durable cluster network binding.');
+    }
+    const actor = (binding as Record<string, unknown>).actor;
+    if (actor === 'console' ? root.origin.kind !== 'user' : root.origin.kind !== 'device' || root.origin.ref !== actor) throw new CoreError('forbidden', 'Cluster requester differs from its durable origin.');
+    this.#o.clusterAuthority.check(t.id, binding, restore);
+  }
+
   async #apply(c: ChangeRow, t: TargetRow, a: NetworkTarget, brief: Brief, signal: AbortSignal, report: Reporter): Promise<Report> {
     if (c.state !== 'review' && c.state !== 'applying') return report('failed', `This change isn’t waiting to be applied (it is ${c.state}).`);
     if (brief.inputs?.snapshot_sha !== c.snapshot_sha || brief.inputs?.proposed_sha !== c.proposed_sha) return report('failed', 'The change isn’t the one you reviewed any more, so Nova applied nothing.');
@@ -585,6 +613,7 @@ export class Network {
     // The target must still be the snapshot: nothing changed it since the review.
     const now = await a.read(signal);
     if (now.version !== snap.version || digest(now.config) !== snap.sha) return report('failed', `${t.name}’s configuration changed since the snapshot, so Nova applied nothing. Ask again to start from what is there now.`);
+    this.#clusterWrite(c, t, brief);
     const devices = this.#counted().map((d) => d.id);
     if (!devices.length) return report('failed', 'None of your devices is paired any more, so Nova couldn’t confirm contact after the change: it applied nothing.');
     this.#set(c.id, { state: 'applying' });
@@ -605,6 +634,7 @@ export class Network {
   }
 
   async #write(c: ChangeRow, t: TargetRow, a: NetworkTarget, brief: Brief, signal: AbortSignal, report: Reporter, snap: Snap, prop: { sha: string; config: Config }, devices: string[], cp: { id: string }): Promise<Report> {
+    this.#clusterWrite(c, t, brief);
     this.#o.ledger.committing(brief.task_id, `write the new configuration to ${t.name}`);
     // The switch is armed once the write may have landed: a write that failed is checked by reading
     // the target, and only one that certainly changed nothing leaves it unarmed.
@@ -664,6 +694,7 @@ export class Network {
         this.#set(c.id, { state: 'revert_failed', next_revert_at: null, reason: `${t.name}’s configuration changed after Nova’s change, so Nova didn’t overwrite it. Check ${t.name} yourself, then settle the change.` });
         return report('failed', `${t.name}’s configuration changed after Nova’s change (it isn’t the snapshot or Nova’s change), so Nova didn’t overwrite it.`);
       }
+      this.#clusterWrite(c, t, brief, brief.inputs?.by === 'switch');
       this.#o.ledger.committing(brief.task_id, `write the snapshot back to ${t.name}`);
       // The snapshot's own bytes, exactly as the target gave them (review S7).
       await a.write(snap.text, now.version, signal);

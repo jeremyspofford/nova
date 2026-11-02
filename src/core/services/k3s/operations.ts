@@ -19,7 +19,7 @@ import type { PlacementDevice } from '../placement.ts';
 import type { ClusterObservation, ServiceInput } from '../topology.ts';
 import { K3sDriver, type K3sClock, type K3sExecution } from './driver.ts';
 import { k3sDeviceLabel, type K3sChartValues } from './values.ts';
-import type { ClusterTools, ClusterSnapshot } from './tools.ts';
+import { unavailableClusterTools, type ClusterTools, type ClusterSnapshot } from './tools.ts';
 
 export interface K3sRegistration {
   id: string; namespace: string; hubId: string; deviceIds: string[];
@@ -30,13 +30,15 @@ export interface K3sRegistration {
 export interface K3sOptions {
   // Trusted composition only. No API creates registrations, joins or credential capabilities.
   registrations: () => readonly K3sRegistration[];
-  tools?: (cluster: string) => ClusterTools;
+  // Resolve current authority; keep its object identity stable for the duration of each I/O.
+  // Removing/replacing it revokes in-flight observations without discarding older evidence.
+  tools?: (cluster: string) => ClusterTools | null | undefined;
   probeOrigin?: (cluster: string) => string | undefined;
   clock?: Pick<K3sClock, 'sleep' | 'schedule'>;
 }
 interface Options extends K3sOptions {
   home: string; ledger: Ledger; verifier: Verifier; network: Network; devices: Devices;
-  placement: () => PlacementDevice[]; now: () => Date; activeHub: () => boolean;
+  placement: () => PlacementDevice[]; now: () => Date; activeHub: () => boolean; networkKey: symbol;
 }
 type Operation = 'deploy' | 'promote' | 'rollback';
 interface Input {
@@ -91,9 +93,22 @@ export class K3sOperations {
     if (row && row.fingerprint !== fingerprint) { void row.driver.close(); this.#drivers.delete(r.id); row = undefined; }
     if (!row) {
       const current = () => this.#o.placement().filter(d => r.deviceIds.includes(d.id));
+      // Cache observations, never capability authority. A provider must remain current across
+      // an awaited read; replacement cannot refresh cached evidence through a revoked port.
+      const provider = () => this.#o.tools?.(r.id) ?? unavailableClusterTools;
+      const tools: ClusterTools = {
+        available: () => provider().available(),
+        execute: async (operation, signal) => {
+          const current = provider();
+          if (!current.available().ok) throw new Error('The current cluster capability is unavailable.');
+          const result = await current.execute(operation, signal);
+          if (provider() !== current || !current.available().ok) throw new Error('The cluster capability changed during I/O.');
+          return result;
+        },
+      };
       const driver = new K3sDriver({ cluster: { id: r.id, namespace: r.namespace, hubId: r.hubId, devices: [] },
         directory: join(this.#o.home, 'services', 'k3s', r.id), workloadOnly: true, devices: current,
-        ...(this.#o.tools ? { tools: this.#o.tools(r.id) } : {}),
+        tools,
         ...(this.#o.probeOrigin?.(r.id) ? { probeOrigin: this.#o.probeOrigin(r.id)! } : {}),
         clock: { now: () => this.#o.now().getTime(), sleep: this.#o.clock?.sleep.bind(this.#o.clock) ?? (async (ms, signal) => { await sleep(ms, undefined, { signal }); }), schedule: this.#o.clock?.schedule.bind(this.#o.clock) ?? (() => () => {}) },
       });
@@ -148,6 +163,15 @@ export class K3sOperations {
     port(); // Refuse before any legacy token read or adapter fallback.
     return clusterNetworkTarget(registration, port);
   }
+  checkNetworkAuthority(target: string, binding: unknown, restore: boolean) {
+    if (!closed(binding, ['cluster', 'namespace', 'registration', 'actor']) || !['cluster', 'namespace', 'registration', 'actor'].every(k => typeof binding[k] === 'string' && binding[k])) throw new CoreError('forbidden', 'Missing or invalid durable cluster network authority.');
+    const r = this.#registration(binding.cluster as string);
+    if (r.networkTarget !== target || r.namespace !== binding.namespace || digest(r) !== binding.registration) throw new CoreError('conflict', 'The approved cluster network registration changed.');
+    // Automatic exact snapshot restoration was authorized with the original M10d change.
+    // It still needs the current bound capability, but not a new requester/hub grant.
+    if (!restore) this.#access(binding.actor as string);
+    if (!this.networkTarget(target)) throw new CoreError('conflict', 'Cluster network capability unavailable.');
+  }
   #body(body: Record<string, unknown>, operation: string) {
     if (!closed(body, operation === 'deploy' ? ['version', 'expected', 'network_change'] : ['version', 'expected']) || typeof body.version !== 'string' || !validServiceExpected(body.expected) || operation === 'deploy' && (typeof body.network_change !== 'string' || !/^c[0-9a-f]{10}$/.test(body.network_change))) throw new CoreError('validation', 'Use a registered version and exact expected state; deploy also requires its reviewed network change.');
   }
@@ -173,7 +197,11 @@ export class K3sOperations {
     this.#access(this.#actor(principal));
     if (digest(this.#registration(cluster)) !== digest(r)) throw new CoreError('conflict', 'Cluster registration changed.');
     this.networkTarget(r.networkTarget);
-    return this.#o.network.start({ target: r.networkTarget, patch: clusterNetworkPatch(r, values, body.expected as ServiceExpectedState), title: `Network policy for ${cluster}/${service}@${def.version}` });
+    const actor = this.#actor(principal);
+    return this.#o.network.start({ target: r.networkTarget, patch: clusterNetworkPatch(r, values, body.expected as ServiceExpectedState), title: `Network policy for ${cluster}/${service}@${def.version}` }, {
+      origin: actor === 'console' ? { kind: 'user' } : { kind: 'device', ref: actor },
+      cluster: { as: this.#o.networkKey, binding: { cluster, namespace: r.namespace, registration: digest(r), actor } },
+    });
   }
   #committed(id: string) { return this.#o.ledger.events(id).some(e => e.kind === 'commit_point'); }
   retry(cluster: string, service: string, id: string, principal: Principal) {

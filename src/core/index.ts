@@ -572,6 +572,7 @@ export function createCore(o: CoreOptions) {
   // then the dead-man's switch on the device mesh: no contact from the person's devices within the
   // window (mesh.contact_window_s), and Nova puts the snapshot back by itself.
   let k3s: K3sOperations | null = null;
+  const clusterNetworkKey = Symbol('cluster-network-origin');
   const network = new Network({
     db, log, home: o.home, ledger, verifier, vault, devices, now, privacy: () => profile.privacyDefault(),
     checkpoint: (reason) => checkpoints.auto(reason),
@@ -579,10 +580,14 @@ export function createCore(o: CoreOptions) {
     contactKinds: () => profile.get<unknown>('mesh', 'contact_kinds'),
     ...(o.network ?? {}),
     clusterTarget: id => k3s?.networkTarget(id) ?? null,
+    clusterAuthority: { key: clusterNetworkKey, check: (target, binding, restore) => {
+      if (!k3s) throw new CoreError('conflict', 'Cluster network authority is unavailable.');
+      k3s.checkNetworkAuthority(target, binding, restore);
+    } },
     notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'network', name: 'Network', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('network', 'Nova couldn’t tell you about a network change.', { error: (e as Error).message })); },
   });
   ledger.workers.set(network.worker.id, network.worker);
-  k3s = o.k3s ? new K3sOperations({ ...o.k3s, home: o.home, ledger, verifier, network, devices, now,
+  k3s = o.k3s ? new K3sOperations({ ...o.k3s, home: o.home, ledger, verifier, network, devices, now, networkKey: clusterNetworkKey,
     placement: () => placementDevicesNow(), activeHub: () => role.role() === 'hub' && devices.state().hub_id === meshIdentity.id,
   }) : null;
   if (k3s) ledger.workers.set(k3s.worker.id, k3s.worker);

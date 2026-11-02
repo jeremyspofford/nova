@@ -11,6 +11,8 @@ export interface ClusterNetworkDocument {
   schema: 1; cluster: string; namespace: string;
   services: Record<string, { state: [ServiceExpectedState]; versions: { version: string; egress: 'none' | 'internet' }[] }>;
 }
+// Port identity must remain current across each awaited read. Its provider is resolved again
+// immediately before writes; removal never falls back to a legacy credentialed adapter.
 export interface ClusterNetworkPort {
   read(signal?: AbortSignal): Promise<{ document: ClusterNetworkDocument; policies: Config[]; text: string; version: string }>;
   // The implementation renders exactly renderClusterNetwork(document, registered), applies the
@@ -23,7 +25,8 @@ export function renderClusterNetwork(raw: unknown, registration: K3sRegistration
   if (!closed(raw, ['schema', 'cluster', 'namespace', 'services']) || raw.schema !== 1 || raw.cluster !== registration.id || raw.namespace !== registration.namespace || !raw.services || typeof raw.services !== 'object' || Array.isArray(raw.services) || Object.keys(raw.services).length > 64) throw new CoreError('validation', 'Invalid canonical cluster network document.');
   const policies: Config[] = [];
   for (const [service, entry] of Object.entries(raw.services)) {
-    if (!closed(entry, ['state', 'versions']) || !Array.isArray(entry.state) || entry.state.length !== 1 || !validServiceExpected(entry.state[0]) || !Array.isArray(entry.versions) || entry.versions.length > 64) throw new CoreError('validation', 'Invalid canonical cluster service policy.');
+    if (['__proto__', 'constructor', 'prototype'].includes(service) || !registration.services.some(d => d.service === service)) throw new CoreError('validation', 'Network policy service is not registered.');
+    if (!closed(entry, ['state', 'versions']) || !Array.isArray(entry.state) || entry.state.length !== 1 || !validServiceExpected(entry.state[0]) || !Array.isArray(entry.versions) || entry.versions.length === 0 || entry.versions.length > 64) throw new CoreError('validation', 'Invalid canonical cluster service policy.');
     const seen = new Set<string>();
     for (const v of entry.versions) {
       if (!closed(v, ['version', 'egress']) || typeof v.version !== 'string' || seen.has(v.version)) throw new CoreError('validation', 'Invalid canonical cluster policy version.');
@@ -32,6 +35,8 @@ export function renderClusterNetwork(raw: unknown, registration: K3sRegistration
       if (!def || !['none', 'internet'].includes(def.egress) || v.egress !== def.egress) throw new CoreError('validation', 'Network policy must match a registered immutable service definition.');
       policies.push({ apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', metadata: { name: token('network', service, v.version), namespace: registration.namespace }, spec: { podSelector: { matchLabels: { 'nova/service': token('selector', service), 'nova/version': token('version', service, v.version) } }, policyTypes: ['Egress'], egress: v.egress === 'none' ? [] : [{}] } });
     }
+    const state = entry.state[0] as unknown as ServiceExpectedState;
+    if ([state.live, state.previous].some(version => version !== null && !seen.has(version))) throw new CoreError('validation', 'Network policy must retain live and previous versions.');
   }
   return policies;
 }
@@ -48,7 +53,9 @@ export function clusterNetworkPatch(r: K3sRegistration, values: K3sChartValues, 
 export function clusterNetworkTarget(registration: () => K3sRegistration, port: () => ClusterNetworkPort): NetworkTarget {
   return {
     async read(signal) {
-      const source = await port().read(signal);
+      const current = port();
+      const source = await current.read(signal);
+      if (port() !== current) throw new CoreError('conflict', 'Cluster network capability changed during read.');
       const rendered = renderClusterNetwork(source.document, registration());
       if (JSON.stringify(source.policies) !== JSON.stringify(rendered)) throw new CoreError('conflict', 'Actual cluster network policy readback differs from the canonical document.');
       if (!source.version || JSON.stringify(JSON.parse(source.text)) !== JSON.stringify(source.document)) throw new CoreError('conflict', 'Cluster network readback text differs from its document.');

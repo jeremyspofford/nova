@@ -4,15 +4,16 @@ import { join } from 'node:path';
 import { hub, enroll, call } from './mesh-support.ts';
 import { simulatedK3s } from '../support/k3s.ts';
 import { startNetconfig } from '../../scripts/stand-ins/fake-netconfig.js';
-import { createCore, renderClusterNetwork, type ClusterNetworkDocument, type Core } from '../../src/core/index.ts';
+import { createCore, renderClusterNetwork, unavailableClusterTools, type ClusterTools, type ClusterNetworkDocument, type Core } from '../../src/core/index.ts';
 import { fakeToken } from '../support/infra.ts';
 
 const empty = { live: null, previous: null, assigned: null };
 async function setup(o: { capability?: boolean } = {}) {
   const sim = await simulatedK3s();
   let registrations: any[] = [];
+  let provider: ClusterTools | undefined = sim.tools;
   const h = await hub({ core: { now: () => new Date(sim.clock.now()), k3s: {
-    registrations: () => registrations, ...(o.capability === false ? {} : { tools: () => sim.tools }), probeOrigin: () => sim.origin,
+    registrations: () => registrations, ...(o.capability === false ? {} : { tools: () => provider! }), probeOrigin: () => sim.origin,
     clock: sim.clock,
   } } as any });
   h.clock.t = sim.clock.now();
@@ -61,9 +62,10 @@ async function setup(o: { capability?: boolean } = {}) {
   let hubStopped = false;
   const restarted: Core[] = [];
   return { sim, h, net, target, base, settle, network, registrations,
+    setProvider(next: ClusterTools | undefined) { provider = next; },
     async restart() {
       await h.stop(); hubStopped = true;
-      const core = createCore({ home: h.home, version: '0.1.0', trustedOrigin: () => false, now: () => new Date(sim.clock.now()), k3s: { registrations: () => registrations, tools: () => sim.tools, probeOrigin: () => sim.origin, clock: sim.clock } });
+      const core = createCore({ home: h.home, version: '0.1.0', trustedOrigin: () => false, now: () => new Date(sim.clock.now()), k3s: { registrations: () => registrations, tools: () => provider!, probeOrigin: () => sim.origin, clock: sim.clock } });
       restarted.push(core); return core;
     },
     async stop() { if (!hubStopped) await h.stop(); for (const core of restarted) await core.close(); await net.close(); await sim.close(); },
@@ -553,4 +555,242 @@ test('optional cluster composition preserves malformed-source diagnostics from t
     const r = await h.c('GET', '/services/topology');
     assert.ok(r.body.issues.includes('Cluster observations malformed.'));
   } finally { await h.stop(); }
+});
+
+// Task3 independent-review fix round 1: provider identity is current authority, not cached metadata.
+test('fix1 I1: replacing the provider stops warm-driver collection and promotion; restoration retries only the same approved state', async () => {
+  const s = await setup();
+  try {
+    assert.equal((await deploy(s)).state, 'done');
+    const beforeMap = (await s.h.c('GET', '/services/topology')).body;
+    const observed = beforeMap.machines.find((m: any) => m.id === s.h.core.mesh.identity.id).observations.find((o: any) => o.source === 'cluster');
+    const expected = expectedOf(s);
+    const p = await s.h.c('POST', `${s.base}/promote`, { version: '1', expected });
+    assert.equal(p.status, 200);
+    const calls = s.sim.calls().length;
+    s.setProvider(unavailableClusterTools);
+    s.h.core.ledger.approve(p.body.id);
+    const blocked = await s.settle(p.body.id);
+    assert.equal(blocked.state, 'waiting');
+    assert.equal(blocked.attempts, 0);
+    s.sim.clock.advance(1000);
+    const afterMap = (await s.h.c('GET', '/services/topology')).body;
+    const row = afterMap.machines.find((m: any) => m.id === s.h.core.mesh.identity.id);
+    assert.equal(row.observations.find((o: any) => /Actual registered/.test(o.reason)).at, observed.at);
+    assert.ok(row.observations.some((o: any) => /Control plane unavailable/.test(o.reason)));
+    assert.equal(s.sim.calls().length, calls, 'no I/O through the revoked cached provider');
+    s.setProvider(s.sim.tools);
+    s.h.core.ledger.retry(blocked.id);
+    const restored = await s.settle(blocked.id);
+    assert.equal(restored.state, 'done', restored.reason!);
+    assert.deepEqual(restored.brief.inputs?.expected, expected);
+    assert.equal(restored.id, blocked.id);
+  } finally { await s.stop(); }
+});
+
+test('fix1 I1: provider removal during awaited network preflight prevents workload prepare', async () => {
+  const s = await setup();
+  try {
+    const change = await s.network();
+    const read = s.sim.tools.network!.read;
+    s.sim.tools.network!.read = async signal => { const result = await read(signal); s.setProvider(undefined); return result; };
+    const p = await s.h.c('POST', `${s.base}/deploy`, { version: '1', expected: empty, network_change: change });
+    s.h.core.ledger.approve(p.body.id);
+    const task = await s.settle(p.body.id);
+    assert.equal(task.state, 'waiting');
+    assert.equal(task.attempts, 0);
+    assert.equal(s.sim.read().services.echo!.versions.length, 0);
+    assert.ok(!s.sim.calls().some(c => c.operation === 'prepare-workload'));
+  } finally { await s.stop(); }
+});
+
+for (const revoke of ['hub', 'actor', 'registration'] as const) test(`fix1 I2: current ${revoke} authority is checked after awaited M10d read and before policy write`, async () => {
+  const s = await setup();
+  try {
+    const person = await enroll(s.h, { name: 'Network approver', kind: 'phone' });
+    s.h.core.db.run('UPDATE device SET can_approve = 1 WHERE id = ?', person.dev.deviceId);
+    const r = await call(s.h.mesh, 'POST', `/api/v1${s.base}/network`, { version: '1', expected: empty }, { authorization: `Bearer ${person.token}` });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    await s.settle(r.body.task.id);
+    const apply = s.h.core.network.view(r.body.change.id).tasks.find(t => t.step === 'apply')!;
+    const read = s.sim.tools.network!.read;
+    let once = false;
+    s.sim.tools.network!.read = async signal => {
+      const result = await read(signal);
+      if (!once) {
+        once = true;
+        if (revoke === 'hub') s.h.core.db.run("UPDATE mesh_state SET role = 'standby', hub_id = 'replacement-hub' WHERE id = 1");
+        else if (revoke === 'actor') s.h.core.db.run('UPDATE device SET can_approve = 0 WHERE id = ?', person.dev.deviceId);
+        else s.registrations[0].sites.push({ id: 'new-site', name: 'Changed registration' });
+      }
+      return result;
+    };
+    const before = s.net.hits.filter((h: any) => h.method === 'PUT').length;
+    s.h.core.ledger.approve(apply.id, { confirm: true });
+    const finished = await s.settle(apply.id);
+    assert.equal(s.net.hits.filter((h: any) => h.method === 'PUT').length, before);
+    assert.equal((s.sim.read() as any).networkPolicies?.length ?? 0, 0);
+    assert.equal(finished.state, 'failed');
+    assert.deepEqual(finished.origin, { kind: 'device', ref: person.dev.deviceId });
+    assert.equal((finished.brief.inputs?.cluster_binding as any).actor, person.dev.deviceId);
+  } finally { await s.stop(); }
+});
+
+test('fix1 I2: generic network input cannot forge the trusted cluster origin or binding', async () => {
+  const s = await setup();
+  try {
+    const patch = { schema: 1, cluster: 'simulation', namespace: 'nova-services', services: { echo: { state: [empty], versions: [{ version: '1', egress: 'none' }] } } };
+    const r = await s.h.c('POST', '/network/changes', { target: s.target.id, patch, actor: 'console', cluster_binding: { actor: 'console', cluster: 'simulation', namespace: 'nova-services', registration: 'fake' } });
+    assert.equal(r.status, 403);
+    assert.equal(s.h.core.network.list().changes.length, 0);
+    assert.equal(s.net.hits.length, 0);
+  } finally { await s.stop(); }
+});
+
+test('fix1 M3: canonical policy entries require registered non-prototype keys, nonempty versions and the live policy', async () => {
+  const s = await setup();
+  try {
+    const document = (service: string, versions: unknown[], state = empty) => ({ schema: 1, cluster: 'simulation', namespace: 'nova-services', services: JSON.parse(JSON.stringify({ [service]: { state: [state], versions } })) });
+    for (const name of ['unknown', '__proto__', 'constructor', 'prototype']) {
+      assert.throws(() => renderClusterNetwork(document(name, []), s.registrations[0]));
+      assert.throws(() => renderClusterNetwork(document(name, [{ version: '1', egress: 'none' }]), s.registrations[0]));
+    }
+    assert.throws(() => renderClusterNetwork(document('echo', []), s.registrations[0]));
+    assert.throws(() => renderClusterNetwork(document('echo', [{ version: '2', egress: 'none' }], { ...empty, live: '1' } as any), s.registrations[0]));
+    assert.deepEqual(renderClusterNetwork({ schema: 1, cluster: 'simulation', namespace: 'nova-services', services: {} }, s.registrations[0]), []);
+  } finally { await s.stop(); }
+});
+
+test('fix1 I1: rollback rejects a provider replacement during status read and resumes the same approved state', async () => {
+  const s = await setup();
+  try {
+    assert.equal((await deploy(s)).state, 'done');
+    assert.equal((await promote(s)).state, 'done');
+    assert.equal((await deploy(s, '2')).state, 'done');
+    assert.equal((await promote(s, '2')).state, 'done');
+    const expected = expectedOf(s);
+    const p = await s.h.c('POST', `${s.base}/rollback`, { version: '1', expected });
+    const execute = s.sim.tools.execute;
+    s.sim.tools.execute = async (op, signal) => {
+      const result = await execute(op, signal);
+      if (op.operation === 'status') s.setProvider(undefined);
+      return result;
+    };
+    const before = s.sim.calls().length;
+    s.h.core.ledger.approve(p.body.id);
+    const blocked = await s.settle(p.body.id);
+    assert.equal(blocked.state, 'waiting');
+    assert.equal(blocked.attempts, 0);
+    assert.ok(s.sim.calls().slice(before).every(c => c.operation === 'status'));
+    assert.equal(s.sim.read().services.echo!.live, '2');
+    s.sim.tools.execute = execute; s.setProvider(s.sim.tools);
+    s.h.core.ledger.retry(blocked.id);
+    assert.equal((await s.settle(blocked.id)).state, 'done');
+    assert.equal(s.sim.read().services.echo!.live, '1');
+  } finally { await s.stop(); }
+});
+
+test('fix1 I1: replacing a network port during awaited snapshot read refuses the old result', async () => {
+  const s = await setup();
+  try {
+    const port = s.sim.tools.network!;
+    const read = port.read;
+    port.read = async signal => {
+      const result = await read(signal);
+      s.setProvider({ ...s.sim.tools, network: { read, write: port.write } });
+      return result;
+    };
+    const r = await s.h.c('POST', `${s.base}/network`, { version: '1', expected: empty });
+    const task = await s.settle(r.body.task.id);
+    assert.equal(task.state, 'failed');
+    assert.equal(s.h.core.network.view(r.body.change.id).tasks.filter(t => t.step === 'apply').length, 0);
+    assert.equal(s.net.hits.filter((h: any) => h.method === 'PUT').length, 0);
+  } finally { await s.stop(); }
+});
+
+for (const revoked of [false, true]) test(`fix1 I2: durable requester survives restart and ${revoked ? 'revocation refuses' : 'unchanged approval permits'} the exact network apply`, async () => {
+  const s = await setup();
+  try {
+    const person = await enroll(s.h, { name: 'Durable requester', kind: 'phone' });
+    s.h.core.db.run('UPDATE device SET can_approve = 1 WHERE id = ?', person.dev.deviceId);
+    const r = await call(s.h.mesh, 'POST', `/api/v1${s.base}/network`, { version: '1', expected: empty }, { authorization: `Bearer ${person.token}` });
+    await s.settle(r.body.task.id);
+    const apply = s.h.core.network.view(r.body.change.id).tasks.find(t => t.step === 'apply')!;
+    const core = await s.restart();
+    const restored = core.ledger.get(apply.id);
+    assert.deepEqual(restored.origin, { kind: 'device', ref: person.dev.deviceId });
+    assert.deepEqual(restored.brief.inputs?.cluster_binding, core.ledger.get(r.body.task.id).brief.inputs?.cluster_binding);
+    if (revoked) core.db.run('UPDATE device SET can_approve = 0 WHERE id = ?', person.dev.deviceId);
+    core.ledger.approve(apply.id, { confirm: true }); await core.ledger.idle();
+    assert.equal(core.ledger.get(apply.id).state, revoked ? 'failed' : 'done');
+    assert.equal(s.net.hits.filter((h: any) => h.method === 'PUT').length, revoked ? 0 : 1);
+  } finally { await s.stop(); }
+});
+
+for (const malformed of ['missing', 'actor', 'registration'] as const) test(`fix1 I2: ${malformed} durable cluster binding cannot invent authority`, async () => {
+  const s = await setup();
+  try {
+    const r = await s.h.c('POST', `${s.base}/network`, { version: '1', expected: empty });
+    await s.settle(r.body.task.id);
+    const apply = s.h.core.network.view(r.body.change.id).tasks.find(t => t.step === 'apply')!;
+    // A legacy/malformed durable record is never upgraded to an implicit console request.
+    for (const id of [r.body.task.id, apply.id]) {
+      const brief = s.h.core.ledger.get(id).brief;
+      if (malformed === 'missing') delete brief.inputs!.cluster_binding;
+      else (brief.inputs!.cluster_binding as any)[malformed] = malformed === 'actor' ? 'untrusted-device' : 'changed';
+      s.h.core.db.run('UPDATE task SET brief = ? WHERE id = ?', JSON.stringify(brief), id);
+    }
+    s.h.core.ledger.approve(apply.id, { confirm: true });
+    assert.equal((await s.settle(apply.id)).state, 'failed');
+    assert.equal(s.net.hits.filter((h: any) => h.method === 'PUT').length, 0);
+  } finally { await s.stop(); }
+});
+
+test('fix1 I2: dead-man restores its exact snapshot after actor/hub revocation; absent capability waits for a fresh port', async () => {
+  const s = await setup();
+  try {
+    const snapshot = s.net.text();
+    const person = await enroll(s.h, { name: 'Revocable requester', kind: 'phone' });
+    s.h.core.db.run('UPDATE device SET can_approve = 1 WHERE id = ?', person.dev.deviceId);
+    const r = await call(s.h.mesh, 'POST', `/api/v1${s.base}/network`, { version: '1', expected: empty }, { authorization: `Bearer ${person.token}` });
+    await s.settle(r.body.task.id);
+    const apply = s.h.core.network.view(r.body.change.id).tasks.find(t => t.step === 'apply')!;
+    s.h.core.ledger.approve(apply.id, { confirm: true });
+    assert.equal((await s.settle(apply.id)).state, 'done');
+    s.h.core.db.run('UPDATE device SET can_approve = 0 WHERE id = ?', person.dev.deviceId);
+    s.h.core.db.run("UPDATE mesh_state SET role = 'standby', hub_id = 'replacement-hub' WHERE id = 1");
+    const before = s.net.hits.length;
+    s.setProvider(unavailableClusterTools);
+    s.sim.clock.advance(301000); s.h.core.network.sweep(); await s.h.core.ledger.idle();
+    const failed = s.h.core.network.view(r.body.change.id);
+    assert.equal(failed.state, 'reverting');
+    assert.equal(failed.tasks.filter(t => t.step === 'revert').at(-1)!.state, 'failed');
+    assert.equal(s.net.hits.length, before, 'missing capability never calls a cached port or legacy adapter');
+    assert.notEqual(s.net.text(), snapshot);
+    s.h.core.network.close(); // Dispose real timer; exercise the existing due retry sweep.
+    s.sim.clock.advance(16000); s.setProvider(s.sim.tools); s.h.core.network.sweep();
+    await new Promise(resolve => setTimeout(resolve, 20)); await s.h.core.ledger.idle();
+    assert.equal(s.h.core.network.view(r.body.change.id).state, 'reverted');
+    assert.equal(s.net.text(), snapshot);
+    assert.deepEqual((s.sim.read() as any).networkPolicies, []);
+    const revert = s.h.core.network.view(r.body.change.id).tasks.filter(t => t.step === 'revert').at(-1)!;
+    assert.equal(revert.approval_tier, 1);
+    assert.equal(s.h.core.ledger.get(revert.id).brief.inputs?.by, 'switch');
+    assert.deepEqual(s.h.core.ledger.get(revert.id).origin, { kind: 'device', ref: person.dev.deviceId });
+  } finally { await s.stop(); }
+});
+
+test('fix1 I2: a manual network restore still requires current authority after its awaited read', async () => {
+  const s = await setup();
+  try {
+    const id = await s.network();
+    const revert = s.h.core.network.revert(id);
+    const read = s.sim.tools.network!.read;
+    s.sim.tools.network!.read = async signal => { const result = await read(signal); s.h.core.db.run("UPDATE mesh_state SET role = 'standby', hub_id = 'replacement-hub' WHERE id = 1"); return result; };
+    const before = s.net.text(), writes = s.net.hits.filter((h: any) => h.method === 'PUT').length;
+    s.h.core.ledger.approve(revert.task.id, { confirm: true });
+    assert.equal((await s.settle(revert.task.id)).state, 'failed');
+    assert.equal(s.net.hits.filter((h: any) => h.method === 'PUT').length, writes);
+    assert.equal(s.net.text(), before);
+  } finally { await s.stop(); }
 });
