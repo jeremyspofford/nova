@@ -269,17 +269,19 @@ export class K3sOperations {
           if (!observed.length) continue;
           const current = observed.find(v => v.version === s.live);
           const live = current && current.replicas > 0 ? current : undefined;
-          // A stopped resource cannot prove serving health, but its measured failure is
-          // still real evidence. Keep that failure's own timestamp rather than readiness.
-          const health = live?.health ?? (current?.health.ok === false ? current.health : undefined);
-          const observation = { source: 'workload' as const, health: health?.ok === true ? 'healthy' as const : health?.ok === false ? 'failed' as const : 'unknown' as const, at: health?.checked_at ?? null, reason: 'Actual cluster workload health measurement.' };
           // Readiness belongs to its version, not the serving workload. Only the current
-          // candidate can provide fallback evidence when there is no live workload at all.
+          // candidate can contribute when there is no live workload, with measured health
+          // kept separate so a readiness receipt cannot hide its failure or uncertainty.
           const candidate = s.live === null ? observed.find(v => v.version === s.assigned?.version
             && s.assigned.want !== 'stopped' && v.ready_at !== null && v.ready_at >= s.assigned.at) : undefined;
+          const measured = current ?? candidate;
+          // A stopped resource cannot prove availability, but its measured failure is
+          // still real evidence. Preserve each source timestamp independently.
+          const health = measured && (measured.replicas > 0 || measured.health.ok === false) ? measured.health : undefined;
+          const observation = { source: 'workload' as const, health: health?.ok === true ? 'healthy' as const : health?.ok === false ? 'failed' as const : 'unknown' as const, at: health?.checked_at ?? null, reason: 'Actual cluster workload health measurement.' };
           const readiness = candidate ? { source: 'workload' as const, health: candidate.ready ? 'healthy' as const : candidate.status === 'failed' ? 'failed' as const : 'unknown' as const, at: candidate.ready_at, reason: `Observed readiness of ${candidate.version}.` } : null;
-          attached.push({ service: s.service, driver: K3S_DRIVER_NAME, placement: identity.id, live: live?.version ?? null, previous: s.previous, assigned: s.assigned, observation: readiness ?? observation,
-            observations: failure ? [{ source: 'cluster' as const, health: 'unknown' as const, at: failure.at, reason: 'Control plane collection unavailable; workload evidence retains its own age.' }] : [],
+          attached.push({ service: s.service, driver: K3S_DRIVER_NAME, placement: identity.id, live: live?.version ?? null, previous: s.previous, assigned: s.assigned, observation,
+            observations: [...(readiness ? [readiness] : []), ...(failure ? [{ source: 'cluster' as const, health: 'unknown' as const, at: failure.at, reason: 'Control plane collection unavailable; workload evidence retains its own age.' }] : [])],
             versions: observed.map(v => ({ version: v.version, status: v.status, since: v.since, observed_at: v.ready_at, promotion_tier: null })), authority: null });
         }
         machines.push({ ...identity, observation: { health: node?.ready ? 'healthy' : node ? 'failed' : 'unknown', at: node?.at ?? null, reason: node ? 'Actual registered cluster node observation.' : 'No node observation is available.' }, observations: failure ? [{ health: 'unknown', at: failure.at, reason: 'Control plane unavailable; last node observation retained.' }] : [], services: attached });

@@ -996,3 +996,120 @@ test('final I2: capacity blocks network proposals and approved deploy before any
     assert.equal(await s.sim.serving(), '1');
   } finally { await s.stop(); }
 });
+
+
+test('R1: current candidate readiness cannot replace its measured failure or unknown health', async () => {
+  const s = await setup();
+  try {
+    assert.equal((await deploy(s)).state, 'done');
+    const readyAt = s.sim.read().services.echo!.versions[0]!.ready_at;
+    const read = async () => (await s.h.c('GET', '/services/topology')).body.machines.find((m: any) => m.id === s.h.core.mesh.identity.id).services.find((v: any) => v.service === 'echo');
+    const effects = s.sim.calls().filter(c => c.operation !== 'status').length;
+    s.sim.change(state => { state.unhealthy = ['1']; });
+    // Match the actual reviewer probe: distinct operations can share an equal, fresh time.
+    const failed = await read();
+    const actual = s.sim.read().services.echo!.versions[0]!;
+    assert.equal(actual.ready, true);
+    assert.equal(actual.health.ok, false);
+    assert.equal(actual.health.checked_at, readyAt);
+    assert.equal(failed.live, null);
+    assert.equal(failed.health, 'failed');
+    assert.equal(failed.status, 'Failed');
+    const measured = (row: any) => row.observations.find((o: any) => /health measurement/.test(o.reason));
+    const readiness = (row: any) => row.observations.find((o: any) => /readiness/.test(o.reason));
+    assert.equal(measured(failed).health, 'failed');
+    assert.equal(measured(failed).at, readyAt);
+    assert.equal(measured(failed).age_ms, 0);
+    assert.equal(readiness(failed).health, 'healthy');
+    assert.equal(readiness(failed).at, readyAt);
+    s.sim.clock.advance(5000);
+    const later = await read();
+    assert.equal(later.health, 'failed');
+    assert.equal(later.status, 'Failed');
+    assert.equal(measured(later).at, new Date(s.sim.clock.now()).toISOString());
+    assert.equal(measured(later).age_ms, 0);
+    assert.equal(readiness(later).at, readyAt);
+    assert.equal(readiness(later).age_ms, 5000);
+    s.sim.change(state => { state.unhealthy = []; state.unknown = ['1']; });
+    const unknown = await read();
+    assert.equal(unknown.health, 'unknown');
+    assert.equal(unknown.status, 'Waiting');
+    assert.equal(measured(unknown).health, 'unknown');
+    assert.equal(measured(unknown).age_ms, 0);
+    assert.equal(readiness(unknown).health, 'healthy');
+    s.sim.change(state => { state.unknown = []; });
+    s.sim.clock.advance(5000);
+    const healthy = await read();
+    assert.equal(healthy.health, 'healthy');
+    assert.equal(healthy.status, 'Verified');
+    assert.equal(measured(healthy).age_ms, 0);
+    assert.equal(readiness(healthy).age_ms, 10000);
+    // Fresh health is not a fresh readiness receipt, and stopped replicas prove no readiness.
+    s.sim.clock.advance(110000);
+    const staleReady = await read();
+    assert.equal(staleReady.health, 'unknown');
+    assert.equal(staleReady.status, 'Waiting');
+    assert.equal(measured(staleReady).health, 'healthy');
+    assert.equal(measured(staleReady).age_ms, 0);
+    assert.equal(readiness(staleReady).at, readyAt);
+    assert.equal(readiness(staleReady).age_ms, 120000);
+    assert.equal(readiness(staleReady).stale, true);
+    s.sim.change(state => { const candidate = state.services.echo!.versions[0]!; candidate.replicas = 0; candidate.ready = false; });
+    const stopped = await read();
+    assert.equal(stopped.health, 'unknown');
+    assert.equal(stopped.status, 'Waiting');
+    assert.equal(s.sim.calls().filter(c => c.operation !== 'status').length, effects);
+    assert.equal(s.sim.clock.timers.size, 0);
+  } finally { await s.stop(); }
+});
+
+test('R1: candidate measured-health age remains independent from fresh readiness', async () => {
+  const s = await setup();
+  try {
+    assert.equal((await deploy(s)).state, 'done');
+    const oldHealthAt = s.sim.read().services.echo!.versions[0]!.health.checked_at!;
+    s.sim.clock.advance(120000);
+    const readyAt = new Date(s.sim.clock.now()).toISOString();
+    s.sim.change(state => { state.services.echo!.versions[0]!.ready_at = readyAt; });
+    // Controlled source timestamps at the existing trusted fixture port; actual children
+    // still collect status. This models separate measured-health and validation receipts.
+    let healthAt = oldHealthAt;
+    const execute = s.sim.tools.execute;
+    s.sim.tools.execute = async (op, signal) => {
+      const snapshot = await execute(op, signal);
+      if (op.operation === 'status') {
+        snapshot.versions[0]!.health.checked_at = healthAt;
+        snapshot.observed_at = new Date(Math.max(s.sim.clock.now(), Date.parse(healthAt))).toISOString();
+      }
+      return snapshot;
+    };
+    const read = async () => (await s.h.c('GET', '/services/topology')).body.machines.find((m: any) => m.id === s.h.core.mesh.identity.id).services.find((v: any) => v.service === 'echo');
+    const stale = await read();
+    assert.equal(stale.health, 'unknown');
+    assert.equal(stale.status, 'Waiting');
+    const measured = (row: any) => row.observations.find((o: any) => /health measurement/.test(o.reason));
+    const readiness = (row: any) => row.observations.find((o: any) => /readiness/.test(o.reason));
+    assert.equal(measured(stale).at, oldHealthAt);
+    assert.equal(measured(stale).age_ms, 120000);
+    assert.equal(measured(stale).stale, true);
+    assert.equal(readiness(stale).at, readyAt);
+    assert.equal(readiness(stale).health, 'healthy');
+    assert.equal(readiness(stale).age_ms, 0);
+    healthAt = new Date(s.sim.clock.now() + 1).toISOString();
+    const future = await read();
+    assert.equal(future.health, 'unknown');
+    assert.equal(future.status, 'Waiting');
+    assert.equal(measured(future).at, healthAt);
+    assert.equal(measured(future).age_ms, null);
+    assert.equal(measured(future).stale, true);
+    assert.equal(readiness(future).at, readyAt);
+    assert.equal(readiness(future).age_ms, 0);
+    s.sim.clock.advance(1);
+    const fresh = await read();
+    assert.equal(fresh.health, 'healthy');
+    assert.equal(fresh.status, 'Verified');
+    assert.equal(measured(fresh).age_ms, 0);
+    assert.equal(readiness(fresh).at, readyAt);
+    assert.equal(readiness(fresh).age_ms, 1);
+  } finally { await s.stop(); }
+});
