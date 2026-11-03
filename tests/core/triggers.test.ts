@@ -81,9 +81,12 @@ test('webhooks: unknown is not found, a wrong or missing token is refused, a pau
 });
 
 test('dedup: the same event within the window is dropped as the same as the earlier one', async () => {
-  const { triggers, at } = setup();
+  const { triggers, ledger, at } = setup();
   const { token } = triggers.createRule({ name: 'Example events', class: 'event', hook: 'example', action: note(), dedup_window_s: 60 }, 'person');
   const first = await triggers.hook('example', token, { n: 1 });
+  assert.equal(first.triage.decision, 'act');
+  await ledger.idle();
+  assert.equal(ledger.get(first.ledger_task_id!).state, 'done');
   at('2026-03-02T12:00:40Z');
   const second = await triggers.hook('example', token, { n: 1 });
   assert.equal(second.triage.decision, 'drop');
@@ -91,12 +94,58 @@ test('dedup: the same event within the window is dropped as the same as the earl
   assert.equal(second.dedup_key, first.dedup_key);
   const other = await triggers.hook('example', token, { n: 2 });
   assert.equal(other.triage.decision, 'act');
+  // Independent actions require completed work; queued work intentionally batches new events.
+  await ledger.idle();
+  assert.equal(ledger.get(other.ledger_task_id!).state, 'done');
   const keyed = await triggers.hook('example', token, { n: 3 }, 'fact-1');
   const keyedAgain = await triggers.hook('example', token, { n: 4 }, 'fact-1');
   assert.equal(keyed.triage.decision, 'act');
   assert.equal(keyedAgain.triage.decision, 'drop', 'an explicit dedup key wins over the payload');
+  await ledger.idle();
+  assert.equal(ledger.get(keyed.ledger_task_id!).state, 'done');
   at('2026-03-02T12:02:00Z');
   assert.equal((await triggers.hook('example', token, { n: 1 })).triage.decision, 'act', 'after the window it counts again');
+  await ledger.idle();
+  assert.ok(ledger.list().every((task) => task.state === 'done'));
+});
+
+test('dedup: a new event joins queued work while an identical event is dropped', async () => {
+  const { triggers, ledger } = setup();
+  const { token } = triggers.createRule({ name: 'Example events', class: 'event', hook: 'example', action: note(), dedup_window_s: 60 }, 'person');
+  // Hold the runner at a known boundary instead of relying on how many microtasks a hook takes.
+  ledger.halt();
+  let taskId: string;
+  try {
+    const first = await triggers.hook('example', token, { n: 1 });
+    assert.equal(first.triage.decision, 'act');
+    taskId = first.ledger_task_id!;
+    assert.equal(ledger.get(taskId).state, 'queued');
+
+    const other = await triggers.hook('example', token, { n: 2 });
+    assert.equal(other.triage.decision, 'queue');
+    assert.equal(other.triage.reason, 'Added to "Note the event".');
+    assert.equal(other.ledger_task_id, taskId);
+    assert.notEqual(other.dedup_key, first.dedup_key);
+    assert.equal(ledger.list().length, 1);
+    assert.equal(ledger.get(taskId).state, 'queued');
+
+    const duplicate = await triggers.hook('example', token, { n: 1 });
+    assert.equal(duplicate.triage.decision, 'drop');
+    assert.equal(duplicate.triage.reason, `Same as trigger ${first.trigger_id}.`);
+    assert.equal(duplicate.dedup_key, first.dedup_key);
+    assert.equal(duplicate.ledger_task_id, null);
+    assert.equal(ledger.list().length, 1);
+  } finally {
+    ledger.resume();
+    await ledger.idle();
+  }
+  assert.equal(ledger.get(taskId!).state, 'done', 'the queued task runs when the runner resumes');
+
+  const next = await triggers.hook('example', token, { n: 3 });
+  assert.equal(next.triage.decision, 'act', 'completed work does not batch a new event');
+  assert.notEqual(next.ledger_task_id, taskId!);
+  await ledger.idle();
+  assert.equal(ledger.get(next.ledger_task_id!).state, 'done');
 });
 
 test('cooldown: a rule that just acted stays silent until the cooldown ends', async () => {
