@@ -6,12 +6,13 @@
 // wait for the hand-back. No Chromium needed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { Cdp, type Transport } from '../../src/core/browser/cdp.ts';
 import { Browser } from '../../src/core/browser/worker.ts';
+import { Session } from '../../src/core/browser/session.ts';
 import type { Launched } from '../../src/core/browser/chromium.ts';
 import { Db } from '../../src/core/db.ts';
 import { Log } from '../../src/core/log.ts';
@@ -140,3 +141,51 @@ test('a device that is revoked, or may no longer approve, loses the browser at o
     await core.close();
   }
 });
+
+// A closed mode revokes interaction immediately, but every close caller must still await
+// the launched browser's cleanup (including a close that starts from a lost CDP connection).
+for (const first of ['caller', 'transport'] as const) {
+  test(`session close waits for profile cleanup after ${first} starts closing`, async () => {
+    const fake = standIn(() => {});
+    const profile = mkdtempSync(join(tmpdir(), 'nova-close-profile-'));
+    const cleanup = Promise.withResolvers<void>();
+    let launched!: Launched;
+    let closes = 0;
+    const session = new Session({
+      taskId: 'task-close-1', chromium: process.execPath, hosts: [], sandbox: false,
+      launch: async () => {
+        launched = await fake.launch();
+        return { ...launched, profile, close: async () => {
+          closes++;
+          await cleanup.promise;
+          await launched.close();
+          rmSync(profile, { recursive: true, force: true });
+        } };
+      },
+    });
+    let initial: Promise<void> | undefined;
+    let reentrant: Promise<void> | undefined;
+    session.once('closed', () => { reentrant = session.close(); });
+    try {
+      await session.open();
+      if (first === 'caller') initial = session.close();
+      else launched.cdp.close();
+      const repeated = session.close();
+      let completed = false;
+      void Promise.all([reentrant, repeated]).then(() => { completed = true; });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(session.mode, 'closed', 'interaction is revoked before cleanup finishes');
+      assert.equal(existsSync(profile), true, 'the fixture holds physical cleanup pending');
+      assert.equal(completed, false, 'reentrant and repeated close must await physical cleanup');
+      cleanup.resolve();
+      await Promise.all([initial, reentrant, repeated]);
+      assert.equal(existsSync(profile), false, 'every close promise observes profile removal');
+      assert.equal(closes, 1, 'one physical cleanup owns the session');
+    } finally {
+      cleanup.resolve();
+      await initial;
+      await session.close();
+      rmSync(profile, { recursive: true, force: true });
+    }
+  });
+}

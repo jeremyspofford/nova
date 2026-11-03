@@ -124,6 +124,7 @@ export class Session extends EventEmitter {
   #o: SessionOptions;
   #now: () => Date;
   #browser: Launched | null = null;
+  #closing: Promise<void> | null = null;
   #refuser: Server | null = null;
   #sockets = new Set<Socket>();
   #cdp: Cdp | null = null;
@@ -442,8 +443,17 @@ export class Session extends EventEmitter {
     return this.#closeNow(why);
   }
 
-  async #closeNow(why: string): Promise<void> {
-    if (this.mode === 'closed') return;
+  #closeNow(why: string): Promise<void> {
+    if (this.#closing) return this.#closing;
+    // Publish the cleanup promise before closed events can re-enter close(). Closed mode
+    // revokes interaction immediately; callers still wait for the browser and refuser.
+    const closing = Promise.withResolvers<void>();
+    this.#closing = closing.promise;
+    void this.#finishClose(why).then(closing.resolve, closing.reject);
+    return closing.promise;
+  }
+
+  async #finishClose(why: string): Promise<void> {
     const held = this.holder;
     this.mode = 'closed';
     this.#closedWhy = why;
