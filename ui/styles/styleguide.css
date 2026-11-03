@@ -67,3 +67,7 @@
 .sg-back { margin-bottom: var(--space-4); }
 .sg-broken { padding: var(--space-3) var(--space-4); border: 1px solid var(--status-error); border-radius: var(--radius-input); color: var(--status-error); }
 .sg-cards > .sg-state { margin: 0; }
+
+/* The Backups state selector must fit the entry even with longer role labels. */
+#sg-backups-settings .sg-pick { flex-wrap: wrap; }
+#sg-backups-settings .sg-pick select { min-width: 0; max-width: 100%; }
