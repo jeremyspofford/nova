@@ -236,6 +236,8 @@ test('the drain: nothing new starts but what is kept; running work gets the boun
     await sleep(200);
     assert.equal(ledger.get(later.id).state, 'queued', 'nothing new starts while it drains');
     ledger.resume();
+    assert.equal(await until(() => ledger.get(slow.id).state, (s) => s === 'active'), 'active');
+    ledger.cancel(slow.id);
     await until(() => ledger.get(later.id).state, (s) => s === 'active', 3000);
     ledger.cancel(later.id);
     const c = mk('committed', 'Past its commit point');
@@ -456,5 +458,46 @@ test('writes held: every change refused with the reason, the mesh’s own calls 
     assert.equal((await h.c('POST', '/memory', { kind: 'fact', content: 'x' })).status, 201);
   } finally {
     await h.stop();
+  }
+});
+
+
+test('planned promotion refuses a timed-out live worker and keeps the old hub usable', { timeout: 30_000 }, async () => {
+  const p = await pair();
+  const pending = Promise.withResolvers<unknown>();
+  let runs = 0;
+  try {
+    const ledger = p.a.core.ledger;
+    ledger.workers.set('uncooperative', {
+      id: 'uncooperative', name: 'Uncooperative', about: 'Controlled test worker', egress: 'none', evidence: [], health: () => ({ ok: true }),
+      timeoutMs: 40, lane: () => ({ key: 'private', max: 1 }),
+      run: (b) => {
+        runs++;
+        return runs === 1 ? pending.promise : Promise.resolve({ envelope: '1', task_id: b.task_id, status: 'failed', summary: 'Finished test work.', evidence: [], artifacts: [], blockers: [], usage: { duration_ms: 0 }, follow_up_suggestions: [] });
+      },
+    });
+    const work = ledger.create({ title: 'Uncooperative test work', owner: 'uncooperative', goal: 'Test timeout.', origin: { kind: 'user' }, evidence_required: [{ kind: 'confirmation' }], approval_tier: 0 });
+    assert.equal(await until(() => ledger.events(work.id).some((e) => e.kind === 'timed_out'), Boolean), true);
+    backedUp(p.a.core);
+    await synced(p);
+    const started = await p.a.api('POST', '/mesh/promotions', { device_id: p.standbyId, confirm: true });
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    const rec = await until(() => p.a.core.mesh.promotions.record(), (r) => r?.state === 'failed');
+    assert.equal(rec?.state, 'failed');
+    assert.deepEqual([p.a.core.mesh.role.role(), p.b.core.mesh.role.role()], ['hub', 'standby']);
+    assert.equal(p.name.target(), p.a.mesh, 'stable name was never transferred');
+    assert.equal(runs, 1, 'refused drain cannot dispatch a concurrent retry');
+    assert.equal((await p.a.api('PUT', '/profile/user/drain_probe', { value: 'still usable' })).status, 200);
+    assert.doesNotMatch(rec!.said ?? '', /past its commit point/, 'a timed-out worker has not claimed a commit');
+    const drain = ledger.list().find((t) => t.parent_id === rec!.parent && t.title === 'Running work finished or handed over');
+    assert.ok(drain);
+    assert.doesNotMatch(drain.brief.goal, /past the point where they change/, 'drain explanation does not invent an outside effect');
+    pending.resolve(null);
+    await ledger.idle();
+    assert.equal(runs, 2, 'settlement lets the resumed hub retry');
+    assert.equal(ledger.get(work.id).state, 'failed');
+  } finally {
+    pending.resolve(null);
+    await stop(p);
   }
 });

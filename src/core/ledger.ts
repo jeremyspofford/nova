@@ -250,6 +250,7 @@ export class Ledger extends EventEmitter {
     // Its worker is still running and waiting for the person (needsPerson): running it a second
     // time would race the first.
     if (this.#running.has(id)) throw new CoreError('conflict', 'This task is still running: it is waiting for you to do a step. Open it to take over.');
+    if (this.#inflight.has(id)) throw new CoreError('conflict', 'This task’s previous worker is still running. Wait for it to stop before retrying.');
     if (t.state !== 'waiting' || (t.approval_tier >= 2 && !t.approved_at)) throw new CoreError('conflict', "This task isn't waiting for a retry.");
     this.#db.run(`UPDATE task SET user_visibility = 'handling' WHERE id = ?`, id);
     // Running work with outside effects again is a new decision: the OK given for the first run
@@ -338,6 +339,7 @@ export class Ledger extends EventEmitter {
     const requeued: string[] = [];
     const reverified: string[] = [];
     for (const found of this.list({ state: 'active', limit: 500 })) {
+      if (this.#inflight.has(found.id)) continue;
       // A worker that said its work never started, and then Nova stopped: that dispatch isn't counted.
       const unstarted = this.#claimedNotStarted(found.id);
       if (unstarted) this.#giveBack(found.id, unstarted);
@@ -356,6 +358,7 @@ export class Ledger extends EventEmitter {
     // A worker that was waiting for the person (needsPerson) was running too; what it had open is
     // gone, so it starts again from the beginning.
     for (const t of this.list({ state: 'waiting', limit: 500 })) {
+      if (this.#inflight.has(t.id)) continue;
       const last = this.#db.get<{ kind: string }>('SELECT kind FROM task_event WHERE task_id = ? AND to_state IS NOT NULL ORDER BY seq DESC LIMIT 1', t.id);
       if (last?.kind !== 'needs_person') continue;
       if (!this.#mayRerun(t)) {
@@ -401,9 +404,16 @@ export class Ledger extends EventEmitter {
             if (this.#inflight.has(t.id)) continue;
             const lane = this.#lane(t);
             if ([...this.#inflight.values()].filter((x) => x.lane === lane.key).length >= lane.max) continue;
+            let interrupted = false;
             const done = this.#runOne(t)
+              .then((stopped) => { interrupted = stopped === true; })
               .catch((e) => { this.#log.problem('ledger', 'The Work Ledger stumbled while running a task.', { detail: (e as Error)?.stack ?? String(e), taskId: t.id }); })
-              .finally(() => { this.#inflight.delete(t.id); });
+              .finally(() => {
+                this.#inflight.delete(t.id);
+                // A refused handover may have resumed while this worker was still stopping.
+                if (interrupted && !this.#halted) this.recover();
+                this.#wake?.();
+              });
             this.#inflight.set(t.id, { lane: lane.key, done });
           }
           if (this.#dirty) continue;
@@ -435,7 +445,7 @@ export class Ledger extends EventEmitter {
   halt(reason = 'Nova is restarting.'): string[] {
     this.#halted = true;
     this.#keep = null;
-    const ids = [...this.#running.keys()];
+    const ids = [...this.#inflight.keys()];
     for (const ac of this.#running.values()) ac.abort(new Error(reason));
     return ids;
   }
@@ -444,27 +454,30 @@ export class Ledger extends EventEmitter {
   // starts except what `keep` allows (the promotion's own records); running work gets `boundMs` to
   // finish; a task past its commit point (its worker's `uncancellable` says why) is never cut, and is
   // waited for up to `commitMs`; anything else still running is stopped and stays active, so the next
-  // hub's recovery requeues it (or holds it, if it may have had an effect). `stuck`: work past its
-  // commit point still running at the end; the caller then gives up handing over and resumes.
+  // hub's recovery requeues it (or holds it, if it may have had an effect). Stopped workers get
+  // another `commitMs` to actually settle. `stuck`: any physical work still alive at the end;
+  // the caller must give up handing over and resume, even if its attempt already timed out.
   async drain(o: { boundMs: number; commitMs: number; keep: (t: Task) => boolean }): Promise<{ finished: string[]; handed: string[]; stuck: string[] }> {
     this.#halted = true;
     this.#keep = o.keep;
-    const mine = () => [...this.#running.keys()].filter((id) => { try { return !o.keep(this.get(id)); } catch { return true; } });
+    const mine = () => [...this.#inflight.keys()].filter((id) => { try { return !o.keep(this.get(id)); } catch { return true; } });
     const before = mine();
+    const live = (id: string) => this.#inflight.has(id);
     const wait = async (ids: string[], ms: number) => {
       const until = Date.now() + ms;
-      while (ids.some((id) => this.#running.has(id)) && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+      while (ids.some(live) && Date.now() < until) await new Promise((r) => setTimeout(r, Math.min(50, until - Date.now())));
     };
     await wait(before, o.boundMs);
     const committed = (id: string) => { try { return !!this.workers.get(this.get(id).owner)?.uncancellable?.(this.get(id)); } catch { return false; } };
-    let left = before.filter((id) => this.#running.has(id));
-    const past = left.filter(committed);
+    const past = before.filter(live).filter(committed);
     if (past.length) await wait(past, o.commitMs);
-    const stuck = past.filter((id) => this.#running.has(id));
-    if (stuck.length) return { finished: before.filter((id) => !this.#running.has(id)), handed: [], stuck };
-    left = before.filter((id) => this.#running.has(id));
+    const stuck = past.filter(live);
+    if (stuck.length) return { finished: before.filter((id) => !live(id)), handed: [], stuck };
+    const left = before.filter(live);
     for (const id of left) this.#running.get(id)?.abort(new Error('This hub is handing over to another node.'));
-    return { finished: before.filter((id) => !left.includes(id)), handed: left, stuck: [] };
+    // Revocation is not settlement: handing an unresolved worker to another hub would overlap it.
+    await wait(left, o.commitMs);
+    return { finished: before.filter((id) => !left.includes(id)), handed: left.filter((id) => !live(id)), stuck: left.filter(live) };
   }
 
   // Nothing new starts but what `keep` allows, and nothing running is stopped: a hub that restarts
@@ -476,12 +489,14 @@ export class Ledger extends EventEmitter {
 
   // A drain that didn't end in a handover: the queue runs again.
   resume(): void {
+    const interrupted = this.#halted;
     this.#halted = false;
     this.#keep = null;
-    void this.pump();
+    if (interrupted) this.recover();
+    else void this.pump();
   }
 
-  // Resolves when nothing is running or queued.
+  // Resolves when no physical worker remains and no queued work can currently start.
   async idle(): Promise<void> {
     while (this.#pumping) await this.#pumping;
   }
@@ -508,7 +523,7 @@ export class Ledger extends EventEmitter {
     return t;
   }
 
-  async #runOne(t: Task): Promise<void> {
+  async #runOne(t: Task): Promise<boolean | void> {
     const gated = this.#gate(t);
     if (gated.state !== 'queued') return;
     const worker = this.workers.get(t.owner)!;
@@ -518,52 +533,67 @@ export class Ledger extends EventEmitter {
     this.#running.set(t.id, ac);
     const limit = worker.timeoutMs ?? this.#timeoutMs;
     const signal = AbortSignal.any([ac.signal, AbortSignal.timeout(limit)]);
-    // A worker that ignores the signal must not hold the queue: whichever comes first wins.
+    // Expiry revokes authority immediately, but the inflight slot outlives this race until the
+    // actual worker settles. Independent lanes can still run; this id/lane cannot overlap it.
+    let stop!: () => void;
     const stopped = new Promise<never>((_, fail) => {
-      if (signal.aborted) fail(signal.reason);
-      signal.addEventListener('abort', () => fail(signal.reason), { once: true });
+      stop = () => {
+        if (this.#running.get(t.id) === ac) this.#running.delete(t.id);
+        fail(signal.reason);
+      };
+      if (signal.aborted) stop();
+      else signal.addEventListener('abort', stop, { once: true });
     });
-    let raw: unknown;
+    const work = Promise.resolve().then(() => TASK_CONTEXT.run({ task_id: t.id, privacy_mode: t.brief.privacy_mode }, () => worker.run(t.brief, signal)));
     try {
-      raw = await Promise.race([TASK_CONTEXT.run({ task_id: t.id, privacy_mode: t.brief.privacy_mode }, () => worker.run(t.brief, signal)), stopped]);
-    } catch (e) {
-      this.#running.delete(t.id);
-      if (this.#halted && !this.#keep?.(t)) return;
-      if (this.get(t.id).state === 'cancelled') return;
-      if (signal.aborted && (e as Error)?.name === 'TimeoutError') {
-        return this.#retryOrFail(t.id, `${worker.name} took longer than ${Math.round(limit / 1000)} s.`, undefined, 'timed_out');
+      let raw: unknown;
+      try {
+        raw = await Promise.race([work, stopped]);
+        if (signal.aborted) throw signal.reason;
+      } catch (e) {
+        this.#running.delete(t.id);
+        if (this.#halted && !this.#keep?.(t)) return true;
+        if (this.get(t.id).state === 'cancelled') return;
+        if (signal.aborted && (e as Error)?.name === 'TimeoutError') {
+          return this.#retryOrFail(t.id, `${worker.name} took longer than ${Math.round(limit / 1000)} s.`, undefined, 'timed_out');
+        }
+        return this.#retryOrFail(t.id, `${worker.name} stopped with an error: ${(e as Error).message}`, (e as Error).stack);
       }
-      return this.#retryOrFail(t.id, `${worker.name} stopped with an error: ${(e as Error).message}`, (e as Error).stack);
-    }
-    stopped.catch(() => {});
-    this.#running.delete(t.id);
-    if (this.get(t.id).state === 'cancelled') return;
-    // A worker that asked for the person and then finished without saying they were done.
-    if (this.get(t.id).state === 'waiting') this.#move(t.id, 'active', `${worker.name} is on it.`, 'person_done');
+      stopped.catch(() => {});
+      this.#running.delete(t.id);
+      if (this.get(t.id).state === 'cancelled') return;
+      // A worker that asked for the person and then finished without saying they were done.
+      if (this.get(t.id).state === 'waiting') this.#move(t.id, 'active', `${worker.name} is on it.`, 'person_done');
 
-    let report: Report;
-    try {
-      report = validateReport(raw, t.brief);
-    } catch (e) {
-      const details = e instanceof CoreError ? e.details.join('; ') : String(e);
-      return this.#retryOrFail(t.id, `${worker.name} sent back a report Nova couldn't read.`, details);
-    }
-    const cost = { duration_ms: Math.round(report.usage.duration_ms), ...(report.usage.cost_usd ? { cost_usd: report.usage.cost_usd } : {}) };
-    this.#db.run('UPDATE task SET report = ?, cost = ? WHERE id = ?', JSON.stringify(report), JSON.stringify(cost), t.id);
-    this.#event(t.id, 'reported', null, null, { status: report.status, summary: report.summary });
+      let report: Report;
+      try {
+        report = validateReport(raw, t.brief);
+      } catch (e) {
+        const details = e instanceof CoreError ? e.details.join('; ') : String(e);
+        return this.#retryOrFail(t.id, `${worker.name} sent back a report Nova couldn't read.`, details);
+      }
+      const cost = { duration_ms: Math.round(report.usage.duration_ms), ...(report.usage.cost_usd ? { cost_usd: report.usage.cost_usd } : {}) };
+      this.#db.run('UPDATE task SET report = ?, cost = ? WHERE id = ?', JSON.stringify(report), JSON.stringify(cost), t.id);
+      this.#event(t.id, 'reported', null, null, { status: report.status, summary: report.summary });
 
-    if (report.status === 'failed') return this.#fail(t.id, `${worker.name} couldn't do it: ${report.summary}`);
-    if (report.status === 'blocked' || report.status === 'partial') {
-      // Only a blocked report can say the work never started; then the dispatch is given back.
-      const unstarted = report.status === 'blocked' ? this.#claimedNotStarted(t.id) : null;
-      if (unstarted) this.#giveBack(t.id, unstarted);
-      this.#db.run(`UPDATE task SET user_visibility = 'attention' WHERE id = ?`, t.id);
-      const why = report.status === 'blocked' ? `Blocked: ${report.blockers.join('; ') || report.summary}` : `Partly done: ${report.summary}`;
-      this.#move(t.id, 'waiting', why, report.status);
-      return;
+      if (report.status === 'failed') return this.#fail(t.id, `${worker.name} couldn't do it: ${report.summary}`);
+      if (report.status === 'blocked' || report.status === 'partial') {
+        // Only a blocked report can say the work never started; then the dispatch is given back.
+        const unstarted = report.status === 'blocked' ? this.#claimedNotStarted(t.id) : null;
+        if (unstarted) this.#giveBack(t.id, unstarted);
+        this.#db.run(`UPDATE task SET user_visibility = 'attention' WHERE id = ?`, t.id);
+        const why = report.status === 'blocked' ? `Blocked: ${report.blockers.join('; ') || report.summary}` : `Partly done: ${report.summary}`;
+        this.#move(t.id, 'waiting', why, report.status);
+        return;
+      }
+      this.#move(t.id, 'verifying', 'Checking the evidence.', 'verifying');
+      this.#verifyAndSettle(t.id, report);
+    } finally {
+      signal.removeEventListener('abort', stop);
+      // Observe late rejections as well as resolutions, without accepting their report or
+      // releasing capacity early. Keeping #runOne pending also makes idle/drain truthful.
+      await work.catch(() => {});
     }
-    this.#move(t.id, 'verifying', 'Checking the evidence.', 'verifying');
-    this.#verifyAndSettle(t.id, report);
   }
 
   #verifyAndSettle(id: string, report: Report): void {
