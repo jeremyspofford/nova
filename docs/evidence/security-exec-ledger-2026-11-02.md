@@ -432,7 +432,7 @@ The sole reviewer persistent write is this authorized report. No source, index, 
 
 ## Rulings I made
 
-Initial sixteen controller decisions in their original order; later rulings17–22 are in the CI correction supplement. the owner's instruction limits chat reports to merge lines and blockers, so the reviewable PR record carries this full list.
+Initial sixteen controller decisions in their original order; later rulings17–22 are in the CI correction supplement and23–24 in the trigger correction record. the owner's instruction limits chat reports to merge lines and blockers, so the reviewable PR record carries this full list.
 
 1. Ruling: the owner's explicit ordered fixes and continuous-execution instruction authorize this implementation directly; no duplicate brainstorming/plan confirmation round. Existing review is the design; engineering details independently reviewed. Cost ifwrong: visibleimplementationrework; actualnewrenderedpatterns/designstage2/architectureowner-gates persist.
 

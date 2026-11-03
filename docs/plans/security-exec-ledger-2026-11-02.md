@@ -58,3 +58,5 @@ Coordinator archives complete reports/rulings/evidence; plain-language same-PR L
 
 
 CI correction: original run41557701721 at a248 failed; four canary/rollback fixture failures and leaked setup cleanup causally isolated. Browser shared-close correction introduced a pending-launch leak, fixed at3d713478 and independently re-reviewed with no open findings. Original remote UI causality remains unproven. Full history/reports in docs/evidence/security-exec-ledger-ci-correction-2026-11-03.md. Final ordinary exact-head CI/merge/preview remain required.
+
+Second CI41565401864 completedUI157/157 but unit1631pass/1dedupfixturefail/14unchangedskips; reviewed test-only4216de43 observes real completion and explicitly protects busy batching. Full history docs/evidence/security-exec-ledger-trigger-correction-2026-11-03.md. Fresh ordinary exact-headCI stillrequired.

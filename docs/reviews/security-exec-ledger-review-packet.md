@@ -1,6 +1,6 @@
 # Review packet: inherited secrets and physical execution/cleanup ownership
 
-Owner IMMEDIATE S1/S2 from whole-app main `048eea0e`. Complete current candidate artifact: `048eea0ee043f43d01bc9a36bed601ce9805373b` → `3d713478648e50f18bfa7c1dba54f0fff3fa405b`. This self-contained packet includes the whole contextual source/test diff plus full Ledger and Session implementations. Diff/source display removes trailing whitespace only; pinned Git content and retained source manifests are authoritative.
+Owner IMMEDIATE S1/S2 from whole-app main `048eea0e`. Complete current candidate artifact: `048eea0ee043f43d01bc9a36bed601ce9805373b` → `4216de43b4e59b0c48f184c87e801d9a96b02be8`. This self-contained packet includes the whole contextual source/test diff plus full Ledger and Session implementations. Diff/source display removes trailing whitespace only; pinned Git content and retained source manifests are authoritative.
 
 ## Claims
 
@@ -25,6 +25,8 @@ Known pre-existing synchronous-listener-throw cleanup, Chromium best-effort prof
 Initial S1/S2 task reviews and fresh whole-branch adversarial review approved source7055. The first exact-head CI at a248 **failed**: unit job timed out after four canary/rollback fixture failures, and UI156/157 had one profile-removal failure. Unit causal isolation is established. Six original-source isolated UI passes did not identify its cause. A controlled adjacent close bug was corrected; independent review caught a new pending-launch leak in that correction. Round1 source `3d713478648e50f18bfa7c1dba54f0fff3fa405b` closes that finding with no open findings. Original remote UI profile-removal causality remains **UNPROVEN**, and fresh ordinary final-head CI/LEDGER/merge/preview gates remain mandatory. Local focused passes are not a substitute.
 
 [Initial full reports/output/rulings](../evidence/security-exec-ledger-2026-11-02.md), [complete CI correction and independent reviews](../evidence/security-exec-ledger-ci-correction-2026-11-03.md), [safe exact correction test output](../evidence/security-exec-ledger-ci-output-2026-11-03.md), [plain-language LEDGER](../LEDGER.md). Process snapshots that included unrelated local commands are excluded from public evidence; no actual owner secrets or keychains were used. No extra owner-input gate is invented for these explicitly ordered fixes.
+
+Subsequent ordinary CI atd5 passedUI157/157 but failed one later unit dedup fixture. Test-only correction `4216de43b4e59b0c48f184c87e801d9a96b02be8` was independently approved with no findings; runtime remains identical to reviewed3d7. [Full subsequent failure/correction/review](../evidence/security-exec-ledger-trigger-correction-2026-11-03.md). Another full ordinary final-head CI is still required.
 
 ## Complete contextual source/test diff
 
@@ -1659,6 +1661,97 @@ index 9e8c58dc..1be8107b 100644
 +    await stop(p);
 +  }
 +});
+diff --git a/tests/core/triggers.test.ts b/tests/core/triggers.test.ts
+index 53bbe839..8db3ccf6 100644
+--- a/tests/core/triggers.test.ts
++++ b/tests/core/triggers.test.ts
+@@ -74,36 +74,85 @@ test('webhooks: unknown is not found, a wrong or missing token is refused, a pau
+
+   triggers.pause(rule.id);
+   const t = await triggers.hook('example', token, {});
+   assert.equal(t.triage.decision, 'drop');
+   assert.match(t.triage.reason, /paused/i);
+   assert.equal(t.ledger_task_id, null);
+   assert.equal(ledger.list().length, 0);
+ });
+
+ test('dedup: the same event within the window is dropped as the same as the earlier one', async () => {
+-  const { triggers, at } = setup();
++  const { triggers, ledger, at } = setup();
+   const { token } = triggers.createRule({ name: 'Example events', class: 'event', hook: 'example', action: note(), dedup_window_s: 60 }, 'person');
+   const first = await triggers.hook('example', token, { n: 1 });
++  assert.equal(first.triage.decision, 'act');
++  await ledger.idle();
++  assert.equal(ledger.get(first.ledger_task_id!).state, 'done');
+   at('2026-03-02T12:00:40Z');
+   const second = await triggers.hook('example', token, { n: 1 });
+   assert.equal(second.triage.decision, 'drop');
+   assert.equal(second.triage.reason, `Same as trigger ${first.trigger_id}.`);
+   assert.equal(second.dedup_key, first.dedup_key);
+   const other = await triggers.hook('example', token, { n: 2 });
+   assert.equal(other.triage.decision, 'act');
++  // Independent actions require completed work; queued work intentionally batches new events.
++  await ledger.idle();
++  assert.equal(ledger.get(other.ledger_task_id!).state, 'done');
+   const keyed = await triggers.hook('example', token, { n: 3 }, 'fact-1');
+   const keyedAgain = await triggers.hook('example', token, { n: 4 }, 'fact-1');
+   assert.equal(keyed.triage.decision, 'act');
+   assert.equal(keyedAgain.triage.decision, 'drop', 'an explicit dedup key wins over the payload');
++  await ledger.idle();
++  assert.equal(ledger.get(keyed.ledger_task_id!).state, 'done');
+   at('2026-03-02T12:02:00Z');
+   assert.equal((await triggers.hook('example', token, { n: 1 })).triage.decision, 'act', 'after the window it counts again');
++  await ledger.idle();
++  assert.ok(ledger.list().every((task) => task.state === 'done'));
++});
++
++test('dedup: a new event joins queued work while an identical event is dropped', async () => {
++  const { triggers, ledger } = setup();
++  const { token } = triggers.createRule({ name: 'Example events', class: 'event', hook: 'example', action: note(), dedup_window_s: 60 }, 'person');
++  // Hold the runner at a known boundary instead of relying on how many microtasks a hook takes.
++  ledger.halt();
++  let taskId: string;
++  try {
++    const first = await triggers.hook('example', token, { n: 1 });
++    assert.equal(first.triage.decision, 'act');
++    taskId = first.ledger_task_id!;
++    assert.equal(ledger.get(taskId).state, 'queued');
++
++    const other = await triggers.hook('example', token, { n: 2 });
++    assert.equal(other.triage.decision, 'queue');
++    assert.equal(other.triage.reason, 'Added to "Note the event".');
++    assert.equal(other.ledger_task_id, taskId);
++    assert.notEqual(other.dedup_key, first.dedup_key);
++    assert.equal(ledger.list().length, 1);
++    assert.equal(ledger.get(taskId).state, 'queued');
++
++    const duplicate = await triggers.hook('example', token, { n: 1 });
++    assert.equal(duplicate.triage.decision, 'drop');
++    assert.equal(duplicate.triage.reason, `Same as trigger ${first.trigger_id}.`);
++    assert.equal(duplicate.dedup_key, first.dedup_key);
++    assert.equal(duplicate.ledger_task_id, null);
++    assert.equal(ledger.list().length, 1);
++  } finally {
++    ledger.resume();
++    await ledger.idle();
++  }
++  assert.equal(ledger.get(taskId!).state, 'done', 'the queued task runs when the runner resumes');
++
++  const next = await triggers.hook('example', token, { n: 3 });
++  assert.equal(next.triage.decision, 'act', 'completed work does not batch a new event');
++  assert.notEqual(next.ledger_task_id, taskId!);
++  await ledger.idle();
++  assert.equal(ledger.get(next.ledger_task_id!).state, 'done');
+ });
+
+ test('cooldown: a rule that just acted stays silent until the cooldown ends', async () => {
+   const { triggers, at } = setup();
+   const { token } = triggers.createRule({ name: 'Example events', class: 'event', hook: 'example', action: note(), cooldown_s: 300, dedup_window_s: 0 }, 'person');
+   const first = await triggers.hook('example', token, { n: 1 });
+   assert.equal(first.cooldown_until, '2026-03-02T12:05:10.000Z');
+   at('2026-03-02T12:01:00Z');
+   const second = await triggers.hook('example', token, { n: 2 });
+   assert.equal(second.triage.decision, 'silent');
 diff --git a/tests/subprocess-environment.test.js b/tests/subprocess-environment.test.js
 new file mode 100644
 index 00000000..ca0e6558

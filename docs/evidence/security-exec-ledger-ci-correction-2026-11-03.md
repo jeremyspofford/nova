@@ -578,3 +578,8 @@ Final checks: `git diff --exit-code`, `git diff --cached --exit-code`, and `git 
 The full consolidated correction is accepted after the single Important/P1 was fixed and independently closed. The unit fixture cause is established. The public close completion and in-progress acquisition contracts are tested and reviewed. Original intermittent remote Chromium profile-removal causality remains UNPROVEN; a fresh full ordinary CI is mandatory and does not retroactively recover that trace. Known pre-existing listener-throw, best-effort Chromium removal and unsupported arbitrary multiple-open limits remain as explicitly recorded above.
 
 [Exact available safe test and diagnostic output](security-exec-ledger-ci-output-2026-11-03.md) retains RED, cleanup-only RED, GREEN, six diagnostic original-source UI passes and the failed TCP oracle. The overbroad process snapshot and whole original CI logs remain private, not silently published.
+
+
+## Subsequent ordinary-CI disposition
+
+The second full CI completed with UI157/157 and a sole later unit dedup-fixture failure. Its [separately reproduced test-only correction and independent review](security-exec-ledger-trigger-correction-2026-11-03.md) preserve production behavior and all exact decisions. That later result and the next required ordinary run are not hidden by the earlier scoped approval.

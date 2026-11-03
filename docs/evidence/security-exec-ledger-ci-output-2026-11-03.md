@@ -1138,3 +1138,263 @@ no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fa
 ℹ duration_ms 2769.081776
 no-Kubernetes tripwire: never fired
 ````
+
+
+## Second CI trigger fixture output
+
+The originalRED/diagnostic and successful unchanged-behavior boundary are preserved separately. These outputs do not substitute for the later required full run. Exact original bytes are hashed; whitespace-normalized displays include gzip+base64 when needed.
+
+### `ci-trigger-fix-logs/diagnostic.log`
+
+1833 original bytes; SHA-256 `a251ec7965391ec8158979375421e3a3138bd3200d374903ebde42bfbea48bf2`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+diagnostic before keyed [
+  { id: '4e53710f-740d-4032-9123-2b2b724bc78e', state: 'queued' },
+  { id: '062fd2f2-f56a-478a-aafa-7506a0d3b526', state: 'done' }
+] {
+  first: '062fd2f2-f56a-478a-aafa-7506a0d3b526',
+  other: '4e53710f-740d-4032-9123-2b2b724bc78e'
+}
+diagnostic keyed {
+  decision: {
+    decision: 'queue',
+    reason: 'Added to "Note the event".',
+    model: { provider: 'rules', template_id: 'triage', version: 1 }
+  },
+  task: '4e53710f-740d-4032-9123-2b2b724bc78e'
+} [
+  { id: '4e53710f-740d-4032-9123-2b2b724bc78e', state: 'queued' },
+  { id: '062fd2f2-f56a-478a-aafa-7506a0d3b526', state: 'done' }
+]
+diagnostic after idle [
+  { id: '4e53710f-740d-4032-9123-2b2b724bc78e', state: 'done' },
+  { id: '062fd2f2-f56a-478a-aafa-7506a0d3b526', state: 'done' }
+]
+✖ dedup: the same event within the window is dropped as the same as the earlier one (53.601069ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 143.982156
+
+✖ failing tests:
+
+test at tests/core/triggers.test.ts:83:1
+✖ dedup: the same event within the window is dropped as the same as the earlier one (53.601069ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  'queue' !== 'act'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/core/triggers.test.ts:100:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'queue',
+    expected: 'act',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired
+````
+
+Exact original bytes (gzip+base64):
+
+```text
+H4sIAAAAAAAC/81V224bNxB936+Y5kU24NXedPO2KaAEahsEdQLbeQoCg1rOSqy45IYXS0Lgt35Dn/oj/Z18SYe7G9hBkMBAi6KCBJFD8szMOZyh0vFLv0aj0KEFZ0S7FwZLYKZBDic7WqucPIMtyuYMaukPwBSHXWFBK3i9vP4FDFba8M5cMyEBb9EcoWJSfg8v3zxbPX918dOLn8Eri+404oJtlLZOVLDGWhuEHR7J1dsI4AMIXsJogtNinqV1PJ+kPJ6kRR6fZ3kR5+t8Pc8n62q+wNEZWMccRTp679EjH8Hd2T1EOstrntd5XE9nLJ7MFyxmrGbxfJrOWMqL9TSfPYDgWiEBRO/gA2HUwlj3aBA6oN0WzWMDj+4ectAnH7xyrIQVWpXd7OG8z7DzBMQ2s51xyTmddBqeXGiHQCEE5pV7Mh52NpqjJDRojb4VvIvQeImWEnfYtJJyv+nYItnZJlBKyvUuMyIDekYds7vH5/Y/0fEhxax2aAhO4j8IbkD+N0L7+OcfJC73bdmJZlkzKAd74bZCdda9UFzvQVjgRrctKc3s/fZhjMxIQbkRNJxMi/EszdLZeWNPo4+//0UaW2ch68bWi1DfaTdpmf007Aq231IxVaGU5KlfsjvR+e1nTnM9DLk3zNEtuWkIfVKMzxd5Np1FXV4BT6hN77uMovAPzPXzhPoEJnTZNhu6Z+NgG9OuRVFm/wkpAEtr0YTYV8ZoA29Xl5c3y6ur1eX1i1cX70pYHVpqd4R7y6QP/VBTkyIJjaAmeAR875ksCYe+Q1HCd0+fwohVbtSbw4fyvabcnmvl8ODGPzCl1bHR3v4IJ7WQWCZJstUNJr+hweaYjCuq1EOy12bnDKJNlL5lccOEiisR1+LgvPlkXXshefItOrM0pd/pfSzMHlXVRTQ2XsGJIm+loNiMYrKDuiG7QtONy6xYnJfzL87TPTbuyq/DnmWoqGdaO2KGtd9C3DJ6Wawti8W8LE6HzrZBWqKq4L/SEjUektx47JtWoIKq5TNhhn5GJAf6P2+HOChW9iL0Rt0GfB0aXq/dKgg3LHJR12FBUAfEoNpdpL7yCKrwlIXnAHn0NxdD25IpBwAA
+```
+
+### `ci-trigger-fix-logs/final-api-trigger-proactive.log`
+
+624 original bytes; SHA-256 `cd3eb6edb832c3f95c278527c624cd1a91ff4a44a670a79f8b19ba27f67a27c1`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ webhooks are the one route outside the X-Nova guard, and they check their own token (411.370886ms)
+✔ the guard exemption is explicit: only the webhook route has it, and no other route can claim it (84.012321ms)
+✔ the trigger registry over the API: add, edit, pause, remove; tokens never listed; tasks you delegate are reactive triggers (307.077462ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1287.202875
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-trigger-fix-logs/final-diff-check.log`
+
+0 original bytes; SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+````text
+````
+
+### `ci-trigger-fix-logs/final-m2-acceptance.log`
+
+411 original bytes; SHA-256 `c4f05020ec26f7d13a19c4316c0669d66820d2669e12cfe4c2a55a8536869257`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M2 gate: event and heartbeat triggers make verified ledger tasks; a proactive message traces to its trigger; local-only holds (1011.398641ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1085.624722
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-trigger-fix-logs/final-module-boundary.log`
+
+641 original bytes; SHA-256 `d47a270cc3d9e8af6d80bf7dd8c41de2f43b47067eae22a841a0fb07f9229587`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ no file outside the Decision Service reaches a seat or the wire client, and only wire.ts names the endpoint (66.752324ms)
+✔ negative controls: each planted violation is caught (0.700981ms)
+✔ the service’s index.ts and the core’s index.ts export no seat and no wire client (345.382296ms)
+✔ Part 1’s old folder is gone: its code lives in the service (0.336872ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 502.284362
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-trigger-fix-logs/final-triggers.log`
+
+2319 original bytes; SHA-256 `e814faad2b5b60b15804818384cca9a767b455118f8090d89d4da91b6c58ef36`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ triage.v1 ships as an active template, and a webhook rule turns an event into a ledger task traced to its trigger (89.497765ms)
+✔ webhooks: unknown is not found, a wrong or missing token is refused, a paused rule records a drop (65.509767ms)
+✔ dedup: the same event within the window is dropped as the same as the earlier one (68.382907ms)
+✔ dedup: a new event joins queued work while an identical event is dropped (67.899287ms)
+✔ cooldown: a rule that just acted stays silent until the cooldown ends (56.180437ms)
+✔ batching: an event while the rule’s earlier task is still waiting is added to it, not made a second task (57.751867ms)
+✔ a proactive message traces to its trigger; in quiet hours it is held, then delivered when they end (61.828761ms)
+✔ a category the person turned off is dropped, with the reason (45.129869ms)
+✔ heartbeat: a due time runs once, however many times Nova ticks (claim-once) (70.305611ms)
+✔ heartbeat: runs missed more than 6 hours ago are recorded as dropped; the latest recent one catches up (75.182761ms)
+✔ a paused heartbeat does not run, and does not catch up for the time it was paused (80.997654ms)
+✔ in local-only mode the remote decision provider is never called, even when registered first (52.694172ms)
+✔ an unsure triage does not act alone: the task waits for the person (52.50744ms)
+✔ with the triage template retired, triage falls back to the local rules and says no model was used (44.359436ms)
+✔ a firing whose rule lives elsewhere (a schedule file) brings its own action: recorded, triaged, claimed once, and traced to its task (48.883674ms)
+✔ a task the person delegates is recorded as a reactive trigger linked to it (44.868618ms)
+✔ the registry: rules are validated, editable, pausable and removable, and every change is kept (48.265197ms)
+✔ an unsure proactive message waits for the person: no tick delivers it, an approval does (42.59965ms)
+✔ a message held for quiet hours is withdrawn if its rule is paused, removed or turned off meanwhile (126.267552ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1314.074465
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-trigger-fix-logs/final-typecheck.log`
+
+72 original bytes; SHA-256 `e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0`.
+
+````text
+npm notice run nova@0.1.0 typecheck
+npm notice run tsc -p tsconfig.json
+````
+
+### `ci-trigger-fix-logs/original-green.log`
+
+364 original bytes; SHA-256 `bf130f565efe7cee36b86f40ea11c5eab8cfb268e3cced851831f390b5ce97a4`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ dedup: the same event within the window is dropped as the same as the earlier one (55.275256ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 149.828531
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-trigger-fix-logs/original-red.log`
+
+1061 original bytes; SHA-256 `1ec9f69ac1ce25ad1969b9771c6e87a52a1d497b892e426df3874005b674bc50`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ dedup: the same event within the window is dropped as the same as the earlier one (55.950745ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 158.50192
+
+✖ failing tests:
+
+test at tests/core/triggers.test.ts:83:1
+✖ dedup: the same event within the window is dropped as the same as the earlier one (55.950745ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  'queue' !== 'act'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/core/triggers.test.ts:96:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'queue',
+    expected: 'act',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired
+````
+
+Exact original bytes (gzip+base64):
+
+```text
+H4sIAAAAAAAC/71UzW4TMRC+5ymGU1Kp2U0IoYmhSGkVoKpoURNOCFXO7mxi4rW3Yzs/Qtx4Bk68CK/DkzDeTVUhRI+sVtrxN+NvZr6x19juZVggGfTowJOqtopQgKQSc+is2Zd5fQwr1OUxFDrsQJoc1gMH1sD7yfwtEGaW8houpNKAG6Q9ZFLrF3D54Wx6fn31+uINBOPQH7V+/fgOOeahEuBXCE6WGHcYD1vlV8rU6FaZ3G5BOcjJVhVXIt1D+MFGSVohcR0IneEwGQ97J8+GpeMc334Ct+Md9GvbBRW769WLSrp7sy63CcmkyVBrztS43FrVeZuVt7k9mHkg6ZU1tyWzD0fJsNcfP23VbUU6ZZZNatFqxS9I36xTFglTFni5RHJJxBKOGg1E/79oAjBxDimWPiWyBB+nNze3k9lsejO/uL76JGC6q3jWzLuROsTDYGHB7Fwyn4A94F2QWjAPv+27gAHb8OT0FNoy8+0Gjg/3O+fezq3xuPPJS2ms2Zc2uFfQKZRGkabpypaYfkbCcp8mmc1xl24trT0hutTYjeyWUpluprqF2vlA9+giKJ2nj8k5fi76vaOHUqTbm6wuKKFgoGM4mVBcGhmpa6Zbxg1SbYv+YDQWJ3/td16Sn4VFjJkUvPnMWs/CyOoxxpXkW+WcGIxOxOAIvtSsS2SXZJXfsUsu+aZ5Cnhc+6ISAtp/zKXduFjjqP698A2Ih4GJZgYNaKvIb4nBZnTTOLeDM1dFER2qrDTGoX1tmX/8AEy8xlCwnbd+AzycJMUlBAAA
+```
+
+### `ci-trigger-fix-logs/queued-boundary.log`
+
+355 original bytes; SHA-256 `a42ee25e0059ea76ffc371efb9a1c93bcaf88caba58f1ac10ab06e70005e1dad`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ dedup: a new event joins queued work while an identical event is dropped (52.887042ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 150.054312
+no-Kubernetes tripwire: never fired
+````
