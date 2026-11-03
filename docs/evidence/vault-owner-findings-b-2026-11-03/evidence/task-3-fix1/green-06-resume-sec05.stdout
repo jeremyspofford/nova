@@ -1,0 +1,18 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+(node:32) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ migration resumes: a name already moved from the same old vault counts as moved; the old vault keeps only Nova’s own keys (1972.061043ms)
+✔ SEC05: old entry changed after staging survives commit and resumed migration (351.193164ms)
+✔ SEC05: old-vault writes fail closed while migration holds the writer lock (60.481707ms)
+✔ SEC05: a cached old-vault writer reloads after migration rekeys the remaining entries (202.923624ms)
+✔ SEC05: a concurrent old-vault writer retains its latest acknowledged value (740.582423ms)
+✔ SEC05: a core-replaced migrated entry is kept regardless of the replacement guess (720.406896ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4617.199311
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,12 @@
+{
+  "task_base": "9360aab137f93409c1b7c2570e5d5dccc97e1f77",
+  "source_lines": 2721,
+  "budget": 3000,
+  "files": {
+    "src/broker/broker.ts": "0e9dcb1cdcc02685ac3ccb92c3bc5edd4bb207a1d353184369cd4f9f87809f78",
+    "src/broker/launch.ts": "4b92ecc07b84f4bc9a3b39b0d49048a62e4e27575b2b3cc7273e6908f390fb3d",
+    "src/broker/oldvault.ts": "bf6c3899380789da726ead575361f02d3bc5d75bf057a2e94dc2f366ff5caddf",
+    "tests/core/broker-canary.test.ts": "e927a4f789c9754f884a4e34e624029e9256fe0570c83172b40e3ddeebc2d5c6",
+    "tests/core/broker-owner-findings-b-migration.test.ts": "e85cea87792f82d242d52d7e22abb02e7067e4e95ea094ad7ed3a8cd30810011"
+  }
+}

@@ -1,0 +1,3 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ private Core bootstrap asks parent over IPC, accepts only fixed role context and rejects malformed delivery (1.16248ms)
+✖ Core owns only its metadata client, closes it permanently, and standalone Core honestly has no broker (183.995168ms)

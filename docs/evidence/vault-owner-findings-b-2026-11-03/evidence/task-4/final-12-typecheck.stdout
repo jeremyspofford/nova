@@ -1,0 +1,3 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+tests/core/broker-owner-findings-b-launch.test.ts(157,71): error TS18046: 'stage.outcome' is of type 'unknown'.
+no-Kubernetes tripwire: never fired

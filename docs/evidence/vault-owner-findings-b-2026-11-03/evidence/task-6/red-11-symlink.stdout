@@ -1,0 +1,32 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ fixed broker reset removes both exact device accounts, never reads values, and refuses retained runs (1.684649ms)
+✔ keychain deletion failure is propagated, never silently reported as reset success (0.359096ms)
+✔ Windows reset does not interpret ambiguous exit 44 as item absence; removal uses metadata only (0.124996ms)
+✔ documented missing entry and repeated successful deletion remain idempotent (0.194117ms)
+✖ broker bootstrap refuses a symlinked storage directory before touching its target (107.453778ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 4
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 179.563456
+
+✖ failing tests:
+
+test at tests/core/broker-reset-keys.test.ts:50:1
+✖ broker bootstrap refuses a symlinked storage directory before touching its target (107.453778ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/broker-reset-keys.test.ts:58:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /directory|symlink/i,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

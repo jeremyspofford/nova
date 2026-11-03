@@ -1,0 +1,68 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ I1 confirmed absent connectors-directory permits migration (in-process) (205.617761ms)
+✔ I1 confirmed absent gmail-directory permits migration (in-process) (189.532ms)
+✔ I1 confirmed absent gmail-files permits migration (in-process) (194.123224ms)
+✔ I1 dangling Gmail source refuses stage and preserves source authority (in-process) (122.550937ms)
+✔ I1 dangling Gmail source refuses restage and preserves source authority (in-process) (183.284343ms)
+✔ I1 dangling Gmail source refuses finish and preserves source authority (in-process) (189.083515ms)
+✔ I1 inaccessible Gmail source refuses stage and preserves source authority (in-process) (121.242723ms)
+✔ I1 inaccessible Gmail source refuses restage and preserves source authority (in-process) (184.878194ms)
+✔ I1 inaccessible Gmail source refuses finish and preserves source authority (in-process) (185.596746ms)
+(node:564) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ I1 confirmed absent connectors-directory permits migration (permission IPC) (1442.705422ms)
+(node:824) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent gmail-directory permits migration (permission IPC) (1541.387214ms)
+(node:1090) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent gmail-files permits migration (permission IPC) (1540.189663ms)
+(node:1356) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling Gmail source refuses stage and preserves source authority (permission IPC) (1473.56791ms)
+(node:1616) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling Gmail source refuses restage and preserves source authority (permission IPC) (1605.602618ms)
+(node:1882) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling Gmail source refuses finish and preserves source authority (permission IPC) (1555.062981ms)
+(node:2148) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 inaccessible Gmail source refuses stage and preserves source authority (permission IPC) (1472.177452ms)
+(node:2408) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 inaccessible Gmail source refuses restage and preserves source authority (permission IPC) (1548.818837ms)
+(node:2674) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 inaccessible Gmail source refuses finish and preserves source authority (permission IPC) (1520.140883ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 17
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 15391.131209
+
+✖ failing tests:
+
+test at tests/core/broker-migration-source-inspection.test.ts:52:5
+✖ I1 confirmed absent connectors-directory permits migration (permission IPC) (1442.705422ms)
+  AssertionError [ERR_ASSERTION]: {"id":4,"error":"failed","words":"The old vault couldn’t be read; nothing was staged.","record":{"seq":3,"at":"2026-11-03T06:37:50.385Z","device":"f8169170-4276-471b-a0e0-94a12f6cfca3","verb":"create","ref":null,"target":null,"scope_item":null,"outcome":"failed:request","tier":null,"approval_id":null,"task":null,"role":"core","prev":"35147ac31cd4e307bf3f2eaef5f0aa6b11e87701d6ad229b2c1f72f7cfb92a02","hash":"cc5ed3ade9900cc9c616d4da3f92b940df5af48bdf42c1234fd3d734d3d3c804"}}
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:58:16)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,24 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control (7455.282402ms)
+✔ B3 four lanes remain held during TERM escalation; stopPrograms awaits cleanup and refuses new uses (6090.731784ms)
+✔ B3 ambiguous leftover directory refuses a fresh credentialed process without killing its recorded PID (65.828983ms)
+✔ B3 delayed file open succeeds normally; bad cwd spawn error and exit/timeout races settle without stale timers (2276.630676ms)
+✔ B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context (1571.220337ms)
+✔ B5 explicit keychain missing refuses migration even with a valid file key (3.432844ms)
+✔ B5 explicit keychain wrong refuses migration even with a valid file key (0.714527ms)
+✔ B5 explicit keychain unavailable refuses migration even with a valid file key (0.561461ms)
+✔ B3 synchronous launcher spawn failure releases exactly once and leaves no stale owned entry (139.848117ms)
+✔ B3 normal parent exit cleans inherited descendants even after they close their output pipes (1340.930486ms)
+✔ B3 main graceful shutdown awaits real owned descendant cleanup (6451.454035ms)
+✔ B3 broker SIGKILL leaves ownership evidence and restarted broker refuses reuse without stale PID killing (1572.020302ms)
+✔ B3 cleanup failure retains evidence and blocks further credentialed use (535.002576ms)
+✔ B3 Windows credentialed process branch refuses before run directory or value injection (65.568553ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 27689.83651
+no-Kubernetes tripwire: never fired

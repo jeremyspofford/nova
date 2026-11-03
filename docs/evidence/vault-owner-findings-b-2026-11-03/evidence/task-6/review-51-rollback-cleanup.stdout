@@ -1,0 +1,387 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"result":{"ok":false,"said":"Going back stopped (Broker owned cleanup was not confirmed; operator recovery may be needed.); Nova kept v1.1.0 running."},"mode":"running","oldPid":53,"broker":{"status":"running","pid":68},"coreRestarted":true}
+Expected cleanup rejection: Broker owned cleanup was not confirmed; operator recovery may be needed.
+review egress guard: never fired
+✖ review: rollback must keep Core stopped when owned broker cleanup fails (469.082898ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 813.623552
+
+✖ failing tests:
+
+test at .superpowers/sdd/vault-owner-findings-b-2026-11-03/evidence/task-6/review-rollback-cleanup.test.ts:45:1
+✖ review: rollback must keep Core stopped when owned broker cleanup fails (469.082898ms)
+  AssertionError [ERR_ASSERTION]: rollback must not start replacement Core after unconfirmed cleanup
+  + actual - expected
+  
+  + ServerProcess {
+  +   Symbol(kCapture): false,
+  +   Symbol(shapeMode): false,
+  +   _events: [Object: null prototype] {
+  +     exit: [Function (anonymous)],
+  +     message: [Function (anonymous)],
+  +     ready: [Function (anonymous)]
+  +   },
+  +   _eventsCount: 3,
+  +   _maxListeners: undefined,
+  +   group: false,
+  +   identity: {
+  +     pid: 75,
+  +     start: 47409399
+  +   },
+  +   port: 43979,
+  +   proc: <ref *1> ChildProcess {
+  +     Symbol(kCapture): false,
+  +     Symbol(kChannelHandle): Pipe {
+  +       Symbol(kJSONBuffer): '',
+  +       Symbol(kStringDecoder): StringDecoder {
+  +         Symbol(kNativeDecoder): Buffer(7) [Uint8Array] [
+  +           0,
+  +           0,
+  +           0,
+  +           0,
+  +           0,
+  +           0,
+  +           1
+  +         ],
+  +         encoding: 'utf8'
+  +       },
+  +       buffering: false,
+  +       pendingHandle: null,
+  +       sockets: {
+  +         got: {},
+  +         send: {}
+  +       }
+  +     },
+  +     Symbol(shapeMode): false,
+  +     _closesGot: 0,
+  +     _closesNeeded: 4,
+  +     _disconnect: [Function (anonymous)],
+  +     _events: [Object: null prototype] {
+  +       close: [Function: bound onceWrapper] {
+  +         listener: [Function: finish]
+  +       },
+  +       error: [
+  +         [Function (anonymous)],
+  +         [Function: bound onceWrapper] {
+  +           listener: [Function (anonymous)]
+  +         },
+  +         Symbol(events.emitting): 0
+  +       ],
+  +       exit: [Function: bound onceWrapper] {
+  +         listener: [Function (anonymous)]
+  +       },
+  +       internalMessage: [Function (anonymous)],
+  +       message: [Function (anonymous)],
+  +       newListener: [Function (anonymous)]
+  +     },
+  +     _eventsCount: 6,
+  +     _handle: Process {
+  +       Symbol(owner_symbol): [Circular *1],
+  +       onexit: [Function (anonymous)],
+  +       pid: 75
+  +     },
+  +     _handleQueue: null,
+  +     _maxListeners: undefined,
+  +     _pendingMessage: null,
+  +     _send: [Function (anonymous)],
+  +     channel: Control {
+  +       Symbol(kCapture): false,
+  +       Symbol(kPendingMessages): [],
+  +       Symbol(shapeMode): false,
+  +       _events: [Object: null prototype] {},
+  +       _eventsCount: 0,
+  +       _maxListeners: undefined
+  +     },
+  +     connected: true,
+  +     disconnect: [Function (anonymous)],
+  +     exitCode: null,
+  +     killed: false,
+  +     pid: 75,
+  +     send: [Function (anonymous)],
+  +     signalCode: null,
+  +     spawnargs: [
+  +       '/opt/node/bin/node',
+  +       '/tmp/nova-broker-life-IUypyE/supervisor/releases/v1.1.0/src/server.js'
+  +     ],
+  +     spawnfile: '/opt/node/bin/node',
+  +     stderr: <ref *3> Socket {
+  +       Symbol(async_id_symbol): 367,
+  +       Symbol(kBuffer): null,
+  +       Symbol(kBufferCb): null,
+  +       Symbol(kBufferGen): null,
+  +       Symbol(kBytesRead): 0,
+  +       Symbol(kBytesWritten): 0,
+  +       Symbol(kCapture): false,
+  +       Symbol(kHandle): Pipe {
+  +         Symbol(owner_symbol): [Circular *3],
+  +         reading: true
+  +       },
+  +       Symbol(kSetKeepAlive): false,
+  +       Symbol(kSetKeepAliveInitialDelay): 0,
+  +       Symbol(kSetNoDelay): false,
+  +       Symbol(kSetTOS): undefined,
+  +       Symbol(lastWriteQueueSize): 0,
+  +       Symbol(shapeMode): true,
+  +       Symbol(timeout): null,
+  +       _closeAfterHandlingError: false,
+  +       _events: {
+  +         close: [Function (anonymous)],
+  +         data: [Function: take],
+  +         drain: undefined,
+  +         end: [Function: onReadableStreamEnd],
+  +         error: undefined,
+  +         finish: undefined,
+  +         prefinish: undefined,
+  +         readable: undefined
+  +       },
+  +       _eventsCount: 3,
+  +       _hadError: false,
+  +       _host: null,
+  +       _maxListeners: undefined,
+  +       _parent: null,
+  +       _pendingData: null,
+  +       _pendingEncoding: '',
+  +       _readableState: ReadableState {
+  +         Symbol(kState): 193997060,
+  +         awaitDrainWriters: null,
+  +         buffer: [],
+  +         bufferIndex: 0,
+  +         highWaterMark: 65536,
+  +         length: 0,
+  +         pipes: []
+  +       },
+  +       _server: null,
+  +       _sockname: null,
+  +       _writableState: WritableState {
+  +         Symbol(kBufferedValue): null,
+  +         Symbol(kState): 17564420,
+  +         bufferedIndex: 0,
+  +         corked: 0,
+  +         highWaterMark: 65536,
+  +         length: 0,
+  +         onwrite: [Function (anonymous)],
+  +         pendingcb: 0,
+  +         writelen: 0
+  +       },
+  +       allowHalfOpen: false,
+  +       connecting: false,
+  +       server: null
+  +     },
+  +     stdin: null,
+  +     stdio: [
+  +       null,
+  +       <ref *2> Socket {
+  +         Symbol(async_id_symbol): 366,
+  +         Symbol(kBuffer): null,
+  +         Symbol(kBufferCb): null,
+  +         Symbol(kBufferGen): null,
+  +         Symbol(kBytesRead): 0,
+  +         Symbol(kBytesWritten): 0,
+  +         Symbol(kCapture): false,
+  +         Symbol(kHandle): Pipe {
+  +           Symbol(owner_symbol): [Circular *2],
+  +           reading: true
+  +         },
+  +         Symbol(kSetKeepAlive): false,
+  +         Symbol(kSetKeepAliveInitialDelay): 0,
+  +         Symbol(kSetNoDelay): false,
+  +         Symbol(kSetTOS): undefined,
+  +         Symbol(lastWriteQueueSize): 0,
+  +         Symbol(shapeMode): true,
+  +         Symbol(timeout): null,
+  +         _closeAfterHandlingError: false,
+  +         _events: {
+  +           close: [Function (anonymous)],
+  +           data: [Function: take],
+  +           drain: undefined,
+  +           end: [Function: onReadableStreamEnd],
+  +           error: undefined,
+  +           finish: undefined,
+  +           prefinish: undefined,
+  +           readable: undefined
+  +         },
+  +         _eventsCount: 3,
+  +         _hadError: false,
+  +         _host: null,
+  +         _maxListeners: undefined,
+  +         _parent: null,
+  +         _pendingData: null,
+  +         _pendingEncoding: '',
+  +         _readableState: ReadableState {
+  +           Symbol(kState): 194521348,
+  +           awaitDrainWriters: null,
+  +           buffer: [],
+  +           bufferIndex: 0,
+  +           highWaterMark: 65536,
+  +           length: 0,
+  +           pipes: []
+  +         },
+  +         _server: null,
+  +         _sockname: null,
+  +         _writableState: WritableState {
+  +           Symbol(kBufferedValue): null,
+  +           Symbol(kState): 17564420,
+  +           bufferedIndex: 0,
+  +           corked: 0,
+  +           highWaterMark: 65536,
+  +           length: 0,
+  +           onwrite: [Function (anonymous)],
+  +           pendingcb: 0,
+  +           writelen: 0
+  +         },
+  +         allowHalfOpen: false,
+  +         connecting: false,
+  +         server: null
+  +       },
+  +       <ref *3> Socket {
+  +         Symbol(async_id_symbol): 367,
+  +         Symbol(kBuffer): null,
+  +         Symbol(kBufferCb): null,
+  +         Symbol(kBufferGen): null,
+  +         Symbol(kBytesRead): 0,
+  +         Symbol(kBytesWritten): 0,
+  +         Symbol(kCapture): false,
+  +         Symbol(kHandle): Pipe {
+  +           Symbol(owner_symbol): [Circular *3],
+  +           reading: true
+  +         },
+  +         Symbol(kSetKeepAlive): false,
+  +         Symbol(kSetKeepAliveInitialDelay): 0,
+  +         Symbol(kSetNoDelay): false,
+  +         Symbol(kSetTOS): undefined,
+  +         Symbol(lastWriteQueueSize): 0,
+  +         Symbol(shapeMode): true,
+  +         Symbol(timeout): null,
+  +         _closeAfterHandlingError: false,
+  +         _events: {
+  +           close: [Function (anonymous)],
+  +           data: [Function: take],
+  +           drain: undefined,
+  +           end: [Function: onReadableStreamEnd],
+  +           error: undefined,
+  +           finish: undefined,
+  +           prefinish: undefined,
+  +           readable: undefined
+  +         },
+  +         _eventsCount: 3,
+  +         _hadError: false,
+  +         _host: null,
+  +         _maxListeners: undefined,
+  +         _parent: null,
+  +         _pendingData: null,
+  +         _pendingEncoding: '',
+  +         _readableState: ReadableState {
+  +           Symbol(kState): 193997060,
+  +           awaitDrainWriters: null,
+  +           buffer: [],
+  +           bufferIndex: 0,
+  +           highWaterMark: 65536,
+  +           length: 0,
+  +           pipes: []
+  +         },
+  +         _server: null,
+  +         _sockname: null,
+  +         _writableState: WritableState {
+  +           Symbol(kBufferedValue): null,
+  +           Symbol(kState): 17564420,
+  +           bufferedIndex: 0,
+  +           corked: 0,
+  +           highWaterMark: 65536,
+  +           length: 0,
+  +           onwrite: [Function (anonymous)],
+  +           pendingcb: 0,
+  +           writelen: 0
+  +         },
+  +         allowHalfOpen: false,
+  +         connecting: false,
+  +         server: null
+  +       },
+  +       null
+  +     ],
+  +     stdout: <ref *2> Socket {
+  +       Symbol(async_id_symbol): 366,
+  +       Symbol(kBuffer): null,
+  +       Symbol(kBufferCb): null,
+  +       Symbol(kBufferGen): null,
+  +       Symbol(kBytesRead): 0,
+  +       Symbol(kBytesWritten): 0,
+  +       Symbol(kCapture): false,
+  +       Symbol(kHandle): Pipe {
+  +         Symbol(owner_symbol): [Circular *2],
+  +         reading: true
+  +       },
+  +       Symbol(kSetKeepAlive): false,
+  +       Symbol(kSetKeepAliveInitialDelay): 0,
+  +       Symbol(kSetNoDelay): false,
+  +       Symbol(kSetTOS): undefined,
+  +       Symbol(lastWriteQueueSize): 0,
+  +       Symbol(shapeMode): true,
+  +       Symbol(timeout): null,
+  +       _closeAfterHandlingError: false,
+  +       _events: {
+  +         close: [Function (anonymous)],
+  +         data: [Function: take],
+  +         drain: undefined,
+  +         end: [Function: onReadableStreamEnd],
+  +         error: undefined,
+  +         finish: undefined,
+  +         prefinish: undefined,
+  +         readable: undefined
+  +       },
+  +       _eventsCount: 3,
+  +       _hadError: false,
+  +       _host: null,
+  +       _maxListeners: undefined,
+  +       _parent: null,
+  +       _pendingData: null,
+  +       _pendingEncoding: '',
+  +       _readableState: ReadableState {
+  +         Symbol(kState): 194521348,
+  +         awaitDrainWriters: null,
+  +         buffer: [],
+  +         bufferIndex: 0,
+  +         highWaterMark: 65536,
+  +         length: 0,
+  +         pipes: []
+  +       },
+  +       _server: null,
+  +       _sockname: null,
+  +       _writableState: WritableState {
+  +         Symbol(kBufferedValue): null,
+  +         Symbol(kState): 17564420,
+  +         bufferedIndex: 0,
+  +         corked: 0,
+  +         highWaterMark: 65536,
+  +         length: 0,
+  +         onwrite: [Function (anonymous)],
+  +         pendingcb: 0,
+  +         writelen: 0
+  +       },
+  +       allowHalfOpen: false,
+  +       connecting: false,
+  +       server: null
+  +     }
+  +   },
+  +   root: '/tmp/nova-broker-life-IUypyE/supervisor/releases/v1.1.0',
+  +   startedAt: 1793701961900
+  + }
+  - null
+  
+      at TestContext.<anonymous> (file:///workspace/.superpowers/sdd/vault-owner-findings-b-2026-11-03/evidence/task-6/review-rollback-cleanup.test.ts:58:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ServerProcess],
+    expected: null,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

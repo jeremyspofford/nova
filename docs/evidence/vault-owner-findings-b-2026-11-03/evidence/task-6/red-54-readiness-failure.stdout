@@ -1,0 +1,31 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+lifecycle egress guard: never fired
+✖ failed broker readiness remains pending until the actual child closes (115.920359ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 499.849241
+
+✖ failing tests:
+
+test at tests/supervisor/broker-lifecycle.test.ts:387:1
+✖ failed broker readiness remains pending until the actual child closes (115.920359ms)
+  AssertionError [ERR_ASSERTION]: a failed ready message must not detach the child lifetime
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///workspace/tests/supervisor/broker-lifecycle.test.ts:406:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

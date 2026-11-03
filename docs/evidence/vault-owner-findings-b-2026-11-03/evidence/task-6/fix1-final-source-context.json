@@ -1,0 +1,20 @@
+{
+  "at": "2026-11-03T10:52:05.762275+00:00",
+  "base": "2827e53ba94c1f6589ddb7bed95ab2e849f1ccd4",
+  "head": "44a8deb563324ac2847c02dc82dfc6e3aec32d85",
+  "clean": true,
+  "changed_files": [
+    "src/broker/spawn.ts",
+    "src/supervisor/supervisor.ts",
+    "tests/supervisor/broker-lifecycle.test.ts"
+  ],
+  "sha256": {
+    "src/broker/spawn.ts": "10dd40750327b48fec944844a52fe3945eddd352492f83c97b1354f57d98faa8",
+    "src/supervisor/supervisor.ts": "3e63706e59936a18c052a0fa853d227cb07b271145a2de7a03eb6bc2a402c919",
+    "tests/supervisor/broker-lifecycle.test.ts": "ec800025b89cd38d0bcfa97e67f45c47d72fc4178823d4429ab607ee3ce89c97"
+  },
+  "compiler60_and_controls61_exact_files_match_commit": true,
+  "focused58_production_matches_commit": true,
+  "focused58_test_difference": "one explicit optional-error result type annotation; check-59-typing-correction.diff",
+  "broker_lines": 2896
+}

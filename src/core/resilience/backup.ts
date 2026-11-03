@@ -97,9 +97,14 @@ const SKIP_FILE: Record<string, string> = {
 };
 const DB_FILE = /^nova\.db/;
 const TEMP = /\.(tmp|partial)$|\.nova-sync-\d+\.tmp$/;
+// The Credential Broker's store (docs/plans/vault-broker.md §10 "No escrow"): only its item blobs
+// (ciphertext) go in. Its header, every wrap, the device key, the socket and the audit log never do,
+// so a backup alone opens nothing.
+const BROKER_KEPT = (r: string) => r === 'broker' || r === 'broker/items' || r.startsWith('broker/items/');
 
 export const EXCLUDED = [
   'nova.db: copied as a consistent snapshot instead',
+  'broker/ (all but broker/items/): the vault’s header, wraps and device key never leave this machine',
   ...Object.entries(SKIP_FILE).map(([p, why]) => `${p}: ${why}`),
   ...Object.entries(SKIP_TOP).map(([p, why]) => `${p}: ${why}`),
 ];
@@ -128,7 +133,7 @@ export function backupFiles(home: string): string[] {
     for (const e of readdirSync(join(home, rel), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (!rel && (SKIP_TOP[e.name] || DB_FILE.test(e.name))) continue;
-      if (SKIP_FILE[r] || TEMP.test(e.name)) continue;
+      if (SKIP_FILE[r] || TEMP.test(e.name) || ((r === 'broker' || r.startsWith('broker/')) && !BROKER_KEPT(r))) continue;
       if (e.isDirectory()) walk(r);
       else if (e.isFile()) out.push(r);
       // Links, sockets and the like are not the person's content and are never followed.

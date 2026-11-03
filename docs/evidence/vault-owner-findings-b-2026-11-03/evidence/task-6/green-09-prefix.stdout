@@ -1,0 +1,53 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ src/broker is its own tree: Node’s standard library and its own files, nothing from core, no package (5.64224ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (21.864197ms)
+✔ the size budget: no more than 3,000 lines of broker code, tests aside, so one reviewer can read all of it (0.560684ms)
+✔ no network surface in the source: no HTTP server, nothing listens on a port, no inspector (2.04682ms)
+✔ the fixed protocol: seven verbs, three messages, a fixed refusal list (0.91321ms)
+✔ the client has no method that returns a value: no get, resolve, reveal or export (0.197225ms)
+✔ fixed broker reset removes both exact device accounts, never reads values, and refuses retained runs (1.847587ms)
+✔ keychain deletion failure is propagated, never silently reported as reset success (0.425093ms)
+✔ Windows reset does not interpret ambiguous exit 44 as item absence; removal uses metadata only (0.170408ms)
+✔ documented missing entry and repeated successful deletion remain idempotent (0.323552ms)
+✔ reset cannot erase broker keys or retained owned-run evidence without supervisor cleanup (95.353484ms)
+✔ cleanup attestation for another reset cannot authorize this authenticated marker (64.142382ms)
+✔ the wipe takes every Nova entry by name, keeps the person’s own files and lists them; afterwards it is first run, new identity, empty roster (170.63354ms)
+✔ backups go from every folder Nova ever backed up to, its own sealed ones only; strays stay; an unreachable folder is said before and after (180.502119ms)
+✔ the vault’s key leaves the keychain, through the vault’s own key abstraction (127.286014ms)
+✔ a reset stopped half way finishes at the next start; a half-reset Nova never runs (133.788322ms)
+✔ only the hub’s own screen may reset or export, and a reset is confirmed every time (245.799972ms)
+✔ once devices are told, work stops and Nova restarts in place to finish: under the supervisor, a staged restart (65.702137ms)
+✔ a restart that fails: the reset finishes when Nova starts next, said plainly, and nothing new is taken until then (123.209075ms)
+✔ a forged reset marker (one Nova didn’t seal) erases nothing: Nova starts as it was, says so, and keeps it aside (70.963704ms)
+✔ a marker changed since it was staged, or junk, is never acted on either: a normal start, said, kept aside (88.136842ms)
+✔ a reset is refused for a home that is your own home folder (or contains it), and for a folder without Nova’s mark (185.195167ms)
+✔ an existing home from before the mark gets it at its next start; one holding another database doesn’t (86.41133ms)
+✔ a backup that finishes after staging, and a half-written one, are erased too (140.964384ms)
+✔ a file named like an encrypted copy that doesn’t open under the backup key is never erased (133.383422ms)
+✔ a folder already holding workspace/ and .git/ that aren’t Nova’s is refused at start, in plain words (0.568508ms)
+✔ an Era 2 home (its standing files, memory and workspace, no nova.db yet) is Nova’s own: adopted whole (65.502677ms)
+✔ things already there that aren’t named like Nova’s are adopted, left alone through a reset, and said (115.630335ms)
+✔ when Relay was on or used, the confirmation and the result say its work stays in Relay (124.931857ms)
+✔ a home that was new and empty is erased whole; so is an existing Nova home (246.96761ms)
+✔ a finished reset whose marker was left behind is recognised and cleared quietly (129.740844ms)
+✔ after a reset, the hub’s own screen is told once to clear what it kept; a paired device never (119.076749ms)
+✔ actual supervisor starts broker before Core IPC, rotates roles on restart, uses release code and stops both (422.530321ms)
+✔ three broker crashes hold Core and credentials in safe mode, recovery starts a fresh broker (1150.644056ms)
+✔ broker name is reserved, never an editable image/program workload (0.998647ms)
+✔ supervisor reset finishes authenticated cleanup before deleting keys and starts fresh identity (611.873284ms)
+✔ retained owned run blocks supervisor reset and leaves authenticated marker plus broker evidence intact (905.43704ms)
+✔ a repair’s restart: at most once a minute, and it counts toward safe mode like a crash (751.812021ms)
+✔ “base” runs the commit pinned when the supervisor started, never the checkout as edited since (125.062277ms)
+✔ the supervisor’s folder must be the person’s alone (8.742468ms)
+✔ a tag named current or base is never a release, and a switch that fails puts the running release back (261.834206ms)
+✔ going back with nowhere to go keeps safe mode; the socket wants what the person typed (124.008882ms)
+✔ a refused rollback whose release won’t start again is held in safe mode, not left stopped (2278.273918ms)
+ℹ tests 43
+ℹ suites 0
+ℹ pass 43
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11142.483928
+no-Kubernetes tripwire: never fired

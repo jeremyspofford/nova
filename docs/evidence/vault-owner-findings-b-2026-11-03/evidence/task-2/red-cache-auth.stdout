@@ -1,0 +1,73 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B6: failed deletion never caches an uncommitted map (5.280129ms)
+✖ B6: a warm reader authenticates changed ciphertext and notices a lost key (0.942889ms)
+✖ B6: key-file promotion waits until committed ciphertext authenticates (0.899319ms)
+✔ B6: recovery revalidates pending authentication after acquiring the writer lock (1.559667ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 1
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 92.998025
+
+✖ failing tests:
+
+test at tests/core/vault-owner-findings-b.test.ts:161:1
+✖ B6: failed deletion never caches an uncommitted map (5.280129ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + null
+  - 'synthetic-keep-value'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:173:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: 'synthetic-keep-value',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:177:1
+✖ B6: a warm reader authenticates changed ciphertext and notices a lost key (0.942889ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:182:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /doesn’t open with its key/,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:191:1
+✖ B6: key-file promotion waits until committed ciphertext authenticates (0.899319ms)
+  Error: ENOENT: no such file or directory, open '/tmp/nova-vault-b6-LAWk8X/vault/key'
+      at Object.openSync (node:fs:556:18)
+      at readFileSync (node:fs:440:35)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:198:20)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'open',
+    path: '/tmp/nova-vault-b6-LAWk8X/vault/key'
+  }
+no-Kubernetes tripwire: never fired

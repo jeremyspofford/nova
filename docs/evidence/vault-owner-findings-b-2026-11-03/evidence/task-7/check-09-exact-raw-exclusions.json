@@ -1,0 +1,123 @@
+{
+  "at": "2026-11-03T11:17:25.624172+00:00",
+  "cwd": "/home/jeremy/.codex/worktrees/nova-vault-integration/nova-build",
+  "env": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/tmp",
+    "LANG": "C.UTF-8",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null"
+  },
+  "argv": [
+    "git",
+    "diff",
+    "--cached",
+    "--check",
+    "--",
+    ".",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/green-45-combined-focused.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-02.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-03-keys.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-14-stop-failure.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-16-legacy-reset.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-19-concurrent.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-30-bootstrap.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-31-client-close.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-34-seal-module.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-42-broker-diagnostics.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-52-review-lifecycle.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-54-readiness-failure.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-56-close-during-stop.stdout",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/review-51-rollback-cleanup.stdout"
+  ],
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": "",
+  "excluded_exact_original_stdout_files": [
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/green-45-combined-focused.stdout",
+      "bytes": 16631,
+      "sha256": "3e0779f8a06cbde78c7908159d502fe86399c539abcdabd7607b1cac6aa9d193",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-02.stdout",
+      "bytes": 3542,
+      "sha256": "b88dcd9686a03a2f8c733faf22d96154de69b24d63752a87d50e566bb1a4bbae",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-03-keys.stdout",
+      "bytes": 2170,
+      "sha256": "4da3b6593b1060870caf217bc2589af746a41eea4cc3efbfefd62e0db60258b4",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-14-stop-failure.stdout",
+      "bytes": 1082,
+      "sha256": "0b18be96129b28a30c48f373a8e62aabb16a486ce4e224f2e839fc08ea4d30d0",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-16-legacy-reset.stdout",
+      "bytes": 1064,
+      "sha256": "75239d81da30e164f8b7421dfb3db6d5535fa728286d33e442636c0fd76fd9a8",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-19-concurrent.stdout",
+      "bytes": 974,
+      "sha256": "1695aec1ede4337bebed0ac704663bd2983c4f002d92d14caa24cc59db7c21ea",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-30-bootstrap.stdout",
+      "bytes": 2311,
+      "sha256": "982f49a96d246ebdeba0bca0d8175e61d2d06352c9513f85ac12cf5b8179b64f",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-31-client-close.stdout",
+      "bytes": 1200,
+      "sha256": "65574e5c6f5bf2beb136b0bc1aec19dab6dc91160b159b4c6417c120c15ef202",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-34-seal-module.stdout",
+      "bytes": 1137,
+      "sha256": "efd1ab8434f7a257fd42540a8f30950dace8b813277e4df8f5d2f6c1f271e319",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-42-broker-diagnostics.stdout",
+      "bytes": 1490,
+      "sha256": "bca56954fe83ecd2c11be78f774d14e9d1bb32f57566f26118ab2ce5f1c4d717",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-52-review-lifecycle.stdout",
+      "bytes": 5125,
+      "sha256": "be46efa754cb84434c46e36a396ed13bdd967fac068d378bd6fc01d88e1fbd4f",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-54-readiness-failure.stdout",
+      "bytes": 1069,
+      "sha256": "925e2413d6caabc0afbde168f5a78099c2eb074c795de9c1f78aeecdbe695621",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/red-56-close-during-stop.stdout",
+      "bytes": 1154,
+      "sha256": "5d73629918cee80c4ece4b975d515307e58d2f48f22a1d2571811c6c08a76f4e",
+      "private_original_equal": true
+    },
+    {
+      "file": "docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/review-51-rollback-cleanup.stdout",
+      "bytes": 12713,
+      "sha256": "40fc855dfa57ce8bf3aa10b59a884dd37ac3b1fe8e800386649a30afd2a30e72",
+      "private_original_equal": true
+    }
+  ],
+  "scope": "Only listed byte-verified immutable Task6 stdout; no source/test/general folder/config exception. Ruling29."
+}

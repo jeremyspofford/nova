@@ -1,0 +1,50 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B2 finish failure acknowledges already-created copies without source names or values (201.522983ms)
+✖ B2 partial cleanup failure reports possible removals as well as copies (187.198221ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 500.340794
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:131:1
+✖ B2 finish failure acknowledges already-created copies without source names or values (201.522983ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /copies.*removals.*may.*review.*resume/i. Input:
+  
+  'The old vault couldn’t be read or changed; nothing was moved or removed.'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:142:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'The old vault couldn’t be read or changed; nothing was moved or removed.',
+    expected: /copies.*removals.*may.*review.*resume/i,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:207:1
+✖ B2 partial cleanup failure reports possible removals as well as copies (187.198221ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /copies.*removals.*may.*review.*resume/i. Input:
+  
+  'The old vault couldn’t be read or changed; nothing was moved or removed.'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:220:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'The old vault couldn’t be read or changed; nothing was moved or removed.',
+    expected: /copies.*removals.*may.*review.*resume/i,
+    operator: 'match',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

@@ -77,7 +77,7 @@ export interface VaultSync { sealedFile(): string | null; keyForStandby(): strin
 // Checkpoints (M7 amendment) stay on their node too: they hold its keys. So do a factory reset's
 // marker and report (resilience/reset.ts): a standby that copied the marker would erase itself with
 // the hub's plan.
-export const NOT_JOURNALLED: ReadonlySet<string> = new Set(['.git', 'mesh', 'logs', 'backups', 'exports', 'kept', 'workers', 'connectors', 'vault', 'checkpoints', 'factory-reset.json', 'reset-report.json', '.nova-home']);
+export const NOT_JOURNALLED: ReadonlySet<string> = new Set(['.git', 'mesh', 'logs', 'backups', 'exports', 'kept', 'workers', 'connectors', 'vault', 'broker', 'checkpoints', 'factory-reset.json', 'reset-report.json', '.nova-home']);
 const DB_FILE = /^nova\.db/;
 const TMP = /\.nova-sync-\d+\.tmp$/;
 // A bigger file isn't carried; it is reported once instead.

@@ -121,3 +121,31 @@ export function consoleStatus(s: SupervisorState): ServiceStatus {
     history: s.history.map((h) => ({ at: h.at, version: h.version, outcome: h.outcome, said: h.said })),
   };
 }
+
+
+// Private startup handoff, never an HTTP route or an environment variable. Only the core role
+// context is accepted; an old release without broker support explicitly supplies null.
+export function ipcBroker(proc: NodeJS.Process, env: NodeJS.ProcessEnv = process.env): Promise<{ socket: string; token: string } | null> {
+  if (env.NOVA_SUPERVISED !== '1' || typeof proc.send !== 'function') return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const finish = (context: { socket: string; token: string } | null, error?: Error) => {
+      clearTimeout(timer); proc.off('message', take); proc.off('disconnect', lost);
+      if (error) reject(error); else resolve(context);
+    };
+    const lost = () => finish(null, new Error('The supervisor disconnected before broker startup.'));
+    const take = (m: unknown) => {
+      const msg = m as { nova?: unknown; context?: unknown };
+      if (msg?.nova !== 'broker') return;
+      const c = msg.context as { socket?: unknown; token?: unknown } | null;
+      const shape = Object.keys(msg).sort().join() === 'context,nova';
+      const context = c === null || (c && typeof c === 'object' && Object.keys(c).sort().join() === 'socket,token'
+        && typeof c.socket === 'string' && c.socket.length > 0 && c.socket.length <= 4096 && !c.socket.includes('\0')
+        && typeof c.token === 'string' && /^[0-9a-f]{64}$/.test(c.token));
+      if (!shape || !context) return finish(null, new Error('Invalid private broker context.'));
+      finish(c as { socket: string; token: string } | null);
+    };
+    const timer = setTimeout(() => finish(null, new Error('The supervisor did not provide broker startup context.')), 5000);
+    proc.on('message', take); proc.once('disconnect', lost);
+    try { proc.send!({ nova: 'broker-ready' }); } catch { lost(); }
+  });
+}

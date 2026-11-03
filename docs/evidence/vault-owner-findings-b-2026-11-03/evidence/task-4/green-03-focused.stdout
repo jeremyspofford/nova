@@ -1,0 +1,35 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control (5470.692381ms)
+✔ B3 four lanes remain held during TERM escalation; stopPrograms awaits cleanup and refuses new uses (6091.243286ms)
+✔ B3 ambiguous leftover directory refuses a fresh credentialed process without killing its recorded PID (70.760358ms)
+✔ B3 delayed file open succeeds normally; bad cwd spawn error and exit/timeout races settle without stale timers (2287.917378ms)
+✔ B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context (1645.703054ms)
+✔ B5 explicit keychain missing refuses migration even with a valid file key (3.289434ms)
+✔ B5 explicit keychain wrong refuses migration even with a valid file key (0.634451ms)
+✔ B5 explicit keychain unavailable refuses migration even with a valid file key (0.484472ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 7
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 15688.713486
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:52:1
+✖ B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control (5470.692381ms)
+  AssertionError [ERR_ASSERTION]: condition reached before deadline
+      at until (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:18:10)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:59:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

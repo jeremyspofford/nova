@@ -1,0 +1,14 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ private Core bootstrap asks parent over IPC, accepts only fixed role context and rejects malformed delivery (1.979813ms)
+✔ Core owns only its metadata client, closes it permanently, and standalone Core honestly has no broker (263.105972ms)
+✔ a deliberately closed metadata client cannot reconnect with its retained role token (151.710165ms)
+✔ closing during the initial metadata handshake settles the pending caller without reconnecting (102.93314ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 822.202691
+no-Kubernetes tripwire: never fired

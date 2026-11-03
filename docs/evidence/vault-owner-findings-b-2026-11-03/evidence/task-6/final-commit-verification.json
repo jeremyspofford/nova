@@ -1,0 +1,18 @@
+{
+  "at": "2026-11-03T10:26:51.354106+00:00",
+  "head": "2827e53ba94c1f6589ddb7bed95ab2e849f1ccd4",
+  "clean": true,
+  "source_check_receipts": [
+    {
+      "attempt": "green-49-final-combined",
+      "host_and_visible_identity_during_test": "c3bc7c49caa682e5dbff50a207ec4c7825529e7f",
+      "exact_changed_files_match_committed_head": true
+    },
+    {
+      "attempt": "check-50-final-compiler",
+      "host_and_visible_identity_during_test": "c3bc7c49caa682e5dbff50a207ec4c7825529e7f",
+      "exact_changed_files_match_committed_head": true
+    }
+  ],
+  "qualified_main_ancestor": true
+}

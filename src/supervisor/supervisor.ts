@@ -21,8 +21,9 @@ import { createServer as createNet, type Server as NetServer, type Socket } from
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
+import { ensureMark, unsafeHome, supervisorResetPending, finishReset, homeEntries, sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
 import { runningPid } from '../home.js';
+import { startBroker, stopBroker, type Started } from '../broker/spawn.ts';
 import { ServerProcess } from './server.ts';
 import { CrashWindow } from './crashes.ts';
 import { SupervisorDriver } from './services.ts';
@@ -84,11 +85,19 @@ export class Supervisor {
   readonly stateFile: string;
   state: SupervisorState;
   server: ServerProcess | null = null;
+  #broker: Started | null = null;
+  #brokerStopping = false;
+  #brokerState: { status: 'running' | 'stopped' | 'unsupported' | 'failed'; pid: number | null } = { status: 'stopped', pid: null };
   #crashes: CrashWindow;
   #restartTimer: ReturnType<typeof setTimeout> | null = null;
   #healthTimer: ReturnType<typeof setInterval> | null = null;
   #deploying = false;
+  #restarting = false;
   #closed = false;
+  #running: Promise<void> | null = null;
+  #starting: Promise<void> | null = null;
+  #stopping: Promise<void> | null = null;
+  #closing: Promise<void> | null = null;
   #pending: SupervisorProblem[] = [];
   #control: NetServer | null = null;
   #page: HttpServer | null = null;
@@ -160,7 +169,12 @@ export class Supervisor {
 
   // ---- running ----------------------------------------------------------------------------------
 
-  async run(): Promise<void> {
+  run(): Promise<void> {
+    if (this.#closed) return Promise.reject(new Error('The supervisor is closed.'));
+    return this.#running ??= this.#run();
+  }
+
+  async #run(): Promise<void> {
     // Its folder holds the control socket and the slots that run: the person's alone, or nothing.
     const st = statSync(this.o.dir);
     const uid = typeof process.getuid === 'function' ? process.getuid() : null;
@@ -168,15 +182,18 @@ export class Supervisor {
     if (st.mode & 0o077) throw new Error(`The supervisor’s folder ${this.o.dir} is open to other users (mode ${(st.mode & 0o777).toString(8)}). Close it first: chmod 700 ${this.o.dir}`);
     const other = runningPid(this.o.home);
     if (other) throw new Error(`A Nova server is already running this home (process ${other}). Stop it first: the supervisor starts its own.`);
+    if (unsafeHome(this.o.home) || !ensureMark(this.o.home)) throw new Error('The supervisor needs a safe, Nova-owned home folder.');
     const pidFile = join(this.o.dir, 'supervisor.pid');
     const prev = Number(readOr(pidFile, '0'));
     if (prev && prev !== process.pid && alive(prev)) throw new Error(`Another supervisor (process ${prev}) is already running with ${this.o.dir}.`);
     writeFileSync(pidFile, String(process.pid));
     await this.#listen();
+    if (this.#closed) return;
     this.state.pid = process.pid;
     // "base" is the commit the repository was at now, in a slot of its own: the checkout on disk
     // may be edited while Nova runs, and that must never change what a restart runs.
     const pinned = await this.slots.pinBase().catch((e: Error) => { this.#say(`The base couldn’t be pinned to a commit: ${e.message}`); return null; });
+    if (this.#closed) return;
     this.#base = pinned?.path ?? null;
     this.state.releases.base_commit = pinned?.commit ?? null;
     if (!pinned) this.#say(`${this.o.repo} has no commit to pin, so "base" runs ${this.o.base} as it is on disk.`);
@@ -187,35 +204,96 @@ export class Supervisor {
       this.#say(`Nova is held in safe mode: ${this.state.safe_mode.reason} Run “recover” or “rollback”.`);
       await this.#openPage();
     } else {
-      this.#start();
+      await this.#start();
     }
+    if (this.#closed) return;
     this.#healthTimer = setInterval(() => { void this.#healthCheck(); }, this.t.healthEveryMs);
     // Every other service it runs, as they were when it stopped.
     await this.services.resume();
     this.#save();
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
     this.#closed = true;
+    return this.#closing ??= this.#close();
+  }
+
+  async #close(): Promise<void> {
     if (this.#restartTimer) clearTimeout(this.#restartTimer);
     if (this.#healthTimer) clearInterval(this.#healthTimer);
-    await this.services.close();
-    await this.#stopServer();
+    // Startup owns a child before readiness (also the reset-only cleaner). Join that work
+    // before stopping the resulting pair or removing lifecycle evidence; never race resume.
+    const services = Promise.allSettled([this.services.close()]);
+    // A run preflight refusal has no owned child. Join its continuation, while the separately
+    // tracked startup carries any actual child failure and the pair stop joins physical cleanup.
+    const startup = await Promise.allSettled([this.#running?.catch(() => {}), this.#starting]);
+    const results = await Promise.all([services, Promise.allSettled([this.#stopServer()])]);
+    const failure = [...startup, ...results.flat()].find((r) => r.status === 'rejected');
+    if (failure) {
+      this.state.mode = 'safe_mode';
+      this.state.safe_mode = { reason: 'Owned cleanup was not confirmed. Operator recovery is required.', at: nowIso(), last_good: this.state.releases.last_good, output: '' };
+    }
     await this.#closePage();
     await new Promise<void>((r) => (this.#control ? this.#control.close(() => r()) : r()));
     rmSync(join(this.o.dir, 'control.sock'), { force: true });
-    rmSync(join(this.o.dir, 'supervisor.pid'), { force: true });
+    if (!failure) rmSync(join(this.o.dir, 'supervisor.pid'), { force: true });
     if (this.state.mode !== 'safe_mode') this.state.mode = 'stopped';
     this.#save();
+    if (failure?.status === 'rejected') throw failure.reason;
   }
 
   codeRoot(version: string | null = this.state.releases.current): string {
     return !version || version === BASE ? (this.#base ?? this.o.base) : this.slots.path(version);
   }
 
-  #start(): void {
+  #start(): Promise<void> {
+    if (this.#closed) return Promise.resolve();
+    if (this.#starting) return this.#starting;
+    const operation = (async () => {
+      try { await this.#startPair(); }
+      catch (e) {
+        if (this.#closed) throw e; // close owns this failure too, not a best-effort crash callback.
+        await this.#crashed(null, { code: 1, signal: null });
+      }
+    })();
+    this.#starting = operation;
+    void operation.finally(() => { if (this.#starting === operation) this.#starting = null; }).catch(() => {});
+    return operation;
+  }
+
+  async #startPair(): Promise<void> {
     if (this.#closed) return;
+    // Every fallback enters here. A retained handle means its cleanup was not confirmed;
+    // neither rollback nor another startup may overwrite that ownership.
+    if (this.#broker || this.server || this.#stopping) throw new Error('Previous broker/Core ownership must be cleaned up before starting.');
     const root = this.codeRoot();
+    const source = join(root, 'src', 'broker');
+    const keyMode = this.o.env.NOVA_VAULT_KEY === 'file' ? 'file' as const : 'auto' as const;
+    const reset = supervisorResetPending(this.o.home);
+    if (reset) {
+      if (reset.broker) {
+        const cleaner = await startBroker(join(this.o.home, 'broker'), { source, keyMode, env: this.o.env, reset: true, pipe: true });
+        await cleaner.stopped;
+      }
+      if (this.#closed) return;
+      finishReset(this.o.home, { brokerCleaned: reset.seal, vault: { mode: keyMode } });
+    }
+    if (existsSync(join(source, 'main.ts'))) {
+      if (!ensureMark(this.o.home) || homeEntries(this.o.home).before.includes('broker')) throw new Error('Broker storage is not owned by this home.');
+      const b = await startBroker(join(this.o.home, 'broker'), { source, keyMode, env: this.o.env, pipe: true });
+      this.#broker = b;
+      if (this.#closed) return; // close joins startup, then drains this retained handle.
+      this.#brokerState = { status: 'running', pid: b.child.pid ?? null };
+      b.child.once('exit', (code, signal) => {
+        if (this.#broker !== b || this.#brokerStopping || this.#closed) return;
+        this.#broker = null;
+        this.#brokerState = { status: 'failed', pid: null };
+        void this.#crashed(null, { code, signal });
+      });
+    } else {
+      // Old release fixtures remain usable for noncredential work, never fake broker success.
+      this.#brokerState = { status: 'unsupported', pid: null };
+    }
     // Its command is its definition's: `node` is the Node running the supervisor, and the script
     // after it is in the release's code.
     const [cmd, script, ...rest] = this.console().artifact.release!.command;
@@ -231,6 +309,7 @@ export class Supervisor {
     this.state.server = { ...this.state.server, pid: s.pid, port: null, started_at: nowIso(), code: root };
     this.#save();
     s.on('ready', (port: number) => {
+      if (this.#closed || this.server !== s) return;
       this.state.server.port = port;
       if (!this.#deploying) this.state.mode = 'running';
       this.state.health.failing = 0;
@@ -245,15 +324,19 @@ export class Supervisor {
       this.state.server.pid = null;
       this.#save();
       if (e.expected || this.#closed || this.#deploying) return;
-      this.#crashed(s, e);
+      void this.#crashed(s, e);
     });
   }
 
-  #crashed(s: ServerProcess, e: { code: number | null; signal: string | null }): void {
+  async #crashed(s: ServerProcess | null, e: { code: number | null; signal: string | null }): Promise<void> {
+    if (this.#closed) return;
+    try { await this.#stopServer(); }
+    catch { await this.#enterSafeMode('Broker owned cleanup was not confirmed. Operator recovery is required.', ''); return; }
+    if (this.#closed) return;
     const now = Date.now();
     this.#crashes.record(now);
     const how = e.signal ? `was stopped by ${e.signal}` : `exited with code ${e.code}`;
-    const tail = s.tail(15);
+    const tail = s?.tail(15) ?? 'The credential broker stopped or could not start.';
     if (this.#crashes.tooMany) {
       void this.#enterSafeMode(`Nova stopped ${this.#crashes.count} times within ${Math.round(this.t.windowMs / 1000)} s (the last time it ${how}), so the supervisor stopped restarting it.`, tail);
       return;
@@ -263,7 +346,7 @@ export class Supervisor {
     this.state.server.restarts++;
     this.#save();
     this.#say(`Nova ${how}. Starting it again in ${(wait / 1000).toFixed(1)} s.`);
-    this.#restartTimer = setTimeout(() => { this.#restartTimer = null; this.#start(); }, wait);
+    this.#restartTimer = setTimeout(() => { this.#restartTimer = null; void this.#start(); }, wait);
     this.#problem({
       source: 'supervisor', playbook: 'server-crashed',
       said: `Nova stopped unexpectedly (it ${how}) and the supervisor started it again.`,
@@ -272,7 +355,7 @@ export class Supervisor {
   }
 
   async #enterSafeMode(reason: string, output: string): Promise<void> {
-    await this.#stopServer();
+    try { await this.#stopServer(); } catch { reason += ' Broker cleanup is unconfirmed; retained run evidence must be recovered.'; }
     const lastGood = this.state.releases.last_good;
     this.state.mode = 'safe_mode';
     this.state.safe_mode = { reason, at: nowIso(), last_good: lastGood, output };
@@ -282,32 +365,65 @@ export class Supervisor {
     for (const p of this.#pending.splice(0)) recordProblem(this.o.home, p);
     recordProblem(this.o.home, { source: 'supervisor', playbook: 'safe-mode', said: `Nova is held in safe mode: ${reason}${offer}`, detail: output });
     this.#say(`Safe mode: ${reason}${offer}`);
-    await this.#openPage();
+    if (!this.#closed) await this.#openPage();
   }
 
   // Leaves safe mode on the person's word: starts Nova again from the current release.
   async recover(): Promise<{ ok: boolean; said: string }> {
+    if (this.#restarting || this.#starting || this.#closed) return { ok: false, said: 'A restart is already running or the supervisor is closed.' };
     if (this.state.mode !== 'safe_mode') return { ok: false, said: 'Nova isn’t in safe mode.' };
-    await this.#closePage();
-    this.#crashes.reset();
-    this.state.safe_mode = null;
-    this.#start();
-    const port = await this.server?.ready(this.t.readyMs);
-    return port ? { ok: true, said: `Nova is running again on port ${port}.` } : { ok: false, said: 'Nova didn’t start; it may go back to safe mode.' };
+    this.#restarting = true;
+    try {
+      await this.#stopServer();
+      await this.#closePage();
+      this.#crashes.reset();
+      this.state.safe_mode = null;
+      await this.#start();
+      const port = await this.server?.ready(this.t.readyMs);
+      return port ? { ok: true, said: `Nova is running again on port ${port}.` } : { ok: false, said: 'Nova didn’t start; it may go back to safe mode.' };
+    } finally { this.#restarting = false; }
   }
 
   async restart(why = 'as asked', graceMs?: number): Promise<{ ok: boolean; said: string }> {
     if (this.#deploying) return { ok: false, said: 'A deploy is running; it restarts Nova itself.' };
-    await this.#stopServer(graceMs);
-    this.#start();
-    const port = await this.server?.ready(this.t.readyMs);
-    return port ? { ok: true, said: `Nova was restarted (${why}) and answers on port ${port}.` } : { ok: false, said: 'Nova didn’t come back after the restart.' };
+    if (this.#restarting || this.#starting || this.#closed) return { ok: false, said: 'A restart is already running or the supervisor is closed.' };
+    this.#restarting = true;
+    if (this.#restartTimer) { clearTimeout(this.#restartTimer); this.#restartTimer = null; }
+    try {
+      await this.#stopServer(graceMs);
+      await this.#start();
+      const port = await this.server?.ready(this.t.readyMs);
+      return port ? { ok: true, said: `Nova was restarted (${why}) and answers on port ${port}.` } : { ok: false, said: 'Nova didn’t come back after the restart.' };
+    } finally { this.#restarting = false; }
   }
 
-  async #stopServer(graceMs?: number): Promise<void> {
+  #stopServer(graceMs?: number): Promise<void> {
+    if (this.#stopping) return this.#stopping;
+    const operation = this.#stopPair(graceMs);
+    this.#stopping = operation;
+    void operation.finally(() => { if (this.#stopping === operation) this.#stopping = null; }).catch(() => {});
+    return operation;
+  }
+
+  async #stopPair(graceMs?: number): Promise<void> {
     const s = this.server;
     this.server = null;
     if (s) await s.stop(graceMs);
+    const b = this.#broker;
+    if (b) {
+      this.#brokerStopping = true;
+      try {
+        await stopBroker(b);
+        this.#broker = null;
+        this.#brokerState = { status: 'stopped', pid: null };
+      } catch (e) {
+        this.#brokerState = { status: 'failed', pid: null };
+        this.state.mode = 'safe_mode';
+        this.state.safe_mode = { reason: 'Broker owned cleanup was not confirmed. Operator recovery is required.', at: nowIso(), last_good: this.state.releases.last_good, output: '' };
+        this.#save();
+        throw e;
+      } finally { this.#brokerStopping = false; }
+    }
   }
 
   // ---- health -----------------------------------------------------------------------------------
@@ -366,6 +482,12 @@ export class Supervisor {
 
   async #onMessage(s: ServerProcess, m: unknown): Promise<void> {
     const msg = m as { nova?: string; id?: string; type?: string; version?: string; seq?: unknown; problem?: unknown; staged?: unknown; service?: unknown; confirm?: unknown; expected?: unknown };
+    if (s !== this.server) return;
+    if (msg?.nova === 'broker-ready') {
+      const b = this.#broker;
+      s.send({ nova: 'broker', context: b ? { socket: b.socket, token: b.tokens.core } : null });
+      return;
+    }
     if (msg?.nova === 'mark') {
       if (Number.isInteger(msg.seq) && Number.isInteger(msg.problem)) this.#marks.set(s, { seq: msg.seq as number, problem: msg.problem as number });
       return;
@@ -442,6 +564,7 @@ export class Supervisor {
   // ---- deploying ---------------------------------------------------------------------------------
 
   async deploy(version: string, say: Say = () => {}, expected?: ServiceExpectedState): Promise<{ ok: boolean; said: string }> {
+    if (this.#restarting || this.#starting || this.#closed) return { ok: false, said: 'A restart is already running or the supervisor is closed.' };
     if (this.#deploying) return { ok: false, said: 'A deploy is already running.' };
     if (expected !== undefined && !sameServiceExpected(expected, consoleStatus(this.state))) return { ok: false, said: SERVICE_CHANGED };
     if (!isRelease(version)) return { ok: false, said: 'That isn’t a release’s tag.' };
@@ -508,7 +631,7 @@ export class Supervisor {
       try {
         if (existsSync(join(this.o.home, 'nova.db'))) takeCheckpoint({ home: this.o.home, kind: 'auto', reason: `Before switching to release ${version}`, version: packageVersion(this.codeRoot(from)) ?? from });
       } catch (e) {
-        this.#start();
+        await this.#start();
         await this.server?.ready(this.t.readyMs);
         return stopped('switch', `Nova couldn’t take a checkpoint before switching, so it didn’t switch: ${(e as Error).message}`);
       }
@@ -517,7 +640,7 @@ export class Supervisor {
       try {
         this.slots.point(version);
         this.state.releases.current = version;
-        this.#start();
+        await this.#start();
         const started = this.server;
         port = await started?.ready(this.t.readyMs);
         const post = schemaVersion(this.o.home);
@@ -533,7 +656,7 @@ export class Supervisor {
         const why = `The switch to ${version} failed: ${(e as Error).message}`;
         if (this.state.releases.current !== version) {
           // Nothing of the new release ran: the one before starts again as it was.
-          this.#start();
+          await this.#start();
           await this.server?.ready(this.t.readyMs);
           return stopped('switch', `${why}. Nova went back to running ${from === BASE ? 'the code the supervisor started from' : from}.`);
         }
@@ -640,6 +763,7 @@ export class Supervisor {
   // ---- going back ---------------------------------------------------------------------------------
 
   async rollback(o: { auto: boolean; reason: string; target: string | null; say?: Say; expected?: ServiceExpectedState }): Promise<{ ok: boolean; said: string }> {
+    if (this.#restarting || this.#starting || this.#closed) return { ok: false, said: 'A restart is already running or the supervisor is closed.' };
     if (!o.auto && this.#deploying) return { ok: false, said: 'A console deploy is already running.' };
     if (o.expected !== undefined && !sameServiceExpected(o.expected, consoleStatus(this.state))) return { ok: false, said: SERVICE_CHANGED };
     const say = o.say ?? (() => {});
@@ -669,7 +793,7 @@ export class Supervisor {
           const why = n > 0
             ? `Going back to ${name(target)} would lose ${n} change${n === 1 ? '' : 's'} written since ${cur} upgraded the database (${Object.entries(w).map(([t, k]) => `${k} in ${t}`).join(', ')}).`
             : `The backup taken before ${cur} upgraded the database isn’t there any more.`;
-          this.#start();
+          await this.#start();
           const up = await this.server?.ready(this.t.readyMs);
           if (this.state.deploy?.outcome === 'running') this.state.deploy.outcome = 'refused';
           this.#history(cur, target, 'rollback refused', why);
@@ -696,7 +820,7 @@ export class Supervisor {
       }
       this.slots.point(target === BASE ? null : target);
       this.state.releases.current = target;
-      this.#start();
+      await this.#start();
       const port = await this.server?.ready(this.t.readyMs);
       if (!port) {
         step(false, `${name(target)} didn’t start either.`);
@@ -714,13 +838,14 @@ export class Supervisor {
       if (o.auto) this.#problem({ source: 'supervisor', playbook: 'release-rolled-back', subject: cur, said: `Release ${cur} was rolled back by itself: its health failed in the canary window. ${name(target)} is running again, with your data as it was.`, detail: `${o.reason}${restored ? `\n${restored}` : ''}` });
       return { ok: true, said: `${o.auto ? `Rolled back: ${o.reason} ` : ''}${restored ? `${restored} ` : ''}${name(target)} is running again.` };
     } catch (e) {
-      // Whatever stopped it, Nova isn't left stopped: the release that ran starts again.
+      // Restore availability only when previous ownership can be cleaned up. #start's shared
+      // admission guard retains failed broker ownership and holds every fallback in safe mode.
       const why = (e as Error).message;
       step(false, `Going back stopped: ${why}`);
       if (!this.server) {
         try { this.slots.point(cur === BASE ? null : cur); } catch { /* current stays as it was */ }
         this.state.releases.current = cur;
-        this.#start();
+        await this.#start();
         const again = this.server as ServerProcess | null;
         if (!(await again?.ready(this.t.readyMs))) {
           await this.#enterSafeMode(`Going back to ${name(target)} stopped (${why}) and ${name(cur)} didn’t start again.`, again?.tail(15) ?? '');
@@ -775,6 +900,7 @@ export class Supervisor {
   }
 
   #save(): void {
+    Object.assign(this.state, { broker: this.#brokerState });
     if (this.services) this.state.services = this.services.status().filter((x) => x.service !== CONSOLE);
     this.state.observed_at = nowIso();
     if (this.manager) this.state.service_policies = this.manager.policies();

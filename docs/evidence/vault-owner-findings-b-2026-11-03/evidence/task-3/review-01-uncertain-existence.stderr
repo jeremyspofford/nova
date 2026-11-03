@@ -1,0 +1,29 @@
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: uncertain/nonregular Gmail sources must refuse staging
++ actual - expected
+
+  [
++   {
++     staged: 1
++   },
++   {
++     staged: 1
++   }
+-   'failed',
+-   'failed'
+  ]
+
+    at file:///workspace/[eval1]:24:8
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: [ { staged: 1 }, { staged: 1 } ],
+  expected: [ 'failed', 'failed' ],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v26.3.1

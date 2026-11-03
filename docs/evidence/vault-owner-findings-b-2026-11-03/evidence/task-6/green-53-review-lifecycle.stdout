@@ -1,0 +1,15 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ rollback retains failed owned cleanup and refuses every replacement admission (286.247557ms)
+✔ close joins owned startup readiness and cleanup: replacement (507.167821ms)
+✔ close joins owned startup readiness and cleanup: initial (303.797791ms)
+✔ close joins owned startup readiness and cleanup: reset (491.659187ms)
+✔ close joins owned startup readiness and cleanup: late-failure (477.380426ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2451.400775
+no-Kubernetes tripwire: never fired

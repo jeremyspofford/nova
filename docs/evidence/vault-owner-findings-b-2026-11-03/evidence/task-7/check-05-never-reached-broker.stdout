@@ -1,0 +1,851 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+TAP version 13
+# Subtest: B2 held-name oracle: new equal/different writes are both kept (core)
+ok 1 - B2 held-name oracle: new equal/different writes are both kept (core)
+  ---
+  duration_ms: 652.752845
+  type: 'test'
+  ...
+# Subtest: B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (core)
+ok 2 - B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (core)
+  ---
+  duration_ms: 390.373203
+  type: 'test'
+  ...
+# Subtest: B2 approval binds a restaged write epoch with identical names/kinds (core)
+ok 3 - B2 approval binds a restaged write epoch with identical names/kinds (core)
+  ---
+  duration_ms: 253.66878
+  type: 'test'
+  ...
+# Subtest: B2 held-name oracle: new equal/different writes are both kept (passkey)
+ok 4 - B2 held-name oracle: new equal/different writes are both kept (passkey)
+  ---
+  duration_ms: 657.240537
+  type: 'test'
+  ...
+# Subtest: B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (passkey)
+ok 5 - B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (passkey)
+  ---
+  duration_ms: 378.342344
+  type: 'test'
+  ...
+# Subtest: B2 approval binds a restaged write epoch with identical names/kinds (passkey)
+ok 6 - B2 approval binds a restaged write epoch with identical names/kinds (passkey)
+  ---
+  duration_ms: 257.086968
+  type: 'test'
+  ...
+# Subtest: B2 legacy-content migrated revision is never a resumable proof
+ok 7 - B2 legacy-content migrated revision is never a resumable proof
+  ---
+  duration_ms: 322.796758
+  type: 'test'
+  ...
+# Subtest: B2 v1:unknown migrated revision is never a resumable proof
+ok 8 - B2 v1:unknown migrated revision is never a resumable proof
+  ---
+  duration_ms: 316.375674
+  type: 'test'
+  ...
+# Subtest: B2 v99:unknown migrated revision is never a resumable proof
+ok 9 - B2 v99:unknown migrated revision is never a resumable proof
+  ---
+  duration_ms: 332.710278
+  type: 'test'
+  ...
+# Subtest: B2 missing migrated revision is never a resumable proof
+ok 10 - B2 missing migrated revision is never a resumable proof
+  ---
+  duration_ms: 331.505484
+  type: 'test'
+  ...
+# Subtest: B2 finish failure acknowledges already-created copies without source names or values
+ok 11 - B2 finish failure acknowledges already-created copies without source names or values
+  ---
+  duration_ms: 194.580873
+  type: 'test'
+  ...
+# Subtest: B2 Gmail same-value after stage is retained using non-content metadata
+ok 12 - B2 Gmail same-value after stage is retained using non-content metadata
+  ---
+  duration_ms: 190.471499
+  type: 'test'
+  ...
+# Subtest: B2 Gmail different-value after stage is retained using non-content metadata
+ok 13 - B2 Gmail different-value after stage is retained using non-content metadata
+  ---
+  duration_ms: 189.512594
+  type: 'test'
+  ...
+# Subtest: B2 Gmail same-mtime after stage is retained using non-content metadata
+ok 14 - B2 Gmail same-mtime after stage is retained using non-content metadata
+  ---
+  duration_ms: 188.018651
+  type: 'test'
+  ...
+# Subtest: B2 Gmail replace-file after stage is retained using non-content metadata
+ok 15 - B2 Gmail replace-file after stage is retained using non-content metadata
+  ---
+  duration_ms: 189.851266
+  type: 'test'
+  ...
+# Subtest: B2 quiet regular Gmail source still migrates and is removed
+ok 16 - B2 quiet regular Gmail source still migrates and is removed
+  ---
+  duration_ms: 187.172571
+  type: 'test'
+  ...
+# Subtest: B2 uncertain Gmail identity refuses staging and cannot remove an existing name
+ok 17 - B2 uncertain Gmail identity refuses staging and cannot remove an existing name
+  ---
+  duration_ms: 247.530957
+  type: 'test'
+  ...
+# Subtest: B2 restaging an uncertain Gmail source still invalidates its prior approval
+ok 18 - B2 restaging an uncertain Gmail source still invalidates its prior approval
+  ---
+  duration_ms: 185.472691
+  type: 'test'
+  ...
+# Subtest: B2 uncertain Gmail identity at finish preserves every source after copies
+ok 19 - B2 uncertain Gmail identity at finish preserves every source after copies
+  ---
+  duration_ms: 192.981502
+  type: 'test'
+  ...
+# Subtest: B2 partial cleanup failure reports possible removals as well as copies
+ok 20 - B2 partial cleanup failure reports possible removals as well as copies
+  ---
+  duration_ms: 187.445591
+  type: 'test'
+  ...
+# Subtest: B2 migration cards retain the pending-approval rate bound
+ok 21 - B2 migration cards retain the pending-approval rate bound
+  ---
+  duration_ms: 124.604115
+  type: 'test'
+  ...
+# Subtest: process argv substitution cannot spend an approval or reuse a task grant
+ok 22 - process argv substitution cannot spend an approval or reuse a task grant
+  ---
+  duration_ms: 225.117415
+  type: 'test'
+  ...
+# Subtest: process cwd substitution cannot spend an approval or reuse a task grant
+ok 23 - process cwd substitution cannot spend an approval or reuse a task grant
+  ---
+  duration_ms: 212.787641
+  type: 'test'
+  ...
+# Subtest: process env substitution cannot spend an approval or reuse a task grant
+ok 24 - process env substitution cannot spend an approval or reuse a task grant
+  ---
+  duration_ms: 204.805609
+  type: 'test'
+  ...
+# Subtest: process stdin substitution cannot spend an approval or reuse a task grant
+ok 25 - process stdin substitution cannot spend an approval or reuse a task grant
+  ---
+  duration_ms: 212.53091
+  type: 'test'
+  ...
+# Subtest: process timeout_ms substitution cannot spend an approval or reuse a task grant
+ok 26 - process timeout_ms substitution cannot spend an approval or reuse a task grant
+  ---
+  duration_ms: 212.518489
+  type: 'test'
+  ...
+# Subtest: process task grant refuses changed argv before launching
+ok 27 - process task grant refuses changed argv before launching
+  ---
+  duration_ms: 137.536797
+  type: 'test'
+  ...
+# Subtest: process task grant refuses changed cwd before launching
+ok 28 - process task grant refuses changed cwd before launching
+  ---
+  duration_ms: 136.851849
+  type: 'test'
+  ...
+# Subtest: process task grant refuses changed env before launching
+ok 29 - process task grant refuses changed env before launching
+  ---
+  duration_ms: 142.711456
+  type: 'test'
+  ...
+# Subtest: process task grant refuses changed stdin before launching
+ok 30 - process task grant refuses changed stdin before launching
+  ---
+  duration_ms: 148.923501
+  type: 'test'
+  ...
+# Subtest: process task grant refuses changed timeout_ms before launching
+ok 31 - process task grant refuses changed timeout_ms before launching
+  ---
+  duration_ms: 144.931819
+  type: 'test'
+  ...
+# Subtest: process cards identify each caller input safely; audit never carries env or stdin
+ok 32 - process cards identify each caller input safely; audit never carries env or stdin
+  ---
+  duration_ms: 64.121749
+  type: 'test'
+  ...
+# Subtest: standing process consent cards explain argv cwd allow-listed env stdin and timeout breadth
+ok 33 - standing process consent cards explain argv cwd allow-listed env stdin and timeout breadth
+  ---
+  duration_ms: 221.235376
+  type: 'test'
+  ...
+# Subtest: task grants expire exactly five minutes after approval despite repeated same-task reuse
+ok 34 - task grants expire exactly five minutes after approval despite repeated same-task reuse
+  ---
+  duration_ms: 80.641138
+  type: 'test'
+  ...
+# Subtest: HTTP query substitution needs matching approval and a new grant; audit retains bare path
+ok 35 - HTTP query substitution needs matching approval and a new grant; audit retains bare path
+  ---
+  duration_ms: 64.871402
+  type: 'test'
+  ...
+# Subtest: HTTP card identifies query changes without showing raw query
+ok 36 - HTTP card identifies query changes without showing raw query
+  ---
+  duration_ms: 61.322188
+  type: 'test'
+  ...
+# Subtest: generate creation approval binds generation policy length
+ok 37 - generate creation approval binds generation policy length
+  ---
+  duration_ms: 59.753548
+  type: 'test'
+  ...
+# Subtest: generate creation approval binds generation policy alphabet
+ok 38 - generate creation approval binds generation policy alphabet
+  ---
+  duration_ms: 57.334864
+  type: 'test'
+  ...
+# Subtest: generate create card shows validated policy, including future generated replacements
+ok 39 - generate create card shows validated policy, including future generated replacements
+  ---
+  duration_ms: 66.292764
+  type: 'test'
+  ...
+# Subtest: sealed creation approval binds generation policy length
+ok 40 - sealed creation approval binds generation policy length
+  ---
+  duration_ms: 59.410714
+  type: 'test'
+  ...
+# Subtest: sealed creation approval binds generation policy alphabet
+ok 41 - sealed creation approval binds generation policy alphabet
+  ---
+  duration_ms: 60.407069
+  type: 'test'
+  ...
+# Subtest: sealed create card shows validated policy, including future generated replacements
+ok 42 - sealed create card shows validated policy, including future generated replacements
+  ---
+  duration_ms: 69.454878
+  type: 'test'
+  ...
+# Subtest: generation policy validation rejects coercion and unsafe policies before offering approval
+ok 43 - generation policy validation rejects coercion and unsafe policies before offering approval
+  ---
+  duration_ms: 58.304302
+  type: 'test'
+  ...
+# Subtest: generation rejects the biased byte tail and samples distinct symbols uniformly
+ok 44 - generation rejects the biased byte tail and samples distinct symbols uniformly
+  ---
+  duration_ms: 0.984384
+  type: 'test'
+  ...
+# Subtest: equivalent normalized program defaults reuse the approval and task grant
+ok 45 - equivalent normalized program defaults reuse the approval and task grant
+  ---
+  duration_ms: 207.33267
+  type: 'test'
+  ...
+# Subtest: HTTP query changes cannot reuse an already-issued task grant
+ok 46 - HTTP query changes cannot reuse an already-issued task grant
+  ---
+  duration_ms: 62.324608
+  type: 'test'
+  ...
+# Subtest: SEC01: migration commit with a registered passkey refuses core approval and preserves old entries
+ok 47 - SEC01: migration commit with a registered passkey refuses core approval and preserves old entries
+  ---
+  duration_ms: 197.914795
+  type: 'test'
+  ...
+# Subtest: SEC02: create approval binds injection header
+ok 48 - SEC02: create approval binds injection header
+  ---
+  duration_ms: 60.609864
+  type: 'test'
+  ...
+# Subtest: SEC02: bind approval binds injection header
+ok 49 - SEC02: bind approval binds injection header
+  ---
+  duration_ms: 62.156271
+  type: 'test'
+  ...
+# Subtest: SEC02: propose approval binds injection header
+ok 50 - SEC02: propose approval binds injection header
+  ---
+  duration_ms: 64.724693
+  type: 'test'
+  ...
+# Subtest: SEC02: create approval binds injection prefix
+ok 51 - SEC02: create approval binds injection prefix
+  ---
+  duration_ms: 61.257265
+  type: 'test'
+  ...
+# Subtest: SEC02: bind approval binds injection prefix
+ok 52 - SEC02: bind approval binds injection prefix
+  ---
+  duration_ms: 61.728079
+  type: 'test'
+  ...
+# Subtest: SEC02: propose approval binds injection prefix
+ok 53 - SEC02: propose approval binds injection prefix
+  ---
+  duration_ms: 59.457124
+  type: 'test'
+  ...
+# Subtest: SEC02: create approval binds injection format
+ok 54 - SEC02: create approval binds injection format
+  ---
+  duration_ms: 58.217113
+  type: 'test'
+  ...
+# Subtest: SEC02: bind approval binds injection format
+ok 55 - SEC02: bind approval binds injection format
+  ---
+  duration_ms: 59.454331
+  type: 'test'
+  ...
+# Subtest: SEC02: propose approval binds injection format
+ok 56 - SEC02: propose approval binds injection format
+  ---
+  duration_ms: 60.504661
+  type: 'test'
+  ...
+# Subtest: SEC02: approval card shows meaningful injection settings for each bound action
+ok 57 - SEC02: approval card shows meaningful injection settings for each bound action
+  ---
+  duration_ms: 60.495615
+  type: 'test'
+  ...
+# Subtest: SEC03: echoed hex signatures and supported encodings are scrubbed
+ok 58 - SEC03: echoed hex signatures and supported encodings are scrubbed
+  ---
+  duration_ms: 76.553006
+  type: 'test'
+  ...
+# Subtest: SEC03: echoed base64 signatures and supported encodings are scrubbed
+ok 59 - SEC03: echoed base64 signatures and supported encodings are scrubbed
+  ---
+  duration_ms: 63.211879
+  type: 'test'
+  ...
+# Subtest: SEC04: update refuses sensitive class with any retained standing consent
+ok 60 - SEC04: update refuses sensitive class with any retained standing consent
+  ---
+  duration_ms: 60.902499
+  type: 'test'
+  ...
+# Subtest: SEC04: propose refuses sensitive class with any retained standing consent
+ok 61 - SEC04: propose refuses sensitive class with any retained standing consent
+  ---
+  duration_ms: 59.271806
+  type: 'test'
+  ...
+# Subtest: SEC05: old entry changed after staging survives commit and resumed migration
+ok 62 - SEC05: old entry changed after staging survives commit and resumed migration
+  ---
+  duration_ms: 322.058271
+  type: 'test'
+  ...
+# Subtest: SEC05: old-vault writes fail closed while migration holds the writer lock
+ok 63 - SEC05: old-vault writes fail closed while migration holds the writer lock
+  ---
+  duration_ms: 59.188511
+  type: 'test'
+  ...
+# Subtest: SEC05: a cached old-vault writer reloads after migration rekeys the remaining entries
+ok 64 - SEC05: a cached old-vault writer reloads after migration rekeys the remaining entries
+  ---
+  duration_ms: 192.17031
+  type: 'test'
+  ...
+# Subtest: SEC05: a concurrent old-vault writer retains its latest acknowledged value
+ok 65 - SEC05: a concurrent old-vault writer retains its latest acknowledged value
+  ---
+  duration_ms: 726.717273
+  type: 'test'
+  ...
+# Subtest: SEC05: a core-replaced migrated entry is kept regardless of the replacement guess
+ok 66 - SEC05: a core-replaced migrated entry is kept regardless of the replacement guess
+  ---
+  duration_ms: 661.703807
+  type: 'test'
+  ...
+# Subtest: an approved sensitive-class proposal revokes the old core-approved task grant
+ok 67 - an approved sensitive-class proposal revokes the old core-approved task grant
+  ---
+  duration_ms: 96.277454
+  type: 'test'
+  ...
+# Subtest: restoring pre-proposal ciphertext cannot restore the former credential policy
+ok 68 - restoring pre-proposal ciphertext cannot restore the former credential policy
+  ---
+  duration_ms: 76.989714
+  type: 'test'
+  ...
+# Subtest: one approved multi-item proposal revokes every changed item grant and preserves every new policy
+ok 69 - one approved multi-item proposal revokes every changed item grant and preserves every new policy
+  ---
+  duration_ms: 77.014165
+  type: 'test'
+  ...
+# Subtest: a class-only proposal shows its retained target, scope and injection instead of claiming unbound
+ok 70 - a class-only proposal shows its retained target, scope and injection instead of claiming unbound
+  ---
+  duration_ms: 82.437946
+  type: 'test'
+  ...
+# Subtest: a proposal card includes retained bindings together with replaced and newly added bindings
+ok 71 - a proposal card includes retained bindings together with replaced and newly added bindings
+  ---
+  duration_ms: 87.95022
+  type: 'test'
+  ...
+# Subtest: a proposal approval is invalid if a retained binding changes after the card was shown
+ok 72 - a proposal approval is invalid if a retained binding changes after the card was shown
+  ---
+  duration_ms: 68.198079
+  type: 'test'
+  ...
+# (node:4397) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: B1: no run ticket reaches core; the broker runs the program itself; a second socket can redeem nothing
+ok 73 - B1: no run ticket reaches core; the broker runs the program itself; a second socket can redeem nothing
+  ---
+  duration_ms: 1741.741737
+  type: 'test'
+  ...
+# Subtest: B2: migration: the broker reads its own home only, commit is tier 3, and no answer depends on a value core chose
+ok 74 - B2: migration: the broker reads its own home only, commit is tier 3, and no answer depends on a value core chose
+  ---
+  duration_ms: 407.787281
+  type: 'test'
+  ...
+# (node:4781) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: B3: text core writes is never echoed or scrubbed: a held value in it gives the same answer as any other text
+ok 75 - B3: text core writes is never echoed or scrubbed: a held value in it gives the same answer as any other text
+  ---
+  duration_ms: 1439.36639
+  type: 'test'
+  ...
+# Subtest: B4: a hub never adopts a planted inbox; a holder adopts only after a tier-3 pin, and only a newer generation
+ok 76 - B4: a hub never adopts a planted inbox; a holder adopts only after a tier-3 pin, and only a newer generation
+  ---
+  duration_ms: 134.812156
+  type: 'test'
+  ...
+# Subtest: B5: health flags answer no guess: reuse only among values core didn’t choose; no weak flag to core
+ok 77 - B5: health flags answer no guess: reuse only among values core didn’t choose; no weak flag to core
+  ---
+  duration_ms: 195.61185
+  type: 'test'
+  ...
+# Subtest: S1: basic auth’s encoded user:pass, and a value cut by the size limit, are scrubbed
+ok 78 - S1: basic auth’s encoded user:pass, and a value cut by the size limit, are scrubbed
+  ---
+  duration_ms: 95.396165
+  type: 'test'
+  ...
+# Subtest: S5: rolling an item’s file back doesn’t bring back a revoked binding
+ok 79 - S5: rolling an item’s file back doesn’t bring back a revoked binding
+  ---
+  duration_ms: 67.273084
+  type: 'test'
+  ...
+# Subtest: M: passkey for every tier-3 verb once registered; `..;` paths; private address ranges; grants cleared on change
+ok 80 - M: passkey for every tier-3 verb once registered; `..;` paths; private address ranges; grants cleared on change
+  ---
+  duration_ms: 61.054764
+  type: 'test'
+  ...
+# Subtest: S2, S3: no file tool reads broker/; a factory reset removes it; checkpoints never copy it and a restore leaves it
+ok 81 - S2, S3: no file tool reads broker/; a factory reset removes it; checkpoints never copy it and a restore leaves it
+  ---
+  duration_ms: 303.912396
+  type: 'test'
+  ...
+# Subtest: Argon2id is Node’s own (RFC 9106 test vector), and the broker never goes below the floor
+ok 82 - Argon2id is Node’s own (RFC 9106 test vector), and the broker never goes below the floor
+  ---
+  duration_ms: 124.809911
+  type: 'test'
+  ...
+# Subtest: every factor opens the vault, a wrong one doesn’t, and each item is sealed on its own
+ok 83 - every factor opens the vault, a wrong one doesn’t, and each item is sealed on its own
+  ---
+  duration_ms: 180.077876
+  type: 'test'
+  ...
+# Subtest: a tampered item fails on its own, a swapped or moved item is refused, and the others still open
+ok 84 - a tampered item fails on its own, a swapped or moved item is refused, and the others still open
+  ---
+  duration_ms: 59.348019
+  type: 'test'
+  ...
+# Subtest: a deleted item doesn’t open from an older copy of the store, with any key that still exists
+ok 85 - a deleted item doesn’t open from an older copy of the store, with any key that still exists
+  ---
+  duration_ms: 129.366912
+  type: 'test'
+  ...
+# Subtest: a rotation cut short is finished at the next unlock; no item is lost
+ok 86 - a rotation cut short is finished at the next unlock; no item is lost
+  ---
+  duration_ms: 128.678253
+  type: 'test'
+  ...
+# Subtest: holder sync: the standby opens the hub’s vault with its own wrap; the outbox carries ciphertext and public keys only
+ok 87 - holder sync: the standby opens the hub’s vault with its own wrap; the outbox carries ciphertext and public keys only
+  ---
+  duration_ms: 185.576106
+  type: 'test'
+  ...
+# Subtest: sealed entry: the person’s WebCrypto envelope opens only for the digest it was sealed to
+ok 88 - sealed entry: the person’s WebCrypto envelope opens only for the digest it was sealed to
+  ---
+  duration_ms: 9.811438
+  type: 'test'
+  ...
+# Subtest: locked: list_refs gives the state and no refs; every other verb refuses with locked
+ok 89 - locked: list_refs gives the state and no refs; every other verb refuses with locked
+  ---
+  duration_ms: 85.969263
+  type: 'test'
+  ...
+# Subtest: create: tier 3, a card of metadata only; a generated or sealed value, never in an answer
+ok 90 - create: tier 3, a card of metadata only; a generated or sealed value, never in an answer
+  ---
+  duration_ms: 66.611568
+  type: 'test'
+  ...
+# Subtest: use: the exact bound origin only, even when core asks with a valid approval made for the bound one
+ok 91 - use: the exact bound origin only, even when core asks with a valid approval made for the bound one
+  ---
+  duration_ms: 85.607979
+  type: 'test'
+  ...
+# Subtest: redirects aren’t followed: A’s 302 to B comes back as an outcome, and B sees nothing
+ok 92 - redirects aren’t followed: A’s 302 to B comes back as an outcome, and B sees nothing
+  ---
+  duration_ms: 80.777054
+  type: 'test'
+  ...
+# Subtest: use: out of scope (method, path, traversal, a host in the path, an auth header from the caller)
+ok 93 - use: out of scope (method, path, traversal, a host in the path, an auth header from the caller)
+  ---
+  duration_ms: 65.523578
+  type: 'test'
+  ...
+# Subtest: tiers: standing consent at tier 1; outside it, ask first, once per task; sensitive asks; per-use asks every time; no standing consent on sensitive
+ok 94 - tiers: standing consent at tier 1; outside it, ask first, once per task; sensitive asks; per-use asks every time; no standing consent on sensitive
+  ---
+  duration_ms: 75.816638
+  type: 'test'
+  ...
+# Subtest: approvals: missing, replayed, made for another digest, or expired are refused
+ok 95 - approvals: missing, replayed, made for another digest, or expired are refused
+  ---
+  duration_ms: 68.568401
+  type: 'test'
+  ...
+# Subtest: rate caps and flood control are the broker’s own
+ok 96 - rate caps and flood control are the broker’s own
+  ---
+  duration_ms: 67.063357
+  type: 'test'
+  ...
+# Subtest: update, rotate: metadata and class, a new value, delete; a pending version used, committed or abandoned
+ok 97 - update, rotate: metadata and class, a new value, delete; a pending version used, committed or abandoned
+  ---
+  duration_ms: 85.085261
+  type: 'test'
+  ...
+# Subtest: bind: tier 3 with lookalike flags to add; removing and revoking consent at once; no wildcards; kinds not built are refused
+ok 98 - bind: tier 3 with lookalike flags to add; removing and revoking consent at once; no wildcards; kinds not built are refused
+  ---
+  duration_ms: 70.8008
+  type: 'test'
+  ...
+# Subtest: passkey approvals: required for every tier-3 verb once a passkey is registered; checked by the broker itself
+ok 99 - passkey approvals: required for every tier-3 verb once a passkey is registered; checked by the broker itself
+  ---
+  duration_ms: 65.515053
+  type: 'test'
+  ...
+# Subtest: share_scope: a holder device at tier 3, removed at once with a re-key; external managers are Phase 2
+ok 100 - share_scope: a holder device at tier 3, removed at once with a re-key; external managers are Phase 2
+  ---
+  duration_ms: 61.066629
+  type: 'test'
+  ...
+# Subtest: n8n: sign computes the header inside the broker; verify answers valid or not
+ok 101 - n8n: sign computes the header inside the broker; verify answers valid or not
+  ---
+  duration_ms: 65.993424
+  type: 'test'
+  ...
+# Subtest: a program’s approval covers its exact arguments, shown on the card
+ok 102 - a program’s approval covers its exact arguments, shown on the card
+  ---
+  duration_ms: 830.24136
+  type: 'test'
+  ...
+# Subtest: unlock: the person’s factor only, a few attempts a minute; “ask me after a restart” stays locked at start
+ok 103 - unlock: the person’s factor only, a few attempts a minute; “ask me after a restart” stays locked at start
+  ---
+  duration_ms: 250.339784
+  type: 'test'
+  ...
+# Subtest: a provider’s key comes from the vault, reaches the server, and appears in no log, problem or receipt
+ok 104 - a provider’s key comes from the vault, reaches the server, and appears in no log, problem or receipt
+  ---
+  duration_ms: 287.114819
+  type: 'test'
+  ...
+# Subtest: the NOVA_SECRET_<NAME> fallback is for development only: the vault wins, and its value is redacted too
+ok 105 - the NOVA_SECRET_<NAME> fallback is for development only: the vault wins, and its value is redacted too
+  ---
+  duration_ms: 91.896154
+  type: 'test'
+  ...
+# Subtest: B6: cold get reads valid committed data under a stale lock without changing pending bytes
+ok 106 - B6: cold get reads valid committed data under a stale lock without changing pending bytes
+  ---
+  duration_ms: 3.843529
+  type: 'test'
+  ...
+# Subtest: B6: cold has reads valid committed data under a stale lock without changing pending bytes
+ok 107 - B6: cold has reads valid committed data under a stale lock without changing pending bytes
+  ---
+  duration_ms: 0.85284
+  type: 'test'
+  ...
+# Subtest: B6: cold list reads valid committed data under a stale lock without changing pending bytes
+ok 108 - B6: cold list reads valid committed data under a stale lock without changing pending bytes
+  ---
+  duration_ms: 1.074092
+  type: 'test'
+  ...
+# Subtest: B6: cold status reads valid committed data under a stale lock without changing pending bytes
+ok 109 - B6: cold status reads valid committed data under a stale lock without changing pending bytes
+  ---
+  duration_ms: 1.162396
+  type: 'test'
+  ...
+# Subtest: B6: warm get reads valid committed data under a stale lock without changing pending bytes
+ok 110 - B6: warm get reads valid committed data under a stale lock without changing pending bytes
+  ---
+  duration_ms: 0.963166
+  type: 'test'
+  ...
+# Subtest: B6: warm has reads valid committed data under a stale lock without changing pending bytes
+ok 111 - B6: warm has reads valid committed data under a stale lock without changing pending bytes
+  ---
+  duration_ms: 0.831084
+  type: 'test'
+  ...
+# Subtest: B6: warm list reads valid committed data under a stale lock without changing pending bytes
+ok 112 - B6: warm list reads valid committed data under a stale lock without changing pending bytes
+  ---
+  duration_ms: 0.817635
+  type: 'test'
+  ...
+# Subtest: B6: warm status reads valid committed data under a stale lock without changing pending bytes
+ok 113 - B6: warm status reads valid committed data under a stale lock without changing pending bytes
+  ---
+  duration_ms: 1.009312
+  type: 'test'
+  ...
+# Subtest: B6: committed reads leave unrelated pending ciphertext alone even without a writer lock
+ok 114 - B6: committed reads leave unrelated pending ciphertext alone even without a writer lock
+  ---
+  duration_ms: 0.913253
+  type: 'test'
+  ...
+# Subtest: B6: warm reads observe another cooperating writer and never resurrect its deleted entries
+ok 115 - B6: warm reads observe another cooperating writer and never resurrect its deleted entries
+  ---
+  duration_ms: 1.908656
+  type: 'test'
+  ...
+# Subtest: B6: every mutator refuses an existing lock and leaves the committed vault intact
+ok 116 - B6: every mutator refuses an existing lock and leaves the committed vault intact
+  ---
+  duration_ms: 1.717399
+  type: 'test'
+  ...
+# Subtest: B6: interrupted authenticated rekey requires the exclusive lock and publishes only after recovery
+ok 117 - B6: interrupted authenticated rekey requires the exclusive lock and publishes only after recovery
+  ---
+  duration_ms: 1.602939
+  type: 'test'
+  ...
+# Subtest: B6: pending malformed rekey never authenticates or replaces the committed file
+ok 118 - B6: pending malformed rekey never authenticates or replaces the committed file
+  ---
+  duration_ms: 1.023268
+  type: 'test'
+  ...
+# Subtest: B6: pending tampered rekey never authenticates or replaces the committed file
+ok 119 - B6: pending tampered rekey never authenticates or replaces the committed file
+  ---
+  duration_ms: 0.8643
+  type: 'test'
+  ...
+# Subtest: B6: pending different-id rekey never authenticates or replaces the committed file
+ok 120 - B6: pending different-id rekey never authenticates or replaces the committed file
+  ---
+  duration_ms: 0.855185
+  type: 'test'
+  ...
+# Subtest: B6: file key promotion waits for serialization without blocking reads
+ok 121 - B6: file key promotion waits for serialization without blocking reads
+  ---
+  duration_ms: 1.011844
+  type: 'test'
+  ...
+# Subtest: B6: duplicate key removal waits for serialization without blocking reads
+ok 122 - B6: duplicate key removal waits for serialization without blocking reads
+  ---
+  duration_ms: 0.800979
+  type: 'test'
+  ...
+# Subtest: B6: ordinary keychain reads never acquire a writer lock
+ok 123 - B6: ordinary keychain reads never acquire a writer lock
+  ---
+  duration_ms: 0.554508
+  type: 'test'
+  ...
+# Subtest: B6: failed deletion never caches an uncommitted map
+ok 124 - B6: failed deletion never caches an uncommitted map
+  ---
+  duration_ms: 1.042815
+  type: 'test'
+  ...
+# Subtest: B6: a warm reader authenticates changed ciphertext and notices a lost key
+ok 125 - B6: a warm reader authenticates changed ciphertext and notices a lost key
+  ---
+  duration_ms: 0.827604
+  type: 'test'
+  ...
+# Subtest: B6: key-file promotion waits until committed ciphertext authenticates
+ok 126 - B6: key-file promotion waits until committed ciphertext authenticates
+  ---
+  duration_ms: 0.650091
+  type: 'test'
+  ...
+# Subtest: B6: recovery revalidates pending authentication after acquiring the writer lock
+ok 127 - B6: recovery revalidates pending authentication after acquiring the writer lock
+  ---
+  duration_ms: 0.971627
+  type: 'test'
+  ...
+# Subtest: secrets round-trip, encrypted at rest with AES-256-GCM, 0600, by secret:// reference
+ok 128 - secrets round-trip, encrypted at rest with AES-256-GCM, 0600, by secret:// reference
+  ---
+  duration_ms: 4.945436
+  type: 'test'
+  ...
+# Subtest: a tampered vault, a wrong key or a missing key is refused in plain words, never guessed at
+ok 129 - a tampered vault, a wrong key or a missing key is refused in plain words, never guessed at
+  ---
+  duration_ms: 1.002766
+  type: 'test'
+  ...
+# Subtest: a lost key doesn’t brick the vault: saving a secret again starts a new one, the old kept aside; a reset does the same on purpose
+ok 130 - a lost key doesn’t brick the vault: saving a secret again starts a new one, the old kept aside; a reset does the same on purpose
+  ---
+  duration_ms: 2.281208
+  type: 'test'
+  ...
+# Subtest: deleting a secret re-keys the vault, so an old copy of the file doesn’t open with the key in use; a re-key cut short recovers
+ok 131 - deleting a secret re-keys the vault, so an old copy of the file doesn’t open with the key in use; a re-key cut short recovers
+  ---
+  duration_ms: 1.946915
+  type: 'test'
+  ...
+# Subtest: a vault id is a UUID before it names a keychain item
+ok 132 - a vault id is a UUID before it names a keychain item
+  ---
+  duration_ms: 0.460289
+  type: 'test'
+  ...
+# Subtest: the key: in the keychain when one answers (no key file), else a 0600 file with a plain notice
+ok 133 - the key: in the keychain when one answers (no key file), else a 0600 file with a plain notice
+  ---
+  duration_ms: 1.989938
+  type: 'test'
+  ...
+# Subtest: keychain CLIs get the key on stdin, never on the command line
+ok 134 - keychain CLIs get the key on stdin, never on the command line
+  ---
+  duration_ms: 0.883915
+  type: 'test'
+  ...
+# Subtest: the real secret-tool, if this machine has one: a throwaway account, removed afterwards
+ok 135 - the real secret-tool, if this machine has one: a throwaway account, removed afterwards # SKIP no secret-tool or no desktop session here
+  ---
+  duration_ms: 2.366178
+  type: 'test'
+  ...
+# Subtest: commitHome resolves only after its queued real git commit finishes
+ok 136 - commitHome resolves only after its queued real git commit finishes
+  ---
+  duration_ms: 36.017186
+  type: 'test'
+  ...
+# Subtest: never in git history: the home ignores vault/, and the secret is in no commit
+ok 137 - never in git history: the home ignores vault/, and the secret is in no commit
+  ---
+  duration_ms: 20.419409
+  type: 'test'
+  ...
+# Subtest: redacted from the log, problems and receipts, wherever the value turns up
+ok 138 - redacted from the log, problems and receipts, wherever the value turns up
+  ---
+  duration_ms: 92.627422
+  type: 'test'
+  ...
+# Subtest: replication: the standby gets the vault sealed in the batch; no sync log holds the key or a value
+ok 139 - replication: the standby gets the vault sealed in the batch; no sync log holds the key or a value
+  ---
+  duration_ms: 85.435154
+  type: 'test'
+  ...
+1..139
+# tests 139
+# suites 0
+# pass 138
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 21934.917389
+no-Kubernetes tripwire: never fired
+Task7 egress guard: never fired

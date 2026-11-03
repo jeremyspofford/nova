@@ -1,0 +1,299 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ process argv substitution cannot spend an approval or reuse a task grant (185.216211ms)
+✖ process cwd substitution cannot spend an approval or reuse a task grant (173.400825ms)
+✖ process env substitution cannot spend an approval or reuse a task grant (161.131331ms)
+✖ process stdin substitution cannot spend an approval or reuse a task grant (149.229718ms)
+✖ process timeout_ms substitution cannot spend an approval or reuse a task grant (149.242117ms)
+✖ process cards identify each caller input safely; audit never carries env or stdin (62.020352ms)
+✖ standing process consent cards explain argv cwd allow-listed env stdin and timeout breadth (63.709402ms)
+✖ task grants expire exactly five minutes after approval despite repeated same-task reuse (82.633939ms)
+✖ HTTP query substitution needs matching approval and a new grant; audit retains bare path (64.364868ms)
+✖ HTTP card identifies query changes without showing raw query (61.373194ms)
+✖ generate creation approval binds exact stored generation policy (60.387278ms)
+✖ generate create card shows validated policy, including future generated replacements (60.811012ms)
+✖ sealed creation approval binds exact stored generation policy (60.552005ms)
+✖ sealed create card shows validated policy, including future generated replacements (58.568734ms)
+✖ generation policy validation rejects coercion and unsafe policies before offering approval (59.555286ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 0
+ℹ fail 15
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1578.615866
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:42:3
+✖ process argv substitution cannot spend an approval or reuse a task grant (185.216211ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:51:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:42:3
+✖ process cwd substitution cannot spend an approval or reuse a task grant (173.400825ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'approval_invalid'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:48:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'approval_invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:42:3
+✖ process env substitution cannot spend an approval or reuse a task grant (161.131331ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'approval_invalid'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:48:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'approval_invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:42:3
+✖ process stdin substitution cannot spend an approval or reuse a task grant (149.229718ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'approval_invalid'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:48:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'approval_invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:42:3
+✖ process timeout_ms substitution cannot spend an approval or reuse a task grant (149.242117ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'approval_invalid'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:48:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'approval_invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:59:1
+✖ process cards identify each caller input safely; audit never carries env or stdin (62.020352ms)
+  AssertionError [ERR_ASSERTION]: cwd
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:64:71)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:76:1
+✖ standing process consent cards explain argv cwd allow-listed env stdin and timeout breadth (63.709402ms)
+  AssertionError [ERR_ASSERTION]: caller
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:82:101)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:93:1
+✖ task grants expire exactly five minutes after approval despite repeated same-task reuse (82.633939ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'needs_approval'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:107:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'needs_approval',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:115:1
+✖ HTTP query substitution needs matching approval and a new grant; audit retains bare path (64.364868ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'approval_invalid'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:122:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'approval_invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:135:1
+✖ HTTP card identifies query changes without showing raw query (61.373194ms)
+  AssertionError [ERR_ASSERTION]: The "string" argument must be of type string. Received type undefined (undefined)
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:142:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /query.*sha256:[a-f0-9]{64}/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:150:3
+✖ generate creation approval binds exact stored generation policy (60.387278ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'approval_invalid'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:158:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'approval_invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:166:3
+✖ generate create card shows validated policy, including future generated replacements (60.811012ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /16 characters/. Input:
+  
+  '{"verb":"create","what":"Make a new password for test/POLICY","name":"test/POLICY","origin":null,"username":null,"class":"sensitive","flags":[],"tier":3,"items":[],"approving":"Saves it in Nova Vault, unbound (usable nowhere until you bind it). Suggested class: sensitive.","expires_at":"2026-11-03T07:24:48.430Z"}'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:172:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '{"verb":"create","what":"Make a new password for test/POLICY","name":"test/POLICY","origin":null,"username":null,"class":"sensitive","flags":[],"tier":3,"items":[],"approving":"Saves it in Nova Vault, unbound (usable nowhere until you bind it). Suggested class: sensitive.","expires_at":"2026-11-03T07:24:48.430Z"}',
+    expected: /16 characters/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:150:3
+✖ sealed creation approval binds exact stored generation policy (60.552005ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'approval_invalid'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:158:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'approval_invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:166:3
+✖ sealed create card shows validated policy, including future generated replacements (58.568734ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /16 characters/. Input:
+  
+  '{"verb":"create","what":"Save a credential for test/POLICY","name":"test/POLICY","origin":null,"username":null,"class":"sensitive","flags":[],"tier":3,"items":[],"approving":"Saves it in Nova Vault, unbound (usable nowhere until you bind it). Suggested class: sensitive.","expires_at":"2026-11-03T07:24:48.549Z"}'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:172:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '{"verb":"create","what":"Save a credential for test/POLICY","name":"test/POLICY","origin":null,"username":null,"class":"sensitive","flags":[],"tier":3,"items":[],"approving":"Saves it in Nova Vault, unbound (usable nowhere until you bind it). Suggested class: sensitive.","expires_at":"2026-11-03T07:24:48.549Z"}',
+    expected: /16 characters/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:186:1
+✖ generation policy validation rejects coercion and unsafe policies before offering approval (59.555286ms)
+  AssertionError [ERR_ASSERTION]: {"length":"16","alphabet":"0123456789abcdef"}
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:194:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

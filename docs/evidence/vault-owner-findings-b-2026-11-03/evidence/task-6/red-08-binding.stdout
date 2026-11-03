@@ -1,0 +1,28 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ reset cannot erase broker keys or retained owned-run evidence without supervisor cleanup (111.086048ms)
+✖ cleanup attestation for another reset cannot authorize this authenticated marker (66.306331ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 556.076639
+
+✖ failing tests:
+
+test at tests/core/broker-reset-lifecycle.test.ts:19:1
+✖ cleanup attestation for another reset cannot authorize this authenticated marker (66.306331ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-reset-lifecycle.test.ts:25:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /broker.*cleanup/i,
+    operator: 'throws',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,208 @@
+diff --git a/src/broker/broker.ts b/src/broker/broker.ts
+index f71e80ca..e5702434 100644
+--- a/src/broker/broker.ts
++++ b/src/broker/broker.ts
+@@ -63,7 +63,7 @@ export class Broker {
+   #entry = entryKey();
+   #approvals: Approvals;
+   #rates: Rates;
+-  #staged: { vaultId: string | null; revision: string; items: Map<string, Buffer> } | null = null;
++  #staged: { vaultId: string | null; revision: string; items: Map<string, Buffer>; epochs: Map<string, string | null> } | null = null;
+   #running = 0;
+   #grants = new Set<string>();
+   #index = new Map<string, Meta & { version: number; pending: boolean }>();
+@@ -626,8 +626,8 @@ export class Broker {
+   //    The answer is a count.
+   //  - commit (tier 3, one card of names and kinds): each staged entry whose name is free becomes an
+   //    unbound item (usable nowhere), marked as migrated from that old vault, and is read back. A
+-  //    name already taken by an item migrated from the same old vault counts as moved (a resumed
+-  //    run); a name taken by any other item stays in the old vault. Neither looks at a value. Then
++  //    name already taken by an item migrated from the same source write counts as moved (a
++  //    resumed run); a name taken by any other item stays in the old vault. Neither compares values. Then
+   //    the launcher takes what moved out of the old vault.
+   //  - propose (tier 3): one card of bindings and classes, metadata only.
+   async #migrate(src: { migrate: unknown; proposals?: unknown }, ctx: Ctx): Promise<Answer> {
+@@ -636,18 +636,22 @@ export class Broker {
+     if (src.migrate === 'stage') {
+       const out = await this.#launch(['migrate', home], null);
+       const items = new Map<string, Buffer>();
++      const epochs = new Map<string, string | null>();
+       let vaultId: string | null = null;
+       let revision = '';
+       for (const line of out.split('\n')) {
+         if (!line) continue;
+-        let x: { vault_id?: unknown; revision?: unknown; name?: unknown; value?: unknown };
++        let x: { vault_id?: unknown; revision?: unknown; name?: unknown; value?: unknown; epoch?: unknown };
+         try { x = JSON.parse(line); } catch { continue; }
+         if ('vault_id' in x) { vaultId = typeof x.vault_id === 'string' ? x.vault_id : null; revision = typeof x.revision === 'string' ? x.revision : ''; continue; }
+-        if (items.size < MAX_STAGED && str(x.name, 200) && NAME.test(x.name) && typeof x.value === 'string' && x.value.length > 0 && x.value.length <= 64 * 1024) items.set(x.name, Buffer.from(x.value, 'utf8'));
++        if (items.size < MAX_STAGED && str(x.name, 200) && NAME.test(x.name) && typeof x.value === 'string' && x.value.length > 0 && x.value.length <= 64 * 1024 && (x.epoch === null || str(x.epoch, 400))) {
++          items.set(x.name, Buffer.from(x.value, 'utf8'));
++          epochs.set(x.name, x.epoch);
++        }
+       }
+       for (const b of this.#staged?.items.values() ?? []) zero(b);
+-      if (!/^[0-9a-f]{64}$/.test(revision)) throw new Failed('The old vault snapshot is incomplete; nothing was staged.');
+-      this.#staged = { vaultId, revision, items };
++      if (!/^v2:[0-9a-f]{64}$/.test(revision)) throw new Failed('The old vault snapshot is incomplete; nothing was staged.');
++      this.#staged = { vaultId, revision, items, epochs };
+       return { outcome: { staged: items.size } };
+     }
+     if (src.migrate !== 'commit') throw new Failed('A migration stages, commits, then proposes bindings.');
+@@ -656,10 +660,12 @@ export class Broker {
+     const from = st.vaultId ?? 'era2';
+     const plan = [...groupStaged(st.items)].map(([name, g]) => {
+       const owner = [...this.#index.values()].find((x) => x.aliases.includes(`${ALIAS}${name}`));
+-      const revision = createHash('sha256').update(canonical(g.names.map((n) => [n, st.items.get(n)!.toString('base64')]))).digest('hex');
+-      return { name, g, revision, status: !owner ? 'move' : owner.provenance === 'migrated' && owner.migrated_from === from && owner.migrated_revision === revision ? 'moved' : 'kept' };
++      const sources = g.names.map((n) => [n, st.epochs.get(n)]);
++      const revision = sources.every(([, epoch]) => typeof epoch === 'string')
++        ? `v2:${createHash('sha256').update(canonical(sources)).digest('hex')}` : undefined;
++      return { name, g, revision, status: !owner ? 'move' : revision && owner.provenance === 'migrated' && owner.migrated_from === from && owner.migrated_revision === revision ? 'moved' : 'kept' };
+     });
+-    this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ name: x.name, kind: x.g.kind, status: x.status })) }, { verb: 'create', what: `Move ${plan.filter((x) => x.status === 'move').length} credential(s) from the old vault into Nova Vault`, tier: 3, items: plan.map((x) => ({ name: x.name, kind: x.g.kind, origin: x.g.origin, status: x.status })), approving: 'Each is moved inside the broker, unbound (usable nowhere until you bind it), read back, and only then removed from the old vault. A name already taken by another credential stays in the old vault.' }, true);
++    this.#approve(ctx, { verb: 'create', source: 'migrate', snapshot: st.revision, items: plan.map((x) => ({ name: x.name, kind: x.g.kind, status: x.status })) }, { verb: 'create', what: `Move ${plan.filter((x) => x.status === 'move').length} credential(s) from the old vault into Nova Vault`, tier: 3, flags: [`Source snapshot: ${st.revision}`], items: plan.map((x) => ({ name: x.name, kind: x.g.kind, origin: x.g.origin, status: x.status })), approving: 'Each is moved inside the broker, unbound (usable nowhere until you bind it), read back, and only then removed from the old vault. A name already taken by another credential stays in the old vault.' }, true);
+     this.#staged = null;
+     const moved: string[] = [];
+     let readBack = true;
+@@ -698,7 +704,9 @@ export class Broker {
+       const chunks: Buffer[] = [];
+       let n = 0;
+       child.stdout!.on('data', (x: Buffer) => { n += x.length; if (n <= 80 * 1024 * 1024) chunks.push(x); });
+-      child.on('close', (code) => (code === 0 ? ok(Buffer.concat(chunks).toString('utf8')) : fail(new Failed('The old vault couldn’t be read or changed; nothing was moved or removed.'))));
++      child.on('close', (code) => (code === 0 ? ok(Buffer.concat(chunks).toString('utf8')) : fail(new Failed(args[0] === 'finish'
++        ? 'Migration cleanup could not finish. Copies and removals may already exist; review the vaults and resume migration.'
++        : 'The old vault couldn’t be read; nothing was staged.'))));
+     });
+   }
+ 
+diff --git a/src/broker/launch.ts b/src/broker/launch.ts
+index b813459c..b97062d4 100644
+--- a/src/broker/launch.ts
++++ b/src/broker/launch.ts
+@@ -9,7 +9,7 @@
+ //     the value in its environment, or in a 0600 file in a 0700 folder named by that variable and
+ //     removed on exit. It scrubs stdout and stderr of the value (and its encodings), passes on
+ //     signals, and exits with the program's code.
+-//   launch.ts migrate <home>   stdout: { vault_id, revision }, then { name, value } per credential
++//   launch.ts migrate <home>   stdout: { vault_id, revision }, then { name, value, epoch } privately
+ //     Reads vault.ts's file and key and Era 2's Gmail files. Nova's own keys aren't sent.
+ //   launch.ts finish <home>    fd 3: { vault_id, revision, names }
+ //     Takes the names that moved out of the old vault (a new key, or no file and no key) and removes
+@@ -78,10 +78,11 @@ async function run() {
+ function migrate(home: string) {
+   return withOldVaultLock(home, () => {
+     const { old, gmail, revision } = migrationSnapshot(home);
+-    const items = new Map<string, string>(gmail);
+-    for (const [k, v] of old?.map ?? []) items.set(k, v);
++    const items = new Map<string, string>(gmail.items);
++    const epochs = new Map(gmail.epochs);
++    for (const [k, v] of old?.map ?? []) { items.set(k, v); epochs.set(k, old!.epoch); }
+     line({ vault_id: old?.id ?? null, revision });
+-    for (const [name, value] of items) if (!OWN_KEYS.some((r) => r.test(name))) line({ name, value });
++    for (const [name, value] of items) if (!OWN_KEYS.some((r) => r.test(name))) line({ name, value, epoch: epochs.get(name) });
+     old?.key.fill(0);
+   });
+ }
+@@ -92,7 +93,7 @@ async function finish(home: string) {
+     const names = Array.isArray(f.names) ? (f.names as unknown[]).filter((n): n is string => typeof n === 'string') : [];
+     const { old, revision } = migrationSnapshot(home);
+     try {
+-      // A newer value was never read back. Keep all entries on any staged revision mismatch.
++      // A newer write was never read back, even if its value matches. Never compare plaintext.
+       if (revision !== f.revision || (old && old.id !== f.vault_id)) { line({ removed: 0 }); return; }
+       const removed = old ? removeFromOldVault(home, old, names) : [];
+       removeGmailFiles(home, names);
+diff --git a/src/broker/oldvault.ts b/src/broker/oldvault.ts
+index 9d174742..c3a2f915 100644
+--- a/src/broker/oldvault.ts
++++ b/src/broker/oldvault.ts
+@@ -11,7 +11,7 @@
+ // connectors/; the copies taken before the migration still hold the old entries until they age out
+ // (NOTES for Track 1).
+ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
++import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+ 
+ // Under Node's permission model a folder that doesn't exist can't be granted, so asking about a
+ // path in it throws instead of answering false: either way there is nothing there.
+@@ -27,7 +27,7 @@ const AAD = (id: string) => Buffer.from(`nova-vault-v1|${id}`, 'utf8');
+ const fp = (key: Buffer) => createHash('sha256').update(key).digest('hex').slice(0, 16);
+ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+ 
+-export interface OldVault { id: string; map: Map<string, string>; key: Buffer; store: KeyStore }
++export interface OldVault { id: string; epoch: string; map: Map<string, string>; key: Buffer; store: KeyStore }
+ 
+ function keyMode(env: NodeJS.ProcessEnv): 'auto' | 'file' | 'keychain' {
+   const v = env.NOVA_VAULT_KEY;
+@@ -64,8 +64,12 @@ export function readOldVault(home: string, o: { env?: NodeJS.ProcessEnv; store?:
+       d.setAuthTag(Buffer.from(f.tag, 'base64'));
+       let map: Map<string, string>;
+       try { map = new Map(Object.entries(JSON.parse(Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8')) as Record<string, string>)); } catch { throw new Error('The old vault doesn’t open with its key.'); }
++      // Only expose an epoch after authentication. Core's writer draws a fresh 12-byte nonce
++      // for EVERY save, including identical values; restoring the exact ciphertext keeps it.
++      const nonce = Buffer.from(f.nonce, 'base64');
++      if (nonce.length !== 12) throw new Error('The old vault has no supported write epoch.');
+       if (pending) { renameSync(`${file}.tmp`, file); chmodSync(file, 0o600); }
+-      return { id: f.id, map, key, store: s };
++      return { id: f.id, epoch: `vault:${f.id}:${nonce.toString('hex')}`, map, key, store: s };
+     }
+   }
+   throw new Error('The old vault’s key isn’t where it should be, so nothing can be moved from it.');
+@@ -94,23 +98,39 @@ export function removeFromOldVault(home: string, v: OldVault, names: string[]):
+   chmodSync(file, 0o600);
+   v.key.fill(0);
+   v.key = key;
++  v.epoch = `vault:${v.id}:${nonce.toString('hex')}`;
+   return gone;
+ }
+ 
+ // Era 2's plaintext Gmail files (src/connectors/gmail.js), moved by the broker too.
+ export const GMAIL_FILES: Record<string, string> = { 'client.json': 'connector/gmail/GOOGLE_OAUTH_CLIENT', 'token.json': 'connector/gmail/GOOGLE_REFRESH_TOKEN', 'password.json': 'connector/gmail/GMAIL_APP_PASSWORD' };
+-export function readGmailFiles(home: string): Map<string, string> {
++// Gmail writers MUST be quiesced for migration: these file identities/change times are not an
++// authenticated journal or protection against hostile same-user/root metadata manipulation.
++// No size, content, or access time participates. Unknown/non-regular identities refuse staging
++// and cleanup; stable regular files still migrate normally.
++function gmailEpoch(path: string): string | null {
++  const s = lstatSync(path, { bigint: true });
++  return s.isFile() && s.ino > 0n && s.mtimeNs > 0n && s.ctimeNs > 0n
++    ? `gmail:${s.dev}:${s.ino}:${s.mtimeNs}:${s.ctimeNs}` : null;
++}
++export function readGmailFiles(home: string) {
+   const out = new Map<string, string>();
++  const epochs = new Map<string, string>();
+   for (const [file, name] of Object.entries(GMAIL_FILES)) {
+     const p = join(home, 'connectors', 'gmail', file);
+     if (!there(p)) continue;
++    const before = gmailEpoch(p);
++    if (before === null) throw new Error('A Gmail source has no trustworthy write epoch.');
+     const text = readFileSync(p, 'utf8');
++    const after = gmailEpoch(p);
++    if (before !== after) throw new Error('A Gmail source changed while it was being read.');
++    epochs.set(name, before);
+     if (!text.trim()) continue;
+     let v = text;
+     try { v = JSON.stringify(JSON.parse(text)); } catch { /* kept as its text, as gmail.js does */ }
+     out.set(name, v);
+   }
+-  return out;
++  return { items: out, epochs };
+ }
+ export function removeGmailFiles(home: string, names: string[]): void {
+   for (const [file, name] of Object.entries(GMAIL_FILES)) if (names.includes(name) && there(join(home, 'connectors', 'gmail', file))) rmSync(join(home, 'connectors', 'gmail', file), { force: true });
+@@ -126,11 +146,11 @@ export function withOldVaultLock<T>(home: string, run: () => T): T {
+   try { return run(); } finally { rmSync(lock, { recursive: true }); }
+ }
+ 
+-// Private to the launcher/broker pipe, never a response or audit field. A changed snapshot is
+-// retained wholesale; no secret comparison is exposed through conflict decisions.
++// Source epochs travel only over the private launcher pipe. The v2 metadata-only digest also
++// scopes the public approval card. A changed/uncertain snapshot is retained wholesale.
+ export function migrationSnapshot(home: string) {
+   const old = readOldVault(home);
+   const gmail = readGmailFiles(home);
+-  const revision = createHash('sha256').update(JSON.stringify([old?.id ?? null, [...old?.map ?? []], [...gmail]])).digest('hex');
++  const revision = `v2:${createHash('sha256').update(JSON.stringify([old?.epoch ?? null, [...gmail.epochs]])).digest('hex')}`;
+   return { old, gmail, revision };
+ }

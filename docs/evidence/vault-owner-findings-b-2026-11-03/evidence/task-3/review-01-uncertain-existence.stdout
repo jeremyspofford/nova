@@ -1,0 +1,52 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+[
+  {
+    "kind": "missing-control",
+    "stage": {
+      "staged": 1
+    },
+    "commit": {
+      "migrated": [
+        "provider/PROBE"
+      ],
+      "moved": 1,
+      "kept": [],
+      "read_back": true,
+      "removed": 1
+    },
+    "legacyRemains": false
+  },
+  {
+    "kind": "dangling-link",
+    "stage": {
+      "staged": 1
+    },
+    "commit": {
+      "migrated": [
+        "provider/PROBE"
+      ],
+      "moved": 1,
+      "kept": [],
+      "read_back": true,
+      "removed": 1
+    },
+    "legacyRemains": false
+  },
+  {
+    "kind": "inaccessible-directory",
+    "stage": {
+      "staged": 1
+    },
+    "commit": {
+      "migrated": [
+        "provider/PROBE"
+      ],
+      "moved": 1,
+      "kept": [],
+      "read_back": true,
+      "removed": 1
+    },
+    "legacyRemains": false
+  }
+]
+no-Kubernetes tripwire: never fired

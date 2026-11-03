@@ -1,0 +1,31 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ actual supervisor starts broker before Core IPC, rotates roles on restart, uses release code and stops both (254.175217ms)
+✔ three broker crashes hold Core and credentials in safe mode, recovery starts a fresh broker (1150.277784ms)
+✔ broker name is reserved, never an editable image/program workload (0.938989ms)
+✔ supervisor reset finishes authenticated cleanup before deleting keys and starts fresh identity (616.354857ms)
+✔ retained owned run blocks supervisor reset and leaves authenticated marker plus broker evidence intact (908.466788ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 4
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3281.654214
+
+✖ failing tests:
+
+test at tests/supervisor/broker-lifecycle.test.ts:42:1
+✖ actual supervisor starts broker before Core IPC, rotates roles on restart, uses release code and stops both (254.175217ms)
+  AssertionError [ERR_ASSERTION]: supervisor marks home before creating owned broker storage
+      at TestContext.<anonymous> (file:///workspace/tests/supervisor/broker-lifecycle.test.ts:49:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

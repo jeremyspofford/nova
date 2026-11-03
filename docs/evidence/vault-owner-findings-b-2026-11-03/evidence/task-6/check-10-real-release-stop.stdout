@@ -1,0 +1,16 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ actual supervisor starts broker before Core IPC, rotates roles on restart, uses release code and stops both (2955.950948ms)
+✔ three broker crashes hold Core and credentials in safe mode, recovery starts a fresh broker (1157.47625ms)
+✔ broker name is reserved, never an editable image/program workload (0.937548ms)
+✔ supervisor reset finishes authenticated cleanup before deleting keys and starts fresh identity (617.034298ms)
+✔ retained owned run blocks supervisor reset and leaves authenticated marker plus broker evidence intact (920.201214ms)
+✔ supervisor restart awaits real TERM-resistant credentialed process cleanup before new Core (6801.715937ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 12812.384757
+no-Kubernetes tripwire: never fired

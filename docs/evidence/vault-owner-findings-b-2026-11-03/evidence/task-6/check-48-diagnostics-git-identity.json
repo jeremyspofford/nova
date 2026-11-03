@@ -1,0 +1,72 @@
+{
+  "started_at": "2026-11-03T10:23:26.245974+00:00",
+  "cwd": "/home/jeremy/.codex/worktrees/nova-vault-integration/nova-build",
+  "launcher_env": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/tmp/nova-task6-docker-home-m7116m__",
+    "LANG": "C.UTF-8"
+  },
+  "argv": [
+    "/usr/bin/docker",
+    "run",
+    "--rm",
+    "--pull=never",
+    "--network=none",
+    "--user=1000:1000",
+    "--read-only",
+    "--tmpfs",
+    "/tmp:rw,exec,nosuid,size=1g",
+    "--mount",
+    "type=bind,src=/tmp/nova-task6-docker-home-m7116m__/git-identity,dst=/home/jeremy/workspace/nova-build/.git/worktrees/nova-build5,readonly",
+    "--mount",
+    "type=bind,src=/home/jeremy/.codex/worktrees/nova-vault-integration/nova-build,dst=/workspace,readonly",
+    "--mount",
+    "type=bind,src=/home/jeremy/.local/share/mise/installs/node/26.3.1,dst=/opt/node,readonly",
+    "--workdir",
+    "/workspace",
+    "--env",
+    "HOME=/tmp/nova-task6-private-home",
+    "--env",
+    "PATH=/opt/node/bin:/usr/bin:/bin",
+    "--env",
+    "TZ=UTC",
+    "--env",
+    "LANG=C.UTF-8",
+    "mcr.microsoft.com/playwright:v1.56.1-noble",
+    "sh",
+    "-c",
+    "mkdir -m 700 \"$HOME\" && exec \"$@\"",
+    "task6",
+    "sh",
+    "scripts/tripwire.sh",
+    "node",
+    "--test",
+    "--test-timeout=30000",
+    "tests/core/diagnostics-composition.test.ts"
+  ],
+  "command": [
+    "sh",
+    "scripts/tripwire.sh",
+    "node",
+    "--test",
+    "--test-timeout=30000",
+    "tests/core/diagnostics-composition.test.ts"
+  ],
+  "git_identity": {
+    "host_head": "c3bc7c49caa682e5dbff50a207ec4c7825529e7f",
+    "visible_commit": "c3bc7c49caa682e5dbff50a207ec4c7825529e7f",
+    "validated_commit_object": "c3bc7c49caa682e5dbff50a207ec4c7825529e7f",
+    "scope": "HEAD commit object only; no shared config/refs/tree/history; dirty sources are not this commit",
+    "changed_files_sha256": {
+      "docs/LEDGER.md": "debe8d0bf6e624b01590e70af0eceff646c4aac843a0136d0b352a295a1bdbe2",
+      "docs/builder-packet/CAPABILITY-INVENTORY.md": "9e5f2f20b1cd15ac126bfe81916286df7b8508956b00c95f677ab482ef75af70",
+      "docs/builder-packet/ROADMAP-AND-GATES.md": "f64960bc8ee74d4d8e4526c50943dc488a30f8faabbbb39e3769b2c05545a86e",
+      "src/core/diagnostics/index.ts": "d732758da9b8c84e857f05b9cefd1d643789e63659cfb6565eee08c1f302d970",
+      "src/core/index.ts": "969241c81047f90d91c4892cf36e08bb2a7ad62d498667598c5dd7fc4a0a6d5f",
+      "src/supervisor/supervisor.ts": "5468b3b22fc73bba1c6b35588055dc603cc915ff3887b426dc5abd232be5bf60",
+      "tests/core/broker-diagnostics.test.ts": "e49cfb5f2d110c1dbb9b7caa0121716e0d2754ef5cfd0b8e661edb4a202a968c"
+    }
+  },
+  "exit_code": 0,
+  "ended_at": "2026-11-03T10:23:28.468726+00:00"
+}

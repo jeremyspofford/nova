@@ -1,0 +1,42 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ reset cannot erase broker keys or retained owned-run evidence without supervisor cleanup (105.35903ms)
+file:///workspace/tests/supervisor/broker-lifecycle.test.ts:9
+import { validate, consoleDefinition } from '../../src/core/services/definition.ts';
+                   ^^^^^^^^^^^^^^^^^
+SyntaxError: The requested module '../../src/core/services/definition.ts' does not provide an export named 'consoleDefinition'
+    at #asyncInstantiate (node:internal/modules/esm/module_job:327:21)
+    at async ModuleJob.run (node:internal/modules/esm/module_job:431:5)
+    at async node:internal/modules/esm/loader:646:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v26.3.1
+✖ tests/supervisor/broker-lifecycle.test.ts (301.898669ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 746.318164
+
+✖ failing tests:
+
+test at tests/core/broker-reset-lifecycle.test.ts:8:1
+✖ reset cannot erase broker keys or retained owned-run evidence without supervisor cleanup (105.35903ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-reset-lifecycle.test.ts:14:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /broker.*cleanup/i,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests/supervisor/broker-lifecycle.test.ts:1:1
+✖ tests/supervisor/broker-lifecycle.test.ts (301.898669ms)
+  'test failed'
+no-Kubernetes tripwire: never fired

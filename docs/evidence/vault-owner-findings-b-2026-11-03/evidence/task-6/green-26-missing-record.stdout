@@ -1,0 +1,22 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ src/broker is its own tree: Node’s standard library and its own files, nothing from core, no package (5.87014ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (51.123478ms)
+✔ the size budget: no more than 3,000 lines of broker code, tests aside, so one reviewer can read all of it (0.553308ms)
+✔ no network surface in the source: no HTTP server, nothing listens on a port, no inspector (2.175787ms)
+✔ the fixed protocol: seven verbs, three messages, a fixed refusal list (1.005272ms)
+✔ the client has no method that returns a value: no get, resolve, reveal or export (0.194272ms)
+✔ fixed broker reset removes both exact device accounts, never reads values, and refuses retained runs (1.771182ms)
+✔ keychain deletion failure is propagated, never silently reported as reset success (0.390998ms)
+✔ Windows reset does not interpret ambiguous exit 44 as item absence; removal uses metadata only (0.126568ms)
+✔ documented missing entry and repeated successful deletion remain idempotent (0.236181ms)
+✔ broker bootstrap refuses a symlinked storage directory before touching its target (4.903089ms)
+✔ reset refuses broker data with a missing device record instead of losing unknown-account evidence (0.564127ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 136.461188
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,33 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ src/broker is its own tree: Node’s standard library and its own files, nothing from core, no package (2.893384ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (10.045467ms)
+✔ the size budget: no more than 3,000 lines of broker code, tests aside, so one reviewer can read all of it (0.457225ms)
+✔ no network surface in the source: no HTTP server, nothing listens on a port, no inspector (2.133757ms)
+✔ the fixed protocol: seven verbs, three messages, a fixed refusal list (0.92842ms)
+✔ the client has no method that returns a value: no get, resolve, reveal or export (0.216277ms)
+✔ actual git, backup, journal and checkpoint selections exclude broker keys, headers, logs and runtime (134.699037ms)
+✔ fixed broker reset removes both exact device accounts, never reads values, and refuses retained runs (1.749184ms)
+✔ keychain deletion failure is propagated, never silently reported as reset success (0.364726ms)
+✔ Windows reset does not interpret ambiguous exit 44 as item absence; removal uses metadata only (0.128968ms)
+✔ documented missing entry and repeated successful deletion remain idempotent (0.172268ms)
+✔ broker bootstrap refuses a symlinked storage directory before touching its target (4.681048ms)
+✔ reset cannot erase broker keys or retained owned-run evidence without supervisor cleanup (102.740136ms)
+✔ cleanup attestation for another reset cannot authorize this authenticated marker (69.432459ms)
+✔ actual supervisor starts broker before Core IPC, rotates roles on restart, uses release code and stops both (2951.706648ms)
+✔ three broker crashes hold Core and credentials in safe mode, recovery starts a fresh broker (1149.082063ms)
+✔ broker name is reserved, never an editable image/program workload (0.985286ms)
+✔ supervisor reset finishes authenticated cleanup before deleting keys and starts fresh identity (623.263279ms)
+✔ retained owned run blocks supervisor reset and leaves authenticated marker plus broker evidence intact (917.464887ms)
+✔ supervisor restart awaits real TERM-resistant credentialed process cleanup before new Core (6856.101627ms)
+✔ failed broker owned shutdown never starts replacement Core or reports broker running (234.619357ms)
+✔ first supervised start finishes a previously staged legacy reset before creating broker storage (312.838281ms)
+✔ a service cleanup rejection still drains broker and Core, releases control and reports failure (232.620185ms)
+ℹ tests 23
+ℹ suites 0
+ℹ pass 23
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14697.659568
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,22 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ private Core bootstrap asks parent over IPC, accepts only fixed role context and rejects malformed delivery (2.122116ms)
+✔ Core owns only its metadata client, closes it permanently, and standalone Core honestly has no broker (265.458425ms)
+✔ a deliberately closed metadata client cannot reconnect with its retained role token (147.106192ms)
+✔ src/broker is its own tree: Node’s standard library and its own files, nothing from core, no package (4.370842ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (20.231364ms)
+✔ the size budget: no more than 3,000 lines of broker code, tests aside, so one reviewer can read all of it (0.733069ms)
+✔ no network surface in the source: no HTTP server, nothing listens on a port, no inspector (2.496662ms)
+✔ the fixed protocol: seven verbs, three messages, a fixed refusal list (1.13927ms)
+✔ the client has no method that returns a value: no get, resolve, reveal or export (0.260733ms)
+(node:57) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ person-only served seal module loads in a browser and its envelope is consumed by the real broker (1875.001007ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3152.644794
+no-Kubernetes tripwire: never fired

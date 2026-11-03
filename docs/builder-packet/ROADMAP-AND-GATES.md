@@ -201,8 +201,11 @@ Spec: AMENDMENT-2026-10-31-B. Evidence base: LAUNCH-READINESS-RESEARCH-2026-10-3
   - **DS1 built (PR #255):** the service, the seats, the decision log and the boundary test. Moving the gate onto it is Track 1's job.
 
 ## Nova Vault and the Credential Broker (owner input 2026-10-31)
+
+Current source44a8 and [all12 B dispositions](../evidence/vault-owner-findings-b-2026-11-03/b-mapping.md) are published. B is received; fresh Task7/full-code/live review, ordinary exact-head full CI and matched merge remain pending. Global C1 is unchanged and currently unmet by the live app; broker-only canary/heap tests do not prove whole-product confidentiality. Low per-name IO remains partial (Task2 M1); S4/S6 stated limits remain. No Health285 entry approval, Secrets app promotion or credentialed J/K proof is inferred.
 Spec: `nova-vault-broker-design-2026-10-31.md`, with the owner's instruction and decisions. The design (ADR) is `docs/plans/vault-broker.md`. Each phase is ADR-gated, and nothing displaces in-flight work or the M10e–M10k order.
 - **Phase 1:** the broker and Nova Vault. A side track after M10e, in three PRs, ahead of M10h's spoke credentials and M10j's cluster credentials.
+  - **P1a source Tasks1–6 accepted, final gates pending (#275, 2026-11-03):** broker, Nova Vault, fixed verbs/IPC and owner findings A/B fixes, plus supervisor lifecycle, guarded reset/key removal, metadata-only diagnostics and the fixed public sealing module. These lifecycle/safety NOTES are implemented on the branch; whole-branch review and exact-head CI still gate merge. Actual credential consumers, migration/audit approvals, sealed-entry forms and browser relay remain P1b; complete gate P1c. Core still reads the old vault, legacy diagnostics redaction remains required, and no merge, full cutover or credentialed M10j/M10k claim is made.
   - **Gate:** canary values found nowhere Nova writes; the broker refusing a non-bound origin even when core asks; an adversarial review.
 - **Phase 2:** the 1Password connector behind the broker, after Phase 1's gate. A real account needs the owner's OK.
 - **Phase 3:** optional Vaultwarden and further connectors, by demand. Never a default.
