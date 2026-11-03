@@ -585,3 +585,179 @@ The amended renderer accurately communicates that provider-managed task reports 
 Review was read-only except for this explicitly requested report. No subagents, source/index/branch/HEAD mutations, pushes, merges, or test reruns occurred.
 
 **RELEASE**
+
+## Task3 production diagnostics — full implementer report
+
+# Task 3 — production diagnostics mounting
+
+Status: implementation and focused verification complete; released for independent review. No UI work, push, PR, preview or merge performed.
+
+## Scope and final behavior
+
+Base: `17ec5b9deb33df9897780d2293852e178588320a`, branch `codex/health-caps-diagnostics`, sole writing checkout `/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build`.
+
+- Core mounts the existing `diagnosticsRoutes` and `buildDiagnostics` through a late getter over the returned Core object. Metadata uses existing version, instance, clock and `self.build()` getter. Construction does not build a bundle; each authorized request builds in memory.
+- Production `createNova` passes an Era 2 callback returning numeric `chat_logs`, `schedules` and `skills`, evaluated per download. No provider/model inference call, dependency, shadow store or second route implementation was added.
+- `SessionStore.countLogs()` reads directory entries only. It counts regular `.jsonl` files with a valid session id, including main, run and helper logs, even empty/malformed contents. Invalid names, directories and symlinks are excluded. It does not read title, kind, metadata or transcript. Existing SessionStore APIs are unchanged.
+- Existing person access, authorization, mutation guards, native JSON, attachment filename, no-store and diagnostics scrubber are reused unchanged. Existing diagnostics canary assertions/eval graders were not edited.
+- Docs explain the count semantics and residual privacy limits. No app/surfaces/components/styleguide/crawl changes.
+
+## Root contract rulings
+
+1. Root rejected `store.list().length` because listing reads session titles/kind. Root authorized directory-only `countLogs()` including main/run/helper. Initial requested field `session_logs` collided with the scrubber's intentional `/session/i` match and was redacted even when numeric. Root ruled `chat_logs`; no scrubber exception or weakened assertion.
+2. The “no output includes private mesh addresses” constraint applies to tool/public evidence, not removal of the existing diagnostics address metadata documented in the plan. A draft new assertion excluding synthetic documentation IP `192.0.2.10` was removed on root's instruction before execution reached it. This was an unsupported new assumption, not an existing assertion. No projection was changed, and no owner address or real preview diagnostics was read.
+
+## Test coverage and safety
+
+New `tests/core/diagnostics-composition.test.ts` uses actual `createNova`, Core, stores and two loopback HTTP listeners. It tests the unmounted production route first; actual console enrollment/reveal/approval and approved browser-cookie download; public, invalid-cookie and proxied-console denial; mutation header/origin guards; native JSON, filename and no-store headers; exact numeric/fresh counts; useful nonempty health/log/count payload; no new file under Nova home and no retained bundle signature in existing fixture files; actual listener shutdown.
+
+The production download plants synthetic vault/environment secrets and fixture-generated mesh/vault keys, with plain/case-folded/URL/base64/base64url/hex log variants and a Bearer problem detail. It independently checks no variant survives. It plants content in real memory, capture, ledger title/goal/brief inputs, profile user, session title/transcript, schedule prompt and skill body; none appears in the download. Session `list` and `read` throw during downloads to guard against content reads. Focused count tests cover directory-only semantics with real files and a symlink.
+
+Fixtures use private temp HOME, explicit file-held vault, fake Ollama and fixed hardware. The launcher below supplies a clean enumerated environment, dropping inherited Nova/provider credentials. The test also scopes/restores its own HOME/vault/canary settings for normal CI. No owner keys, keychain, home, cloud, device, provider or model data were used. Existing suite fixtures run under the private launcher HOME and file-vault override. Existing acceptance egress guards and no-Kubernetes tripwire remain active; every completed test launcher reports the tripwire never fired.
+
+## Exact verification launcher and retained evidence
+
+All commands below ran from the checkout above. The launcher source was saved **before RED**, not reconstructed later. Each run saved its complete argv, cwd and fully enumerated environment before launching, combined stdout/stderr in full, and the actual child status; the wrapper exits that status after printing the saved output. Shell `cat` never masks a failure. `HOME` is a newly created temporary private directory removed on completion; its exact run value is retained in each invocation JSON. Raw evidence is local and ignored under `evidence/task-3/`, not a claim of hosted CI or final-branch qualification.
+
+```python
+from pathlib import Path
+import json, os, subprocess, sys, tempfile
+base=Path(__file__).resolve().parent
+name=sys.argv[1]
+command=sys.argv[2:]
+# Deliberate clean env: no inherited Nova/provider/keychain credentials.
+env={k:os.environ[k] for k in ['PATH','LANG','LC_ALL','SYSTEMROOT','SystemRoot'] if k in os.environ}
+env['PATH']='/home/jeremy/.local/share/mise/installs/node/26.3.1/bin:'+env.get('PATH','/usr/bin:/bin')
+env['NOVA_VAULT_KEY']='file'
+env['NOVA_SECRET_DIAGNOSTICS_TEST']='synthetic-environment-7f3a91c2e8b4+/='
+with tempfile.TemporaryDirectory(prefix='nova-diagnostics-private-user-') as home:
+ env['HOME']=home
+ (base/(name+'.invocation.json')).write_text(json.dumps({'cwd':str(Path.cwd()),'command':command,'env':env},indent=2)+'\n')
+ with (base/(name+'.log')).open('w') as output:
+  result=subprocess.run(command,env=env,stdout=output,stderr=subprocess.STDOUT)
+ (base/(name+'.exit')).write_text(str(result.returncode)+'\n')
+ print((base/(name+'.log')).read_text())
+ print('EXIT_CODE='+str(result.returncode))
+ raise SystemExit(result.returncode)
+```
+
+Each invocation is `python3 .superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/run.py NAME COMMAND...`.
+For every NAME below, retained files are `evidence/task-3/NAME.invocation.json`, `NAME.log`, `NAME.exit`. Source: `evidence/task-3/run.py`; hashes: `evidence/task-3/sha256.json`.
+
+| NAME | Command after NAME | Actual exit and result |
+| --- | --- | --- |
+| red | `sh scripts/test.sh --test-concurrency=1 tests/core/diagnostics-composition.test.ts` | 1; 2 tests, 0 pass, 2 fail: missing countLogs; actual production diagnostics 404 vs expected 200. Run before production edits. |
+| green-first | same focused command | 1; 1 pass, 1 fail: session_logs intentionally scrubbed to marker. Preserved generic scrubber; root selected chat_logs. |
+| typecheck-first | `npm run typecheck` | 1; TS2345 on new test public-header union. Corrected explicit Record typing. No production type error. |
+| green-second | focused command above | 1; 1 pass, 1 fail: empty vault reports null key store before first write. Corrected fixture timing; assert file key after planting canary and in downloaded bundle. |
+| green-third | focused command above | 0; 2/2 pass, no failures/skips; 931.563487 ms. |
+| existing-affected | affected command below without the new diagnostics-composition file | 0; 109/109 pass, no failures/cancelled/skips/todo; 70864.480333 ms. |
+| typecheck-final | `npm run typecheck` | 0. npm printed an available-update notice; no install/update performed. |
+| diff-check | `git diff --check` | 0. |
+| affected-final | affected command below | 0; 111/111 pass, no failures/cancelled/skips/todo; 68207.998655 ms. |
+
+Exact final affected command (test flags precede paths):
+
+```sh
+sh scripts/test.sh --test-concurrency=1 tests/core/diagnostics-composition.test.ts tests/core/diagnostics.test.ts tests/core/api.test.ts tests/core/core-options.test.ts tests/core/caps.test.ts tests/core/caps-composition.test.ts tests/acceptance/caps.test.ts tests/acceptance/caps-api.test.ts tests/core/evals.test.ts tests/acceptance/evals-regression.test.ts tests/server.test.js tests/runner.test.js tests/chat-run.test.js tests/helpers.test.js tests/scheduler.test.js
+```
+
+These runs include all existing diagnostics canary tests, the real diagnostics regression eval, regression negative control, capability and injection batteries, Core/API boundary checks, production Caps composition/API, clock/timezone semantics and server/runner/chat/scheduler/helper tests. No skip, test weakening, assertion relaxation or blind rerun. Every failed attempt above led to a specific fixture/schema correction.
+
+## Self-review and limitations
+
+- Reviewed the complete source/test/docs diff and closure initialization order: route getters execute after `self`, `core`, store and runner exist; no bundle/global cache is retained. Core Caps and `runner.caps` ownership are unchanged and covered by existing affected checks.
+- `chat_logs` is intentionally not a person-started-conversation count. Schedules/skills use existing views and return their lengths; the callback does not project their prompt/body.
+- Excluded content-store canaries and known-secret variants are evidence for those boundaries, not a universal classifier. Arbitrary personal free text can still occur in included log/problem messages, service details and configured names when it is neither known nor secret-shaped. Existing documented hostname/IP/model/runtime metadata remains included. This task does not redesign that module.
+- The new production test starts actual HTTP servers through createNova and closes them; it is not a new subprocess CLI/shutdown test. Existing production Caps API test exercises real subprocess launch/restart/shutdown.
+- Focused checks are the authorized task scope. No whole-suite ordinary CI, UI crawl, screenshots, owner recognition, preview, PR or merge proof is claimed; root owns final branch qualification and independent review.
+- Skills read/applied: test-driven-development (including writing-good-tests) and verification-before-completion. using-superpowers explicitly says dispatched subagents ignore that skill. Parent's authorized focused validation scope controls over generic full-suite suggestions.
+
+RELEASEsource: no further source writes planned after this task commit; root may review and take ownership.
+
+## Task3 independent spec and quality review
+
+Spec compliance: Compliant for the Task 3 backend slice and the three recorded Task 3 rulings.
+Task quality: Approved.
+Findings: 0 Critical, 0 Important, 1 Minor.
+
+## Scope and inputs
+
+- Reviewed base `17ec5b9deb33df9897780d2293852e178588320a` to head `19989f5d1921a29c5e41b398dc02e19ecbb189fd`, using `.superpowers/sdd/health-caps-diagnostics-2026-11-03/review-17ec5b9d..19989f5d.diff` as the source-change view. The first combined tool output truncated the middle of the package; I read the omitted middle in bounded sections. No changed hunk was independently reread; focused unchanged production setup portions were inspected only for the named integration risks below.
+- Read the complete Task 3 brief, complete implementer report, and progress ledger. Applied the countLogs directory-entry ruling, the numeric `chat_logs` naming ruling without scrubber exceptions, and the documented synthetic-network-metadata ruling. The review does not reinterpret those decisions as new defects.
+- The only write is this requested review report. No test reruns, source/index/branch/HEAD changes, subagents, UI work, push, PR, CI, preview, or merge operations were performed.
+
+## Spec compliance
+
+- Production mounting reuses the existing `buildDiagnostics` and `diagnosticsRoutes`, with one request-time getter over the completed Core: `src/core/index.ts:85`, `src/core/index.ts:1506`, `src/core/index.ts:1650`, `src/core/index.ts:1749`. The getter supplies the existing home/version/instance/clock and `self.build()` rather than a new builder or store. The returned Core still includes `caps` in the surrounding unchanged object.
+- The production callback returns only numeric lengths/counts, evaluated at download time: `src/server.js:68`; the optional Core interface matches the existing diagnostics options contract: `src/core/index.ts:273`, `src/core/diagnostics/index.ts:149`. The fresh initial, populated, and subsequent log counts are checked through actual HTTP responses at `tests/core/diagnostics-composition.test.ts:61`, `tests/core/diagnostics-composition.test.ts:118`, and `tests/core/diagnostics-composition.test.ts:142`.
+- Session counting follows the authorized semantics precisely: `src/sessions.js:46` uses only `existsSync`, `readdirSync` with Dirents, regular-file classification, `.jsonl`, and the existing valid-id predicate. It does not read session metadata or transcript. Empty/malformed files and main/run/helper logs count; invalid names, directories, and symlinks do not. The real-files test covers these cases at `tests/core/diagnostics-composition.test.ts:25`; throwing replacements for metadata/transcript methods guard the mounted route at `tests/core/diagnostics-composition.test.ts:106`.
+- Actual `createNova` console and mesh listeners are used, rather than a manually mounted test Core: `tests/core/diagnostics-composition.test.ts:50`, `tests/core/diagnostics-composition.test.ts:59`. Real browser enrollment/reveal/console approval/session-cookie flow is exercised at `tests/core/diagnostics-composition.test.ts:96`. Both permitted listeners return the native JSON attachment, expected filename, format marker, redaction marker, and no-store header at `tests/core/diagnostics-composition.test.ts:109`.
+- Public and invalid-cookie mesh requests receive 401 without the attachment or bundle marker; forwarded console requests are denied; authenticated mutations retain header/origin guards: `tests/core/diagnostics-composition.test.ts:131`, `tests/core/diagnostics-composition.test.ts:138`, `tests/core/diagnostics-composition.test.ts:139`.
+- Synthetic known-secret variants are planted in included log/problem fields and independently searched in the downloaded JSON, including fixture-generated mesh and vault keys: `tests/core/diagnostics-composition.test.ts:66`, `tests/core/diagnostics-composition.test.ts:71`, `tests/core/diagnostics-composition.test.ts:74`, `tests/core/diagnostics-composition.test.ts:123`. Excluded memory/capture/task/profile/session/schedule/skill/brief content is planted and checked absent at `tests/core/diagnostics-composition.test.ts:81` and `tests/core/diagnostics-composition.test.ts:126`. These establish the named boundaries and known-secret cases, not universal removal of arbitrary personal free text.
+- The no-retention checks compare every regular file path under the fixture Nova home and search existing files for the bundle marker: `tests/core/diagnostics-composition.test.ts:108`, `tests/core/diagnostics-composition.test.ts:129`. The reused builder and route operate on local objects with no write/cache/upload operation: `src/core/diagnostics/index.ts:152`, `src/core/diagnostics/index.ts:196`, `src/core/diagnostics/index.ts:211`.
+- Real listeners, scheduler, Core, and fake runtime are closed; listener state is asserted false at `tests/core/diagnostics-composition.test.ts:143`. This proves in-process listener shutdown, as the implementer correctly states; it is not separate diagnostics CLI signal-handling proof.
+- Documentation records exact `chat_logs` semantics, unchanged numeric secret-key scrubbing, and the remaining free-text limit: `docs/plans/diagnostics.md:172`, `docs/plans/diagnostics.md:179`, `docs/plans/diagnostics.md:216`. The diff has no app, surface, component, styleguide, crawler, dependency, provider implementation, diagnostics scrubber, existing canary assertion, or eval-grader edits.
+
+## Strengths
+
+- The production change is small and additive: a Core option, a late route getter, one numeric callback, and one narrow store count method. It avoids initialization cycles without a second mutable attach mechanism: `src/core/index.ts:273`, `src/core/index.ts:1506`, `src/server.js:68`, `src/sessions.js:46`.
+- The 154-line new test protects actual composition and access behavior with real stores and HTTP listeners. The populated-versus-first download checks would catch stale or construction-time counts; the RED evidence confirms the test failed at the previously unmounted production boundary: `tests/core/diagnostics-composition.test.ts:60`, `tests/core/diagnostics-composition.test.ts:118`, `evidence/task-3/red.log:26` (evidence paths below are relative to this report's directory).
+- Existing privacy logic remains the enforcement boundary, including deliberate secret-key matching of numeric fields; the field-name correction keeps that boundary intact: `src/core/diagnostics/index.ts:30`, `src/core/diagnostics/index.ts:84`, `src/server.js:68`.
+- The report preserves failed attempts, exact launch environment/argv/cwd, actual child exit codes, final results, and explicit limits rather than claiming UI or final-branch qualification: `task-3-report.md:28`, `task-3-report.md:58`, `task-3-report.md:77`.
+
+## Named risk checks outside the diff
+
+1. **Early getter invocation / declaration ordering.** Checked the existing diagnostics route implementation and production setup ordering. `src/core/diagnostics/index.ts:207` stores a handler closure and calls `build()` only from its handler at line 211. The numeric callback is not invoked while creating Core; SessionStore and Runner are created before listeners are returned (`src/server.js:103`, `src/server.js:107`, `src/server.js:614`). The new actual first-download test and retained passing run exercise that order. No early-access defect found.
+2. **Person-access regression or JSON-attachment bypass.** Checked existing `src/core/api.ts:140` through authorization/mutation checks and Reply serialization at `src/core/api.ts:182`, plus `src/core/mesh/access.ts:56` and `src/core/mesh/access.ts:111`. An unspecified route access remains person access, authorization precedes handler execution, console identity excludes forwarding, and mesh cookies resolve through device sessions. The production handler passes the identified principal through Core before legacy routing (`src/server.js:591`). The existing mesh helper actually fetches HTTP, returns response headers and parses native JSON (`tests/core/mesh-support.ts:18`); it does not synthesize a bundle. No access or attachment bypass found.
+3. **Callback content projection / shared Caps contract.** Checked the existing schedule/skill view methods and production Runner binding: `src/schedules.js:80` returns the existing schedule view, `src/skills.js:109` returns the existing installed-skills view, and `src/server.js:115` still binds `runner.caps = core.caps`. Schedule/skill views read their existing metadata/body internally, as permitted by the task's existing-view callback; only `.length` is returned. Session content receives the stricter directory-only contract. No new content projection or Caps replacement found.
+4. **Builder retention, excluded-store exposure, or weakened redaction.** Checked the existing builder projection and final scrub at `src/core/diagnostics/index.ts:152` through `src/core/diagnostics/index.ts:200`. Era2 is invoked at line 191 and scrubbed with the rest of the object at line 196. There is no persistence path. Included log/problem/configured-name fields retain their documented free-text limitations; this is accurately disclosed in the new docs and report, not treated as blanket privacy proof. No new builder exception or weakened secret scrub found.
+5. **Fixture owner-home/keychain exposure and unverifiable execution evidence.** Checked `tests/acceptance/support.ts:48`: blank fixtures use a newly created temporary root, separate HOME and Nova home, and explicit file vault. The new test scopes/restores the relevant process settings and uses fake Ollama/fixed hardware (`tests/core/diagnostics-composition.test.ts:46`). Read retained `evidence/task-3/run.py`, every invocation JSON and exit file, failure details and final output summaries; independently recomputed all 28 entries in `evidence/task-3/sha256.json`, with zero mismatches. The launcher retains only enumerated base environment keys plus private HOME/file-vault/synthetic canary settings, so inherited provider/Nova credentials are not passed. No owner data was inspected by this review.
+
+## Verification evidence inspected
+
+- RED exit 1: missing countLogs and actual production diagnostics 404, with 0/2 pass (`evidence/task-3/red.log:17`, `evidence/task-3/red.log:26`; `red.exit`).
+- Preserved failed corrections: numeric `session_logs` scrubbed, test-only header union type error, and lazy vault key assertion timing. Each has a saved invocation/log/exit and corresponds to the documented correction; no unrelated or blind rerun is needed.
+- Final focused composition run: exit 0, 2/2 pass, no failures/skips; inspected `green-third.log` and `green-third.exit`.
+- Existing affected run: exit 0, 109/109 pass; final combined affected run: exit 0, 111/111 pass, zero failures/cancelled/skipped/todo (`evidence/task-3/affected-final.log:113`, `affected-final.exit`). The saved final invocation contains the new diagnostics test, existing diagnostics/API/Core/Caps/composition/acceptance/eval tests, and server/runner/chat/helper/scheduler tests, with flags before paths.
+- Existing diagnostics regression eval, negative control, module import boundary, and production Caps API are explicitly present and passing in the final output (`evidence/task-3/affected-final.log:31`, line 37, line 60, and line 2). Every completed test log reports the no-Kubernetes tripwire never fired (`affected-final.log:121`).
+- Final typecheck exits 0 (`typecheck-final.exit`); retained output has the minor npm-notifier noise listed below. Retained diff check exits 0 with empty output (`diff-check.exit`, `diff-check.log`). No suite was rerun by the reviewer because code inspection raised no unanswered defect requiring a probe.
+
+## Issues
+
+### Critical
+
+- None.
+
+### Important
+
+- None.
+
+### Minor
+
+- **M1 — Verification-output noise.** `evidence/task-3/typecheck-final.log:4` emits an unrelated npm available-update notice (also honestly reported at `task-3-report.md:65`). This does not invalidate the clean compiler exit or indicate a source defect, but the reviewer template explicitly treats reported output noise as a finding. For future verification launchers, disable only npm's update notifier (for example, `NPM_CONFIG_UPDATE_NOTIFIER=false`) so compiler output stays focused; do not hide warnings or rerun this passing check merely to erase historical evidence. This is optional tooling polish, not a backend acceptance blocker.
+
+## Cannot verify / controller follow-up
+
+- Task 3 does not establish actual owner rendered-entry recognition, app Health composition, Home-start phone/rail reachability, download interaction in the browser UI, posture screenshots/F0 preservation, eight-item visual check, or C18/O14 and C19/O15 shipped inventory. Those are outside this diff and remain pending controller/remaining-task gates; the report explicitly claims none (`task-3-report.md:83`).
+- No ordinary full CI result at the final branch head, whole-branch review, authorized preview, same-PR LEDGER or merge proof is present in this backend slice. The 111 passing tests qualify this focused change only. Root must complete the final plan gates.
+- No universal arbitrary-free-text privacy guarantee is established or required under the clarified brief. Included names, host/IP/model/runtime metadata and log/problem details retain the existing documented behavior (`docs/plans/diagnostics.md:161`, `docs/plans/diagnostics.md:179`). The controlled synthetic-network ruling does not authorize publishing actual owner private addresses or real diagnostic bundles.
+- Broad live Caps behavior/provider-report accounting and existing UI behavior are not independently re-proven in this scoped diff. The binding remains unchanged and the relevant focused regression evidence passes; earlier reviewed contracts and later whole-branch qualification remain the controller's responsibility.
+
+## Assessment
+
+Task quality: Approved, with 0 Critical / 0 Important / 1 Minor.
+Spec compliance: Compliant for the reviewed backend scope; cross-task gates remain explicitly unverified.
+Reasoning: The change mounts the established diagnostics implementation at the real production boundary without relaxing authorization, secret scrubbing, or Caps ownership. Its actual HTTP tests and retained test-first evidence support fresh numeric counts, private fixture isolation, excluded-store boundaries, native attachment behavior and in-memory per-request construction; the sole finding is optional verification-output polish.
+
+RELEASE: Review complete. No further writes or validation planned; source remains released to root.
+
+## Additional rulings I made (with costs)
+
+Ruling: diagnostics Era2 counts must avoid SessionStore.list/title/header reads; add narrow countLogs() over valid regular JSONL directory entries, expose session_logs including main/run/helper, schedules/skills numeric. Owner spec requires counts/no content; example conversations=list.length is illustrative and reads metadata. Cost if wrong: diagnostic count is persisted session logs, not only person-started conversations; key/docs must state semantics, no second metadata store/broad refactor. Focused test-first exact file-count/no-content proof and route tests required.
+
+Ruling: rename diagnostics Era2 session_logs to chat_logs; countLogs() semantics unchanged includes valid persisted main/run/helper files. Existing generic SECRET_KEY/session redaction stays intact, no numeric exception. Cost if wrong: a new diagnostic count field name must be understood through docs; preserves stronger scrub boundary and focused numeric-count assertions.
+
+Ruling: no private mesh addresses means actual owner/private host must never enter our tool/public evidence; documented synthetic network metadata in controlled diagnostic bundles is allowed. Existing diagnostics plan explicitly permits IPs/hostnames/runtime URLs. Do not tighten unchanged projection or add false assertion that192.0.2.10 must be absent. Cost if wrong: private owner-downloaded diagnostic bundles still contain documented nonsecret network identifiers; review-before-sharing caveat remains and no actual owner bundle is read/published by builder. The new unsupported test assertion is corrected, no preexisting check relaxed.
+
+Task3 M1 retained/deferred: npm available-update notice is optional verification tooling polish; clean compiler exit is not hidden or rerun to erase history. Final whole-branch review will triage it.
