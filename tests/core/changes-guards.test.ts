@@ -4,7 +4,7 @@
 // during a canary is immediate; the approval card shows what a rule pack's tasks would do; the
 // canary's window can't be cut short by the wall clock, and a change that was tampered with after
 // its release isn't applied.
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -35,7 +35,8 @@ function open(o: Partial<CoreOptions> = {}) {
 }
 
 const checked = (core: Core, id: string) => until(() => core.changes.get(id), (c) => c.state !== 'checking');
-const inCanary = (core: Core, id: string) => until(() => core.changes.get(id), (c) => c.state !== 'canary' || (!!c.canary?.started_at && c.canary.applied !== false));
+// Approval queues the ship task; waiting/checking is not an applied canary yet.
+const inCanary = (core: Core, id: string) => until(() => core.changes.get(id), (c) => c.state !== 'waiting' && c.state !== 'checking' && (c.state !== 'canary' || (!!c.canary?.started_at && c.canary.applied === true)));
 const settled = (core: Core, id: string, states = ['done', 'failed', 'cancelled']) => until(() => core.ledger.get(id), (t) => states.includes(t.state));
 async function watch(core: Core, clock: { now: Date }, id: string) {
   const c = core.changes.get(id);
@@ -199,8 +200,10 @@ test('in a sandbox copy a firing rule records its task without starting it', { t
 
 // v1 installed by hand and never enabled (its permission never OK'd), with a binary file and a
 // large one in its folder; v2 (which overwrites the large one) fails its canary and is rolled back.
-async function rolledBackExtension() {
+async function rolledBackExtension(t: TestContext) {
   const { home, clock, core } = open();
+  // Own cleanup before setup assertions: a failed setup must not leave this core running.
+  t.after(() => core.close());
   const perm = [{ kind: 'network', target: '127.0.0.1:9', why: 'To check a local service.' }];
   const v1 = notesSkill('1.0.0', { manifest: { permissions: perm } });
   core.extensions.install(v1.manifest);
@@ -226,34 +229,22 @@ async function rolledBackExtension() {
   return { home, core, dir, v1, bin, big };
 }
 
-test('rolling back an extension puts its state back exactly: installed, not enabled', { timeout: 120_000 }, async () => {
-  const { core } = await rolledBackExtension();
-  try {
-    assert.equal(core.extensions.get('example-notes').state, 'installed');
-    assert.equal(core.extensions.get('example-notes').version, '1.0.0');
-  } finally {
-    await core.close();
-  }
+test('rolling back an extension puts its state back exactly: installed, not enabled', { timeout: 120_000 }, async (t) => {
+  const { core } = await rolledBackExtension(t);
+  assert.equal(core.extensions.get('example-notes').state, 'installed');
+  assert.equal(core.extensions.get('example-notes').version, '1.0.0');
 });
 
-test('rolling back an extension leaves a binary file it never touched byte for byte', { timeout: 120_000 }, async () => {
-  const { core, dir, v1, bin } = await rolledBackExtension();
-  try {
-    assert.ok(readFileSync(join(dir, 'icon.png')).equals(bin));
-    assert.equal(readFileSync(join(dir, 'SKILL.md'), 'utf8'), v1.files['SKILL.md']);
-  } finally {
-    await core.close();
-  }
+test('rolling back an extension leaves a binary file it never touched byte for byte', { timeout: 120_000 }, async (t) => {
+  const { dir, v1, bin } = await rolledBackExtension(t);
+  assert.ok(readFileSync(join(dir, 'icon.png')).equals(bin));
+  assert.equal(readFileSync(join(dir, 'SKILL.md'), 'utf8'), v1.files['SKILL.md']);
 });
 
-test('rolling back an extension puts back a large file it overwrote', { timeout: 120_000 }, async () => {
-  const { core, dir, big } = await rolledBackExtension();
-  try {
-    assert.ok(existsSync(join(dir, 'big.txt')), 'not deleted');
-    assert.ok(readFileSync(join(dir, 'big.txt')).equals(big));
-  } finally {
-    await core.close();
-  }
+test('rolling back an extension puts back a large file it overwrote', { timeout: 120_000 }, async (t) => {
+  const { dir, big } = await rolledBackExtension(t);
+  assert.ok(existsSync(join(dir, 'big.txt')), 'not deleted');
+  assert.ok(readFileSync(join(dir, 'big.txt')).equals(big));
 });
 
 test('rolling back a brand-new extension leaves nothing behind, whatever it keeps or exports on removal', { timeout: 120_000 }, async () => {

@@ -41,7 +41,8 @@ function open(o: { git?: boolean; ollama?: string } = {}) {
 }
 
 const checked = (core: Core, id: string) => until(() => core.changes.get(id), (c) => c.state !== 'checking');
-const inCanary = (core: Core, id: string) => until(() => core.changes.get(id), (c) => c.state !== 'canary' || (!!c.canary?.started_at && c.canary.applied !== false));
+// Approval queues the ship task; waiting/checking is not an applied canary yet.
+const inCanary = (core: Core, id: string) => until(() => core.changes.get(id), (c) => c.state !== 'waiting' && c.state !== 'checking' && (c.state !== 'canary' || (!!c.canary?.started_at && c.canary.applied === true)));
 // The canary's window on the test clock: three looks, a third of the window apart and past its end.
 async function watch(core: Core, clock: { now: Date }, id: string) {
   const c = core.changes.get(id);
