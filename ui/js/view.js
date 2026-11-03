@@ -871,7 +871,13 @@ export function renderBackupsSettings(model = {}, { id = 'settings-backups' } = 
   const { settings = {}, permissions = {}, state = 'loading', errors = {}, notice = '', recovery = {} } = model;
   const prefix = esc(id);
   const heading = `<h2 class="view-title" id="${prefix}-title">Backups</h2>`;
-  if (state === 'loading') return `<section class="backups-settings" aria-labelledby="${prefix}-title" aria-busy="true">${heading}<p class="settings-note" role="status">Loading backup settings…</p></section>`;
+  if (state === 'loading') {
+    // The caller owns the request start. Never allocate/reset its age during a render.
+    const wait = Number.isFinite(model.loadingSince) && model.loadingSince > 0
+      ? waitingLine('Loading backup settings', { key: 'view-backups', since: model.loadingSince })
+      : '<p class="settings-note" role="status">Backup settings are not available yet.</p>';
+    return `<section class="backups-settings" aria-labelledby="${prefix}-title" aria-busy="true">${heading}${wait}</section>`;
+  }
   const editable = permissions.canEdit === true && !permissions.readOnlyReason;
   const consoleReveal = editable && permissions.console === true;
   const saving = state === 'saving';

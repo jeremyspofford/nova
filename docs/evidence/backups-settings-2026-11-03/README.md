@@ -1,10 +1,12 @@
 # Backups settings — Task1 rendered entry
 
-Design preparation only: `/styleguide?entry=backups-settings`, anchor `#sg-backups-settings`. The shared `renderBackupsSettings(model, { id })` renderer is ready for recognition review. Settings navigation, live settings/key requests, clipboard access and app state composition remain queued behind the rendered-entry approval in OPERATING-RULES.
+Design preparation only: `/styleguide?entry=backups-settings`, anchor `#sg-backups-settings`. The shared renderer is not composed into app navigation/state/API flows by this task. The current [I1 loading correction and source-matched evidence](ci-i1-loading/README.md) use the existing shared wait primitive and caller-owned request timestamp.
 
 The entry uses existing SettingsRow, input, button, confirmation and code-block patterns. Its fixtures use neutral paths and one public dummy key in the actual 64-hex-character/eight-group format. A paired approver can see the initial setup key once; repeated reveal is offered only to the console and requires the explicit tier-3 checkbox.
 
-## Evidence
+## Original 525a52e2 evidence — historical
+
+The following full matrix describes the original commit. It is preserved unchanged, rather than relabeled as current-source evidence after I1.
 
 - [112 final PNGs and source/PNG hashes](screenshots.json): 14 states × Chromium/WebKit × phone 390×844, desktop 1440×900, tablet 820×1180, half-open 842×675. PNGs are full-page captures at those viewport sizes; time is fixed at `2026-11-03T12:00:00Z`.
 - Every state: `loading`, `empty`, `configured`, `saving`, `error`, `first-key`, `confirm`, `shown`, `paired-viewer`, `paired-approver`, `paired-first-key`, `standby`, `unavailable`, `long-paths`.

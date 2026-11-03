@@ -35,7 +35,7 @@ test('folder and retention drafts have associated labels, help and explicit remo
 });
 
 test('loading and read-only capabilities cannot mutate settings or reveal a key', () => {
-  const loading = render({ state: 'loading' });
+  const loading = render({ state: 'loading', loadingSince: Date.now() - 1500 });
   assert.match(loading, /Loading backup settings/);
   assert.doesNotMatch(loading, /<form|backups-reveal|backups-save/);
   for (const permissions of [{ canEdit: false, console: false, readOnlyReason: 'This paired device can view settings.' }, { canEdit: false, console: true, readOnlyReason: 'Settings are read-only on standby.' }, {}]) {
@@ -112,4 +112,38 @@ test('all arbitrary strings and identifiers are escaped; rendering is pure and d
   assert.match(html, /&lt;img/);
   assert.equal(render(model, { id: attack }), html);
   assert.equal(JSON.stringify(model), before);
+});
+
+test('Backups loading uses the caller’s actual start through quiet, indicator and long-wait redraws', (t) => {
+  const now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const draft = { target: '/srv/pending draft', keep: 0, encrypted_target: '/media/pending' };
+  for (const [age, classes, delay] of [[400, '', 600], [1000, ' is-late', null], [12000, ' is-late is-long', null], [-500, '', 1500]]) {
+    const model = { state: 'loading', loadingSince: now - age, settings: draft, recovery: { state: 'first-shown', key: KEY } };
+    const before = JSON.stringify(model);
+    const html = render(model);
+    assert.match(html, new RegExp(`class="waiting${classes}"`));
+    assert.match(html, new RegExp(`data-waiting="view-backups" data-since="${now - age}"`));
+    assert.match(html, /role="status"/);
+    assert.match(html, /aria-busy="true"/);
+    if (delay !== null) assert.match(html, new RegExp(`--wait-left: ${delay}ms`));
+    if (age >= 10000) assert.match(html, /12 s so far · it usually takes under a second/);
+    else assert.doesNotMatch(html, /so far|it usually takes/);
+    assert.doesNotMatch(html, /<form|data-done|data-total|%/);
+    assert.ok(!html.includes(KEY));
+    assert.equal(render(model), html, 'same model under the same clock/history');
+    assert.equal(JSON.stringify(model), before, 'loading does not alter supplied settings or recovery state');
+  }
+  assert.match(render({ settings: draft, state: 'error', errors: { keep: 'Enter 1–365 copies.' } }), /name="keep"[^>]*value="0"/);
+  assert.equal(draft.target, '/srv/pending draft');
+});
+
+test('Backups loading without a valid start stays busy without inventing an elapsed wait', (t) => {
+  t.mock.method(Date, 'now', () => 1_800_000_000_000);
+  for (const loadingSince of [undefined, null, 0, -1, NaN, Infinity, '1800000000000', '\"><img src=x>']) {
+    const html = render({ state: 'loading', loadingSince });
+    assert.match(html, /aria-busy="true"/);
+    assert.match(html, /Backup settings are not available yet\./);
+    assert.doesNotMatch(html, /data-waiting|data-since|so far|<img|<form/);
+  }
 });

@@ -1,0 +1,38 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+(node:26) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Backups has its own rendered styleguide entry rather than a helper exemption (0.803145ms)
+✔ folder and retention drafts have associated labels, help and explicit removal actions (0.598707ms)
+✔ loading and read-only capabilities cannot mutate settings or reveal a key (0.687763ms)
+✔ a paired approver can receive the first key once but cannot repeat a reveal (0.227817ms)
+✔ repeated reveal uses explicit tier-3 confirmation with no hidden key bytes (0.25978ms)
+✔ only visible authorized key states emit escaped key text, only inside code (0.259511ms)
+✔ saving prevents duplicate submit while retaining editable drafts and failed fields (0.282249ms)
+✔ empty settings use default retention without converting an invalid draft or promising folder creation (0.351801ms)
+✔ all arbitrary strings and identifiers are escaped; rendering is pure and deterministic (0.284758ms)
+✔ Backups loading uses the caller’s actual start through quiet, indicator and long-wait redraws (1.119902ms)
+✔ Backups loading without a valid start stays busy without inventing an elapsed wait (0.311071ms)
+(node:27) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the bands: nothing under 1 s, an indicator to 10 s, then real progress (0.621127ms)
+✔ progress is in real units: no fraction without a total, never full before it is done (0.648019ms)
+✔ a general estimate, in words, from a measured rate only, erring long (0.23475ms)
+✔ a long wait says what is done, an estimate where there is a basis, else the time so far (0.141036ms)
+✔ after 10 s there is always a general estimate: this device’s own history, else what is usual for the kind of wait (1.698827ms)
+✔ a waiting line carries when the wait began, so a redraw keeps its age; it is hidden for its first second (0.848462ms)
+✔ no artificial delay: every timer in the PWA is named for what it is (4.337162ms)
+✔ no fake work: no “checking…” or padding, and every wait is drawn by wait.js (0.617168ms)
+✔ no simulated streaming: text grows only from the server’s deltas, never replayed (1.738548ms)
+✔ every component ui/js/components.js exports is in the styleguide (2.980447ms)
+✔ every component ui/js/view.js exports is in the styleguide (0.924878ms)
+✔ each styleguide entry has its own anchor and address, so it can be approved alone (0.48263ms)
+✔ the styleguide’s content is neutral: no real people, services or data (0.255581ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 90.676527
+no-Kubernetes tripwire: never fired

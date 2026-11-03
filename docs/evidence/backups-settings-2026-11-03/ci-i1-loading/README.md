@@ -1,0 +1,16 @@
+# Task1 CI correction I1 — shared loading wait
+
+The original Task1 commit `525a52e2` failed the existing `tests/m9-wait.test.js` gate because Backups rendered a raw loading label. The renderer now composes the existing `waitingLine` primitive with stable kind `view-backups` and a caller-supplied `model.loadingSince` timestamp. The shared primitive and existing gate are unchanged.
+
+`loadingSince` must be a finite positive epoch timestamp. The future app adapter must capture the real request start and retain it through redraws. The component never allocates or resets a wait start. Missing/invalid timestamps produce a busy section and “Backup settings are not available yet.” without invented elapsed progress. Future timestamps follow the shared negative-elapsed quiet behavior. Loading output depends on the external clock and shared wait history; comparisons are deterministic with those held fixed.
+
+- [Unit output](ci-i1-unit-green-stdout.txt), [exact argv/env/source hashes](ci-i1-unit-green-command.json): 24 passed, zero failures/skips. Includes the unchanged M9 wait gate, all original 13 renderer/styleguide checks and two new timing/fallback tests. The Node26 localStorage ExperimentalWarning is retained; no warning suppression or assertion exemption was added.
+- [Focused browser output](ci-i1-browser-green-stdout.txt), [exact invocation](ci-i1-browser-green-command.json): four passed (two entry checks and two new loading checks), zero failures/skips. The two original complete ready-state matrices remain in the browser file for ordinary CI; this fix does not rerun them locally.
+- [Static output](ci-i1-static-stdout.txt), [exact invocation](ci-i1-static-command.json): token/theme/JavaScript/project type checks pass. Existing non-lead package scale/approval debt remains reported.
+- [24 new PNGs, viewport dimensions and hashes](screenshots.json): quiet400ms, indicator1500ms and long12000ms × four original postures × Chromium/WebKit, in Orb Teal. Quiet shots allow the shared finite appearance animation to remain in its actual quiet state instead of fast-forwarding it.
+- [Chromium](chromium-matrix.json) and [WebKit](webkit-matrix.json): 72 loading cases each, covering all six themes, four postures and three timing bands, with busy/status semantics, unchanged start timestamp, computed visibility, overflow/ID/form/control checks and no backup/key or mutation requests.
+- [Current source hashes](source-hashes.json) include the unchanged shared wait implementation and existing M9 gate.
+
+All six local attempts (three genuine REDs and three GREENs), complete logs, argv/environment/time/status/source hashes and original hosted CI failure remain in the private Task1 audit. Each run uses the corrected cache-only/network-none/read-only/uid1000/private-HOME/file-key/tripwire/Node-egress harness. Egress logs are empty; tripwire never fired. No full-suite retry, new skip, timeout increase, app/backend composition or clipboard operation.
+
+The original [112-PNG manifest](../screenshots.json) and 672-case matrices describe exactly commit `525a52e2`; they remain intact and are historical evidence. They are not relabeled as proof for this corrected source. The separately reviewed demo draft-reset minor and historical early-static-preload minor remain deferred and documented.

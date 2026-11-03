@@ -1,0 +1,14 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ Backups entry exists in chromium (644.178512ms)
+✔ Backups chromium: shared loading wait preserves age in every posture and theme (4683.866998ms)
+✔ Backups entry exists in webkit (741.105392ms)
+✔ Backups webkit: shared loading wait preserves age in every posture and theme (4656.754271ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11257.614868
+no-Kubernetes tripwire: never fired

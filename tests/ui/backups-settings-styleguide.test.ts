@@ -182,4 +182,69 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
       });
     } finally { await b?.close(); }
   });
+
+  test(`Backups ${engine}: shared loading wait preserves age in every posture and theme`, async () => {
+    let b: Browser | undefined;
+    try {
+      const launched = await launch();
+      assert.notEqual(typeof launched, 'string');
+      b = launched as Browser;
+      await fixture(async (base) => {
+        const measured: object[] = [];
+        for (const [size, dimensions] of Object.entries(SIZES)) {
+          const d = await device(b!, { ...dimensions, touch: size !== 'desktop', scheme: 'dark', serviceWorkers: 'block' });
+          const p = d.page;
+          const requests: string[] = [];
+          p.on('request', (r) => { if (!['GET', 'HEAD'].includes(r.method()) || /\/backups(?:\/|\?|$)/.test(r.url())) requests.push(`${r.method()} ${r.url()}`); });
+          await p.clock.setFixedTime(new Date('2026-11-03T12:00:00Z'));
+          await p.goto(`${base}/styleguide?entry=backups-settings`);
+          await choose(p, 'loading');
+          const waiting = p.locator('.backups-settings [data-waiting="view-backups"]');
+          assert.equal(await waiting.count(), 1, 'Backups must compose the shared wait line');
+          const since = Number(await waiting.getAttribute('data-since'));
+          assert.equal(since, Date.parse('2026-11-03T12:00:00Z') - 1500, 'the specimen supplies a stable request start');
+          const themes = await p.locator('#sg-ds option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+          assert.equal(themes.length, 6);
+          for (const theme of themes) {
+            const response = p.waitForResponse((r) => r.url().includes('/preview.css') && r.status() === 200);
+            await p.locator('#sg-ds').selectOption(theme);
+            const css = await (await response).text();
+            await p.waitForFunction((text) => document.getElementById('ds')?.textContent === text && !document.getElementById('ds-boot'), css);
+            for (const [phase, elapsed] of [['quiet', 400], ['indicator', 1500], ['long', 12000]] as const) {
+              await p.clock.setFixedTime(new Date(since + elapsed));
+              await choose(p, 'loading');
+              assert.equal(await waiting.getAttribute('data-since'), String(since), 'redraw retains the actual start');
+              assert.equal(await p.locator('.backups-settings').getAttribute('aria-busy'), 'true');
+              assert.equal(await waiting.getAttribute('role'), 'status');
+              assert.equal(await p.locator('.backups-settings form, .backups-settings button, .backups-settings input').count(), 0);
+              const text = await waiting.innerText();
+              if (phase === 'quiet') {
+                assert.equal(await waiting.getAttribute('class'), 'waiting');
+                assert.match(await waiting.getAttribute('style') ?? '', /--wait-left: 600ms/);
+                assert.equal(await waiting.evaluate((e) => getComputedStyle(e).opacity), '0', 'under 1s the indicator is unseen');
+              } else {
+                assert.match(await waiting.getAttribute('class') ?? '', /is-late/);
+                assert.equal(await waiting.evaluate((e) => getComputedStyle(e).opacity), '1');
+              }
+              if (phase === 'long') assert.match(text, /12 s so far · it usually takes under a second/);
+              else assert.doesNotMatch(text, /so far|it usually takes/);
+              assert.doesNotMatch(text, /%|of \d/);
+              await geometry(p, `${engine}/${theme}/${size}/loading-${phase}`);
+              measured.push({ engine, theme, size, phase, elapsed, since, text });
+              if (process.env.NOVA_BACKUPS_STYLEGUIDE_SHOTS && theme === 'orb-teal') {
+                const folder = resolve(process.env.NOVA_BACKUPS_STYLEGUIDE_SHOTS, 'ci-i1-loading', engine);
+                mkdirSync(folder, { recursive: true });
+                // Fast-forwarding the finite appear animation would falsify the quiet screenshot.
+                await p.screenshot({ path: join(folder, `loading-${phase}-${size}.png`), fullPage: true, animations: phase === 'quiet' ? 'allow' : 'disabled', caret: 'hide' });
+              }
+            }
+          }
+          assert.deepEqual(requests, []);
+          assert.deepEqual(d.errors, []);
+          await d.ctx.close();
+        }
+        if (process.env.NOVA_BACKUPS_STYLEGUIDE_SHOTS) writeFileSync(join(resolve(process.env.NOVA_BACKUPS_STYLEGUIDE_SHOTS), `${engine}-loading-matrix.json`), JSON.stringify(measured, null, 2));
+      });
+    } finally { await b?.close(); }
+  });
 }

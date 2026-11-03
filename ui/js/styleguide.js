@@ -272,7 +272,7 @@ const backupStates = [
 let backupState = 'configured';
 function backupModel() {
   const model = { settings: { target: '/srv/backup-copies', keep: 7, encrypted_target: '/media/encrypted-copies' }, permissions: { canEdit: true, console: true }, state: 'ready', errors: {}, recovery: { state: 'hidden' } };
-  if (backupState === 'loading') model.state = 'loading';
+  if (backupState === 'loading') Object.assign(model, { state: 'loading', loadingSince: t0.getTime() - 1500 });
   if (backupState === 'empty') model.settings = { target: null, keep: 7, encrypted_target: null };
   if (backupState === 'saving') model.state = 'saving';
   if (backupState === 'error') Object.assign(model, { settings: { ...model.settings, keep: 0 }, state: 'error', notice: 'Could not save. The encrypted copy folder is not writable. Your entries are still here.', errors: { target: 'Choose a private folder outside Nova’s home.', keep: 'Enter a whole number from 1 to 365.', encrypted_target: 'Choose a different folder you can write to.' } });
