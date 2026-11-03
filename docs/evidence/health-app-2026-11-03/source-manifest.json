@@ -1,10 +1,10 @@
 {
-  "base": "e92f2369f2c3253602567817283c7aefa9bae6dd",
-  "note": "Runtime Git identity is only the actual base commit; mounted source changes are identified by hashes, not represented as clean e92 source. The final implementation commit is returned after committing these files/report.",
+  "base": "c071b5360224bd1e83b5e352a1c05bd448237a2f",
+  "note": "Fix1 current source hashes. Runtime Git identity remains c071; the mounted two-file source change is identified by these hashes. Original c071 source manifest is retained verbatim as source-manifest-c071.json. Early original probe provenance limits remain; these are not retroactive hashes.",
   "files": {
     "ui/js/app.js": {
-      "sha256": "3f7636a9244d6f786416f1f59bf6851560baf34d158de8a62cd0b3fbf65b0cfc",
-      "git_blob": "1b7d31a4bb0cbced212c8df5243a3a82f5b9660e"
+      "sha256": "4787137e1f6c8b52fdb34c1954d8528427170a60339e090fb05c01432a00910b",
+      "git_blob": "f56d903fbe372389a3a67e7e9a12e390022001db"
     },
     "ui/js/surfaces.js": {
       "sha256": "1df0f98707b74c4e1b77f269eee7e7ab1590da2d4ccc6e739b74957bbafcbdac",
@@ -31,8 +31,8 @@
       "git_blob": "3fea9b6aac5e3e2dd468e76011ccb554f637e28d"
     },
     "tests/ui/health-caps-diagnostics.test.ts": {
-      "sha256": "92343c31419ce962c1e5ffeeaac3615e59d37967ac31f1fec63aac3287cc6629",
-      "git_blob": "634bf9306ac658cb66224239dc112f47161b92dd"
+      "sha256": "a84db07c93051390d8a47a1ca8ae0a39cbbd01cc100989c143e0cf5f27935837",
+      "git_blob": "ae0995ddd7c33cd3fda5c89220aab4b218e619ad"
     },
     "tests/ui/navigation-reachability.test.ts": {
       "sha256": "8a5b99412e79ef42a664a5010916c36dba086c5963670bc0f622e02ee7ca84b0",

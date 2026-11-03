@@ -128,7 +128,7 @@ async function diagnosticsWorkerUpgrade(b: Browser, m: ReturnType<typeof blank>,
 }
 
 for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]] as const) {
-  test(`Health app: ${engine} Home save, freshness, SSE draft island and native diagnostics`, { timeout: 180_000 }, async () => {
+  test(`Health app: ${engine} Home spend refresh, save, freshness, SSE draft island and native diagnostics`, { timeout: 180_000 }, async () => {
     const b = await launch();
     if (typeof b === 'string') throw new Error(b);
     console.log(`HEALTH RUNTIME ${engine}=${b.version()} node=${process.version}`);
@@ -136,7 +136,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     const previousHome = process.env.HOME;
     process.env.HOME = m.env.HOME;
     const runtime = await startFakeOllama({ models: [] });
-    const nova = createNova(loadConfig({ ...m.env, NOVA_AGENT_CMD: 'unused-synthetic-agent', NOVA_AGENT_EGRESS: 'none', NOVA_TZ: 'UTC' }), { models: { ollamaUrl: runtime.url, hardware: async () => hubHardware(), watchMs: 100, wakePollMs: 50 } });
+    const nova = createNova(loadConfig({ ...m.env, NOVA_AGENT_CMD: 'unused-synthetic-agent', NOVA_AGENT_EGRESS: 'none', NOVA_TZ: 'UTC' }), { agent: async () => ({ text: 'Synthetic conversation completed.', aborted: false, usage: { tokens_in: 1200, tokens_out: 300, cost_usd: 0.125 } }), models: { ollamaUrl: runtime.url, hardware: async () => hubHardware(), watchMs: 100, wakePollMs: 50 } });
     await new Promise<void>(r => nova.server.listen(0, '127.0.0.1', r));
     m.base = `http://127.0.0.1:${(nova.server.address() as AddressInfo).port}`;
     const out = process.env.NOVA_HEALTH_APP_SHOTS ? join(process.env.NOVA_HEALTH_APP_SHOTS, engine) : null;
@@ -160,6 +160,47 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         assert.equal(await p.locator('#banner').isVisible(), false, 'live Core responses override the browser network hint');
         assert.notEqual(await p.locator('.orb[data-orb-live]').first().getAttribute('data-state'), 'offline', 'live Core is not shown as an offline orb');
         await healthFromHome(p, touch);
+        // Conversation metering emits no Caps/profile/task event. Leaving and reopening Health
+        // must read current usage, even in one visible document with an unsaved limits draft.
+        const previousMonth = (await m.get('/api/v1/caps')).month;
+        if (posture === 'phone') assert.equal(previousMonth.total.tokens_in, 0, 'startup has no usage');
+        const draft = p.locator('[data-work-limits] [name="task.tokens"]');
+        await p.locator('[name="task.tokens.unlimited"]').uncheck();
+        await draft.fill('9876');
+        const home = p.locator('a[data-dest="home"]').filter({ visible: true }).first();
+        if (touch) await home.tap(); else await home.click();
+        await drawn(p);
+        assert.equal(new URL(p.url()).pathname, '/');
+        let conversationCapsReads = 0;
+        const countCaps = (r: import('playwright-core').Request) => { if (r.url().endsWith('/api/v1/caps')) conversationCapsReads++; };
+        p.on('request', countCaps);
+        const session = nova.runner.createSession('Synthetic Health usage regression');
+        await new Promise<void>((resolve, reject) => {
+          const completed = (id: string, event: { type: string; message?: string }) => {
+            if (id !== session || !['done', 'error'].includes(event.type)) return;
+            nova.runner.off('event', completed);
+            if (event.type === 'error') reject(new Error(event.message)); else resolve();
+          };
+          nova.runner.on('event', completed);
+          nova.runner.send(session, 'Complete this benign synthetic conversation.');
+        });
+        const currentMonth = (await m.get('/api/v1/caps')).month;
+        assert.equal(currentMonth.total.tokens_in, previousMonth.total.tokens_in + 1200);
+        assert.equal(currentMonth.total.tokens_out, previousMonth.total.tokens_out + 300);
+        assert.equal(currentMonth.total.usd, previousMonth.total.usd + 0.125);
+        assert.equal(currentMonth.providers[0].provider, 'unused-synthetic-agent');
+        assert.equal(conversationCapsReads, 0, 'conversation completion does not mask entry refresh');
+        p.off('request', countCaps);
+        await healthFromHome(p, touch);
+        const expectedTokens = (currentMonth.total.tokens_in + currentMonth.total.tokens_out).toLocaleString('en-US');
+        await p.waitForFunction(expected => document.querySelector('.work-cost-providers')?.textContent?.includes(expected), `${expectedTokens} tokens`, { timeout: 3000 });
+        assert.match(await p.locator('.work-costs > .card-line').first().innerText(), new RegExp(`${expectedTokens} tokens`));
+        assert.match(await p.locator('.work-costs > .card-lead').innerText(), new RegExp(String(currentMonth.total.usd)));
+        assert.match(await p.locator('.work-cost-providers').innerText(), /unused-synthetic-agent · unused-synthetic-agent/);
+        assert.equal(await draft.inputValue(), '9876', 'Health entry refresh preserves the unsaved limits draft');
+        assert.equal(await p.evaluate(() => document.visibilityState), 'visible');
+        assert.equal(documentRequests(p).length, 1, 'usage refreshed through Home in the same document');
+        console.log(`HEALTH ENTRY ${engine}/${posture}: real conversation ${expectedTokens} tokens, $${currentMonth.total.usd}; actual Home return; draft retained; no reload/visibility/profile/save trigger`);
         if (posture === 'halfopen') assert.match((await p.locator('body').getAttribute('data-posture'))!, /^half-open-/);
         const form = p.locator('[data-work-limits]');
         for (let i = 0; i < names.length; i++) {
@@ -402,7 +443,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         await reconnect;
         await unloaded.page.waitForFunction(() => !(document.querySelector('[data-save-work-limits]') as HTMLButtonElement)?.disabled);
         assert.equal(await offlineField.inputValue(), '65433', 'reconnection preserves unsaved offline edits');
-        assert.equal(unloaded.errors.filter(error => /Failed to load resource:.*503/.test(error)).length, 1);
+        assert.equal(unloaded.errors.filter(error => /Failed to load resource:.*503/.test(error)).length, 2, 'initial Home read and actual Health-entry retry both observe the fixture outage');
         const offlineErrors = unloaded.errors.filter(error => offlineRequests.some(reason => error === `Failed to load resource: ${reason}`));
         console.log(`HEALTH ${engine}/${posture} expected offline request failures: ${JSON.stringify(offlineRequests)}; manualRetry=${manualRetry}`);
         // WebKit may omit a console error for this failure; requestfailed above is the

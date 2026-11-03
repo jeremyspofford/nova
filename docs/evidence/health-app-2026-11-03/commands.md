@@ -82,3 +82,15 @@ Intermediate PNG binaries remain private under exact-image-only ignore entries; 
 | delivery-crawl | 0 | [argv](delivery-crawl/command.json) | [stdout](delivery-crawl/stdout.txt) |
 | delivery-typecheck | 0 | [argv](delivery-typecheck/command.json) | [stdout](delivery-typecheck/stdout.txt) |
 | delivery-offline-compatibility | 0 | [argv](delivery-offline-compatibility/command.json) | [stdout](delivery-offline-compatibility/stdout.txt) |
+
+## Fix1 — Health-entry spend refresh (base c071)
+
+All five new attempts record exact mounted-source hashes at command start, full stdout and owned-container cleanup. [Hash index](fix-1-command-hashes.json). Original74 attempts and early probe provenance limits above remain historical, unchanged. No retries after the qualified pass.
+
+| Run | Exit | Exact command | Raw output |
+| --- | --- | --- | --- |
+| fix-1-browser-green | 1 | [argv](fix-1-browser-green/command.json) | [stdout](fix-1-browser-green/stdout.txt) |
+| fix-1-browser-qualified | 0 | [argv](fix-1-browser-qualified/command.json) | [stdout](fix-1-browser-qualified/stdout.txt) |
+| fix-1-entry-red | 1 | [argv](fix-1-entry-red/command.json) | [stdout](fix-1-entry-red/stdout.txt) |
+| fix-1-home-crawl | 0 | [argv](fix-1-home-crawl/command.json) | [stdout](fix-1-home-crawl/stdout.txt) |
+| fix-1-static-qualified | 0 | [argv](fix-1-static-qualified/command.json) | [stdout](fix-1-static-qualified/stdout.txt) |

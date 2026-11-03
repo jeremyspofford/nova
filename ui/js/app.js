@@ -301,6 +301,8 @@ function showCore(view) {
   renderChrome();
   renderToc_();
   renderCore({ enter: true });
+  // Conversations and month rollover need no Core event; opening Health reads current spend.
+  if (view === 'health') refreshCore(['caps']);
   const target = view === 'home' ? null : el[VIEWS[view]];
   if (target) target.focus({ preventScroll: true });
 }

@@ -1,0 +1,17 @@
+c071b5360224bd1e83b5e352a1c05bd448237a2f
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+NAVIGATION phone: registered=11 reached=11 missing=[] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true,"healthCosts":true,"healthDiagnostics":true} states=26
+DOCUMENT phone: main-document requests=1
+✔ navigation reachability and required homes: phone (27139.223825ms)
+NAVIGATION rail: registered=11 reached=11 missing=[] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true,"healthCosts":true,"healthDiagnostics":true} states=26
+DOCUMENT rail: main-document requests=1
+✔ navigation reachability and required homes: rail (22216.225076ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 49588.377629
+no-Kubernetes tripwire: never fired
