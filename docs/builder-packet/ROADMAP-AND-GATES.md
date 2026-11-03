@@ -2,6 +2,12 @@
 
 Build in this order. A milestone is complete only when its gate passes with evidence (OPERATING-RULES). **Continue through milestones autonomously** — do not stop after each one to ask what to do next. Stop only at a gate failure you cannot resolve, a genuine packet conflict, or a Tier-3 decision reserved for the user.
 
+## Owner replacement roadmap — 2026-11-03
+
+[The goal and replacement roadmap](nova-replacement-roadmap-2026-11-03.md) records the owner's prospective direction: **REPLAY** and **COMPOUNDS**, a job-by-job replacement matrix with a 30-consecutive-day owner-use test, the PWA-first mobile track and offline tiers L1–L3. These are goals and acceptance criteria, not a new claim that their supporting capabilities are already shipped or uniquely proven against competitors.
+
+It governs work **after the current queue** and does not reorder M10j/M10k, Insertion #3, the wiring workstream or Design Stage2. The notifications design is approved input; its separate write-up is still to follow. Filing this roadmap neither starts that implementation nor replaces the existing ADR, review, rendered-entry, privacy or release gates.
+
 ## Cross-cutting gate — rendered app reachability (owner escalation, 2026-11-02)
 
 - Every registered app view must have a real door from Home in phone and rail arrangements. The required UI gate crawls actual clicks/taps against production VIEWS, independently of the navigation placement model; new orphan views fail it. Topology has ordinary Home Devices and Settings Devices homes; Capture has its own visible Settings category.

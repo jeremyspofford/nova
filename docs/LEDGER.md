@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-03 · Roadmap · A goal and replacement test for Nova**
+- What changed: filed the owner's [replacement roadmap](builder-packet/nova-replacement-roadmap-2026-11-03.md) and linked it from the milestone roadmap. REPLAY and COMPOUNDS are the flagships; the matrix defines replacement per job as 30 consecutive days of owner use without the incumbent. The roadmap also records the PWA-first mobile direction, approved notifications input awaiting its write-up, and offline tiers L1–L3.
+- What you can now do: review the declared direction and its acceptance criteria in the builder packet. Work after the current queue must follow this roadmap; in-flight order and gates are unchanged.
+- Still unfinished: this is documentation only. Replay queries, prospective graph traces, gated skill distillation, notifications, native mobile and offline-tier capabilities retain their actual implementation/review/evidence gates. No incumbent has been declared replaced by filing the roadmap or before its 30-day test.
+
 **2026-11-03 · Health backend · Automatic cost limits and a guarded diagnostics API**
 - What changed: autonomous work run by this Nova now uses the existing per-task and daily limits for steps, tokens and priced dollars. A stopped task offers a fresh allowance through the existing approval flow; the daily ceiling still applies. The person-only API can save limits and download an in-memory diagnostics attachment with fresh counts and known-secret redaction. If required secret scanning is unavailable, the download is refused with a safe error instead of returning an unsafe attachment.
 - What you can now do: get automatic cost enforcement for this machine’s runner and use the guarded APIs. Your own conversations are counted without these autonomous limits. Provider-managed work and other nodes are excluded; Models keeps its separate accounting. This is not a complete billing total.
