@@ -1,0 +1,12 @@
+308c88735b782a49cd6688b9b701bae3c5368f1c
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M3: with the server down, the PWA stays honestly offline, and recovers when it returns (18624.054319ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18848.637909
+no-Kubernetes tripwire: never fired

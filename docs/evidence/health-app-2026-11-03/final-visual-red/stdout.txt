@@ -1,0 +1,44 @@
+6ea82d7b211375dc390aed44bb2f53fed4f51500
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+HEALTH RUNTIME chromium=141.0.7390.37 node=v26.3.1
+HEALTH ENTRY chromium/phone: real conversation 1,500 tokens, $0.125; actual Home return; draft retained; no reload/visibility/profile/save trigger
+HEALTH PARTIAL chromium/phone: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON
+HEALTH chromium/phone expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/phone: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH VISUAL chromium/phone {"targets":[{"selector":"#h-diagnostics","text":"Diagnostics","x":41,"y":25,"width":76.5,"height":14,"color":[189,218,214],"inside":false,"hit":false,"scroller":{"x":0,"y":52,"width":390,"height":721.25},"posture":"continuous","ink":50},{"selector":".diagnostics-download summary","text":"Review before sharing","x":54.765625,"y":225.25,"width":124.875,"height":17,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":0,"y":52,"width":390,"height":721.25},"posture":"continuous","ink":0},{"selector":"[data-download-diagnostics]","text":"Download diagnostics","x":58,"y":287.125,"width":123.84375,"height":17,"color":[238,250,248],"inside":true,"hit":true,"scroller":{"x":0,"y":52,"width":390,"height":721.25},"posture":"continuous","ink":0}],"failures":["#h-diagnostics: clipped by the real scroller","#h-diagnostics: obscured",".diagnostics-download summary: no painted text","[data-download-diagnostics]: no painted text"]}
+✖ Health app: chromium Home spend refresh, save, freshness, SSE draft island and native diagnostics (8352.003134ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8926.557357
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:132:3
+✖ Health app: chromium Home spend refresh, save, freshness, SSE draft island and native diagnostics (8352.003134ms)
+  AssertionError [ERR_ASSERTION]: Diagnostics title, disclosure and action must be painted and unobscured
+  + actual - expected
+  
+  + [
+  +   '#h-diagnostics: clipped by the real scroller',
+  +   '#h-diagnostics: obscured',
+  +   '.diagnostics-download summary: no painted text',
+  +   '[data-download-diagnostics]: no painted text'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///work/tests/ui/health-caps-diagnostics.test.ts:512:22)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ '#h-diagnostics: clipped by the real scroller', '#h-diagnostics: obscured', '.diagnostics-download summary: no painted text', '[data-download-diagnostics]: no painted text' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

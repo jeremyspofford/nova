@@ -1,0 +1,231 @@
+{
+  "head": "9aed2eccd4434113aa3b56075ec253581f982119",
+  "base": "702ddc4d5ce3ec097f4a4dda7427fb8bc277de25",
+  "fullExit": 2,
+  "diagnostics": 74,
+  "exactRawPaths": [
+    {
+      "path": "docs/evidence/health-app-2026-11-03/core-connectivity-browser/stdout.txt",
+      "sha256": "49c3f3f280644e9b4853d29be8d6c7ffd088b43d5793ba67635a8a4795a7820c",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/debug-webkit-context-route/stdout.txt",
+      "sha256": "810b63956f4468311d47e681e043a69ab09dfebd72548190c03fe2032ad1a7e2",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/debug-webkit-crash/stdout.txt",
+      "sha256": "4714eef3c533432725fd953e3f08c2123c747085d4cab03c04c80e8bd95ed8da",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/debug-webkit-minimal/stdout.txt",
+      "sha256": "f39ca6790c7178fab6118cdef49c205d6f7fdac7b6ae9dcf6ff4ede43b1047cc",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/debug-webkit-number-restore/stdout.txt",
+      "sha256": "032f15cfdf9c31fdda6637cc4bb060391614f376a247b4f369e9732280f1f1ec",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/debug-webkit-pinned-baseline/stdout.txt",
+      "sha256": "5da592ff2231068883bebd93b689735d5d7bc6cdf43d3f9b90f22998f1511e7c",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/debug-webkit-static-route/stdout.txt",
+      "sha256": "8c9cf0bd0e5db5f4c739f5f093f219c022e53a3ca404aaac3748d2f8606ce85c",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/debug-webkit-two-plain-reloads/stdout.txt",
+      "sha256": "00c9cb657ddacbb4866bfd0c19df7a7e895297818e80446adad151f5053c676d",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/debug-worker-migration/stdout.txt",
+      "sha256": "32d503567f8dbad22be0392e4a361dd9f2334ac9d04c396fd437182e2dfce6bc",
+      "diagnostics": 7
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-revalidation-browser/stdout.txt",
+      "sha256": "071acd67bf9966bfa5251c051e7a80b97a0b96577b06387edf9a597f19ec7427",
+      "diagnostics": 1
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/fix-1-browser-green/stdout.txt",
+      "sha256": "a2fa4e65e306f3e736e8442d12fde56a431d666ec175b3f13905d6e528a72432",
+      "diagnostics": 4
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/fix-1-staged-diffcheck-full.txt",
+      "sha256": "afd07d112a398fb5a2bfc5c3a98c3f63590f20cddce5dc27805ebe10b4ec3d9c",
+      "diagnostics": 4
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/fix-2-partial-red/stdout.txt",
+      "sha256": "caab2b17fab6128e39b556cb8921721606342ae6f575211fe191e1037b9a8843",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/green-app-1/stdout.txt",
+      "sha256": "3ea286e12803096d3c530955910b2afbf2c8f45e3f90b1cc2ed0dd86aaa48c2e",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/green-app-2/stdout.txt",
+      "sha256": "e3b27b212d0f08f13eed4a2ca97b4c1eede429ade00b750a1e0609c0991b1929",
+      "diagnostics": 1
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/green-app-4/stdout.txt",
+      "sha256": "404bc319a3d3262ccc6cce405f189120e0ef0ba02b101ed2cd54f8d7328418ad",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/green-complete-1/stdout.txt",
+      "sha256": "2fc98318a14223400df352f2876f9891768d698aae4a46b18df8c9e1e962db91",
+      "diagnostics": 1
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/green-full-isolated/stdout.txt",
+      "sha256": "7dedb78024488c3bf0aded785d2fae4352b9f7420fff346f0f266b80dd457e6f",
+      "diagnostics": 4
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/green-island-both/stdout.txt",
+      "sha256": "52e2984579089b438e3aa97284db82f14876827a9f707f57532ee330cbbed56f",
+      "diagnostics": 1
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/qualified-browser-3/stdout.txt",
+      "sha256": "aca69037ebf98a4bfc30c4b9939f49b2cd4e4889f7a12150a4bf85f7efb44d1f",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/qualified-browser/stdout.txt",
+      "sha256": "e2575212a8bd50e077c6ebcfa5540f5ead0dd25ae48bb1f9808e51ac64e03ce9",
+      "diagnostics": 3
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/red-app-corrected/stdout.txt",
+      "sha256": "034f5701a4733ca72ea4c7debacd4acc0782d413b5387d26fff27a6688d6a9f0",
+      "diagnostics": 1
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/red-island-blur/stdout.txt",
+      "sha256": "9e9c1d2850a24c25a578a1af713b0e7f56479416d2df948319230b439a85d798",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/red-local-core-connectivity/stdout.txt",
+      "sha256": "f704671cd4ba8023b691cce0c8669340986b506516fad243555768c4d810f8df",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/red-lost-put/stdout.txt",
+      "sha256": "ff39b1aaa5889374ed2779f333681a65d58e9f8aee4931c45efd4e1eca92c992",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/red-refresh-layout-settled/stdout.txt",
+      "sha256": "44a51fffce4abde429be2d4c0f01e68fc52bca86a533ed260b500281db758543",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/red-refresh-layout/stdout.txt",
+      "sha256": "2918b9546acf062c7774be4072844ab96d3a8fc042686b8109aacf64125125aa",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/red-save-press-revalidation-cleanup/stdout.txt",
+      "sha256": "da25d748b8229cd00b655226259c9a11ededd81f9a103e9eea37390175c5862a",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/red-unchanged-validation/stdout.txt",
+      "sha256": "f98ab6a9ad5a34f57eedfbf905af950430a7bfbb5893a4def458788f00af94ed",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/red-worker-owned-cleanup/stdout.txt",
+      "sha256": "079953a6e6f4bc2b87279c1147eeb5c4386b3be362059343017a37a149170617",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/red-worker-unrelated-cache/stdout.txt",
+      "sha256": "24f9703429b3ab4a3c7e07cf0122319bce8069ab01a224f092d2e4ec744ec72c",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/release-final-browser/stdout.txt",
+      "sha256": "74406e7d7acdefb9b4896f17260482601b6f2beed0d6021a4b43cf1c2beac5b4",
+      "diagnostics": 1
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/sw-final-browser/stdout.txt",
+      "sha256": "8c3ea02e1527a0e5fdb83ca2014961ae548aab3be3870bce1f437dd159acd38b",
+      "diagnostics": 2
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/sw-owned-outage-browser/stdout.txt",
+      "sha256": "a1976e3137a8a388dc06379736bb9e33c2ecb45496974360c83b397b1e7616a8",
+      "diagnostics": 2
+    }
+  ],
+  "separateSourceDocExit": 0,
+  "uncommittedRootDocDiffcheckExit": 0,
+  "full_command": [
+    "git",
+    "diff",
+    "--check",
+    "702ddc4d5ce3ec097f4a4dda7427fb8bc277de25",
+    "9aed2eccd4434113aa3b56075ec253581f982119"
+  ],
+  "separate_source_doc_command": [
+    "git",
+    "diff",
+    "--check",
+    "702ddc4d5ce3ec097f4a4dda7427fb8bc277de25",
+    "9aed2eccd4434113aa3b56075ec253581f982119",
+    "--",
+    ".",
+    ":(exclude)docs/evidence/health-app-2026-11-03/core-connectivity-browser/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/debug-webkit-context-route/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/debug-webkit-crash/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/debug-webkit-minimal/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/debug-webkit-number-restore/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/debug-webkit-pinned-baseline/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/debug-webkit-static-route/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/debug-webkit-two-plain-reloads/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/debug-worker-migration/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/final-revalidation-browser/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/fix-1-browser-green/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/fix-1-staged-diffcheck-full.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/fix-2-partial-red/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/green-app-1/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/green-app-2/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/green-app-4/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/green-complete-1/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/green-full-isolated/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/green-island-both/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/qualified-browser-3/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/qualified-browser/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/red-app-corrected/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/red-island-blur/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/red-local-core-connectivity/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/red-lost-put/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/red-refresh-layout-settled/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/red-refresh-layout/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/red-save-press-revalidation-cleanup/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/red-unchanged-validation/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/red-worker-owned-cleanup/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/red-worker-unrelated-cache/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/release-final-browser/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/sw-final-browser/stdout.txt",
+    ":(exclude)docs/evidence/health-app-2026-11-03/sw-owned-outage-browser/stdout.txt"
+  ],
+  "note": "Measured code head9aed before later documentation-only commit; exact raw captured bytes retained. Full74 diagnostics in34 immutable raw files, separate exact-path source/doc check0. No Git/config/attributes/CI/test exception or universal clean claim."
+}

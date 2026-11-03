@@ -26,7 +26,15 @@ function hold(page: Page, pattern: string | RegExp) {
   const held: Route[] = [];
   let open = false;
   const ready = page.route(pattern, (r) => { if (open || r.request().method() !== 'GET') r.fallback(); else held.push(r); });
-  return { ready, release: async () => { open = true; await page.unroute(pattern); for (const r of held.splice(0)) await r.fallback().catch(() => {}); } };
+  return {
+    ready, paths: () => held.map(r => new URL(r.request().url()).pathname),
+    releasePath: async (path: string) => {
+      const matches = held.filter(r => new URL(r.request().url()).pathname === path);
+      assert.equal(matches.length, 1, `one real held GET for ${path}`);
+      const route = matches[0]!; held.splice(held.indexOf(route), 1); await route.fallback();
+    },
+    release: async () => { open = true; await page.unroute(pattern); for (const r of held.splice(0)) await r.fallback().catch(() => {}); },
+  };
 }
 
 test('M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real units', async (t) => {
@@ -36,7 +44,9 @@ test('M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real 
   try {
     const d = await device(b, DESKTOP);
     await d.page.clock.install();
-    const h = hold(d.page, /\/api\/v1\/(tasks|problems|health|profile|identity|memory|triggers|messages|workers|mesh|resilience)/);
+    // Hold current and future Core GETs, including Caps. Setup precedes boot; events is the
+    // live transport. Neither is a counted data part, and both must remain live.
+    const h = hold(d.page, /\/api\/v1\/(?!setup(?:[/?]|$)|events(?:[/?]|$))/);
     await h.ready;
     await d.page.goto(`${m.base}/tasks`);
     await d.page.waitForSelector('html[data-ready]');
@@ -51,10 +61,33 @@ test('M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real 
     assert.match(w[0]!.text, /^Loading Tasks…$/, 'it says what it waits for, and nothing more yet');
     await d.page.clock.runFor(10_000);
     w = await indicator(d.page, '#tasks-view [data-waiting]');
-    assert.match(w[0]!.text, /^Loading Tasks… · \d+ of \d+ parts · 1\d s so far · it usually takes under a second$/, `after 10 s: real units and a general estimate, with no history on this device (${w[0]!.text})`);
+    console.log(`M9 all-pending held GETs ${JSON.stringify(h.paths())}; ${w[0]!.text}`);
+    assert.ok(h.paths().includes('/api/v1/caps'), 'Caps is actually pending, not accidentally completed');
+    assert.match(w[0]!.text, /^Loading Tasks… · 0 of 13 parts · 1\d s so far · it usually takes under a second$/, `after 10 s: zero completed real parts and a general estimate, with no history on this device (${w[0]!.text})`);
+    assert.equal(await d.page.locator('#tasks-view [data-waiting]').getAttribute('data-done'), '0');
+    assert.equal(await d.page.locator('#tasks-view [data-waiting]').getAttribute('data-total'), '13');
     const shots = m9Shots();
     if (shots) await d.page.screenshot({ path: join(shots, 'waiting-tasks-after-10s.png') });
     assert.doesNotMatch(w[0]!.text, /%/, 'no percentage');
+    // A separate positive control in the same wait: only the actual Caps read completes.
+    // Real partial work must switch from elapsed/usual words to the measured-rate estimate.
+    const caps = d.page.waitForResponse(r => new URL(r.url()).pathname === '/api/v1/caps');
+    await h.releasePath('/api/v1/caps');
+    assert.equal((await caps).status(), 200);
+    await d.page.waitForFunction(() => document.querySelector('#tasks-view [data-waiting]')?.getAttribute('data-done') === '1');
+    await d.page.clock.runFor(1000); // the existing wait clock updates its words once per second
+    const partial = await d.page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>('#tasks-view [data-waiting]')!;
+      return { text: (el.textContent ?? '').replace(/\s+/g, ' ').trim(), elapsed: Date.now() - Number(el.dataset.since), total: el.dataset.total };
+    });
+    const rate = /^Loading Tasks… · 1 of 13 parts · about (\d+) minutes left$/.exec(partial.text);
+    assert.ok(rate, `one completed real part has a rate-based estimate: ${partial.text}`);
+    assert.equal(partial.total, '13');
+    // Account only for the existing one-second text clock, not a guessed completion/default.
+    const minutes = Number(rate[1]);
+    assert.ok(minutes >= Math.round((partial.elapsed - 1000) * 12 * 1.2 / 60_000) && minutes <= Math.round(partial.elapsed * 12 * 1.2 / 60_000), 'estimate follows actual elapsed time and twelve remaining real parts');
+    assert.doesNotMatch(partial.text, /so far|usually|%/);
+    console.log(`M9 only-Caps-completed ${JSON.stringify(partial)}`);
     await h.release();
     await settled(d.page, 'tasks');
     assert.equal(await d.page.locator('#tasks-view [data-waiting]').count(), 0, 'the indicator goes when the data is in');

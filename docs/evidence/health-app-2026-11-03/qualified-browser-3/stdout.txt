@@ -1,0 +1,42 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+HEALTH RUNTIME chromium=141.0.7390.37 node=v26.3.1
+HEALTH chromium/phone: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH chromium/desktop: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH chromium/tablet: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH chromium/halfopen: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+✔ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (29912.895964ms)
+HEALTH RUNTIME webkit=26.0 node=v26.3.1
+✖ Health app: webkit Home save, freshness, SSE draft island and native diagnostics (9634.538579ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 40032.462497
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:37:3
+✖ Health app: webkit Home save, freshness, SSE draft island and native diagnostics (9634.538579ms)
+  AssertionError [ERR_ASSERTION]: no unexpected browser errors outside intentional outage/offline failures
+  + actual - expected
+  
+  + [
+  +   'Failed to load resource: WebKit encountered an internal error'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///work/tests/ui/health-caps-diagnostics.test.ts:262:16)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'Failed to load resource: WebKit encountered an internal error' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

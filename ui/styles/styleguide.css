@@ -71,3 +71,4 @@
 /* The Backups state selector must fit the entry even with longer role labels. */
 #sg-backups-settings .sg-pick { flex-wrap: wrap; }
 #sg-backups-settings .sg-pick select { min-width: 0; max-width: 100%; }
+.health-specimen { max-width: var(--layout-content-max); padding: var(--space-5); }

@@ -23,6 +23,8 @@ Both arrangements reached each path named below. “Reached” proves the render
 
 The 70-item register includes API-only controls, missing discovery, inert wiring and deliberately unbuilt scope; **70 does not mean 70 missing router views**. No backend implementation/eval history is erased by declaring its app workflow unshipped. Existing UNPROVEN, advisory, stand-in and privacy/security limits remain.
 
+Health-only update, 2026-11-03: C18/C19 and O14/O15 below now use the [new app proof](health-app-2026-11-03/README.md) and [exact phone/rail paths](health-app-2026-11-03/capability-mapping.json). The earlier schema-3 JSON, raw crawl evidence and independent audit remain historical; no other capability claim is changed.
+
 ## Capability mapping
 
 All C identifiers and original L numbers are pinned to the baseline inventory, so later line shifts do not change their identity. “Both” means both phone and rail actual paths in the JSON, never a shared navigation-array inference.
@@ -46,8 +48,8 @@ All C identifiers and original L numbers are pinned to the baseline inventory, s
 | C15 / L26 | Golden-task eval harness (regression gate, capability suite, injection suite) | `/settings#models` | CI/developer mechanism, not an app-run eval suite. Models reached; wired score summaries source-audited, not exercised with scored models; no run/case explorer. | O12 |
 | C16 / L27 | Model-swap scorecard per provider/model | `/settings#models` | Partial: Models reached; assigned/recommended score summaries are wired by source audit. Scored records conditional; full provider/model history and app eval runs not shipped. | O12 |
 | C17 / L28 | Claims register (capabilities claimed vs. what the suite demonstrates) | No normal-Home surface claimed | CI/developer-only claims register; not an app feature. | O13 |
-| C18 / L29 | Cost ceilings on autonomous work (per task and per day: steps, tokens, priced dollars), loop detector, resume as a new approval | No normal-Home surface claimed | Not shipped: autonomous-run caps inert; model inference Cloud budget is a different feature. | O14 |
-| C19 / L30 | One-click diagnostics bundle, redacted by construction (no secret, no personal content, local only) | No normal-Home surface claimed | Not shipped: diagnostics route/Health download unwired; integrity scrub absent. | O15 |
+| C18 / L29 | Cost ceilings on autonomous work (per task and per day: steps, tokens, priced dollars), loop detector, resume as a new approval | `/health` via actual Home phone/rail clicks (2026-11-03 proof) | Health task/day controls, explicit Unlimited and month spend reached; real save/readback/reload and SSE/freshness proof passed. Backend live caps unchanged; provider-managed reports/other-node spend excluded; Models cloud budget separate. | O14 |
+| C19 / L30 | One-click diagnostics bundle, redacted by construction (no secret, no personal content, local only) | `/health` via actual Home phone/rail clicks (2026-11-03 proof) | Native Diagnostics control reached; actual JSON attachment/headers/redaction/no-retention proof passed. Known-secret scrubbing is bounded; integrity scrub absent. | O15 |
 | C20 / L31 | Decision templates (cached, validated, versioned) | `/settings#backups` | Partial surface: Changes list reached; existing template review/ship/rollback conditional. Template authoring/registry/cache/dry-run controls absent. | O10, O16 |
 | C21 / L32 | Approval tiers (NOVA-SPEC §6) | `/settings#privacy`, `/tasks` | Partial: legacy permission switches and Tasks reached; populated approval sheets conditional. Full per-capability tier editor absent. | O17, O64 |
 | C22 / L33 | Governed self-modification (ADR-9 pipeline) + the foundry | `/settings#backups` | Partial surface: Changes list reached; existing proposal review/ship/rollback conditional. Proposal creation and foundry invocation API-only. | O16, O18 |
@@ -102,8 +104,8 @@ The independent audit found all of the following, including narrow setup, histor
 | O11 | 23,25 | Full ingest-screen/decision-record history browser | ingest_screen and decision_record backend logging; Health aggregate/seat lines and per-capture verdict are narrower than a general screen/decision log. |
 | O12 | 26,27 | Run evaluation and inspect every case/run/provider/model card history | scripts/evals.sh and scorecard storage/routes; Models summaries do not provide an eval runner or case/run explorer. |
 | O13 | 28 | Claims register UI | tests/evals/claims.ts is CI/developer-only; no app register view. |
-| O14 | 29 | Autonomous-run task/day steps/tokens/dollars caps, loop-resume approval settings | core/caps exports/hooks are inert in composition. Models cloud budget is a different mechanism; no caps form/Health spend/replicated usage. |
-| O15 | 30 | One-click diagnostic download/integrity scrub | diagnosticsRoutes exported but not composed; no Health link. Scrub itself not built per inventory. |
+| O14 | 29 | Autonomous-run task/day steps/tokens/dollars caps, loop-resume approval settings | 2026-11-03: Health form and month totals reached through Home in both layouts; real finite/null save, validation and SSE/freshness verified. Core live caps and existing approval/resume unchanged. Provider reports/replicated spend remain follow-up; Models cloud budget separate. |
+| O15 | 30 | One-click diagnostic download/integrity scrub | 2026-11-03: native Health download reached through Home and functionally verified in Chromium/WebKit. Integrity scrub still not built. Known-secret redaction does not guarantee arbitrary free-text privacy. |
 | O16 | 31,33,51 | Propose a template/extension/config/rules/design change and configure its declarative tests/probe | POST /changes (changes/pipeline.ts:367); Changes list can review/ship existing records, not author one. |
 | O17 | 32 | Full four-tier per-capability policy editor | Only legacy tool yes/ask switches at #perms and task approval sheets; full policy explicitly not built. |
 | O18 | 33,69 | Foundry need/kind/model authoring invocation | POST /foundry core/index.ts:1516–1518. No foundry UI or chat tool in src/tools.js. |

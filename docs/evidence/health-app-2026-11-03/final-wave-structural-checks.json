@@ -1,0 +1,50 @@
+{
+  "base": "6ea82d7b211375dc390aed44bb2f53fed4f51500",
+  "existing_tracked_pngs_checked": 818,
+  "all_existing_pngs_byte_identical": true,
+  "current_visual_entries": 4,
+  "new_public_png_count": 2,
+  "reused_exact_specimen_count": 2,
+  "historical_matrix_entries_retained": 36,
+  "intermediate_png_count": 18,
+  "ui_src_dependencies_styles_unchanged": true,
+  "workflow_only_changes_checkout_depth0_to2": true,
+  "current_source_hashes_match_qualified_runs": true,
+  "prior_source_manifest_archived_byte_exact": true,
+  "debug_source_snapshots": {
+    "initial-red.test.ts.txt": "5bdcff04ccca5ae35568944cab48c24445b9a4dad41a37238e3ac6575bfaecae",
+    "framing-probe.test.ts.txt": "27f92009a761c553ce8a04b06dae1db6dc86f417844496ef87b4d9402d273ddb",
+    "diagnosticsPaint.ts.txt": "9425aacbe22e3088aef6e471d9d299dcf94618d9a0d6db32e4d1a4a93d3a4c1b"
+  },
+  "active_bad_witness_replacements": [
+    {
+      "previous": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-diagnostics-download-halfopen.png",
+      "previous_sha256": "279fe117fe776ef619befe5cf44ffbe764ecaae076d07f3c3f30c6841f0f6434",
+      "current": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/final-wave/chromium/app-diagnostics-download-halfopen.png",
+      "current_sha256": "a73c8d3683bfc5212a74ade4e74455997e61d921afe0ba94e0547d3259122caa",
+      "reused_prior_public_bytes": false
+    },
+    {
+      "previous": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-diagnostics-download-phone.png",
+      "previous_sha256": "84255a754f4ea63d44d6b5b89124b89ba725391836929e1afd44f1b1a11fd7b3",
+      "current": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/final-wave/chromium/app-diagnostics-download-phone.png",
+      "current_sha256": "cda96136d9b0a67ad28f53a974b059a350d89e582437ab43005057bd721c0b61",
+      "reused_prior_public_bytes": false
+    },
+    {
+      "previous": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-diagnostics-halfopen.png",
+      "previous_sha256": "abad550d67efc61c78154b9e310da8e1685c6ec287106b18e818276286d9aac7",
+      "current": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-diagnostics-halfopen.png",
+      "current_sha256": "abad550d67efc61c78154b9e310da8e1685c6ec287106b18e818276286d9aac7",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "previous": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-diagnostics-phone.png",
+      "previous_sha256": "731d9970073dcc7f10c102760f3d8a45d98e1214471ed412abbd439c195d82b8",
+      "current": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-diagnostics-phone.png",
+      "current_sha256": "731d9970073dcc7f10c102760f3d8a45d98e1214471ed412abbd439c195d82b8",
+      "reused_prior_public_bytes": true
+    }
+  ],
+  "packaging_note": "An initial final-* glob included older historical run images in new mutable metadata; corrected to the exact seven current command labels before staging. Original image/log bytes never changed."
+}

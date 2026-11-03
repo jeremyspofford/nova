@@ -1,0 +1,64 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ a stuck loop is stopped before its 5th identical call, says what it spent, and its resume waits for an OK; approved, it continues and reports (243.860163ms)
+✔ the day’s ceiling stops the next task before its first model call, and offers its resume (165.127095ms)
+✔ without the caps, the same loop runs to max_tool_steps (today’s only bound), and nothing is offered (113.512148ms)
+✔ a person’s own conversation is metered even above every autonomous ceiling (103.261757ms)
+✔ session log counts inspect directory entries only, including main, run and helper logs without interpreting content (1.097671ms)
+✖ production diagnostics downloads fresh numeric Era2 counts with person access and no persisted bundle or excluded content (208.738969ms)
+✔ production diagnostics refuses a populated vault after real key loss, while empty and readable vaults download (137.863823ms)
+▶ production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors
+  ✔ list throws (86.801051ms)
+  ✔ second lookup throws (88.157578ms)
+  ✔ second lookup missing (86.919045ms)
+  ✔ key lookup throws (94.756044ms)
+  ✔ key file unreadable (92.132121ms)
+  ✔ identity unreadable (78.735916ms)
+  ✔ identity malformed (73.122964ms)
+  ✔ identity incomplete (77.025639ms)
+✔ production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors (680.329125ms)
+✔ the scrubber: keys that name secrets, every known value in every form, and secret-shaped strings (2.183551ms)
+✔ the bundle holds no canary from anywhere Nova keeps a secret, no personal content, and still says what is going on (197.028229ms)
+✔ Nova has no way to send the bundle anywhere: the builder imports no network module and writes no file (0.663787ms)
+(node:69) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ work costs renders Caps totals without treating unpriced or estimated tokens as extra usage (10.344334ms)
+✔ work costs escapes provider, model, period, error and input strings without mutation (0.625374ms)
+✔ unloaded and unavailable costs cannot save; null is explicitly unlimited (0.939417ms)
+✔ diagnostics supplies a native attachment link and no live action when unavailable (0.174486ms)
+(node:76) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the bands: nothing under 1 s, an indicator to 10 s, then real progress (0.7063ms)
+✔ progress is in real units: no fraction without a total, never full before it is done (0.657594ms)
+✔ a general estimate, in words, from a measured rate only, erring long (0.243993ms)
+✔ a long wait says what is done, an estimate where there is a basis, else the time so far (0.147066ms)
+✔ after 10 s there is always a general estimate: this device’s own history, else what is usual for the kind of wait (1.108929ms)
+✔ a waiting line carries when the wait began, so a redraw keeps its age; it is hidden for its first second (0.848108ms)
+✔ no artificial delay: every timer in the PWA is named for what it is (4.705275ms)
+✔ no fake work: no “checking…” or padding, and every wait is drawn by wait.js (0.632841ms)
+✔ no simulated streaming: text grows only from the server’s deltas, never replayed (1.666866ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 31
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3098.959486
+
+✖ failing tests:
+
+test at tests/core/diagnostics-composition.test.ts:44:1
+✖ production diagnostics downloads fresh numeric Era2 counts with person access and no persisted bundle or excluded content (208.738969ms)
+  AssertionError [ERR_ASSERTION]: The "string" argument must be of type string. Received type object (null)
+      at TestContext.<anonymous> (file:///work/tests/core/diagnostics-composition.test.ts:63:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: /^[a-f0-9]{7,40}$/,
+    operator: 'match',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

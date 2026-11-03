@@ -1,0 +1,6 @@
+tree f9ca9b32abae909ec2109f940245a7c0f2f06815
+parent c071b5360224bd1e83b5e352a1c05bd448237a2f
+author Jeremy Spofford <23528024+jeremyspofford@users.noreply.github.com> 1793724265 -0500
+committer Jeremy Spofford <23528024+jeremyspofford@users.noreply.github.com> 1793724265 -0500
+
+fix(ui): refresh Health spend on entry

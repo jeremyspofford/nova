@@ -1,0 +1,77 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (1459.288511ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2035.338279
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:33:3
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (1459.288511ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Month to date/. Input:
+  
+  'MONTH TO DATE · 2026-11\n' +
+    '\n' +
+    '$0.00 priced USD\n' +
+    '\n' +
+    '0 tokens · 0 estimated · 0 unpriced\n' +
+    '\n' +
+    'No model usage recorded this month. Usage from Nova runner work and your conversations will appear here.\n' +
+    '\n' +
+    'Nova runner usage on this machine; provider-managed tasks are not included. Estimated tokens are part of the total; unpriced tokens are not included in priced USD.\n' +
+    '\n' +
+    'AUTONOMOUS WORK LIMITS\n' +
+    '\n' +
+    'Nova stops autonomous runner work at a limit and needs new approval to resume. Your own conversations are metered, but not capped.\n' +
+    '\n' +
+    'PER TASK\n' +
+    '\n' +
+    'Weighted steps\n' +
+    '\n' +
+    'Repeated tool calls count more.\n' +
+    '\n' +
+    'Unlimited\n' +
+    '\n' +
+    'Tokens\n' +
+    '\n' +
+    'Unlimited\n' +
+    '\n' +
+    'Priced USD\n' +
+    '\n' +
+    'Unlimited\n' +
+    'PER DAY\n' +
+    '\n' +
+    'Weighted steps\n' +
+    '\n' +
+    'Repeated tool calls count more.\n' +
+    '\n' +
+    'Unlimited\n' +
+    '\n' +
+    'Tokens\n' +
+    '\n' +
+    'Unlimited\n' +
+    '\n' +
+    'Priced USD\n' +
+    '\n' +
+    'Unlimited\n' +
+    'Save limits\n' +
+    '\n' +
+    'How these limits work'
+  
+      at healthFromHome (file:///work/tests/ui/health-caps-diagnostics.test.ts:28:10)
+      at async TestContext.<anonymous> (file:///work/tests/ui/health-caps-diagnostics.test.ts:58:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'MONTH TO DATE · 2026-11\n\n$0.00 priced USD\n\n0 tokens · 0 estimated · 0 unpriced\n\nNo model usage recorded this month. Usage from Nova runner work and your conversations will appear here.\n\nNova runner usage on this machine; provider-managed tasks are not included. Estimated tokens are part of the total; unpriced tokens are not included in priced USD.\n\nAUTONOMOUS WORK LIMITS\n\nNova stops autonomous runner work at a limit and needs new approval to resume. Your own conversations are metered, but not capped.\n\nPER TASK\n\nWeighted steps\n\nRepeated tool calls count more.\n\nUnlimited\n\nTokens\n\nUnlimited\n\nPriced USD\n\nUnlimited\nPER DAY\n\nWeighted steps\n\nRepeated tool calls count more.\n\nUnlimited\n\nTokens\n\nUnlimited\n\nPriced USD\n\nUnlimited\nSave limits\n\nHow these limits work',
+    expected: /Month to date/,
+    operator: 'match',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

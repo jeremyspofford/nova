@@ -1,0 +1,89 @@
+{
+  "date": "2026-11-03",
+  "evidence": "delivery-crawl/output/navigation/<layout>-report.json",
+  "layouts": {
+    "phone": {
+      "required": {
+        "homeTopology": true,
+        "devicesTopology": true,
+        "captureCategory": true,
+        "healthCosts": true,
+        "healthDiagnostics": true
+      },
+      "healthCosts": [
+        {
+          "href": "/health",
+          "label": "Health",
+          "section": "home"
+        }
+      ],
+      "healthDiagnostics": [
+        {
+          "href": "/health",
+          "label": "Health",
+          "section": "home"
+        }
+      ],
+      "documentRequests": [
+        "http://127.0.0.1:40451/"
+      ],
+      "forbidden": []
+    },
+    "rail": {
+      "required": {
+        "homeTopology": true,
+        "devicesTopology": true,
+        "captureCategory": true,
+        "healthCosts": true,
+        "healthDiagnostics": true
+      },
+      "healthCosts": [
+        {
+          "href": "/health",
+          "label": "Health",
+          "section": "aside"
+        }
+      ],
+      "healthDiagnostics": [
+        {
+          "href": "/health",
+          "label": "Health",
+          "section": "aside"
+        }
+      ],
+      "documentRequests": [
+        "http://127.0.0.1:42109/"
+      ],
+      "forbidden": []
+    }
+  },
+  "capabilities": {
+    "C18": {
+      "orphan": "O14",
+      "surface": "/health",
+      "controls": [
+        "task.iterations",
+        "task.tokens",
+        "task.usd",
+        "day.iterations",
+        "day.tokens",
+        "day.usd",
+        "six explicit Unlimited checkboxes",
+        "Save limits",
+        "month totals"
+      ],
+      "behavior": "Real finite/null save, readback/reload, invalid no PUT, freshness and SSE ordering in final-browser; Core/runner/backend unchanged.",
+      "remaining": "Provider reports and other-node spend excluded; Models budgets separate; existing resume approval unchanged."
+    },
+    "C19": {
+      "orphan": "O15",
+      "surface": "/health",
+      "controls": [
+        "native Download diagnostics anchor"
+      ],
+      "behavior": "Native browser attachment parsed, real serialized HTTP headers/no-store/filename/redaction marker/excluded fixture canaries/no retained server file checked in final-browser.",
+      "remaining": "Integrity scrub unbuilt; known-secret scrubbing does not guarantee arbitrary free-text privacy."
+    }
+  },
+  "source_run": "delivery-crawl/command.json"
+}
