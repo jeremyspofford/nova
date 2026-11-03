@@ -558,7 +558,53 @@ function testRunSheet(t, run, where) {
 </form>`;
 }
 
-export function approvalSheet(t, { worker = null, run = null } = {}) {
+// Tier 3 on the hub's own screen is confirmed with a passkey (Insertion #3 T2): it proves a person
+// is here, not just a program on this computer. Tiers 0–2 are unchanged. Proposed design: shown in
+// the styleguide only until the owner approves it; no app sheet passes `passkey` yet.
+export const PASSKEY_STATES = ['ready', 'waiting', 'cancelled', 'failed', 'expired', 'no-passkey', 'unavailable', 'rate', 'confirmed'];
+const PASSKEY_LINES = {
+  ready: ['status', 'Confirm with your passkey. Nova checks that you are here, not only a program on this computer.'],
+  waiting: ['status', 'Waiting for your passkey. Use your security key, fingerprint or screen lock when your browser asks.'],
+  cancelled: ['status', 'No passkey was used, so nothing was approved.'],
+  failed: ['alert', 'That passkey didn’t confirm this request, so nothing was approved.'],
+  expired: ['status', 'This request ran out of time before it was confirmed, so nothing was approved. Ask again for a fresh one.'],
+  'no-passkey': ['status', 'Actions like this need a passkey on Nova’s own screen. Add one first; nothing is approved until then.'],
+  unavailable: ['alert', 'This browser can’t use a passkey here. Open Nova on this computer’s own address (localhost) in a browser that supports passkeys. There is no other way to confirm this.'],
+  rate: ['alert', 'Too many tries. Wait a minute, then try again.'],
+  confirmed: ['status', 'Confirmed with your passkey.'],
+};
+export function passkeyConfirm({ state = 'ready', confirmed = false } = {}) {
+  const [role, line] = PASSKEY_LINES[state] ?? PASSKEY_LINES.ready;
+  const box = ['ready', 'cancelled', 'failed'].includes(state)
+    ? `<label class="confirm"><input type="checkbox" name="confirm" required${confirmed ? ' checked' : ''}> I understand, and I want Nova to do this.</label>` : '';
+  return `${box}<p class="settings-note passkey-line" role="${role}" data-passkey-state="${esc(state)}">${esc(line)}</p>`;
+}
+export function passkeyAction({ state = 'ready', confirmed = false } = {}) {
+  const b = (action, label, o = {}) => `<button type="${o.submit ? 'submit' : 'button'}" class="btn ${o.quiet ? 'quiet' : 'primary'}" data-action="${action}"${o.disabled ? ' disabled' : ''}${o.busy ? ' aria-busy="true"' : ''}>${esc(label)}</button>`;
+  if (state === 'waiting') return `${b('passkey-wait', 'Waiting for your passkey…', { disabled: true, busy: true })}${b('passkey-stop', 'Stop waiting', { quiet: true })}`;
+  if (state === 'expired') return b('passkey-ask-again', 'Ask again');
+  if (state === 'no-passkey') return b('passkey-add', 'Add a passkey');
+  if (state === 'unavailable' || state === 'confirmed') return '';
+  if (state === 'rate') return b('passkey-confirm', 'Confirm with passkey', { disabled: true });
+  return b('passkey-confirm', state === 'ready' ? 'Confirm with passkey' : 'Try again', { submit: true, disabled: !confirmed });
+}
+// Adding the console's passkey (later: Settings › Security). Nova keeps only its public key.
+export const PASSKEY_SETUP_STATES = ['start', 'waiting', 'added', 'failed', 'unavailable'];
+export function passkeySetup({ state = 'start', name = 'This computer’s passkey' } = {}) {
+  const lines = {
+    start: ['status', 'Tier-3 actions on Nova’s own screen will ask for this passkey. Your browser will ask you to create it with your security key, fingerprint or screen lock. Nova keeps only its public key.'],
+    waiting: ['status', 'Waiting for your browser to create the passkey.'],
+    added: ['status', `Passkey added: ${name}. Tier-3 actions now ask for it.`],
+    failed: ['alert', 'No passkey was added. Nothing changed; try again when you are ready.'],
+    unavailable: ['alert', 'This browser can’t create a passkey here. Open Nova on this computer’s own address (localhost) in a browser that supports passkeys.'],
+  };
+  const [role, line] = lines[state] ?? lines.start;
+  const action = state === 'waiting' ? '<button type="button" class="btn primary" data-action="passkey-setup-wait" disabled aria-busy="true">Waiting for your browser…</button>'
+    : ['start', 'failed'].includes(state) ? `<button type="button" class="btn primary" data-action="passkey-setup">${state === 'failed' ? 'Try again' : 'Add a passkey'}</button>` : '';
+  return `<section class="passkey-setup" aria-labelledby="passkey-setup-title"><h3 class="settings-group-title" id="passkey-setup-title">Passkey for tier-3 actions</h3><p class="settings-note" role="${role}" data-passkey-setup-state="${esc(state)}">${esc(line)}</p>${action ? `<div class="connection-actions">${action}</div>` : ''}</section>`;
+}
+
+export function approvalSheet(t, { worker = null, run = null, passkey = null } = {}) {
   const tier = Number(t.approval_tier) >= 3 ? 3 : 2;
   const EGRESS = { none: 'stays on this machine', local: 'stays on your devices', remote: 'reaches the internet' };
   const where = worker ? `${esc(worker.name ?? worker.id)}${EGRESS[worker.egress] ? ` · ${EGRESS[worker.egress]}` : ''}` : esc(t.owner);
@@ -568,9 +614,9 @@ export function approvalSheet(t, { worker = null, run = null } = {}) {
   <h2 class="sheet-title" id="sheet-title">${esc(t.title)}</h2>
   <p class="sheet-line">${esc(t.brief?.goal ?? '')}</p>
   <dl class="facts"><dt>Who does it</dt><dd>${where}</dd><dt>Privacy</dt><dd>${esc(PRIVACY_WORDS[t.privacy_mode] ?? t.privacy_mode ?? '')}</dd><dt>Why it asks</dt><dd>${esc(TIER_WORDS[tier])}</dd></dl>
-  ${tier === 3 ? '<label class="confirm"><input type="checkbox" name="confirm" required> I understand, and I want Nova to do this.</label>' : ''}
+  ${tier === 3 && passkey ? passkeyConfirm(passkey) : tier === 3 ? '<label class="confirm"><input type="checkbox" name="confirm" required> I understand, and I want Nova to do this.</label>' : ''}
   <div class="sheet-actions">
-    <button type="submit" class="btn primary" data-action="approve" value="approve"${tier === 3 ? ' disabled' : ''}>${tier === 3 ? 'Confirm' : 'Approve'}</button>
+    ${tier === 3 && passkey ? passkeyAction(passkey) : `<button type="submit" class="btn primary" data-action="approve" value="approve"${tier === 3 ? ' disabled' : ''}>${tier === 3 ? 'Confirm' : 'Approve'}</button>`}
     <button type="button" class="btn" data-action="cancel-task">Cancel the task</button>
     <button type="button" class="btn quiet" data-action="close-sheet">Not now</button>
   </div>
