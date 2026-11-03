@@ -1,0 +1,198 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ production diagnostics refuses a populated vault after real key loss, while empty and readable vaults download (222.6949ms)
+▶ production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors
+  ✖ list throws (89.121336ms)
+  ✖ second lookup throws (84.10429ms)
+  ✖ second lookup missing (83.004214ms)
+  ✖ key lookup throws (82.169231ms)
+  ✖ key file unreadable (84.114853ms)
+  ✖ identity unreadable (84.926633ms)
+  ✖ identity malformed (84.384198ms)
+  ✖ identity incomplete (86.562917ms)
+✖ production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors (680.214535ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 0
+ℹ fail 10
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1208.402572
+
+✖ failing tests:
+
+test at tests/core/diagnostics-composition.test.ts:203:1
+✖ production diagnostics refuses a populated vault after real key loss, while empty and readable vaults download (222.6949ms)
+  AssertionError [ERR_ASSERTION]: failed scan response exposed private data
+      at refusedScan (file:///workspace/tests/core/diagnostics-composition.test.ts:194:14)
+      at TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:226:5)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/core/diagnostics-composition.test.ts:233:40
+✖ list throws (89.121336ms)
+  AssertionError [ERR_ASSERTION]: failed scan response exposed private data
+      at refusedScan (file:///workspace/tests/core/diagnostics-composition.test.ts:194:14)
+      at TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:260:7)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:233:32)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/core/diagnostics-composition.test.ts:233:40
+✖ second lookup throws (84.10429ms)
+  AssertionError [ERR_ASSERTION]: failed scan response exposed private data
+      at refusedScan (file:///workspace/tests/core/diagnostics-composition.test.ts:194:14)
+      at TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:260:7)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:233:32)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/core/diagnostics-composition.test.ts:233:40
+✖ second lookup missing (83.004214ms)
+  AssertionError [ERR_ASSERTION]: failed scan response exposed private data
+      at refusedScan (file:///workspace/tests/core/diagnostics-composition.test.ts:194:14)
+      at TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:260:7)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:233:32)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/core/diagnostics-composition.test.ts:233:40
+✖ key lookup throws (82.169231ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  200 !== 503
+  
+      at refusedScan (file:///workspace/tests/core/diagnostics-composition.test.ts:197:10)
+      at TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:260:7)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:233:32)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 200,
+    expected: 503,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/diagnostics-composition.test.ts:233:40
+✖ key file unreadable (84.114853ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  200 !== 503
+  
+      at refusedScan (file:///workspace/tests/core/diagnostics-composition.test.ts:197:10)
+      at TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:260:7)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:233:32)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 200,
+    expected: 503,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/diagnostics-composition.test.ts:233:40
+✖ identity unreadable (84.926633ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  200 !== 503
+  
+      at refusedScan (file:///workspace/tests/core/diagnostics-composition.test.ts:197:10)
+      at TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:260:7)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:233:32)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 200,
+    expected: 503,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/diagnostics-composition.test.ts:233:40
+✖ identity malformed (84.384198ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  200 !== 503
+  
+      at refusedScan (file:///workspace/tests/core/diagnostics-composition.test.ts:197:10)
+      at TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:260:7)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:233:32)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 200,
+    expected: 503,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/diagnostics-composition.test.ts:233:40
+✖ identity incomplete (86.562917ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  200 !== 503
+  
+      at refusedScan (file:///workspace/tests/core/diagnostics-composition.test.ts:197:10)
+      at TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:260:7)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/diagnostics-composition.test.ts:233:32)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 200,
+    expected: 503,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

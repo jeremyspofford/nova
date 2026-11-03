@@ -1,0 +1,12 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ session log counts inspect directory entries only, including main, run and helper logs without interpreting content (0.967877ms)
+✔ production diagnostics downloads fresh numeric Era2 counts with person access and no persisted bundle or excluded content (395.865112ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 748.208278
+no-Kubernetes tripwire: never fired

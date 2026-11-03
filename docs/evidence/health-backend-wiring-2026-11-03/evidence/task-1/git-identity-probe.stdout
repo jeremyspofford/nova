@@ -1,0 +1,3 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+254d75a
+no-Kubernetes tripwire: never fired

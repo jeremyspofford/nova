@@ -1,0 +1,26 @@
+{
+  "command": [
+    "git",
+    "diff",
+    "--exit-code",
+    "0134b074b3c97ed67c4d5765a1ba788be1205145",
+    "--",
+    "ui",
+    "package.json",
+    "package-lock.json",
+    "docs/plans/health-backend-wiring-2026-11-03.md",
+    "docs/builder-packet/WORK-LEDGER-AND-VERIFICATION.md",
+    "src/core/child-env.ts",
+    "src/core/ledger.ts",
+    "src/core/diagnostics/index.ts",
+    "src/core/models/index.ts",
+    "tests/core/caps.test.ts",
+    "tests/core/diagnostics.test.ts",
+    "tests/acceptance/egress-guard.ts",
+    "scripts/tripwire.sh"
+  ],
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": "",
+  "note": "Final protection after parent-authorized two current C18/C19 inventory row accuracy corrections; app Not shipped flags retained."
+}

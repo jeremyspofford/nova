@@ -1,0 +1,111 @@
+[
+  {
+    "command": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "f9ffbb0c2b241b60ba5161cc55bbdb8c3462b819\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "rev-parse",
+      "HEAD^{tree}"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "10865860c54b82791c56734c88d5b8767fdfeeda\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "branch",
+      "--show-current"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "codex/health-backend-wiring\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "status",
+      "--porcelain=v1"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--check",
+      "0134b074b3c97ed67c4d5765a1ba788be1205145..HEAD"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--name-only",
+      "254d75ab978c33e5aef8f98d18d9b4734ea605a9..HEAD"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "docs/LEDGER.md\ndocs/builder-packet/CAPABILITY-INVENTORY.md\ndocs/evidence/health-backend-wiring-2026-11-03.md\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "log",
+      "--format=%H %s",
+      "0134b074b3c97ed67c4d5765a1ba788be1205145..HEAD"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "f9ffbb0c2b241b60ba5161cc55bbdb8c3462b819 docs: record backend Health activation and verification\n254d75ab978c33e5aef8f98d18d9b4734ea605a9 Mount production diagnostics with private count-only downloads\neddb30b82a0b269eed2ed1d4d9498ac947163cc2 feat(caps): mount Core cost caps in production runner\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--exit-code",
+      "0134b074b3c97ed67c4d5765a1ba788be1205145",
+      "--",
+      "ui",
+      "package.json",
+      "package-lock.json",
+      "docs/plans/health-backend-wiring-2026-11-03.md",
+      "docs/builder-packet/WORK-LEDGER-AND-VERIFICATION.md",
+      "src/core/child-env.ts",
+      "src/core/ledger.ts",
+      "src/core/diagnostics/index.ts",
+      "src/core/models/index.ts",
+      "tests/core/caps.test.ts",
+      "tests/core/diagnostics.test.ts",
+      "tests/acceptance/egress-guard.ts",
+      "scripts/tripwire.sh"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "exact_reviewed_blob_matches_after_final_commit": 11,
+    "host_dependency_mountpoint_empty": true
+  }
+]

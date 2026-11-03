@@ -1,0 +1,19 @@
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Known vault credential must not survive download when vault enumeration is unavailable
+
+true !== false
+
+    at file:///workspace/.superpowers/sdd/health-backend-wiring-2026-11-03/evidence/task-1/review-vault-unavailable.mjs:47:10
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: true,
+  expected: false,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v26.3.1

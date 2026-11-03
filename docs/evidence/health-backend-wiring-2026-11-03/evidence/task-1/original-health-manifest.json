@@ -1,0 +1,272 @@
+[
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/task-2-report.md",
+    "copy": "original-health/task-2-report.md",
+    "sha256": "bc8a7e39c86d9f625524f681b53487ec3d4ed6b9bbb2c9b513ab084b94ee558b",
+    "bytes": 10633
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/task-2-review.md",
+    "copy": "original-health/task-2-review.md",
+    "sha256": "522731a664bbbdcf957a10d245965f412e7405ceb722a37769797e5defab24b6",
+    "bytes": 11781
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/task-2-invocation-history.md",
+    "copy": "original-health/task-2-invocation-history.md",
+    "sha256": "465fb17acb41981fcac340fb164b14cf3c1dbcfe4fc64714b5012ed10af21f66",
+    "bytes": 7423
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/task-3-report.md",
+    "copy": "original-health/task-3-report.md",
+    "sha256": "f818527c6cae6357ca599a913f8d605d47a11e9ac8772889de927f40aa6d1a0d",
+    "bytes": 10251
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/task-3-review.md",
+    "copy": "original-health/task-3-review.md",
+    "sha256": "e2368aa8eff6417ecf96b09a4a27f7da9b4dffc2b4f8b06199096ba09a54d73d",
+    "bytes": 14531
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/affected-isolated.log",
+    "copy": "original-health/evidence/task-2/affected-isolated.log",
+    "sha256": "9b053ed52412e299288fefb49d4c9d4e1129a175dca1e0eac8b019378d4a4d71",
+    "bytes": 10322
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/affected.log",
+    "copy": "original-health/evidence/task-2/affected.log",
+    "sha256": "d56871630156c90f6b83f34f43d40466e5b613f25c3a5ce98c196b09ca4819c5",
+    "bytes": 10322
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/diff-check.log",
+    "copy": "original-health/evidence/task-2/diff-check.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/green-attempt-1.log",
+    "copy": "original-health/evidence/task-2/green-attempt-1.log",
+    "sha256": "5ef5e9697c5709e21a831018adefd174a56516d5ac483946b8347c6cd8985240",
+    "bytes": 2688
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/green-attempt-2.log",
+    "copy": "original-health/evidence/task-2/green-attempt-2.log",
+    "sha256": "cbbce9b624b40378dac478647c8c4ba3ec1a1c70ef86a0683a3aee1c44f77a8d",
+    "bytes": 2308
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/green-attempt-3.log",
+    "copy": "original-health/evidence/task-2/green-attempt-3.log",
+    "sha256": "87bbada0bc03f7293a0fcb6c9cce59ba4e8a83339f3b181e0deea49633e90765",
+    "bytes": 1848
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/red-isolated.log",
+    "copy": "original-health/evidence/task-2/red-isolated.log",
+    "sha256": "e5c8c3585ebbdffc79439af75b7666130a9b9629e84ac8c8956292a53e75476f",
+    "bytes": 4416
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/red.log",
+    "copy": "original-health/evidence/task-2/red.log",
+    "sha256": "524f5f75f376032d2eb6b8463e305d1f9b62aa1f65fb70b7e8ec819ce9f0155a",
+    "bytes": 4161
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/typecheck-attempt-1.log",
+    "copy": "original-health/evidence/task-2/typecheck-attempt-1.log",
+    "sha256": "3ca729a4194b72c352051f0be7594cf1bd9418ee416414ef970b32cc47c3e684",
+    "bytes": 2102
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/typecheck-final.log",
+    "copy": "original-health/evidence/task-2/typecheck-final.log",
+    "sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "bytes": 72
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-2/typecheck.log",
+    "copy": "original-health/evidence/task-2/typecheck.log",
+    "sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0",
+    "bytes": 72
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/affected-final.exit",
+    "copy": "original-health/evidence/task-3/affected-final.exit",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/affected-final.invocation.json",
+    "copy": "original-health/evidence/task-3/affected-final.invocation.json",
+    "sha256": "c6d05f0a852826fab66c4c765059de7024256f529a290d40b0c356c4aa0c141f",
+    "bytes": 2090
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/affected-final.log",
+    "copy": "original-health/evidence/task-3/affected-final.log",
+    "sha256": "51d3e0a45a5e0a913ad8eae2c2ac8cacc0861021d7a6e7ea667e0f96ef685292",
+    "bytes": 13126
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/diff-check.exit",
+    "copy": "original-health/evidence/task-3/diff-check.exit",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/diff-check.invocation.json",
+    "copy": "original-health/evidence/task-3/diff-check.invocation.json",
+    "sha256": "5408afde1b7e2afed2ca790b06391f06bfdff8da63672520cd6fe30d8f6b4916",
+    "bytes": 1531
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/diff-check.log",
+    "copy": "original-health/evidence/task-3/diff-check.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/existing-affected.exit",
+    "copy": "original-health/evidence/task-3/existing-affected.exit",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/existing-affected.invocation.json",
+    "copy": "original-health/evidence/task-3/existing-affected.invocation.json",
+    "sha256": "b878f57714e746a4b87821bababd94e2090bcf05bf7861d2ca2e85c7243c7fb3",
+    "bytes": 2040
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/existing-affected.log",
+    "copy": "original-health/evidence/task-3/existing-affected.log",
+    "sha256": "c1b0a245e9861aade6dce5602bd9e80673998206b3e46cb89b24c6bd966f75c1",
+    "bytes": 12853
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/green-first.exit",
+    "copy": "original-health/evidence/task-3/green-first.exit",
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/green-first.invocation.json",
+    "copy": "original-health/evidence/task-3/green-first.invocation.json",
+    "sha256": "5b7542a4a0bed78f62c2638848ff3fb71864df80d066d1f9df089f49e859e940",
+    "bytes": 1604
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/green-first.log",
+    "copy": "original-health/evidence/task-3/green-first.log",
+    "sha256": "4a71d6f64e3939126c60ab8f8a28f2d369286cbcdf529d01a918f7db9840ee0f",
+    "bytes": 1597
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/green-second.exit",
+    "copy": "original-health/evidence/task-3/green-second.exit",
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/green-second.invocation.json",
+    "copy": "original-health/evidence/task-3/green-second.invocation.json",
+    "sha256": "6745c5342eac69c5d76d85a767f9dc7cf3ef8a79ab8b03879504dd3c624d0e92",
+    "bytes": 1604
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/green-second.log",
+    "copy": "original-health/evidence/task-3/green-second.log",
+    "sha256": "9d81cc5816159195f460651d6b6d38a0266ce9eadf934abe9b391e773302a867",
+    "bytes": 1377
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/green-third.exit",
+    "copy": "original-health/evidence/task-3/green-third.exit",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/green-third.invocation.json",
+    "copy": "original-health/evidence/task-3/green-third.invocation.json",
+    "sha256": "38736ba18f4c0c18f40bcea0dfd31b190ebfad050cba38df5de398f8482da544",
+    "bytes": 1604
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/green-third.log",
+    "copy": "original-health/evidence/task-3/green-third.log",
+    "sha256": "6ef3b582c0ab705c9920ef6be5e2461cd53bcf219685fad5c0a410b956688566",
+    "bytes": 537
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/red.exit",
+    "copy": "original-health/evidence/task-3/red.exit",
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/red.invocation.json",
+    "copy": "original-health/evidence/task-3/red.invocation.json",
+    "sha256": "aa15eb3b95b65bd8c1c7a039caa17d79d001385310b65ebca046e64602070148",
+    "bytes": 1604
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/red.log",
+    "copy": "original-health/evidence/task-3/red.log",
+    "sha256": "09c9dc5e1016aed04d51d0d21b653799ea0e4d5b0455dff30c8054362fda603a",
+    "bytes": 2041
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/run.py",
+    "copy": "original-health/evidence/task-3/run.py",
+    "sha256": "d3f8bca7d681df6bdb607a067e98a42b4adb57523779a51729adcbde715d14ae",
+    "bytes": 1063
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/sha256.json",
+    "copy": "original-health/evidence/task-3/sha256.json",
+    "sha256": "4e24bff8b64f5d5442a1b30a3ffa926565032f12b58aeb8128f024613b718373",
+    "bytes": 2630
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/typecheck-final.exit",
+    "copy": "original-health/evidence/task-3/typecheck-final.exit",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "bytes": 2
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/typecheck-final.invocation.json",
+    "copy": "original-health/evidence/task-3/typecheck-final.invocation.json",
+    "sha256": "eae4cde3946c1130db7db959030d07dc7d1fbfbed4cf80407e4179b7dff8eaac",
+    "bytes": 1532
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/typecheck-final.log",
+    "copy": "original-health/evidence/task-3/typecheck-final.log",
+    "sha256": "dcf10606386ef0899ffa6774ad7a933ec84d9ca5a4efee7c68777baf8bb18626",
+    "bytes": 280
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/typecheck-first.exit",
+    "copy": "original-health/evidence/task-3/typecheck-first.exit",
+    "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "bytes": 2
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/typecheck-first.invocation.json",
+    "copy": "original-health/evidence/task-3/typecheck-first.invocation.json",
+    "sha256": "5883c19232bab57ca3286b1c6776b070f27c0e39510d83bf7d27da176bc7636a",
+    "bytes": 1532
+  },
+  {
+    "source": "/home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/.superpowers/sdd/health-caps-diagnostics-2026-11-03/evidence/task-3/typecheck-first.log",
+    "copy": "original-health/evidence/task-3/typecheck-first.log",
+    "sha256": "991486422b518cfea1e9a5bb4813fc5a9ec7f68dd3835781ece58ab6635b00fe",
+    "bytes": 692
+  }
+]
