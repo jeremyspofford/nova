@@ -103,7 +103,7 @@ Publication/check implementation is complete separately from the unchecked root 
 
 ## Task 8: Consolidated final repair — owner Set C and open integration findings
 
-**Files:** `src/broker/{scrub,broker,store,http,net,protocol}.ts` as actually needed; `src/core/resilience/{reset,checkpoints}.ts`; existing B3 launch fixture and seal-module browser test; focused regression files under `tests/core/` or `tests/ui/` according to runtime; current phase1 plan/limits and owner-findings evidence. Locate `addressClass`'s existing file before editing; no new network stack. Root owns packet generation, final publication/LEDGER/CI/merge/preview.
+**Files:** `src/broker/{scrub,broker,store,http,origin,protocol}.ts` as actually needed; `src/core/resilience/{reset,checkpoints}.ts`; existing B3 launch fixture and seal-module browser test; focused regression files under `tests/core/` or `tests/ui/` according to runtime; current phase1 plan/limits and owner-findings evidence. `addressClass` and `requestPath` are in `src/broker/origin.ts`; no new network stack. Root owns packet generation, final publication/LEDGER/CI/merge/preview.
 
 **Interfaces:** preserve existing fixed broker verbs, answer schema and approval actions; retain `use()` reference resolution. No raw-value getter or P1b consumer switch. Preserve supervisor marker-bound physical cleanup, all existing `STAYS` semantics and source backup-selection rules. Production remains within the existing3000-line broker boundary; no privileged relocation or budget exception. A concrete capacity issue requires the actual reviewable diff and options, not code golf or silent overrun.
 
