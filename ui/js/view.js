@@ -910,5 +910,5 @@ export function renderBackupsSettings(model = {}, { id = 'settings-backups' } = 
   }
   const keyError = recovery.error && recovery.state !== 'unavailable' ? `<p class="settings-note backups-error" role="alert">${esc(recovery.error)}</p>` : '';
   const body = `${reason}${feedback}${editable ? `<form aria-label="Backup settings" aria-busy="${saving}">${fields}${actions}</form>` : fields}<section class="backups-recovery" aria-labelledby="${prefix}-recovery-title"><h3 class="settings-group-title" id="${prefix}-recovery-title">Recovery key</h3><p class="settings-note">For encrypted backup copies. It does not replace Nova Vault recovery factors.</p>${keyBody}${keyError}</section>`;
-  return `<section class="backups-settings" aria-labelledby="${prefix}-title" aria-busy="${saving}">${heading}${body}</section>`;
+  return `<section class="backups-settings" aria-labelledby="${prefix}-title" aria-busy="${saving}">${heading}${body}${state === 'error' && !editable ? `<div class="connection-actions">${button('retry', 'Try again')}</div>` : ''}</section>`;
 }

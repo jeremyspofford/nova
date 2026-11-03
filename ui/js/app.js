@@ -1583,7 +1583,7 @@ function selectSettings(cat) {
 
 // From the list or the sidebar to a category, as its own step in the history.
 function openSettingsCat(cat, { push = true } = {}) {
-  if (push) history.pushState(null, '', `/settings#${cat}`);
+  if (push) { core.hideBackupsKey(); history.pushState(null, '', `/settings#${cat}`); }
   selectSettings(cat);
   el.scroller.scrollTop = 0;
   const heading = el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(cat)}"] h2`);
@@ -1635,6 +1635,7 @@ function moveSettingsResult(dir) {
 }
 
 function chooseSettingsResult(option) {
+  core.hideBackupsKey();
   const target = $(option.dataset.target) ?? el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(option.dataset.cat)}"]`);
   $('settings-search').value = '';
   renderSettingsResults('');

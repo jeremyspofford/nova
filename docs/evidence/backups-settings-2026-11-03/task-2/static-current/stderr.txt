@@ -1,0 +1,4 @@
+npm notice run nova@0.1.0 lint:tokens
+npm notice run node scripts/lint-tokens.js
+npm notice run nova@0.1.0 check:themes
+npm notice run node scripts/check-themes.js

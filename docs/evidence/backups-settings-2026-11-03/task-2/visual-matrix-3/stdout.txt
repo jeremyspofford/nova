@@ -1,0 +1,13 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ Backups app/specimen chromium: four postures, native recovery bands and accessibility (17307.786218ms)
+✔ Backups app/specimen webkit: four postures, native recovery bands and accessibility (26361.46311ms)
+✔ Backups actual missing-key conflict and replica console stay within existing guards (2675.986499ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 46811.552043
+no-Kubernetes tripwire: never fired

@@ -431,7 +431,7 @@ export async function ruleAction(action, id) {
 
 // Backups has its own freshness. A failed read never marks all Core endpoints offline.
 // Plaintext lives only in this closure and the dedicated visible recovery section.
-let backups = { settings: null, draft: null, state: 'loading', errors: {}, notice: '', recovery: { state: 'hidden' }, loadingSince: null, fresh: false };
+const backups = { settings: null, draft: null, state: 'loading', errors: {}, notice: '', recovery: { state: 'hidden' }, loadingSince: null, fresh: false };
 let backupsChanged = () => {};
 let backupsActive = false;
 let backupsEpoch = 0;
@@ -458,6 +458,10 @@ export function enterBackups() { backupsActive = true; }
 let backupsLastPermissions = null;
 function syncBackupsPermissions() {
   const p = backupsPermissions();
+  if (!store.meshFresh && backups.draft && !backupsPending) {
+    backups.state = 'error';
+    backups.notice = 'Device permissions could not be refreshed. Try again.';
+  }
   if (!p.canEdit || (backupsLastPermissions?.console && !p.console)) hideBackupsKey();
   backupsLastPermissions = p;
 }
@@ -469,7 +473,10 @@ export function loadBackups() {
     backups.settings = backupSettingsOnly(r.data.settings);
     backups.draft ??= { ...backups.settings };
     backups.fresh = !r.stale;
-    if (!backupsPending) backups.state = 'ready';
+    if (!backupsPending) {
+      backups.state = backups.fresh && store.meshFresh ? 'ready' : 'error';
+      backups.notice = backups.state === 'error' ? 'Backup settings or device permissions could not be refreshed. Try again.' : '';
+    }
   }).catch(() => {
     backups.fresh = false;
     backups.state = 'error';
@@ -542,7 +549,7 @@ async function saveBackups(clear = null) {
     await load(['profile', 'resilience']);
   } catch (e) {
     backups.state = 'error'; backups.notice = e.message;
-  } finally { backupsPending = false; backupsChanged(); }
+  } finally { backupsPending = false; syncBackupsPermissions(); backupsChanged(); }
 }
 async function revealBackupsKey() {
   if (backupsPending || !backupsActive || backups.recovery.state !== 'confirm' || !backups.recovery.confirmed || !backupsPermissions().console || !backupsPermissions().canEdit) return;
@@ -556,7 +563,7 @@ async function revealBackupsKey() {
     if (epoch === backupsEpoch && backupsActive && backupsPermissions().canEdit && backupsPermissions().console) backups.recovery = { state: 'shown', key: r.recovery_key };
   } catch {
     if (epoch === backupsEpoch) backups.recovery = { state: 'unavailable', error: 'The recovery key is unavailable. Check the connection and try again from the console.' };
-  } finally { backupsPending = false; backups.state = 'ready'; backupsChanged(); }
+  } finally { backupsPending = false; backups.state = 'ready'; syncBackupsPermissions(); backupsChanged(); }
 }
 export function bindBackups(root, changed) {
   backupsChanged = changed;
@@ -575,6 +582,7 @@ export function bindBackups(root, changed) {
     if (action === 'backups-hide' || action === 'backups-cancel') hideBackupsKey();
     else if (action === 'backups-reveal' && backupsPermissions().canEdit && backupsPermissions().console) { hideBackupsKey(); backups.recovery = { state: 'confirm', confirmed: false }; backupsChanged(); }
     else if (action === 'backups-confirm') revealBackupsKey();
+    else if (action === 'backups-retry') loadBackups();
     else if (action === 'backups-clear-target') saveBackups('target');
     else if (action === 'backups-clear-encrypted') saveBackups('encrypted_target');
     else if (action === 'backups-copy' && e.isTrusted && backupsActive && backupsPermissions().canEdit && ['first-shown', 'shown'].includes(backups.recovery.state) && backups.recovery.key) {

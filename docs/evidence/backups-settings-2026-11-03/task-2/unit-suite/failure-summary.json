@@ -1,0 +1,135 @@
+{
+  "classification": "FAILED/INCOMPLETE: forced hung-child SIGTERM under Root Ruling10; not normal completion or baseline proven",
+  "exit": 1,
+  "tests": 1662,
+  "pass": 1600,
+  "fail": 22,
+  "cancelled": 0,
+  "skipped": 40,
+  "reported_duration_ms": 449941.455381,
+  "child_elapsed_at_signal": "07:24",
+  "signal": "SIGTERM to confirmed tests/chaos/network.test.ts PID1570 only",
+  "egress_log_bytes": 2230,
+  "egress_blocked_destinations": {
+    "ha-box:42961": 52,
+    "ha-box:8123": 2,
+    "home.example.com:443": 1,
+    "models.example:443": 1,
+    "www.example.org:443": 1,
+    "collect.example:443": 1
+  },
+  "failures": [
+    {
+      "location": "test at tests/acceptance/m10d-ops.test.ts:20:1",
+      "name": "\u2716 M10d gate: infrastructure, a network change and an account step through chat, each asking at tier 3, with no secret in any transcript, log or file (1585.173551ms)",
+      "first_detail": "AssertionError [ERR_ASSERTION]: The input did not match the regular expression /Started infrastructure run i[0-9a-f]+ on \u201cExample\u201d/. Input:"
+    },
+    {
+      "location": "test at tests/acceptance/no-kubernetes.test.ts:29:1",
+      "name": "\u2716 the tripwire fires: a call fails the run and says what was called; a clean run passes with its own result (22.972251ms)",
+      "first_detail": "AssertionError [ERR_ASSERTION]: kubectl: no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)"
+    },
+    {
+      "location": "test at tests/chaos/network.test.ts:126:1",
+      "name": "\u2716 DNS failing: a connection that can\u2019t reconnect because its name won\u2019t resolve says so, and closes once the name resolves again (10300.977036ms)",
+      "first_detail": "AssertionError [ERR_ASSERTION]: Timed out waiting for the live connection: \"reconnecting\""
+    },
+    {
+      "location": "test at tests/core/browser.test.ts:82:1",
+      "name": "\u2716 Chromium: NOVA_CHROMIUM is used when it is there, and said plainly when it isn\u2019t (2.154492ms)",
+      "first_detail": "AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:"
+    },
+    {
+      "location": "test at tests/core/diagnostics-composition.test.ts:44:1",
+      "name": "\u2716 production diagnostics downloads fresh numeric Era2 counts with person access and no persisted bundle or excluded content (318.355382ms)",
+      "first_detail": "AssertionError [ERR_ASSERTION]: The \"string\" argument must be of type string. Received type object (null)"
+    },
+    {
+      "location": "test at tests/core/infra.test.ts:61:1",
+      "name": "\u2716 M10d gate: a plan is shown in full before apply, and apply asks at tier 3; confirmed, a checkpoint comes first and Nova reads the state back (168.284189ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/infra.test.ts:130:1",
+      "name": "\u2716 M10d: declining the apply applies nothing (141.590015ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/infra.test.ts:145:1",
+      "name": "\u2716 M10d gate: a budget breach alerts and blocks: no apply is offered, a problem and a message say why (145.777892ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/infra.test.ts:163:1",
+      "name": "\u2716 M10d: a resource Nova can\u2019t price is never offered for apply (118.64593ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/infra.test.ts:177:1",
+      "name": "\u2716 M10d: at 80 % the apply is offered with an alert; the apply checks the budget again as it runs (122.587433ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/infra.test.ts:198:1",
+      "name": "\u2716 M10d: a saved plan changed after review is refused; destroying is tier 3 and takes the resources off the record (123.096212ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/infra.test.ts:230:1",
+      "name": "\u2716 M10d: a provider secret not in the vault stops the plan and says where it goes (never chat); projects need a budget and a configuration (104.333118ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/infra.test.ts:268:1",
+      "name": "\u2716 M10d: a project past 80 % once applied raises one alert, not one per heartbeat; over budget raises another (114.266076ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/m10d-review.test.ts:67:1",
+      "name": "\u2716 review B2: the month is priced from the plan\u2019s whole result, so a resource Nova never recorded counts (168.283357ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/m10d-review.test.ts:91:1",
+      "name": "\u2716 review S1: a size named like a built-in JavaScript property can\u2019t be priced, and blocks before anything is applied (110.219533ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/m10d-review.test.ts:106:1",
+      "name": "\u2716 review S6: sensitive attributes are masked wherever Nova stores or shows them, the database and checkpoints included (104.399651ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/m10d-review.test.ts:131:1",
+      "name": "\u2716 review minor: a plan too large to show in full is never offered for apply (118.915756ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/m10d-review.test.ts:142:1",
+      "name": "\u2716 review minor: the plan says plainly that planning runs the project\u2019s providers (105.169118ms)",
+      "first_detail": "Error [CoreError]: OpenTofu isn\u2019t on this computer (no tofu on PATH). Nova doesn\u2019t install it."
+    },
+    {
+      "location": "test at tests/core/mesh-spokes.test.ts:280:1",
+      "name": "\u2716 join.sh checks the archive against the hash it carries, and a standby is never started as a computer, however --kind is written (467.699311ms)",
+      "first_detail": "AssertionError [ERR_ASSERTION]: Nova\u2019s device agent: The hub didn\u2019t take the code: That code didn\u2019t work."
+    },
+    {
+      "location": "test at tests/core/relay-review.test.ts:155:1",
+      "name": "\u2716 2. a worktree with a hostile .git: Nova runs nothing from it (334.213051ms)",
+      "first_detail": "Error: Command failed: git config -f /tmp/nova-test-fxATR6/nova-evil-Dpshpd/.git/config core.fsmonitor touch /tmp/nova-test-fxATR6/nova-marker-5sIo2y/ran"
+    },
+    {
+      "location": "test at tests/core/vault.test.ts:234:1",
+      "name": "\u2716 commitHome resolves only after its queued real git commit finishes (5041.976767ms)",
+      "first_detail": "AssertionError [ERR_ASSERTION]: real git commit reached the fixture gate"
+    },
+    {
+      "location": "test at tests/supervisor/services-review.test.ts:538:1",
+      "name": "\u2716 no code in Nova or its scripts names a Kubernetes tool to run (the tripwire sees PATH lookups only) (3.100601ms)",
+      "first_detail": "AssertionError [ERR_ASSERTION]: fatal: not a git repository: /home/jeremy/workspace/nova-build/.git/worktrees/nova-build10"
+    }
+  ],
+  "root_triage_required": true,
+  "no_fix_or_retry": true
+}

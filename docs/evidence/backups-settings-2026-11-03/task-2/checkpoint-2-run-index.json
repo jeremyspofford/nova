@@ -1,0 +1,152 @@
+[
+  {
+    "run": "affected-unit",
+    "start": "2026-11-03T17:55:56.627432+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "canonical-crawl",
+    "start": "2026-11-03T17:48:48.127301+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "cases-green-2",
+    "start": "2026-11-03T17:47:21.109354+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "compiler-1",
+    "start": "2026-11-03T17:47:45.863102+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "green-home-1",
+    "start": "2026-11-03T17:09:51.607680+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "late-authorization-red",
+    "start": "2026-11-03T17:54:04.220369+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "lifecycle-green",
+    "start": "2026-11-03T17:54:49.864898+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "reconnect-green",
+    "start": "2026-11-03T17:51:23.042788+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "reconnect-observed",
+    "start": "2026-11-03T17:50:42.758605+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "reconnect-red",
+    "start": "2026-11-03T17:49:43.009505+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "red-home",
+    "start": "2026-11-03T17:07:32.095515+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "resume-cases-1",
+    "start": "2026-11-03T17:46:23.366742+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "resume-red",
+    "start": "2026-11-03T17:45:58.734888+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "roles-red",
+    "start": "2026-11-03T17:46:57.238601+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "settings-registry-red",
+    "start": "2026-11-03T17:54:29.981903+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "sse-loading",
+    "start": "2026-11-03T17:48:21.209454+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "static-current",
+    "start": "2026-11-03T17:57:01.395965+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "unit-suite",
+    "start": "2026-11-03T17:56:41.216671+00:00",
+    "exit": 1,
+    "egress": 2230
+  },
+  {
+    "run": "visual-1",
+    "start": "2026-11-03T17:52:17.895414+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "visual-ids",
+    "start": "2026-11-03T17:52:41.354318+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "visual-matrix-2",
+    "start": "2026-11-03T17:55:33.110616+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "visual-matrix-3",
+    "start": "2026-11-03T17:56:31.100498+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "visual-native-toggle-5",
+    "start": "2026-11-03T17:58:32.656912+00:00",
+    "exit": 0,
+    "egress": 0
+  },
+  {
+    "run": "visual-native-webkit-6",
+    "start": "2026-11-03T17:59:05.632934+00:00",
+    "exit": 1,
+    "egress": 0
+  },
+  {
+    "run": "visual-neutral-4",
+    "start": "2026-11-03T17:57:55.892528+00:00",
+    "exit": 1,
+    "egress": 0
+  }
+]

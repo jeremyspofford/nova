@@ -1,0 +1,19 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ Backups search within the same category clears a shown key (1427.747721ms)
+✔ Backups initial endpoint failure stays local and offers a real retry (1282.742235ms)
+✔ Backups delayed first key cannot appear after route exit or category return (1634.500501ms)
+✔ Backups delayed repeat key respects Not now, hash navigation and Hide during save (2264.801067ms)
+✔ Backups native clipboard changes only on explicit Copy click (1479.643155ms)
+✔ Backups preserves inflight edits and duplicate submit guard, then validates blanks and nulls (1664.122777ms)
+✔ Backups failed mesh refresh clears key and stays read-only; fresh retry recovers drafts (1415.862224ms)
+✔ Backups offline save failure keeps draft and allows a real retry (1462.729498ms)
+✔ Backups real paired viewer and approver enforce roles, initial-only key and live role loss (1927.08118ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 15014.97761
+no-Kubernetes tripwire: never fired

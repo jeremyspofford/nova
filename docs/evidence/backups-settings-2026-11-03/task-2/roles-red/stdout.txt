@@ -1,0 +1,33 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Backups failed mesh refresh clears key and stays read-only; fresh retry recovers drafts (1477.230194ms)
+✔ Backups offline save failure keeps draft and allows a real retry (1477.689144ms)
+✔ Backups real paired viewer and approver enforce roles, initial-only key and live role loss (1985.333189ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5399.861481
+
+✖ failing tests:
+
+test at tests/ui/backups-settings.test.ts:245:1
+✖ Backups failed mesh refresh clears key and stays read-only; fresh retry recovers drafts (1477.230194ms)
+  AssertionError [ERR_ASSERTION]: unknown authorization has a retry
+  
+  0 !== 1
+  
+      at file:///work/tests/ui/backups-settings.test.ts:256:10
+      at async appCase (file:///work/tests/ui/backups-settings.test.ts:118:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired
