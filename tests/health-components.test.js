@@ -4,7 +4,8 @@ import * as components from '../ui/js/components.js';
 import { DEFAULT_LIMITS } from '../src/core/caps/index.ts';
 
 const zero = { tokens_in: 0, tokens_out: 0, estimated_tokens: 0, unpriced_tokens: 0, usd: 0, iterations: 0 };
-const view = { limits: DEFAULT_LIMITS, month: { month: '2026-11', providers: [], total: zero } };
+const accounting = { scope: 'this-node-runner', provider_reports_included: false, words: 'Nova runner usage on this machine; provider-managed tasks are not included. Autonomous runner work is live capped; your own conversations are metered without caps. Provider-owned loops are not live capped. Spend on other nodes is not included. Estimated tokens and tokens without a price are labeled separately; this is not complete monthly billing.' };
+const view = { accounting, limits: DEFAULT_LIMITS, month: { month: '2026-11', providers: [], total: zero } };
 
 test('work costs renders Caps totals without treating unpriced or estimated tokens as extra usage', () => {
   assert.equal(typeof components.workCosts, 'function');
@@ -14,12 +15,18 @@ test('work costs renders Caps totals without treating unpriced or estimated toke
   assert.match(html, /6,000 unpriced/);
   assert.match(html, /\$0\.12/);
   assert.match(html, /priced USD/);
+  const compact = html.split('<details')[0];
+  const details = html.split('<details')[1];
+  assert.match(compact, /Nova runner usage on this machine; provider-managed tasks are not included\./);
+  assert.match(details, /Nova runner usage on this machine; provider-managed tasks are not included\./);
+  assert.match(details, /Provider-owned loops are not live capped\./);
+  assert.doesNotMatch(html, /Provider usage appears only when reported|reported usage is counted afterward/);
 });
 
 test('work costs escapes provider, model, period, error and input strings without mutation', () => {
   assert.equal(typeof components.workCosts, 'function');
   const attack = '<img src=x onerror="alert(1)">';
-  const input = { view: { limits: { ...DEFAULT_LIMITS, task: { ...DEFAULT_LIMITS.task, usd: attack } }, month: { month: attack, total: zero, providers: [{ ...zero, provider: attack, model: attack }] } }, state: 'save-error', error: attack };
+  const input = { view: { accounting: { ...accounting, words: attack }, limits: { ...DEFAULT_LIMITS, task: { ...DEFAULT_LIMITS.task, usd: attack } }, month: { month: attack, total: zero, providers: [{ ...zero, provider: attack, model: attack }] } }, state: 'save-error', error: attack };
   const before = JSON.stringify(input);
   const html = components.workCosts(input);
   assert.ok(!html.includes('<img'));

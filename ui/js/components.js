@@ -493,10 +493,12 @@ export function workCosts({ view = null, state = 'ready', error = '', invalid = 
   const count = (n) => Number.isFinite(n) ? n.toLocaleString('en-US') : 'Unknown';
   const dollars = (n) => Number.isFinite(n) ? n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }) : 'Unknown';
   const usage = (s) => `${count(s.tokens_in + s.tokens_out)} tokens · ${count(s.estimated_tokens)} estimated · ${count(s.unpriced_tokens)} unpriced`;
+  const accountingScope = 'Nova runner usage on this machine; provider-managed tasks are not included.';
+  const accountingWords = view?.accounting?.words ?? `${accountingScope} Autonomous runner work is live capped; your own conversations are metered without caps. Provider-owned loops are not live capped. Spend on other nodes is not included. Estimated tokens and tokens without a price are labeled separately; this is not complete monthly billing.`;
   const month = view?.month;
   const totals = !loaded ? `<p class="card-line" role="status">${state === 'unavailable' ? 'Work costs are unavailable. Limits cannot be saved until they load.' : 'Loading work costs and limits.'}</p>`
     : `<p class="sheet-heading">Month to date · ${esc(month.month)}</p><p class="card-lead">${dollars(month.total.usd)} priced USD</p><p class="card-line">${usage(month.total)}</p>
-      ${month.providers.length ? `<ul class="settings-list work-cost-providers" aria-label="Usage by provider and model">${month.providers.map((p) => settingsRow({ title: `${p.provider} · ${p.model}`, note: usage(p), control: `<span class="card-line">${dollars(p.usd)} priced USD</span>` })).join('')}</ul>` : '<p class="card-line">No model usage recorded this month. Usage from work and your conversations will appear here.</p>'}`;
+      ${month.providers.length ? `<ul class="settings-list work-cost-providers" aria-label="Usage by provider and model">${month.providers.map((p) => settingsRow({ title: `${p.provider} · ${p.model}`, note: usage(p), control: `<span class="card-line">${dollars(p.usd)} priced USD</span>` })).join('')}</ul>` : '<p class="card-line">No model usage recorded this month. Usage from Nova runner work and your conversations will appear here.</p>'}`;
   const fields = [['task', 'Per task'], ['day', 'Per day']].map(([scope, title]) => `<fieldset class="work-cost-group"><legend class="sheet-heading">${title}</legend><ul class="settings-list">${[['iterations', 'Weighted steps'], ['tokens', 'Tokens'], ['usd', 'Priced USD']].map(([key, label]) => {
     const name = `${scope}.${key}`;
     const id = `work-limit-${scope}-${key}`;
@@ -507,10 +509,10 @@ export function workCosts({ view = null, state = 'ready', error = '', invalid = 
   }).join('')}</ul></fieldset>`).join('');
   const notice = state === 'saving' ? 'Saving limits.' : state === 'success' ? 'Limits saved on this node.' : state === 'save-error' ? (error || 'Limits could not be saved. Your edits are still here; try again.') : Object.keys(invalid).length ? 'Enter a finite number greater than zero, or choose Unlimited.' : '';
   return `<section class="work-costs" aria-label="Work costs" data-work-costs-state="${esc(state)}">${totals}
-    <p class="card-line">Usage recorded on this node, including your conversations. Provider usage appears only when reported to Nova. Estimated tokens are part of the total; unpriced tokens are not included in priced USD.</p>
-    <h3 class="sheet-heading">Autonomous work limits</h3><p class="card-line">Nova stops autonomous work at a limit and needs new approval to resume. Your own conversations are metered, but not capped.</p>
+    <p class="card-line">${accountingScope} Estimated tokens are part of the total; unpriced tokens are not included in priced USD.</p>
+    <h3 class="sheet-heading">Autonomous work limits</h3><p class="card-line">Nova stops autonomous runner work at a limit and needs new approval to resume. Your own conversations are metered, but not capped.</p>
     <form data-work-limits novalidate>${fields}<div class="work-cost-actions"><button class="btn" type="submit" data-save-work-limits${locked || Object.keys(invalid).length ? ' disabled' : ''}>Save limits</button><p class="card-line" role="status" data-work-costs-notice>${esc(notice)}</p></div></form>
-    <details class="work-cost-details"><summary>How these limits work</summary><p class="card-line">Task limits apply to each run or approved resume. Daily limits use your profile’s timezone. Provider-owned loops are not capped live; reported usage is counted afterward when available. Unpriced tokens cannot be held to a dollar limit. Estimated usage is approximate. Spend is local to this node; after failover, another node may have different totals. These totals are not a complete provider bill.</p></details>
+    <details class="work-cost-details"><summary>How these limits work</summary><p class="card-line">${esc(accountingWords)}</p><p class="card-line">Task limits apply to each run or approved resume. Daily limits use your profile’s timezone. Unpriced tokens cannot be held to a dollar limit. Estimated usage is approximate. Spend is local to this node; after failover, another node may have different totals.</p></details>
   </section>`;
 }
 

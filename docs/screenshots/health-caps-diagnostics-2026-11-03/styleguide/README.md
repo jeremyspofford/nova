@@ -2,6 +2,8 @@
 
 Review addresses: `/styleguide?entry=work-costs` (`#sg-work-costs`) and `/styleguide?entry=diagnostics` (`#sg-diagnostics`). These are local fixtures only; saving and downloading have no live effect. App composition awaits rendered owner recognition.
 
+Accounting scope, aligned with the implemented Caps API: **Nova runner usage on this machine; provider-managed tasks are not included.** Their reports live outside these Caps totals, so reporting usage elsewhere in Nova does not make it appear here. The visible scope, expanded explanation and fixtures reflect `accounting.scope: this-node-runner` and `provider_reports_included: false`. These captures supersede the earlier conditional-report wording; geometry and controls are unchanged.
+
 120 full-page PNGs: Chromium and WebKit, each at desktop 1280×820, phone 390×844, tablet 820×1180, and half-open 1100×900. PNG height grows with the full page. All screenshots use the default Orb Teal design and dark system preference. [manifest.json](manifest.json) lists exact paths, dimensions, byte counts and SHA-256 hashes.
 
 - Work costs: loading, unavailable, zero, mixed, configured, unlimited, invalid, saving, save-error, success, adversarial, and expanded details.

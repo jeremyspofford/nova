@@ -87,337 +87,337 @@
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-adversarial-desktop.png",
     "width": 1280,
     "height": 1646,
-    "bytes": 608957,
-    "sha256": "7457295ec63827d1c36d61ddd51b7bda06562d8e27b67f4906c3655727066868"
+    "bytes": 608330,
+    "sha256": "d5aba3cbf17e2ca9cb97ce1c7195263a8e1b998a6ad34979fe984711d5f488a3"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-adversarial-halfopen.png",
     "width": 1100,
     "height": 1646,
-    "bytes": 556152,
-    "sha256": "b872d3f29aafb31e0d91b9002b696f7141e6503735be5cdb1973af92daff00cb"
+    "bytes": 555484,
+    "sha256": "00b030a6a6100e76197e947317182154e36c58edd72db94789f46f3b7cdd5fd1"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-adversarial-phone.png",
     "width": 390,
     "height": 2268,
-    "bytes": 376804,
-    "sha256": "d3ffb3fb95bc71f42ddeeebb5212cdabf8eac749815ab40178a0f1f84389afe6"
+    "bytes": 375001,
+    "sha256": "99311c5cb209a7c3836f97b26f3e31e3e60b3845a1100b08dc9a0ab1dcd897a1"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-adversarial-tablet.png",
     "width": 820,
     "height": 1646,
-    "bytes": 433326,
-    "sha256": "3af11a9df08b82e5846fb27581c577ffbfc5e4009d0c0684730d20b9a7291d15"
+    "bytes": 432595,
+    "sha256": "1ce5303efd710233e82ec7ef9543b59e546288cd3f7f43524fd64a180bd55ce9"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-configured-desktop.png",
     "width": 1280,
     "height": 1586,
-    "bytes": 570156,
-    "sha256": "bfeff4fc2d5d98c0415e5421d171e1e465cdee517b25d6c4244908310dd0abe2"
+    "bytes": 569370,
+    "sha256": "2975d41d1077c3430e2896e1d8f614baf4fab764ea8c9681da5dd3403add7085"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-configured-halfopen.png",
     "width": 1100,
     "height": 1586,
-    "bytes": 518907,
-    "sha256": "0ce17b4948cb19c71405cfabb025d610e22edce5e860e452c44c92cd777b94f5"
+    "bytes": 518146,
+    "sha256": "1a14f297a51555c99fddc4d59e53a37020ec6f01bfeac640d85acbc8c59c01e0"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-configured-phone.png",
     "width": 390,
     "height": 2148,
-    "bytes": 347651,
-    "sha256": "f71832465f2e2d5eb72394a54e22c44e28aa3788ead893b1c8671588616b5a5c"
+    "bytes": 345253,
+    "sha256": "aee508fc496a3e9400c9f4b1a5ae5ce06625054cd6ed06a4ada70d7705b3c03e"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-configured-tablet.png",
     "width": 820,
     "height": 1586,
-    "bytes": 404364,
-    "sha256": "cd0b33f0600d9a5c10d77c433ba0609bd35e2c1c6309600c6e724068f4e8d76b"
+    "bytes": 403416,
+    "sha256": "f59c16086abe0868d3bf709e760de1a0ec970c5b950b7ce5c7ee196070dee5c9"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-details-desktop.png",
     "width": 1280,
-    "height": 1664,
-    "bytes": 618681,
-    "sha256": "6008537ed54f0362045daa21475b63a990008883a59812541923cb8af9484c1c"
+    "height": 1723,
+    "bytes": 647246,
+    "sha256": "c835dab4ae91c3a17e6e66cf0e88fc71b5cad7f17133e83c561e71d6f3863140"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-details-halfopen.png",
     "width": 1100,
-    "height": 1664,
-    "bytes": 563341,
-    "sha256": "e8b158fa2c4fcf1b0d54c5f1e6c6621878c6c2a4e3cd4e18b8d7c1d78b3dff7e"
+    "height": 1723,
+    "bytes": 591287,
+    "sha256": "046662b59bcdca899c6ec209df83a71ed65d16140a2ef88f9169f94ea3812f85"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-details-phone.png",
     "width": 390,
-    "height": 2343,
-    "bytes": 391442,
-    "sha256": "4553b1ed5fb7b951c6e1ef0dedd984023086ef4854e4db2cbe7d4f67a8529196"
+    "height": 2460,
+    "bytes": 414308,
+    "sha256": "f815f336103e2d77ab1c0ff2841cc84cfa64136802beb6b00dceee7a04f9afa0"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-details-tablet.png",
     "width": 820,
-    "height": 1664,
-    "bytes": 442578,
-    "sha256": "43f666087c7d3c65b130bdb5b8fccfc425c50470b5761edf58b7c04a9b248e7f"
+    "height": 1723,
+    "bytes": 464089,
+    "sha256": "7055bc326c05e10a616239d85aaa5f39cc8d3dff85e62c6228b8ec6312980b73"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-invalid-desktop.png",
     "width": 1280,
     "height": 1646,
-    "bytes": 593906,
-    "sha256": "b5f206dacf930d7c58c92c2d34beb36bc43fd187e08363b8550576368fed49a0"
+    "bytes": 593403,
+    "sha256": "3aefaf0015567e464164d99be17b1f148be815b667e548fd468a86260fedaa6f"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-invalid-halfopen.png",
     "width": 1100,
     "height": 1646,
-    "bytes": 540957,
-    "sha256": "280b953b9ee21112f88bd3b70482f6d0824261a66d54869e4a1a6974e7802d84"
+    "bytes": 540472,
+    "sha256": "7694ff5cbc1f45eb216f9296992c2c1a4e0ec885237062a58d43ee56f19e9262"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-invalid-phone.png",
     "width": 390,
     "height": 2246,
-    "bytes": 362070,
-    "sha256": "8803448bcc1b7c29a7c680ac3ab3eeb83bb7b50625f433deb00dbd2506e91cc9"
+    "bytes": 360522,
+    "sha256": "b39d772e11c7abde0e3e7391e4a8ec8f33d8ef4f7f9b35f1ec1513009db20f26"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-invalid-tablet.png",
     "width": 820,
     "height": 1646,
-    "bytes": 419246,
-    "sha256": "36bc3f1f815e23f33bd6592e20591d8387f12dc9ae174cd12c5534a6ad9c3204"
+    "bytes": 418602,
+    "sha256": "b059ae65682cf7ab9d7cbc3be53c9ae65c08a64704f614515b6af5c58ae638e1"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-loading-desktop.png",
     "width": 1280,
     "height": 1365,
-    "bytes": 490125,
-    "sha256": "7e3f39844fff4c2ffb984ea48a1fc2379609bb61d938a99b237e1a31802d7dbb"
+    "bytes": 489200,
+    "sha256": "73b3f30a7829f7868ea03e588f3ee64a7d10224bc587ea68ca3c8f10ec625a44"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-loading-halfopen.png",
     "width": 1100,
     "height": 1405,
-    "bytes": 446354,
-    "sha256": "48eb37a1af2683a4097cf36f64577b1c5ddece5420e32ae00345e67a629f7d2e"
+    "bytes": 445517,
+    "sha256": "eb315694b3b737d5189c56a686a0e168c2494b36b4e628cb2fd240ff6365b9f2"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-loading-phone.png",
     "width": 390,
     "height": 1869,
-    "bytes": 296627,
-    "sha256": "1118a9ffa2d35b9c9f1ef6ecf1aefe21064d04b2b50cad4fd2c094588e900f7f"
+    "bytes": 293913,
+    "sha256": "4b1b6088672eec735644e970c1b1de8db0c604648d6860fa52534d04ee19a78b"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-loading-tablet.png",
     "width": 820,
     "height": 1405,
-    "bytes": 356050,
-    "sha256": "65681e58c32c6686f7e23500f2c7aa5d21ef134ad8a6510c9bb85246276d0734"
+    "bytes": 354866,
+    "sha256": "07d42965a0e8417510a3477de0b9584e4b89b9c3c659750063e4d279b043eff8"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-mixed-desktop.png",
     "width": 1280,
     "height": 1586,
-    "bytes": 569552,
-    "sha256": "c7688803f663cc181e234d1ccb9219d9ac1680b40bc2ef0cb7b57944123f0005"
+    "bytes": 568697,
+    "sha256": "857a82eedbd03d88d810e1ca6be5923a48887755882e8b5fcf23294bdcdb03c3"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-mixed-halfopen.png",
     "width": 1100,
     "height": 1586,
-    "bytes": 518231,
-    "sha256": "e49ee562a0201be950388b83c589bbb78cc7b706c417efde9a6b44d621b85c4c"
+    "bytes": 517431,
+    "sha256": "b1f6ad2729546dc517834d1548f976fec3ccaef76c535989b5aac84cae7bf784"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-mixed-phone.png",
     "width": 390,
     "height": 2148,
-    "bytes": 347170,
-    "sha256": "ec528118763816b6715e7c408a380e6b3d5a1da5f8a049a31f79948cdf84a1cb"
+    "bytes": 344713,
+    "sha256": "d0d4bc205b8f94024199b1e8b1367fd9324fc7e9297f11dee88f37dd8fc25b53"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-mixed-tablet.png",
     "width": 820,
     "height": 1586,
-    "bytes": 403713,
-    "sha256": "06be81c476130b35706d8843a3d6d088485016d5514a5dadfdecee4f638b839d"
+    "bytes": 402750,
+    "sha256": "6b338e6613f28eee84cca1a72a1b4b3c1b6ec093db4f902bdb0c98358ebf3803"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-save-error-desktop.png",
     "width": 1280,
     "height": 1586,
-    "bytes": 574115,
-    "sha256": "d55c942c23cb4120d9d27e8707ab36f51def83d455575a7ef807ebdc8e9faaa0"
+    "bytes": 573314,
+    "sha256": "bed9a9f4a1050dce3cc327d8bf9546c6d0602bac87e4f4b82b2af31c5a24a963"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-save-error-halfopen.png",
     "width": 1100,
     "height": 1586,
-    "bytes": 522939,
-    "sha256": "49c9d17b4825cf3371f1c496ec84ddc6cff2bcb02c3f6f224696cd867c73931f"
+    "bytes": 522248,
+    "sha256": "632fa01e5e31ad0db95bd3172258424af18ed94feeed715a079e05f4cb0d06dc"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-save-error-phone.png",
     "width": 390,
     "height": 2199,
-    "bytes": 356512,
-    "sha256": "656e49409735b15769c68ae588d64ff5b964af665f139ebbadc999de9ce57c64"
+    "bytes": 354222,
+    "sha256": "0ce8679e2ba5367c19df228434aba5d710a4a403becec94221a707306d8264ef"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-save-error-tablet.png",
     "width": 820,
     "height": 1586,
-    "bytes": 408533,
-    "sha256": "5d8933fecc93b275b4228c333801a914a149a969312c6bfd928c8b7e62abbfa9"
+    "bytes": 407623,
+    "sha256": "e408643509129da9fea464c60a05df19adefe1e77bf6c999955852006125eb35"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-saving-desktop.png",
     "width": 1280,
     "height": 1586,
-    "bytes": 570990,
-    "sha256": "460b23b065edd79cb28153d9deb134620286202b16b0e7afd3d7f9f7965e31d0"
+    "bytes": 570187,
+    "sha256": "f9afaeb1704a65ee63d47075e1d592343174d88a299bbece9b204ab0d541ce5f"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-saving-halfopen.png",
     "width": 1100,
     "height": 1586,
-    "bytes": 519899,
-    "sha256": "aa175865ddc66c77ea9251815d22c4d9fe31fe3e63a84af0880ad11826e6ac28"
+    "bytes": 519094,
+    "sha256": "b299488fe43a6bc4ba15db18176ee3b0e67f005138e5a1c5756560400e1bc71d"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-saving-phone.png",
     "width": 390,
     "height": 2148,
-    "bytes": 348667,
-    "sha256": "ca0ea76406b3444fe58f0c83d8ccbaf2de2a3478bfaeb38aa738f269d3fad698"
+    "bytes": 346233,
+    "sha256": "914f1cd87fb209140f4cb2d099a76a664c57179661a47e8b5690caeb84fff349"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-saving-tablet.png",
     "width": 820,
     "height": 1586,
-    "bytes": 405203,
-    "sha256": "4bab712560b85871156fa90915a1773930f3ffa0375334d3a356bfed0989a4fb"
+    "bytes": 404269,
+    "sha256": "b431c00b943980c7e51191e3957880bf10c902c4802431250fbf533df7260f71"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-success-desktop.png",
     "width": 1280,
     "height": 1586,
-    "bytes": 572222,
-    "sha256": "fa4745603571767bb8083155301a20ede94c721f686dd3dddc1bd02baee0c070"
+    "bytes": 571419,
+    "sha256": "0fb6fd16e44b4a3742dc119107ebbe7a57ee5d70a3d254a89a438457cacd37e2"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-success-halfopen.png",
     "width": 1100,
     "height": 1586,
-    "bytes": 521062,
-    "sha256": "2c9139a35777347643bbb58c0cf9351aac73e8e2d789f7987c669225ba443320"
+    "bytes": 520355,
+    "sha256": "5804abc57827abcd6216a9d2ee1d1fcf4ce80af1dcfb4cb3d71178313f87ea0e"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-success-phone.png",
     "width": 390,
     "height": 2148,
-    "bytes": 349785,
-    "sha256": "5c67a781257ea23fd0b482e1df21d4ad306e1102011ee8e4396f11f359934dd2"
+    "bytes": 347350,
+    "sha256": "50a957d683bc20a4536fd8a73e6bfa42fc0628f3eb0cbe45962efda6d7010b80"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-success-tablet.png",
     "width": 820,
     "height": 1586,
-    "bytes": 406231,
-    "sha256": "b13d9d68cbbead725db8976b5e5a14ae24950843929c33a0a212381e924e849e"
+    "bytes": 405303,
+    "sha256": "c98c84bfc2c23702ca2d7417f0ab11f6bdaa77ae0d9dfd40fad2e8e09c9192bd"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-unavailable-desktop.png",
     "width": 1280,
     "height": 1365,
-    "bytes": 492876,
-    "sha256": "ee310ecb3b4147f586b0cdf1071b823c6b58500742e70e0c5715c3a58abb6511"
+    "bytes": 491932,
+    "sha256": "11203811b2ecd17f30ae2937897750876093676afd043c0b187e31ef32646126"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-unavailable-halfopen.png",
     "width": 1100,
     "height": 1365,
-    "bytes": 448490,
-    "sha256": "011426d869e6e52ef82aae32e218baa4b7357c98cc1110f47fcd897a0813c4fd"
+    "bytes": 447520,
+    "sha256": "eedeef4c9f02a851275b468587c89549471dfe1065d58495e9045138980290ff"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-unavailable-phone.png",
     "width": 390,
     "height": 1844,
-    "bytes": 318851,
-    "sha256": "b5bc815b670f97f724cc10a901d3c16870c8be6e15746875d1eea7f1180d9dbd"
+    "bytes": 315912,
+    "sha256": "c65701083ba8cc5af989011365f7d6e94fe17bf49548e117d5477bfe0a1f6a9b"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-unavailable-tablet.png",
     "width": 820,
     "height": 1365,
-    "bytes": 358226,
-    "sha256": "6d859177eb61912ef3c7a787246a83071b9e62cacdc86268ae95fe595b655b30"
+    "bytes": 357088,
+    "sha256": "68ce006e823ad2ee817572ebc1f8ebb81020d10d87c56734b85ccc9f1e76b879"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-unlimited-desktop.png",
     "width": 1280,
     "height": 1586,
-    "bytes": 568956,
-    "sha256": "4c5cf2d1eab4e8d862a9ac4be7a088cb9bb883110d532a0018de20b2866d90bf"
+    "bytes": 568114,
+    "sha256": "c14f54f7a0d3f8f6c76aadfa71497c62cc22f4ddbac2ed75dbd9730d52be80d6"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-unlimited-halfopen.png",
     "width": 1100,
     "height": 1586,
-    "bytes": 517614,
-    "sha256": "c294174b2a7d3abe8ecde9a72cd3554c61cb79e0519d931d25cc8fdcaaaaa2a7"
+    "bytes": 516814,
+    "sha256": "a2de55d73559db954f6ee7bedacb53aca60a60924f3b786a0438b5fdf790bcd4"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-unlimited-phone.png",
     "width": 390,
     "height": 2148,
-    "bytes": 346570,
-    "sha256": "7f930a119219d75a21663a1596f43d459400d98f21cec85ccfffe8d83546ba87"
+    "bytes": 344114,
+    "sha256": "1c78638cc28e293fbd7c2742bfba38ddaaac3dcf73dbf08d968fb9ee027ac3cd"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-unlimited-tablet.png",
     "width": 820,
     "height": 1586,
-    "bytes": 403115,
-    "sha256": "877f5ed815ab286c4ab8b52f5432e36563d72f55b8dc415f9ef535dba9d1b93e"
+    "bytes": 402147,
+    "sha256": "43572c19c239393d2474b934a9e5e947a70036be1a10acdbe621bdfcf98eed9c"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-zero-desktop.png",
     "width": 1280,
     "height": 1469,
-    "bytes": 527737,
-    "sha256": "d05904f5702bb782ec19862acfe9e6aa37b3f13d91c622864094a6882b3fbdc1"
+    "bytes": 527648,
+    "sha256": "3aaf5d922dbcab4b0e2d694faa4518d952f846758c6c94b449732ad30dcfe494"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-zero-halfopen.png",
     "width": 1100,
     "height": 1469,
-    "bytes": 481154,
-    "sha256": "72e0b24921017cc3341086a61bf524d08da900e2e62ba8d8271968e5ad524a63"
+    "bytes": 481079,
+    "sha256": "ac89a2e457fe56adccc8abf2c223f061b120f384bebf164306547938f7568817"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-zero-phone.png",
     "width": 390,
     "height": 1968,
-    "bytes": 320970,
-    "sha256": "4fdf6ada347a37b0e834652faa0d5aada9ae49ec9d3bd718af0f04ac405fe175"
+    "bytes": 319626,
+    "sha256": "4e2400f919b1ca97ccacfadbabc83d78bc7e8c177f489432007cd6ec3716b2c0"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/chromium/work-costs-zero-tablet.png",
     "width": 820,
     "height": 1469,
-    "bytes": 379543,
-    "sha256": "c9770ad834edb9c0e8017b969c63f756710031bde8cca1f6e04d90993d10c303"
+    "bytes": 379328,
+    "sha256": "874467b69d3c9969326f46f9c3918d77d82f8fe9200e6b699c89e2f22f078d5e"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/diagnostics-available-desktop.png",
@@ -507,336 +507,336 @@
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-adversarial-desktop.png",
     "width": 1280,
     "height": 1639,
-    "bytes": 298707,
-    "sha256": "13ac9469fac64f5bbaf7c528fcd60f848435f89e485be7fb34e3e2ae5496a847"
+    "bytes": 298057,
+    "sha256": "9a7d995b63a3bf09cc4aa6a282384c2cf6c8bec4c7f759e7c5947f4d8b63cafa"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-adversarial-halfopen.png",
     "width": 1100,
     "height": 1679,
-    "bytes": 290821,
-    "sha256": "6a93bc74d7e58f0f03081d64a6b0175d2733881e57c7795347ee0833bb25af46"
+    "bytes": 290176,
+    "sha256": "31bdb4e9eaa731b5df61228502036bfdcc5cff3cea745de35be104036444114d"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-adversarial-phone.png",
     "width": 390,
     "height": 2299,
-    "bytes": 247175,
-    "sha256": "3af0a75440a5120742a1c4c56474e940c3f879e5d42bb16acb17a4f2b4faf1c8"
+    "bytes": 245741,
+    "sha256": "403f707c3b480afd401f71d3e97234dd52da416bdf69b0a7dc0898efca61496f"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-adversarial-tablet.png",
     "width": 820,
     "height": 1679,
-    "bytes": 269979,
-    "sha256": "846a87a23ff2424895e5ac256da7bc523e3f9da777e778a4207d909d5d1eb9b1"
+    "bytes": 269335,
+    "sha256": "8333a9b565071d7e36111613b834fd6443b3ac41ee7d8adc3f704f999b74d4d8"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-configured-desktop.png",
     "width": 1280,
     "height": 1579,
-    "bytes": 271493,
-    "sha256": "8de191dde428c0b074f0b007c6654a75fd44fe09398b2ca68a63e57d246b776a"
+    "bytes": 270742,
+    "sha256": "204b56dbb282936428b575213224307a262b325b3379d3e16daa84339781e559"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-configured-halfopen.png",
     "width": 1100,
     "height": 1619,
-    "bytes": 263632,
-    "sha256": "85dc610d8f93e7b6b74af928bf79429a4722a249334045c0344346875a396b22"
+    "bytes": 263014,
+    "sha256": "2b065f340d489d9cc986bed6e7987c51e58a9469be81db2dec4af0b281a08146"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-configured-phone.png",
     "width": 390,
     "height": 2179,
-    "bytes": 222893,
-    "sha256": "33ba8a00d50e98eb7b9fe10e7d59386677ca01b237a0af61a9466d97674fa07a"
+    "bytes": 220794,
+    "sha256": "3791af9a383c3b6d90eebacca7d0b310b106105da416434d03f60f5f8d483f9c"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-configured-tablet.png",
     "width": 820,
     "height": 1619,
-    "bytes": 243442,
-    "sha256": "10e4c707f168f0b149ad565406780209c91338d23ba337cda2556ab4cfba7ac7"
+    "bytes": 242901,
+    "sha256": "b9371b90cbc2a5c5c7ef3decfac466916bd95d8a88e15b433d352d4a27f70a2e"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-details-desktop.png",
     "width": 1280,
-    "height": 1655,
-    "bytes": 304833,
-    "sha256": "0d8d155dd90368f222f96f4da0d12519385dee2543edba4f3300973169958974"
+    "height": 1712,
+    "bytes": 324090,
+    "sha256": "0fa1854380f8f8e96e7b6bec73eb657b690b638f2e2fc66e6e7c5163888cda44"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-details-halfopen.png",
     "width": 1100,
-    "height": 1695,
-    "bytes": 296632,
-    "sha256": "e346be75b37f3c91681ec0fb069563220de3aa5b89483589c16a7c358a46c0a1"
+    "height": 1752,
+    "bytes": 316260,
+    "sha256": "890052797eea73e3d45f7395ba326632045e25c0e91c0349fb388fee0de372bd"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-details-phone.png",
     "width": 390,
-    "height": 2369,
-    "bytes": 256627,
-    "sha256": "c638be86811aee574ca7a87f688ace8fdb7491455a73d341fe36876d7d418fee"
+    "height": 2483,
+    "bytes": 273685,
+    "sha256": "6789efc7ee7bc2070834690a7208919ba4b6b29b6061deddf582bade5ab6dc23"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-details-tablet.png",
     "width": 820,
-    "height": 1695,
-    "bytes": 278378,
-    "sha256": "28a71fa1528041bec8811c689ed3e505bdb2063969c1258eaf9a98f49fb9b8e1"
+    "height": 1752,
+    "bytes": 297865,
+    "sha256": "ff5bf39a35cfc60e418ecdb044a57c8573c4c832859dc2729e35347729428036"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-invalid-desktop.png",
     "width": 1280,
     "height": 1638,
-    "bytes": 283022,
-    "sha256": "9e105c96e967335e05a46da04578ba2f5c5b1b2b5c9bdba28bb231fe98ae8c99"
+    "bytes": 282257,
+    "sha256": "c357fd47cd2621eb8005b8b6bf733b27c796fb3c845a610ad21fb02f7cc43cf9"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-invalid-halfopen.png",
     "width": 1100,
     "height": 1678,
-    "bytes": 274869,
-    "sha256": "b868ed02eb522f8112237f7d9fde2fea9d2514e503af1376b600ec33604314a3"
+    "bytes": 274307,
+    "sha256": "672b05727e6f40b377697b8cde7e48811c2609555df2708013bb90a8060b4dce"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-invalid-phone.png",
     "width": 390,
     "height": 2275,
-    "bytes": 232900,
-    "sha256": "04239940a6a7a8e6d91dbe1f2fafb6474c12cbccc9e4be7a648b7820e4d3eb9b"
+    "bytes": 231343,
+    "sha256": "3ca9e999b45242c32d89785069fcc1ed5a1b2d3c84495020f4d9832226b24cde"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-invalid-tablet.png",
     "width": 820,
     "height": 1678,
-    "bytes": 254764,
-    "sha256": "175f4e5b127619a8552fd95d99cc75ca059a8885c94cb4abee36f1d4fc43ab43"
+    "bytes": 254358,
+    "sha256": "7e354dd9240ca34982b2004003ccb14105f4c4cf9adcdf095b3fa0c6427e2a9a"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-loading-desktop.png",
     "width": 1280,
     "height": 1359,
-    "bytes": 225040,
-    "sha256": "b1816cdccdf3d28886bf02d1732f4ff98b7ef2397ec2f3e44e77073a1fd4ecfb"
+    "bytes": 224468,
+    "sha256": "c8ad2de4ec064919f30d0d7416cb0ed0f12233f40560105fd59fa4a7892340bb"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-loading-halfopen.png",
     "width": 1100,
     "height": 1399,
-    "bytes": 220086,
-    "sha256": "fa1dbd71d055c4aa9e0c9ccb60e1e34c52695801358505e50dff7f55c1109eb8"
+    "bytes": 219409,
+    "sha256": "ccd08e35b0d2e567ec0057406464f9b431dc42a658e291480977dd5dd9328331"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-loading-phone.png",
     "width": 390,
     "height": 1859,
-    "bytes": 184571,
-    "sha256": "206fb51899c8205569506e09f637db1e538743e790be6281c1023608a8fa271c"
+    "bytes": 182307,
+    "sha256": "a89f9a561a7ed017eee200417d08c0399790fc3b68d3b1235b34091e4d2c0ab9"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-loading-tablet.png",
     "width": 820,
     "height": 1399,
-    "bytes": 202116,
-    "sha256": "35c5a8ecee1de6f6f7464ad1a4ab2b40b342eeae7b6c871156fbb83c24b04895"
+    "bytes": 201657,
+    "sha256": "4b2f00af368986a85cda1763095fdc981566e75ea689cb56620f0ca85eee23c4"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-mixed-desktop.png",
     "width": 1280,
     "height": 1579,
-    "bytes": 270911,
-    "sha256": "dbce6594c5e97d0cff65d5588a93ed6829ab5f786b07eb2c07671863dcb25d22"
+    "bytes": 270136,
+    "sha256": "3d9a4f40a57c2122d512304e26c4fa0f4da1bec31377fbbfd7b75b536293adfb"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-mixed-halfopen.png",
     "width": 1100,
     "height": 1619,
-    "bytes": 263103,
-    "sha256": "32ed8242167404dd96a8666b82006bc771ad52edca374a17f509a103fc644893"
+    "bytes": 262467,
+    "sha256": "e11537dcd4a23d195fbf753a18db5ced16b3ac4126a74cc3430473600281b586"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-mixed-phone.png",
     "width": 390,
     "height": 2179,
-    "bytes": 222332,
-    "sha256": "16ea205322d775f9cead14009925d68cb2bbd403fd66555af7ae82c44c8833f4"
+    "bytes": 220111,
+    "sha256": "6533ef43b23d289e1b909317d1660d1df5ec69408b0537c7bfbc2e6f1ae707bc"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-mixed-tablet.png",
     "width": 820,
     "height": 1619,
-    "bytes": 242734,
-    "sha256": "294f98706a3797eb7e850cd5221c35e6790275cf75a24e724cfa6801fac44e50"
+    "bytes": 242212,
+    "sha256": "ccfe1a31a194127fe2e98f1bdc969361a2cf438754261db2740245f6b91b9c75"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-save-error-desktop.png",
     "width": 1280,
     "height": 1579,
-    "bytes": 275770,
-    "sha256": "f279db64d1bcff2ee249bd642f74d623b4b3853df579a08b1facb5c529c8bb5b"
+    "bytes": 274967,
+    "sha256": "da4b80bf71aed7732035dcdeba02204fe80eb370f466e27fc41649cef124c497"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-save-error-halfopen.png",
     "width": 1100,
     "height": 1619,
-    "bytes": 267794,
-    "sha256": "dc5c05862e2994610a9c12090226c71a273c1d0e9ac8f07775e14cbb008f201d"
+    "bytes": 267137,
+    "sha256": "863031609becbe4564d755deb896255007851c15e101c16be9907aea1d015f62"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-save-error-phone.png",
     "width": 390,
     "height": 2229,
-    "bytes": 228882,
-    "sha256": "b6b2172084cae9777eb31756e22289b049534fb2f10414d017af457bd1146f0a"
+    "bytes": 227861,
+    "sha256": "bcb20f0cb56fe09d5aa1eadf6d0e30c4046ba14dfed974e74ddb32ba3d6441d6"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-save-error-tablet.png",
     "width": 820,
     "height": 1619,
-    "bytes": 248027,
-    "sha256": "7836f9b9e82f5f88d0cbf8558de92d2130e01c4896d02c8c5643f84044d17219"
+    "bytes": 247496,
+    "sha256": "6985b64d8453bbab6640e47d49d790a396971cee65d551b25058d6906119a0c4"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-saving-desktop.png",
     "width": 1280,
     "height": 1579,
-    "bytes": 272471,
-    "sha256": "107134a9377cf4900a863ae6844986f08eceedae14bd0f20a903175ce5274b6c"
+    "bytes": 271708,
+    "sha256": "8c8e8772e2b4ae8130e3ae65cc6e666f0c65555cad055750cfd53a4daf39774c"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-saving-halfopen.png",
     "width": 1100,
     "height": 1619,
-    "bytes": 264531,
-    "sha256": "b0bfbef6c708f9f8884f656c06f0b3b5d11d5b10971915b7eadfb3193f76baca"
+    "bytes": 263885,
+    "sha256": "23a2839bf7e2724aa889f14014badc414ca3e5336e58143c7ddad34207c6cb5d"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-saving-phone.png",
     "width": 390,
     "height": 2179,
-    "bytes": 223594,
-    "sha256": "e84c563651854cc0f7e86f111598abc921482d2c42df68f88c2fbc36a7d413da"
+    "bytes": 221532,
+    "sha256": "cb5b3a00bd257cf2d0473b4c4325a1748067b4db558c552a8fe974bdc8079f50"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-saving-tablet.png",
     "width": 820,
     "height": 1619,
-    "bytes": 244225,
-    "sha256": "9b5743fe5b6ea861fc72385301743bdcad495f00448fac08e0f090890d5673a5"
+    "bytes": 243694,
+    "sha256": "601f9511e589c1f0bf4db6f9f86b1ae9062a2cbab7739395e1d3be5df9709658"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-success-desktop.png",
     "width": 1280,
     "height": 1579,
-    "bytes": 273640,
-    "sha256": "7cf2507d19d4b0386ac3a60274932af302f39c5b5ec37430b9ba68d92c21b7b2"
+    "bytes": 272873,
+    "sha256": "5029357936dc927fa34efc9c76ac186351f0cb452981d324419f7061aacc1f52"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-success-halfopen.png",
     "width": 1100,
     "height": 1619,
-    "bytes": 265682,
-    "sha256": "0b64c69e45bffb013040076d85f73b07d55ebe4bff8a0fda3806f28a5d7e43c9"
+    "bytes": 265030,
+    "sha256": "09f894fb0a65a0443c35bfc4770e476b9ebedc075fc2c666438e07c8d72a1471"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-success-phone.png",
     "width": 390,
     "height": 2179,
-    "bytes": 224960,
-    "sha256": "423714fcc693f67872318c456c919c46bd66e71a1e928f50bcba406c529822a1"
+    "bytes": 222632,
+    "sha256": "233879f9ec343af49886b0b1c2237c78b44aabb2c3795561529adb09e5a50661"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-success-tablet.png",
     "width": 820,
     "height": 1619,
-    "bytes": 245452,
-    "sha256": "328c171768f0dc1b9959c3b70392d3a305b9fa69b8a0b345c10a13f826b85f7b"
+    "bytes": 244923,
+    "sha256": "511834e18dabec76201815d61800192447c591aa2ff75e47ebe03afd8583ec5a"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-unavailable-desktop.png",
     "width": 1280,
     "height": 1359,
-    "bytes": 228022,
-    "sha256": "d7e797d0b78d765e09d3cdd5b5abf0e0e8b86e76b375e119a996d5a9a4e3ff8d"
+    "bytes": 227447,
+    "sha256": "f319cb098e4f83e5fd39404a63e6b2b7546a109551b6118e8699778859a03eee"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-unavailable-halfopen.png",
     "width": 1100,
     "height": 1399,
-    "bytes": 222952,
-    "sha256": "33409475d9d91e7e18328e47f835eb474590717125d36ea2484c594b634ad8f8"
+    "bytes": 222135,
+    "sha256": "6ec405ef831eea5cce3d67460cfaffa15ad9eb5daaa79f446b27d53fb2eb971c"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-unavailable-phone.png",
     "width": 390,
     "height": 1878,
-    "bytes": 188016,
-    "sha256": "77900f7430393fd96e6bdefb6a3547b207b31c73e61b00d41c2db65db0a56268"
+    "bytes": 185667,
+    "sha256": "3e31ec836000ab4654270d39d67f4ffc1e55ca12fe84f78299b082c1062f5214"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-unavailable-tablet.png",
     "width": 820,
     "height": 1399,
-    "bytes": 205214,
-    "sha256": "fe6e340c140c088e605a7e5a48b2c33cb18a8b8fa2a991ee3269178cb82a8ccd"
+    "bytes": 204640,
+    "sha256": "80abfdc336b54765e05b245bb8e3b8dc4136e3eec3ae6ae5d4fd15de1a44ab09"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-unlimited-desktop.png",
     "width": 1280,
     "height": 1579,
-    "bytes": 270385,
-    "sha256": "c36a0fd651c68de8708e87a154611aeb3616f4b920e3880e222108106c2a4ad4"
+    "bytes": 269595,
+    "sha256": "b726ee7bfe072982d3b004772c188fbc783cde49868e6378e03dd6b7ee2c8aa5"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-unlimited-halfopen.png",
     "width": 1100,
     "height": 1619,
-    "bytes": 262467,
-    "sha256": "4b56c8590f26b9c225d6acbcffdccfaedc6494d4de558550059cc627d03fe0d4"
+    "bytes": 261844,
+    "sha256": "97165bf8b8a2a5d7f0ae1c246b71b77382f2961a3dfe893ddcf3291f0e5e9609"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-unlimited-phone.png",
     "width": 390,
     "height": 2179,
-    "bytes": 221774,
-    "sha256": "b9e1f305d146888aa596bd7bff7191373b909b7e616993942b2d1e6d200d484c"
+    "bytes": 219556,
+    "sha256": "1df70eb04dde3a5bcced59ea9b407ae6b80a27356cf9df57264758b36676cc0b"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-unlimited-tablet.png",
     "width": 820,
     "height": 1619,
-    "bytes": 242083,
-    "sha256": "c212deb054d9d4e411d9a2023abbb43646ec2005537750e46ca61f35f9775f76"
+    "bytes": 241552,
+    "sha256": "b68cf4016cd656d0e6f85d80bc1802f771e0ec690416ab57c8b2f0ac083dfc10"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-zero-desktop.png",
     "width": 1280,
     "height": 1462,
-    "bytes": 249130,
-    "sha256": "81589baeebeb0a156c88dde1cf933c1474a98962ee9dcb5881e88e15a6007fd2"
+    "bytes": 248884,
+    "sha256": "22c333f80adbed1d8c5283eb33deda9fdea30b20d2adf885f4122e5312f15b4c"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-zero-halfopen.png",
     "width": 1100,
     "height": 1502,
-    "bytes": 242157,
-    "sha256": "bfe34f820cab88aabad7bcc14dc5892cb2390ac2fea0de15edf5f24d7c9b82b1"
+    "bytes": 241916,
+    "sha256": "61d8e78d5fdb251a1140a19cf0b579c3b2ec47080f629f23cd6c896e3cba0445"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-zero-phone.png",
     "width": 390,
     "height": 2000,
-    "bytes": 204383,
-    "sha256": "75d1dd9ced2af954c7c816b29a09f7f1bfb30616286cc867e36fcade9d3cb3a6"
+    "bytes": 203640,
+    "sha256": "0896f54d3899b460fb0d9dc591557ef4d57caaef77976fc24a556af4233877d5"
   },
   {
     "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/webkit/work-costs-zero-tablet.png",
     "width": 820,
     "height": 1502,
-    "bytes": 223179,
-    "sha256": "79bc2315f3406ef492409a59893064f19e401840bd7b9939956eb1f0cc39ae2d"
+    "bytes": 223111,
+    "sha256": "67cb25f9002390538dacccb1e1254cc9f4245e58cd0a098034f8dbe89a816121"
   }
 ]

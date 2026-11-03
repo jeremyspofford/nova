@@ -44,6 +44,9 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
             assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${entry}/${state}/${posture}: page overflow`);
             assert.deepEqual(await p.locator(`#sg-${entry}`).evaluate((root) => [...root.querySelectorAll<HTMLElement>('input, button, p, label, summary, .settings-control')].filter((e) => e.clientWidth && e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent)), [], `${entry}/${state}/${posture}: clipped text`);
             if (entry === 'work-costs') {
+              const compact = await p.locator('.work-costs').innerText();
+              assert.match(compact, /Nova runner usage on this machine; provider-managed tasks are not included\./, 'exclusion is visible before expanding details');
+              assert.doesNotMatch(compact, /Provider usage appears only when reported|reported usage is counted afterward/);
               assert.equal(await p.locator('[data-save-work-limits]').isDisabled(), ['loading', 'unavailable', 'saving', 'invalid'].includes(state));
               assert.equal(await p.locator('input[type="number"]').count(), 6);
               if (state === 'mixed') {
@@ -63,7 +66,12 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
           await activate(p.locator(`#sg-${entry} summary`));
           assert.equal(await p.locator(`#sg-${entry} details`).getAttribute('open'), '');
           assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'expanded disclosure has no overflow');
-          if (entry === 'work-costs') assert.match(await p.locator('.work-cost-details').innerText(), /Provider-owned loops are not capped live/);
+          if (entry === 'work-costs') {
+            const details = await p.locator('.work-cost-details').innerText();
+            assert.match(details, /Nova runner usage on this machine; provider-managed tasks are not included\./);
+            assert.match(details, /Provider-owned loops are not live capped/);
+            assert.doesNotMatch(details, /Provider usage appears only when reported|reported usage is counted afterward/);
+          }
           else assert.match(await p.locator('.work-cost-details').innerText(), /not a guarantee that every private detail is removed/);
           if (process.env.NOVA_HEALTH_STYLEGUIDE_SHOTS === '1') await p.screenshot({ path: join(out, `${entry}-details-${posture}.png`), fullPage: true, animations: 'disabled', caret: 'hide' });
           if (entry === 'work-costs') {

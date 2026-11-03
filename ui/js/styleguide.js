@@ -269,6 +269,8 @@ let diagnosticState = 'available';
 function costFixture() {
   const empty = { iterations: 0, tokens_in: 0, tokens_out: 0, estimated_tokens: 0, unpriced_tokens: 0, usd: 0 };
   const limits = { task: { iterations: 24, tokens: 150000, usd: 0.5 }, day: { iterations: 300, tokens: 1500000, usd: 5 } };
+  const accounting = { scope: 'this-node-runner', provider_reports_included: false, words: 'Nova runner usage on this machine; provider-managed tasks are not included. Autonomous runner work is live capped; your own conversations are metered without caps. Provider-owned loops are not live capped. Spend on other nodes is not included. Estimated tokens and tokens without a price are labeled separately; this is not complete monthly billing.' };
+  // Direct model calls recorded by Nova's runner, not reports from provider-managed tasks.
   const providers = costState === 'zero' ? [] : [
     { ...empty, provider: 'Cloud provider', model: 'Standard model', tokens_in: 12000, tokens_out: 5000, estimated_tokens: 4000, usd: 0.12 },
     { ...empty, provider: 'Other provider', model: 'Unlisted model', tokens_in: 5000, tokens_out: 1000, unpriced_tokens: 6000 },
@@ -280,7 +282,7 @@ function costFixture() {
     providers[0].provider = '<img src=x onerror="alert(1)">';
     providers[0].model = 'LongModelNameWithoutSpaces'.repeat(6);
   }
-  return { state: costState, view: ['loading', 'unavailable'].includes(costState) ? null : { limits, month: { month: '2026-11', providers, total: providers.reduce((sum, p) => Object.fromEntries(Object.keys(sum).map((k) => [k, sum[k] + p[k]])), empty) } }, invalid: costState === 'invalid' ? { 'task.usd': 'Enter a finite number greater than zero, or choose Unlimited.' } : {} };
+  return { state: costState, view: ['loading', 'unavailable'].includes(costState) ? null : { accounting, limits, month: { month: '2026-11', providers, total: providers.reduce((sum, p) => Object.fromEntries(Object.keys(sum).map((k) => [k, sum[k] + p[k]])), empty) } }, invalid: costState === 'invalid' ? { 'task.usd': 'Enter a finite number greater than zero, or choose Unlimited.' } : {} };
 }
 function healthEntry(kind) {
   const costs = kind === 'work-costs';
@@ -392,7 +394,7 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
         () => `<div class="sg-cards">${state('Rows', `<div class="panel"><ul class="device-list">${deviceRow(hub, { now: t0 })}${deviceRow(desk, { now: t0, roles: true })}${deviceRow(phone, { now: t0 })}${deviceRow({ ...phone, id: 'old', name: 'Old tablet', trust: 'revoked', revoked_at: at(-48) }, { now: t0 })}</ul></div>`)}${state('The card', deviceMeshCard({ devices: [hub, desk, phone], now: t0 }))}${state('Only this device', deviceMeshCard({ devices: [hub], now: t0 }))}</div>`],
       ['health-card', 'HealthCard', 'Fine, or what isn’t, in human terms; the detail is on the Health page, never a path or an error here.',
         () => `<div class="sg-cards">${state('All normal', healthCard({ health: { ok: true, checks: { database: { ok: true }, workers: { ok: true, workers: [{}, {}, {}] } } } }))}${state('Needs you (amber)', healthCard({ health: { ok: true, checks: {} }, problems: [{ id: 1, source: 'backups', message: 'raw detail stays in Health' }] }))}${state('Stopped (red)', healthCard({ health: { ok: true, checks: {} }, problems: [{ id: 2, source: 'ledger', stops: true }] }))}${state('Nova isn’t answering', healthCard({ reachable: false }))}</div>`],
-      ['work-costs', 'Work costs', 'Month-to-date usage and six limits for autonomous work on this node.', () => healthEntry('work-costs')],
+      ['work-costs', 'Work costs', 'Month-to-date usage and six limits for Nova runner work on this machine.', () => healthEntry('work-costs')],
       ['diagnostics', 'Diagnostics', 'A native download, its privacy limits, and an unavailable state.', () => healthEntry('diagnostics')],
       ['memory-card', 'MemoryHighlightCard', 'One thing Nova kept, or that nothing is kept yet.',
         () => `<div class="sg-cards">${state('Kept', memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] }))}${state('Nothing yet', memoryHighlightCard())}</div>`],
