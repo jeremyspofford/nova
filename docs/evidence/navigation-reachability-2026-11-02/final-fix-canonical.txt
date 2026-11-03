@@ -1,0 +1,21 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ selected empty destination cannot borrow hidden previous-view content (463.360311ms)
+✔ hidden active root and hidden active content cannot receive coverage credit (408.758948ms)
+✔ actual visible empty-state content is ready; only active visible pending markers block it (402.465006ms)
+DOCUMENT GUARD: same-document requests=1 reload requests=2 current navigation entries=1
+✔ document guard preserves real same-document history and hash changes, then rejects reload (419.597147ms)
+NAVIGATION phone: registered=11 reached=11 missing=[] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true} states=26
+DOCUMENT phone: main-document requests=1
+✔ navigation reachability and required homes: phone (27304.426398ms)
+NAVIGATION rail: registered=11 reached=11 missing=[] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true} states=26
+DOCUMENT rail: main-document requests=1
+✔ navigation reachability and required homes: rail (21812.069022ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 51254.853199
+no-Kubernetes tripwire: never fired

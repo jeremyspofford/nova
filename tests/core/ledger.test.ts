@@ -5,13 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Db } from '../../src/core/db.ts';
 import { Log } from '../../src/core/log.ts';
-import { Ledger, canMove, type TaskInput } from '../../src/core/ledger.ts';
+import { Ledger, canMove, type TaskInput, type LanedWorker } from '../../src/core/ledger.ts';
 import { Verifier } from '../../src/core/verify.ts';
 import { Workspace, sha256, workspaceWorker } from '../../src/core/workspace.ts';
 import { ENVELOPE_VERSION, type Brief, type PrivacyMode } from '../../src/core/envelope.ts';
 import type { Egress, Worker } from '../../src/core/workers.ts';
 
-function setup(opts: { workers?: (ws: Workspace) => Worker[]; privacy?: PrivacyMode; db?: Db; root?: string } = {}) {
+function setup(opts: { workers?: (ws: Workspace) => LanedWorker[]; privacy?: PrivacyMode; db?: Db; root?: string; timeoutMs?: number; maxAttempts?: number } = {}) {
   const root = opts.root ?? mkdtempSync(join(tmpdir(), 'nova-ledger-'));
   const db = opts.db ?? new Db(':memory:');
   if (!opts.db) db.migrate();
@@ -19,7 +19,7 @@ function setup(opts: { workers?: (ws: Workspace) => Worker[]; privacy?: PrivacyM
   const ws = new Workspace(join(root, 'workspace'));
   const workers = [workspaceWorker(ws), ...(opts.workers?.(ws) ?? [])];
   const verifier = new Verifier(ws);
-  const ledger = new Ledger({ db, log, verifier, workers, defaultPrivacy: () => opts.privacy ?? 'local-only' });
+  const ledger = new Ledger({ db, log, verifier, workers, defaultPrivacy: () => opts.privacy ?? 'local-only', timeoutMs: opts.timeoutMs, maxAttempts: opts.maxAttempts });
   return { db, log, ws, ledger, root, verifier };
 }
 
@@ -221,32 +221,42 @@ test('pumping an empty queue settles, so idle() returns (regression: it used to 
 
 // Review findings (PR #210): each of these failed before its fix.
 
-test('a worker that hangs past the timeout does not block the queue', async () => {
-  const hang = fake('hang', 'none', () => new Promise(() => {}));
-  const root = mkdtempSync(join(tmpdir(), 'nova-ledger-'));
-  const db = new Db(':memory:');
-  db.migrate();
-  const ws = new Workspace(join(root, 'workspace'));
-  const ledger = new Ledger({ db, log: new Log(db, null), verifier: new Verifier(ws), workers: [workspaceWorker(ws), hang(ws)], defaultPrivacy: () => 'local-only', timeoutMs: 40, maxAttempts: 1 });
-  const stuck = ledger.create(writeNote({ owner: 'hang', idempotency_key: 'h' }));
-  const next = ledger.create(writeNote({ idempotency_key: 'n' }));
-  await ledger.idle();
-  assert.equal(ledger.get(stuck.id).state, 'failed');
-  assert.match(ledger.get(stuck.id).reason ?? '', /took longer than/);
-  assert.equal(ledger.get(next.id).state, 'done', 'the next task still ran');
+test('a worker past its deadline fails promptly but retains its lane until physical settlement', { timeout: 5000 }, async () => {
+  const pending = Promise.withResolvers<unknown>();
+  const { ledger } = setup({ timeoutMs: 40, maxAttempts: 1, workers: (ws) => [fake('hang', 'none', () => pending.promise)(ws)] });
+  const stuck = ledger.create(writeNote({ owner: 'hang' }));
+  const next = ledger.create(writeNote());
+  try {
+    await eventually(() => ledger.get(stuck.id).state === 'failed');
+    assert.match(ledger.get(stuck.id).reason ?? '', /took longer than/);
+    assert.equal(ledger.get(next.id).state, 'queued', 'same lane cannot overlap even a terminal attempt');
+    assert.throws(() => ledger.committing(stuck.id, 'late commit'), /running/);
+    pending.resolve(report(stuck.brief));
+    await ledger.idle();
+    assert.equal(ledger.get(stuck.id).state, 'failed', 'late success cannot replace the deadline result');
+    assert.equal(ledger.get(stuck.id).report, null);
+    assert.equal(ledger.get(next.id).state, 'done');
+  } finally { pending.resolve(null); await ledger.idle(); }
 });
 
-test('cancelling a running task frees the queue', async () => {
-  const hang = fake('hang', 'none', () => new Promise(() => {}));
-  const { ledger } = setup({ workers: (ws) => [hang(ws)] });
-  const stuck = ledger.create(writeNote({ owner: 'hang', idempotency_key: 'h' }));
-  const next = ledger.create(writeNote({ idempotency_key: 'n' }));
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(ledger.get(stuck.id).state, 'active');
-  ledger.cancel(stuck.id, 'Taking too long.');
-  await ledger.idle();
-  assert.equal(ledger.get(stuck.id).state, 'cancelled');
-  assert.equal(ledger.get(next.id).state, 'done');
+test('cancelling revokes authority immediately but frees the lane only when the worker settles', { timeout: 5000 }, async () => {
+  const pending = Promise.withResolvers<unknown>();
+  const { ledger } = setup({ workers: (ws) => [fake('hang', 'none', () => pending.promise)(ws)] });
+  const stuck = ledger.create(writeNote({ owner: 'hang' }));
+  const next = ledger.create(writeNote());
+  try {
+    await eventually(() => ledger.get(stuck.id).state === 'active');
+    ledger.cancel(stuck.id, 'Taking too long.');
+    assert.throws(() => ledger.committing(stuck.id, 'late commit'), /running/);
+    assert.throws(() => ledger.notStarted(stuck.id, 'late claim'), /running/);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(ledger.get(next.id).state, 'queued');
+    pending.reject(new Error('late cancellation rejection'));
+    await ledger.idle();
+    assert.equal(ledger.get(stuck.id).state, 'cancelled');
+    assert.equal(ledger.get(stuck.id).report, null);
+    assert.equal(ledger.get(next.id).state, 'done');
+  } finally { pending.resolve(null); await ledger.idle(); }
 });
 
 test('a read-back target matches however it is spelled, and an append is not repeated', async () => {
@@ -425,4 +435,145 @@ test('a worker can take longer than the default timeout when it says so', async 
   const t = ledger.create(writeNote({ owner: 'slow' }));
   await ledger.idle();
   assert.equal(ledger.get(t.id).state, 'done', ledger.get(t.id).reason ?? '');
+});
+
+
+async function eventually(check: () => boolean): Promise<void> {
+  const until = Date.now() + 2000;
+  while (!check() && Date.now() < until) await new Promise((r) => setTimeout(r, 5));
+  assert.ok(check(), 'the expected state arrived within the bound');
+}
+
+// Physical worker settlement, not timeout bookkeeping, owns its id and lane slot.
+for (const max of [1, 2]) for (const late of ['resolve', 'reject'] as const) {
+  test(`timeout retains the live worker slot (max ${max}, late ${late})`, { timeout: 5000 }, async () => {
+    const pending = Promise.withResolvers<unknown>();
+    const retry = Promise.withResolvers<unknown>();
+    let firstBrief!: Brief;
+    const calls: string[] = [];
+    let firstSignal!: AbortSignal;
+    const { ledger, ws } = setup({ timeoutMs: 50, workers: (ws) => [{
+      ...fake('controlled', 'none', async () => null)(ws),
+      lane: () => ({ key: 'one', max }),
+      run: (b, signal) => {
+        calls.push(b.task_id);
+        if (!firstBrief) { firstBrief = b; firstSignal = signal; return pending.promise; }
+        if (b.task_id === firstBrief.task_id) return retry.promise;
+        return workspaceWorker(ws).run(b, signal);
+      },
+    }] });
+    const first = ledger.create(writeNote({ owner: 'controlled' }));
+    try {
+      await eventually(() => ledger.events(first.id).some((e) => e.kind === 'timed_out'));
+      void ledger.pump();
+      await new Promise((r) => setTimeout(r, 10));
+      assert.equal(calls.filter((id) => id === first.id).length, 1, 'no retry overlaps the unresolved first worker');
+      assert.equal(firstSignal.aborted, true);
+      assert.equal(ledger.get(first.id).state, 'queued');
+      assert.throws(() => ledger.committing(first.id, 'too late'), /running/);
+      assert.throws(() => ledger.notStarted(first.id, 'too late'), /running/);
+      const sibling = ledger.create(writeNote({ owner: 'controlled' }));
+      const other = ledger.create(writeNote());
+      await eventually(() => ledger.get(other.id).state === 'done');
+      if (max === 1) assert.equal(ledger.get(sibling.id).state, 'queued', 'same lane remains reserved');
+      else await eventually(() => ledger.get(sibling.id).state === 'done');
+      let idle = false;
+      void ledger.idle().then(() => { idle = true; });
+      await new Promise((r) => setTimeout(r, 10));
+      assert.equal(idle, false, 'idle cannot claim the unresolved worker is gone');
+      const expired = ledger.get(first.id);
+      assert.equal(expired.attempts, 1);
+      assert.equal(expired.report, null);
+      if (late === 'resolve') pending.resolve(report(firstBrief, { status: 'failed', summary: 'late result' }));
+      else pending.reject(new Error('late rejection'));
+      await eventually(() => calls.filter((id) => id === first.id).length === 2);
+      assert.equal(ledger.get(first.id).report, null, 'late result did not replace the current report');
+      assert.equal(ledger.events(first.id).filter((e) => e.kind === 'reported').length, 0);
+      retry.resolve(await workspaceWorker(ws).run(firstBrief, new AbortController().signal));
+      await ledger.idle();
+      assert.equal(ledger.get(first.id).state, 'done');
+      assert.equal(ledger.get(first.id).attempts, 2);
+      assert.equal(ledger.get(sibling.id).state, 'done', 'settlement wakes the blocked lane');
+      assert.equal(ledger.events(first.id).filter((e) => e.kind === 'commit_point' || e.kind === 'not_started').length, 0);
+    } finally {
+      pending.resolve(null);
+      retry.resolve(null);
+      ledger.halt();
+      await ledger.idle();
+    }
+  });
+}
+
+test('drain refuses live timed-out work and resume recovers stopped siblings without overlapping either', { timeout: 5000 }, async () => {
+  const orphan = Promise.withResolvers<unknown>();
+  const cooperative = Promise.withResolvers<unknown>();
+  let orphanRuns = 0;
+  let politeRuns = 0;
+  const { ledger, ws } = setup({ workers: (ws) => [{
+    ...fake('orphan', 'none', async () => null)(ws), timeoutMs: 30,
+    lane: () => ({ key: 'orphan', max: 1 }),
+    run: (b, signal) => ++orphanRuns === 1 ? orphan.promise : workspaceWorker(ws).run(b, signal),
+  }, {
+    ...fake('polite', 'none', async () => null)(ws),
+    lane: () => ({ key: 'polite', max: 1 }),
+    run: (b, signal) => {
+      if (++politeRuns > 1) return workspaceWorker(ws).run(b, signal);
+      signal.addEventListener('abort', () => cooperative.reject(signal.reason), { once: true });
+      return cooperative.promise;
+    },
+  }] });
+  const stuck = ledger.create(writeNote({ owner: 'orphan' }));
+  const polite = ledger.create(writeNote({ owner: 'polite' }));
+  try {
+    await eventually(() => ledger.events(stuck.id).some((e) => e.kind === 'timed_out'));
+    const start = Date.now();
+    const drained = await ledger.drain({ boundMs: 10, commitMs: 20, keep: () => false });
+    assert.ok(Date.now() - start < 500, 'drain is bounded');
+    assert.deepEqual(drained.stuck, [stuck.id], 'unresolved work prevents handover');
+    assert.ok(!drained.finished.includes(stuck.id) && !drained.handed.includes(stuck.id));
+    assert.throws(() => ledger.committing(polite.id, 'after abort'), /running/);
+    assert.throws(() => ledger.notStarted(polite.id, 'after abort'), /running/);
+    ledger.resume();
+    ledger.recover();
+    await eventually(() => ledger.get(polite.id).state === 'done');
+    assert.equal(politeRuns, 2, 'stopped cooperative task is recovered after refused drain');
+    assert.equal(orphanRuns, 1);
+    orphan.resolve(report(stuck.brief, { status: 'failed' }));
+    await ledger.idle();
+    assert.equal(ledger.get(stuck.id).state, 'done');
+    assert.equal(orphanRuns, 2);
+    assert.equal(readFileSync(ws.resolve('notes/hello.md'), 'utf8'), 'hello\n');
+  } finally {
+    orphan.resolve(null);
+    cooperative.resolve(null);
+    ledger.halt();
+    await ledger.idle();
+  }
+});
+
+
+test('halt revokes authority and resume waits for physical settlement before recovery', { timeout: 5000 }, async () => {
+  const pending = Promise.withResolvers<unknown>();
+  let runs = 0;
+  const { ledger } = setup({ workers: (ws) => [{
+    ...fake('halted', 'none', async () => null)(ws),
+    run: (b, signal) => ++runs === 1 ? pending.promise : workspaceWorker(ws).run(b, signal),
+  }] });
+  const first = ledger.create(writeNote({ owner: 'halted' }));
+  try {
+    await eventually(() => runs === 1);
+    assert.deepEqual(ledger.halt(), [first.id]);
+    assert.throws(() => ledger.committing(first.id, 'after halt'), /running/);
+    assert.throws(() => ledger.notStarted(first.id, 'after halt'), /running/);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(ledger.get(first.id).state, 'active');
+    ledger.resume();
+    assert.deepEqual(ledger.recover().requeued, [], 'recovery cannot change a still-live attempt');
+    assert.equal(ledger.get(first.id).attempts, 1);
+    pending.resolve(report(first.brief, { status: 'failed', summary: 'late halted report' }));
+    await ledger.idle();
+    assert.equal(runs, 2);
+    assert.equal(ledger.get(first.id).state, 'done');
+    assert.equal(ledger.events(first.id).filter((e) => e.kind === 'reported').length, 1);
+  } finally { pending.resolve(null); ledger.halt(); await ledger.idle(); }
 });

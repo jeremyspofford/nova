@@ -2,6 +2,12 @@
 
 Build in this order. A milestone is complete only when its gate passes with evidence (OPERATING-RULES). **Continue through milestones autonomously** — do not stop after each one to ask what to do next. Stop only at a gate failure you cannot resolve, a genuine packet conflict, or a Tier-3 decision reserved for the user.
 
+## Cross-cutting gate — rendered app reachability (owner escalation, 2026-11-02)
+
+- Every registered app view must have a real door from Home in phone and rail arrangements. The required UI gate crawls actual clicks/taps against production VIEWS, independently of the navigation placement model; new orphan views fail it. Topology has ordinary Home Devices and Settings Devices homes; Capture has its own visible Settings category.
+- CAPABILITY-INVENTORY's current app-shipping column and [51-row mapping / 70-item scope register](../evidence/navigation-capability-surfaces-2026-11-02.md) govern discoverable app claims. Backend history, API-only work and conditional task/data controls are not blanket app-shipping evidence. Normal-Home, onboarding-only and external pairing boundaries stay explicit.
+- [Evidence](../evidence/navigation-reachability-2026-11-02.md) preserves real before/after and new-orphan failures. This repair does not reorder M10j → M10k, pass credentialed K3s, lift #275's findings-B hold or approve stage-2 visual work.
+
 ## M0 — Baseline and inventory (no new features)
 - Fresh clone of `origin/main`; verify Era 1/Era 2 state against CAPABILITY-INVENTORY; correct the inventory where code disagrees.
 - Environment baseline: toolchain pinned (Mise), lint/typecheck/tests running in CI.
@@ -144,7 +150,7 @@ Nova gets its own sandboxed computer and browser. A design doc (ADR) comes first
 - **Chat as the control plane** for coding (Relay workers in worktrees), infrastructure (a plan is shown before any apply, and apply is Tier 3), networking (Tier 3, with a snapshot, a diff and a dead-man's switch), and accounts (Tier 3; passwords never enter model context).
 - **Approval tiers apply throughout,** and everything goes in the Work Ledger.
 - **Gate:** set in the M10 design doc before the build starts; at least, the Part 4 tier rules are each proven by tests, plus the fresh-user test.
-- **Service orchestration (owner input 2026-10-31, binding):** `INPUT-2026-10-31-SERVICE-ORCHESTRATION.md`. Designed in the addendum ADR `docs/plans/M10-orchestration.md`, whose open questions the owner decided the same day (`INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md`); built after M10d as phases M10e–M10k. Nova stays fully functional with no Kubernetes anywhere. The promotion drill with two test devices is part of M10's gate evidence.
+- **Service orchestration (owner input 2026-10-31, binding):** `INPUT-2026-10-31-SERVICE-ORCHESTRATION.md`. Designed in the addendum ADR `docs/plans/M10-orchestration.md`, whose open questions the owner decided the same day (`INPUT-2026-10-31-ORCHESTRATION-DECISIONS.md`); built after M10d as phases M10e–M10k. Nova stays fully functional with no Kubernetes anywhere. The promotion drill with two test devices is part of M10's gate evidence. M10i adds the system map reached from Settings › Services and Health › Devices, with independently aged observations, manager-backed version approvals and same-snapshot Mermaid text (`docs/evidence/m10i-gate.md`). Cluster observations are stand-ins until M10j; the K3s driver, per-cluster credentials and M10k GitOps/second-site work remain unbuilt. The existing M10e service-change-kind/GitOps pipeline deferral is unchanged.
 
 ## QA harness — Amendment 2026-10-31-A
 Spec: AMENDMENT-2026-10-31-A. A local harness with two modes: change-aware PR testing, and a sweep of the full application on disposable seeded instances, with nothing leaving this machine.

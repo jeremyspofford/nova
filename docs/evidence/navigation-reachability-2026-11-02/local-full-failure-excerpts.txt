@@ -1,0 +1,192 @@
+# npm-test.log
+SHA256 full retained log: 4fa12ea5ff764d54cd70244e9b62a0fa2e56ab252c03075df5e1c5140bde0e96
+
+ℹ tests 1627
+ℹ suites 0
+ℹ pass 1608
+ℹ fail 4
+ℹ cancelled 1
+ℹ skipped 14
+ℹ todo 0
+ℹ duration_ms 394079.425271
+
+✖ failing tests:
+
+test at tests/acceptance/fresh-user.test.ts:28:1
+✖ fresh user: blank profile → conversational setup → a delegated task verified with evidence, local-only, durable across a restart (12392.805195ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    [
+      [
+        'model-runtime',
+        false
+      ],
+      [
+  +     'screenpipe',
+  +     false
+  +   ],
+  +   [
+        'home-assistant',
+        false
+      ],
+      [
+        'computer',
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/acceptance/fresh-user.test.ts:95:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ [ 'model-runtime', false ], [ 'screenpipe', false ], [ 'home-assistant', false ], [ 'computer', false ] ],
+    expected: [ [ 'model-runtime', false ], [ 'home-assistant', false ], [ 'computer', false ] ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/acceptance/fresh-user.test.ts:1:1
+✖ tests/acceptance/fresh-user.test.ts (394058.803584ms)
+  'Promise resolution is still pending but the event loop has already resolved'
+
+test at tests/acceptance/m6a-capture.test.ts:40:1
+✖ M6a: the real server pulls Screenpipe on its own, never stores a private window, rides out an outage, refuses a remote Screenpipe, keeps capture out of git (8067.188128ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + 'unreachable'
+  - 'on'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/acceptance/m6a-capture.test.ts:69:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'unreachable',
+    expected: 'on',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/provider-guard.test.ts:170:1
+✖ a coding agent that changes more than Nova takes from one task is refused in plain words (656.315896ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /changed 201 files .* Nova takes at most 200 files and 50 MB from one task/. Input:
+
+  "Claude Code couldn't do it: Claude Code ended (exit 0) without a result."
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/core/provider-guard.test.ts:181:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "Claude Code couldn't do it: Claude Code ended (exit 0) without a result.",
+    expected: /changed 201 files .* Nova takes at most 200 files and 50 MB from one task/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/ui-review.test.js:155:1
+✖ search knows more of people’s words, and “mode” means light and dark (3.302029ms)
+  AssertionError [ERR_ASSERTION]: screenpipe
+  + actual - expected
+
+  + 'Capture › Capture'
+  - 'Privacy and permissions › Capture'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/ui-review.test.js:161:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'Capture › Capture',
+    expected: 'Privacy and permissions › Capture',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired
+
+
+# npm-test-bounded.log
+SHA256 full retained log: e36fc964f709f1cb811ec4388268682e306921514f732f7b1cc60e171498b54a
+
+ℹ Error: Test "N1b: after 20 free follows in all, every fetch asks" at tests/ingest/round2.test.js:87:1 generated asynchronous activity after the test ended. This activity created the error "Error: ENOENT: no such file or directory, open '/tmp/nova-test-LkAFnz/nova-gate-TOzOp9/sessions/2026-11-02-natghm.jsonl'" and would have caused the test to fail, but instead triggered an unhandledRejection event.
+ℹ tests 1626
+ℹ suites 0
+ℹ pass 1607
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 14
+ℹ todo 0
+ℹ duration_ms 205206.108666
+
+✖ failing tests:
+
+test at tests/core/design-api.test.ts:164:1
+✖ the mode is set through the profile route and emits the event; other appearance keys go through apply (1953.925823ms)
+  TypeError: Cannot read properties of undefined (reading 'action')
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/core/design-api.test.ts:179:32)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at tests/core/provider-guard.test.ts:170:1
+✖ a coding agent that changes more than Nova takes from one task is refused in plain words (772.668684ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /changed 201 files .* Nova takes at most 200 files and 50 MB from one task/. Input:
+
+  "Claude Code couldn't do it: Claude Code ended (exit 0) without a result."
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/core/provider-guard.test.ts:181:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "Claude Code couldn't do it: Claude Code ended (exit 0) without a result.",
+    expected: /changed 201 files .* Nova takes at most 200 files and 50 MB from one task/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/ingest/round2.test.js:87:1
+✖ N1b: after 20 free follows in all, every fetch asks (15461.393417ms)
+  Error: timed out
+      at Object.drive (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/ingest/support.js:167:13)
+      at async TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/ingest/round2.test.js:92:19)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at tests/skills-api.test.js:81:1
+✖ the email summary: searches, reads, summarizes; mail is screened, and an address after it that the mail didn’t give asks (6795.044052ms)
+  Error: timed out
+      at settle (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/skills-api.test.js:45:9)
+      at async ask (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/skills-api.test.js:47:116)
+      at async TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/skills-api.test.js:82:21)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at tests/ui-review.test.js:155:1
+✖ search knows more of people’s words, and “mode” means light and dark (3.238401ms)
+  AssertionError [ERR_ASSERTION]: screenpipe
+  + actual - expected
+
+  + 'Capture › Capture'
+  - 'Privacy and permissions › Capture'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/ui-review.test.js:161:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'Capture › Capture',
+    expected: 'Privacy and permissions › Capture',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

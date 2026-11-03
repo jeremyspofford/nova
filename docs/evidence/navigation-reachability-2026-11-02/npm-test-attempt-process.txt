@@ -1,0 +1,7 @@
+Ordinary npm test attempt; source at base6d0a74a with navigation working tree changes.
+2026-11-02 18:25:49UTC process evidence via ps:
+PID1967752 PPID1967741 elapsed367s: node --test tests/*.test.js tests/core/*.test.ts tests/acceptance/*.test.ts tests/supervisor/*.test.ts tests/chaos/*.test.ts tests/ingest/*.test.ts tests/ingest/*.test.js
+PID1967774 PPID1967752 elapsed367s: node [inherited test-runner defaults] tests/acceptance/fresh-user.test.ts
+No fresh-user completion/failure line in npm-test.log. Other acceptance file output finished; log remained5627bytes and last modified18:22:15UTC.
+Only this owned child and runner received TERM. Ordinary attempt exited143; no ordinary suite total/pass claim.
+Bounded full-glob invocation is separate evidence only; no source, fixture, dependency or runtime change for this stall.

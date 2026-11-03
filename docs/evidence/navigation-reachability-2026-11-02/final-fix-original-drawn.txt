@@ -1,0 +1,10 @@
+async function drawn(page: Page) {
+  await ready(page);
+  await page.waitForFunction(async () => {
+    const { store } = await import(String('/js/surfaces.js'));
+    const root = [...document.querySelectorAll<HTMLElement>('#scroller > *, #main > *')].find(e => !e.hidden && e.checkVisibility() && e.querySelector('h2, .card, .empty, .empty-state, .turn'));
+    const pending = [...document.querySelectorAll<HTMLElement>('[data-skeleton], .view-waiting, [data-waiting], [data-topology-wait]')].some(e => e.checkVisibility());
+    return store.loaded && !!store.health && !!root && !pending && !document.querySelector('#thread.no-anim');
+  }, null, { timeout: 20_000 });
+  await still(page);
+}

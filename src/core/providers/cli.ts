@@ -3,6 +3,7 @@
 // cancelled or runs out of time. Nothing here runs a command just to check it is there.
 import { spawn } from 'node:child_process';
 import { trackChild } from '../children.ts';
+import { inheritedChildEnv } from '../child-env.ts';
 import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 
@@ -38,15 +39,10 @@ export function which(program: string, path = process.env.PATH ?? ''): string | 
   return null;
 }
 
-// What a provider's command is never handed: Nova's own settings and secrets, and the variables
-// through which a Claude Code session Nova may itself be running in would leak into the child.
-// NODE_TEST_CONTEXT: set when Nova itself runs under `node --test`; a brief's own `node --test`
-// would otherwise report to Nova's test runner instead of exiting with its result.
-const LEAKY = /^(NOVA_|NODE_TEST_CONTEXT$|CLAUDE\w*(MEMORY|ADDITIONAL_DIRECTORIES|CLAUDE_MD|USER_EMAIL))/;
+// Inheritance is finite and shared with Era 2. Explicit extras are a trusted caller contract,
+// not another source of ambient parent data; no provider adapter currently supplies extras.
 export function childEnv(extra: Record<string, string> = {}, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) if (v !== undefined && !LEAKY.test(k)) out[k] = v;
-  return { ...out, ...extra };
+  return { ...inheritedChildEnv(env), ...extra };
 }
 
 export interface Ran { code: number | null; signal: string | null; stderr: string; aborted: boolean; timedOut: boolean; ms: number }

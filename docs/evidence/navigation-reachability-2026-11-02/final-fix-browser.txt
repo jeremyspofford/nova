@@ -1,0 +1,21 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M10b: a site sign-in saved and forgotten in Settings › Connections › Site sign-ins (2268.982821ms)
+✔ selected empty destination cannot borrow hidden previous-view content (399.729349ms)
+✔ hidden active root and hidden active content cannot receive coverage credit (402.667861ms)
+✔ actual visible empty-state content is ready; only active visible pending markers block it (392.166783ms)
+✔ document guard preserves real same-document history and hash changes, then rejects reload (381.638546ms)
+NAVIGATION phone: registered=11 reached=11 missing=[] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true} states=26
+DOCUMENT phone: main-document requests=1
+✔ navigation reachability and required homes: phone (27255.412404ms)
+NAVIGATION rail: registered=11 reached=11 missing=[] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true} states=26
+DOCUMENT rail: main-document requests=1
+✔ navigation reachability and required homes: rail (21717.330462ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 53691.364118
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,64 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ selected empty destination cannot borrow hidden previous-view content (464.660837ms)
+✖ hidden active root and hidden active content cannot receive coverage credit (447.730281ms)
+✔ actual visible empty-state content is ready; only active visible pending markers block it (425.898872ms)
+✖ document guard preserves real same-document history and hash changes, then rejects reload (409.227654ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 1
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1961.101016
+
+✖ failing tests:
+
+test at tests/ui/navigation-guards.test.ts:21:1
+✖ selected empty destination cannot borrow hidden previous-view content (464.660837ms)
+  AssertionError [ERR_ASSERTION]: Empty Topology must not receive coverage credit from hidden Home
+
+  true !== false
+
+      at TestContext.<anonymous> (file:///work/tests/ui/navigation-guards.test.ts:23:16)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ui/navigation-guards.test.ts:27:1
+✖ hidden active root and hidden active content cannot receive coverage credit (447.730281ms)
+  AssertionError [ERR_ASSERTION]: Hidden active root must fail
+
+  true !== false
+
+      at TestContext.<anonymous> (file:///work/tests/ui/navigation-guards.test.ts:31:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ui/navigation-guards.test.ts:48:1
+✖ document guard preserves real same-document history and hash changes, then rejects reload (409.227654ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection: Reload must be rejected even though navigation timing resets to one
+      at async TestContext.<anonymous> (file:///work/tests/ui/navigation-guards.test.ts:57:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /actual router retains the document/,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

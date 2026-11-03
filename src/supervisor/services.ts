@@ -37,7 +37,7 @@ import { chmod, lstat, readFile, realpath, writeFile } from 'node:fs/promises';
 import { totalmem } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONSOLE, commandProblem, platformKey, programName, promotionTier, type ProgramArtifact, type ServiceDefinition, type ServiceDriver, type ServiceOutcome, type ServicePlan, type ServicePlanStep, type ServiceSay, type ServiceStatus, type ServiceVersionStatus, type ServiceVersionView, type SupervisorProblem } from '../core/index.ts';
+import { sameServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, commandProblem, platformKey, programName, promotionTier, type ProgramArtifact, type ServiceDefinition, type ServiceDriver, type ServiceOutcome, type ServicePlan, type ServicePlanStep, type ServiceSay, type ServiceStatus, type ServiceVersionStatus, type ServiceVersionView, type SupervisorProblem } from '../core/index.ts';
 import { CrashWindow } from './crashes.ts';
 import { bootId, hasProc, same, stat, type ProcId } from './procs.ts';
 import { ServerProcess } from './server.ts';
@@ -76,8 +76,8 @@ export interface ConsoleHooks {
   status(): ServiceStatus;
   // Makes the release's slot from its tag (the console's alongside start is part of its deploy).
   prepare(version: string): Promise<Outcome>;
-  deploy(version: string, say: Say): Promise<Outcome>;
-  rollback(o: { auto: boolean; reason: string }, say: Say): Promise<Outcome>;
+  deploy(version: string, say: Say, expected?: ServiceExpectedState): Promise<Outcome>;
+  rollback(o: { auto: boolean; reason: string; expected?: ServiceExpectedState }, say: Say): Promise<Outcome>;
 }
 
 export interface SupervisorDriverOptions {
@@ -271,9 +271,10 @@ export class SupervisorDriver implements ServiceDriver {
 
   // ---- switch: traffic moves, a canary, then the soak --------------------------------------------
 
-  async switch(service: string, version: string, say: Say = () => {}): Promise<Outcome> {
-    if (service === CONSOLE) return this.o.console.deploy(version, say);
+  async switch(service: string, version: string, say: Say = () => {}, expected?: ServiceExpectedState): Promise<Outcome> {
+    if (service === CONSOLE) return this.o.console.deploy(version, say, expected);
     return this.#exclusive(service, async (rec, rt) => {
+      if (expected !== undefined && !sameServiceExpected(expected, rec)) return { ok: false, said: SERVICE_CHANGED };
       const def = this.#def(service, version);
       const v = rec.versions.find((x) => x.version === version);
       // Only a version that passed is ever offered, whoever asks.
@@ -400,12 +401,13 @@ export class SupervisorDriver implements ServiceDriver {
 
   // ---- rollback: the kept version, in one step --------------------------------------------------------
 
-  async rollback(service: string, o: { auto: boolean; reason: string }, say: Say = () => {}): Promise<Outcome> {
+  async rollback(service: string, o: { auto: boolean; reason: string; expected?: ServiceExpectedState }, say: Say = () => {}): Promise<Outcome> {
     if (service === CONSOLE) return this.o.console.rollback(o, say);
     return this.#exclusive(service, (rec, rt) => this.#rollback(rec, rt, o, say));
   }
 
-  async #rollback(rec: Rec, rt: Runtime, o: { auto: boolean; reason: string }, say: Say = () => {}): Promise<Outcome> {
+  async #rollback(rec: Rec, rt: Runtime, o: { auto: boolean; reason: string; expected?: ServiceExpectedState }, say: Say = () => {}): Promise<Outcome> {
+    if (o.expected !== undefined && !sameServiceExpected(o.expected, rec)) return { ok: false, said: SERVICE_CHANGED };
     const service = rec.service;
     // The soak's end can't take the kept slot from under a rollback.
     this.#clearSoak(rt);

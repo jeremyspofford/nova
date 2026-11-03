@@ -1,0 +1,35 @@
+{
+  "pin": "6d0a74a58a3a20df7f3718b2ade2413c1ba84e8a",
+  "modules": [
+    {
+      "file": "ui/js/components.js",
+      "sha256": "d7e56048a0e82bd273766b0aad862aff998da0214f6284db4ae7f82e371f5287",
+      "exact_pinned_bytes": true
+    },
+    {
+      "file": "ui/js/nav.js",
+      "sha256": "cd69a43c704da1f0381754e89ae0f7a61612f4bac0466d54ae668be152841798",
+      "exact_pinned_bytes": true
+    },
+    {
+      "file": "ui/js/settings-ia.js",
+      "sha256": "f8bf56ef1c14c3469313beaf73011b430591d47548e2b9ecdbec7cc920a071ac",
+      "exact_pinned_bytes": true
+    },
+    {
+      "file": "ui/js/surfaces.js",
+      "sha256": "52ac354fd5748ce871bb923d6c0366437725f38699ce67348191c77aa3d2db5f",
+      "exact_pinned_bytes": true
+    },
+    {
+      "file": "ui/js/app.js",
+      "sha256": "c5b7a1b46fb6cf1f20f266a1677b663e7b115acaa4f14e3881cfcc33f89ff953",
+      "exact_pinned_bytes": true
+    },
+    {
+      "file": "ui/index.html",
+      "sha256": "6431b1731fff3d77fb0c4042cb345eaf58005e54fa417e67c32eb15a0001b799",
+      "exact_pinned_bytes": true
+    }
+  ]
+}

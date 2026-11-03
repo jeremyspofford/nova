@@ -2,7 +2,7 @@
 // stdin, text streamed back. Understands plain text output and Claude Code's
 // stream-json; anything else that prints text works too.
 import { spawn } from 'node:child_process';
-import { trackChild } from './core/index.ts';
+import { inheritedChildEnv, trackChild } from './core/index.ts';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,15 +11,10 @@ export class AgentError extends Error {
   constructor(message, detail = '') { super(message); this.detail = detail; }
 }
 
-// Nova's files are the agent's only memory. When Nova itself runs inside a
-// Claude Code session, that session's memory, extra CLAUDE.md folders and the
-// signed-in account's email arrive through the environment; strip them so
-// they can't leak in. (A real run signed a draft with a name only that email held.)
-// Nova's own secrets in its environment never reach the agent either: the stable name's control
-// token (M10g) can move where every device goes.
-const LEAKY = /^CLAUDE\w*(MEMORY|ADDITIONAL_DIRECTORIES|CLAUDE_MD|USER_EMAIL)|^NOVA_MESH_NAME_TOKEN$/;
+// Nova's files are the agent's only memory. Ambient credentials, settings and host-session
+// memory never reach it; use the same finite inherited policy as tools and provider CLIs.
 export function agentEnv(env = process.env) {
-  return Object.fromEntries(Object.entries(env).filter(([k]) => !LEAKY.test(k)));
+  return inheritedChildEnv(env);
 }
 
 export function runAgent({ cmd, system, prompt, signal, onText = () => {} }) {

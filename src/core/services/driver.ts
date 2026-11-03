@@ -2,6 +2,7 @@
 // service, whatever runs it. The supervisor driver (src/supervisor/services.ts) is the default; the
 // K3s driver (M10j) will implement the same six calls, so a third needs no caller changes. Every
 // driver passes the same contract test (tests/support/service-driver-contract.ts).
+import type { ServiceExpectedState, ServiceAssignment } from './expected.ts';
 import type { ServiceDefinition } from './definition.ts';
 
 export type Say = (line: string) => void;
@@ -42,6 +43,7 @@ export interface ServiceStatus {
   live: string | null;
   // The version kept to go back to in one step, and until when (null: until the next promotion).
   previous: string | null;
+  assigned?: ServiceAssignment | null;
   soak_until: string | null;
   // Held: restarted too often, so the driver stopped trying. The reason, in plain words.
   held: { reason: string; at: string } | null;
@@ -61,11 +63,12 @@ export interface ServiceDriver {
   // then runs its contract tests and health. It never moves traffic. Refused when `plan` refuses.
   apply(def: ServiceDefinition, say?: Say): Promise<Outcome>;
   status(service?: string): ServiceStatus[];
+  // Any supplied expected state MUST be compared inside the driver queue/atomic mutation.
   // Moves traffic to a version `apply` made ready, watches it, and rolls back by itself when its
   // health fails. On success, the previous version is kept for its soak.
-  switch(service: string, version: string, say?: Say): Promise<Outcome>;
+  switch(service: string, version: string, say?: Say, expected?: ServiceExpectedState): Promise<Outcome>;
   // Back to the kept version in one step: nothing is installed or downloaded.
-  rollback(service: string, o: { auto: boolean; reason: string }, say?: Say): Promise<Outcome>;
+  rollback(service: string, o: { auto: boolean; reason: string; expected?: ServiceExpectedState }, say?: Say): Promise<Outcome>;
   // Starts the live version again after it was held (it stopped too often), the person having fixed
   // what stopped it. The same, approved version: nothing new runs. A driver may not offer it.
   recover?(service: string, say?: Say): Promise<Outcome>;

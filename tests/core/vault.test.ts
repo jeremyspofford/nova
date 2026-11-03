@@ -231,6 +231,31 @@ test('the real secret-tool, if this machine has one: a throwaway account, remove
   assert.equal(store.read(), null);
 });
 
+test('commitHome resolves only after its queued real git commit finishes', async (t) => {
+  if (spawnSync('git', ['--version']).error) { t.skip('git is not installed'); return; }
+  const h = home();
+  writeFileSync(join(h, 'USER.md'), '# You\n');
+  await ensureGit(h);
+  const hold = join(h, '.git', 'hold-commit');
+  const entered = join(h, '.git', 'commit-entered');
+  writeFileSync(hold, 'hold');
+  // The fixture owns this real pre-commit hook; no wall-clock guess can finish the commit.
+  writeFileSync(join(h, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\ntouch .git/commit-entered\nwhile [ -f .git/hold-commit ]; do sleep 0.01; done\n', { mode: 0o755 });
+  writeFileSync(join(h, 'notes.md'), 'a queued note\n');
+  let finished = false;
+  const committed = commitHome(h, 'queued turn').then(() => { finished = true; });
+  try {
+    const deadline = Date.now() + 5000;
+    while (!existsSync(entered) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(existsSync(entered), 'real git commit reached the fixture gate');
+    await ensureGit(h);
+    assert.equal(finished, false, 'ensureGit does not drain the commit queue');
+    assert.doesNotMatch(execFileSync('git', ['-C', h, 'log', '--oneline'], { encoding: 'utf8' }), /queued turn/);
+  } finally { rmSync(hold, { force: true }); await committed; }
+  assert.equal(finished, true);
+  assert.match(execFileSync('git', ['-C', h, 'log', '--oneline'], { encoding: 'utf8' }), /queued turn/);
+});
+
 test('never in git history: the home ignores vault/, and the secret is in no commit', async (t) => {
   if (spawnSync('git', ['--version']).error) { t.skip('git is not installed'); return; }
   const h = home();
@@ -239,10 +264,7 @@ test('never in git history: the home ignores vault/, and the secret is in no com
   const v = new Vault({ home: h, mode: 'file' });
   v.put('connector/example/API_TOKEN', SECRET);
   writeFileSync(join(h, 'notes.md'), 'a note\n');
-  commitHome(h, 'a turn');
-  await new Promise((r) => setTimeout(r, 50));
-  // commitHome queues; ensureGit on the same queue waits for it.
-  await ensureGit(h);
+  await commitHome(h, 'a turn');
   const g = (...args: string[]) => execFileSync('git', ['-C', h, ...args], { encoding: 'utf8' });
   assert.match(g('log', '--oneline'), /a turn/);
   assert.equal(g('ls-files', 'vault').trim(), '', 'vault/ is not tracked');

@@ -20,6 +20,7 @@ import { bindCapture, captureChanged, loadCapture, loadCaptureView, renderCaptur
 import { bindModels, loadModels, renderModels } from './models.js';
 import { bindChanges, loadChanges, renderChanges } from './changes.js';
 import { bindCheckpoints, loadCheckpoints, renderCheckpoints } from './checkpoints.js';
+import { bindTopology, showTopology, topologyVisible, submitTopology } from './topology.js';
 import { bindServices, loadServices, renderServices } from './services.js';
 import { bindReset, loadReset, renderReset } from './reset.js';
 import { startSetup, setupShowing } from './setup.js';
@@ -35,7 +36,7 @@ const el = {
   sidebar: $('sidebar'), dock: $('dock'), toast: $('toast'), topbarOrb: $('topbar-orb'), asideToggle: $('aside-toggle'),
   home: $('home'), tasks: $('tasks-view'), memory: $('memory'), automations: $('automations'), rules: $('rules'),
   skills: $('skills'), schedules: $('schedules'), activity: $('activity'), health: $('health-view'), settings: $('settings-view'),
-  aside: $('aside'), mainLink: $('main-link'), mainDot: $('main-dot'), capture: $('capture-view'),
+  aside: $('aside'), mainLink: $('main-link'), mainDot: $('main-dot'), capture: $('capture-view'), topology: $('topology-view'),
 };
 
 const state = {
@@ -271,21 +272,23 @@ function route() {
   else if (r.dest === 'activity') showActivity();
   else if (r.dest === 'settings') showSettings();
   else if (r.dest === 'capture') showCaptureView();
+  else if (r.dest === 'topology') showTopologyView();
   else showCore(r.dest);
 }
 
-const VIEWS = { home: 'home', chat: 'thread', tasks: 'tasks', memory: 'memory', automations: 'automations', skills: 'skills', activity: 'activity', health: 'health', settings: 'settings', capture: 'capture' };
+const VIEWS = { home: 'home', chat: 'thread', tasks: 'tasks', memory: 'memory', automations: 'automations', skills: 'skills', activity: 'activity', health: 'health', settings: 'settings', capture: 'capture', topology: 'topology' };
 function setView(view) {
   const was = state.view;
   state.view = view;
   document.body.dataset.view = view;
+  topologyVisible(view === 'topology');
   for (const [v, key] of Object.entries(VIEWS)) el[key].hidden = v !== view;
   el.dock.hidden = view !== 'chat';
   el.menu.hidden = view !== 'chat';
   if (view !== 'chat') el.jump.hidden = true;
   if (was === 'settings' && view !== 'settings') core.cancelPreview();
-  // The Capture view belongs to Settings in the navigation.
-  markCurrent(view === 'capture' ? 'settings' : view);
+  // Capture and Topology belong to Settings in the navigation.
+  markCurrent(['capture', 'topology'].includes(view) ? 'settings' : view);
   if (was !== view) showSignals();
 }
 
@@ -590,7 +593,7 @@ const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state
 
 // Every view's heading names it, Home's too (UX review 1, F5: never an empty heading); beside a
 // rail, and on a phone's Home, it is there for screen readers only (layout.css).
-const TITLES = { home: 'Home', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture' };
+const TITLES = { home: 'Home', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture', topology: 'Topology' };
 function renderChrome() {
   const title = state.view === 'chat' ? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
   el.dock.hidden = state.view !== 'chat' || readOnly();
@@ -1898,6 +1901,18 @@ function showCaptureView() {
   el.capture.focus({ preventScroll: true });
   Promise.all([loadCapture(), loadCaptureView()]);
 }
+bindTopology(el.topology);
+function showTopologyView() {
+  stream?.close();
+  stream = null;
+  Object.assign(state, { id: null, live: null, pending: null });
+  setView('topology');
+  el.scroller.scrollTop = 0;
+  renderChrome();
+  renderToc_();
+  showTopology();
+  el.topology.focus({ preventScroll: true });
+}
 el.capture.addEventListener('click', (e) => { followLink(e); });
 // The indicator opens the Capture view in place, from any page.
 $('capture-ind').addEventListener('click', (e) => { followLink(e); });
@@ -1972,6 +1987,7 @@ $('sheet').addEventListener('submit', (e) => {
   if (roles) { e.preventDefault(); core.reviewRoles(roles); return; }
   const form = e.target.closest('.approval-sheet');
   if (!form) return;
+  if (form.hasAttribute('data-topology-approval')) { e.preventDefault(); submitTopology(form); return; }
   e.preventDefault();
   core.approve(form);
 });
