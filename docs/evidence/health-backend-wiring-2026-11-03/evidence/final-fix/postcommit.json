@@ -1,0 +1,81 @@
+[
+  {
+    "argv": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "4e7278d1b662a376ea3c6d2fe2e543830e2b55a8\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "rev-parse",
+      "HEAD^{tree}"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "1b0b0dc6d44a7b5e83dffd9379dfb6363ffd129b\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "branch",
+      "--show-current"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "codex/health-backend-wiring\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "status",
+      "--porcelain=v1"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "diff",
+      "--check",
+      "f9ffbb0c2b241b60ba5161cc55bbdb8c3462b819..HEAD"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "diff",
+      "--name-only",
+      "f9ffbb0c2b241b60ba5161cc55bbdb8c3462b819..HEAD"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "docs/plans/diagnostics.md\nsrc/core/README.md\nsrc/core/caps/index.ts\nsrc/core/diagnostics/index.ts\ntests/acceptance/caps.test.ts\ntests/core/diagnostics-composition.test.ts\n",
+    "stderr": ""
+  },
+  {
+    "tested_blobs_equal_committed_blobs": {
+      "docs/plans/diagnostics.md": "5d162b5917da0a27c73a6adf3521805e5a8bd9da",
+      "src/core/README.md": "7c7ac92fddefdf1cca28e7964a835cfda23d9ac5",
+      "src/core/caps/index.ts": "2d7456c53a1064d9d9898aa02fce9ca3ca71d2c2",
+      "src/core/diagnostics/index.ts": "101fb1e5f2d92add5f4e6e6c7ad99f13de1dc2b0",
+      "tests/acceptance/caps.test.ts": "bc65764080338e7d3a9357f6ff4a03dc08b634c3",
+      "tests/core/diagnostics-composition.test.ts": "6f60245bc7761be0486914abdb6bf2524e31c0ec"
+    },
+    "all_other_tracked_paths_unchanged_from_fix_base": true
+  }
+]

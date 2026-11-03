@@ -2,7 +2,7 @@
 // Real Nova listeners and stores; all data, vault keys, runtime and hardware are private fixtures.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
@@ -151,4 +151,117 @@ test('production diagnostics downloads fresh numeric Era2 counts with person acc
     assert.equal(nova.server.listening, false);
     assert.equal(nova.mesh!.listening, false);
   }
+});
+
+// A private real file vault and the mounted HTTP route: no builder/scrubber/route replacement.
+async function scanFixture() {
+  const m = blank('nova-diagnostics-scan-');
+  const before = { HOME: process.env.HOME, NOVA_VAULT_KEY: process.env.NOVA_VAULT_KEY };
+  Object.assign(process.env, { HOME: m.env.HOME, NOVA_VAULT_KEY: 'file' });
+  const runtime = await startFakeOllama({ models: [] });
+  const config = { ...loadConfig({ ...m.env, NOVA_AGENT_CMD: 'example-unused-command', NOVA_AGENT_EGRESS: 'none', NOVA_TZ: 'UTC' }), commit: false };
+  let nova: ReturnType<typeof createNova> | undefined;
+  const start = async () => {
+    nova = createNova(config, { secrets: () => null, models: { ollamaUrl: runtime.url, hardware: async () => hubHardware() } });
+    await new Promise<void>((resolve) => nova!.server.listen(0, '127.0.0.1', resolve));
+    return nova;
+  };
+  const stop = async () => {
+    if (!nova) return;
+    nova.scheduler.stop();
+    await close(nova.server);
+    await nova.core.close();
+    assert.equal(nova.server.listening, false);
+    nova = undefined;
+  };
+  return {
+    m, start, stop,
+    download: () => call(`http://127.0.0.1:${(nova!.server.address() as AddressInfo).port}`, 'GET', '/api/v1/diagnostics'),
+    close: async () => {
+      try { await stop(); } finally {
+        await runtime.close();
+        for (const [k, v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+      }
+    },
+  };
+}
+
+const scanError = 'Diagnostics could not be downloaded because Nova could not complete its secret check. Try again when the secret stores are available.';
+function refusedScan(reply: Awaited<ReturnType<typeof call>>, sensitive: string[]) {
+  const text = JSON.stringify(reply.body);
+  for (const value of sensitive) {
+    for (const form of [value, encodeURIComponent(value), Buffer.from(value).toString('base64'), Buffer.from(value).toString('hex')]) {
+      assert.ok(!text.includes(form), 'failed scan response exposed private data');
+    }
+  }
+  assert.equal(reply.status, 503);
+  assert.equal(reply.headers.get('content-disposition'), null, 'unsafe bundle must never become an attachment');
+  assert.equal(reply.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(reply.body, { error: scanError }, 'fixed error only, without raw source errors or warnings');
+}
+
+test('production diagnostics refuses a populated vault after real key loss, while empty and readable vaults download', async () => {
+  const f = await scanFixture();
+  const secret = canary('key-loss');
+  const encoded = Buffer.from(secret).toString('base64');
+  try {
+    const nova = await f.start();
+    const empty = await f.download();
+    assert.equal(empty.status, 200);
+    assert.deepEqual(empty.body.redaction.warnings, []);
+    assert.match(empty.headers.get('content-disposition') ?? '', /^attachment;/);
+    nova.core.vault.put('provider/SCAN_CANARY', secret);
+    nova.core.log.write('info', 'example', `encoded service detail ${encoded}`);
+    const readable = await f.download();
+    assert.equal(readable.status, 200);
+    assert.deepEqual(readable.body.redaction.warnings, []);
+    assert.ok(readable.body.redaction.values_redacted > 0);
+    assert.ok(!JSON.stringify(readable.body).includes(encoded));
+    await f.stop();
+    // Only this disposable fixture's key moves; restart exercises the actual vault decryption.
+    renameSync(join(f.m.home, 'vault', 'key'), join(f.m.home, 'vault', 'key.held'));
+    const restarted = await f.start();
+    assert.equal(restarted.core.vault.status().ok, false);
+    const before = files(f.m.home);
+    refusedScan(await f.download(), [secret, f.m.home, join(f.m.home, 'vault', 'key')]);
+    assert.deepEqual(files(f.m.home), before, 'refusal persists no bundle or problem containing the raw error');
+  } finally { await f.close(); }
+});
+
+test('production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors', async (t) => {
+  const cases = ['list throws', 'second lookup throws', 'second lookup missing', 'key lookup throws', 'key file unreadable', 'identity unreadable', 'identity malformed', 'identity incomplete'] as const;
+  for (const failure of cases) await t.test(failure, async (t) => {
+    const f = await scanFixture();
+    const secret = canary('partial-secret');
+    const detail = `${canary('source-error')} at ${join(f.m.home, 'private-source')}`;
+    try {
+      const nova = await f.start();
+      nova.core.vault.put('provider/AAA', canary('first-secret'));
+      nova.core.vault.put('provider/ZZZ', secret);
+      nova.core.log.write('info', 'example', `encoded service detail ${Buffer.from(secret).toString('base64')}`);
+      let includedReads = 0;
+      const view = nova.core.models.view.bind(nova.core.models);
+      t.mock.method(nova.core.models, 'view', () => { includedReads++; return view(); });
+      if (failure === 'list throws') t.mock.method(nova.core.vault, 'list', () => { throw new Error(detail); });
+      if (failure === 'second lookup throws' || failure === 'second lookup missing') {
+        const get = nova.core.vault.get.bind(nova.core.vault);
+        t.mock.method(nova.core.vault, 'get', (name: string) => {
+          if (name !== 'provider/ZZZ') return get(name);
+          if (failure === 'second lookup missing') return null;
+          throw new Error(detail);
+        });
+      }
+      if (failure === 'key lookup throws') t.mock.method(nova.core.vault, 'keyForStandby', () => { throw new Error(detail); });
+      if (failure === 'key file unreadable') chmodSync(join(f.m.home, 'vault', 'key'), 0);
+      if (failure === 'identity unreadable') chmodSync(join(f.m.home, 'mesh', 'identity.json'), 0);
+      if (failure === 'identity malformed') writeFileSync(join(f.m.home, 'mesh', 'identity.json'), detail);
+      if (failure === 'identity incomplete') writeFileSync(join(f.m.home, 'mesh', 'identity.json'), JSON.stringify({ ed25519: { private: canary('one-key') } }));
+      const before = files(f.m.home);
+      refusedScan(await f.download(), [secret, detail, f.m.home]);
+      assert.equal(includedReads, 0, 'the required scan must finish before collecting included metadata/free text');
+      assert.deepEqual(files(f.m.home), before);
+      const log = readFileSync(nova.core.log.file!, 'utf8');
+      assert.ok(!log.includes(detail), 'raw scan failure must not enter service logs');
+    } finally { t.mock.restoreAll(); await f.close(); }
+  });
 });
