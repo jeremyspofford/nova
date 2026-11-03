@@ -90,6 +90,40 @@ sync verified while things are calm, tested by a drill (pull
 the WAN, run the checklist) — same standard as the restore
 drill in the launch criteria.
 
+## Distinctive features (owner-approved 2026-11-03, in priority order)
+From the 2026-11-03 rival-feature research + owner review.
+All five are IN; build order follows the priority.
+1. **Second-opinion button (primary).** One tap sends any
+   consequential Nova plan or answer to a DIFFERENT model for
+   adversarial review before the owner commits — the project's
+   own builder/reviewer pattern, productised. Default-on for
+   tier-2+ plans; the dissent is shown, never summarised away.
+2. **Undo for agent actions.** The action ledger makes Nova's
+   actions reversible within a stated window: file moves, mail
+   actions, config changes, sends where the platform allows.
+   Replay applied to what Nova did, not only what you saw.
+3. **Memory-use receipts.** Every answer can show which
+   memories and captures it used; tap to inspect, correct, or
+   pin. Pinning freezes a memory against consolidation —
+   the direct answer to the Dreaming V3 revolt.
+4. **Interrupt report card.** Proactivity runs on a user-set
+   budget; weekly report shows interruptions and hit-rate;
+   nudge types that miss twice retire themselves.
+5. **Vendor-death insurance.** "Nova survives us": everything
+   exportable in open formats, full function if Aria Labs
+   disappears, marketed as a feature, tested by the same
+   export drill that proves backups.
+
+## Licensing (owner decision, 2026-11-03)
+Nova ships under the **Business Source License 1.1**: source
+inspectable, personal self-hosting permitted, commercial use
+and competing products prohibited; each version converts to
+Apache 2.0 four years after its release. Licensor: Aria Labs.
+Trademark ("Nova", orb identity) is separate protection,
+filed before public launch. Final license text gets one
+lawyer review before charging begins. Draft text:
+builder-packet `nova-license-draft-2026-11-03.md`.
+
 ## Sequencing against the live queue
 Nothing here jumps the current queue (M10j/k, Insertion #3,
 wiring, Design Stage 2). This roadmap governs what comes

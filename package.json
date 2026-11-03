@@ -4,7 +4,7 @@
   "private": true,
   "description": "Nova, a personal agent. Plain files are the source of truth.",
   "type": "module",
-  "license": "AGPL-3.0-only",
+  "license": "BUSL-1.1",
   "engines": {
     "node": ">=26"
   },
