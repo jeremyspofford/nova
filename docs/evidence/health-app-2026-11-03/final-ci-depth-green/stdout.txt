@@ -1,0 +1,13 @@
+6ea82d7b211375dc390aed44bb2f53fed4f51500
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ CI changes: actual checkout depth makes a real shallow PR merge classify code from its first parent (51.644127ms)
+✔ CI changes: shallow merge first-parent docs stay docs-only; an unavailable older BEFORE fails closed (51.984095ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 172.594139
+no-Kubernetes tripwire: never fired

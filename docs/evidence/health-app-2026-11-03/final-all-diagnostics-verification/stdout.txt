@@ -1,0 +1,149 @@
+dcdd0cb030bd5ef95b6e493382c715e128ce602f
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+HEALTH RUNTIME chromium=141.0.7390.37 node=v26.3.1
+HEALTH ENTRY chromium/phone: real conversation 1,500 tokens, $0.125; actual Home return; draft retained; no reload/visibility/profile/save trigger
+HEALTH PARTIAL chromium/phone: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON
+HEALTH chromium/phone expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/phone: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH VISUAL chromium/phone {"targets":[{"selector":"#h-diagnostics","text":"Diagnostics","x":41,"y":76,"width":76.5,"height":14,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":0,"y":52,"width":390,"height":721.25},"posture":"continuous","ink":84},{"selector":".diagnostics-download summary","text":"Review before sharing","x":54.765625,"y":276.25,"width":124.875,"height":17,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":0,"y":52,"width":390,"height":721.25},"posture":"continuous","ink":148},{"selector":"[data-download-diagnostics]","text":"Download diagnostics","x":58,"y":338.125,"width":123.84375,"height":17,"color":[238,250,248],"inside":true,"hit":true,"scroller":{"x":0,"y":52,"width":390,"height":721.25},"posture":"continuous","ink":137}],"failures":[]}
+HEALTH SW script request /sw.js; legacy=true
+HEALTH initial installed worker versions [ 'nova-shell-v14' ]
+HEALTH SW script request /sw.js; legacy=false
+HEALTH upgraded worker versions [ 'nova-shell-v15' ]
+HEALTH cache names before diagnostic assertion [ 'other-app-public-example', 'nova-shell-v15' ]
+HEALTH installed SW expected outage console messages [
+  'Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING',
+  'Failed to load resource: the server responded with a status of 503 ()'
+]
+HEALTH installed SW nova-shell-v14 → nova-shell-v15: legacy owned diagnostic cache removed; native attachment; current/query responses never cached; diagnostics offline 503; ordinary tasks offline 200
+HEALTH ENTRY chromium/desktop: real conversation 3,000 tokens, $0.25; actual Home return; draft retained; no reload/visibility/profile/save trigger
+HEALTH controlled Save pointer trace [
+  {
+    type: 'input',
+    target: 'task.iterations',
+    value: '0',
+    fresh: 'ready',
+    mode: 'success',
+    disabled: false
+  },
+  {
+    type: 'pointerdown',
+    target: 'BUTTON',
+    value: '',
+    fresh: 'ready',
+    mode: 'ready',
+    disabled: false
+  },
+  {
+    type: 'change',
+    target: 'task.iterations',
+    value: '0',
+    fresh: 'ready',
+    mode: 'ready',
+    disabled: false
+  },
+  {
+    type: 'click',
+    target: 'BUTTON',
+    value: '',
+    fresh: 'refreshing',
+    mode: 'ready',
+    disabled: false
+  },
+  {
+    type: 'submit',
+    target: 'FORM',
+    value: undefined,
+    fresh: 'refreshing',
+    mode: 'ready',
+    disabled: false
+  }
+]
+HEALTH PARTIAL chromium/desktop: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON
+HEALTH chromium/desktop expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/desktop: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH VISUAL chromium/desktop {"targets":[{"selector":"#h-diagnostics","text":"Diagnostics","x":275,"y":83.5,"width":76.5,"height":14,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":60,"width":1004,"height":840},"posture":"continuous","ink":83},{"selector":".diagnostics-download summary","text":"Review before sharing","x":288.765625,"y":225.25,"width":124.875,"height":17,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":60,"width":1004,"height":840},"posture":"continuous","ink":171},{"selector":"[data-download-diagnostics]","text":"Download diagnostics","x":292,"y":281.125,"width":123.84375,"height":17,"color":[238,250,248],"inside":true,"hit":true,"scroller":{"x":84,"y":60,"width":1004,"height":840},"posture":"continuous","ink":137}],"failures":[]}
+HEALTH ENTRY chromium/tablet: real conversation 4,500 tokens, $0.375; actual Home return; draft retained; no reload/visibility/profile/save trigger
+HEALTH PARTIAL chromium/tablet: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON
+HEALTH chromium/tablet expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/tablet: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH VISUAL chromium/tablet {"targets":[{"selector":"#h-diagnostics","text":"Diagnostics","x":141,"y":75.5,"width":76.5,"height":14,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":736,"height":1128},"posture":"continuous","ink":89},{"selector":".diagnostics-download summary","text":"Review before sharing","x":154.765625,"y":217.25,"width":124.875,"height":17,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":736,"height":1128},"posture":"continuous","ink":175},{"selector":"[data-download-diagnostics]","text":"Download diagnostics","x":158,"y":279.125,"width":123.84375,"height":17,"color":[238,250,248],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":736,"height":1128},"posture":"continuous","ink":140}],"failures":[]}
+HEALTH ENTRY chromium/halfopen: real conversation 6,000 tokens, $0.5; actual Home return; draft retained; no reload/visibility/profile/save trigger
+HEALTH PARTIAL chromium/halfopen: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON
+HEALTH chromium/halfopen expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/halfopen: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH VISUAL chromium/halfopen {"targets":[{"selector":"#h-diagnostics","text":"Diagnostics","x":152,"y":75.5,"width":76.5,"height":14,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":758,"height":285.5},"posture":"half-open-vertical","ink":83},{"selector":".diagnostics-download summary","text":"Review before sharing","x":165.765625,"y":217.25,"width":124.875,"height":17,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":758,"height":285.5},"posture":"half-open-vertical","ink":155},{"selector":"[data-download-diagnostics]","text":"Download diagnostics","x":169,"y":279.125,"width":123.84375,"height":17,"color":[238,250,248],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":758,"height":285.5},"posture":"half-open-vertical","ink":137}],"failures":[]}
+✔ Health app: chromium Home spend refresh, save, freshness, SSE draft island and native diagnostics (33365.930545ms)
+HEALTH RUNTIME webkit=26.0 node=v26.3.1
+HEALTH ENTRY webkit/phone: real conversation 1,500 tokens, $0.125; actual Home return; draft retained; no reload/visibility/profile/save trigger
+HEALTH PARTIAL webkit/phone: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON
+HEALTH webkit/phone expected offline request failures: ["WebKit encountered an internal error"]; manualRetry=false
+HEALTH webkit/phone: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH VISUAL webkit/phone {"targets":[{"selector":"#h-diagnostics","text":"Diagnostics","x":41,"y":76,"width":76.48566436767578,"height":14,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":0,"y":52,"width":390,"height":721.984375},"posture":"continuous","ink":204},{"selector":".diagnostics-download summary","text":"Review before sharing","x":57.890625,"y":272,"width":124.87109375,"height":17,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":0,"y":52,"width":390,"height":721.984375},"posture":"continuous","ink":283},{"selector":"[data-download-diagnostics]","text":"Download diagnostics","x":58,"y":334,"width":123.830078125,"height":17,"color":[238,250,248],"inside":true,"hit":true,"scroller":{"x":0,"y":52,"width":390,"height":721.984375},"posture":"continuous","ink":422}],"failures":[]}
+HEALTH ENTRY webkit/desktop: real conversation 3,000 tokens, $0.25; actual Home return; draft retained; no reload/visibility/profile/save trigger
+HEALTH controlled Save pointer trace [
+  {
+    type: 'input',
+    target: 'task.iterations',
+    value: '0',
+    fresh: 'ready',
+    mode: 'success',
+    disabled: false
+  },
+  {
+    type: 'pointerdown',
+    target: 'BUTTON',
+    value: '',
+    fresh: 'ready',
+    mode: 'ready',
+    disabled: false
+  },
+  {
+    type: 'change',
+    target: 'task.iterations',
+    value: '0',
+    fresh: 'ready',
+    mode: 'ready',
+    disabled: false
+  },
+  {
+    type: 'click',
+    target: 'BUTTON',
+    value: '',
+    fresh: 'refreshing',
+    mode: 'ready',
+    disabled: false
+  },
+  {
+    type: 'submit',
+    target: 'FORM',
+    value: undefined,
+    fresh: 'refreshing',
+    mode: 'ready',
+    disabled: false
+  }
+]
+HEALTH PARTIAL webkit/desktop: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON
+HEALTH webkit/desktop expected offline request failures: ["WebKit encountered an internal error"]; manualRetry=false
+HEALTH webkit/desktop: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH VISUAL webkit/desktop {"targets":[{"selector":"#h-diagnostics","text":"Diagnostics","x":275,"y":84,"width":76.48565673828125,"height":14,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":60,"width":1004,"height":840},"posture":"continuous","ink":204},{"selector":".diagnostics-download summary","text":"Review before sharing","x":291.890625,"y":223,"width":124.87109375,"height":17,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":60,"width":1004,"height":840},"posture":"continuous","ink":286},{"selector":"[data-download-diagnostics]","text":"Download diagnostics","x":292,"y":279,"width":123.830078125,"height":17,"color":[238,250,248],"inside":true,"hit":true,"scroller":{"x":84,"y":60,"width":1004,"height":840},"posture":"continuous","ink":420}],"failures":[]}
+HEALTH ENTRY webkit/tablet: real conversation 4,500 tokens, $0.375; actual Home return; draft retained; no reload/visibility/profile/save trigger
+HEALTH PARTIAL webkit/tablet: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON
+HEALTH webkit/tablet expected offline request failures: ["WebKit encountered an internal error"]; manualRetry=false
+HEALTH webkit/tablet: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH VISUAL webkit/tablet {"targets":[{"selector":"#h-diagnostics","text":"Diagnostics","x":141,"y":76,"width":76.48565673828125,"height":14,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":736,"height":1128},"posture":"continuous","ink":205},{"selector":".diagnostics-download summary","text":"Review before sharing","x":157.890625,"y":215,"width":124.87109375,"height":17,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":736,"height":1128},"posture":"continuous","ink":288},{"selector":"[data-download-diagnostics]","text":"Download diagnostics","x":158,"y":277,"width":123.830078125,"height":17,"color":[238,250,248],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":736,"height":1128},"posture":"continuous","ink":425}],"failures":[]}
+HEALTH ENTRY webkit/halfopen: real conversation 6,000 tokens, $0.5; actual Home return; draft retained; no reload/visibility/profile/save trigger
+HEALTH PARTIAL webkit/halfopen: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON
+HEALTH webkit/halfopen expected offline request failures: ["WebKit encountered an internal error"]; manualRetry=false
+HEALTH webkit/halfopen: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH VISUAL webkit/halfopen {"targets":[{"selector":"#h-diagnostics","text":"Diagnostics","x":152,"y":76,"width":76.48565673828125,"height":14,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":758,"height":285.5},"posture":"half-open-vertical","ink":204},{"selector":".diagnostics-download summary","text":"Review before sharing","x":168.890625,"y":215,"width":124.87109375,"height":17,"color":[189,218,214],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":758,"height":285.5},"posture":"half-open-vertical","ink":283},{"selector":"[data-download-diagnostics]","text":"Download diagnostics","x":169,"y":277,"width":123.830078125,"height":17,"color":[238,250,248],"inside":true,"hit":true,"scroller":{"x":84,"y":52,"width":758,"height":285.5},"posture":"half-open-vertical","ink":420}],"failures":[]}
+✔ Health app: webkit Home spend refresh, save, freshness, SSE draft island and native diagnostics (36039.58681ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 69978.263599
+no-Kubernetes tripwire: never fired

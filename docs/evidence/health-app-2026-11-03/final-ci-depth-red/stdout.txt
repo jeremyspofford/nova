@@ -1,0 +1,56 @@
+6ea82d7b211375dc390aed44bb2f53fed4f51500
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ CI changes: actual checkout depth makes a real shallow PR merge classify code from its first parent (49.277235ms)
+✖ CI changes: shallow merge first-parent docs stay docs-only; an unavailable older BEFORE fails closed (51.927419ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 170.841144
+
+✖ failing tests:
+
+test at tests/ci-changes.test.js:50:1
+✖ CI changes: actual checkout depth makes a real shallow PR merge classify code from its first parent (49.277235ms)
+  AssertionError [ERR_ASSERTION]: changes checkout is genuinely shallow
+  
+  'false' !== 'true'
+  
+      at file:///work/tests/ci-changes.test.js:52:12
+      at fixture (file:///work/tests/ci-changes.test.js:46:5)
+      at TestContext.<anonymous> (file:///work/tests/ci-changes.test.js:51:3)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'false',
+    expected: 'true',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ci-changes.test.js:58:1
+✖ CI changes: shallow merge first-parent docs stay docs-only; an unavailable older BEFORE fails closed (51.927419ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception: older push BEFORE is absent at the actual workflow depth
+      at file:///work/tests/ci-changes.test.js:62:12
+      at fixture (file:///work/tests/ci-changes.test.js:46:5)
+      at TestContext.<anonymous> (file:///work/tests/ci-changes.test.js:59:3)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'throws',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

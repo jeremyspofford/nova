@@ -1,0 +1,27 @@
+{
+  "full_staged_check_exit": 2,
+  "full_staged_check_stdout": "docs/evidence/health-app-2026-11-03/final-ci-depth-red/stdout.txt:19: trailing whitespace.\n+  \ndocs/evidence/health-app-2026-11-03/final-ci-depth-red/stdout.txt:21: trailing whitespace.\n+  \ndocs/evidence/health-app-2026-11-03/final-visual-halfopen-framing-probe/stdout.txt:93: trailing whitespace.\n+  \ndocs/evidence/health-app-2026-11-03/final-visual-halfopen-framing-probe/stdout.txt:100: trailing whitespace.\n+  \ndocs/evidence/health-app-2026-11-03/final-visual-phone-framing-probe/stdout.txt:29: trailing whitespace.\n+  \ndocs/evidence/health-app-2026-11-03/final-visual-phone-framing-probe/stdout.txt:35: trailing whitespace.\n+  \ndocs/evidence/health-app-2026-11-03/final-visual-red/stdout.txt:25: trailing whitespace.\n+  \ndocs/evidence/health-app-2026-11-03/final-visual-red/stdout.txt:33: trailing whitespace.\n+  \n",
+  "full_staged_check_stderr": "",
+  "full_stdout_sha256": "2f2434d55af6f12603fac1cd0666d4517d0e499036ed27761ac4a64fcdbe7e25",
+  "exact_immutable_raw_exclusions": [
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-ci-depth-red/stdout.txt",
+      "working_and_staged_sha256": "3205bd34a8fb771a6cdfae5e8b51655496019e7c7fec0f1446f2bc63886e7e32"
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-visual-halfopen-framing-probe/stdout.txt",
+      "working_and_staged_sha256": "a7a0a2fb491507ac02ea932ae19a205b65a7cde6ccddba794a6f880205c2480e"
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-visual-phone-framing-probe/stdout.txt",
+      "working_and_staged_sha256": "5c842abc1c9546cffa348a66c826ee02936e2ebe8dcecafdeed03aff3c4266ce"
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-visual-red/stdout.txt",
+      "working_and_staged_sha256": "308c69b076cf638aa12167f69f0fee4c6d56c5663170ecc4ceac20bc6414e88d"
+    }
+  ],
+  "separate_source_doc_check_exit": 0,
+  "separate_source_doc_check_stdout": "",
+  "note": "Lossless JSON-escaped full diagnostics; only exact hash-recorded immutable stdout paths excluded from separate source/doc check. No raw-byte rewrite, recursive raw diagnostic, global exception or universal clean claim."
+}

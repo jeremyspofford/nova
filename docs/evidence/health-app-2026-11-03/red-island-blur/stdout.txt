@@ -1,0 +1,31 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (3092.976568ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3703.539809
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:34:3
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (3092.976568ms)
+  AssertionError [ERR_ASSERTION]: refresh never disconnects or blurs the editing island
+  
+  2 !== 0
+  
+      at TestContext.<anonymous> (file:///work/tests/ui/health-caps-diagnostics.test.ts:100:16)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

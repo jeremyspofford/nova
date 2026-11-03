@@ -1,0 +1,15 @@
+{
+  "full_staged_check_exit": 2,
+  "full_staged_check_stdout": "docs/evidence/health-app-2026-11-03/ci-repair-landmark-red/stdout.txt:21: trailing whitespace.\n+  \ndocs/evidence/health-app-2026-11-03/ci-repair-landmark-red/stdout.txt:36: trailing whitespace.\n+  \n",
+  "full_staged_check_stderr": "",
+  "full_stdout_sha256": "81241c40ec09992c644c75f8724f020b390d4a1c2d3a300aa0102ed30e84abe9",
+  "exact_immutable_raw_exclusions": [
+    {
+      "path": "docs/evidence/health-app-2026-11-03/ci-repair-landmark-red/stdout.txt",
+      "working_and_staged_sha256": "e9b893a59e819d35b1cc042065beb6247246ea1bd061856f307479730abb95cd"
+    }
+  ],
+  "separate_source_doc_check_exit": 0,
+  "separate_source_doc_check_stdout": "",
+  "note": "Lossless JSON-escaped full diagnostics. Only exact hash-recorded immutable stdout paths excluded from separate source/doc check. No raw-byte rewrite, recursive diagnostic file, global exception or universal clean claim."
+}

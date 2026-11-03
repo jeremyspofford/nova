@@ -1,0 +1,98 @@
+{
+  "base": "c071b5360224bd1e83b5e352a1c05bd448237a2f",
+  "note": "Fix1 current source hashes. Runtime Git identity remains c071; the mounted two-file source change is identified by these hashes. Original c071 source manifest is retained verbatim as source-manifest-c071.json. Early original probe provenance limits remain; these are not retroactive hashes.",
+  "files": {
+    "ui/js/app.js": {
+      "sha256": "4787137e1f6c8b52fdb34c1954d8528427170a60339e090fb05c01432a00910b",
+      "git_blob": "f56d903fbe372389a3a67e7e9a12e390022001db"
+    },
+    "ui/js/surfaces.js": {
+      "sha256": "1df0f98707b74c4e1b77f269eee7e7ab1590da2d4ccc6e739b74957bbafcbdac",
+      "git_blob": "5a686aa344e456bf92a4392c192da830bd940a64"
+    },
+    "ui/js/components.js": {
+      "sha256": "9880ee80f0803d66a3ee6fd4ac33a6b43925b492b0759f81f8246de5b8130e82",
+      "git_blob": "27cb4f19ab2fa72e4536796b414127d45acd8ee3"
+    },
+    "ui/js/wait.js": {
+      "sha256": "0b6b1301204f6087b30670306aef0173ae1d4cfd2e945612f96137b3fa07937a",
+      "git_blob": "e39af8ffc5c13247b243e50fcdab8bc37bff0995"
+    },
+    "ui/sw.js": {
+      "sha256": "b84514fd099867169e61220a65be257d8e2889734aff8f0d2569d7bf2090d197",
+      "git_blob": "ea8a05e1e7b8cb44b83f6ccd65ca0e7174dd6821"
+    },
+    "tests/health-components.test.js": {
+      "sha256": "4893923a90e8319269ff8ce1d06a62e9cc0643af97bf2dfc78a4db83478cd16e",
+      "git_blob": "d80fafd97b093c8f4f1502564986196098d1a608"
+    },
+    "tests/m9-wait.test.js": {
+      "sha256": "41d61f51ad3c137f5508cb6345bb39cf4490ed50afc129c6571aacaea95687bc",
+      "git_blob": "3fea9b6aac5e3e2dd468e76011ccb554f637e28d"
+    },
+    "tests/ui/health-caps-diagnostics.test.ts": {
+      "sha256": "a84db07c93051390d8a47a1ca8ae0a39cbbd01cc100989c143e0cf5f27935837",
+      "git_blob": "ae0995ddd7c33cd3fda5c89220aab4b218e619ad"
+    },
+    "tests/ui/navigation-reachability.test.ts": {
+      "sha256": "8a5b99412e79ef42a664a5010916c36dba086c5963670bc0f622e02ee7ca84b0",
+      "git_blob": "a2dcb270dfafd16f93e32ec43f9702edf3a9b3a4"
+    },
+    "tests/ui/health-styleguide.test.ts": {
+      "sha256": "e3bc8f47821e840b91c083fc5fd1779e4bce95f8dec851fbdb56999e64b84da6",
+      "git_blob": "bb8fa3f7adc306f33489fa1d513569b3049ad799"
+    },
+    "tests/ui/m10i-topology.test.ts": {
+      "sha256": "3c80c82be8413eb554ade4a718ba1a5baa0d7e60a130c7450610926a5b503952",
+      "git_blob": "7c5ba3fb4336d04664dc6c405db4730cefe4b236"
+    },
+    "tests/ui/m10i-support.ts": {
+      "sha256": "6db51d318f940553ded52cfdec9b595e997c348ffb39a977a6ed4f68f28762c7",
+      "git_blob": "ae608a250981035b1bd75a5507d3b645d844dc83"
+    },
+    "tests/ui/offline.test.ts": {
+      "sha256": "76330e237eb2f999af8d8377c2853b1eb2f223715e7198c4119dfbaf87657705",
+      "git_blob": "b11b3f8f7101e5dec572a284f925bb62001d48bc"
+    },
+    "tests/support/fixtures/health-sw-v14.js.txt": {
+      "sha256": "08b67c951a45f45b428194fc087b3a7d23f755417af827ba6d114e264bfa3405",
+      "git_blob": "7679f88172924e033bece3020a50f73d270b1aa3"
+    },
+    "src/core/caps/index.ts": {
+      "sha256": "7358e6f0b13415b89b897d49c37a52c24427f85af8ea7e73311f27ec10f48be1",
+      "git_blob": "2d7456c53a1064d9d9898aa02fce9ca3ca71d2c2"
+    },
+    "src/core/diagnostics/index.ts": {
+      "sha256": "58ea305de520ab92f087af526c3253ed48889713823ab733181d7ea34da9b92e",
+      "git_blob": "101fb1e5f2d92add5f4e6e6c7ad99f13de1dc2b0"
+    },
+    "tests/core/diagnostics-composition.test.ts": {
+      "sha256": "3c2a19be49adab2c67864fa0825edbae2565b453ca842d8b78dea6021784ff15",
+      "git_blob": "6f60245bc7761be0486914abdb6bf2524e31c0ec"
+    },
+    "tests/acceptance/caps.test.ts": {
+      "sha256": "77dd732fb180f9431ea704efca299e5597e6f1072102e75b021f2d4397414678",
+      "git_blob": "bc65764080338e7d3a9357f6ff4a03dc08b634c3"
+    },
+    "package.json": {
+      "sha256": "4e5463f62336020fbbb0733b931050e4ee4a424142d4db56ebe60d7b766172c2",
+      "git_blob": "fe52fbcb8ee9907947929c5f242037c1f0ec968d"
+    },
+    "package-lock.json": {
+      "sha256": "6879ef97e46aec6de9e8371192c5dac06de4c0e4532d58e08884ead00b9bd305",
+      "git_blob": "d15f4fdac057f3c2555be2609e4dd4ebfa50b76b"
+    },
+    "ui/js/topology.js": {
+      "sha256": "f6e68388d821d00635bb641ce66412d16420cb3c70be29d5fd561b97897aafcb",
+      "git_blob": "29cda83e6a1e7746324684c9a579f0a0715f2327"
+    },
+    "ui/js/topology-view.js": {
+      "sha256": "51d04a73dce7794b8c713ddfc9cbbfc5123591978a19f9a48b820415ff8abfe9",
+      "git_blob": "3d5867fbb1a7ed04a1978808775c7a0ca559f23b"
+    }
+  },
+  "archived_probes": {
+    "tests/ui/health-reload-probe.ts": "docs/evidence/health-app-2026-11-03/debug-baseline/reload-probe.ts.txt",
+    "tests/ui/health-topology-offline-baseline-probe.ts": "docs/evidence/health-app-2026-11-03/debug-baseline/topology-offline-probe.ts.txt"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "base": "c071b5360224bd1e83b5e352a1c05bd448237a2f",
+  "root_docs_before": {
+    "docs/LEDGER.md": "a3efe3542334b13ed6650059541171ab3df558c07664e37fdfd2bcbc2e6ccfa7",
+    "docs/plans/owner-priority-queue-2026-11-02.md": "d9fd9812fa1683572187a335a45e7698086315e680956f24287a442840fcef59",
+    "src/core/README.md": "0720fbaaa4667466d8aeaec7b1e361a91d9893fc2b4153818608df99e79d0131",
+    "docs/evidence/health-app-2026-11-03/delivery.md": "a4fe80a203a90ff14344f6c368728c3dfe1e15342e19477add053eead8d7c3f8"
+  },
+  "root_docs_after": {
+    "docs/LEDGER.md": "a3efe3542334b13ed6650059541171ab3df558c07664e37fdfd2bcbc2e6ccfa7",
+    "docs/plans/owner-priority-queue-2026-11-02.md": "d9fd9812fa1683572187a335a45e7698086315e680956f24287a442840fcef59",
+    "src/core/README.md": "0720fbaaa4667466d8aeaec7b1e361a91d9893fc2b4153818608df99e79d0131",
+    "docs/evidence/health-app-2026-11-03/delivery.md": "a4fe80a203a90ff14344f6c368728c3dfe1e15342e19477add053eead8d7c3f8"
+  },
+  "existing_tracked_pngs_checked": 776,
+  "all_existing_pngs_byte_identical": true,
+  "original_c071_source_manifest_archived_byte_exact": true,
+  "current_source_hashes_match_qualified_runs": true,
+  "current_public_png_count": 40,
+  "new_intermediate_png_count": 52,
+  "changed_source_test_paths_including_root_owned_doc": [
+    "src/core/README.md",
+    "tests/ui/health-caps-diagnostics.test.ts",
+    "ui/js/app.js"
+  ],
+  "backend_caps_diagnostics_unchanged": true,
+  "dependencies_styles_components_loader_wait_sw_unchanged": true,
+  "production_change": "ui/js/app.js showCore Health entry calls existing refreshCore([caps]); no navigation adapter change",
+  "packaging_tool_failure": "First changed-source assertion accidentally included metadata paths written by that same script; corrected to ui/src/tests/package paths, retaining the root-owned README exception explicitly."
+}

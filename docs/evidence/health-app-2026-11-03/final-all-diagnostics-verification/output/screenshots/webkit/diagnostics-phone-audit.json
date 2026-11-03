@@ -1,0 +1,74 @@
+{
+  "targets": [
+    {
+      "selector": "#h-diagnostics",
+      "text": "Diagnostics",
+      "x": 41,
+      "y": 76,
+      "width": 76.48566436767578,
+      "height": 14,
+      "color": [
+        189,
+        218,
+        214
+      ],
+      "inside": true,
+      "hit": true,
+      "scroller": {
+        "x": 0,
+        "y": 52,
+        "width": 390,
+        "height": 721.984375
+      },
+      "posture": "continuous",
+      "ink": 204
+    },
+    {
+      "selector": ".diagnostics-download summary",
+      "text": "Review before sharing",
+      "x": 57.890625,
+      "y": 272,
+      "width": 124.87109375,
+      "height": 17,
+      "color": [
+        189,
+        218,
+        214
+      ],
+      "inside": true,
+      "hit": true,
+      "scroller": {
+        "x": 0,
+        "y": 52,
+        "width": 390,
+        "height": 721.984375
+      },
+      "posture": "continuous",
+      "ink": 283
+    },
+    {
+      "selector": "[data-download-diagnostics]",
+      "text": "Download diagnostics",
+      "x": 58,
+      "y": 334,
+      "width": 123.830078125,
+      "height": 17,
+      "color": [
+        238,
+        250,
+        248
+      ],
+      "inside": true,
+      "hit": true,
+      "scroller": {
+        "x": 0,
+        "y": 52,
+        "width": 390,
+        "height": 721.984375
+      },
+      "posture": "continuous",
+      "ink": 422
+    }
+  ],
+  "failures": []
+}

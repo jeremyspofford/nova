@@ -40,6 +40,7 @@ test('each styleguide entry has its own anchor and address, so it can be approve
   const ids = [...guide.matchAll(/^\s+\['([a-z][a-z-]*)', '[^']+', '/gm)].map((m) => m[1]);
   assert.ok(ids.length >= 30, `entries: ${ids.join(', ')}`);
   assert.equal(new Set(ids).size, ids.length, 'entry ids are unique');
+  for (const entry of ['work-costs', 'diagnostics']) assert.ok(ids.includes(entry), `${entry} is reviewable alone`);
   for (const reserved of ['ds', 'mode']) assert.ok(!ids.includes(reserved), `#sg-${reserved} is the design switch`);
   assert.match(guide, /id="sg-\$\{id\}"/);
   assert.match(guide, /href="\?entry=\$\{id\}"/);

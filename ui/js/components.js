@@ -485,6 +485,43 @@ export function healthCard({ health = null, problems = [], reachable = true } = 
   return card({ kind: 'health-card', title: 'System health', icon: 'health', body, action: '<a class="link" href="/health" data-nav="health">Health</a>' });
 }
 
+// The Caps.view() shape, supplied by the caller. No fetching or defaults here: an absent view
+// must never turn into an editable set of guessed limits. The styleguide uses synthetic views.
+export function workCosts({ view = null, state = 'ready', error = '', invalid = {} } = {}) {
+  const loaded = !!view && !['loading', 'unavailable'].includes(state);
+  const locked = !loaded || state === 'saving';
+  const count = (n) => Number.isFinite(n) ? n.toLocaleString('en-US') : 'Unknown';
+  const dollars = (n) => Number.isFinite(n) ? n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }) : 'Unknown';
+  const usage = (s) => `${count(s.tokens_in + s.tokens_out)} tokens · ${count(s.estimated_tokens)} estimated · ${count(s.unpriced_tokens)} unpriced`;
+  const accountingScope = 'Nova runner usage on this machine; provider-managed tasks are not included.';
+  const accountingWords = view?.accounting?.words ?? `${accountingScope} Autonomous runner work is live capped; your own conversations are metered without caps. Provider-owned loops are not live capped. Spend on other nodes is not included. Estimated tokens and tokens without a price are labeled separately; this is not complete monthly billing.`;
+  const month = view?.month;
+  const totals = !loaded ? (state === 'unavailable' ? '<p class="card-line" role="status">Work costs are unavailable. Limits cannot be saved until they load.</p>' : waitingLine('Loading work costs and limits', { key: 'health-costs' }))
+    : `<p class="sheet-heading">Month to date · ${esc(month.month)}</p><p class="card-lead">${dollars(month.total.usd)} priced USD</p><p class="card-line">${usage(month.total)}</p>
+      ${month.providers.length ? `<ul class="settings-list work-cost-providers" aria-label="Usage by provider and model">${month.providers.map((p) => settingsRow({ title: `${p.provider} · ${p.model}`, note: usage(p), control: `<span class="card-line">${dollars(p.usd)} priced USD</span>` })).join('')}</ul>` : '<p class="card-line">No model usage recorded this month. Usage from Nova runner work and your conversations will appear here.</p>'}`;
+  const fields = [['task', 'Per task'], ['day', 'Per day']].map(([scope, title]) => `<fieldset class="work-cost-group"><legend class="sheet-heading">${title}</legend><ul class="settings-list">${[['iterations', 'Weighted steps'], ['tokens', 'Tokens'], ['usd', 'Priced USD']].map(([key, label]) => {
+    const name = `${scope}.${key}`;
+    const id = `work-limit-${scope}-${key}`;
+    const value = loaded ? view.limits[scope][key] : undefined;
+    const unlimited = value === null;
+    const problem = invalid[name];
+    return settingsRow({ title: label, note: key === 'iterations' ? 'Repeated tool calls count more.' : '', control: `<input class="input work-limit" id="${id}" name="${name}" aria-label="${title} ${label.toLowerCase().replace('usd', 'USD')}" type="number" step="any" required value="${value === null || value === undefined ? '' : esc(String(value))}"${locked || unlimited ? ' disabled' : ''}${problem ? ` aria-invalid="true" aria-describedby="${id}-error"` : ''}><label class="work-unlimited"><input type="checkbox" name="${name}.unlimited" aria-label="${title} ${label.toLowerCase().replace('usd', 'USD')} unlimited"${unlimited ? ' checked' : ''}${locked ? ' disabled' : ''}> Unlimited</label>${problem ? `<p class="card-line work-limit-error" id="${id}-error">${esc(problem)}</p>` : ''}` });
+  }).join('')}</ul></fieldset>`).join('');
+  const notice = state === 'saving' ? '' : state === 'success' ? 'Limits saved on this node.' : state === 'save-error' ? (error || 'Limits could not be saved. Your edits are still here; try again.') : Object.keys(invalid).length ? 'Enter a finite number greater than zero, or choose Unlimited.' : '';
+  return `<section class="work-costs" aria-label="Work costs" data-work-costs-state="${esc(state)}">${totals}
+    <p class="card-line">${accountingScope} Estimated tokens are part of the total; unpriced tokens are not included in priced USD.</p>
+    <h3 class="sheet-heading">Autonomous work limits</h3><p class="card-line">Nova stops autonomous runner work at a limit and needs new approval to resume. Your own conversations are metered, but not capped.</p>
+    <form data-work-limits novalidate>${fields}<div class="work-cost-actions"><button class="btn" type="submit" data-save-work-limits${locked || Object.keys(invalid).length ? ' disabled' : ''}>Save limits</button><p class="card-line" role="status" data-work-costs-notice>${state === 'saving' ? waitingLine('Saving limits', { key: 'health-costs-save', tag: 'span' }) : esc(notice)}</p></div></form>
+    <details class="work-cost-details"><summary>How these limits work</summary><p class="card-line">${esc(accountingWords)}</p><p class="card-line">Task limits apply to each run or approved resume. Daily limits use your profile’s timezone. Unpriced tokens cannot be held to a dollar limit. Estimated usage is approximate. Spend is local to this node; after failover, another node may have different totals.</p></details>
+  </section>`;
+}
+
+// Leave the real action as a native attachment navigation. The styleguide alone intercepts it;
+// future Health composition must not fetch the bundle or turn it into a client-side data store.
+export function diagnosticsDownload({ available = true } = {}) {
+  return `<section class="diagnostics-download" aria-label="Diagnostics" data-diagnostics-state="${available ? 'available' : 'unavailable'}"><p class="card-line">Download versions, health, settings and recent diagnostic logs. Work, memory and conversations are represented by counts and states, without conversation, memory or captured screen/audio content.</p><p class="card-line">Built in memory for your download. Nova keeps no copy and uploads nothing.</p><details class="work-cost-details"><summary>Review before sharing</summary><p class="card-line">Known secrets and secret-shaped values are redacted. Logs and error details can still contain other free text; this is not a guarantee that every private detail is removed. Review the file before sharing.</p></details>${available ? '<a class="btn" href="/api/v1/diagnostics" download data-download-diagnostics>Download diagnostics</a>' : '<p class="card-line">Diagnostics are unavailable. Try again when Nova is reachable.</p><button class="btn" disabled>Download diagnostics</button>'}</section>`;
+}
+
 export function memoryHighlightCard({ records = [] } = {}) {
   const r = records.find((m) => m.active && m.user_state !== 'forgotten');
   const body = r

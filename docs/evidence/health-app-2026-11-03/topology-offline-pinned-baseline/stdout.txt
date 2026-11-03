@@ -1,0 +1,26 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+PINNED TOPOLOGY OFFLINE {
+  online: false,
+  text: 'TopologyMachines, services and their observed versions.Refresh mapDownload MermaidRefresh the map before exporting or changing versions. Current health is unknown where observations have expired.Your machinesRefreshNeeds youThe map could not refreshLast observation is 30 seconds old. Current machine health is unknown.View last observation',
+  button: undefined
+}
+✖ M10i: a real controlling service worker never revives cached topology as current offline (31153.463969ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 31600.994533
+
+✖ failing tests:
+
+test at tests/ui/health-topology-offline-baseline-probe.ts:10:1
+✖ M10i: a real controlling service worker never revives cached topology as current offline (31153.463969ms)
+  page.waitForFunction: Timeout 30000ms exceeded.
+      at TestContext.<anonymous> (/work/tests/ui/health-topology-offline-baseline-probe.ts:33:19) {
+    name: 'TimeoutError'
+  }
+no-Kubernetes tripwire: never fired

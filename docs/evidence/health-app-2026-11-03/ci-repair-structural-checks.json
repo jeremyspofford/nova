@@ -1,0 +1,27 @@
+{
+  "base": "3b6c9f0dce8e709ddb465f00e4291e177f8a7de8",
+  "existing_tracked_png_count": 820,
+  "all_existing_pngs_byte_identical": true,
+  "historical_public_matrix_byte_unchanged": true,
+  "new_public_witness_count": 2,
+  "current_private_captures": 40,
+  "protected_backend_CI_styles_dependencies_wait_components_app_skeleton_core_SW_unchanged": true,
+  "original_hosted_evidence": {
+    "ci-ui-126105260011.log": {
+      "sha256": "912a650090ae154285a785639e1fd3277a75a6eba21153cba2bd3a607adcff3d",
+      "bytes": 249698,
+      "note": "Private immutable hosted CI evidence retained; observed hash, no write performed."
+    },
+    "ci-unit-126105260007.log": {
+      "sha256": "22e773af152d03b97e0b0969f70e86b14592b91d24c35d52911ea5c19d6ab3a8",
+      "bytes": 260765,
+      "note": "Private immutable hosted CI evidence retained; observed hash, no write performed."
+    }
+  },
+  "new_focal_source_changes": [
+    "ui/js/surfaces.js",
+    "tests/ui/m9-progress.test.ts",
+    "tests/ui/health-caps-diagnostics.test.ts"
+  ],
+  "raster_helper_unchanged_enclosing_parent_is_div_panel": true
+}

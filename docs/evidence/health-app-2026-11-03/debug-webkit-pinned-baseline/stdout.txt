@@ -1,0 +1,37 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+2026-11-03T13:51:40.599Z pw:browser <launching> /ms-playwright/webkit-2215/pw_run.sh --inspector-pipe --headless --no-startup-window
+2026-11-03T13:51:40.601Z pw:browser <launched> pid=376
+2026-11-03T13:51:41.373Z pw:browser [pid=376][err] 
+2026-11-03T13:51:41.373Z pw:browser [pid=376][err] ** (MiniBrowser:382): CRITICAL **: 13:51:41.373: WebKitWebView is-controlled-by-automation set but automation is not allowed in the context, falling back to default session.
+RELOAD FAILED /api/v1/setup { errorText: 'Load request cancelled' }
+RELOAD FAILED /api/v1/events { errorText: 'Load request cancelled' }
+RELOAD REQUEST document /health
+2026-11-03T13:51:42.660Z pw:browser [pid=376][err] /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/optional:479: _Tp &std::_Optional_base_impl<unsigned long, std::_Optional_base<unsigned long>>::_M_get() [_Tp = unsigned long, _Dp = std::_Optional_base<unsigned long>]: Assertion 'this->_M_is_engaged()' failed.
+2026-11-03T13:51:42.674Z pw:browser [pid=376] <gracefully close start>
+2026-11-03T13:51:42.683Z pw:browser [pid=376] <process did exit: exitCode=0, signal=null>
+2026-11-03T13:51:42.683Z pw:browser [pid=376] starting temporary directories cleanup
+2026-11-03T13:51:42.685Z pw:browser [pid=376] finished temporary directories cleanup
+2026-11-03T13:51:42.685Z pw:browser [pid=376] <gracefully close end>
+✖ isolate WebKit routing and reload (2259.121315ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2477.068052
+
+✖ failing tests:
+
+test at tests/ui/health-reload-probe.ts:7:1
+✖ isolate WebKit routing and reload (2259.121315ms)
+  page.reload: Page crashed
+  Call log:
+    - waiting for navigation until "load"
+  
+      at TestContext.<anonymous> (/work/tests/ui/health-reload-probe.ts:21:11) {
+    name: 'Error'
+  }
+no-Kubernetes tripwire: never fired

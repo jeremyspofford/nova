@@ -1,0 +1,158 @@
+{
+  "base": "3b6c9f0dce8e709ddb465f00e4291e177f8a7de8",
+  "note": "Ordinary-CI repair from3b: one shared initial loader-part list, redundant outer Health landmarks removed, actual M9/Health regressions. Historical provenance limits unchanged; new qualified source starts match this source tree. Runner metadata coverage adds M9 inputs and three explicitly run static files; prior runner archived.",
+  "files": {
+    "ui/js/app.js": {
+      "sha256": "cd4f395c8ce4b9a9557110c1502b1942da975793b97c4b86eff912fc20224cd4",
+      "git_blob": "2198aa41f9ec2d473106372850939ae877fb0587"
+    },
+    "ui/js/surfaces.js": {
+      "sha256": "deaa66b348b3120910b42361ffb6105460e80952e3a527e3e517e7d63224966b",
+      "git_blob": "a74b0b878f8183621f2aa22a0dd2a8b7bccfdad5"
+    },
+    "ui/js/components.js": {
+      "sha256": "9880ee80f0803d66a3ee6fd4ac33a6b43925b492b0759f81f8246de5b8130e82",
+      "git_blob": "27cb4f19ab2fa72e4536796b414127d45acd8ee3"
+    },
+    "ui/js/wait.js": {
+      "sha256": "0b6b1301204f6087b30670306aef0173ae1d4cfd2e945612f96137b3fa07937a",
+      "git_blob": "e39af8ffc5c13247b243e50fcdab8bc37bff0995"
+    },
+    "ui/sw.js": {
+      "sha256": "b84514fd099867169e61220a65be257d8e2889734aff8f0d2569d7bf2090d197",
+      "git_blob": "ea8a05e1e7b8cb44b83f6ccd65ca0e7174dd6821"
+    },
+    "tests/health-components.test.js": {
+      "sha256": "4893923a90e8319269ff8ce1d06a62e9cc0643af97bf2dfc78a4db83478cd16e",
+      "git_blob": "d80fafd97b093c8f4f1502564986196098d1a608"
+    },
+    "tests/m9-wait.test.js": {
+      "sha256": "41d61f51ad3c137f5508cb6345bb39cf4490ed50afc129c6571aacaea95687bc",
+      "git_blob": "3fea9b6aac5e3e2dd468e76011ccb554f637e28d"
+    },
+    "tests/ui/health-caps-diagnostics.test.ts": {
+      "sha256": "0796df088f958455713aab19aaacf0e2d10457d201190698257f8c74600e26ab",
+      "git_blob": "4b4d68fde34d2ca82152e93365bedad464f02a41"
+    },
+    "tests/ui/navigation-reachability.test.ts": {
+      "sha256": "8a5b99412e79ef42a664a5010916c36dba086c5963670bc0f622e02ee7ca84b0",
+      "git_blob": "a2dcb270dfafd16f93e32ec43f9702edf3a9b3a4"
+    },
+    "tests/ui/health-styleguide.test.ts": {
+      "sha256": "e3bc8f47821e840b91c083fc5fd1779e4bce95f8dec851fbdb56999e64b84da6",
+      "git_blob": "bb8fa3f7adc306f33489fa1d513569b3049ad799"
+    },
+    "tests/ui/m10i-topology.test.ts": {
+      "sha256": "3c80c82be8413eb554ade4a718ba1a5baa0d7e60a130c7450610926a5b503952",
+      "git_blob": "7c5ba3fb4336d04664dc6c405db4730cefe4b236"
+    },
+    "tests/ui/m10i-support.ts": {
+      "sha256": "6db51d318f940553ded52cfdec9b595e997c348ffb39a977a6ed4f68f28762c7",
+      "git_blob": "ae608a250981035b1bd75a5507d3b645d844dc83"
+    },
+    "tests/ui/offline.test.ts": {
+      "sha256": "76330e237eb2f999af8d8377c2853b1eb2f223715e7198c4119dfbaf87657705",
+      "git_blob": "b11b3f8f7101e5dec572a284f925bb62001d48bc"
+    },
+    "tests/support/fixtures/health-sw-v14.js.txt": {
+      "sha256": "08b67c951a45f45b428194fc087b3a7d23f755417af827ba6d114e264bfa3405",
+      "git_blob": "7679f88172924e033bece3020a50f73d270b1aa3"
+    },
+    "src/core/caps/index.ts": {
+      "sha256": "7358e6f0b13415b89b897d49c37a52c24427f85af8ea7e73311f27ec10f48be1",
+      "git_blob": "2d7456c53a1064d9d9898aa02fce9ca3ca71d2c2"
+    },
+    "src/core/diagnostics/index.ts": {
+      "sha256": "58ea305de520ab92f087af526c3253ed48889713823ab733181d7ea34da9b92e",
+      "git_blob": "101fb1e5f2d92add5f4e6e6c7ad99f13de1dc2b0"
+    },
+    "tests/core/diagnostics-composition.test.ts": {
+      "sha256": "3c2a19be49adab2c67864fa0825edbae2565b453ca842d8b78dea6021784ff15",
+      "git_blob": "6f60245bc7761be0486914abdb6bf2524e31c0ec"
+    },
+    "tests/acceptance/caps.test.ts": {
+      "sha256": "77dd732fb180f9431ea704efca299e5597e6f1072102e75b021f2d4397414678",
+      "git_blob": "bc65764080338e7d3a9357f6ff4a03dc08b634c3"
+    },
+    "package.json": {
+      "sha256": "4e5463f62336020fbbb0733b931050e4ee4a424142d4db56ebe60d7b766172c2",
+      "git_blob": "fe52fbcb8ee9907947929c5f242037c1f0ec968d"
+    },
+    "package-lock.json": {
+      "sha256": "6879ef97e46aec6de9e8371192c5dac06de4c0e4532d58e08884ead00b9bd305",
+      "git_blob": "d15f4fdac057f3c2555be2609e4dd4ebfa50b76b"
+    },
+    "ui/js/topology.js": {
+      "sha256": "f6e68388d821d00635bb641ce66412d16420cb3c70be29d5fd561b97897aafcb",
+      "git_blob": "29cda83e6a1e7746324684c9a579f0a0715f2327"
+    },
+    "ui/js/topology-view.js": {
+      "sha256": "51d04a73dce7794b8c713ddfc9cbbfc5123591978a19f9a48b820415ff8abfe9",
+      "git_blob": "3d5867fbb1a7ed04a1978808775c7a0ca559f23b"
+    },
+    ".github/workflows/ci.yml": {
+      "sha256": "b7b1b3c11825148b67f852e80115476e04e530d4ff2ea7621e49a8e45a741577",
+      "git_blob": "8255292c25a213317497865b02f09d41444a02f3"
+    },
+    "scripts/ci-changes.sh": {
+      "sha256": "72271c0328ff8cdebd9a97123a6f34258505c68d92db1e79e6012c7ab99b6f37",
+      "git_blob": "f706e2f37940f74fcccb6d557a5a27a78607dcbe"
+    },
+    "tests/ci-changes.test.js": {
+      "sha256": "71578a590c3339348be25df2e8ea28f0e86eeb63fb9335e80a5564f72cae8653",
+      "git_blob": "7088902b087cb602c67338b0c58697e2c5ea95b7"
+    },
+    "tests/ui/health-diagnostics-visual.ts": {
+      "sha256": "9425aacbe22e3088aef6e471d9d299dcf94618d9a0d6db32e4d1a4a93d3a4c1b",
+      "git_blob": "e46b8681c4dc48d2cd7ad1a096203cacc116aa30"
+    },
+    "src/core/browser/png.ts": {
+      "sha256": "e1b06de34220bc6afa371b4863f1fb7f9a238f9c742c96490f14ebe53a4c33f1",
+      "git_blob": "a9c6948da9d2451af11b63f19162051358bfa7be"
+    },
+    "tests/ui/support.ts": {
+      "sha256": "ddcc40e28b51331a41e82f3be0e134c161e49c0dfe3b33a6150ab713515cec15",
+      "git_blob": "ee40aaa481c40fa20597402a5476925a300d5a61"
+    },
+    "ui/styles/components.css": {
+      "sha256": "3c3ec46433623dbec0e8d4ed3c18d598ff2b920ffaa7624b6adc54c13f2bc95e",
+      "git_blob": "c6c62074e67d94047eada212ded9e7ca008770dd"
+    },
+    "ui/styles/layout.css": {
+      "sha256": "20d0ac7bedf4d5cc95531a9186b26a0381938606209d57fcdad3464c18e42877",
+      "git_blob": "06c703e7cdbde9336db2e7c40b3b0dc25d7c873e"
+    },
+    "docs/evidence/health-app-2026-11-03/run.py": {
+      "sha256": "651e51fa6c6e7bc7091004b083fec3307337b84f78140fe0f6907eb0493f7891",
+      "git_blob": "7a9d211714697ab5b0786d430b2ab3f38fbe3bfd"
+    },
+    "tests/ui/m9-progress.test.ts": {
+      "sha256": "cec27b1f8892d058992b0f33a3a13490a28a495e08ea954d504aa13511419dc6",
+      "git_blob": "813dd237dc11352aacb572fd93513bba3589aefe"
+    },
+    "tests/ui/m9-support.ts": {
+      "sha256": "40c83114c075a535803f0003a9e7ce935a8c23b971b66f1818e1d10f718d70fc",
+      "git_blob": "d9118ffb6c27eed65d1cb73418c09441dc46ba1c"
+    },
+    "tests/ui/m9-thinker.js": {
+      "sha256": "f130483c6bb60ce0d2595c6198a304f3e061abbdbcb4d6737fe59dba88be0444",
+      "git_blob": "2849e8d698b93ef979ab571f38be9ffdfd5d4cd8"
+    },
+    "tests/ui-components.test.js": {
+      "sha256": "7a12b99ae9ab787d7b048c0c16484f0acd98c1eb02c1c145d5ff6576097ae41b",
+      "git_blob": "17b768817d14e5d7ec6517c45fac1e3c7f5e1994"
+    },
+    "tests/ui-logic.test.js": {
+      "sha256": "2d8b4ff6d1fc1690451a624d9cde390e510744c6f43af5f6e5bc5956607b9a4d",
+      "git_blob": "ff0d21c9fc09a9624a866f370b14f11143891655"
+    },
+    "tests/navigation-registry.test.js": {
+      "sha256": "a6254c2193afa8ad742d35f59049bc92b215d56dabf6b1f296873d9d6ea26d3a",
+      "git_blob": "4abe4d6819effdf3f57cbbd27091355b23614d0f"
+    }
+  },
+  "archived_probes": {
+    "tests/ui/health-reload-probe.ts": "docs/evidence/health-app-2026-11-03/debug-baseline/reload-probe.ts.txt",
+    "tests/ui/health-topology-offline-baseline-probe.ts": "docs/evidence/health-app-2026-11-03/debug-baseline/topology-offline-probe.ts.txt"
+  }
+}
