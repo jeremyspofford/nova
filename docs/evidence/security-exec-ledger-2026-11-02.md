@@ -1,5 +1,7 @@
 # Subprocess environment and execution ownership evidence
 
+Current integration supplement: [actual CI failure, corrections, rejected review and accepted round1](security-exec-ledger-ci-correction-2026-11-03.md). This original record preserves the initial S1/S2 review at source7055; it does not erase the subsequent failed CI or certify the later browser correction by itself.
+
 Owner IMMEDIATE S1/S2, based on the whole-app review of main `048eea0ee043f43d01bc9a36bed601ce9805373b`. This record distinguishes completed task checks from the final PR gate. S1 source: `0714b489f0376c112e2d9db8bb6ff046fe04877b`. S2 source: `7055737e3d2571df279574847107c83b2acfc6e6`. Both independent task reviews are approved. The final independent adversarial review also approved source `7055737e`; ordinary exact-head CI, same-PR LEDGER and merge/preview completion remain pending. No merge or complete-CI claim is made by the task reports below.
 
 ## S1 full implementer report
@@ -430,7 +432,7 @@ The sole reviewer persistent write is this authorized report. No source, index, 
 
 ## Rulings I made
 
-Exhaustive controller decisions in their original order; the owner's instruction limits chat reports to merge lines and blockers, so the reviewable PR record carries this full list.
+Initial sixteen controller decisions in their original order; later rulings17–22 are in the CI correction supplement. the owner's instruction limits chat reports to merge lines and blockers, so the reviewable PR record carries this full list.
 
 1. Ruling: the owner's explicit ordered fixes and continuous-execution instruction authorize this implementation directly; no duplicate brainstorming/plan confirmation round. Existing review is the design; engineering details independently reviewed. Cost ifwrong: visibleimplementationrework; actualnewrenderedpatterns/designstage2/architectureowner-gates persist.
 

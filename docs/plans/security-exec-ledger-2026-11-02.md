@@ -50,8 +50,11 @@
 ### Task 3: integration, adversarial review and merge
 
 Coordinator archives complete reports/rulings/evidence; plain-language same-PR LEDGER; fresh most-capable whole-branch security/adversarial review of concrete S1/S2 code and actual controlled probes for unanswered risks. One consolidated test-first fix wave/scoped review if needed. Exact-head ordinary full unit/UI/typecheck/token/theme/audit and required gate must pass. Merge --merge --match-head-commit only after gates, restart authorized preview script4318/mesh4320 and verify clean merged head/root/health/mesh. Report merge one line, immediately start W1 then W2. Preserve ownerB work and Jdraft, never call full J passed.
-- [ ] Evidence/reviews/LEDGER and claims accurate.
+- [x] Evidence/reviews/LEDGER and claims accurate.
 - [x] Final independent adversarial review accepted.
 - [ ] Exact-head ordinary CI and required gate green.
 - [ ] Matched merge + authorized preview restart/verification.
 - [ ] Continue next queued W1 without asking routine permission.
+
+
+CI correction: original run41557701721 at a248 failed; four canary/rollback fixture failures and leaked setup cleanup causally isolated. Browser shared-close correction introduced a pending-launch leak, fixed at3d713478 and independently re-reviewed with no open findings. Original remote UI causality remains unproven. Full history/reports in docs/evidence/security-exec-ledger-ci-correction-2026-11-03.md. Final ordinary exact-head CI/merge/preview remain required.
