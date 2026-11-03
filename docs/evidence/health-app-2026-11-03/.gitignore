@@ -698,3 +698,21 @@
 /final-visual-qualified/output/screenshots/chromium/app-diagnostics-download-phone.png
 /final-visual-qualified/output/screenshots/chromium/styleguide-diagnostics-halfopen.png
 /final-visual-qualified/output/screenshots/chromium/styleguide-diagnostics-phone.png
+
+# One default Diagnostics-branch verification: exact private image paths only.
+/final-all-diagnostics-verification/output/screenshots/chromium/app-diagnostics-download-desktop.png
+/final-all-diagnostics-verification/output/screenshots/chromium/app-diagnostics-download-halfopen.png
+/final-all-diagnostics-verification/output/screenshots/chromium/app-diagnostics-download-phone.png
+/final-all-diagnostics-verification/output/screenshots/chromium/app-diagnostics-download-tablet.png
+/final-all-diagnostics-verification/output/screenshots/chromium/styleguide-diagnostics-desktop.png
+/final-all-diagnostics-verification/output/screenshots/chromium/styleguide-diagnostics-halfopen.png
+/final-all-diagnostics-verification/output/screenshots/chromium/styleguide-diagnostics-phone.png
+/final-all-diagnostics-verification/output/screenshots/chromium/styleguide-diagnostics-tablet.png
+/final-all-diagnostics-verification/output/screenshots/webkit/app-diagnostics-download-desktop.png
+/final-all-diagnostics-verification/output/screenshots/webkit/app-diagnostics-download-halfopen.png
+/final-all-diagnostics-verification/output/screenshots/webkit/app-diagnostics-download-phone.png
+/final-all-diagnostics-verification/output/screenshots/webkit/app-diagnostics-download-tablet.png
+/final-all-diagnostics-verification/output/screenshots/webkit/styleguide-diagnostics-desktop.png
+/final-all-diagnostics-verification/output/screenshots/webkit/styleguide-diagnostics-halfopen.png
+/final-all-diagnostics-verification/output/screenshots/webkit/styleguide-diagnostics-phone.png
+/final-all-diagnostics-verification/output/screenshots/webkit/styleguide-diagnostics-tablet.png

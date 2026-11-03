@@ -119,3 +119,11 @@ Seven exact commands; all raw failures retained. [Hashes](final-wave-command-has
 | final-visual-halfopen-framing-probe | 1 | [argv](final-visual-halfopen-framing-probe/command.json) | [stdout](final-visual-halfopen-framing-probe/stdout.txt) |
 | final-visual-qualified | 0 | [argv](final-visual-qualified/command.json) | [stdout](final-visual-qualified/stdout.txt) |
 | final-wave-static-qualified | 0 | [argv](final-wave-static-qualified/command.json) | [stdout](final-wave-static-qualified/stdout.txt) |
+
+## Post-wave Diagnostics-only default-branch verification
+
+One run, no source change or public matrix replacement. All eight app/specimen pairs remain private; [source/command/stdout/PNG/audit hashes](final-all-diagnostics-verification/verification.json).
+
+| Run | Exit | Exact command | Raw output |
+| --- | --- | --- | --- |
+| final-all-diagnostics-verification | 0 | [argv](final-all-diagnostics-verification/command.json) | [stdout](final-all-diagnostics-verification/stdout.txt) |
