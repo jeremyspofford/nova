@@ -612,6 +612,19 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 .settings-label { font: var(--type-weight-regular) var(--type-body)/var(--type-line-tight) var(--font-body); }
 .settings-note { margin-top: var(--space-1); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
 .settings-control { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+/* Health detail reuses settings rows and fields, without another card family. */
+.work-costs, .diagnostics-download { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-3); min-width: 0; }
+.work-costs { font-variant-numeric: tabular-nums; }
+.work-costs .settings-label, .work-costs .settings-note { overflow-wrap: anywhere; }
+.work-cost-group { min-width: 0; margin: 0; padding: var(--space-3) 0; border: 0; }
+.work-cost-group .settings-control { min-width: 0; max-width: 100%; }
+.work-limit { width: calc(var(--space-8) * 2); max-width: 100%; }
+.work-unlimited { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--hit); font-size: var(--type-small); }
+.work-limit-error { flex-basis: 100%; }
+.work-cost-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-top: var(--space-3); }
+.work-cost-details { font-size: var(--type-small); color: var(--text-secondary); }
+.work-cost-details summary { cursor: pointer; min-height: var(--hit); padding-block: var(--space-3); }
+.diagnostics-download > .btn { align-self: flex-start; }
 .input {
   min-height: calc(var(--space-6) + var(--space-2));
   padding: var(--space-1) var(--space-3);

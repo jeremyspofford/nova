@@ -1,0 +1,7 @@
+# Exact-head CI setup failure and correction
+
+[Run41680690628](https://github.com/jeremyspofford/nova/actions/runs/41680690628), exact6ea82d7b, was cancelled before unit/UI tests. [Changes job126073226572](https://github.com/jeremyspofford/nova/actions/runs/41680690628/job/126073226572) began17:05:03UTC and completed17:10:17UTC. Its check annotation says “The job has exceeded the maximum execution time of 5m0s”. Full-history/all-ref git fetch occupied17:05:05–17:10:13 (~308seconds); classification printed heavy=true only afterwards. Unit/UI were skipped and gate did not pass. This was not a unit/UI failure or a green run; it has not been retried blindly.
+
+The combined wave changes only the changes-job checkout depth0→2. The five-minute deadline, classifier, all other checkouts/jobs and required gate remain unchanged. [Actual-workflow private Git fixture RED](final-ci-depth-red/stdout.txt) and [GREEN](final-ci-depth-green/stdout.txt) prove a real shallow merge still has its first parent, code→heavy/computer as appropriate, docs→docs-only with known parent, and unavailable older push BEFORE→existing fail-closed heavy fallback. A batched main push lacking that older base may run extra heavy checks; it cannot silently skip source qualification. Local tests do not prove hosted checkout duration; fresh ordinary exact-head CI remains a release gate.
+
+Full job log and annotation/job metadata remain in the private audit; public job/run links are authoritative. No timeout increase, classifier relaxation, forced successful exit, extra skip or new dependency.

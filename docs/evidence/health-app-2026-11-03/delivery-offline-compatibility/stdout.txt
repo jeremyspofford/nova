@@ -1,0 +1,13 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M10i: a real controlling service worker never revives cached topology as current offline (11566.8671ms)
+✔ M3: with the server down, the PWA stays honestly offline, and recovers when it returns (18361.706458ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 30728.08185
+no-Kubernetes tripwire: never fired

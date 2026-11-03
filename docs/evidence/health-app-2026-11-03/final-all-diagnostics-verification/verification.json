@@ -1,0 +1,342 @@
+{
+  "source_commit": "dcdd0cb030bd5ef95b6e493382c715e128ce602f",
+  "note": "ONE extra verification of all eight newly added Diagnostics raster/geometry branches. All16 PNGs retained privately, no Work-cost/full40 refresh or public matrix replacement. Current public corrected two witnesses remain byte-identical. No source/UI/style edits.",
+  "command_sha256": "0cc66d5aab72206d9396d0dd28b21c55a50e48b722aa02652d5eec27a7e9bb13",
+  "stdout_sha256": "dd87791a875044bb09e10e2a1e595acd30c8074c63e134fd47b96ace83ff420a",
+  "source_hashes_match_current_files": true,
+  "runtime_source_hash_count": 25,
+  "public_current_manifest_sha256": "9f46aefdfa01a485bc6ae0242999d335d1f39ef188fa935fb88bf44d44fb84b0",
+  "public_matrix_and_png_bytes_unchanged": true,
+  "raster_audits": [
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-all-diagnostics-verification/output/screenshots/chromium/diagnostics-desktop-audit.json",
+      "sha256": "d68505c4169c3d5e296504b4255119275d109a6d39cd7c46ffdeffca8deb14bd",
+      "targets": [
+        {
+          "selector": "#h-diagnostics",
+          "inside": true,
+          "hit": true,
+          "ink": 83,
+          "posture": "continuous"
+        },
+        {
+          "selector": ".diagnostics-download summary",
+          "inside": true,
+          "hit": true,
+          "ink": 171,
+          "posture": "continuous"
+        },
+        {
+          "selector": "[data-download-diagnostics]",
+          "inside": true,
+          "hit": true,
+          "ink": 137,
+          "posture": "continuous"
+        }
+      ]
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-all-diagnostics-verification/output/screenshots/chromium/diagnostics-halfopen-audit.json",
+      "sha256": "5fb2f0b9870aa94f6660c614342ee79d44dfab7987591ae21f294d247b2f5515",
+      "targets": [
+        {
+          "selector": "#h-diagnostics",
+          "inside": true,
+          "hit": true,
+          "ink": 83,
+          "posture": "half-open-vertical"
+        },
+        {
+          "selector": ".diagnostics-download summary",
+          "inside": true,
+          "hit": true,
+          "ink": 155,
+          "posture": "half-open-vertical"
+        },
+        {
+          "selector": "[data-download-diagnostics]",
+          "inside": true,
+          "hit": true,
+          "ink": 137,
+          "posture": "half-open-vertical"
+        }
+      ]
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-all-diagnostics-verification/output/screenshots/chromium/diagnostics-phone-audit.json",
+      "sha256": "06ca0524c044868e3a8038fefa567770bd980b0e9c2c4af3fa2d9d12a0f33018",
+      "targets": [
+        {
+          "selector": "#h-diagnostics",
+          "inside": true,
+          "hit": true,
+          "ink": 84,
+          "posture": "continuous"
+        },
+        {
+          "selector": ".diagnostics-download summary",
+          "inside": true,
+          "hit": true,
+          "ink": 148,
+          "posture": "continuous"
+        },
+        {
+          "selector": "[data-download-diagnostics]",
+          "inside": true,
+          "hit": true,
+          "ink": 137,
+          "posture": "continuous"
+        }
+      ]
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-all-diagnostics-verification/output/screenshots/chromium/diagnostics-tablet-audit.json",
+      "sha256": "286ceacfce4841b652c342e816df2c377af5b01ae7d64ea641e4348372d52621",
+      "targets": [
+        {
+          "selector": "#h-diagnostics",
+          "inside": true,
+          "hit": true,
+          "ink": 89,
+          "posture": "continuous"
+        },
+        {
+          "selector": ".diagnostics-download summary",
+          "inside": true,
+          "hit": true,
+          "ink": 175,
+          "posture": "continuous"
+        },
+        {
+          "selector": "[data-download-diagnostics]",
+          "inside": true,
+          "hit": true,
+          "ink": 140,
+          "posture": "continuous"
+        }
+      ]
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-all-diagnostics-verification/output/screenshots/webkit/diagnostics-desktop-audit.json",
+      "sha256": "ec7038044ee5933e1ee089ee0d7ba9351b066d9426db5193270739d39266ce06",
+      "targets": [
+        {
+          "selector": "#h-diagnostics",
+          "inside": true,
+          "hit": true,
+          "ink": 204,
+          "posture": "continuous"
+        },
+        {
+          "selector": ".diagnostics-download summary",
+          "inside": true,
+          "hit": true,
+          "ink": 286,
+          "posture": "continuous"
+        },
+        {
+          "selector": "[data-download-diagnostics]",
+          "inside": true,
+          "hit": true,
+          "ink": 420,
+          "posture": "continuous"
+        }
+      ]
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-all-diagnostics-verification/output/screenshots/webkit/diagnostics-halfopen-audit.json",
+      "sha256": "64675c5a55a34aa365b380573de1b50759e2dbbfa08429d7a631396a866a4cc2",
+      "targets": [
+        {
+          "selector": "#h-diagnostics",
+          "inside": true,
+          "hit": true,
+          "ink": 204,
+          "posture": "half-open-vertical"
+        },
+        {
+          "selector": ".diagnostics-download summary",
+          "inside": true,
+          "hit": true,
+          "ink": 283,
+          "posture": "half-open-vertical"
+        },
+        {
+          "selector": "[data-download-diagnostics]",
+          "inside": true,
+          "hit": true,
+          "ink": 420,
+          "posture": "half-open-vertical"
+        }
+      ]
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-all-diagnostics-verification/output/screenshots/webkit/diagnostics-phone-audit.json",
+      "sha256": "75115763f4484802596260e79e2cb0bb247592e414d9bab3d380509486f24e43",
+      "targets": [
+        {
+          "selector": "#h-diagnostics",
+          "inside": true,
+          "hit": true,
+          "ink": 204,
+          "posture": "continuous"
+        },
+        {
+          "selector": ".diagnostics-download summary",
+          "inside": true,
+          "hit": true,
+          "ink": 283,
+          "posture": "continuous"
+        },
+        {
+          "selector": "[data-download-diagnostics]",
+          "inside": true,
+          "hit": true,
+          "ink": 422,
+          "posture": "continuous"
+        }
+      ]
+    },
+    {
+      "path": "docs/evidence/health-app-2026-11-03/final-all-diagnostics-verification/output/screenshots/webkit/diagnostics-tablet-audit.json",
+      "sha256": "2524e84e1934cd71495549a7984741b98341c4836bd02908e8cab3028953fcc9",
+      "targets": [
+        {
+          "selector": "#h-diagnostics",
+          "inside": true,
+          "hit": true,
+          "ink": 205,
+          "posture": "continuous"
+        },
+        {
+          "selector": ".diagnostics-download summary",
+          "inside": true,
+          "hit": true,
+          "ink": 288,
+          "posture": "continuous"
+        },
+        {
+          "selector": "[data-download-diagnostics]",
+          "inside": true,
+          "hit": true,
+          "ink": 425,
+          "posture": "continuous"
+        }
+      ]
+    }
+  ],
+  "private_diagnostics_pngs": [
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/chromium/app-diagnostics-download-desktop.png",
+      "sha256": "928c8676f346f3651ca254f8b6b8f7d259bcd5c3afbe957a40b9303a9f599c42",
+      "bytes": 426023,
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/chromium/app-diagnostics-download-halfopen.png",
+      "sha256": "a73c8d3683bfc5212a74ade4e74455997e61d921afe0ba94e0547d3259122caa",
+      "bytes": 212922,
+      "width": 842,
+      "height": 675
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/chromium/app-diagnostics-download-phone.png",
+      "sha256": "cda96136d9b0a67ad28f53a974b059a350d89e582437ab43005057bd721c0b61",
+      "bytes": 159815,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/chromium/app-diagnostics-download-tablet.png",
+      "sha256": "413953721d2257db5b2ed98ee5f7279fdb5a2340ab1b3707736268967884909f",
+      "bytes": 356914,
+      "width": 820,
+      "height": 1180
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/chromium/styleguide-diagnostics-desktop.png",
+      "sha256": "7061e8cf95fe2057557b7fec5a9dd303e39224080d3e4512f9eefdc0c1880fe6",
+      "bytes": 353714,
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/chromium/styleguide-diagnostics-halfopen.png",
+      "sha256": "abad550d67efc61c78154b9e310da8e1685c6ec287106b18e818276286d9aac7",
+      "bytes": 162893,
+      "width": 842,
+      "height": 675
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/chromium/styleguide-diagnostics-phone.png",
+      "sha256": "731d9970073dcc7f10c102760f3d8a45d98e1214471ed412abbd439c195d82b8",
+      "bytes": 127065,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/chromium/styleguide-diagnostics-tablet.png",
+      "sha256": "b846c181cb7bac0272bdcdfb03a247096e226b6909cca88196d9a693bf7ee6dc",
+      "bytes": 317151,
+      "width": 820,
+      "height": 1180
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/webkit/app-diagnostics-download-desktop.png",
+      "sha256": "a239f1141438af507eaa1f3b30a4632d7c58805f4ce6f9f858a10030aaff1635",
+      "bytes": 208293,
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/webkit/app-diagnostics-download-halfopen.png",
+      "sha256": "64acc3f40fb15f05b1dcb8bae491143ce0c97a0510bb0b6ff4d43b6ddc7c3858",
+      "bytes": 124670,
+      "width": 842,
+      "height": 675
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/webkit/app-diagnostics-download-phone.png",
+      "sha256": "7a4ac90fa911cc04fa81b85844d70a46456119255846629a001c826e1fb8b39a",
+      "bytes": 105951,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/webkit/app-diagnostics-download-tablet.png",
+      "sha256": "3ca5d6085b5bb3cac770aa6620d099b886ba13325bd0812b764edcfc9586d07a",
+      "bytes": 188269,
+      "width": 820,
+      "height": 1180
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/webkit/styleguide-diagnostics-desktop.png",
+      "sha256": "8e86c8a6ea7ece18749eeec67fd8bce877867badc1769fe9630eab8ea147ec1d",
+      "bytes": 160987,
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/webkit/styleguide-diagnostics-halfopen.png",
+      "sha256": "bae6ce4a6f1c5b16c3161a3fc5e04d55db891cc4a2c82a6a350fc5f84e3434c9",
+      "bytes": 92276,
+      "width": 842,
+      "height": 675
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/webkit/styleguide-diagnostics-phone.png",
+      "sha256": "2032e8b7b7d52ca9c06547397d68ee09f09e14ec1e2370aa6a702c88b5edad15",
+      "bytes": 84253,
+      "width": 390,
+      "height": 844
+    },
+    {
+      "path": "final-all-diagnostics-verification/output/screenshots/webkit/styleguide-diagnostics-tablet.png",
+      "sha256": "22f594bd52a61a784f673265269a12f65f9458f9ef2d2b8991372e59393a5292",
+      "bytes": 157778,
+      "width": 820,
+      "height": 1180
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (4445.328314ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5020.153814
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:33:3
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (4445.328314ms)
+  TypeError: nova.runner.close is not a function
+      at TestContext.<anonymous> (file:///work/tests/ui/health-caps-diagnostics.test.ts:171:19)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+no-Kubernetes tripwire: never fired

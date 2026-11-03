@@ -1,0 +1,9 @@
+{
+  "path": "tests/ui/offline.test.ts",
+  "sha256": "76330e237eb2f999af8d8377c2853b1eb2f223715e7198c4119dfbaf87657705",
+  "git_blob": "b11b3f8f7101e5dec572a284f925bb62001d48bc",
+  "base": "308c88735b782a49cd6688b9b701bae3c5368f1c",
+  "byte_exact_to_base": true,
+  "captured_utc": "2026-11-03T16:54:06.356160+00:00",
+  "precision": "Supplement captured after M3 runner started. Existing runner start metadata captures current app sources but does not list offline.test.ts. This unchanged test file is byte-exact to the actual308c base and included in current source manifest; this supplement is not claimed to be a before-execution hash."
+}

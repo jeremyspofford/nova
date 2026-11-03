@@ -11,6 +11,7 @@ import { ICONS, ORB_SIZES, addDeviceSheet, allowApproveSheet, approvalSheet, bri
 import { waitingLine } from './wait.js';
 import { ORB_STATES } from './status.js';
 import { renderTopology } from './topology-view.js';
+import { workCosts, diagnosticsDownload } from './components.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -260,6 +261,84 @@ function bindTopology() {
   });
 }
 
+// Health specimens are local examples, never a second source of configuration. The browser test
+// compares these public example limits to Caps.DEFAULT_LIMITS; Core is never bundled here.
+const costStates = ['loading', 'unavailable', 'zero', 'mixed', 'configured', 'unlimited', 'invalid', 'saving', 'save-error', 'success', 'adversarial'];
+let costState = 'mixed';
+let diagnosticState = 'available';
+function costFixture() {
+  const empty = { iterations: 0, tokens_in: 0, tokens_out: 0, estimated_tokens: 0, unpriced_tokens: 0, usd: 0 };
+  const limits = { task: { iterations: 24, tokens: 150000, usd: 0.5 }, day: { iterations: 300, tokens: 1500000, usd: 5 } };
+  const accounting = { scope: 'this-node-runner', provider_reports_included: false, words: 'Nova runner usage on this machine; provider-managed tasks are not included. Autonomous runner work is live capped; your own conversations are metered without caps. Provider-owned loops are not live capped. Spend on other nodes is not included. Estimated tokens and tokens without a price are labeled separately; this is not complete monthly billing.' };
+  // Direct model calls recorded by Nova's runner, not reports from provider-managed tasks.
+  const providers = costState === 'zero' ? [] : [
+    { ...empty, provider: 'Cloud provider', model: 'Standard model', tokens_in: 12000, tokens_out: 5000, estimated_tokens: 4000, usd: 0.12 },
+    { ...empty, provider: 'Other provider', model: 'Unlisted model', tokens_in: 5000, tokens_out: 1000, unpriced_tokens: 6000 },
+  ];
+  if (costState === 'configured') { limits.task.usd = 0.75; limits.day.tokens = 2000000; }
+  if (costState === 'unlimited') { limits.task.usd = null; limits.day.iterations = null; }
+  if (costState === 'invalid') limits.task.usd = 0;
+  if (costState === 'adversarial') {
+    providers[0].provider = '<img src=x onerror="alert(1)">';
+    providers[0].model = 'LongModelNameWithoutSpaces'.repeat(6);
+  }
+  return { state: costState, view: ['loading', 'unavailable'].includes(costState) ? null : { accounting, limits, month: { month: '2026-11', providers, total: providers.reduce((sum, p) => Object.fromEntries(Object.keys(sum).map((k) => [k, sum[k] + p[k]])), empty) } }, invalid: costState === 'invalid' ? { 'task.usd': 'Enter a finite number greater than zero, or choose Unlimited.' } : {} };
+}
+function healthEntry(kind) {
+  const costs = kind === 'work-costs';
+  const selected = costs ? costState : diagnosticState;
+  return `<div class="sg-demo-row"><label for="${kind}-state">Specimen state</label><select class="input" id="${kind}-state">${(costs ? costStates : ['available', 'unavailable']).map((s) => `<option value="${s}"${s === selected ? ' selected' : ''}>${s.replaceAll('-', ' ')}</option>`).join('')}</select></div><p class="sg-about">Illustrative data only. ${costs ? 'Saving makes no changes.' : 'The download action is intercepted; no file or live data is requested.'}</p><div class="panel health-specimen" data-health-specimen="${kind}">${costs ? workCosts(costFixture()) : diagnosticsDownload({ available: diagnosticState === 'available' })}</div>${costs ? '' : '<p class="card-line" role="status" data-diagnostics-notice></p>'}`;
+}
+function bindHealthSpecimens() {
+  for (const kind of ['work-costs', 'diagnostics']) {
+    const entry = sg.querySelector(`#sg-${kind}`);
+    if (!entry) continue;
+    // A copied/opened specimen link must also stay local, not just ordinary clicks. The shared
+    // component retains its native attachment URL for Health; only this catalogue changes it.
+    const localDownload = () => entry.querySelector('[data-download-diagnostics]')?.setAttribute('href', '#sg-diagnostics');
+    localDownload();
+    entry.addEventListener('change', (e) => {
+      if (e.target.id === `${kind}-state`) {
+        if (kind === 'work-costs') costState = e.target.value;
+        else diagnosticState = e.target.value;
+        entry.querySelector('[data-health-specimen]').innerHTML = kind === 'work-costs' ? workCosts(costFixture()) : diagnosticsDownload({ available: diagnosticState === 'available' });
+        localDownload();
+        const notice = entry.querySelector('[data-diagnostics-notice]');
+        if (notice) notice.textContent = '';
+      } else if (e.target.name?.endsWith('.unlimited')) {
+        const input = entry.querySelector(`[name="${e.target.name.replace('.unlimited', '')}"]`);
+        input.disabled = e.target.checked;
+        clearInvalid(entry);
+      }
+    });
+    entry.addEventListener('input', (e) => { if (e.target.matches('.work-limit')) clearInvalid(entry); });
+    entry.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (entry.querySelector('[data-save-work-limits]')?.disabled) return;
+      const invalid = [...entry.querySelectorAll('.work-limit')].filter((input) => !input.disabled && (!input.value.trim() || !Number.isFinite(Number(input.value)) || Number(input.value) <= 0));
+      for (const input of invalid) { input.setAttribute('aria-invalid', 'true'); input.setAttribute('aria-describedby', 'work-specimen-error'); }
+      const notice = entry.querySelector('[data-work-costs-notice]');
+      notice.id = 'work-specimen-error';
+      notice.textContent = invalid.length ? 'Enter a finite number greater than zero, or choose Unlimited.' : 'Specimen complete. No limits were saved.';
+      invalid[0]?.focus();
+    });
+    const interceptDownload = (e) => {
+      if (e.target.closest('[data-download-diagnostics]')) {
+        e.preventDefault();
+        entry.querySelector('[data-diagnostics-notice]').textContent = 'Specimen complete. No file was downloaded.';
+      }
+    };
+    entry.addEventListener('click', interceptDownload);
+    entry.addEventListener('auxclick', interceptDownload);
+  }
+}
+function clearInvalid(entry) {
+  for (const input of entry.querySelectorAll('.work-limit')) { input.removeAttribute('aria-invalid'); input.removeAttribute('aria-describedby'); }
+  for (const error of entry.querySelectorAll('.work-limit-error')) error.remove();
+  entry.querySelector('[data-work-costs-notice]').textContent = '';
+  entry.querySelector('[data-save-work-limits]').disabled = false;
+}
+
 // ---- how an entry is drawn -----------------------------------------------------------------------
 
 const state = (label, html, cls = '') => `<figure class="sg-state${cls ? ` ${cls}` : ''}"><figcaption class="sg-label">${label}</figcaption><div class="sg-specimen">${html}</div></figure>`;
@@ -315,6 +394,8 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
         () => `<div class="sg-cards">${state('Rows', `<div class="panel"><ul class="device-list">${deviceRow(hub, { now: t0 })}${deviceRow(desk, { now: t0, roles: true })}${deviceRow(phone, { now: t0 })}${deviceRow({ ...phone, id: 'old', name: 'Old tablet', trust: 'revoked', revoked_at: at(-48) }, { now: t0 })}</ul></div>`)}${state('The card', deviceMeshCard({ devices: [hub, desk, phone], now: t0 }))}${state('Only this device', deviceMeshCard({ devices: [hub], now: t0 }))}</div>`],
       ['health-card', 'HealthCard', 'Fine, or what isn’t, in human terms; the detail is on the Health page, never a path or an error here.',
         () => `<div class="sg-cards">${state('All normal', healthCard({ health: { ok: true, checks: { database: { ok: true }, workers: { ok: true, workers: [{}, {}, {}] } } } }))}${state('Needs you (amber)', healthCard({ health: { ok: true, checks: {} }, problems: [{ id: 1, source: 'backups', message: 'raw detail stays in Health' }] }))}${state('Stopped (red)', healthCard({ health: { ok: true, checks: {} }, problems: [{ id: 2, source: 'ledger', stops: true }] }))}${state('Nova isn’t answering', healthCard({ reachable: false }))}</div>`],
+      ['work-costs', 'Work costs', 'Month-to-date usage and six limits for Nova runner work on this machine.', () => healthEntry('work-costs')],
+      ['diagnostics', 'Diagnostics', 'A native download, its privacy limits, and an unavailable state.', () => healthEntry('diagnostics')],
       ['memory-card', 'MemoryHighlightCard', 'One thing Nova kept, or that nothing is kept yet.',
         () => `<div class="sg-cards">${state('Kept', memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] }))}${state('Nothing yet', memoryHighlightCard())}</div>`],
       ['approval-sheet', 'ApprovalSheet', 'Tiered: tier 2 asks; tier 3 needs an explicit confirmation every time.',
@@ -373,6 +454,10 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
 }
 
 function render() {
+  // Appearance can arrive after someone has started editing. Keep Health's local form and
+  // disclosure state through that catalogue redraw; never replace an unsaved edit with a fixture.
+  const healthSpecimens = [...sg.querySelectorAll('[data-health-specimen], [data-diagnostics-notice]')];
+  const healthFocus = document.activeElement?.closest('[data-health-specimen]') ? document.activeElement : null;
   const groups = entries();
   const all = groups.flatMap(([, list]) => list);
   const shown = only ? all.filter(([id]) => id === only) : null;
@@ -383,7 +468,13 @@ function render() {
     const index = `<nav class="sg-index" aria-label="Entries">${groups.map(([g, list]) => `<div><p class="sg-label">${g}</p><ul>${list.map(([id, name]) => `<li><a href="#sg-${id}">${name}</a></li>`).join('')}</ul></div>`).join('')}</nav>`;
     sg.innerHTML = index + groups.map(([g, list]) => `<section class="sg-section" aria-label="${g}"><h2>${g}</h2>${list.map(one).join('')}</section>`).join('');
   }
+  for (const previous of healthSpecimens) {
+    const selector = previous.hasAttribute('data-health-specimen') ? `[data-health-specimen="${previous.dataset.healthSpecimen}"]` : '[data-diagnostics-notice]';
+    sg.querySelector(selector)?.replaceWith(previous);
+  }
+  if (healthFocus?.isConnected) healthFocus.focus({ preventScroll: true });
   bindTopology();
+  bindHealthSpecimens();
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }

@@ -1,0 +1,20 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (33671.591652ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 34139.492688
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:33:3
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (33671.591652ms)
+  page.waitForResponse: Timeout 30000ms exceeded while waiting for event "response"
+      at TestContext.<anonymous> (/work/tests/ui/health-caps-diagnostics.test.ts:140:27) {
+    name: 'TimeoutError'
+  }
+no-Kubernetes tripwire: never fired

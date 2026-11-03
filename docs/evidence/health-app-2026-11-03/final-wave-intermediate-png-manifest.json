@@ -1,0 +1,131 @@
+{
+  "policy": "Every listed intermediate PNG retained privately; exact-image-only ignore. Old bad public witnesses and all earlier PNGs untouched. Final2 corrected app copies tracked, current2 matching specimens byte-identical to earlier public files.",
+  "pngs": [
+    {
+      "path": "final-visual-red/output/screenshots/chromium/app-diagnostics-download-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 126723,
+      "sha256": "84255a754f4ea63d44d6b5b89124b89ba725391836929e1afd44f1b1a11fd7b3"
+    },
+    {
+      "path": "final-visual-red/output/screenshots/chromium/app-work-costs-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 169886,
+      "sha256": "68a95a0005b0425d05c1a9d6526448134fc94db218aa48508e67914e9ed05c5e"
+    },
+    {
+      "path": "final-visual-phone-framing-probe/output/screenshots/chromium/app-diagnostics-download-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 160101,
+      "sha256": "309b491711e152b9394c2a3480d4762760861212cd9ecaf63428ec3d8814edf4"
+    },
+    {
+      "path": "final-visual-phone-framing-probe/output/screenshots/chromium/app-work-costs-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 169886,
+      "sha256": "68a95a0005b0425d05c1a9d6526448134fc94db218aa48508e67914e9ed05c5e"
+    },
+    {
+      "path": "final-visual-phone-framing-probe/output/screenshots/chromium/probe-phone-action.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 140689,
+      "sha256": "798ac1bee9ec1715040ddf34e1499eefc3966147305a63cb6eefa9c904a724ba"
+    },
+    {
+      "path": "final-visual-phone-framing-probe/output/screenshots/chromium/probe-phone-heading.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 160612,
+      "sha256": "0581fb6d9d977725d56337056543ec61adef7ab96fcab05621a2ce97c64ff9c9"
+    },
+    {
+      "path": "final-visual-phone-framing-probe/output/screenshots/chromium/probe-phone-original.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 126723,
+      "sha256": "84255a754f4ea63d44d6b5b89124b89ba725391836929e1afd44f1b1a11fd7b3"
+    },
+    {
+      "path": "final-visual-phone-framing-probe/output/screenshots/chromium/probe-phone-restored.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 160101,
+      "sha256": "309b491711e152b9394c2a3480d4762760861212cd9ecaf63428ec3d8814edf4"
+    },
+    {
+      "path": "final-visual-halfopen-framing-probe/output/screenshots/chromium/app-diagnostics-download-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 213707,
+      "sha256": "bfb5b306b60a26a7a621d90062cff4d3f13ea7e4b9ada08c72666cd37b37c84f"
+    },
+    {
+      "path": "final-visual-halfopen-framing-probe/output/screenshots/chromium/app-work-costs-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 227222,
+      "sha256": "7d3b3d6ea69853515d9f7a50d9c637d75d476a06a126d1f90172ab5957b63ce7"
+    },
+    {
+      "path": "final-visual-halfopen-framing-probe/output/screenshots/chromium/probe-halfopen-action.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 213553,
+      "sha256": "c68945ad62b395a07128168838ac5168dbcfa6b88465ab9572c296c2cacb300b"
+    },
+    {
+      "path": "final-visual-halfopen-framing-probe/output/screenshots/chromium/probe-halfopen-heading.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 214120,
+      "sha256": "bab277cdf9986f4fd2347cdf2371ae966a7733851f5a9304654699a8601ba0b6"
+    },
+    {
+      "path": "final-visual-halfopen-framing-probe/output/screenshots/chromium/probe-halfopen-original.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 194304,
+      "sha256": "279fe117fe776ef619befe5cf44ffbe764ecaae076d07f3c3f30c6841f0f6434"
+    },
+    {
+      "path": "final-visual-halfopen-framing-probe/output/screenshots/chromium/probe-halfopen-restored.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 213707,
+      "sha256": "bfb5b306b60a26a7a621d90062cff4d3f13ea7e4b9ada08c72666cd37b37c84f"
+    },
+    {
+      "path": "final-visual-qualified/output/screenshots/chromium/app-diagnostics-download-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 212922,
+      "sha256": "a73c8d3683bfc5212a74ade4e74455997e61d921afe0ba94e0547d3259122caa"
+    },
+    {
+      "path": "final-visual-qualified/output/screenshots/chromium/app-diagnostics-download-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 159815,
+      "sha256": "cda96136d9b0a67ad28f53a974b059a350d89e582437ab43005057bd721c0b61"
+    },
+    {
+      "path": "final-visual-qualified/output/screenshots/chromium/styleguide-diagnostics-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 162893,
+      "sha256": "abad550d67efc61c78154b9e310da8e1685c6ec287106b18e818276286d9aac7"
+    },
+    {
+      "path": "final-visual-qualified/output/screenshots/chromium/styleguide-diagnostics-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 127065,
+      "sha256": "731d9970073dcc7f10c102760f3d8a45d98e1214471ed412abbd439c195d82b8"
+    }
+  ]
+}

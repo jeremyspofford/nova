@@ -1,0 +1,69 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+2026-11-03T14:46:15.535Z pw:browser <launching> /ms-playwright/chromium-1194/chrome-linux/chrome --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-back-forward-cache --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-extensions --disable-features=AcceptCHFrame,AvoidUnnecessaryBeforeUnloadCheckSync,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,Translate,AutoDeElevate,RenderDocument --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --enable-automation --headless --hide-scrollbars --mute-audio --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --no-sandbox --disable-background-networking --user-data-dir=/tmp/playwright_chromiumdev_profile-TAj6JU --remote-debugging-pipe --no-startup-window
+2026-11-03T14:46:15.542Z pw:browser <launched> pid=42
+2026-11-03T14:46:15.709Z pw:browser [pid=42][err] [42:56:1103/144615.706670:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory
+2026-11-03T14:46:15.714Z pw:browser [pid=42][err] [42:56:1103/144615.714272:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+2026-11-03T14:46:15.714Z pw:browser [pid=42][err] [42:56:1103/144615.714323:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory
+2026-11-03T14:46:15.714Z pw:browser [pid=42][err] [42:56:1103/144615.714338:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory
+2026-11-03T14:46:15.841Z pw:browser [pid=42][err] [42:56:1103/144615.841426:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+2026-11-03T14:46:15.851Z pw:browser [pid=42][err] [42:42:1103/144615.851663:ERROR:dbus/object_proxy.cc:573] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+2026-11-03T14:46:15.852Z pw:browser [pid=42][err] [42:56:1103/144615.851775:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+2026-11-03T14:46:15.852Z pw:browser [pid=42][err] [42:56:1103/144615.851786:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+2026-11-03T14:46:15.852Z pw:browser [pid=42][err] [42:56:1103/144615.851791:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+2026-11-03T14:46:15.852Z pw:browser [pid=42][err] [42:56:1103/144615.851794:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+2026-11-03T14:46:15.852Z pw:browser [pid=42][err] [42:56:1103/144615.851796:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+2026-11-03T14:46:15.866Z pw:browser [pid=42][err] [42:42:1103/144615.866382:ERROR:dbus/object_proxy.cc:573] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+2026-11-03T14:46:15.867Z pw:browser [pid=42][err] [42:42:1103/144615.867709:ERROR:dbus/object_proxy.cc:573] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+2026-11-03T14:46:15.867Z pw:browser [pid=42][err] [42:56:1103/144615.867717:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory
+2026-11-03T14:46:15.867Z pw:browser [pid=42][err] [42:56:1103/144615.867736:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory
+2026-11-03T14:46:15.867Z pw:browser [pid=42][err] [42:42:1103/144615.867755:ERROR:dbus/object_proxy.cc:573] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+2026-11-03T14:46:15.869Z pw:browser [pid=42][err] [42:42:1103/144615.868757:ERROR:dbus/object_proxy.cc:573] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+HEALTH RUNTIME chromium=141.0.7390.37 node=v26.3.1
+HEALTH chromium/phone expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/phone: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH SW script request /sw.js; legacy=true
+HEALTH initial installed worker versions [ 'nova-shell-v14' ]
+HEALTH SW script request /sw.js; legacy=false
+HEALTH upgraded worker versions [ 'nova-shell-v15' ]
+HEALTH cache names before diagnostic assertion [ 'nova-shell-v14', 'other-app-public-example', 'nova-shell-v15' ]
+2026-11-03T14:46:24.091Z pw:browser [pid=42] <gracefully close start>
+2026-11-03T14:46:24.126Z pw:browser [pid=42] <process did exit: exitCode=0, signal=null>
+2026-11-03T14:46:24.126Z pw:browser [pid=42] starting temporary directories cleanup
+2026-11-03T14:46:24.136Z pw:browser [pid=42] finished temporary directories cleanup
+2026-11-03T14:46:24.136Z pw:browser [pid=42] <gracefully close end>
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (8610.83378ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9140.780855
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:109:3
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (8610.83378ms)
+  AssertionError [ERR_ASSERTION]: current diagnostics and query variants never enter any browser cache
+  + actual - expected
+  
+  + [
+  +   'http://127.0.0.1:34037/api/v1/diagnostics',
+  +   'http://127.0.0.1:34037/api/v1/diagnostics?example=1'
+  + ]
+  - []
+  
+      at diagnosticsWorkerUpgrade (file:///work/tests/ui/health-caps-diagnostics.test.ts:91:12)
+      at async TestContext.<anonymous> (file:///work/tests/ui/health-caps-diagnostics.test.ts:389:59)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'http://127.0.0.1:34037/api/v1/diagnostics', 'http://127.0.0.1:34037/api/v1/diagnostics?example=1' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,26 @@
+[
+  {
+    "run": "fix-2-browser-qualified",
+    "exit_code": 0,
+    "command_sha256": "3385edb5fa671929548719d7661fd12b28c6b4b9519758c1c561b5aad2090e04",
+    "stdout_sha256": "695d8eec19cb3e5b17e90ae99a03fa7ec0c6a1728245028d4369318ae51d67bc"
+  },
+  {
+    "run": "fix-2-core-outage-qualified",
+    "exit_code": 0,
+    "command_sha256": "1ba3d4008748731d00eac2d571fb1ee102d2d91f7a0715a722c7ed9d0868efc7",
+    "stdout_sha256": "9733d2d9c11d0de3306697c57a7bdc3b413fa02db2d06114b1987cd3046e0fd8"
+  },
+  {
+    "run": "fix-2-partial-red",
+    "exit_code": 1,
+    "command_sha256": "293a591048f647e4c320f0a1bcf6c4e8d44832a7d0987a3f51e4531a710c8167",
+    "stdout_sha256": "caab2b17fab6128e39b556cb8921721606342ae6f575211fe191e1037b9a8843"
+  },
+  {
+    "run": "fix-2-static-qualified",
+    "exit_code": 0,
+    "command_sha256": "cb71d78526c620e2226b7925eda401d3899230463830e496538dcd9c6f1e59f9",
+    "stdout_sha256": "0740e4325b6c0e87db81ebf6689ac211431d24176362795bac74193fd04addfe"
+  }
+]

@@ -1,0 +1,8 @@
+docs/evidence/health-app-2026-11-03/fix-1-browser-green/stdout.txt:23: trailing whitespace.
++  
+docs/evidence/health-app-2026-11-03/fix-1-browser-green/stdout.txt:25: trailing whitespace.
++  
+docs/evidence/health-app-2026-11-03/fix-1-browser-green/stdout.txt:40: trailing whitespace.
++  
+docs/evidence/health-app-2026-11-03/fix-1-browser-green/stdout.txt:42: trailing whitespace.
++  

@@ -1,0 +1,22 @@
+c071b5360224bd1e83b5e352a1c05bd448237a2f
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+HEALTH RUNTIME chromium=141.0.7390.37 node=v26.3.1
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (5126.7277ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5678.358884
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:131:3
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (5126.7277ms)
+  page.waitForFunction: Timeout 3000ms exceeded.
+      at TestContext.<anonymous> (/work/tests/ui/health-caps-diagnostics.test.ts:196:17) {
+    name: 'TimeoutError'
+  }
+no-Kubernetes tripwire: never fired

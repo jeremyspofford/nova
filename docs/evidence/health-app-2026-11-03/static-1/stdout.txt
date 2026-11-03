@@ -1,0 +1,27 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+(node:26) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ work costs renders Caps totals without treating unpriced or estimated tokens as extra usage (10.05726ms)
+✔ work costs escapes provider, model, period, error and input strings without mutation (0.496262ms)
+✔ unloaded and unavailable costs cannot save; null is explicitly unlimited (1.118975ms)
+✔ diagnostics supplies a native attachment link and no live action when unavailable (0.193765ms)
+(node:33) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the bands: nothing under 1 s, an indicator to 10 s, then real progress (0.688225ms)
+✔ progress is in real units: no fraction without a total, never full before it is done (0.953147ms)
+✔ a general estimate, in words, from a measured rate only, erring long (0.306441ms)
+✔ a long wait says what is done, an estimate where there is a basis, else the time so far (0.14085ms)
+✔ after 10 s there is always a general estimate: this device’s own history, else what is usual for the kind of wait (1.047762ms)
+✔ a waiting line carries when the wait began, so a redraw keeps its age; it is hidden for its first second (0.77741ms)
+✔ no artificial delay: every timer in the PWA is named for what it is (3.957224ms)
+✔ no fake work: no “checking…” or padding, and every wait is drawn by wait.js (0.571897ms)
+✔ no simulated streaming: text grows only from the server’s deltas, never replayed (1.715326ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 166.122957
+no-Kubernetes tripwire: never fired

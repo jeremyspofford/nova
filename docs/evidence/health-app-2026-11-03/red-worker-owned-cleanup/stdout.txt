@@ -1,0 +1,38 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+HEALTH RUNTIME chromium=141.0.7390.37 node=v26.3.1
+HEALTH chromium/phone expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/phone: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH SW script request /sw.js; legacy=true
+HEALTH initial installed worker versions [ 'nova-shell-v14' ]
+HEALTH SW script request /sw.js; legacy=false
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (9318.903034ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9909.40856
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:116:3
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (9318.903034ms)
+  AssertionError [ERR_ASSERTION]: worker upgrade preserves an unrelated cache
+  
+  false !== true
+  
+      at diagnosticsWorkerUpgrade (file:///work/tests/ui/health-caps-diagnostics.test.ts:80:12)
+      at async TestContext.<anonymous> (file:///work/tests/ui/health-caps-diagnostics.test.ts:396:59)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,29 @@
+{
+  "base": "308c88735b782a49cd6688b9b701bae3c5368f1c",
+  "root_docs_before": {
+    "docs/LEDGER.md": "a3efe3542334b13ed6650059541171ab3df558c07664e37fdfd2bcbc2e6ccfa7",
+    "docs/plans/owner-priority-queue-2026-11-02.md": "87dd8066ddb5b6e9ed3b7bc64eaafb33ec6f277bc6cd763cd05a62e6a38c80f2",
+    "src/core/README.md": "0720fbaaa4667466d8aeaec7b1e361a91d9893fc2b4153818608df99e79d0131",
+    "docs/evidence/health-app-2026-11-03/delivery.md": "118eb6cf31175c65a33c4399b88995fe70c3ac4f9a6d11c89fec22602ec079b0"
+  },
+  "root_docs_after": {
+    "docs/LEDGER.md": "a3efe3542334b13ed6650059541171ab3df558c07664e37fdfd2bcbc2e6ccfa7",
+    "docs/plans/owner-priority-queue-2026-11-02.md": "87dd8066ddb5b6e9ed3b7bc64eaafb33ec6f277bc6cd763cd05a62e6a38c80f2",
+    "src/core/README.md": "0720fbaaa4667466d8aeaec7b1e361a91d9893fc2b4153818608df99e79d0131",
+    "docs/evidence/health-app-2026-11-03/delivery.md": "118eb6cf31175c65a33c4399b88995fe70c3ac4f9a6d11c89fec22602ec079b0"
+  },
+  "all_existing_tracked_pngs_byte_identical": true,
+  "existing_tracked_png_count": 816,
+  "current_manifest_capture_count": 40,
+  "reused_exact_prior_png_count": 38,
+  "new_public_png_count": 2,
+  "current_qualified_run_source_hashes_match": true,
+  "308c_manifest_archive_byte_exact": true,
+  "only_changed_production_code": "ui/js/app.js entry per-Caps loader/redraw; global availability handling unchanged",
+  "changed_source_test_paths_including_root_doc": [
+    "src/core/README.md",
+    "tests/ui/health-caps-diagnostics.test.ts",
+    "ui/js/app.js"
+  ],
+  "backend_components_wait_sw_styles_dependencies_unchanged": true
+}

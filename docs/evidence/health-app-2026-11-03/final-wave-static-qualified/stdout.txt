@@ -1,0 +1,35 @@
+6ea82d7b211375dc390aed44bb2f53fed4f51500
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ CI changes: actual checkout depth makes a real shallow PR merge classify code from its first parent (65.798888ms)
+✔ CI changes: shallow merge first-parent docs stay docs-only; an unavailable older BEFORE fails closed (57.647964ms)
+(node:173) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ work costs renders Caps totals without treating unpriced or estimated tokens as extra usage (10.381656ms)
+✔ work costs escapes provider, model, period, error and input strings without mutation (0.552608ms)
+✔ unloaded and unavailable costs cannot save; null is explicitly unlimited (1.01234ms)
+✔ diagnostics supplies a native attachment link and no live action when unavailable (0.21523ms)
+✔ work costs loading and saving use the retained shared wait clock (0.773079ms)
+(node:180) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the bands: nothing under 1 s, an indicator to 10 s, then real progress (0.736689ms)
+✔ progress is in real units: no fraction without a total, never full before it is done (0.827306ms)
+✔ a general estimate, in words, from a measured rate only, erring long (0.261248ms)
+✔ a long wait says what is done, an estimate where there is a basis, else the time so far (0.15442ms)
+✔ after 10 s there is always a general estimate: this device’s own history, else what is usual for the kind of wait (1.559651ms)
+✔ a waiting line carries when the wait began, so a redraw keeps its age; it is hidden for its first second (1.023111ms)
+✔ no artificial delay: every timer in the PWA is named for what it is (4.861622ms)
+✔ no fake work: no “checking…” or padding, and every wait is drawn by wait.js (0.737807ms)
+✔ no simulated streaming: text grows only from the server’s deltas, never replayed (1.827414ms)
+✔ navigation model accounts for every app view, including Settings children (2.150557ms)
+✔ adding an app registration extends the missing-view oracle (0.820835ms)
+✔ rendered-root oracle derives DOM IDs from actual registration and element mapping (1.8415ms)
+✔ rendered-root oracle fails closed on unresolved, duplicate and uninventoried mappings (0.550594ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 457.143523
+no-Kubernetes tripwire: never fired

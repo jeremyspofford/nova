@@ -1,0 +1,74 @@
+{
+  "base": "3b6c9f0dce8e709ddb465f00e4291e177f8a7de8",
+  "note": "All tested changed-source variants are exact base3b bytes or committed repair-final bytes; no unarchived intermediate source variant. First static pass omitted three unchanged static files from start list; retained, with complete-provenance pass authoritative. Pre-coverage runner bytes archived exactly.",
+  "base_source_hashes": {
+    "ui/js/surfaces.js": "1df0f98707b74c4e1b77f269eee7e7ab1590da2d4ccc6e739b74957bbafcbdac",
+    "tests/ui/m9-progress.test.ts": "2f62bae1ec7bbd0ccc08ca213903fb736fed75bf425da3fa96733a4588aea8f6",
+    "tests/ui/health-caps-diagnostics.test.ts": "477083dd8c61ea7a08d22d457cbf99beb34c14eb3a67d1c1c1dd8c1c30893072"
+  },
+  "runs": [
+    {
+      "run": "ci-repair-m9-original-red",
+      "changed_source_variants": {
+        "ui/js/surfaces.js": "base3b",
+        "tests/ui/m9-progress.test.ts": "base3b",
+        "tests/ui/health-caps-diagnostics.test.ts": "base3b"
+      },
+      "runner_source": "ci-repair-runner-before-static-coverage.py.txt"
+    },
+    {
+      "run": "ci-repair-landmark-red",
+      "changed_source_variants": {
+        "ui/js/surfaces.js": "base3b",
+        "tests/ui/m9-progress.test.ts": "base3b",
+        "tests/ui/health-caps-diagnostics.test.ts": "repair-final"
+      },
+      "runner_source": "ci-repair-runner-before-static-coverage.py.txt"
+    },
+    {
+      "run": "ci-repair-m9-total-red",
+      "changed_source_variants": {
+        "ui/js/surfaces.js": "base3b",
+        "tests/ui/m9-progress.test.ts": "repair-final",
+        "tests/ui/health-caps-diagnostics.test.ts": "repair-final"
+      },
+      "runner_source": "ci-repair-runner-before-static-coverage.py.txt"
+    },
+    {
+      "run": "ci-repair-m9-qualified",
+      "changed_source_variants": {
+        "ui/js/surfaces.js": "repair-final",
+        "tests/ui/m9-progress.test.ts": "repair-final",
+        "tests/ui/health-caps-diagnostics.test.ts": "repair-final"
+      },
+      "runner_source": "ci-repair-runner-before-static-coverage.py.txt"
+    },
+    {
+      "run": "ci-repair-health-qualified",
+      "changed_source_variants": {
+        "ui/js/surfaces.js": "repair-final",
+        "tests/ui/m9-progress.test.ts": "repair-final",
+        "tests/ui/health-caps-diagnostics.test.ts": "repair-final"
+      },
+      "runner_source": "ci-repair-runner-before-static-coverage.py.txt"
+    },
+    {
+      "run": "ci-repair-static-qualified",
+      "changed_source_variants": {
+        "ui/js/surfaces.js": "repair-final",
+        "tests/ui/m9-progress.test.ts": "repair-final",
+        "tests/ui/health-caps-diagnostics.test.ts": "repair-final"
+      },
+      "runner_source": "ci-repair-runner-before-static-coverage.py.txt"
+    },
+    {
+      "run": "ci-repair-static-complete-provenance",
+      "changed_source_variants": {
+        "ui/js/surfaces.js": "repair-final",
+        "tests/ui/m9-progress.test.ts": "repair-final",
+        "tests/ui/health-caps-diagnostics.test.ts": "repair-final"
+      },
+      "runner_source": "run.py"
+    }
+  ]
+}
