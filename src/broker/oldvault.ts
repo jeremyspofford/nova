@@ -11,7 +11,7 @@
 // connectors/; the copies taken before the migration still hold the old entries until they age out
 // (NOTES for Track 1).
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 
 // Under Node's permission model a folder that doesn't exist can't be granted, so asking about a
 // path in it throws instead of answering false: either way there is nothing there.
@@ -27,7 +27,7 @@ const AAD = (id: string) => Buffer.from(`nova-vault-v1|${id}`, 'utf8');
 const fp = (key: Buffer) => createHash('sha256').update(key).digest('hex').slice(0, 16);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export interface OldVault { id: string; map: Map<string, string>; key: Buffer; store: KeyStore }
+export interface OldVault { id: string; epoch: string; map: Map<string, string>; key: Buffer; store: KeyStore }
 
 function keyMode(env: NodeJS.ProcessEnv): 'auto' | 'file' | 'keychain' {
   const v = env.NOVA_VAULT_KEY;
@@ -64,8 +64,12 @@ export function readOldVault(home: string, o: { env?: NodeJS.ProcessEnv; store?:
       d.setAuthTag(Buffer.from(f.tag, 'base64'));
       let map: Map<string, string>;
       try { map = new Map(Object.entries(JSON.parse(Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8')) as Record<string, string>)); } catch { throw new Error('The old vault doesn’t open with its key.'); }
+      // Only expose an epoch after authentication. Core's writer draws a fresh 12-byte nonce
+      // for EVERY save, including identical values; restoring the exact ciphertext keeps it.
+      const nonce = Buffer.from(f.nonce, 'base64');
+      if (nonce.length !== 12) throw new Error('The old vault has no supported write epoch.');
       if (pending) { renameSync(`${file}.tmp`, file); chmodSync(file, 0o600); }
-      return { id: f.id, map, key, store: s };
+      return { id: f.id, epoch: `vault:${f.id}:${nonce.toString('hex')}`, map, key, store: s };
     }
   }
   throw new Error('The old vault’s key isn’t where it should be, so nothing can be moved from it.');
@@ -94,23 +98,39 @@ export function removeFromOldVault(home: string, v: OldVault, names: string[]): 
   chmodSync(file, 0o600);
   v.key.fill(0);
   v.key = key;
+  v.epoch = `vault:${v.id}:${nonce.toString('hex')}`;
   return gone;
 }
 
 // Era 2's plaintext Gmail files (src/connectors/gmail.js), moved by the broker too.
 export const GMAIL_FILES: Record<string, string> = { 'client.json': 'connector/gmail/GOOGLE_OAUTH_CLIENT', 'token.json': 'connector/gmail/GOOGLE_REFRESH_TOKEN', 'password.json': 'connector/gmail/GMAIL_APP_PASSWORD' };
-export function readGmailFiles(home: string): Map<string, string> {
+// Gmail writers MUST be quiesced for migration: these file identities/change times are not an
+// authenticated journal or protection against hostile same-user/root metadata manipulation.
+// No size, content, or access time participates. Unknown/non-regular identities refuse staging
+// and cleanup; stable regular files still migrate normally.
+function gmailEpoch(path: string): string | null {
+  const s = lstatSync(path, { bigint: true });
+  return s.isFile() && s.ino > 0n && s.mtimeNs > 0n && s.ctimeNs > 0n
+    ? `gmail:${s.dev}:${s.ino}:${s.mtimeNs}:${s.ctimeNs}` : null;
+}
+export function readGmailFiles(home: string) {
   const out = new Map<string, string>();
+  const epochs = new Map<string, string>();
   for (const [file, name] of Object.entries(GMAIL_FILES)) {
     const p = join(home, 'connectors', 'gmail', file);
     if (!there(p)) continue;
+    const before = gmailEpoch(p);
+    if (before === null) throw new Error('A Gmail source has no trustworthy write epoch.');
     const text = readFileSync(p, 'utf8');
+    const after = gmailEpoch(p);
+    if (before !== after) throw new Error('A Gmail source changed while it was being read.');
+    epochs.set(name, before);
     if (!text.trim()) continue;
     let v = text;
     try { v = JSON.stringify(JSON.parse(text)); } catch { /* kept as its text, as gmail.js does */ }
     out.set(name, v);
   }
-  return out;
+  return { items: out, epochs };
 }
 export function removeGmailFiles(home: string, names: string[]): void {
   for (const [file, name] of Object.entries(GMAIL_FILES)) if (names.includes(name) && there(join(home, 'connectors', 'gmail', file))) rmSync(join(home, 'connectors', 'gmail', file), { force: true });
@@ -126,11 +146,11 @@ export function withOldVaultLock<T>(home: string, run: () => T): T {
   try { return run(); } finally { rmSync(lock, { recursive: true }); }
 }
 
-// Private to the launcher/broker pipe, never a response or audit field. A changed snapshot is
-// retained wholesale; no secret comparison is exposed through conflict decisions.
+// Source epochs travel only over the private launcher pipe. The v2 metadata-only digest also
+// scopes the public approval card. A changed/uncertain snapshot is retained wholesale.
 export function migrationSnapshot(home: string) {
   const old = readOldVault(home);
   const gmail = readGmailFiles(home);
-  const revision = createHash('sha256').update(JSON.stringify([old?.id ?? null, [...old?.map ?? []], [...gmail]])).digest('hex');
+  const revision = `v2:${createHash('sha256').update(JSON.stringify([old?.epoch ?? null, [...gmail.epochs]])).digest('hex')}`;
   return { old, gmail, revision };
 }

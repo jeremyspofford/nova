@@ -9,7 +9,7 @@
 //     the value in its environment, or in a 0600 file in a 0700 folder named by that variable and
 //     removed on exit. It scrubs stdout and stderr of the value (and its encodings), passes on
 //     signals, and exits with the program's code.
-//   launch.ts migrate <home>   stdout: { vault_id, revision }, then { name, value } per credential
+//   launch.ts migrate <home>   stdout: { vault_id, revision }, then { name, value, epoch } privately
 //     Reads vault.ts's file and key and Era 2's Gmail files. Nova's own keys aren't sent.
 //   launch.ts finish <home>    fd 3: { vault_id, revision, names }
 //     Takes the names that moved out of the old vault (a new key, or no file and no key) and removes
@@ -78,10 +78,11 @@ async function run() {
 function migrate(home: string) {
   return withOldVaultLock(home, () => {
     const { old, gmail, revision } = migrationSnapshot(home);
-    const items = new Map<string, string>(gmail);
-    for (const [k, v] of old?.map ?? []) items.set(k, v);
+    const items = new Map<string, string>(gmail.items);
+    const epochs = new Map(gmail.epochs);
+    for (const [k, v] of old?.map ?? []) { items.set(k, v); epochs.set(k, old!.epoch); }
     line({ vault_id: old?.id ?? null, revision });
-    for (const [name, value] of items) if (!OWN_KEYS.some((r) => r.test(name))) line({ name, value });
+    for (const [name, value] of items) if (!OWN_KEYS.some((r) => r.test(name))) line({ name, value, epoch: epochs.get(name) });
     old?.key.fill(0);
   });
 }
@@ -92,7 +93,7 @@ async function finish(home: string) {
     const names = Array.isArray(f.names) ? (f.names as unknown[]).filter((n): n is string => typeof n === 'string') : [];
     const { old, revision } = migrationSnapshot(home);
     try {
-      // A newer value was never read back. Keep all entries on any staged revision mismatch.
+      // A newer write was never read back, even if its value matches. Never compare plaintext.
       if (revision !== f.revision || (old && old.id !== f.vault_id)) { line({ removed: 0 }); return; }
       const removed = old ? removeFromOldVault(home, old, names) : [];
       removeGmailFiles(home, names);

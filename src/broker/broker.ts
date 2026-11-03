@@ -63,7 +63,7 @@ export class Broker {
   #entry = entryKey();
   #approvals: Approvals;
   #rates: Rates;
-  #staged: { vaultId: string | null; revision: string; items: Map<string, Buffer> } | null = null;
+  #staged: { vaultId: string | null; revision: string; items: Map<string, Buffer>; epochs: Map<string, string> } | null = null;
   #running = 0;
   #grants = new Set<string>();
   #index = new Map<string, Meta & { version: number; pending: boolean }>();
@@ -626,28 +626,37 @@ export class Broker {
   //    The answer is a count.
   //  - commit (tier 3, one card of names and kinds): each staged entry whose name is free becomes an
   //    unbound item (usable nowhere), marked as migrated from that old vault, and is read back. A
-  //    name already taken by an item migrated from the same old vault counts as moved (a resumed
-  //    run); a name taken by any other item stays in the old vault. Neither looks at a value. Then
+  //    name already taken by an item migrated from the same source write counts as moved (a
+  //    resumed run); a name taken by any other item stays in the old vault. Neither compares values. Then
   //    the launcher takes what moved out of the old vault.
   //  - propose (tier 3): one card of bindings and classes, metadata only.
   async #migrate(src: { migrate: unknown; proposals?: unknown }, ctx: Ctx): Promise<Answer> {
     if (src.migrate === 'propose') return this.#propose(src.proposals, ctx);
     const home = dirname(this.store.dir);
     if (src.migrate === 'stage') {
+      // A failed restage must not leave the earlier plaintext or approval scope usable.
+      for (const b of this.#staged?.items.values() ?? []) zero(b);
+      this.#staged = null;
       const out = await this.#launch(['migrate', home], null);
       const items = new Map<string, Buffer>();
+      const epochs = new Map<string, string>();
       let vaultId: string | null = null;
       let revision = '';
       for (const line of out.split('\n')) {
         if (!line) continue;
-        let x: { vault_id?: unknown; revision?: unknown; name?: unknown; value?: unknown };
+        let x: { vault_id?: unknown; revision?: unknown; name?: unknown; value?: unknown; epoch?: unknown };
         try { x = JSON.parse(line); } catch { continue; }
         if ('vault_id' in x) { vaultId = typeof x.vault_id === 'string' ? x.vault_id : null; revision = typeof x.revision === 'string' ? x.revision : ''; continue; }
-        if (items.size < MAX_STAGED && str(x.name, 200) && NAME.test(x.name) && typeof x.value === 'string' && x.value.length > 0 && x.value.length <= 64 * 1024) items.set(x.name, Buffer.from(x.value, 'utf8'));
+        if (items.size < MAX_STAGED && str(x.name, 200) && NAME.test(x.name) && typeof x.value === 'string' && x.value.length > 0 && x.value.length <= 64 * 1024 && str(x.epoch, 400)) {
+          items.set(x.name, Buffer.from(x.value, 'utf8'));
+          epochs.set(x.name, x.epoch);
+        }
       }
-      for (const b of this.#staged?.items.values() ?? []) zero(b);
-      if (!/^[0-9a-f]{64}$/.test(revision)) throw new Failed('The old vault snapshot is incomplete; nothing was staged.');
-      this.#staged = { vaultId, revision, items };
+      if (!/^v2:[0-9a-f]{64}$/.test(revision)) {
+        for (const b of items.values()) zero(b);
+        throw new Failed('The old vault snapshot is incomplete; nothing was staged.');
+      }
+      this.#staged = { vaultId, revision, items, epochs };
       return { outcome: { staged: items.size } };
     }
     if (src.migrate !== 'commit') throw new Failed('A migration stages, commits, then proposes bindings.');
@@ -656,10 +665,11 @@ export class Broker {
     const from = st.vaultId ?? 'era2';
     const plan = [...groupStaged(st.items)].map(([name, g]) => {
       const owner = [...this.#index.values()].find((x) => x.aliases.includes(`${ALIAS}${name}`));
-      const revision = createHash('sha256').update(canonical(g.names.map((n) => [n, st.items.get(n)!.toString('base64')]))).digest('hex');
+      const sources = g.names.map((n) => [n, st.epochs.get(n)]);
+      const revision = `v2:${createHash('sha256').update(canonical(sources)).digest('hex')}`;
       return { name, g, revision, status: !owner ? 'move' : owner.provenance === 'migrated' && owner.migrated_from === from && owner.migrated_revision === revision ? 'moved' : 'kept' };
     });
-    this.#approve(ctx, { verb: 'create', source: 'migrate', items: plan.map((x) => ({ name: x.name, kind: x.g.kind, status: x.status })) }, { verb: 'create', what: `Move ${plan.filter((x) => x.status === 'move').length} credential(s) from the old vault into Nova Vault`, tier: 3, items: plan.map((x) => ({ name: x.name, kind: x.g.kind, origin: x.g.origin, status: x.status })), approving: 'Each is moved inside the broker, unbound (usable nowhere until you bind it), read back, and only then removed from the old vault. A name already taken by another credential stays in the old vault.' }, true);
+    this.#approve(ctx, { verb: 'create', source: 'migrate', snapshot: st.revision, items: plan.map((x) => ({ name: x.name, kind: x.g.kind, status: x.status })) }, { verb: 'create', what: `Move ${plan.filter((x) => x.status === 'move').length} credential(s) from the old vault into Nova Vault`, tier: 3, flags: [`Source snapshot: ${st.revision}`], items: plan.map((x) => ({ name: x.name, kind: x.g.kind, origin: x.g.origin, status: x.status })), approving: 'Each is moved inside the broker, unbound (usable nowhere until you bind it), read back, and only then removed from the old vault. A name already taken by another credential stays in the old vault. Gmail writers must remain stopped until cleanup finishes.' }, true);
     this.#staged = null;
     const moved: string[] = [];
     let readBack = true;
@@ -698,7 +708,9 @@ export class Broker {
       const chunks: Buffer[] = [];
       let n = 0;
       child.stdout!.on('data', (x: Buffer) => { n += x.length; if (n <= 80 * 1024 * 1024) chunks.push(x); });
-      child.on('close', (code) => (code === 0 ? ok(Buffer.concat(chunks).toString('utf8')) : fail(new Failed('The old vault couldn’t be read or changed; nothing was moved or removed.'))));
+      child.on('close', (code) => (code === 0 ? ok(Buffer.concat(chunks).toString('utf8')) : fail(new Failed(args[0] === 'finish'
+        ? 'Migration cleanup could not finish. Copies and removals may already exist; review the vaults and resume migration.'
+        : 'The old vault couldn’t be read; nothing was staged.'))));
     });
   }
 

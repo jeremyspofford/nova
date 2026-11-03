@@ -158,6 +158,8 @@ test('migration resumes: a name already moved from the same old vault counts as 
   v.put('provider/A', C('resume-a'));
   v.put('provider/B', C('resume-b'));
   v.put('nova/backup-key', 'own-backup-key-value-1234567890');
+  const originalFile = readFileSync(join(home, 'vault/secrets.json'));
+  const originalKey = readFileSync(join(home, 'vault/key'));
   const b = await startBroker(join(home, 'broker'), { keyMode: 'file' });
   const core = coreSim(b.socket, b.tokens.core);
   const p = new Person(core.call);
@@ -170,16 +172,19 @@ test('migration resumes: a name already moved from the same old vault counts as 
     assert.deepEqual(new Vault({ home, mode: 'file' }).list(), ['nova/backup-key']);
     // An old vault restored from a copy (a run that stopped before the old file was rewritten):
     // the names are already moved from that vault, so they leave it again and nothing is made twice.
-    const again = new Vault({ home, mode: 'file' });
-    again.put('provider/A', C('resume-a'));
-    assert.equal((await core.call('create', { meta: {}, source: { migrate: 'stage' } })).outcome.staged, 1);
+    writeFileSync(join(home, 'vault/secrets.json'), originalFile);
+    writeFileSync(join(home, 'vault/key'), originalKey);
+    assert.equal((await core.call('create', { meta: {}, source: { migrate: 'stage' } })).outcome.staged, 2);
     const second = await p.approve('create', { meta: {}, source: { migrate: 'commit' } });
     assert.deepEqual(second.outcome.migrated, [], 'nothing is made twice');
-    assert.equal(second.outcome.moved, 1);
-    assert.equal(second.outcome.removed, 1);
+    assert.equal(second.outcome.moved, 2);
+    assert.equal(second.outcome.removed, 2);
+    assert.equal(second.outcome.read_back, true);
     assert.deepEqual(new Vault({ home, mode: 'file' }).list(), ['nova/backup-key']);
+    assert.equal(new Vault({ home, mode: 'file' }).get('nova/backup-key'), 'own-backup-key-value-1234567890');
     assert.equal((await core.call('list_refs')).refs.length, 2);
   } finally {
+    originalKey.fill(0);
     core.stop();
     b.child.kill();
   }
