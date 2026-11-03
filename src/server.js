@@ -110,6 +110,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   runner.memory.readOnly = () => !!core.mesh.role.replica();
   runner.memory.sync();
   runner.chatProvider = chatProvider;
+  runner.caps = core.caps;
   // Coding through chat (M10c): the chat agent's code_change and code_status tools start and read the
   // core's coding runs.
   runner.coding = core.coding;
