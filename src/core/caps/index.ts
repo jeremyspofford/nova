@@ -228,7 +228,13 @@ export class Caps {
   // The view for Settings and Health.
   view() {
     const today = this.dayOf();
-    return { limits: this.limits(), defaults: DEFAULT_LIMITS, day: today, today: this.day(today), month: this.month(today.slice(0, 7)) };
+    return {
+      limits: this.limits(), defaults: DEFAULT_LIMITS, day: today, today: this.day(today), month: this.month(today.slice(0, 7)),
+      accounting: {
+        scope: 'this-node-runner', provider_reports_included: false,
+        words: 'Nova runner usage on this machine; provider-managed tasks are not included. Autonomous runner work is live capped; your own conversations are metered without caps. Provider-owned loops are not live capped. Spend on other nodes is not included. Estimated tokens and tokens without a price are labeled separately; this is not complete monthly billing.',
+      },
+    };
   }
 
   meter(o: { task_id: string | null; session_id: string; capped: boolean }): Meter {
@@ -273,7 +279,7 @@ export class Meter {
     const spent = scope === 'task' ? `This task spent ${spentWords(this.spent)}.` : `Today’s tasks spent ${spentWords(spentNow)}; this one, ${spentWords(this.spent)}.`;
     const resume = scope === 'task'
       ? `Resuming waits for your OK in Tasks; it gets a fresh allowance (${limitWords('iterations', l.task.iterations)}, ${limitWords('tokens', l.task.tokens)}, ${limitWords('usd', l.task.usd)}), and today’s ceiling still holds.`
-      : 'Resuming waits for your OK in Tasks, and runs once there is room under today’s ceiling (it starts again at midnight); the ceilings are in Settings.';
+      : 'Resuming waits for your OK in Tasks, and runs once there is room under today’s ceiling (it starts again at midnight); the ceilings are in Health.';
     return { scope, what, limit, spent: { ...(scope === 'task' ? this.spent : spentNow) }, loop: !!loop, words: [head, loop.trim(), extra, spent, resume].filter(Boolean).join(' ') };
   }
 
@@ -327,7 +333,7 @@ export class Meter {
 // The routes, ready for the composition root to wire (docs/plans/cost-caps.md, NOTES).
 export function capsRoutes(caps: Caps): Route[] {
   return [
-    { method: 'GET', path: '/caps', summary: 'Ceilings on autonomous work (per task and per day: steps, tokens, dollars where priced), what tasks spent today, and this month’s spend per provider and model.', handle: () => caps.view() },
+    { method: 'GET', path: '/caps', summary: 'Ceilings on autonomous work (per task and per day: steps, tokens, dollars where priced), what runner tasks spent today, and this machine’s runner usage this month per provider and model; provider-managed tasks and other nodes are not included.', handle: () => caps.view() },
     { method: 'PUT', path: '/caps/limits', summary: 'Change the ceilings: {task?, day?}, each {iterations?, tokens?, usd?} as a number above zero, or null for none.', body: '{task?, day?}', handle: ({ body }) => ({ limits: caps.setLimits(body), view: caps.view() }) },
   ];
 }
