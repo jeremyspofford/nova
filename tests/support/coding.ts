@@ -20,8 +20,10 @@ export const APP_TEST = "import { test } from 'node:test';\nimport assert from '
 export const SERVER = "import { createServer } from 'node:http';\nimport { greet } from './app.mjs';\nconst host = process.env.HOST || '127.0.0.1';\ncreateServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end(greet('preview')); }).listen(Number(process.env.PORT), host);\n";
 
 // Test-side git: none of the person's or this machine's settings, a placeholder identity.
+// Join automatic maintenance before returning: a detached Git worker could otherwise change
+// the fixture after its byte-for-byte baseline (including .git) has been recorded.
 export function git(cwd: string, ...args: string[]): string {
-  return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Example Person', '-c', 'user.email=person@example.com', '-c', 'init.defaultBranch=main', '-c', 'commit.gpgSign=false', ...args], {
+  return execFileSync('git', ['-c', 'maintenance.autoDetach=false', '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Example Person', '-c', 'user.email=person@example.com', '-c', 'init.defaultBranch=main', '-c', 'commit.gpgSign=false', ...args], {
     cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
     env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: cwd, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', LC_ALL: 'C' },
   }).trim();
