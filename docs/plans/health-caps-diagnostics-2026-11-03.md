@@ -52,6 +52,12 @@ Controller collects complete reports and independent reviews, all rulings with c
 
 W1 mounts existing Caps for Nova-runner usage only. Provider-managed task reports remain recorded separately by Models; they are excluded from Caps day/month totals and their loops are not live capped. API metadata and rendered copy state this directly. Durable per-attempt provider-report integration across duplicate events/restart/month boundaries is an explicit Track1 follow-up, without a second store or silently complete-billing claim. Unlimited is an explicit selection; accidental blank enabled fields are invalid.
 
-## Backend checkpoint (unmerged; rendered decision pending)
+## Historical backend checkpoint (before286 merge and owner approval)
 
 Task1 initial+scope-alignment reviews approved0C/I/M; Task2 backend approved0C/I/M; Task3 diagnostics backend approved0C/0I/1Minor (historical npm update notice, retained). Task3 uses directory-only chat_logs counts including main/run/helper without reading titles/transcripts; the existing scrubber and documented synthetic address metadata stay unchanged. Actual owner-private hosts are excluded from builder tools/public evidence. Task4 remains blocked on the explicit rendered-entry question in draftPR285; continue independent vault B foundation needed by J while pending. No phase merge or app-shipped claim yet.
+
+## Current owner approval and integration base (2026-11-03)
+
+Owner explicitly approved both rendered Work costs and Diagnostics entries. Backend286 is already merged at702ddc4d with qualified pre/post CI and preview. Health now includes that exact main through merge9531785e (parents1572+702dd), never rebased. Four conflicts resolved to byte-exact qualifiedmain Caps/test/README versions; approved UI bytes unchanged. Required diagnostics-scan503 refusal and truthful backend wording remain intact. Task4 is authorized after sole BackupsI1 sourcewriter releases. Real app controls/crawl/HTTP save/download/SSE tests/final review/LEDGER/currentCI/merge/preview are still pending.
+
+Task4 must use the existing shared wait.js/skeleton lifecycle for real loading/saving waits, not literal labels designed to evade the wait gate. Add tests/m9-wait.test.js to affected checks. Track caps freshness per request: cached/failed caps reads must not become editable solely because some other health endpoint answered; preserve draft/last values with disabled save and truthful failure text. Repeat refreshes must not discard drafts/caret, overwrite an in-flight save or announce saving before an actual request. Already-approved components may receive the minimal state plumbing required for these existing loading/error/draft requirements; any genuinely new visual pattern goes through the rendered-entry rule.
