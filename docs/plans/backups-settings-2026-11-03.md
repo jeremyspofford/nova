@@ -13,9 +13,9 @@
 ## Global Constraints
 
 - Stage1: rendered `/styleguide?entry=backups-settings`, own `#sg-backups-settings` anchor, realistic neutral state screenshots and independent review. Owner approves before app view/state/API composition; do not treat approval of279/280 or current unrelated messages as this recognition. Quote/link the exact operating rule if waiting.
-- Only Task1 is currently authorized to execute without that recognition. Tasks2/3 are queued; app code awaits actual reply. Generic existing inputs are not blanket surface approval.
+- Owner explicitly approved the rendered Backups entry in #287. Task1 and its shared-wait correction are independently reviewed; Tasks2/3 are authorized. This recognition is specific to Backups; it does not approve new visual patterns elsewhere.
 - Reuse existing components/tokens/type/spacing/radius/icons; no redesign, theme revision, arbitrary values, gradients or stage2 frontend refactors. No implementation/API instructions in product copy. All components appear in styleguide; no helper exemption to hide a new surface.
-- Pure renderer in ui/js/view.js: `renderBackupsSettings(model, { id = 'settings-backups' } = {}) -> HTML`. Model has settings `{target,keep,encrypted_target}`, permissions `{canEdit,console,readOnlyReason}`, state (`loading`, `ready`, `saving`, `error`), `errors: {target?,keep?,encrypted_target?}`, `notice?: string`, and `recovery: {state: hidden|first-shown|confirm|shown|unavailable, key?: string, confirmed?: boolean, error?: string}`. Only first-shown/shown may render key text; hidden/confirm/unavailable render no key bytes. Saving marks aria-busy and disables duplicate submit, without discarding editable draft/focus. Input names exactly target/keep/encrypted_target; callbacks/event binding belong to eventual surface. Unique id prefix per styleguide example.
+- Pure renderer in ui/js/view.js: `renderBackupsSettings(model, { id = 'settings-backups' } = {}) -> HTML`. Model has settings `{target,keep,encrypted_target}`, permissions `{canEdit,console,readOnlyReason}`, state (`loading`, `ready`, `saving`, `error`), optional `loadingSince` (finite positive request-start epoch for existing shared waitingLine), `errors: {target?,keep?,encrypted_target?}`, `notice?: string`, and `recovery: {state: hidden|first-shown|confirm|shown|unavailable, key?: string, confirmed?: boolean, error?: string}`. Only first-shown/shown may render key text; hidden/confirm/unavailable render no key bytes. Saving marks aria-busy and disables duplicate submit, without discarding editable draft/focus. Input names exactly target/keep/encrypted_target; callbacks/event binding belong to eventual surface. Unique id prefix per styleguide example.
 - Existing defaults/validation: keep7; whole number1–365; null clears an optional folder; blank input is not silently interpreted as removal. Target must already exist, be private, outside/not contain Nova home. Encrypted copy needs target and a different existing folder. App validates simple form constraints; backend performs filesystem checks. No directory creation/browse promise the server cannot honor.
 - Existing roles: PUT/backups/settings is approver (tier2), including hub console. Initial encrypted-copy setup may return its key once to that authorized caller. POST/backups/recovery-key requires the console principal AND confirm:true (tier3), every time. Preserve this distinction; no new broader reveal. GET/mesh/status.you has console/can_approve; reuse store.mesh.you rather than viewport/hostname guesses. Replica/unknown/unavailable capability states remain read-only; backend guards unchanged.
 - The key is for encrypted backup copies, not a promise to recover credential-vault factors or every sign-in. It has64 hex characters in8 groups. Demo only uses a public placeholder with that geometry. No real owner key/home/vault/backup/desktop session; no provider/model/cloud/device/paid calls/image pulls. No broker key/recovery testing under this UI task.
@@ -33,7 +33,7 @@
 4. Empty/unavailable folders, long paths and long key groups remain readable/tappable in every posture.
 5. Actual Home-start clicks reach the Settings section and controls; route-only tests cannot mark the capability shipped.
 
-## Task1: rendered Backups entry (EXECUTE NOW)
+## Task 1: rendered Backups entry (EXECUTE NOW)
 
 **Files:** ui/js/view.js, styleguide.js, narrowly scoped ui/css only if existing patterns need it; tests/backups-settings-view.test.js, tests/ui/backups-settings-styleguide.test.ts; screenshots/docs/evidence for this entry.
 **Produces:** renderer above and `backups-settings` entry, composed from app components and realistic fixtures. No app.js/surfaces.js/settings navigation/backend changes in this task.
@@ -44,7 +44,7 @@
 - [ ] Run affected unit/styleguide coverage/token/theme/JS checks plus the focused browser file. Cache-only isolated harness and exact contemporary argv/env/cwd/status/hashes; preserve failures/warnings. Baseline source702dd has full pre/post hosted CI green; no need repeat its full suite merely to establish baseline. No installs.
 - [ ] Produce concise full Task1 report/commit/RELEASE with exact state/screenshot matrix, slop §0.4 eight-item pass/fail/n-a and accessibility/interaction limits. Root independently reviews, inspects representative real PNGs, publishes concrete draft/recognition question. Do not proceed into Task2 while waiting.
 
-## Task2: reachable Settings form and key flow (AFTER actual recognition)
+## Task 2: reachable Settings form and key flow (AFTER actual recognition)
 
 **Files:** ui/js/surfaces.js/app.js existing Settings loading/routing and event handlers, shared renderer, tests/ui/backups-settings.test.ts and current Home phone/rail crawl. Existing core routes unchanged unless a separately demonstrated production composition defect requires root ruling.
 **Consumes:** accepted renderer and existing `/backups`, `/resilience`, `/mesh/status` through ui/js/core.js request/api. No new client layer.
@@ -55,7 +55,17 @@
 - [ ] Remove Health's literal PUT/API instruction, link to Settings>Backups and preserve current backup/drill controls. Same feature homes in every layout; no right-column duplication added. Update only actual capability rows after Home crawl reaches them.
 - [ ] Capture app screenshots matched to styleguide across required postures, slop results, affected tests, full report and clean commit/RELEASE for fresh task review.
 
-## Task3: final qualification and delivery (root gates)
+## Current approval and Task2 integration contract
+
+Owner approved this rendered entry explicitly. Task1 checkpoint87a0d7e6 has green ordinary CI and a clean scoped re-review of its existing shared-wait correction; no app or reachability claim was made. After Health source passes its task review, Task2 may proceed from already-qualified702dd while Health final review/hosted CI runs. Do not copy unreviewed Health source; Root merges actual qualified Health main into this branch before Backups final qualification, never rebasing. Health fixes preempt the sole writer at a safe checkpoint, and Backups delivery remains after Health. Its current request clocks use actual finitepositive loadingSince, retained across redraw; missing/invalid timestamps stay neutral busy without invented age.
+
+Actual settings mutation returns a flat settings object, optionally `recovery_key`; repeated display returns `{recovery_key,said}`. Map `recovery_key` only into transient visible recovery state and strip it before storing ordinary loaded settings. GET/backups never contains plaintext. Existing profile `backups.recovery_shown` is a nonsecret fingerprint; derive only a previously-shown boolean to keep the console's existing Show key action reachable after folders are removed. The POST is still authoritative if the key no longer exists; show the fixed unavailable/conflict state, never create another key or read a raw vault getter for status. Paired callers retain the existing first-response versus repeated-console distinction.
+
+An encrypted-copy target depends on an ordinary target. The existing explicit Remove backup folder action says “Remove backup folders” when both are configured and submits explicit nulls for both, rather than failing or leaving a hidden dependent policy. Removing only the encrypted copy clears only its field. State clearly that saved files stay on disk; config removal must not delete archives. Cover real null/readback/dependency and saved-file sentinel behavior test-first. This uses the already-approved row/action pattern; no new modal or filesystem operation.
+
+Clearing sensitive state includes Settings hash navigation as well as route exit, Hide and actual capability loss. Ordinary background refresh preserves a just-shown key and unsaved drafts; unknown authorization stays read-only and cannot trigger mutation or repeated display. Copy requires an actual user gesture, with no hidden plaintext textarea fallback. The existing POST/PUT backend guards remain unchanged.
+
+## Task 3: final qualification and delivery (root gates)
 
 - [ ] Complete self-contained current evidence/claims and plain same-PR LEDGER: what the person can do, role limits and actual backup versus credential-vault recovery scope. No universal recovery/whole-phase claim. Preserve historical failed attempts and screenshot provenance.
 - [ ] Fresh independent whole-branch review; fix reproduced findings test-first with scoped rereview. Ordinary exact-head CI allrequired green; merge main in never rebase if needed; no blind CI retry/relaxed gates.
