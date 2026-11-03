@@ -465,24 +465,28 @@ export class Store {
     const w = inbox.device_wraps?.[name];
     if (!w || !UUID.test(inbox.id)) throw new Error('The hub’s vault has no wrap for this device. Enrol it as a holder on the hub first (tier 3).');
     const root = openWrap(this.#device!.factor, w, wrapInfo(inbox.id, name, inbox.gen));
-    // Every blob must open under that root before anything is replaced.
-    const files: ItemFile[] = [];
-    for (const [id, text] of Object.entries(items)) {
-      const f = JSON.parse(text) as ItemFile;
-      if (f.id !== id || !ID.test(id) || f.gen !== inbox.gen) throw new Error(`item ${id} from the hub doesn’t match its header`);
-      open(root, f.meta, metaAad(inbox.id, id));
-      zero(open(root, f.key, keyAad(inbox.id, id, f.version)));
-      files.push(f);
-    }
-    const wraps: Record<string, Wrap> = {};
-    for (const [n, pub] of Object.entries(inbox.factor_pubs)) wraps[n] = sealTo(pub, root, wrapInfo(inbox.id, n, inbox.gen));
-    if (inbox.unlock_mode === 'auto') wraps[name] = sealTo(this.#device!.factor.pub, root, wrapInfo(inbox.id, name, inbox.gen));
-    for (const id of this.ids()) if (!items[id]) rmSync(this.#itemPath(id), { force: true });
-    for (const f of files) this.#write(f);
-    this.#h = { v: 1, id: inbox.id, created_at: this.#now(), kdf: inbox.kdf, unlock_mode: inbox.unlock_mode, gen: inbox.gen, wraps, holders: inbox.holders, passkeys: inbox.passkeys, hub_signer: inbox.signer, origin: 'adopted' };
-    this.#writeHeader();
-    zero(this.#root);
-    this.#root = root;
+    try {
+      // Every blob must open under that root before anything is replaced.
+      const files: ItemFile[] = [];
+      for (const [id, text] of Object.entries(items)) {
+        const f = JSON.parse(text) as ItemFile;
+        if (f.id !== id || !ID.test(id) || f.gen !== inbox.gen) throw new Error(`item ${id} from the hub doesn’t match its header`);
+        open(root, f.meta, metaAad(inbox.id, id));
+        zero(open(root, f.key, keyAad(inbox.id, id, f.version)));
+        files.push(f);
+      }
+      const wraps: Record<string, Wrap> = {};
+      for (const [n, pub] of Object.entries(inbox.factor_pubs)) wraps[n] = sealTo(pub, root, wrapInfo(inbox.id, n, inbox.gen));
+      if (inbox.unlock_mode === 'auto') wraps[name] = sealTo(this.#device!.factor.pub, root, wrapInfo(inbox.id, name, inbox.gen));
+      for (const id of this.ids()) if (!items[id]) rmSync(this.#itemPath(id), { force: true });
+      for (const f of files) this.#write(f);
+      this.#h = { v: 1, id: inbox.id, created_at: this.#now(), kdf: inbox.kdf, unlock_mode: inbox.unlock_mode, gen: inbox.gen, wraps, holders: inbox.holders, passkeys: inbox.passkeys, hub_signer: inbox.signer, origin: 'adopted' };
+      this.#writeHeader();
+      zero(this.#root);
+      // Adoption needs the device wrap to validate and re-seal factors, even in ask mode. That
+      // temporary root must not become an unattended unlock when the hub requires a person.
+      this.#root = inbox.unlock_mode === 'auto' ? root : null;
+    } finally { if (this.#root !== root) zero(root); }
   }
 
   // The hub this device will hold a vault for: its broker's signing key, pinned at enrolment.

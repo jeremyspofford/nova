@@ -63,7 +63,7 @@ export const FIELDS: Record<Message, readonly string[]> = {
 export const ANSWER_KEYS: ReadonlySet<string> = new Set([
   'id', 'ok', 'refused', 'error', 'words', 'role', 'record', 'problem',
   // vault state
-  'state', 'locked', 'exists', 'vault_id', 'unlock_mode', 'approval_mode', 'factors', 'entry_key', 'boot', 'device_id', 'device_key', 'holders', 'kdf', 'alg', 'm', 't', 'p', 'safe_mode',
+  'state', 'locked', 'exists', 'vault_id', 'unlock_mode', 'approval_mode', 'factors', 'entry_key', 'boot', 'device_id', 'device_key', 'device_key_fingerprint', 'holders', 'kdf', 'alg', 'm', 't', 'p', 'safe_mode',
   // refs and metadata
   'refs', 'ref', 'aliases', 'name', 'kind', 'origin', 'username', 'class', 'suggested_class', 'per_use', 'created_at', 'last_used', 'last_rotated', 'health', 'reused', 'old', 'backend', 'version', 'pending', 'bindings',
   'target', 'scope', 'methods', 'paths', 'consent', 'rate_per_hour', 'granted_at', 'approval_id', 'inject', 'how', 'header', 'prefix', 'format', 'lan', 'pin', 'embed_on', 'env', 'file', 'argv',

@@ -91,6 +91,7 @@ export class Broker {
   start(): void {
     try { this.#adoptInbox(); } catch { /* nothing to adopt, or not for this device */ }
     const h = this.store.header;
+    if (this.store.unlocked) this.#reindex();
     if (h && !this.store.unlocked && h.unlock_mode === 'auto' && h.wraps[`device:${this.store.device().id}`]) {
       try { this.store.unlock({ kind: 'device' }); this.#reindex(); } catch { /* stays locked; Health says why */ }
     }
@@ -143,6 +144,7 @@ export class Broker {
       approval_mode: h && Object.keys(h.passkeys).length ? 'passkey' : 'core',
       factors: h ? Object.keys(h.wraps).map((n) => (n.startsWith('device:') ? (n === `device:${dev.id}` ? 'this device' : 'another holder') : n.split(':')[0])) : [],
       entry_key: this.#entry.pub, boot: this.boot, device_id: dev.id, device_key: dev.store,
+      device_key_fingerprint: createHash('sha256').update(Buffer.from(dev.public, 'base64')).digest('hex'),
       holders: h ? Object.entries(h.holders).map(([id, x]) => ({ device: id, name: x.name })) : [],
       kdf: h ? { alg: h.kdf.alg, m: h.kdf.m, t: h.kdf.t, p: h.kdf.p } : null,
       problem: this.problem ?? (this.#broken.length ? `${this.#broken.length} item(s) failed to open (tampered, moved or damaged) and are left as they are.` : dev.store === 'file' && h?.unlock_mode === 'auto' ? FILE_NOTICE : null),
@@ -609,7 +611,8 @@ export class Broker {
       return { holders: Object.keys(this.store.header!.holders), text: 'That device no longer holds the vault; the vault was re-keyed.' };
     }
     if (!str(d.public_key, 60) || !str(d.name, 80)) throw new Failed('A holder brings its broker’s public key and a name.');
-    const text = `The broker on “${d.name}” will be able to open every item in this vault (${this.#index.size} now, and every one added later). Nova core and its models are given no values.`;
+    const fp = createHash('sha256').update(Buffer.from(d.public_key, 'base64')).digest('hex');
+    const text = `The broker on “${d.name}” will be able to open every item in this vault (${this.#index.size} now, and every one added later). Nova core and its models are given no values. Check this device-key fingerprint matches the one the holder shows: ${fp}.`;
     this.#approve(ctx, { verb: 'share_scope', device: d.id, public_key: d.public_key, name: d.name }, { verb: 'share_scope', what: `Let “${d.name}” hold Nova Vault`, target: `device:${d.id}`, tier: 3, approving: text }, true);
     this.store.enrollHolder(d.id, d.public_key, d.name);
     return { holders: Object.keys(this.store.header!.holders), text, outbox: true };
