@@ -43,7 +43,7 @@ The ADR's §13 splits Phase 1 into three PRs. This plan keeps that split, with o
 | `origin.ts` | Canonical targets, exact matching, request paths and scopes, lookalike flags, address classes, the class suggestion |
 | `policy.ts` | Approvals (core-relayed, or a WebAuthn ES256 passkey that also signs a sealed envelope's hash), flood control, rate caps, generated values |
 | `audit.ts` | The hash-chained audit log |
-| `scrub.ts` | Exact-value scrubbing of what a target sent back, in eleven forms, for text and for streams |
+| `scrub.ts` | Exact-value scrubbing of target text and streams, including JSON HTML-safe/ensure_ascii UTF-16 escapes |
 | `http.ts` | The only outbound path |
 | `broker.ts` | The verbs |
 | `server.ts` | The socket, frames, tokens, a hello deadline, and the schema check of every answer |
@@ -52,9 +52,9 @@ The ADR's §13 splits Phase 1 into three PRs. This plan keeps that split, with o
 
 **Core's side:**
 - `src/core/broker/client.ts`, whose methods return no value;
-- one-line safety entries for `broker/` in five core files (§6).
+- safety exclusions, authenticated reset/checkpoint preservation, metadata diagnostics, private bootstrap/client lifecycle, and Supervisor-owned broker startup/cleanup (§6 and NOTES).
 
-**Tests** live in `tests/core/broker-*.test.ts`, so `npm test` runs them with no change to `package.json`. There are 45 tests in 7 files, and §8 lists them.
+**Tests** now span `tests/core/broker-*.test.ts`, affected reset/checkpoint/backup files, and Supervisor lifecycle tests. The actual served seal-module browser proof lives in `tests/ui/broker-seal-module.test.ts` and runs in the equipped UI gate. The original 45 tests in 7 files described the historical P1a baseline; §8 preserves that list. Current results are per-source, per-command evidence, not a summed historical test count.
 
 ## 3. Design decisions P1a took
 
@@ -145,15 +145,15 @@ These are where the ADR left a choice open, or where it didn't fit as written.
 - **Node's permission model doesn't stop a child.** The broker needs `--allow-child-process` for its launcher and the keychain CLIs. So the file-system narrowing is defence in depth against a bug in the broker, not a wall against code that runs as it.
 - **JavaScript strings.** Values are kept in `Buffer`s and zeroed where the code holds them, but a value that becomes a JS string (a header, the scrubber's forms) stays in the broker's heap until it is collected. This is inside the broker, the one place the read capability exists.
 - **Public TLS verification.** It uses Node's defaults (`rejectUnauthorized`, the bundled roots). No test reaches a public host, so it is exercised only for pinned LAN certificates and for refusals before TLS.
-- **The first adoption trusts the first signer** (trust on first use). P1b's holder enrolment should show the hub broker's signing-key fingerprint on both devices' cards. A holder can't detect items dropped from, or rolled back in, the hub's outbox within one generation.
+- **Hub-pin comparison is unavailable today (stated limit6 / C F3).** The current hub-pin card shows a truncated hash of base64 text; hub `state()` exposes no matching signing-key fingerprint, so the person cannot make the claimed comparison. P1b must put the full SHA-256 of decoded Ed25519 public-key bytes on the pin card and expose exactly the same value in hub `state()` and the answer-key allowlist. This repair changes the disclosure only; it does not ship that feature. Holder X25519 fingerprints are a separate existing mechanism. A holder still cannot detect items dropped from, or rolled back in, a hub outbox within one generation.
 - **What an approval covers.** A tier-2 HTTP approval binds the method and full normalized path including query for one task; scope enforcement and audit use the bare path. The card shows the method/bare path and caller-query byte count/fingerprint, never raw query. It does not bind caller-supplied HTTP headers or body, and says so; those fields still pass their existing validation and size limits. Process coverage is stated above. Task grants expire five minutes after approval; reusing a task id does not extend them, and lock, version and policy changes still revoke them. Create cards show and bind the validated generation policy (length, alphabet, distinct symbols and entropy floor), including a sealed credential's policy for future generated update/rotation. These policy details describe generation settings, never an existing credential's value, length or hash.
-- **The scrubber's forms.** Values shorter than 6 characters aren't scrubbed (they would match ordinary text). Generated values are 16 to 128 characters; a short sealed value (a PIN) is a stated limit. The forms are eleven: raw, base64 padded and not, base64url, hex in both cases, URL-encoded in both cases, form-encoded, JSON-escaped, and JSON with `\/`. HTML entities, UTF-16 and other encodings a target might use aren't caught.
+- **The scrubber's forms.** Values shorter than 6 characters aren't scrubbed (they would match ordinary text). Generated values are 16 to 128 characters; a short sealed value (a PIN) is a stated limit. Supported forms include raw, base64 padded and not, base64url, hex in both cases, URL-encoded in both cases, form-encoded, JSON-escaped, JSON with `\/`, Go HTML-safe JSON, Python ensure_ascii JSON, and combined non-ASCII/`<>&'` JSON escapes in lower/upper hex per UTF-16 code unit. HTML entities, raw UTF-16, arbitrary transformations and other encodings remain outside exact-form matching.
 - **Windows** (named pipe, Credential Locker) is untested on real Windows, as `vault.ts` is today.
 - **The heap test** proves values aren't in core's heap *when the snapshot is taken*. The core stand-in keeps everything it received until then, so a value that passed through it would still be found. A positive control (core's own token) shows the search works.
 
 ## 6. Core files this PR changes, and why
 
-Each change is unavoidable once a `broker/` folder can exist in a home. Each is one line, inert until it exists. None is one of Track 1's hot files.
+The table records the original exclusion changes. The historical “five one-line entries” summary predates the substantial Core/server/Supervisor lifecycle and diagnostics integration in NOTES. Task8 also corrects standby-reset ownership and incoming/resumed restore preservation; it does not switch legacy consumers.
 
 | File | Change | Why it can't wait for the wiring |
 |---|---|---|
@@ -167,7 +167,7 @@ Each change is unavoidable once a `broker/` folder can exist in a home. Each is 
 ## 7. Questions for the owner
 
 1. **Q6's reveal:** the terminal launcher gated by the passphrase, or a native helper gated by biometrics (§4)?
-2. **The size budget.** P1a currently uses2,896 of the unchanged3,000 lines (historical question below remains parked, not approved). The browser relay (CDP pass-through, origin checks, scrubbing every message) is the larger part of P1b. Raise the budget to about 3,500 for Phase 1, or have the relay live in the launcher's own file and count it?
+2. **The size budget.** Task8 source currently uses2,922 of the unchanged3,000 lines (the pre-repair baseline was2,896; the earlier2,681 count was historical) (historical question below remains parked, not approved). The browser relay (CDP pass-through, origin checks, scrubbing every message) is the larger part of P1b. Raise the budget to about 3,500 for Phase 1, or have the relay live in the launcher's own file and count it?
 3. **Adding factors after setup** (§4): `unlock` with `add`, gated by a passkey where one is registered?
 
 ## 8. The tests
@@ -203,21 +203,21 @@ Each finding was reproduced as a test first, in `tests/core/broker-review-1.test
 
 ## NOTES for Track 1
 
-Current NOTES disposition at44a8 (accepted Task6). The original numbered handoff below is retained as historical requirements; the table is authoritative about what is actually applied. [Complete report](../evidence/vault-owner-findings-b-2026-11-03/task-6-report.md), [initial review](../evidence/vault-owner-findings-b-2026-11-03/task-6-review.md), [scoped I1/I2 closure](../evidence/vault-owner-findings-b-2026-11-03/task-6-fix-1-review.md).
+The table below records accepted Task6 at44a8, with Task8 reset/restore and browser-job corrections called out. Task8 review/ordinary CI are pending; see [repair dispositions](../evidence/vault-owner-findings-b-2026-11-03/task-8-repair-dispositions.md). The original numbered handoff below is retained as historical requirements; the table is authoritative about what is actually applied. [Complete report](../evidence/vault-owner-findings-b-2026-11-03/task-6-report.md), [initial review](../evidence/vault-owner-findings-b-2026-11-03/task-6-review.md), [scoped I1/I2 closure](../evidence/vault-owner-findings-b-2026-11-03/task-6-fix-1-review.md).
 
 | NOTE | Actual P1a status and proof | Remaining work/limit |
 |---|---|---|
 | 1 supervisor start/ownership | Applied: fixed release broker before Core; private role token IPC, restart/safe mode, stop/reset/release lifecycle. `tests/supervisor/broker-lifecycle.test.ts`; final I1 rollback admission and I2 joined start/reset/stop/close proofs77/9. | Health rendered affordance/audit wiring P1b; old unsupported releases get no credential context. Failure keeps evidence; timeout is not physical exit. |
 | 2 Core wiring | Private bootstrap/client ownership applied: `tests/core/broker-bootstrap.test.ts`, `broker-ipc.test.ts`. | Work Ledger onRecord/sequence/Health, migration boot barrier/proposals, all actual consumers/secret-env refusal and ingest changes remain P1b. Core still constructs/reads legacy Vault. |
-| 3 reset | Applied: fixed-home authenticated marker revalidated, joined owned shutdown then reset-only broker key cleanup, exact device/sign accounts, then directory removal. `broker-reset-lifecycle.test.ts`, `broker-reset-keys.test.ts`, supervisor lifecycle. | Fake CLI/file stores only; genuine keychain failures refuse, missing device identity retains data. No physical Windows/macOS proof. |
+| 3 reset | Task8 retains standby broker storage until the same Supervisor cleanup used by hub reset. Applied: fixed-home authenticated marker revalidated, joined owned shutdown then reset-only broker key cleanup, exact device/sign accounts, then directory removal. `broker-reset-lifecycle.test.ts`, `broker-reset-keys.test.ts`, supervisor lifecycle. | Fake CLI/file stores only; genuine keychain failures refuse, missing device identity retains data. No physical Windows/macOS proof. |
 | 4 diagnostics | Metadata projection applied through actual guarded production composition: count/kind/lock/mode/problem only; `broker-diagnostics.test.ts` and existing diagnostics-composition tests. | Legacy scanning/scrubbing remains required until consumer cutover; scan failure503/no attachment. No generic free-text privacy guarantee or Health button. |
-| 5 sealed console entry | Fixed person-only `/api/v1/broker/seal.js` module serving applied; actual browser module seals→real broker proof in `broker-seal-module.test.ts`. | Plaintext app forms/routes are unchanged until P1b. No owner entry recognition or app cutover claimed. |
+| 5 sealed console entry | Fixed person-only `/api/v1/broker/seal.js` module serving applied; actual browser module seals→real broker proof in `tests/ui/broker-seal-module.test.ts`, moved to the browser-equipped UI gate by Task8. | Plaintext app forms/routes are unchanged until P1b. No owner entry recognition or app cutover claimed. |
 | 6 dependencies/package | No new dependency/script. | None introduced. |
 | 7 schema | No broker credential rows in nova.db. | Work Ledger record wiring is later and is not a credential store. |
 | 8 LEDGER | Current unmerged plain-language entry and partial claims applied. | Main merge entry/qualification finalization stays root-owned. |
 | 9 ROADMAP | Current P1a/remaining P1b/P1c status applied. | Root review/CI/merge still pending. |
-| 10 inventory | Secrets stays Building/Partial;51row282 mapping/historical70 gaps and C18/C19 backend-active/app-Not-shipped retained. | Health285 entry recognition pending; no app promotion. |
-| 11 checkpoints/S4 | Existing broker exclusion verified by `broker-exclusions.test.ts`, backup/checkpoint suites. | Old checkpoint copies of pre-migration vault/key/Era2 files remain a stated limit; no retroactive erasure claim. Proposed rewriting/deleting old copies below has not been implemented or required to redefine S4. |
+| 10 inventory | Secrets stays Building/Partial;51row282 mapping/historical70 gaps and C18/C19 backend-active/app-Not-shipped retained. | Health285 rendered entry was approved separately; its repair/release qualification is root-owned. No Vault app promotion. |
+| 11 checkpoints/S4 | Task8 enforces preserved entries for incoming staging and resumed swaps, retaining ambiguous old storage for operator recovery. Existing outgoing broker exclusion verified by `broker-exclusions.test.ts`, backup/checkpoint suites. | Old checkpoint copies of pre-migration vault/key/Era2 files remain a stated limit; no retroactive erasure claim. Proposed rewriting/deleting old copies below has not been implemented or required to redefine S4. |
 | 12 client API | No launch/migrateFinish/getter/ticket. `broker-boundary.test.ts`; migrateStage takes no folder. | Actual consumer/relay integration P1b. |
 
 SECRET_DIRS/git/journal/backup/checkpoint and sync broker exclusions are verified separately; S6 retained holder data remains explicit. The original historical proposed text follows; its dates/counts and aspirational cutover sentences are not new current claims.

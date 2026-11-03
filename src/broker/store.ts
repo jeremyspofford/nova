@@ -109,6 +109,18 @@ export class Store {
 
   // ---- this device's broker key ---------------------------------------------------------------
 
+  // Public identity stays available when its private store is missing, mismatched or offline.
+  deviceInfo(): { id: string; public: string; store: string | null } {
+    if (this.#device) return { id: this.#device.id, public: this.#device.factor.pub, store: this.#device.store.kind };
+    const p = join(this.dir, 'device.json');
+    if (!existsSync(p)) return this.device();
+    const d = JSON.parse(readFileSync(p, 'utf8')) as { id: string; public: string };
+    if (!UUID.test(d.id) || typeof d.public !== 'string' || Buffer.from(d.public, 'base64').length !== 32) throw new Error('This device’s public broker record is damaged.');
+    let store: string | null = null;
+    try { store = this.#o.deviceStore(`device-${d.id}`).kind; } catch { /* private store unavailable */ }
+    return { id: d.id, public: d.public, store };
+  }
+
   device(): { id: string; public: string; store: string } {
     if (!this.#device) {
       const p = join(this.dir, 'device.json');
@@ -138,7 +150,7 @@ export class Store {
   // A new key pair for this device (after a delete, or when its key is gone), re-sealed for itself.
   #renewDevice() {
     const old = this.#device;
-    const id = old?.id ?? randomUUID();
+    const id = old?.id ?? (existsSync(join(this.dir, 'device.json')) ? this.deviceInfo().id : randomUUID());
     const store = old?.store ?? this.#o.deviceStore(`device-${id}`);
     const { seed, factor } = newFactor();
     store.write(seed);

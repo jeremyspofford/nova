@@ -211,7 +211,7 @@ test('concurrent restarts admit one replacement broker/Core pair', async () => {
   } finally { await f.sup.close(); rmSync(f.dir, { recursive: true, force: true }); }
 });
 
-test('supervised keychain reset retries interruption without reading/recreating removed keys and preserves unrelated accounts', { timeout: 30000 }, async () => {
+for (const resetKind of ['hub', 'standby']) test(`supervised ${resetKind} keychain reset retries interruption without reading/recreating removed keys and preserves unrelated accounts`, { timeout: 30000 }, async () => {
   const f = fixture();
   const bin = join(f.dir, 'bin'), keys = join(f.dir, 'keys'); mkdirSync(bin); mkdirSync(keys);
   const denied = join(f.dir, 'deny-sign');
@@ -242,8 +242,12 @@ elif args[1]=='clear':
     // A synthetic signing entry covers both fixed accounts even if no outbox was needed yet.
     writeFileSync(join(keys, `nova-broker-sign-${old}`), Buffer.alloc(32, 9).toString('base64'));
     const c = open(f.home);
-    const stage = await c.reset.stage({ confirm: true, who: { principal: { kind: 'console' }, listener: 'console', address: '127.0.0.1' } });
-    await stage.done; await c.close(); writeFileSync(denied, 'deny');
+    if (resetKind === 'standby') await c.reset.standbyWipe({ id: 'public-standby-reset', said: 'Public reset notice' });
+    else {
+      const stage = await c.reset.stage({ confirm: true, who: { principal: { kind: 'console' }, listener: 'console', address: '127.0.0.1' } });
+      await stage.done;
+    }
+    await c.close(); writeFileSync(denied, 'deny');
     assert.equal((await f.sup.restart()).ok, false);
     await until(() => f.sup.state.mode === 'safe_mode', 'interrupted reset held');
     assert.equal(existsSync(join(keys, `nova-broker-device-${old}`)), false);

@@ -85,7 +85,7 @@ export class Broker {
     this.#rates = new Rates(now);
     const deviceStore = o.deviceStore ?? ((account: string) => chooseStore('nova-broker', account, join(o.dir, account.startsWith('sign-') ? 'sign.key' : 'device.key'), o.keyMode ? { mode: o.keyMode } : {}));
     this.store = new Store({ dir: o.dir, deviceStore, ...(o.kdf ? { kdf: o.kdf } : {}), ...(o.now ? { now: o.now } : {}) });
-    this.audit = new Audit(join(o.dir, 'audit.log'), this.store.device().id, o.now);
+    this.audit = new Audit(join(o.dir, 'audit.log'), this.store.deviceInfo().id, o.now);
   }
 
   #now() { return this.#o.now?.() ?? new Date(); }
@@ -96,7 +96,7 @@ export class Broker {
     try { this.#adoptInbox(); } catch { /* nothing to adopt, or not for this device */ }
     const h = this.store.header;
     if (this.store.unlocked) this.#reindex();
-    if (h && !this.store.unlocked && h.unlock_mode === 'auto' && h.wraps[`device:${this.store.device().id}`]) {
+    if (h && !this.store.unlocked && h.unlock_mode === 'auto' && h.wraps[`device:${this.store.deviceInfo().id}`]) {
       try { this.store.unlock({ kind: 'device' }); this.#reindex(); } catch { /* stays locked; Health says why */ }
     }
   }
@@ -142,7 +142,7 @@ export class Broker {
 
   state(): Answer {
     const h = this.store.header;
-    const dev = this.store.device();
+    const dev = this.store.deviceInfo();
     return {
       exists: !!h, locked: !this.store.unlocked, vault_id: h?.id ?? this.#pendingId, unlock_mode: h?.unlock_mode ?? null,
       approval_mode: h && Object.keys(h.passkeys).length ? 'passkey' : 'core',
@@ -267,6 +267,7 @@ export class Broker {
         this.store.unlock({ kind: 'passkey', id: p.id, secret: take(p.prf, `passkey:${p.id}`) });
       } else throw new Failed('An unlock brings one factor.');
     } catch (e) {
+      this.lock(); // A failed key renewal or recovery must not leave a partially opened root.
       if (e instanceof Failed) throw e;
       this.#failedUnlocks.push(t);
       throw e instanceof Refused ? e : new Refused('locked', (e as Error).message);
@@ -545,6 +546,7 @@ export class Broker {
       const mm = c.meta;
       for (const k of Object.keys(mm)) if (!['name', 'username', 'class', 'per_use'].includes(k)) throw new Failed('An update changes name, username, class or per_use only.');
       if (mm.name !== undefined) { if (!str(mm.name, 200) || !NAME.test(mm.name)) throw new Failed('not a name'); next.name = mm.name; next.aliases = [...new Set([...m.aliases, `${ALIAS}${mm.name}`])]; }
+      if ([...this.#index].some(([other, meta]) => other !== id && meta.aliases.includes(`${ALIAS}${next.name}`))) throw new Failed('There is already an item with that name.');
       if (mm.username !== undefined) next.username = str(mm.username, 300) ? mm.username : null;
       if (mm.class !== undefined) { if (mm.class !== 'standard' && mm.class !== 'sensitive') throw new Failed('not a class'); next.class = mm.class; }
       if (mm.per_use !== undefined) next.per_use = mm.per_use === true;
@@ -650,8 +652,8 @@ export class Broker {
     }, true);
     if (b.consent) b.consent.approval_id = id_;
     this.store.setMeta(id, stripIndex({ ...m, bindings: [...m.bindings.filter((x) => x.target !== b.target), b] }));
-    this.#forgetGrants(id);
-    this.#reindex();
+    if (before) this.#revoked(id);
+    else { this.#forgetGrants(id); this.#reindex(); }
     return { ref: id, bindings: this.#index.get(id)!.bindings };
   }
 

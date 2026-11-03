@@ -4,7 +4,7 @@
 // program's output through the launcher. Only target-sent text is scrubbed, never text core wrote:
 // scrubbing core's own text would tell core whether it guessed a value.
 // Stated limits: values shorter than 6 characters aren't hunted (they would match ordinary text);
-// HTML entities, UTF-16 and other encodings a target might use aren't; and a target that echoes
+// HTML entities, raw UTF-16 and other encodings a target might use aren't; and a target that echoes
 // text core sent it can, by being scrubbed, confirm a guess about the value used (rate-capped).
 
 export const MARK = '[redacted by the broker]';
@@ -18,6 +18,13 @@ export function formsOf(value: string): string[] {
     encodeURIComponent(value).replace(/%[0-9A-F]{2}/g, (x) => x.toLowerCase()), encodeURIComponent(value).replace(/%20/g, '+'),
     JSON.stringify(value).slice(1, -1).replace(/\//g, '\\/'),
   ]);
+  // Go HTML-safe, Python ensure_ascii, and their combined spelling, per UTF-16 code unit.
+  const json = JSON.stringify(value).slice(1, -1);
+  for (const chars of [/[<>&\u2028\u2029]/g, /[^\x00-\x7f]/g, /[^\x00-\x7f]|[<>&']/g]) {
+    const escaped = json.replace(chars, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+    forms.add(escaped);
+    forms.add(escaped.replace(/\\u([0-9a-f]{4})/g, (_, h: string) => `\\u${h.toUpperCase()}`));
+  }
   return [...forms].filter((f) => f.length >= 6).sort((x, y) => y.length - x.length);
 }
 

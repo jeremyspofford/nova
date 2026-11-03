@@ -76,7 +76,8 @@ export const ANSWER_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 // Header names a response may pass on to core (everything else is dropped, never forwarded).
-export const RESPONSE_HEADERS = ['content-type', 'content-length', 'location', 'retry-after', 'etag', 'last-modified', 'date', 'x-request-id', 'x-ratelimit-remaining', 'x-ratelimit-reset'];
+// Body lengths and cache validators describe the upstream representation, not the scrubbed body.
+export const RESPONSE_HEADERS = ['content-type', 'location', 'retry-after', 'date', 'x-request-id', 'x-ratelimit-remaining', 'x-ratelimit-reset'];
 
 // The keys allowed are checked recursively, except under `headers` (header names) and `refs`
 // filters, which are data. Returns the first key that isn't allowed, or null.

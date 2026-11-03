@@ -43,7 +43,9 @@ signal.signal(signal.SIGTERM,signal.SIG_IGN)
 pid=os.fork()
 if pid==0:
     while True: time.sleep(1)
-with open(os.environ['TF_VAR_LOG'],'w') as f: json.dump([os.getpid(),pid,os.environ['CREDENTIAL_FILE']],f)
+log=os.environ['TF_VAR_LOG']
+with open(log+'.tmp','w') as f: json.dump([os.getpid(),pid,os.environ['CREDENTIAL_FILE']],f)
+os.replace(log+'.tmp',log)
 time.sleep(.2)
 with open(os.environ['CREDENTIAL_FILE']) as f: print(f.read(),flush=True)
 print('delayed read complete '*1000,flush=True)

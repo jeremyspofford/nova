@@ -54,10 +54,11 @@ export function canonicalTarget(t: TargetIn): { kind: TargetKind; target: string
 // A request path: absolute, no traversal, no second slash at the start (which would name a host),
 // no backslash. The scope is checked on the path without its query.
 export function requestPath(p: unknown): { path: string; bare: string } {
-  if (typeof p !== 'string' || !p.startsWith('/') || p.startsWith('//') || p.length > 2000 || /[\\\s#]/.test(p)) throw new Error('not a request path');
+  if (typeof p !== 'string' || !p.startsWith('/') || p.startsWith('//') || p.length > 2000 || /[\\\s#]|[^\x20-\x7e]/.test(p)) throw new Error('not a request path');
   const bare = p.split('?')[0]!;
   let decoded: string;
   try { decoded = decodeURIComponent(bare); } catch { throw new Error('not a request path'); }
+  if (/%[0-9a-f]{2}/i.test(decoded)) throw new Error('a request path has ambiguous nested encoding');
   // `..;x` and `.;x` are dot segments to servers that strip path parameters (Tomcat, Spring).
   if (decoded.split('/').some((s) => /^\.\.?(;|$)/.test(s)) || decoded.includes('\\') || /%2f/i.test(bare)) throw new Error('a request path can’t climb out of its scope');
   return { path: p, bare };
@@ -116,9 +117,12 @@ export function addressClass(addr: string): 'loopback' | 'private' | 'public' {
     return 'public';
   }
   if (v === 6) {
-    const x = addr.toLowerCase();
+    const x = new URL(`http://[${addr}]`).hostname.slice(1, -1);
     if (x === '::1') return 'loopback';
-    if (x.startsWith('::ffff:')) return addressClass(x.slice(7));
+    const halves = x.split('::').map((h) => h ? h.split(':') : []);
+    const parts = halves.length === 2 ? [...halves[0]!, ...Array<string>(8 - halves[0]!.length - halves[1]!.length).fill('0'), ...halves[1]!] : halves[0]!;
+    if (x.startsWith('::ffff:')) return addressClass(parts.slice(6).flatMap((p) => { const n = Number.parseInt(p, 16); return [n >> 8, n & 255]; }).join('.'));
+    if (parts.slice(0, 6).every((p) => Number.parseInt(p, 16) === 0) || (parts[0] === '2001' && parts[1] === '0')) return 'private';
     // ULA, link-local, site-local (fec0::/10), multicast, NAT64 (64:ff9b::/96) and 6to4 (2002::/16),
     // whose embedded IPv4 address could be anything: all treated as not public.
     if (x === '::' || /^f[cd]/.test(x) || /^fe[89a-f]/.test(x) || x.startsWith('ff') || x.startsWith('64:ff9b:') || x.startsWith('2002:')) return 'private';

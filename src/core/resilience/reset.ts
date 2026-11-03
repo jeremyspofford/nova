@@ -641,7 +641,7 @@ export class FactoryReset {
     db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     this.#o.vault.forgetKeys();
     this.#o.vault.clear();
-    const keep = new Set(['mesh', 'logs', 'nova.pid', RESET_REPORT]);
+    const keep = new Set(['broker', 'mesh', 'logs', 'nova.pid', RESET_REPORT]);
     for (const n of own) if (!keep.has(n) && n !== 'nova.db' && !SQLITE_SIDE.test(n)) rmSync(join(home, n), { recursive: true, force: true });
     this.#o.log.info('reset', 'The hub was reset: this standby wiped its copy.', { id: notice.id, rows });
     // Once its report has gone back to the hub, it restarts to finish (its keys and role file).
