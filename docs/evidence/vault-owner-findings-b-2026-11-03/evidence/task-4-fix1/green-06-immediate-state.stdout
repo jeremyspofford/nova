@@ -1,0 +1,12 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ I1 shutdown awaits recoverable owned group before reporting concurrent cleanup failure (5241.709354ms)
+✔ I1 shutdown awaits recoverable owned group before reporting already-rejected cleanup failure (11086.513353ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16528.349441
+no-Kubernetes tripwire: never fired

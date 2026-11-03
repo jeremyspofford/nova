@@ -1,0 +1,135 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ rollback retains failed owned cleanup and refuses every replacement admission (479.457087ms)
+✖ close joins owned startup readiness and cleanup: replacement (608.570085ms)
+✖ close joins owned startup readiness and cleanup: initial (304.491103ms)
+✖ close joins owned startup readiness and cleanup: reset (640.005091ms)
+✖ close joins owned startup readiness and cleanup: late-failure (523.800335ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 0
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2935.10103
+
+✖ failing tests:
+
+test at tests/supervisor/broker-lifecycle.test.ts:273:1
+✖ rollback retains failed owned cleanup and refuses every replacement admission (479.457087ms)
+  AssertionError [ERR_ASSERTION]: rollback must not start Core after unconfirmed cleanup
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///workspace/tests/supervisor/broker-lifecycle.test.ts:284:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/supervisor/broker-lifecycle.test.ts:318:3
+✖ close joins owned startup readiness and cleanup: replacement (608.570085ms)
+  AssertionError [ERR_ASSERTION]: both close callers must await the owned child, not only request cleanup
+  + actual - expected
+  
+    {
+  +   pidFile: false,
+  +   secondSettled: true,
+  +   settled: true
+  -   pidFile: true,
+  -   secondSettled: false,
+  -   settled: false
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/tests/supervisor/broker-lifecycle.test.ts:347:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { settled: true, secondSettled: true, pidFile: false },
+    expected: { settled: false, secondSettled: false, pidFile: true },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/supervisor/broker-lifecycle.test.ts:318:3
+✖ close joins owned startup readiness and cleanup: initial (304.491103ms)
+  AssertionError [ERR_ASSERTION]: both close callers must await the owned child, not only request cleanup
+  + actual - expected
+  
+    {
+  +   pidFile: false,
+  +   secondSettled: true,
+  +   settled: true
+  -   pidFile: true,
+  -   secondSettled: false,
+  -   settled: false
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/tests/supervisor/broker-lifecycle.test.ts:347:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { settled: true, secondSettled: true, pidFile: false },
+    expected: { settled: false, secondSettled: false, pidFile: true },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/supervisor/broker-lifecycle.test.ts:318:3
+✖ close joins owned startup readiness and cleanup: reset (640.005091ms)
+  AssertionError [ERR_ASSERTION]: both close callers must await the owned child, not only request cleanup
+  + actual - expected
+  
+    {
+  +   pidFile: false,
+  +   secondSettled: true,
+  +   settled: true
+  -   pidFile: true,
+  -   secondSettled: false,
+  -   settled: false
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/tests/supervisor/broker-lifecycle.test.ts:347:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { settled: true, secondSettled: true, pidFile: false },
+    expected: { settled: false, secondSettled: false, pidFile: true },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/supervisor/broker-lifecycle.test.ts:318:3
+✖ close joins owned startup readiness and cleanup: late-failure (523.800335ms)
+  AssertionError [ERR_ASSERTION]: both close callers must await the owned child, not only request cleanup
+  + actual - expected
+  
+    {
+  +   pidFile: false,
+  +   secondSettled: true,
+  +   settled: true
+  -   pidFile: true,
+  -   secondSettled: false,
+  -   settled: false
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/tests/supervisor/broker-lifecycle.test.ts:347:14)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { settled: true, secondSettled: true, pidFile: false },
+    expected: { settled: false, secondSettled: false, pidFile: true },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

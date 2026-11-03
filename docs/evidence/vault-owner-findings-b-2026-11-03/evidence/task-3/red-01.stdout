@@ -1,0 +1,331 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B2 held-name oracle: new equal/different writes are both kept (core) (657.045749ms)
+✖ B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (core) (379.631602ms)
+✖ B2 approval binds a restaged write epoch with identical names/kinds (core) (246.338413ms)
+✖ B2 held-name oracle: new equal/different writes are both kept (passkey) (692.192879ms)
+✖ B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (passkey) (393.779832ms)
+✖ B2 approval binds a restaged write epoch with identical names/kinds (passkey) (257.678913ms)
+✖ B2 legacy-content migrated revision is never a resumable proof (258.223866ms)
+✔ B2 v1:unknown migrated revision is never a resumable proof (317.965342ms)
+✔ B2 v99:unknown migrated revision is never a resumable proof (319.251109ms)
+✔ B2 missing migrated revision is never a resumable proof (310.759458ms)
+✖ B2 finish failure acknowledges already-created copies without source names or values (184.729215ms)
+✖ B2 Gmail same-value after stage is retained using non-content metadata (193.604215ms)
+✔ B2 Gmail different-value after stage is retained using non-content metadata (184.785236ms)
+✖ B2 Gmail same-mtime after stage is retained using non-content metadata (200.725729ms)
+✖ B2 Gmail replace-file after stage is retained using non-content metadata (187.089895ms)
+✔ B2 quiet regular Gmail source still migrates and is removed (187.844184ms)
+✖ B2 uncertain Gmail identity cannot resume or remove an existing name (249.080327ms)
+✖ B2 partial cleanup failure reports possible removals as well as copies (185.930213ms)
+✔ B2 migration cards retain the pending-approval rate bound (120.99024ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 6
+ℹ fail 13
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5639.522545
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:34:3
+✖ B2 held-name oracle: new equal/different writes are both kept (core) (657.045749ms)
+  AssertionError [ERR_ASSERTION]: public held-name decisions and cleanup must not test the guess
+  + actual - expected
+  
+    {
+      outcome: {
+  +     kept: [],
+  -     kept: [
+  -       'provider/A'
+  -     ],
+        migrated: [],
+  +     moved: 1,
+  -     moved: 0,
+        read_back: true,
+  +     removed: 1
+  -     removed: 0
+      },
+  +   retained: false,
+  -   retained: true,
+      status: [
+  +     'moved'
+  -     'kept'
+      ]
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:55:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { status: [ 'moved' ], outcome: { migrated: [], moved: 1, kept: [], read_back: true, removed: 1 }, retained: false },
+    expected: { status: [ 'kept' ], outcome: { migrated: [], moved: 0, kept: [Array], read_back: true, removed: 0 }, retained: true },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:61:3
+✖ B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (core) (379.631602ms)
+  AssertionError [ERR_ASSERTION]: global cleanup must not test the guess, independently of resume status
+  + actual - expected
+  ... Skipped lines
+  
+    {
+      outcome: {
+        kept: [],
+        migrated: [
+          'provider/A'
+  ...
+        read_back: true,
+  +     removed: 1
+  -     removed: 0
+      },
+  +   retained: false
+  -   retained: true
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:81:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { outcome: { migrated: [Array], moved: 1, kept: [], read_back: true, removed: 1 }, retained: false },
+    expected: { outcome: { migrated: [Array], moved: 1, kept: [], read_back: true, removed: 0 }, retained: true },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:87:3
+✖ B2 approval binds a restaged write epoch with identical names/kinds (core) (246.338413ms)
+  AssertionError [ERR_ASSERTION]: a prior approval cannot cover a newer source write
+  + actual - expected
+  
+  + undefined
+  - 'approval_invalid'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:96:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'approval_invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:34:3
+✖ B2 held-name oracle: new equal/different writes are both kept (passkey) (692.192879ms)
+  AssertionError [ERR_ASSERTION]: public held-name decisions and cleanup must not test the guess
+  + actual - expected
+  
+    {
+      outcome: {
+  +     kept: [],
+  -     kept: [
+  -       'provider/A'
+  -     ],
+        migrated: [],
+  +     moved: 1,
+  -     moved: 0,
+        read_back: true,
+  +     removed: 1
+  -     removed: 0
+      },
+  +   retained: false,
+  -   retained: true,
+      status: [
+  +     'moved'
+  -     'kept'
+      ]
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:55:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { status: [ 'moved' ], outcome: { migrated: [], moved: 1, kept: [], read_back: true, removed: 1 }, retained: false },
+    expected: { status: [ 'kept' ], outcome: { migrated: [], moved: 0, kept: [Array], read_back: true, removed: 0 }, retained: true },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:61:3
+✖ B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (passkey) (393.779832ms)
+  AssertionError [ERR_ASSERTION]: global cleanup must not test the guess, independently of resume status
+  + actual - expected
+  ... Skipped lines
+  
+    {
+      outcome: {
+        kept: [],
+        migrated: [
+          'provider/A'
+  ...
+        read_back: true,
+  +     removed: 1
+  -     removed: 0
+      },
+  +   retained: false
+  -   retained: true
+    }
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:81:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { outcome: { migrated: [Array], moved: 1, kept: [], read_back: true, removed: 1 }, retained: false },
+    expected: { outcome: { migrated: [Array], moved: 1, kept: [], read_back: true, removed: 0 }, retained: true },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:87:3
+✖ B2 approval binds a restaged write epoch with identical names/kinds (passkey) (257.678913ms)
+  AssertionError [ERR_ASSERTION]: a prior approval cannot cover a newer source write
+  + actual - expected
+  
+  + undefined
+  - 'approval_invalid'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:96:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'approval_invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:109:3
+✖ B2 legacy-content migrated revision is never a resumable proof (258.223866ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  'moved' !== 'kept'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:123:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'moved',
+    expected: 'kept',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:131:1
+✖ B2 finish failure acknowledges already-created copies without source names or values (184.729215ms)
+  AssertionError [ERR_ASSERTION]: The "string" argument must be of type string. Received type undefined (undefined)
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:142:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /copies.*removals.*may.*review.*resume/i,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:157:3
+✖ B2 Gmail same-value after stage is retained using non-content metadata (193.604215ms)
+  AssertionError [ERR_ASSERTION]: a newer Gmail write must survive cleanup even when values match
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:170:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:157:3
+✖ B2 Gmail same-mtime after stage is retained using non-content metadata (200.725729ms)
+  AssertionError [ERR_ASSERTION]: a newer Gmail write must survive cleanup even when values match
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:170:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:157:3
+✖ B2 Gmail replace-file after stage is retained using non-content metadata (187.089895ms)
+  AssertionError [ERR_ASSERTION]: a newer Gmail write must survive cleanup even when values match
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:170:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:190:1
+✖ B2 uncertain Gmail identity cannot resume or remove an existing name (249.080327ms)
+  AssertionError [ERR_ASSERTION]: non-regular source identity is not trusted
+  
+  'moved' !== 'kept'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:200:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'moved',
+    expected: 'kept',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:207:1
+✖ B2 partial cleanup failure reports possible removals as well as copies (185.930213ms)
+  AssertionError [ERR_ASSERTION]: The "string" argument must be of type string. Received type undefined (undefined)
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:220:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /copies.*removals.*may.*review.*resume/i,
+    operator: 'match',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

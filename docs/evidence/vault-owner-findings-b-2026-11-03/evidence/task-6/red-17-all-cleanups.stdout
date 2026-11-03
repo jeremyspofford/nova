@@ -1,0 +1,27 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ a service cleanup rejection still drains broker and Core, releases control and reports failure (234.258562ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 559.571095
+
+✖ failing tests:
+
+test at tests/supervisor/broker-lifecycle.test.ts:189:1
+✖ a service cleanup rejection still drains broker and Core, releases control and reports failure (234.258562ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception: owned broker drained despite another cleanup failure
+      at TestContext.<anonymous> (file:///workspace/tests/supervisor/broker-lifecycle.test.ts:197:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'throws',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

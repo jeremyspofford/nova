@@ -1,0 +1,36 @@
+{
+  "at": "2026-11-03T10:17:24.679693+00:00",
+  "container": "dee9827eacccde10572ef65181ab45ae471cd0857c088cb77f8400e492be04cd",
+  "command": [
+    "sh",
+    "-c",
+    "mkdir -m 700 \"$HOME\" && exec \"$@\"",
+    "task6",
+    "sh",
+    "scripts/tripwire.sh",
+    "node",
+    "--test",
+    "--test-timeout=30000",
+    "tests/core/broker-diagnostics.test.ts"
+  ],
+  "image": "mcr.microsoft.com/playwright:v1.56.1-noble",
+  "mounts": [
+    {
+      "Type": "bind",
+      "Source": "/home/jeremy/.codex/worktrees/nova-vault-integration/nova-build",
+      "Destination": "/workspace",
+      "Mode": "",
+      "RW": false,
+      "Propagation": "rprivate"
+    },
+    {
+      "Type": "bind",
+      "Source": "/home/jeremy/.local/share/mise/installs/node/26.3.1",
+      "Destination": "/opt/node",
+      "Mode": "",
+      "RW": false,
+      "Propagation": "rprivate"
+    }
+  ],
+  "reason": "Fixture created broker before marking home; createNova throws before cleanup try. Exact owned container only."
+}

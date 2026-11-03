@@ -34,7 +34,9 @@ export function readStanding(home) {
 // Folders in the home that hold secrets: the vault (and its key file), the mesh's device and
 // identity keys, and Era 2's connection secrets. No file tool reads or writes them and no helper
 // is handed them; they are also untracked (UNTRACKED) and not journalled (mesh/sync.ts).
-export const SECRET_DIRS = ['vault', 'mesh', 'connectors'];
+// broker/ is the Credential Broker's store (src/broker): ciphertext, its header and, without a
+// keychain, its device key. No file tool reads it.
+export const SECRET_DIRS = ['vault', 'mesh', 'connectors', 'broker'];
 export const inSecretDir = (rel) => SECRET_DIRS.find((d) => rel === d || rel.startsWith(`${d}/`) || rel.startsWith(`${d}\\`)) ?? null;
 
 // Resolve a tool path inside home. "~/x" and "x" both mean home/x.
@@ -58,7 +60,7 @@ const git = (home, ...args) => new Promise((ok) => {
 // mesh/ holds this node's private keys (0600 on disk); git would keep a copy anyone who can read
 // the folder could read, for good. vault/ holds connection secrets (encrypted) and, without a
 // system keychain, their key: a copy in history would outlive revoking them.
-const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'memory/.rendered.json', 'skills/', 'connectors/', 'nova.db*', 'logs/', 'backups/', 'extensions/', 'exports/', 'kept/', 'workers/', 'mesh/', 'vault/', 'nova.pid',
+const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'memory/.rendered.json', 'skills/', 'connectors/', 'nova.db*', 'logs/', 'backups/', 'extensions/', 'exports/', 'kept/', 'workers/', 'mesh/', 'vault/', 'broker/', 'nova.pid',
   // Checkpoints hold the identity and the vault key; the home's mark holds the key that seals a
   // factory reset (M7 amendment). A reset's marker and report are this machine's alone too.
   'checkpoints/', '.nova-home', '.nova-home.tmp', 'factory-reset.json*', 'reset-report.json'];

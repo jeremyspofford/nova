@@ -1,0 +1,94 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ src/broker is its own tree: Node’s standard library and its own files, nothing from core, no package (7.628968ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (18.350163ms)
+✔ the size budget: no more than 3,000 lines of broker code, tests aside, so one reviewer can read all of it (1.038101ms)
+✔ no network surface in the source: no HTTP server, nothing listens on a port, no inspector (3.248075ms)
+✔ the fixed protocol: seven verbs, three messages, a fixed refusal list (1.17126ms)
+✔ the client has no method that returns a value: no get, resolve, reveal or export (0.248103ms)
+(node:39) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the process: permission model, empty environment, a 0600 socket in a 0700 folder, and nothing else listening (105.478338ms)
+(node:46) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the protocol: hello with a token, seven verbs and three messages; everything else refused (164.237395ms)
+(node:53) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ no network surface: no inet listener after every verb; a use aimed at an unbound host makes no connection; answers fit the schema (1506.672723ms)
+(node:304) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the launcher: the broker runs the bound program itself; a swapped binary gets nothing; no loader variables from core (1547.166145ms)
+(node:572) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control (7441.052394ms)
+✔ B3 four lanes remain held during TERM escalation; stopPrograms awaits cleanup and refuses new uses (6088.383936ms)
+✔ B3 ambiguous leftover directory refuses a fresh credentialed process without killing its recorded PID (70.114639ms)
+✔ B3 delayed file open succeeds normally; bad cwd spawn error and exit/timeout races settle without stale timers (2277.814687ms)
+(node:1058) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context (1641.222643ms)
+✔ B5 explicit keychain missing refuses migration even with a valid file key (3.390583ms)
+✔ B5 explicit keychain wrong refuses migration even with a valid file key (0.703324ms)
+✔ B5 explicit keychain unavailable refuses migration even with a valid file key (0.50045ms)
+✔ B3 synchronous and asynchronous launcher spawn failures releases exactly once and leaves no stale owned entry (153.050504ms)
+✔ B3 normal parent exit cleans inherited descendants even after they close their output pipes (1333.752973ms)
+(node:1448) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ B3 main graceful shutdown awaits real owned descendant cleanup (6472.725995ms)
+(node:1703) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:1958) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ B3 broker SIGKILL leaves ownership evidence and restarted broker refuses reuse without stale PID killing (1598.694208ms)
+✔ B3 cleanup failure retains evidence and blocks further credentialed use (543.056408ms)
+✔ B3 Windows credentialed process branch refuses before run directory or value injection (66.683497ms)
+✔ B3 denied owned-group signal blocks new use immediately and shutdown rejects while retaining ownership (6069.618531ms)
+✔ B3 normal exit near the timeout boundary settles each lane once (4104.417546ms)
+✖ I1 shutdown awaits recoverable owned group before reporting concurrent cleanup failure (5161.310081ms)
+✖ I1 shutdown awaits recoverable owned group before reporting already-rejected cleanup failure (11080.108834ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 26
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 57819.93668
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:337:3
+✖ I1 shutdown awaits recoverable owned group before reporting concurrent cleanup failure (5161.310081ms)
+  AssertionError [ERR_ASSERTION]: recoverable use settled through launcher close and cleanup
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:365:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:337:3
+✖ I1 shutdown awaits recoverable owned group before reporting already-rejected cleanup failure (11080.108834ms)
+  AssertionError [ERR_ASSERTION]: recoverable use settled through launcher close and cleanup
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:365:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

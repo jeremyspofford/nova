@@ -1,0 +1,29 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ B2 held-name oracle: new equal/different writes are both kept (core) (685.815059ms)
+✔ B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (core) (392.087669ms)
+✔ B2 approval binds a restaged write epoch with identical names/kinds (core) (254.598436ms)
+✔ B2 held-name oracle: new equal/different writes are both kept (passkey) (640.108273ms)
+✔ B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (passkey) (398.00457ms)
+✔ B2 approval binds a restaged write epoch with identical names/kinds (passkey) (258.345604ms)
+✔ B2 legacy-content migrated revision is never a resumable proof (339.169686ms)
+✔ B2 v1:unknown migrated revision is never a resumable proof (326.737863ms)
+✔ B2 v99:unknown migrated revision is never a resumable proof (331.329006ms)
+✔ B2 missing migrated revision is never a resumable proof (323.104188ms)
+✔ B2 finish failure acknowledges already-created copies without source names or values (196.913191ms)
+✔ B2 Gmail same-value after stage is retained using non-content metadata (201.744644ms)
+✔ B2 Gmail different-value after stage is retained using non-content metadata (206.596496ms)
+✔ B2 Gmail same-mtime after stage is retained using non-content metadata (181.586828ms)
+✔ B2 Gmail replace-file after stage is retained using non-content metadata (189.263345ms)
+✔ B2 quiet regular Gmail source still migrates and is removed (185.942015ms)
+✔ B2 uncertain Gmail identity cannot resume or remove an existing name (321.974474ms)
+✔ B2 partial cleanup failure reports possible removals as well as copies (191.15908ms)
+✔ B2 migration cards retain the pending-approval rate bound (122.914963ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5866.272372
+no-Kubernetes tripwire: never fired

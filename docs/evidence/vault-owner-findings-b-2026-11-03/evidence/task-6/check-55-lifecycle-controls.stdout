@@ -1,0 +1,28 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ supervisor refuses a foreign home before broker retries or problem writes (36.47105ms)
+✔ failed release Core startup with confirmed broker cleanup can recover the previous release (799.991907ms)
+lifecycle egress guard: never fired
+✔ failed broker readiness remains pending until the actual child closes (121.582149ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1284.079776
+
+✖ failing tests:
+
+test at tests/supervisor/broker-lifecycle.test.ts:262:1
+✖ supervisor refuses a foreign home before broker retries or problem writes (36.47105ms)
+  Error: The supervisor needs a safe, Nova-owned home folder.
+      at #run (file:///workspace/src/supervisor/supervisor.ts:184:68)
+      at Supervisor.run (file:///workspace/src/supervisor/supervisor.ts:173:39)
+      at file:///workspace/tests/supervisor/broker-lifecycle.test.ts:267:38
+      at waitForActual (node:assert:601:21)
+      at strict.rejects (node:assert:738:31)
+      at TestContext.<anonymous> (file:///workspace/tests/supervisor/broker-lifecycle.test.ts:267:18)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+no-Kubernetes tripwire: never fired

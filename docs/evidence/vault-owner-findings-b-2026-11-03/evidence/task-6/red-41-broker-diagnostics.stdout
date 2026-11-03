@@ -1,0 +1,2 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ production diagnostics projects fresh broker counts and states without refs, key material or raw failures (111.146071ms)

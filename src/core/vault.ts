@@ -195,6 +195,11 @@ export function keyMode(env: NodeJS.ProcessEnv = process.env): KeyMode {
 // ---- the vault ----------------------------------------------------------------------------------
 
 interface VaultFile { v: 1; id: string; alg: 'aes-256-gcm'; fp: string; nonce: string; tag: string; data: string }
+interface FoundKey {
+  key: Buffer;
+  store: KeyStore;
+  housekeeping?: { disk: KeyStore; keychain: KeyStore };
+}
 
 export interface VaultOptions {
   home: string;
@@ -230,7 +235,9 @@ export class Vault extends EventEmitter {
   #store: KeyStore | null = null;
   #id: string | null = null;
   #map: Map<string, string> | null = null;
+  #committed: string | null = null;
   #problem: string | null = null;
+  #writing = false;
   // Why it won't open: lost for good (no key that fits, or a damaged file), or a keychain that may
   // still answer later. Only a lost vault is set aside by the next save.
   #unopenable: 'lost' | 'waiting' | null = null;
@@ -258,7 +265,8 @@ export class Vault extends EventEmitter {
     return this.get(nameOf(ref));
   }
 
-  put(name: string, value: string): string {
+  put(name: string, value: string): string { return this.#withWrite(() => this.#put(name, value), true); }
+  #put(name: string, value: string): string {
     checkName(name);
     if (typeof value !== 'string' || !value.length) throw new CoreError('validation', 'A secret can’t be empty.');
     // A vault that can never open again would refuse every save forever. Saving starts a new one
@@ -285,7 +293,8 @@ export class Vault extends EventEmitter {
 
   // A new key each time something is deleted, so a copy of the file from before (a backup, an old
   // sync entry) doesn't open with the key in use: the deleted secret stays deleted.
-  delete(name: string): boolean {
+  delete(name: string): boolean { return this.#withWrite(() => this.#delete(name), true); }
+  #delete(name: string): boolean {
     const map = this.#open();
     if (!map.delete(checkName(name))) return false;
     this.#save(map, true);
@@ -294,7 +303,8 @@ export class Vault extends EventEmitter {
 
   // Starts a new, empty vault on purpose (tier 3: needs confirm), with the old file kept aside: for
   // a vault whose key is in a keychain that no longer answers, which saving alone won't replace.
-  reset(confirm: boolean): VaultStatus {
+  reset(confirm: boolean): VaultStatus { return this.#withWrite(() => this.#reset(confirm)); }
+  #reset(confirm: boolean): VaultStatus {
     if (!confirm) throw new CoreError('validation', 'Starting a new vault leaves every saved secret behind (the old file is kept aside). Send confirm: true to do that.');
     this.#startOver();
     this.emit('change', { secrets: 0 });
@@ -302,7 +312,8 @@ export class Vault extends EventEmitter {
   }
 
   // Everything under a prefix (`connector/gmail/`), for revoking an extension's secrets at once.
-  deletePrefix(prefix: string): string[] {
+  deletePrefix(prefix: string): string[] { return this.#withWrite(() => this.#deletePrefix(prefix), true); }
+  #deletePrefix(prefix: string): string[] {
     const map = this.#open();
     const gone = [...map.keys()].filter((k) => k.startsWith(prefix));
     if (!gone.length) return [];
@@ -338,7 +349,8 @@ export class Vault extends EventEmitter {
   // Removes this vault's key wherever it is: the keychain item of each id (this vault's, and any
   // given) and the key file. The vault holds nothing after this. Returns where it was removed from,
   // in plain words; a keychain that isn't answering is said, not guessed at.
-  forgetKeys(ids: string[] = []): { keychain: string | null; file: boolean; problem: string | null } {
+  forgetKeys(ids: string[] = []): { keychain: string | null; file: boolean; problem: string | null } { return this.#withWrite(() => this.#forgetKeys(ids)); }
+  #forgetKeys(ids: string[] = []): { keychain: string | null; file: boolean; problem: string | null } {
     let keychain: string | null = null;
     let problem: string | null = null;
     if (this.#mode !== 'file') {
@@ -375,7 +387,8 @@ export class Vault extends EventEmitter {
   }
 
   // On the standby: the hub's vault, and its key, which goes into this node's own key store.
-  adopt(fileText: string, keyB64: string): void {
+  adopt(fileText: string, keyB64: string): void { this.#withWrite(() => this.#adopt(fileText, keyB64)); }
+  #adopt(fileText: string, keyB64: string): void {
     const key = Buffer.from(String(keyB64), 'base64');
     if (key.length !== 32) throw new CoreError('validation', 'The hub sent a vault key Nova can’t use.');
     const file = parseFile(fileText);
@@ -394,13 +407,45 @@ export class Vault extends EventEmitter {
   }
 
   // On the standby: the hub's vault is gone (its last secret was removed).
-  clear(): void {
+  clear(): void { this.#withWrite(() => this.#clear()); }
+  #clear(): void {
     rmSync(this.file, { force: true });
     this.#map = new Map();
     this.emit('change', { secrets: 0 });
   }
 
   // ---- inside -------------------------------------------------------------------------------
+
+  // Same fail-closed lock as the broker's migration launcher. The mutation reloads under the
+  // lock, so a long-lived consumer cannot resurrect entries from its pre-migration cache.
+  #withWrite<T>(run: () => T, refresh = false, unavailable?: () => T): T {
+    if (this.#writing) return run();
+    const lock = join(this.dir, '.writer-lock');
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    try { mkdirSync(lock, { mode: 0o700 }); }
+    catch {
+      if (unavailable) return unavailable();
+      throw new CoreError('conflict', 'The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.');
+    }
+    this.#writing = true;
+    try {
+      if (refresh) {
+        this.#map = null;
+        this.#key = null;
+        this.#store = null;
+        this.#problem = null;
+        this.#unopenable = null;
+      }
+      return run();
+    } finally {
+      // A mutator may have edited its map before a failed save. Only a fresh authenticated
+      // observation of committed bytes can populate the read cache after a write attempt.
+      this.#map = null;
+      this.#committed = null;
+      this.#writing = false;
+      rmSync(lock, { recursive: true });
+    }
+  }
 
   // The keychain when the mode allows one and it answers, else the key file.
   #choose(id = this.#id ?? 'new'): KeyStore {
@@ -414,65 +459,81 @@ export class Vault extends EventEmitter {
   }
 
   #open(): Map<string, string> {
-    if (this.#map) return this.#map;
-    // A keychain that wasn't answering is asked again; a lost vault stays lost.
-    if (this.#problem && this.#unopenable !== 'waiting') throw new CoreError('conflict', this.#problem);
+    // Ordinary reads neither lock nor clean up pending files. Observe the committed bytes and
+    // available key each time: another process may have saved, rekeyed or removed the vault.
     this.#problem = null;
     this.#unopenable = null;
     if (!existsSync(this.file)) {
+      this.#committed = null;
+      this.#key = null;
+      this.#store = null;
       this.#map = new Map();
       return this.#map;
     }
     let file: VaultFile;
+    let text: string;
     try {
-      file = parseFile(readFileSync(this.file, 'utf8'));
+      text = readFileSync(this.file, 'utf8');
+      file = parseFile(text);
     } catch (e) {
       this.#unopenable = 'lost';
       this.#problem = `The vault (${this.file}) is damaged and can’t be read: ${(e as Error).message}. ${START_OVER}`;
       throw new CoreError('conflict', this.#problem);
     }
     this.#id = file.id;
-    let found: { key: Buffer; store: KeyStore; file: VaultFile };
+    let found: FoundKey;
     try {
-      found = { ...this.#findKey(file), file };
+      found = this.#findKey(file);
     } catch (e) {
-      // A re-key cut short: the new key was saved, and the new file is still beside the old one.
-      const done = this.#finishRekey(file);
-      if (!done) throw e;
-      found = done;
+      // A probe never publishes pending state. Re-open and re-authenticate under the lock before
+      // finishing an interrupted rekey; a stale lock refuses this necessary repair.
+      if (!this.#pendingRekey(file)) throw e;
+      if (!this.#writing) return this.#withWrite(() => this.#open(), true);
+      renameSync(`${this.file}.tmp`, this.file);
+      return this.#open();
     }
     let map: Map<string, string>;
-    try { map = decrypt(found.file, found.key); } catch (e) {
+    try {
+      if (this.#map && this.#committed === text && this.#key?.equals(found.key)) map = this.#map;
+      else {
+        map = decrypt(file, found.key);
+        for (const v of map.values()) addSecretValue(v);
+      }
+    } catch (e) {
       this.#unopenable = 'lost';
       this.#problem = `${(e as Error).message} ${START_OVER}`;
       throw new CoreError('conflict', this.#problem);
     }
-    rmSync(`${this.file}.tmp`, { force: true });
     this.#problem = null;
     this.#unopenable = null;
     this.#map = map;
+    this.#committed = text;
     this.#key = found.key;
     this.#store = found.store;
-    for (const v of this.#map.values()) addSecretValue(v);
-    return this.#map;
+    if (found.housekeeping) {
+      // Promotion is optional for an authenticated read. If serialization is unavailable, keep
+      // using the existing key; otherwise revalidate everything under the lock before changing it.
+      if (!this.#writing) return this.#withWrite(() => this.#open(), true, () => map);
+      this.#store = this.#promoteKey(found);
+    }
+    return map;
   }
 
-  #finishRekey(file: VaultFile): { key: Buffer; store: KeyStore; file: VaultFile } | null {
+  #pendingRekey(file: VaultFile): boolean {
     const tmp = `${this.file}.tmp`;
-    if (!existsSync(tmp)) return null;
+    if (!existsSync(tmp)) return false;
     let next: VaultFile;
-    try { next = parseFile(readFileSync(tmp, 'utf8')); } catch { return null; }
-    if (next.id !== file.id) return null;
+    try { next = parseFile(readFileSync(tmp, 'utf8')); } catch { return false; }
+    if (next.id !== file.id) return false;
     const why = { problem: this.#problem, unopenable: this.#unopenable };
     try {
       const found = this.#findKey(next);
       decrypt(next, found.key);
-      renameSync(tmp, this.file);
-      return { ...found, file: next };
-    } catch {
+      return true;
+    } catch { return false; }
+    finally {
       this.#problem = why.problem;
       this.#unopenable = why.unopenable;
-      return null;
     }
   }
 
@@ -490,9 +551,8 @@ export class Vault extends EventEmitter {
     return this.#map;
   }
 
-  // The key for this vault, wherever it is. A key found in the file while a keychain answers is
-  // moved into the keychain (written, read back, and only then removed from disk).
-  #findKey(file: VaultFile): { key: Buffer; store: KeyStore } {
+  // Probe only. Key promotion/removal waits for ciphertext authentication and the writer lock.
+  #findKey(file: VaultFile): FoundKey {
     const disk = fileKeyStore(this.#home);
     const kc = this.#mode === 'file' ? null : this.#keychainFor(`vault-${file.id}`);
     const kcUp = kc ? kc.available() : null;
@@ -500,17 +560,10 @@ export class Vault extends EventEmitter {
     const fromDisk = disk.read();
     const fits = (k: Buffer | null) => !!k && fp(k) === file.fp;
     if (fits(fromKc)) {
-      if (fromDisk && fits(fromDisk)) disk.remove();
-      return { key: fromKc!, store: kc! };
+      return { key: fromKc!, store: kc!, ...(fromDisk?.equals(fromKc!) ? { housekeeping: { disk, keychain: kc! } } : {}) };
     }
     if (fits(fromDisk)) {
-      if (kc && kcUp?.ok) {
-        try {
-          kc.write(fromDisk!);
-          if (fits(kc.read())) { disk.remove(); return { key: fromDisk!, store: kc }; }
-        } catch { /* the keychain refused: the file stays where it is */ }
-      }
-      return { key: fromDisk!, store: disk };
+      return { key: fromDisk!, store: disk, ...(kc && kcUp?.ok ? { housekeeping: { disk, keychain: kc } } : {}) };
     }
     if (kc && !kcUp?.ok) {
       this.#unopenable = 'waiting';
@@ -522,9 +575,19 @@ export class Vault extends EventEmitter {
     throw new CoreError('conflict', this.#problem);
   }
 
+  #promoteKey(found: FoundKey): KeyStore {
+    const { disk, keychain } = found.housekeeping!;
+    if (found.store.kind === 'keychain') { disk.remove(); return keychain; }
+    try {
+      keychain.write(found.key);
+      if (keychain.read()?.equals(found.key)) { disk.remove(); return keychain; }
+    } catch { /* the keychain refused: the file stays where it is */ }
+    return found.store;
+  }
+
   // With a new key (the first save, or `rekey`), the order keeps the vault openable whatever stops
   // it: the new file is written beside the old, then the key saved, then the file swapped in.
-  // Stopped between the last two, opening finishes the swap (#finishRekey).
+  // Stopped between the last two, opening authenticates the pending file and finishes under lock.
   #save(map: Map<string, string>, rekey = false): void {
     this.#id ??= randomUUID();
     const id = this.#id;

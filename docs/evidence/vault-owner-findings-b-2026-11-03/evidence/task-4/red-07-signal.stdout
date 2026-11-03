@@ -1,0 +1,2 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B3 denied owned-group signal blocks new use immediately and shutdown rejects while retaining ownership (12006.51977ms)

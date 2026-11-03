@@ -1,0 +1,22 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ src/broker is its own tree: Node’s standard library and its own files, nothing from core, no package (2.848755ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (16.452365ms)
+✔ the size budget: no more than 3,000 lines of broker code, tests aside, so one reviewer can read all of it (0.455901ms)
+✔ no network surface in the source: no HTTP server, nothing listens on a port, no inspector (2.181971ms)
+✔ the fixed protocol: seven verbs, three messages, a fixed refusal list (0.924418ms)
+✔ the client has no method that returns a value: no get, resolve, reveal or export (0.203068ms)
+✔ fixed broker reset removes both exact device accounts, never reads values, and refuses retained runs (1.772707ms)
+✔ keychain deletion failure is propagated, never silently reported as reset success (0.351763ms)
+✔ reset cannot erase broker keys or retained owned-run evidence without supervisor cleanup (90.927607ms)
+✔ actual supervisor starts broker before Core IPC, rotates roles on restart, uses release code and stops both (413.811328ms)
+✔ three broker crashes hold Core and credentials in safe mode, recovery starts a fresh broker (1138.734135ms)
+✔ broker name is reserved, never an editable image/program workload (0.945507ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2398.742146
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,51 @@
+{
+  "started_at": "2026-11-03T06:38:50.138488+00:00",
+  "cwd": "/home/jeremy/.codex/worktrees/nova-vault-integration/nova-build",
+  "launcher_env": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/tmp/nova-task3-fix1-docker-home-3fhisr_t",
+    "LANG": "C.UTF-8"
+  },
+  "argv": [
+    "/usr/bin/docker",
+    "run",
+    "--rm",
+    "--pull=never",
+    "--network=none",
+    "--user=1000:1000",
+    "--read-only",
+    "--tmpfs",
+    "/tmp:rw,exec,nosuid,size=1g",
+    "--mount",
+    "type=bind,src=/home/jeremy/.codex/worktrees/nova-vault-integration/nova-build,dst=/workspace,readonly",
+    "--mount",
+    "type=bind,src=/home/jeremy/.local/share/mise/installs/node/26.3.1,dst=/opt/node,readonly",
+    "--workdir",
+    "/workspace",
+    "--env",
+    "HOME=/tmp/nova-task3-fix1-private-home",
+    "--env",
+    "PATH=/opt/node/bin:/usr/bin:/bin",
+    "--env",
+    "TZ=UTC",
+    "--env",
+    "LANG=C.UTF-8",
+    "mcr.microsoft.com/playwright:v1.56.1-noble",
+    "sh",
+    "-c",
+    "mkdir -m 700 \"$HOME\" && exec \"$@\"",
+    "task3-fix1",
+    "sh",
+    "scripts/tripwire.sh",
+    "node",
+    ".superpowers/sdd/vault-owner-findings-b-2026-11-03/evidence/task-3-fix1/permission-probe.mjs"
+  ],
+  "command": [
+    "sh",
+    "scripts/tripwire.sh",
+    "node",
+    ".superpowers/sdd/vault-owner-findings-b-2026-11-03/evidence/task-3-fix1/permission-probe.mjs"
+  ],
+  "exit_code": 0,
+  "ended_at": "2026-11-03T06:38:51.147350+00:00"
+}

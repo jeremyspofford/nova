@@ -1,0 +1,33 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"otherKillDeliveredAtShutdownReturn":false,"delivered":[{"pid":-85,"sig":"SIGTERM"}]}
+{"secondRunningAtShutdownReturn":true}
+{"secondRunningAfterOtherEscalation":false}
+✖ review: stop must await every owned escalation even when one cleanup fails (5371.107509ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5484.684317
+
+✖ failing tests:
+
+test at .superpowers/sdd/vault-owner-findings-b-2026-11-03/evidence/task-4/review-two-group-shutdown.test.ts:53:1
+✖ review: stop must await every owned escalation even when one cleanup fails (5371.107509ms)
+  AssertionError [ERR_ASSERTION]: main exits immediately when stopPrograms rejects, before the second KILL timer fires
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///workspace/.superpowers/sdd/vault-owner-findings-b-2026-11-03/evidence/task-4/review-two-group-shutdown.test.ts:76:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

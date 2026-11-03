@@ -1,0 +1,20 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ supervisor refuses a foreign home before broker retries or problem writes (27.360156ms)
+✔ rollback retains failed owned cleanup and refuses every replacement admission (262.834837ms)
+✔ close joins owned startup readiness and cleanup: replacement (557.400635ms)
+✔ close joins owned startup readiness and cleanup: initial (300.226817ms)
+✔ close joins owned startup readiness and cleanup: reset (484.442853ms)
+✔ close joins owned startup readiness and cleanup: late-failure (472.050322ms)
+✔ failed release Core startup with confirmed broker cleanup can recover the previous release (813.11433ms)
+✔ failed broker readiness remains pending until the actual child closes (123.260875ms)
+lifecycle egress guard: never fired
+✔ close joins a replacement stop already draining the actual Core child (343.290589ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3705.691984
+no-Kubernetes tripwire: never fired

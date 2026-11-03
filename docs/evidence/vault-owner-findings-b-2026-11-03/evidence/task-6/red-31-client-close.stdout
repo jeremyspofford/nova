@@ -1,0 +1,31 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ a deliberately closed metadata client cannot reconnect with its retained role token (110.000473ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 425.576934
+
+✖ failing tests:
+
+test at tests/core/broker-bootstrap.test.ts:46:1
+✖ a deliberately closed metadata client cannot reconnect with its retained role token (110.000473ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /closed/i. Input:
+  
+  'Error: Nova’s vault isn’t running.'
+  
+      at async TestContext.<anonymous> (file:///workspace/tests/core/broker-bootstrap.test.ts:52:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: Nova’s vault isn’t running.
+        at Socket.<anonymous> (file:///workspace/src/core/broker/client.ts:78:35),
+    expected: /closed/i,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

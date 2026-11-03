@@ -1,0 +1,10 @@
+{
+  "fix_base": "9ba59fb70f5d43eef1ff255b81692f3258690200",
+  "commit": "c38cb860e32d734bbdc583133c11faa34de75a15",
+  "source_lines": 2736,
+  "budget": 3000,
+  "files": {
+    "src/broker/oldvault.ts": "fd90f961b7e7bd26663acf469cc7c190c5cfb7ee19ea2a9000f65cb7884d1588",
+    "tests/core/broker-migration-source-inspection.test.ts": "ccf39e7b34eedc6acc1c48070185e593e6abfe3a68b24e4504b5329a20598092"
+  }
+}

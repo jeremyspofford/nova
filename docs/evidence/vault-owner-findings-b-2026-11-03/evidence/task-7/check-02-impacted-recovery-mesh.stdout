@@ -1,0 +1,57 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ the promotion drill: planned, rolled back at epoch + 2, a sleeping computer following the chain, emergency from a backup, fenced; never two hubs; no private key leaves its device (30925.850589ms)
+✔ the vault replicates sealed: after a failover, Home Assistant works on the new hub (1285.761101ms)
+✔ a forgotten memory is gone from every backup, which stays restorable (136.330943ms)
+✔ a backup that cannot be cleaned is destroyed, and that is reported (64.534804ms)
+✔ forgetting a corrected memory cleans the backups; it does not destroy them (review finding) (76.07357ms)
+✔ pre-checks: each reason refuses, in words, and a good candidate passes every one (2.142096ms)
+✔ trust widened to every pinned candidate, and only there: agents accept a candidate’s roster at a higher epoch, never an unpinned key, never a lower epoch; runtime bundles stay hub and standby (3.878579ms)
+✔ the hub’s calls to the candidate and the handover are signed, fresh, used once, and carry no key (3.45167ms)
+✔ the drain: nothing new starts but what is kept; running work gets the bound, then is handed over; work past its commit point is never cut (1227.595638ms)
+✔ fencing covers every pinned hub candidate: a candidate computer’s higher epoch, proven with its key, makes the hub step down (140.580898ms)
+✔ pre-checks through the hub: a phone, a computer that is no candidate, a candidate that isn’t the standby, a hub with no fresh backup, a candidate short of disk and memory, another release (571.420989ms)
+✔ a planned promotion end to end: catch-up, drain, writes held, transfer, the old hub a live standby, the window passed, every step a ledger task (2815.018914ms)
+✔ the new hub fails its checks (the stable name didn’t move): the old hub takes the role back by itself at epoch + 2, and the new one steps down to copy it (2228.999112ms)
+✔ the emergency sheet says the backup’s time, what was lost and that connectors sign in again; a hub or a live standby is sent elsewhere (262.119775ms)
+✔ writes held: every change refused with the reason, the mesh’s own calls still pass, hello says so (107.524887ms)
+✔ planned promotion refuses a timed-out live worker and keeps the old hub usable (3638.893597ms)
+✔ the sync log: every replicated table is recorded, one entry per row; local tables are not (144.279689ms)
+✔ migration 0006 puts what was already there into the log (45.663937ms)
+✔ the journal: the person’s files go in the log, local state stays out, and paths can’t escape (88.908261ms)
+✔ a journalled file that grows too big leaves the standby with no copy, not a stale one, and the person is told (96.149403ms)
+✔ a file too big to carry is told once across restarts, and the problem closes once it fits (104.997341ms)
+✔ role.json: the documented shape, the tolerated variants, and a plain refusal when it can’t say who the hub is (0.981582ms)
+✔ a standby catches up from nothing, keeps up, refuses changes, and gets forgetting right, backups included (569.26906ms)
+✔ promotion: a new epoch, a roster signed by the standby’s own key, a verified ledger record; the old hub fences itself; revoked stays revoked (336.762447ms)
+✔ a forged higher epoch doesn’t make a hub step down (120.1942ms)
+✔ only the standby or a pinned hub candidate can make a hub step down; a replaced standby loses its standby role and address (152.324001ms)
+✔ automatic failover: only when turned on, and only after the hub has been unreachable that long (4452.470755ms)
+✔ a hub that steps down says what never reached the new hub, and repeats its forgets there (324.173563ms)
+✔ automatic failover never fires against a hub that is up: errors and batches it can’t apply are problems, not an outage (8363.437879ms)
+✔ the failover setting is checked, is tier 3, and only an approver may change it (125.357373ms)
+✔ only the standby may pull the log, and what it gets is sealed to it (212.809172ms)
+✔ a standby that falls behind is a problem on the hub (262.526698ms)
+✔ a backup holds a consistent snapshot and the home’s files, with hashes; never the vault key or the private keys (127.730955ms)
+✔ retention keeps the newest by sequence, even when the clock went back; old ones go only after a new one is complete (100.817673ms)
+✔ the encrypted copy: unreadable without the vault key, restored whole, refused when changed (80.716677ms)
+✔ forgetting holds in the nightly backups and the encrypted copies: the database and the files are cleaned (104.334855ms)
+✔ a backup folder that isn’t there is refused, never created; the task fails into its playbook, which retries once it is back (105.424612ms)
+✔ the registry names every column a release added to a replicated table, the newest included (54.011958ms)
+✔ a 0019 standby against a 0020 hub: the hub leaves out device.purposes for it, and the whole batch lands (56.082475ms)
+✔ a standby that doesn’t say its schema is taken to be on 19 (code from before this); an 0018 standby gets neither new column (53.832997ms)
+✔ a hub that didn’t adapt: the standby leaves the column out, says once it is behind, and the rest of the batch lands (56.645078ms)
+✔ a 0021 standby against a 0022 hub: the hub leaves out capture_event’s screening columns for it; a 0022 standby gets them (93.771857ms)
+✔ the receipt’s triggers carry opt_in always now: the sender adapts, not the trigger (35.899276ms)
+✔ a 0020 standby against a 0021 hub: the hub leaves out problem.stops for it, and the problem lands (58.266124ms)
+✔ a 0021 standby keeps problem.stops: the problem that stops Nova is red there too (62.224858ms)
+✔ a hub that didn’t adapt to a 0020 standby: it leaves problem.stops out, says once it is behind, and the problem lands (57.959432ms)
+ℹ tests 46
+ℹ suites 0
+ℹ pass 46
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 62120.568624
+no-Kubernetes tripwire: never fired
+Task7 egress guard: never fired

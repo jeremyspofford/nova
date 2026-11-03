@@ -1,0 +1,238 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Core outbound refuses warm keychain loss and recovers without leaking saved secrets (tainted=false) (91.452841ms)
+✖ Core outbound refuses an unavailable cold scan, including benign payloads (tainted=false) (57.945403ms)
+✖ Core outbound refuses a key-store error after an earlier entry was read (tainted=false) (57.223729ms)
+✖ Core outbound refuses a partial scan when a listed entry disappears (tainted=false) (60.845394ms)
+✖ Core outbound refuses warm keychain loss and recovers without leaking saved secrets (tainted=true) (58.845657ms)
+✖ Core outbound refuses an unavailable cold scan, including benign payloads (tainted=true) (62.555267ms)
+✖ Core outbound refuses a key-store error after an earlier entry was read (tainted=true) (56.10453ms)
+✖ Core outbound refuses a partial scan when a listed entry disappears (tainted=true) (57.902205ms)
+✖ Screen refuses unavailable memory on tainted outbound without exposing error details (0.339853ms)
+✖ Screen refuses unavailable standing on tainted outbound without exposing error details (0.208951ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 0
+ℹ fail 10
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 805.644759
+
+✖ failing tests:
+
+test at tests/ingest/vault-unavailable.test.ts:53:3
+✖ Core outbound refuses warm keychain loss and recovers without leaking saved secrets (tainted=false) (91.452841ms)
+  AssertionError [ERR_ASSERTION]: incomplete safety checks must refuse outbound
+  
+  true !== false
+  
+      at unavailable (file:///workspace/tests/ingest/vault-unavailable.test.ts:46:10)
+      at TestContext.<anonymous> (file:///workspace/tests/ingest/vault-unavailable.test.ts:60:5)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ingest/vault-unavailable.test.ts:70:3
+✖ Core outbound refuses an unavailable cold scan, including benign payloads (tainted=false) (57.945403ms)
+  AssertionError [ERR_ASSERTION]: incomplete safety checks must refuse outbound
+  
+  true !== false
+  
+      at unavailable (file:///workspace/tests/ingest/vault-unavailable.test.ts:46:10)
+      at TestContext.<anonymous> (file:///workspace/tests/ingest/vault-unavailable.test.ts:72:5)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ingest/vault-unavailable.test.ts:79:3
+✖ Core outbound refuses a key-store error after an earlier entry was read (tainted=false) (57.223729ms)
+  AssertionError [ERR_ASSERTION]: incomplete safety checks must refuse outbound
+  
+  true !== false
+  
+      at unavailable (file:///workspace/tests/ingest/vault-unavailable.test.ts:46:10)
+      at TestContext.<anonymous> (file:///workspace/tests/ingest/vault-unavailable.test.ts:87:5)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ingest/vault-unavailable.test.ts:94:3
+✖ Core outbound refuses a partial scan when a listed entry disappears (tainted=false) (60.845394ms)
+  AssertionError [ERR_ASSERTION]: incomplete safety checks must refuse outbound
+  
+  true !== false
+  
+      at unavailable (file:///workspace/tests/ingest/vault-unavailable.test.ts:46:10)
+      at TestContext.<anonymous> (file:///workspace/tests/ingest/vault-unavailable.test.ts:99:5)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ingest/vault-unavailable.test.ts:53:3
+✖ Core outbound refuses warm keychain loss and recovers without leaking saved secrets (tainted=true) (58.845657ms)
+  AssertionError [ERR_ASSERTION]: incomplete safety checks must refuse outbound
+  
+  true !== false
+  
+      at unavailable (file:///workspace/tests/ingest/vault-unavailable.test.ts:46:10)
+      at TestContext.<anonymous> (file:///workspace/tests/ingest/vault-unavailable.test.ts:60:5)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ingest/vault-unavailable.test.ts:70:3
+✖ Core outbound refuses an unavailable cold scan, including benign payloads (tainted=true) (62.555267ms)
+  AssertionError [ERR_ASSERTION]: incomplete safety checks must refuse outbound
+  
+  true !== false
+  
+      at unavailable (file:///workspace/tests/ingest/vault-unavailable.test.ts:46:10)
+      at TestContext.<anonymous> (file:///workspace/tests/ingest/vault-unavailable.test.ts:72:5)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ingest/vault-unavailable.test.ts:79:3
+✖ Core outbound refuses a key-store error after an earlier entry was read (tainted=true) (56.10453ms)
+  AssertionError [ERR_ASSERTION]: incomplete safety checks must refuse outbound
+  
+  true !== false
+  
+      at unavailable (file:///workspace/tests/ingest/vault-unavailable.test.ts:46:10)
+      at TestContext.<anonymous> (file:///workspace/tests/ingest/vault-unavailable.test.ts:87:5)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ingest/vault-unavailable.test.ts:94:3
+✖ Core outbound refuses a partial scan when a listed entry disappears (tainted=true) (57.902205ms)
+  AssertionError [ERR_ASSERTION]: incomplete safety checks must refuse outbound
+  
+  true !== false
+  
+      at unavailable (file:///workspace/tests/ingest/vault-unavailable.test.ts:46:10)
+      at TestContext.<anonymous> (file:///workspace/tests/ingest/vault-unavailable.test.ts:99:5)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ingest/vault-unavailable.test.ts:109:3
+✖ Screen refuses unavailable memory on tainted outbound without exposing error details (0.339853ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///workspace/tests/ingest/vault-unavailable.test.ts:112:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ingest/vault-unavailable.test.ts:109:3
+✖ Screen refuses unavailable standing on tainted outbound without exposing error details (0.208951ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///workspace/tests/ingest/vault-unavailable.test.ts:112:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

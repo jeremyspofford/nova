@@ -1,0 +1,248 @@
+{
+  "source_commit": "44a8deb563324ac2847c02dc82dfc6e3aec32d85",
+  "created_at": "2026-11-03T11:03:32.565649+00:00",
+  "scope": "Complete files reproduced in current self-contained packet; SHA256 and Git blob are immutable44a8 bytes. Broker boundary count includes split trailing empty line. No src modification.",
+  "files": [
+    {
+      "file": "src/broker/audit.ts",
+      "git_blob": "d43424094acdc559aa80a4516eddcd3acb89c29f",
+      "sha256": "e5d79161a8995d7f11212884cf05745e3180230ace575bf02ee1d7838f7dd8ed",
+      "bytes": 2629,
+      "lines": 52,
+      "boundary_count": 53
+    },
+    {
+      "file": "src/broker/broker.ts",
+      "git_blob": "1bd956cbb08dc014a967c0719f3d5c76023280a8",
+      "sha256": "d832a62429100f15295940ce4515d5ce8903d5b183d9f106f154fe037d1ca14c",
+      "bytes": 64023,
+      "lines": 902,
+      "boundary_count": 903
+    },
+    {
+      "file": "src/broker/crypto.ts",
+      "git_blob": "ee38822d97853097a6839bf5585d1c7eaef905eb",
+      "sha256": "8456ad760582c3856b99f294dd5ef85d3ad6954978887d9fece1d18903250b89",
+      "bytes": 7700,
+      "lines": 132,
+      "boundary_count": 133
+    },
+    {
+      "file": "src/broker/http.ts",
+      "git_blob": "f0c939256357fe1483365dfe806a58884ed748e5",
+      "sha256": "10c290adcd9cd033e53b1ce1733dc52056d8b1839ab09028e6341be3a7a0705b",
+      "bytes": 5401,
+      "lines": 93,
+      "boundary_count": 94
+    },
+    {
+      "file": "src/broker/keystore.ts",
+      "git_blob": "2704ae681d213b3740b59df11d78d9b32aed453f",
+      "sha256": "5d0366ed23a0cd85b49e0693995ad2026e2c20eb457a4b0df3d9757e2ea1c64b",
+      "bytes": 9694,
+      "lines": 140,
+      "boundary_count": 141
+    },
+    {
+      "file": "src/broker/launch.ts",
+      "git_blob": "ca249eb35a2c683531c86780f7c8691bd678389f",
+      "sha256": "63bfce9363443f685877e86a18c4cb5ebae6ded622d7ecbe43913db46f9d64c0",
+      "bytes": 6337,
+      "lines": 106,
+      "boundary_count": 107
+    },
+    {
+      "file": "src/broker/main.ts",
+      "git_blob": "5aa9489b61a12b68c7d06e39a44b8bd3996744f6",
+      "sha256": "44d75efd8787811df277aef616793b6400b2241ec533b8b51cc5014430f54f8f",
+      "bytes": 2140,
+      "lines": 49,
+      "boundary_count": 50
+    },
+    {
+      "file": "src/broker/oldvault.ts",
+      "git_blob": "1f48ba6350835be85b7fbd634c33f49415ecfeb9",
+      "sha256": "b76bff5c36df5f79a69e7ac6b4445c88e93e1de76da3df33e32f2b7cd16c7519",
+      "bytes": 10062,
+      "lines": 171,
+      "boundary_count": 172
+    },
+    {
+      "file": "src/broker/origin.ts",
+      "git_blob": "0f824a5c67e914d02f7b71d0a561668833d80a47",
+      "sha256": "f44278fbc87580e6a4e3b4a65562fb795dc7babcdd562bdd0b14d3a8cbf807c0",
+      "bytes": 8725,
+      "lines": 141,
+      "boundary_count": 142
+    },
+    {
+      "file": "src/broker/policy.ts",
+      "git_blob": "cfc6c31b52ea65e0f984e9de8d34619897bea6f0",
+      "sha256": "422f8510db80d4a61c4d0664c9353f625e4b8d3cb599fb153320ae3e41f7af63",
+      "bytes": 9362,
+      "lines": 156,
+      "boundary_count": 157
+    },
+    {
+      "file": "src/broker/protocol.ts",
+      "git_blob": "71c3933444af71e66af35d2914ec0dbed12ada94",
+      "sha256": "8de4ae6488cf4edda51735f805f0a41179dbbb0ba9ee6857ade88169c5467de0",
+      "bytes": 9587,
+      "lines": 137,
+      "boundary_count": 138
+    },
+    {
+      "file": "src/broker/scrub.ts",
+      "git_blob": "662f8a4975d5b6a8a5fdd72d2877c9419f3adc63",
+      "sha256": "86909951c5ab4eb759bbab161e35ac626145e95125c3075c36aceaca4b01d38e",
+      "bytes": 3111,
+      "lines": 65,
+      "boundary_count": 66
+    },
+    {
+      "file": "src/broker/seal.ts",
+      "git_blob": "0ba56a7fcdfeeacd55ee4497f265c2db864a4492",
+      "sha256": "3d042207b50f8d771188318a406f62a50cb07cc62da4e04bbe87b718cddeaf43",
+      "bytes": 2828,
+      "lines": 40,
+      "boundary_count": 41
+    },
+    {
+      "file": "src/broker/server.ts",
+      "git_blob": "b4c7f2b7e28d885a1e8c837e2fbc1653ff9c3756",
+      "sha256": "bcc3608f32e831453a0827cc58ce55fc0fd820b4cc56a66302b2440808b334c1",
+      "bytes": 5647,
+      "lines": 106,
+      "boundary_count": 107
+    },
+    {
+      "file": "src/broker/spawn.ts",
+      "git_blob": "0bb3fe0e3713b13548ad49c7a269b79c94e09d6d",
+      "sha256": "10dd40750327b48fec944844a52fe3945eddd352492f83c97b1354f57d98faa8",
+      "bytes": 4500,
+      "lines": 67,
+      "boundary_count": 68
+    },
+    {
+      "file": "src/broker/store.ts",
+      "git_blob": "d1175cfb1e3b4f5fb9766263f338e78bc0067605",
+      "sha256": "bb54cebdea5b0e7512ef32e048bf42dc529f348e37fd472c5166a72e03cb8e23",
+      "bytes": 27572,
+      "lines": 523,
+      "boundary_count": 524
+    },
+    {
+      "file": "src/core/broker/client.ts",
+      "git_blob": "14304f74da943639031c0ab543befdff89833fd9",
+      "sha256": "460b24ea8b4c663a48268955acd27d6690531b3c6c86e173fd5150b8c81eda00",
+      "bytes": 7209,
+      "lines": 138,
+      "boundary_count": 139
+    },
+    {
+      "file": "src/core/vault.ts",
+      "git_blob": "ddbdb75dd68a9deb843ba1abb2493eef2a2ea7f3",
+      "sha256": "a41d1bd690ba13b096c0dfc1d2911602e51a4d35748607aeca6aa1c24e931ec4",
+      "bytes": 29928,
+      "lines": 651,
+      "boundary_count": 652
+    },
+    {
+      "file": "src/supervisor/supervisor.ts",
+      "git_blob": "e64c79abd6f0ed407726baedc77cdb7979fea41a",
+      "sha256": "3e63706e59936a18c052a0fa853d227cb07b271145a2de7a03eb6bc2a402c919",
+      "bytes": 63421,
+      "lines": 1042,
+      "boundary_count": 1043
+    },
+    {
+      "file": "src/core/resilience/link.ts",
+      "git_blob": "6ca67b2b96a1624509983cfabdfe7df9007536ef",
+      "sha256": "e7210abb57ac518ef96cd8f36b1cc9a5be45a2efbfd175ebf5f9e9a97767851d",
+      "bytes": 10034,
+      "lines": 151,
+      "boundary_count": 152
+    },
+    {
+      "file": "src/core/resilience/reset.ts",
+      "git_blob": "f490a423b7f32e1c6637b21c4715cad34b512a50",
+      "sha256": "f47e232fd8e64b52c35df2a6a4b6a5461db601493fa4308a3570c3e32cc26a50",
+      "bytes": 41078,
+      "lines": 714,
+      "boundary_count": 715
+    },
+    {
+      "file": "src/core/services/definition.ts",
+      "git_blob": "a5f556a6f99e7ed3ef8186f5bff53fe01c572f38",
+      "sha256": "4bb9b593b8e332065064c699167c33fae228bd65a3f28429c0968342caf69121",
+      "bytes": 20119,
+      "lines": 257,
+      "boundary_count": 258
+    },
+    {
+      "file": "src/core/diagnostics/index.ts",
+      "git_blob": "895647cbfc888b69cec3f2ba6f8dbabe5846ad3f",
+      "sha256": "d732758da9b8c84e857f05b9cefd1d643789e63659cfb6565eee08c1f302d970",
+      "bytes": 15596,
+      "lines": 261,
+      "boundary_count": 262
+    },
+    {
+      "file": "src/core/index.ts",
+      "git_blob": "8b8598f4ecc3a8db0dc8b6018e8eb1c7a8ece1e2",
+      "sha256": "969241c81047f90d91c4892cf36e08bb2a7ad62d498667598c5dd7fc4a0a6d5f",
+      "bytes": 137762,
+      "lines": 1785,
+      "boundary_count": 1786
+    },
+    {
+      "file": "src/server.js",
+      "git_blob": "341525d2487a7cb9e88b98dc2ad5b437b3010488",
+      "sha256": "946abe8ebbe269b45be11c0a43b0acd1dacb5ef91fc356820833268041a527ec",
+      "bytes": 44925,
+      "lines": 746,
+      "boundary_count": 747
+    },
+    {
+      "file": "src/home.js",
+      "git_blob": "3d977bdd4c7a40700783a5804ff0cf99c8b320ed",
+      "sha256": "16df6f4b1da151a126acaeb72f8ac569e73fe673714946e44a85222187dbb128",
+      "bytes": 7330,
+      "lines": 135,
+      "boundary_count": 136
+    },
+    {
+      "file": "src/core/resilience/entries.ts",
+      "git_blob": "b159ca98e7a63b64f4a28d610368a303cc59d8f3",
+      "sha256": "d2b4ea0503e3684ed6e2fa77a40464bea3f5c3bf3c00fc56d9acc111d64db796",
+      "bytes": 3839,
+      "lines": 62,
+      "boundary_count": 63
+    },
+    {
+      "file": "src/core/resilience/checkpoints.ts",
+      "git_blob": "bf32052a0bb5b959b9d85267d5a053791efb4c05",
+      "sha256": "0eab89dece4bd2839c2090af9db98fe586cb84c6afb032bf5f24b79736151b0e",
+      "bytes": 56928,
+      "lines": 1044,
+      "boundary_count": 1045
+    },
+    {
+      "file": "src/core/resilience/backup.ts",
+      "git_blob": "feecc3b28c823459d1d632eaa3a5784377b195b0",
+      "sha256": "d16b0663d1966feb23f0bf20a4385b32e8bae7c2d42e5364dd48091a95d983c8",
+      "bytes": 34440,
+      "lines": 681,
+      "boundary_count": 682
+    },
+    {
+      "file": "src/core/mesh/sync.ts",
+      "git_blob": "a15b6992af1b63e41ec5ec34a2a34dea634fc2e8",
+      "sha256": "9095534fa52f2c75dd804d183dc5f19abfcb7e82854b409c4994e4fdf9d75409",
+      "bytes": 30573,
+      "lines": 564,
+      "boundary_count": 565
+    }
+  ],
+  "broker_boundary_lines": 2896
+}

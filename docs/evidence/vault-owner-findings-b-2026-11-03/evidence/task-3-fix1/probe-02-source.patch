@@ -1,0 +1,30 @@
+diff --git a/src/broker/oldvault.ts b/src/broker/oldvault.ts
+index c3a2f915..b870a6a2 100644
+--- a/src/broker/oldvault.ts
++++ b/src/broker/oldvault.ts
+@@ -108,8 +108,13 @@ export const GMAIL_FILES: Record<string, string> = { 'client.json': 'connector/g
+ // authenticated journal or protection against hostile same-user/root metadata manipulation.
+ // No size, content, or access time participates. Unknown/non-regular identities refuse staging
+ // and cleanup; stable regular files still migrate normally.
+-function gmailEpoch(path: string): string | null {
+-  const s = lstatSync(path, { bigint: true });
++function gmailEpoch(path: string): string | null | undefined {
++  let s;
++  try { s = lstatSync(path, { bigint: true }); }
++  catch (e) {
++    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
++    throw e; // Access denial and inspection failure are never proof of absence.
++  }
+   return s.isFile() && s.ino > 0n && s.mtimeNs > 0n && s.ctimeNs > 0n
+     ? `gmail:${s.dev}:${s.ino}:${s.mtimeNs}:${s.ctimeNs}` : null;
+ }
+@@ -118,8 +123,8 @@ export function readGmailFiles(home: string) {
+   const epochs = new Map<string, string>();
+   for (const [file, name] of Object.entries(GMAIL_FILES)) {
+     const p = join(home, 'connectors', 'gmail', file);
+-    if (!there(p)) continue;
+     const before = gmailEpoch(p);
++    if (before === undefined) continue;
+     if (before === null) throw new Error('A Gmail source has no trustworthy write epoch.');
+     const text = readFileSync(p, 'utf8');
+     const after = gmailEpoch(p);

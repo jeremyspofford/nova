@@ -1,0 +1,7 @@
+{
+  "source": "src/core/broker/client.ts",
+  "baseline": "e4f6051",
+  "baseline_sha256": "eaf4c3709c94717b08d06d39f652fb6152ee51023a7bd4293e654fc07a476590",
+  "restored_sha256": "460b24ea8b4c663a48268955acd27d6690531b3c6c86e173fd5150b8c81eda00",
+  "reason": "strengthened closure test allows old socket close to settle; original red31 exposed a transient socket-race error only"
+}

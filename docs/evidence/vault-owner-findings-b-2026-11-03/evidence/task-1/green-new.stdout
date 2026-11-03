@@ -1,0 +1,17 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ holder fingerprints show the proposed decoded X25519 key and expose substitution (core approval) (70.046326ms)
+✔ changing a holder key after core approval remains refused (62.899948ms)
+✔ holder fingerprints show the proposed decoded X25519 key and expose substitution (software passkey approval) (64.216838ms)
+✔ changing a holder key after software passkey approval remains refused (61.200064ms)
+✔ Broker.start indexes auto adoption immediately, including a later signed generation (71.969476ms)
+✔ Broker.start ask adoption stays locked on first and incoming generations until a person factor (183.311948ms)
+✔ Broker.start retains hub pin and signed-header checks before any adoption (67.710648ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 684.192006
+no-Kubernetes tripwire: never fired

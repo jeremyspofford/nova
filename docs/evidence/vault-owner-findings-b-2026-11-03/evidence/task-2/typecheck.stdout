@@ -1,0 +1,5 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+tests/core/vault-owner-findings-b.test.ts(166,95): error TS2322: Type 'Buffer<ArrayBufferLike>' is not assignable to type 'NonSharedBuffer'.
+  Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'.
+    Type 'SharedArrayBuffer' is missing the following properties from type 'ArrayBuffer': resizable, resize, detached, transfer, transferToFixedLength
+no-Kubernetes tripwire: never fired

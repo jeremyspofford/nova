@@ -84,6 +84,7 @@ export class CheckpointError extends CoreError {
 // Top-level names in the home that are never in a checkpoint, and why (shown in every manifest).
 const SKIP_TOP: Record<string, string> = {
   checkpoints: 'checkpoints are never inside each other',
+  broker: 'the Credential Broker keeps its own store; a restore never brings back a deleted credential',
   backups: 'the pre-upgrade copies are kept separately',
   exports: 'exports are copies made on request',
   logs: 'Nova’s logs are for diagnosing this machine',
@@ -525,7 +526,7 @@ export function stageCopy(home: string, f: Found, o: { free?: (dir: string) => n
     for (const file of f.manifest.files) {
       const rel = safeRel(file.path);
       // A checkpoint from before entries.ts may hold files that aren't Nova's: those are never put back.
-      if (!isNovaEntry(rel.split('/')[0]!)) continue;
+      if (!isNovaEntry(rel.split('/')[0]!) || STAYS.has(rel.split('/')[0]!)) continue;
       mkdirDeep(out, rel);
       copyFileSync(join(f.path, 'files', rel), join(out, rel), constants.COPYFILE_FICLONE);
     }
@@ -549,7 +550,15 @@ export function writeStaged(home: string, m: Omit<RestoreMarker, 'v' | 'state' |
 
 // Drops a staging: the whole folder is renamed away first (one atomic step, so its marker can never
 // be found with only part of what it staged), then deleted.
+function requireDisposableStaging(home: string): void {
+  const old = join(root(home), RESTORE_DIR, 'old');
+  // An older interrupted restore may have moved preserved storage aside. Neither a damaged
+  // marker nor a new staging request makes those copies disposable.
+  if (existsSync(old) && readdirSync(old).some((n) => STAYS.has(n))) throw new Error('A restore moved preserved local storage aside; operator recovery is required before it can finish.');
+}
+
 export function dropStaged(home: string): void {
+  requireDisposableStaging(home);
   const dir = join(root(home), RESTORE_DIR);
   if (existsSync(dir)) {
     const gone = join(root(home), `.restore-dropped-${process.pid}-${randomBytes(4).toString('hex')}`);
@@ -586,6 +595,7 @@ export interface FinishOptions {
 export function finishStaged(home: string, o: FinishOptions = {}): { restored: RestoreMarker | null; problems: string[] } {
   const problems: string[] = [];
   if (finishReset(home, { ...o.reset, problem: (p) => problems.push(p) })) return { restored: null, problems };
+  requireDisposableStaging(home);
   const m = readMarker(home);
   if (!m) {
     // A staging that never got its marker (stopped while copying, or while being dropped): nothing
@@ -596,6 +606,7 @@ export function finishStaged(home: string, o: FinishOptions = {}): { restored: R
   const dir = join(root(home), RESTORE_DIR);
   const neu = join(dir, 'new');
   const old = join(dir, 'old');
+  m.names = m.names.filter((n) => !STAYS.has(n));
   const label = m.checkpoint?.label ?? 'a checkpoint';
   const refuse = (why: string) => {
     dropStaged(home);
@@ -610,7 +621,7 @@ export function finishStaged(home: string, o: FinishOptions = {}): { restored: R
       m.carried = carryNow(home, neu, o, m.cold?.node ?? null);
       if (m.cold) applyCold(home, neu, m.cold, m.carried, o);
       m.ready = listing(neu);
-      m.names = readdirSync(neu).filter(isNovaEntry).sort();
+      m.names = readdirSync(neu).filter((n) => isNovaEntry(n) && !STAYS.has(n)).sort();
       m.state = 'carried';
       writeMarker(home, m);
     } catch (e) {
@@ -679,6 +690,7 @@ const full = (e: unknown, what: string) => (isFull(e)
 // the staging. If even that can't be done, Nova refuses to start rather than run a mix.
 function putBack(home: string, m: RestoreMarker, neu: string, old: string): void {
   for (const n of m.names) {
+    if (STAYS.has(n)) continue;
     if (existsSync(join(neu, n))) continue;
     if (existsSync(join(home, n))) rmSync(join(home, n), { recursive: true, force: true });
   }

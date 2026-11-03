@@ -1,0 +1,38 @@
+{
+  "id": "e9c9123d2e69b4cb10bc3c0768e72034ed334751fe2d8d0191c1acfbd32da062",
+  "command": [
+    "sh",
+    "-c",
+    "mkdir -m 700 \"$HOME\" && exec \"$@\"",
+    "task6",
+    "sh",
+    "scripts/tripwire.sh",
+    "node",
+    "--test",
+    "--test-concurrency=1",
+    "--test-timeout=15000",
+    "tests/core/broker-bootstrap.test.ts"
+  ],
+  "mounts": [
+    {
+      "Type": "bind",
+      "Source": "/home/jeremy/.local/share/mise/installs/node/26.3.1",
+      "Destination": "/opt/node",
+      "Mode": "",
+      "RW": false,
+      "Propagation": "rprivate"
+    },
+    {
+      "Type": "bind",
+      "Source": "/home/jeremy/.codex/worktrees/nova-vault-integration/nova-build",
+      "Destination": "/workspace",
+      "Mode": "",
+      "RW": false,
+      "Propagation": "rprivate"
+    }
+  ],
+  "reason": "test cleanup scope skipped broker stop after expected assertion; corrected fixture, exact owned container only",
+  "exit": 0,
+  "stdout": "Flag --time has been deprecated, use --timeout instead\ne9c9123d2e69b4cb10bc3c0768e72034ed334751fe2d8d0191c1acfbd32da062\n",
+  "stderr": ""
+}

@@ -1,0 +1,23 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ session log counts inspect directory entries only, including main, run and helper logs without interpreting content (1.212518ms)
+✔ production diagnostics downloads fresh numeric Era2 counts with person access and no persisted bundle or excluded content (312.383528ms)
+✔ production diagnostics refuses a populated vault after real key loss, while empty and readable vaults download (129.140547ms)
+▶ production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors
+  ✔ list throws (81.661201ms)
+  ✔ second lookup throws (76.874466ms)
+  ✔ second lookup missing (71.313338ms)
+  ✔ key lookup throws (82.347101ms)
+  ✔ key file unreadable (73.071707ms)
+  ✔ identity unreadable (72.365172ms)
+  ✔ identity malformed (68.038043ms)
+  ✔ identity incomplete (69.313943ms)
+✔ production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors (597.460842ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1357.244183
+no-Kubernetes tripwire: never fired

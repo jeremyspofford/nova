@@ -1,0 +1,41 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ production diagnostics projects fresh broker counts and states without refs, key material or raw failures (380.025797ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 692.058689
+
+✖ failing tests:
+
+test at tests/core/broker-diagnostics.test.ts:14:1
+✖ production diagnostics projects fresh broker counts and states without refs, key material or raw failures (380.025797ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + undefined
+  - {
+  -   available: true,
+  -   device_store: 'file',
+  -   exists: false,
+  -   locked: true,
+  -   problem: false,
+  -   unlock_mode: null,
+  -   visible_items: null
+  - }
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-diagnostics.test.ts:31:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: { available: true, exists: false, locked: true, visible_items: null, unlock_mode: null, device_store: 'file', problem: false },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

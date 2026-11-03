@@ -1,0 +1,11 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ the vault replicates sealed: after a failover, Home Assistant works on the new hub (1406.781662ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1702.929563
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,4 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+tests/supervisor/broker-lifecycle.test.ts(351,76): error TS2339: Property 'error' does not exist on type '{ ok: boolean; } | { ok: boolean; error: Error; }'.
+  Property 'error' does not exist on type '{ ok: boolean; }'.
+no-Kubernetes tripwire: never fired

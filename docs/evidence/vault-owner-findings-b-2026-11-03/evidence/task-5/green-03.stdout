@@ -1,0 +1,30 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ process argv substitution cannot spend an approval or reuse a task grant (232.289789ms)
+✔ process cwd substitution cannot spend an approval or reuse a task grant (212.157644ms)
+✔ process env substitution cannot spend an approval or reuse a task grant (208.498232ms)
+✔ process stdin substitution cannot spend an approval or reuse a task grant (208.52664ms)
+✔ process timeout_ms substitution cannot spend an approval or reuse a task grant (211.694833ms)
+✔ process task grant refuses changed argv before launching (135.986214ms)
+✔ process task grant refuses changed cwd before launching (133.490201ms)
+✔ process task grant refuses changed env before launching (135.825198ms)
+✔ process task grant refuses changed stdin before launching (133.223997ms)
+✔ process task grant refuses changed timeout_ms before launching (145.050467ms)
+✔ process cards identify each caller input safely; audit never carries env or stdin (63.831717ms)
+✔ standing process consent cards explain argv cwd allow-listed env stdin and timeout breadth (212.952884ms)
+✔ task grants expire exactly five minutes after approval despite repeated same-task reuse (99.400544ms)
+✔ HTTP query substitution needs matching approval and a new grant; audit retains bare path (66.558817ms)
+✔ HTTP card identifies query changes without showing raw query (79.454389ms)
+✔ generate creation approval binds exact stored generation policy (59.542022ms)
+✔ generate create card shows validated policy, including future generated replacements (62.255372ms)
+✔ sealed creation approval binds exact stored generation policy (60.99468ms)
+✔ sealed create card shows validated policy, including future generated replacements (63.375991ms)
+✔ generation policy validation rejects coercion and unsafe policies before offering approval (58.32949ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2689.25243
+no-Kubernetes tripwire: never fired

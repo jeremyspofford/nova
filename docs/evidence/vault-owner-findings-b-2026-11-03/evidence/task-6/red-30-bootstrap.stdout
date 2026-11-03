@@ -1,0 +1,58 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ private Core bootstrap asks parent over IPC, accepts only fixed role context and rejects malformed delivery (1.161838ms)
+✖ Core owns only its metadata client, closes it permanently, and standalone Core honestly has no broker (186.269482ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 498.565333
+
+✖ failing tests:
+
+test at tests/core/broker-bootstrap.test.ts:12:1
+✖ private Core bootstrap asks parent over IPC, accepts only fixed role context and rejects malformed delivery (1.161838ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'undefined'
+  - 'function'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-bootstrap.test.ts:13:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'undefined',
+    expected: 'function',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-bootstrap.test.ts:29:1
+✖ Core owns only its metadata client, closes it permanently, and standalone Core honestly has no broker (186.269482ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - BrokerClient {
+  -   onRecord: null,
+  -   socket: '/tmp/nova-core-broker-LHUgom/home/broker/run/broker.sock'
+  - }
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-bootstrap.test.ts:36:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: { socket: '/tmp/nova-core-broker-LHUgom/home/broker/run/broker.sock', onRecord: null },
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

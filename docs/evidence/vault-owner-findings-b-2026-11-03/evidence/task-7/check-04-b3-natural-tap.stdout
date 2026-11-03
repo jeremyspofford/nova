@@ -1,0 +1,131 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+TAP version 13
+# (node:33) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control
+ok 1 - B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control
+  ---
+  duration_ms: 6815.87407
+  type: 'test'
+  ...
+# Subtest: B3 four lanes remain held during TERM escalation; stopPrograms awaits cleanup and refuses new uses
+ok 2 - B3 four lanes remain held during TERM escalation; stopPrograms awaits cleanup and refuses new uses
+  ---
+  duration_ms: 6090.219941
+  type: 'test'
+  ...
+# Subtest: B3 ambiguous leftover directory refuses a fresh credentialed process without killing its recorded PID
+ok 3 - B3 ambiguous leftover directory refuses a fresh credentialed process without killing its recorded PID
+  ---
+  duration_ms: 64.388457
+  type: 'test'
+  ...
+# Subtest: B3 delayed file open succeeds normally; bad cwd spawn error and exit/timeout races settle without stale timers
+ok 4 - B3 delayed file open succeeds normally; bad cwd spawn error and exit/timeout races settle without stale timers
+  ---
+  duration_ms: 2285.28098
+  type: 'test'
+  ...
+# (node:471) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context
+ok 5 - B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context
+  ---
+  duration_ms: 1666.916659
+  type: 'test'
+  ...
+# Subtest: B5 explicit keychain missing refuses migration even with a valid file key
+ok 6 - B5 explicit keychain missing refuses migration even with a valid file key
+  ---
+  duration_ms: 3.545366
+  type: 'test'
+  ...
+# Subtest: B5 explicit keychain wrong refuses migration even with a valid file key
+ok 7 - B5 explicit keychain wrong refuses migration even with a valid file key
+  ---
+  duration_ms: 0.726382
+  type: 'test'
+  ...
+# Subtest: B5 explicit keychain unavailable refuses migration even with a valid file key
+ok 8 - B5 explicit keychain unavailable refuses migration even with a valid file key
+  ---
+  duration_ms: 0.582552
+  type: 'test'
+  ...
+# Subtest: B3 synchronous and asynchronous launcher spawn failures releases exactly once and leaves no stale owned entry
+ok 9 - B3 synchronous and asynchronous launcher spawn failures releases exactly once and leaves no stale owned entry
+  ---
+  duration_ms: 147.47195
+  type: 'test'
+  ...
+# Subtest: B3 normal parent exit cleans inherited descendants even after they close their output pipes
+ok 10 - B3 normal parent exit cleans inherited descendants even after they close their output pipes
+  ---
+  duration_ms: 1328.753952
+  type: 'test'
+  ...
+# (node:861) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: B3 main graceful shutdown awaits real owned descendant cleanup
+ok 11 - B3 main graceful shutdown awaits real owned descendant cleanup
+  ---
+  duration_ms: 6482.355805
+  type: 'test'
+  ...
+# (node:1116) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:1371) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: B3 broker SIGKILL leaves ownership evidence and restarted broker refuses reuse without stale PID killing
+ok 12 - B3 broker SIGKILL leaves ownership evidence and restarted broker refuses reuse without stale PID killing
+  ---
+  duration_ms: 1589.200411
+  type: 'test'
+  ...
+# Subtest: B3 cleanup failure retains evidence and blocks further credentialed use
+ok 13 - B3 cleanup failure retains evidence and blocks further credentialed use
+  ---
+  duration_ms: 538.003219
+  type: 'test'
+  ...
+# Subtest: B3 Windows credentialed process branch refuses before run directory or value injection
+ok 14 - B3 Windows credentialed process branch refuses before run directory or value injection
+  ---
+  duration_ms: 62.815434
+  type: 'test'
+  ...
+# Subtest: B3 denied owned-group signal blocks new use immediately and shutdown rejects while retaining ownership
+ok 15 - B3 denied owned-group signal blocks new use immediately and shutdown rejects while retaining ownership
+  ---
+  duration_ms: 6067.747288
+  type: 'test'
+  ...
+# Subtest: B3 normal exit near the timeout boundary settles each lane once
+ok 16 - B3 normal exit near the timeout boundary settles each lane once
+  ---
+  duration_ms: 4103.161379
+  type: 'test'
+  ...
+# Subtest: I1 shutdown awaits recoverable owned group before reporting concurrent cleanup failure
+ok 17 - I1 shutdown awaits recoverable owned group before reporting concurrent cleanup failure
+  ---
+  duration_ms: 5152.559922
+  type: 'test'
+  ...
+# Subtest: I1 shutdown awaits recoverable owned group before reporting already-rejected cleanup failure
+ok 18 - I1 shutdown awaits recoverable owned group before reporting already-rejected cleanup failure
+  ---
+  duration_ms: 11077.991448
+  type: 'test'
+  ...
+1..18
+# tests 18
+# suites 0
+# pass 18
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 53601.323647
+no-Kubernetes tripwire: never fired
+Task7 egress guard: never fired

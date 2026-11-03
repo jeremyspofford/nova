@@ -1,0 +1,50 @@
+{
+  "recorded_at": "2026-11-03T10:20:40.184149+00:00",
+  "review_base": "6185726bd5066fe1896251eb34d08f4e8598b8ad",
+  "qualified_main": "702ddc4d5ce3ec097f4a4dda7427fb8bc277de25",
+  "merge_commit": "c3bc7c49caa682e5dbff50a207ec4c7825529e7f",
+  "merge_parents": [
+    "3e0cfd08b45171136004aaecd969fd0cf485f5d3",
+    "702ddc4d5ce3ec097f4a4dda7427fb8bc277de25"
+  ],
+  "conflicts": [
+    {
+      "path": "src/core/index.ts",
+      "resolution": "Preserve broker client and Caps in named core return; keep main diagnostics route registration unchanged."
+    }
+  ],
+  "broker_lines": 2894,
+  "files_sha256": {
+    "src/broker/keystore.ts": "5d0366ed23a0cd85b49e0693995ad2026e2c20eb457a4b0df3d9757e2ea1c64b",
+    "src/broker/main.ts": "44d75efd8787811df277aef616793b6400b2241ec533b8b51cc5014430f54f8f",
+    "src/broker/spawn.ts": "6cbb0bc3758cb924d50836ebb7a1dd9754dda0c222066dfb0869ae79ca506f2c",
+    "src/core/README.md": "e60d40788bb390cd703d27ebba3350d09ad2f42e173c70b2d3b524e0114af526",
+    "src/core/broker/client.ts": "460b24ea8b4c663a48268955acd27d6690531b3c6c86e173fd5150b8c81eda00",
+    "src/core/caps/index.ts": "7358e6f0b13415b89b897d49c37a52c24427f85af8ea7e73311f27ec10f48be1",
+    "src/core/diagnostics/index.ts": "d732758da9b8c84e857f05b9cefd1d643789e63659cfb6565eee08c1f302d970",
+    "src/core/index.ts": "e718871cba716e520af68c96128461e1c80dc3c4c58b1813ce3065267cfaab42",
+    "src/core/resilience/link.ts": "e7210abb57ac518ef96cd8f36b1cc9a5be45a2efbfd175ebf5f9e9a97767851d",
+    "src/core/resilience/reset.ts": "f47e232fd8e64b52c35df2a6a4b6a5461db601493fa4308a3570c3e32cc26a50",
+    "src/core/services/definition.ts": "4bb9b593b8e332065064c699167c33fae228bd65a3f28429c0968342caf69121",
+    "src/server.js": "946abe8ebbe269b45be11c0a43b0acd1dacb5ef91fc356820833268041a527ec",
+    "src/sessions.js": "9885b19f7eaf760d3f22b16df84a9c324a61c72d9c6cac0a4e0e67a5a6b5183e",
+    "src/supervisor/supervisor.ts": "bcdc1ad4229a626536e7e7b7d3d8e093cc30dd5027045b6ae091782182e96c8a",
+    "tests/acceptance/caps-api.test.ts": "22358070d894dcceb45c476affceb091faca61aacb654ee04c5a0d4b3d2d07ff",
+    "tests/acceptance/caps.test.ts": "77dd732fb180f9431ea704efca299e5597e6f1072102e75b021f2d4397414678",
+    "tests/acceptance/m10g-review2.test.ts": "a307bdd314e212fccb0ab775dcd89d67b4e12fbdffdc0f14e81451aa554445ae",
+    "tests/core/broker-bootstrap.test.ts": "c5c0ac9dded832f87d645ce5cd037cb4ee5d7e17b325d63dfd1a82a57bd47d04",
+    "tests/core/broker-boundary.test.ts": "109e1ef3c3ce06c9c726cb16fd0bbc6a4578c5bc0ac48362e701b0a61495f455",
+    "tests/core/broker-diagnostics.test.ts": "e49cfb5f2d110c1dbb9b7caa0121716e0d2754ef5cfd0b8e661edb4a202a968c",
+    "tests/core/broker-exclusions.test.ts": "74bedd5ff3842821aba6f4b7e5c28a4568bf1265e5ed58fefa8e6b6818164857",
+    "tests/core/broker-reset-keys.test.ts": "0b058c407b6699a408ed8b2aff466405b6aa5d79363bfd9efe6cc02991777ab8",
+    "tests/core/broker-reset-lifecycle.test.ts": "9b54c96b24f86b735d00a2a1768d4fdd82c0ffad9aa3c72b3e654c385d30db4d",
+    "tests/core/broker-seal-module.test.ts": "d686d53a92a364d2e0df1117800e16d15442d5213feaa056aed3782093cdd9ae",
+    "tests/core/caps-composition.test.ts": "e35d115ab9196835aadd7747b0a506f98b9da00b49777dd8effdff45bcd422bb",
+    "tests/core/diagnostics-composition.test.ts": "3c2a19be49adab2c67864fa0825edbae2565b453ca842d8b78dea6021784ff15",
+    "tests/supervisor/broker-lifecycle.test.ts": "7e7f9ec9e5062b4b19c2a46121c3c11074d799de19f9b2873aafcefae49bb0e4"
+  },
+  "publication": {
+    "original_sha256": "d3c283a1495487e6dd7d4e58f6d43e284d5bd5903244d4ad58d9ce420fca6003",
+    "selection": "Only merge/provenance fields and src/tests hashes; private workspace inventory, binary Git metadata and unrelated backend artifacts intentionally excluded. Original retained privately."
+  }
+}

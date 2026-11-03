@@ -167,7 +167,17 @@ export function readReport(home: string): ResetReport | null {
 
 // ---- finishing, at start ----------------------------------------------------------------------
 
+// Only an authenticated, own broker entry can be cleaned by the supervisor.
+export function supervisorResetPending(home: string): { seal: string; broker: boolean } | null {
+  try {
+    const m = JSON.parse(readFileSync(join(home, RESET_MARKER), 'utf8')) as Marker;
+    return !unverified(home, m) ? { seal: m.seal!, broker: homeEntries(home).own.includes('broker') } : null;
+  } catch { return null; }
+}
+
 export interface FinishOptions {
+  // Trusted supervisor only, after owned shutdown and broker-owned key removal completed.
+  brokerCleaned?: string;
   // Where the vault's key lives (as the core is given it): the keychain is reached the vault's way.
   vault?: { mode?: KeyMode; keychain?: ((account: string) => KeyStore | null) | null };
   // Called before each step ("keychain", "backup:<path>", "home:<name>", "scratch", "report"):
@@ -203,6 +213,7 @@ export function finishReset(home: string, o: FinishOptions = {}): ResetReport | 
     return null;
   }
   m = m!;
+  if (homeEntries(home).own.includes('broker') && o.brokerCleaned !== m.seal) throw new Error('The broker needs supervisor cleanup before factory reset.');
   const step = o.step ?? (() => {});
   const now = o.now ?? (() => new Date());
 
@@ -630,7 +641,7 @@ export class FactoryReset {
     db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     this.#o.vault.forgetKeys();
     this.#o.vault.clear();
-    const keep = new Set(['mesh', 'logs', 'nova.pid', RESET_REPORT]);
+    const keep = new Set(['broker', 'mesh', 'logs', 'nova.pid', RESET_REPORT]);
     for (const n of own) if (!keep.has(n) && n !== 'nova.db' && !SQLITE_SIDE.test(n)) rmSync(join(home, n), { recursive: true, force: true });
     this.#o.log.info('reset', 'The hub was reset: this standby wiped its copy.', { id: notice.id, rows });
     // Once its report has gone back to the hub, it restarts to finish (its keys and role file).

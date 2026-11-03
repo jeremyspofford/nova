@@ -64,6 +64,8 @@ It is built **from what exists**, not beside it:
 
 ## The claim, worded exactly
 
+**Current implementation status (2026-11-03):** this claim remains the full Phase1 acceptance requirement. It is **not met across running Nova** while Core and plaintext forms/legacy consumers handle credentials. Accepted P1a at44a8 supplies broker/client and named safety integration only; actual P1b consumer/relay switch and P1c full gate remain required. Owner B is received/source fixes independently reviewed; [current packet](../reviews/vault-broker-phase1-review-packet.md) and [12-entry mapping](../evidence/vault-owner-findings-b-2026-11-03/b-mapping.md). Do not infer whole-product C1 from module heap/canary tests.
+
 The honest-claims rule governs every sentence here and every sentence of user-facing copy built from it.
 - **The capability:** within Nova, the capability to read a credential's value exists only inside the broker. "The broker" means two things, and both run only the broker's code from the same signed release:
   - the broker process;
@@ -611,7 +613,7 @@ All decided on 2026-10-31; see Owner decisions at the top.
 
 ## NOTES for Track 1
 
-Proposed text for Track 1 to apply at merge. Nothing below is applied by this PR.
+Original handoff text retained below. Current applied/conditional NOTES are mapped in [the Phase1 build plan](vault-broker-phase1.md#notes-for-track-1); supervisor/reset/exclusions/metadata diagnostics/fixed seal module are applied at44a8, while actual consumer/form/relay cutover, migration boot barrier and Work Ledger wiring remain P1b. Global C1 is not yet met. S4/S6 remain stated limits; no old copy erasure or retained-holder revocation is claimed.
 
 **1. `docs/LEDGER.md`: a new entry at the top of "## Decisions":**
 
