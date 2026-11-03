@@ -4,10 +4,10 @@
 // the home. It talks to the broker over its pipes only: never the socket, never a ticket. Core
 // never starts it and never holds anything that would let another process act as it.
 //
-//   launch.ts run              fd 3: { path, sha256, argv, cwd, env, inject, tmp, value, stdin }
+//   launch.ts run              fd 3: { path, sha256, argv, cwd, env, inject, home, value, stdin }
 //     Hashes the program itself and refuses one that isn't the bound binary, then starts it with
 //     the value in its environment, or in a 0600 file in a 0700 folder named by that variable and
-//     removed on exit. It scrubs stdout and stderr of the value (and its encodings), passes on
+//     removed by the broker after owned group cleanup. It scrubs stdout and stderr of the value (and its encodings), passes on
 //     signals, and exits with the program's code.
 //   launch.ts migrate <home>   stdout: { vault_id, revision }, then { name, value, epoch } privately
 //     Reads vault.ts's file and key and Era 2's Gmail files. Nova's own keys aren't sent.
@@ -19,9 +19,8 @@
 // would run with the credential; and a program can do what it likes with its own credential,
 // including what its arguments, working folder and project files (core's) steer it to.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { Socket } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OWN_KEYS, removeFromOldVault, removeGmailFiles, withOldVaultLock, migrationSnapshot } from './oldvault.ts';
 import { fileSha256 } from './origin.ts';
@@ -46,7 +45,8 @@ async function run() {
   try { sha = fileSha256(g.path); } catch { fail('the bound program isn’t there', 126); }
   if (sha !== g.sha256) fail('the program isn’t the one this credential is bound to (its SHA-256 differs)', 126);
   const scrub = new Scrubber([String(g.value)]);
-  const home = mkdtempSync(join(typeof g.tmp === 'string' ? g.tmp : tmpdir(), 'nova-run-'));
+  // The broker owns this directory until group cleanup, including after launcher death.
+  const home = g.home as string;
   const env: NodeJS.ProcessEnv = { ...g.env, PATH: '/usr/local/bin:/usr/bin:/bin', HOME: home };
   if (g.inject.how === 'file') {
     const file = join(home, 'credential');
@@ -66,11 +66,10 @@ async function run() {
   child.stdout!.setEncoding('utf8').on('data', (c: string) => process.stdout.write(out.push(c)));
   child.stderr!.setEncoding('utf8').on('data', (c: string) => process.stderr.write(err.push(c)));
   for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(s, () => child.kill(s));
-  child.on('error', () => { rmSync(home, { recursive: true, force: true }); fail('couldn’t start the program', 127); });
+  child.on('error', () => fail('couldn’t start the program', 127));
   child.on('close', (code, signal) => {
     process.stdout.write(out.end());
     process.stderr.write(err.end());
-    rmSync(home, { recursive: true, force: true });
     process.exitCode = code ?? (signal ? 128 + (({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1, SIGKILL: 9 } as Record<string, number>)[signal] ?? 1) : 1);
   });
 }

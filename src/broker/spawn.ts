@@ -14,6 +14,7 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { internalEnv } from './keystore.ts';
 import type { Tokens } from './server.ts';
 
 export const BROKER_SRC = dirname(fileURLToPath(import.meta.url));
@@ -34,7 +35,7 @@ export function startBroker(dir: string, o: { keyMode?: 'auto' | 'file' | 'keych
   const keychain = o.keyMode !== 'file';
   const env = o.env ?? process.env;
   // Only what the keychain CLIs need to reach a desktop session; nothing else of the parent's.
-  const childEnv: NodeJS.ProcessEnv = { TZ: env.TZ ?? 'UTC', ...(keychain && env.DBUS_SESSION_BUS_ADDRESS ? { DBUS_SESSION_BUS_ADDRESS: env.DBUS_SESSION_BUS_ADDRESS } : {}), ...(keychain && env.PATH ? { PATH: env.PATH } : {}) };
+  const childEnv = internalEnv(env, keychain);
   const tokens: Tokens = { core: randomBytes(32).toString('hex'), supervisor: randomBytes(32).toString('hex') };
   const child = spawn(process.execPath, brokerCommand(dir), { cwd: dir, env: childEnv, stdio: ['ignore', o.pipe ? 'pipe' : 'inherit', o.pipe ? 'pipe' : 'inherit', 'ipc'] });
   return new Promise((ok, fail) => {

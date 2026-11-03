@@ -55,7 +55,7 @@ export function readOldVault(home: string, o: { env?: NodeJS.ProcessEnv; store?:
       if (next?.v !== 1 || next.alg !== 'aes-256-gcm' || next.id !== id) break;
       f = next;
     }
-    for (const s of [kc, disk]) {
+    for (const s of keyMode(env) === 'keychain' ? [kc] : [kc, disk]) {
       let key: Buffer | null = null;
       try { key = s.read(); } catch { key = null; }
       if (!key || fp(key) !== f.fp) continue;

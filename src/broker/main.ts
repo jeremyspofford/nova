@@ -18,7 +18,14 @@ process.once('message', async (msg: { tokens?: Tokens; key_mode?: 'auto' | 'file
     broker.start();
     const path = socketPath(dir);
     const server = await serve(broker, path, msg.tokens!);
-    const stop = () => { broker.lock(); server.close(); process.exit(0); };
+    let stopping = false;
+    const stop = async () => {
+      if (stopping) return;
+      stopping = true;
+      broker.lock(); server.close();
+      try { await broker.stopPrograms(); process.exit(0); }
+      catch { process.stderr.write('Owned program cleanup needs operator recovery.\n'); process.exit(1); }
+    };
     process.on('SIGTERM', stop);
     process.on('SIGINT', stop);
     process.send!({ ready: true, socket: path, locked: !broker.store.unlocked });

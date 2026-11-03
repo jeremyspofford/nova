@@ -8,10 +8,21 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+// Trusted internal OS context only; never use this for a credentialed target's environment.
+export function internalEnv(env: NodeJS.ProcessEnv, keychain = true): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { TZ: 'UTC' };
+  if (keychain) for (const name of ['HOME', 'PATH', 'DBUS_SESSION_BUS_ADDRESS', ...(process.platform === 'win32' ? ['SystemRoot', 'USERPROFILE', 'LOCALAPPDATA'] : [])]) {
+    if (env[name]) out[name] = env[name];
+  }
+  return out;
+}
+
 export interface CommandResult { code: number | null; stdout: string; stderr: string; error: string | null }
 export type Run = (cmd: string, args: string[], input?: string) => CommandResult;
 export const runCommand: Run = (cmd, args, input) => {
-  const r = spawnSync(cmd, args, { input: input ?? '', encoding: 'utf8', timeout: 10_000, shell: false, windowsHide: true });
+  // env(1) also removes permission flags Node automatically adds to its children.
+  const posix = process.platform !== 'win32';
+  const r = spawnSync(posix ? '/usr/bin/env' : cmd, posix ? ['-u', 'NODE_OPTIONS', '--', cmd, ...args] : args, { env: internalEnv(process.env), input: input ?? '', encoding: 'utf8', timeout: 10_000, shell: false, windowsHide: true });
   return { code: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', error: r.error ? r.error.message : null };
 };
 

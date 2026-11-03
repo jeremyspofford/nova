@@ -7,13 +7,13 @@
 // Work Ledger.
 import { spawn } from 'node:child_process';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Audit, type Entry } from './audit.ts';
 import { entryKey, openEnvelope, type Envelope, type Kdf } from './crypto.ts';
 import { send, EgressError, type Resolver } from './http.ts';
-import { chooseStore, FILE_NOTICE, type KeyStore } from './keystore.ts';
+import { chooseStore, FILE_NOTICE, internalEnv, type KeyStore } from './keystore.ts';
 import { BUILT, canonicalTarget, checkScope, inScope, lookalikes, requestPath, suggestClass } from './origin.ts';
 import { Approvals, Rates, digestOf, generate, DEFAULT_POLICY, USES_PER_REF_HOUR, type ApprovalIn } from './policy.ts';
 import { REFUSALS, canonical, type Binding, type Card, type Frame, type Inject, type Refusal, type Role } from './protocol.ts';
@@ -65,6 +65,9 @@ export class Broker {
   #rates: Rates;
   #staged: { vaultId: string | null; revision: string; items: Map<string, Buffer>; epochs: Map<string, string> } | null = null;
   #running = 0;
+  #programs = new Map<string, { stop: () => void; done: Promise<void> }>();
+  #stopping = false;
+  #programFailure = false;
   #grants = new Set<string>();
   #index = new Map<string, Meta & { version: number; pending: boolean }>();
   #health = new Map<string, { reused: boolean; old: boolean }>();
@@ -378,32 +381,95 @@ export class Broker {
   // anyone else to redeem. The launcher hashes the binary, runs the program and scrubs its output;
   // the answer is the exit code and that output (up to 4 MiB each).
   #runProgram(b: Binding, id: string, which: 'current' | 'pending', argv: string[], r: ReturnType<typeof programRequest>): Promise<Answer> {
+    if (process.platform === 'win32') throw new Failed('Credentialed programs require owned POSIX process groups on this platform.');
+    if (this.#stopping || this.#programFailure) throw new Failed('Credentialed programs are stopped or need operator recovery.');
     if (this.#running >= 4) throw new Refused('rate', 'Four programs are running with credentials already.');
+    const root = join(this.store.dir, 'run');
+    const run = join(root, 'programs');
+    mkdirSync(run, { recursive: true, mode: 0o700 });
+    // Only this instance's live entries are ours. Never signal PIDs recovered from disk.
+    if (readdirSync(root).some((name) => name !== 'broker.sock' && name !== 'programs')) throw new Failed('A previous program run needs operator recovery.');
+    if (readdirSync(run).some((name) => !this.#programs.has(join(run, name)))) throw new Failed('A previous program run needs operator recovery.');
     const [path, sha256] = b.target.split('#sha256:') as [string, string];
     const value = this.store.value(id, which);
+    let home: string;
+    try { home = mkdtempSync(join(run, 'nova-run-')); } catch (e) { zero(value); throw e; }
     this.#running++;
-    return new Promise((ok) => {
-      // Node carries the broker's permission model into the launcher; it gets exactly what this job
-      // needs on top: to read the program it hashes, and to write under the broker's run folder.
-      const run = join(this.store.dir, 'run');
-      mkdirSync(run, { recursive: true, mode: 0o700 });
-      const child = spawn(process.execPath, [...grantsIf([`--allow-fs-read=${path}`, `--allow-fs-write=${run}/`]), '--disable-sigusr1', '--disable-warning=ExperimentalWarning', '--disable-warning=SecurityWarning', LAUNCH, 'run'], { env: { TZ: 'UTC' }, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
-      const grant = JSON.stringify({ path, sha256, argv, cwd: r.cwd, env: r.env, stdin: r.stdin, inject: b.inject, tmp: run, value: value.toString('utf8') });
-      zero(value);
-      child.stdio[3]!.on('error', () => { /* the launcher stopped before reading it */ });
-      (child.stdio[3] as NodeJS.WritableStream).end(grant);
+    let stopped!: () => void;
+    let finish!: () => void;
+    let failCleanup!: (e: Error) => void;
+    const done = new Promise<void>((ok, fail) => { finish = ok; failCleanup = fail; });
+    // A rejected cleanup remains owned and blocks reuse, even before a supervisor awaits it.
+    done.catch(() => {});
+    this.#programs.set(home, { stop: () => stopped(), done });
+    const answer = new Promise<Answer>((ok, fail) => {
       const take = (s: NodeJS.ReadableStream) => { const c: Buffer[] = []; let n = 0; s.on('data', (x: Buffer) => { if (n < MAX_OUTPUT) c.push(x.subarray(0, MAX_OUTPUT - n)); n += x.length; }); return () => ({ text: Buffer.concat(c).toString('utf8'), cut: n > MAX_OUTPUT }); };
-      const out = take(child.stdout!);
-      const err = take(child.stderr!);
-      const timer = setTimeout(() => { child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000).unref(); }, r.timeout);
-      child.on('close', (code, signal) => {
+      let child: ReturnType<typeof spawn> | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let escalation: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+      let signalFailed = false;
+      const signal = (sig: NodeJS.Signals) => {
+        if (!child?.pid) return;
+        try { process.kill(-child.pid, sig); }
+        catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ESRCH') { signalFailed = true; this.#programFailure = true; } }
+      };
+      const settle = (code: number, out = { text: '', cut: false }, err = { text: '', cut: false }) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
-        this.#running--;
-        const o = out();
-        const e = err();
-        ok({ exit: code ?? (signal ? 128 : 1), stdout: o.text, stderr: e.text, truncated: o.cut || e.cut });
-      });
+        clearTimeout(escalation);
+        // close alone is not ownership release: descendants may have closed their pipes.
+        signal('SIGKILL');
+        try {
+          if (signalFailed) throw new Error('Owned program cleanup could not be confirmed.');
+          rmSync(home, { recursive: true, force: true });
+          this.#programs.delete(home);
+          this.#running--;
+          finish();
+          ok({ exit: code, stdout: out.text, stderr: err.text, truncated: out.cut || err.cut });
+        } catch {
+          this.#programFailure = true;
+          const e = new Failed('Owned program cleanup could not be confirmed; operator recovery is required.');
+          failCleanup(e); fail(e);
+        }
+      };
+      stopped = () => {
+        if (settled || escalation) return;
+        clearTimeout(timer);
+        signal('SIGTERM');
+        escalation = setTimeout(() => {
+          signal('SIGKILL');
+          if (signalFailed && !settled) {
+            settled = true; // No cleanup or lane release: the group remains ambiguous.
+            const e = new Failed('Owned program cleanup could not be confirmed; operator recovery is required.');
+            failCleanup(e); fail(e);
+          }
+        }, 5000);
+      };
+      try {
+        child = spawn(process.execPath, [...grantsIf([`--allow-fs-read=${path}`, `--allow-fs-write=${home}/`]), '--disable-sigusr1', '--disable-warning=ExperimentalWarning', '--disable-warning=SecurityWarning', LAUNCH, 'run'], { detached: true, env: { TZ: 'UTC' }, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+        const out = take(child.stdout!);
+        const err = take(child.stderr!);
+        child.once('error', () => { /* close follows even when spawn fails; release only there */ });
+        child.once('exit', () => stopped());
+        child.once('close', (code, sig) => settle(code ?? (sig ? 128 : 127), out(), err()));
+        timer = setTimeout(stopped, r.timeout);
+        child.stdio[3]!.on('error', () => { /* the launcher stopped before reading it */ });
+        (child.stdio[3] as NodeJS.WritableStream).end(JSON.stringify({ path, sha256, argv, cwd: r.cwd, env: r.env, stdin: r.stdin, inject: b.inject, home, value: value.toString('utf8') }));
+      } catch { if (child?.pid) stopped(); else settle(127); }
+      finally { zero(value); }
     });
+    return answer;
+  }
+
+  // Private broker lifecycle surface, never a socket verb. Shutdown waits for owned cleanup.
+  async stopPrograms(): Promise<void> {
+    this.#stopping = true;
+    const programs = [...this.#programs.values()];
+    for (const p of programs) p.stop();
+    await Promise.all(programs.map((p) => p.done));
+    if (this.#programFailure) throw new Failed('Owned program cleanup needs operator recovery.');
   }
 
   // ---- create (tier 3) ------------------------------------------------------------------------
@@ -702,7 +768,7 @@ export class Broker {
     const dirs = [join(home, 'vault'), join(home, 'connectors')];
     const grants = grantsIf([...dirs.map((d) => `--allow-fs-read=${d}/`), ...(args[0] === 'finish' ? dirs : [dirs[0]!]).map((d) => `--allow-fs-write=${d}/`)]);
     return new Promise((ok, fail) => {
-      const child = spawn(process.execPath, [...grants, '--disable-sigusr1', '--disable-warning=ExperimentalWarning', LAUNCH, ...args], { env: { TZ: 'UTC', ...(this.#o.keyMode === 'file' ? { NOVA_VAULT_KEY: 'file' } : {}) }, stdio: ['ignore', 'pipe', 'ignore', 'pipe'] });
+      const child = spawn(process.execPath, [...grants, '--disable-sigusr1', '--disable-warning=ExperimentalWarning', LAUNCH, ...args], { env: { ...internalEnv(process.env, this.#o.keyMode !== 'file'), ...(this.#o.keyMode ? { NOVA_VAULT_KEY: this.#o.keyMode } : {}) }, stdio: ['ignore', 'pipe', 'ignore', 'pipe'] });
       child.stdio[3]!.on('error', () => { /* the launcher stopped before reading it */ });
       (child.stdio[3] as NodeJS.WritableStream).end(input ?? '');
       const chunks: Buffer[] = [];
