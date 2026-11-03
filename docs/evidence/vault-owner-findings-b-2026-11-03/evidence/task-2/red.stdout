@@ -1,0 +1,288 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B6: cold get reads valid committed data under a stale lock without changing pending bytes (2.878902ms)
+✖ B6: cold has reads valid committed data under a stale lock without changing pending bytes (0.714567ms)
+✖ B6: cold list reads valid committed data under a stale lock without changing pending bytes (0.707159ms)
+✖ B6: cold status reads valid committed data under a stale lock without changing pending bytes (1.740619ms)
+✖ B6: warm get reads valid committed data under a stale lock without changing pending bytes (1.289721ms)
+✖ B6: warm has reads valid committed data under a stale lock without changing pending bytes (0.757009ms)
+✖ B6: warm list reads valid committed data under a stale lock without changing pending bytes (0.734874ms)
+✖ B6: warm status reads valid committed data under a stale lock without changing pending bytes (0.9036ms)
+✖ B6: committed reads leave unrelated pending ciphertext alone even without a writer lock (0.836089ms)
+✖ B6: warm reads observe another cooperating writer and never resurrect its deleted entries (1.362054ms)
+✔ B6: every mutator refuses an existing lock and leaves the committed vault intact (1.313479ms)
+✔ B6: interrupted authenticated rekey requires the exclusive lock and publishes only after recovery (1.470471ms)
+✔ B6: pending malformed rekey never authenticates or replaces the committed file (1.509613ms)
+✔ B6: pending tampered rekey never authenticates or replaces the committed file (0.875982ms)
+✔ B6: pending different-id rekey never authenticates or replaces the committed file (0.915745ms)
+✖ B6: file key promotion waits for serialization without blocking reads (0.389867ms)
+✖ B6: duplicate key removal waits for serialization without blocking reads (0.508393ms)
+✖ B6: ordinary keychain reads never acquire a writer lock (0.833115ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 5
+ℹ fail 13
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 106.515146
+
+✖ failing tests:
+
+test at tests/core/vault-owner-findings-b.test.ts:39:3
+✖ B6: cold get reads valid committed data under a stale lock without changing pending bytes (2.878902ms)
+  Error [CoreError]: The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.
+      at #withWrite (file:///workspace/src/core/vault.ts:420:19)
+      at #open (file:///workspace/src/core/vault.ts:445:56)
+      at Vault.get (file:///workspace/src/core/vault.ts:255:22)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:47:45)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    code: 'conflict',
+    details: []
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:39:3
+✖ B6: cold has reads valid committed data under a stale lock without changing pending bytes (0.714567ms)
+  Error [CoreError]: The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.
+      at #withWrite (file:///workspace/src/core/vault.ts:420:19)
+      at #open (file:///workspace/src/core/vault.ts:445:56)
+      at Vault.has (file:///workspace/src/core/vault.ts:251:22)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:48:45)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    code: 'conflict',
+    details: []
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:39:3
+✖ B6: cold list reads valid committed data under a stale lock without changing pending bytes (0.707159ms)
+  Error [CoreError]: The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.
+      at #withWrite (file:///workspace/src/core/vault.ts:420:19)
+      at #open (file:///workspace/src/core/vault.ts:445:56)
+      at Vault.list (file:///workspace/src/core/vault.ts:320:26)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:49:50)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'conflict',
+    details: []
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:39:3
+✖ B6: cold status reads valid committed data under a stale lock without changing pending bytes (1.740619ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   false,
+  +   0,
+  +   null
+  -   true,
+  -   1,
+  -   'Nova keeps your connection secrets encrypted, but on this computer there is no system keychain it can use, so the key is in a file next to them (vault/key in Nova’s home). Anyone who can read Nova’s home folder can open them. Nova moves the key into the keychain by itself once one is available.'
+    ]
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:50:35)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ false, 0, null ],
+    expected: [ true, 1, 'Nova keeps your connection secrets encrypted, but on this computer there is no system keychain it can use, so the key is in a file next to them (vault/key in Nova’s home). Anyone who can read Nova’s home folder can open them. Nova moves the key into the keychain by itself once one is available.' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:39:3
+✖ B6: warm get reads valid committed data under a stale lock without changing pending bytes (1.289721ms)
+  Error [CoreError]: The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.
+      at #withWrite (file:///workspace/src/core/vault.ts:420:19)
+      at #open (file:///workspace/src/core/vault.ts:445:56)
+      at Vault.get (file:///workspace/src/core/vault.ts:255:22)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:47:45)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'conflict',
+    details: []
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:39:3
+✖ B6: warm has reads valid committed data under a stale lock without changing pending bytes (0.757009ms)
+  Error [CoreError]: The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.
+      at #withWrite (file:///workspace/src/core/vault.ts:420:19)
+      at #open (file:///workspace/src/core/vault.ts:445:56)
+      at Vault.has (file:///workspace/src/core/vault.ts:251:22)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:48:45)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'conflict',
+    details: []
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:39:3
+✖ B6: warm list reads valid committed data under a stale lock without changing pending bytes (0.734874ms)
+  Error [CoreError]: The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.
+      at #withWrite (file:///workspace/src/core/vault.ts:420:19)
+      at #open (file:///workspace/src/core/vault.ts:445:56)
+      at Vault.list (file:///workspace/src/core/vault.ts:320:26)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:49:50)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'conflict',
+    details: []
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:39:3
+✖ B6: warm status reads valid committed data under a stale lock without changing pending bytes (0.9036ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   false,
+  +   0,
+  +   null
+  -   true,
+  -   1,
+  -   'Nova keeps your connection secrets encrypted, but on this computer there is no system keychain it can use, so the key is in a file next to them (vault/key in Nova’s home). Anyone who can read Nova’s home folder can open them. Nova moves the key into the keychain by itself once one is available.'
+    ]
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:50:35)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ false, 0, null ],
+    expected: [ true, 1, 'Nova keeps your connection secrets encrypted, but on this computer there is no system keychain it can use, so the key is in a file next to them (vault/key in Nova’s home). Anyone who can read Nova’s home folder can open them. Nova moves the key into the keychain by itself once one is available.' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:58:1
+✖ B6: committed reads leave unrelated pending ciphertext alone even without a writer lock (0.836089ms)
+  Error: ENOENT: no such file or directory, open '/tmp/nova-vault-b6-cZtMaC/vault/secrets.json.tmp'
+      at Object.openSync (node:fs:556:18)
+      at readFileSync (node:fs:440:35)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:62:20)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'open',
+    path: '/tmp/nova-vault-b6-cZtMaC/vault/secrets.json.tmp'
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:66:1
+✖ B6: warm reads observe another cooperating writer and never resurrect its deleted entries (1.362054ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'synthetic-keep-value'
+  - 'synthetic-new-value'
+               ^
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:71:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'synthetic-keep-value',
+    expected: 'synthetic-new-value',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:128:3
+✖ B6: file key promotion waits for serialization without blocking reads (0.389867ms)
+  Error [CoreError]: The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.
+      at #withWrite (file:///workspace/src/core/vault.ts:420:19)
+      at #open (file:///workspace/src/core/vault.ts:445:56)
+      at Vault.get (file:///workspace/src/core/vault.ts:255:22)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:137:25)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'conflict',
+    details: []
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:128:3
+✖ B6: duplicate key removal waits for serialization without blocking reads (0.508393ms)
+  Error [CoreError]: The vault is busy with a writer or migration. Try again after it finishes; an interrupted lock needs operator recovery.
+      at #withWrite (file:///workspace/src/core/vault.ts:420:19)
+      at #open (file:///workspace/src/core/vault.ts:445:56)
+      at Vault.get (file:///workspace/src/core/vault.ts:255:22)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:137:25)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'conflict',
+    details: []
+  }
+
+test at tests/core/vault-owner-findings-b.test.ts:148:1
+✖ B6: ordinary keychain reads never acquire a writer lock (0.833115ms)
+  AssertionError [ERR_ASSERTION]: read must not create a lock
+  
+  true !== false
+  
+      at Object.read (file:///workspace/tests/core/vault-owner-findings-b.test.ts:152:26)
+      at #findKey (file:///workspace/src/core/vault.ts:529:40)
+      at #openLocked (file:///workspace/src/core/vault.ts:467:33)
+      at file:///workspace/src/core/vault.ts:445:79
+      at #withWrite (file:///workspace/src/core/vault.ts:430:14)
+      at #open (file:///workspace/src/core/vault.ts:445:56)
+      at Vault.get (file:///workspace/src/core/vault.ts:255:22)
+      at TestContext.<anonymous> (file:///workspace/tests/core/vault-owner-findings-b.test.ts:155:23)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

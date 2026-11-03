@@ -1,0 +1,57 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ src/broker is its own tree: Node’s standard library and its own files, nothing from core, no package (4.678589ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (24.800793ms)
+✔ the size budget: no more than 3,000 lines of broker code, tests aside, so one reviewer can read all of it (1.282629ms)
+✔ no network surface in the source: no HTTP server, nothing listens on a port, no inspector (4.361269ms)
+✔ the fixed protocol: seven verbs, three messages, a fixed refusal list (2.255575ms)
+✔ the client has no method that returns a value: no get, resolve, reveal or export (0.527412ms)
+(node:39) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the process: permission model, empty environment, a 0600 socket in a 0700 folder, and nothing else listening (108.299095ms)
+(node:46) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the protocol: hello with a token, seven verbs and three messages; everything else refused (147.747659ms)
+(node:53) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ no network surface: no inet listener after every verb; a use aimed at an unbound host makes no connection; answers fit the schema (1521.038504ms)
+(node:304) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the launcher: the broker runs the bound program itself; a swapped binary gets nothing; no loader variables from core (1556.759995ms)
+✔ holder fingerprints show the proposed decoded X25519 key and expose substitution (core approval) (73.167697ms)
+✔ changing a holder key after core approval remains refused (65.51821ms)
+✔ holder fingerprints show the proposed decoded X25519 key and expose substitution (software passkey approval) (64.535419ms)
+✔ changing a holder key after software passkey approval remains refused (65.615745ms)
+✔ Broker.start indexes auto adoption immediately, including a later signed generation (75.701058ms)
+✔ Broker.start ask adoption stays locked on first and incoming generations until a person factor (185.735602ms)
+✔ Broker.start retains hub pin and signed-header checks before any adoption (65.755914ms)
+✔ Argon2id is Node’s own (RFC 9106 test vector), and the broker never goes below the floor (125.572097ms)
+✔ every factor opens the vault, a wrong one doesn’t, and each item is sealed on its own (176.463322ms)
+✔ a tampered item fails on its own, a swapped or moved item is refused, and the others still open (58.637458ms)
+✔ a deleted item doesn’t open from an older copy of the store, with any key that still exists (113.07035ms)
+✔ a rotation cut short is finished at the next unlock; no item is lost (118.408907ms)
+✔ holder sync: the standby opens the hub’s vault with its own wrap; the outbox carries ciphertext and public keys only (175.531443ms)
+✔ sealed entry: the person’s WebCrypto envelope opens only for the digest it was sealed to (8.725349ms)
+✔ locked: list_refs gives the state and no refs; every other verb refuses with locked (77.098071ms)
+✔ create: tier 3, a card of metadata only; a generated or sealed value, never in an answer (61.026928ms)
+✔ use: the exact bound origin only, even when core asks with a valid approval made for the bound one (85.780454ms)
+✔ redirects aren’t followed: A’s 302 to B comes back as an outcome, and B sees nothing (75.325829ms)
+✔ use: out of scope (method, path, traversal, a host in the path, an auth header from the caller) (65.183891ms)
+✔ tiers: standing consent at tier 1; outside it, ask first, once per task; sensitive asks; per-use asks every time; no standing consent on sensitive (75.218343ms)
+✔ approvals: missing, replayed, made for another digest, or expired are refused (67.825971ms)
+✔ rate caps and flood control are the broker’s own (63.64873ms)
+✔ update, rotate: metadata and class, a new value, delete; a pending version used, committed or abandoned (72.024416ms)
+✔ bind: tier 3 with lookalike flags to add; removing and revoking consent at once; no wildcards; kinds not built are refused (61.543964ms)
+✔ passkey approvals: required for every tier-3 verb once a passkey is registered; checked by the broker itself (61.679321ms)
+✔ share_scope: a holder device at tier 3, removed at once with a re-key; external managers are Phase 2 (62.604642ms)
+✔ n8n: sign computes the header inside the broker; verify answers valid or not (61.987435ms)
+✔ a program’s approval covers its exact arguments, shown on the card (869.783725ms)
+✔ unlock: the person’s factor only, a few attempts a minute; “ask me after a restart” stays locked at start (231.42582ms)
+ℹ tests 39
+ℹ suites 0
+ℹ pass 39
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7284.384572
+no-Kubernetes tripwire: never fired

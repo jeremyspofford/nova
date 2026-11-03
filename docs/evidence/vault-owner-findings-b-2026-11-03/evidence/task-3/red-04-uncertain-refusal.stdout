@@ -1,0 +1,75 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B2 uncertain Gmail identity refuses staging and cannot remove an existing name (277.240776ms)
+✖ B2 restaging an uncertain Gmail source still invalidates its prior approval (193.802491ms)
+✖ B2 uncertain Gmail identity at finish preserves every source after copies (198.51666ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 0
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 781.107387
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:190:1
+✖ B2 uncertain Gmail identity refuses staging and cannot remove an existing name (277.240776ms)
+  AssertionError [ERR_ASSERTION]: non-regular source identity has no trustworthy approval scope
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:199:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:208:1
+✖ B2 restaging an uncertain Gmail source still invalidates its prior approval (193.802491ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:218:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-migration.test.ts:227:1
+✖ B2 uncertain Gmail identity at finish preserves every source after copies (198.51666ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-migration.test.ts:237:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

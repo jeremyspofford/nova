@@ -1,0 +1,117 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ holder fingerprints show the proposed decoded X25519 key and expose substitution (core approval) (73.190018ms)
+✔ changing a holder key after core approval remains refused (62.061219ms)
+✖ holder fingerprints show the proposed decoded X25519 key and expose substitution (software passkey approval) (66.182959ms)
+✔ changing a holder key after software passkey approval remains refused (61.195584ms)
+✖ Broker.start indexes auto adoption immediately, including a later signed generation (67.201605ms)
+✖ Broker.start ask adoption stays locked on first and incoming generations until a person factor (66.835171ms)
+✔ Broker.start retains hub pin and signed-header checks before any adoption (66.547506ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 3
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 573.893934
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-identity.test.ts:39:3
+✖ holder fingerprints show the proposed decoded X25519 key and expose substitution (core approval) (73.190018ms)
+  AssertionError [ERR_ASSERTION]: the holder shows SHA256 of its decoded public key bytes
+  + actual - expected
+  
+  + undefined
+  - '23ae408419daaefdac2c53a906752b6a68a9f882182655ffbbc7dd73c49fff43'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-identity.test.ts:50:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: '23ae408419daaefdac2c53a906752b6a68a9f882182655ffbbc7dd73c49fff43',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-identity.test.ts:39:3
+✖ holder fingerprints show the proposed decoded X25519 key and expose substitution (software passkey approval) (66.182959ms)
+  AssertionError [ERR_ASSERTION]: the holder shows SHA256 of its decoded public key bytes
+  + actual - expected
+  
+  + undefined
+  - '55872256e1914dea219ae9d0762fea65544b28f58e9c6937c09d2c0c26668f3c'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-identity.test.ts:50:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: '55872256e1914dea219ae9d0762fea65544b28f58e9c6937c09d2c0c26668f3c',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-identity.test.ts:86:1
+✖ Broker.start indexes auto adoption immediately, including a later signed generation (67.201605ms)
+  AssertionError [ERR_ASSERTION]: auto adoption lists the hub’s actual metadata without an unlock message
+  + actual - expected
+  
+  + []
+  - [
+  -   {
+  -     aliases: [
+  -       'secret://provider/HOLDER'
+  -     ],
+  -     backend: 'nova',
+  -     bindings: [],
+  -     class: 'sensitive',
+  -     created_at: '2026-11-03T05:42:17.082Z',
+  -     health: {
+  -       old: false,
+  -       reused: false
+  -     },
+  -     kind: 'api_key',
+  -     last_rotated: null,
+  -     last_used: null,
+  -     name: 'provider/HOLDER',
+  -     origin: null,
+  -     pending: false,
+  -     per_use: false,
+  -     ref: 'i0c8014a13cf72d41d5b252fc99f73a',
+  -     username: null,
+  -     version: 1
+  -   }
+  - ]
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-identity.test.ts:91:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ { ref: 'i0c8014a13cf72d41d5b252fc99f73a', aliases: [Array], name: 'provider/HOLDER', kind: 'api_key', origin: null, username: null, class: 'sensitive', per_use: false, created_at: '2026-11-03T05:42:17.082Z', last_used: null, last_rotated: null, health: [Object], backend: 'nova', version: 1, pending: false, bindings: [] } ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-identity.test.ts:101:1
+✖ Broker.start ask adoption stays locked on first and incoming generations until a person factor (66.835171ms)
+  AssertionError [ERR_ASSERTION]: adoption must discard the temporary root in ask mode
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-identity.test.ts:112:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

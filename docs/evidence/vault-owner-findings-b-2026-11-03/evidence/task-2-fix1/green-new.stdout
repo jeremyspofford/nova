@@ -1,0 +1,20 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ Core outbound refuses warm keychain loss and recovers without leaking saved secrets (tainted=false) (88.342983ms)
+✔ Core outbound refuses an unavailable cold scan, including benign payloads (tainted=false) (58.740141ms)
+✔ Core outbound refuses a key-store error after an earlier entry was read (tainted=false) (57.396959ms)
+✔ Core outbound refuses a partial scan when a listed entry disappears (tainted=false) (63.004792ms)
+✔ Core outbound refuses warm keychain loss and recovers without leaking saved secrets (tainted=true) (62.083693ms)
+✔ Core outbound refuses an unavailable cold scan, including benign payloads (tainted=true) (60.741992ms)
+✔ Core outbound refuses a key-store error after an earlier entry was read (tainted=true) (55.282698ms)
+✔ Core outbound refuses a partial scan when a listed entry disappears (tainted=true) (59.113759ms)
+✔ Screen refuses unavailable memory on tainted outbound without exposing error details (0.390648ms)
+✔ Screen refuses unavailable standing on tainted outbound without exposing error details (0.216025ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 802.810572
+no-Kubernetes tripwire: never fired

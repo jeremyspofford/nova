@@ -1,0 +1,89 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ src/broker is its own tree: Node’s standard library and its own files, nothing from core, no package (4.523835ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (25.805629ms)
+✔ the size budget: no more than 3,000 lines of broker code, tests aside, so one reviewer can read all of it (1.508162ms)
+✔ no network surface in the source: no HTTP server, nothing listens on a port, no inspector (3.758121ms)
+✔ the fixed protocol: seven verbs, three messages, a fixed refusal list (1.116324ms)
+✔ the client has no method that returns a value: no get, resolve, reveal or export (0.273093ms)
+✔ broker migration resumes an interrupted authenticated rekey without reopening the old vault in core (269.057005ms)
+✔ pending legacy rekey recovery refuses malformed ciphertext without changing any file or key (166.761917ms)
+✔ pending legacy rekey recovery refuses tampered ciphertext without changing any file or key (153.538529ms)
+✔ pending legacy rekey recovery refuses different-id ciphertext without changing any file or key (147.760897ms)
+✔ pending legacy rekey recovery refuses wrong-format ciphertext without changing any file or key (135.139533ms)
+✔ pending rekey recovery never bypasses an existing legacy writer lock (256.784163ms)
+✔ an openable current legacy file is never replaced by unrelated pending ciphertext (141.783328ms)
+✔ I1 confirmed absent connectors-directory permits migration (in-process) (239.335157ms)
+✔ I1 confirmed absent gmail-directory permits migration (in-process) (205.969828ms)
+✔ I1 confirmed absent gmail-files permits migration (in-process) (194.541363ms)
+✔ I1 dangling connectors ancestor is not confirmed absence (in-process) (128.65367ms)
+✔ I1 dangling gmail ancestor is not confirmed absence (in-process) (130.811787ms)
+✔ I1 dangling Gmail source refuses stage and preserves source authority (in-process) (124.292623ms)
+✔ I1 dangling Gmail source refuses restage and preserves source authority (in-process) (206.137732ms)
+✔ I1 dangling Gmail source refuses finish and preserves source authority (in-process) (189.348312ms)
+✔ I1 inaccessible Gmail source refuses stage and preserves source authority (in-process) (130.921122ms)
+✔ I1 inaccessible Gmail source refuses restage and preserves source authority (in-process) (189.570322ms)
+✔ I1 inaccessible Gmail source refuses finish and preserves source authority (in-process) (195.729362ms)
+(node:1081) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent connectors-directory permits migration (permission IPC) (1729.086124ms)
+(node:1347) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent gmail-directory permits migration (permission IPC) (1715.09802ms)
+(node:1613) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent gmail-files permits migration (permission IPC) (1022.972685ms)
+(node:1831) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling connectors ancestor is not confirmed absence (permission IPC) (1530.475408ms)
+(node:2091) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling gmail ancestor is not confirmed absence (permission IPC) (1495.948933ms)
+(node:2351) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling Gmail source refuses stage and preserves source authority (permission IPC) (1553.332105ms)
+(node:2611) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling Gmail source refuses restage and preserves source authority (permission IPC) (1592.803589ms)
+(node:2877) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling Gmail source refuses finish and preserves source authority (permission IPC) (1585.045127ms)
+(node:3143) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 inaccessible Gmail source refuses stage and preserves source authority (permission IPC) (1517.851409ms)
+(node:3403) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 inaccessible Gmail source refuses restage and preserves source authority (permission IPC) (1633.887419ms)
+(node:3669) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 inaccessible Gmail source refuses finish and preserves source authority (permission IPC) (1600.838213ms)
+✔ I1 Node permission denial remains ERR_ACCESS_DENIED instead of absent Gmail (56.030304ms)
+✔ B2 held-name oracle: new equal/different writes are both kept (core) (659.468027ms)
+✔ B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (core) (391.314115ms)
+✔ B2 approval binds a restaged write epoch with identical names/kinds (core) (255.53199ms)
+✔ B2 held-name oracle: new equal/different writes are both kept (passkey) (641.673977ms)
+✔ B2 GLOBAL finish oracle: a free-name stage retains both newer guesses (passkey) (374.41927ms)
+✔ B2 approval binds a restaged write epoch with identical names/kinds (passkey) (251.187173ms)
+✔ B2 legacy-content migrated revision is never a resumable proof (330.563767ms)
+✔ B2 v1:unknown migrated revision is never a resumable proof (321.94976ms)
+✔ B2 v99:unknown migrated revision is never a resumable proof (322.671136ms)
+✔ B2 missing migrated revision is never a resumable proof (322.065986ms)
+✔ B2 finish failure acknowledges already-created copies without source names or values (190.938372ms)
+✔ B2 Gmail same-value after stage is retained using non-content metadata (194.538391ms)
+✔ B2 Gmail different-value after stage is retained using non-content metadata (184.980203ms)
+✔ B2 Gmail same-mtime after stage is retained using non-content metadata (190.055783ms)
+✔ B2 Gmail replace-file after stage is retained using non-content metadata (192.948991ms)
+✔ B2 quiet regular Gmail source still migrates and is removed (197.882917ms)
+✔ B2 uncertain Gmail identity refuses staging and cannot remove an existing name (251.415464ms)
+✔ B2 restaging an uncertain Gmail source still invalidates its prior approval (183.290566ms)
+✔ B2 uncertain Gmail identity at finish preserves every source after copies (184.476325ms)
+✔ B2 partial cleanup failure reports possible removals as well as copies (185.598332ms)
+✔ B2 migration cards retain the pending-approval rate bound (119.764338ms)
+ℹ tests 57
+ℹ suites 0
+ℹ pass 57
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 26697.33903
+no-Kubernetes tripwire: never fired

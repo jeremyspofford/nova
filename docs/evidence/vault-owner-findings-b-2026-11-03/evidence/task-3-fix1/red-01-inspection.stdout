@@ -1,0 +1,288 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ I1 confirmed absent connectors-directory permits migration (in-process) (219.75976ms)
+✔ I1 confirmed absent gmail-directory permits migration (in-process) (190.628356ms)
+✔ I1 confirmed absent gmail-files permits migration (in-process) (192.368321ms)
+✖ I1 dangling Gmail source refuses stage and preserves source authority (in-process) (122.771412ms)
+✖ I1 dangling Gmail source refuses restage and preserves source authority (in-process) (186.443965ms)
+✖ I1 dangling Gmail source refuses finish and preserves source authority (in-process) (195.694337ms)
+✖ I1 inaccessible Gmail source refuses stage and preserves source authority (in-process) (122.495077ms)
+✖ I1 inaccessible Gmail source refuses restage and preserves source authority (in-process) (186.09271ms)
+✖ I1 inaccessible Gmail source refuses finish and preserves source authority (in-process) (192.730401ms)
+(node:564) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent connectors-directory permits migration (permission IPC) (1551.317277ms)
+(node:830) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent gmail-directory permits migration (permission IPC) (1613.419016ms)
+(node:1096) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent gmail-files permits migration (permission IPC) (1588.600131ms)
+(node:1362) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ I1 dangling Gmail source refuses stage and preserves source authority (permission IPC) (1545.071097ms)
+(node:1622) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ I1 dangling Gmail source refuses restage and preserves source authority (permission IPC) (1610.885825ms)
+(node:1888) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ I1 dangling Gmail source refuses finish and preserves source authority (permission IPC) (1574.529577ms)
+(node:2154) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ I1 inaccessible Gmail source refuses stage and preserves source authority (permission IPC) (1506.304368ms)
+(node:2414) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ I1 inaccessible Gmail source refuses restage and preserves source authority (permission IPC) (1573.831293ms)
+(node:2680) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✖ I1 inaccessible Gmail source refuses finish and preserves source authority (permission IPC) (1546.410912ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 6
+ℹ fail 12
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 15835.960155
+
+✖ failing tests:
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 dangling Gmail source refuses stage and preserves source authority (in-process) (122.771412ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery is not confirmed absence
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:89:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 dangling Gmail source refuses restage and preserves source authority (in-process) (186.443965ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery is not confirmed absence
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:89:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 dangling Gmail source refuses finish and preserves source authority (in-process) (195.694337ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery must refuse the whole cleanup
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:83:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 inaccessible Gmail source refuses stage and preserves source authority (in-process) (122.495077ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery is not confirmed absence
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:89:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 inaccessible Gmail source refuses restage and preserves source authority (in-process) (186.09271ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery is not confirmed absence
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:89:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 inaccessible Gmail source refuses finish and preserves source authority (in-process) (192.730401ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery must refuse the whole cleanup
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:83:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 dangling Gmail source refuses stage and preserves source authority (permission IPC) (1545.071097ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery is not confirmed absence
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:89:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 dangling Gmail source refuses restage and preserves source authority (permission IPC) (1610.885825ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery is not confirmed absence
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:89:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 dangling Gmail source refuses finish and preserves source authority (permission IPC) (1574.529577ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery must refuse the whole cleanup
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:83:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 inaccessible Gmail source refuses stage and preserves source authority (permission IPC) (1506.304368ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery is not confirmed absence
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:89:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 inaccessible Gmail source refuses restage and preserves source authority (permission IPC) (1573.831293ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery is not confirmed absence
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:89:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-migration-source-inspection.test.ts:70:7
+✖ I1 inaccessible Gmail source refuses finish and preserves source authority (permission IPC) (1546.410912ms)
+  AssertionError [ERR_ASSERTION]: uncertain discovery must refuse the whole cleanup
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-migration-source-inspection.test.ts:83:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired
