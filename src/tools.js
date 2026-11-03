@@ -5,7 +5,7 @@
 // Nova runs the tool (asking the user first where required) and calls the model
 // again with the result in the transcript.
 import { spawn } from 'node:child_process';
-import { trackChild } from './core/index.ts';
+import { inheritedChildEnv, trackChild } from './core/index.ts';
 import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { inHome, inSecretDir } from './home.js';
@@ -592,8 +592,9 @@ export function parseToolCall(raw, names = Object.keys(TOOLS)) {
 export function runCommand(command, { cwd, signal, timeoutMs = 120_000 }) {
   return new Promise((resolvePromise) => {
     mkdirSync(cwd, { recursive: true });
-    const shell = process.env.SHELL || '/bin/sh';
-    const child = trackChild(spawn(shell, ['-lc', command], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { group: true });
+    // A login shell (or e.g. zsh's non-login .zshenv) can reintroduce credentials from
+    // startup files after filtering. Use a non-interactive POSIX shell with no profiles.
+    const child = trackChild(spawn('/bin/sh', ['-c', command], { cwd, env: inheritedChildEnv(), detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { group: true });
     let out = '';
     const take = (d) => { out += d; if (out.length > MAX_OUTPUT * 4) out = out.slice(-MAX_OUTPUT * 2); };
     child.stdout.on('data', take);

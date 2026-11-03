@@ -629,8 +629,8 @@ export class Promotions {
     const d = await this.#o.ledger.drain({ boundMs: this.#o.drainMs ?? 60_000, commitMs: this.#o.commitMs ?? 5 * 60_000, keep: (t) => t.owner === PROMOTION_WORKER || t.owner === 'mesh' });
     if (d.stuck.length) {
       this.#resume();
-      this.#task(r, 'drain', 'Running work finished or handed over', false, `${d.stuck.length} ${d.stuck.length === 1 ? 'task is' : 'tasks are'} past the point where they change something outside Nova, and still running; Nova never cuts that short. Nothing changed: try again when ${d.stuck.length === 1 ? 'it is' : 'they are'} done.`, { stuck: d.stuck });
-      this.#save({ ...r, state: 'failed', said: 'Work past its commit point was still running. Nothing changed.' });
+      this.#task(r, 'drain', 'Running work finished or handed over', false, `${d.stuck.length} ${d.stuck.length === 1 ? 'task has' : 'tasks have'} work still running. It may be past its commit point or may not have stopped after cancellation or timeout. Handing over now could run the work twice. Nothing changed: try again when it has stopped.`, { stuck: d.stuck });
+      this.#save({ ...r, state: 'failed', said: 'Work was still running, so Nova could not safely hand over. Nothing changed.' });
       return;
     }
     const drained = this.#task(r, 'drain', 'Running work finished or handed over', true, `${d.finished.length} finished; ${d.handed.length} handed over to run again on the new hub.`, { finished: d.finished, handed: d.handed });

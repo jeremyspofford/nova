@@ -30,6 +30,7 @@ const MAY = /^May already have happened: .*\. Check, then retry or cancel\.$/;
 // A worker that "sends" something each run. `how` decides what comes back.
 function sender(o: { effects?: Effects | (() => Effects); how: 'bad-evidence' | 'throw' | 'garbage' | 'hang'; commits?: boolean; ledger?: () => Ledger; commitFirst?: boolean; timeoutMs?: number }) {
   const runs: string[] = [];
+  let settle = () => {};
   const w: Worker = {
     id: 'sender', name: 'Sender', about: 'test', egress: 'none', evidence: ['read_back'], health: () => ({ ok: true }),
     ...(o.effects ? { effects: typeof o.effects === 'function' ? o.effects : () => o.effects as Effects } : {}),
@@ -40,12 +41,12 @@ function sender(o: { effects?: Effects | (() => Effects); how: 'bad-evidence' | 
       if (o.commitFirst) o.ledger!().committing(b.task_id, 'Send the form');
       if (o.how === 'throw') throw new Error('the far end hung up');
       if (o.how === 'garbage') return { nonsense: true };
-      if (o.how === 'hang') return new Promise(() => {});
+      if (o.how === 'hang') return new Promise((resolve) => { settle = () => resolve(null); });
       const ev = { kind: 'read_back', target: 'note.md', sha256: 'f'.repeat(64), bytes: 9 };
       return { envelope: ENVELOPE_VERSION, task_id: b.task_id, status: 'done', summary: 'Sent it.', evidence: [ev], artifacts: [], blockers: [], usage: { duration_ms: 1 }, follow_up_suggestions: [] };
     },
   };
-  return { w, runs };
+  return { w, runs, settle: () => settle() };
 }
 
 function ledgerWith(w: Worker, o: { timeoutMs?: number; db?: Db } = {}) {
@@ -69,6 +70,11 @@ for (const [how, kind, why] of [
     const s = sender({ effects: 'external', how, ...(how === 'hang' ? { timeoutMs: 40 } : {}) });
     const { ledger } = ledgerWith(s.w);
     const t = ledger.create(input());
+    if (how === 'hang') {
+      assert.equal(await until(() => ledger.get(t.id).state, (s) => s === 'waiting'), 'waiting');
+      assert.throws(() => ledger.retry(t.id), /still running/, 'person cannot overlap an unresolved external attempt');
+      s.settle();
+    }
     await ledger.idle();
     const held = ledger.get(t.id);
     assert.equal(s.runs.length, 1, 'it ran once');
@@ -89,6 +95,10 @@ for (const [how, kind, why] of [
     assert.equal(s.runs.length, 1);
     // The person's retry is the one way to run it again.
     ledger.retry(t.id);
+    if (how === 'hang') {
+      assert.equal(await until(() => ledger.get(t.id).state, (s) => s === 'waiting'), 'waiting');
+      s.settle();
+    }
     await ledger.idle();
     assert.equal(s.runs.length, 2);
     ledger.cancel(t.id, 'Checked: it went through the first time.');
