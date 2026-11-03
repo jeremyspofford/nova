@@ -25,9 +25,10 @@ export type InboxKind = (typeof INBOX_KINDS)[number];
 export type InboxStatus = 'accepted' | 'refused' | 'rejected';
 export interface InboxResult { key: string; kind: InboxKind | string; status: InboxStatus; duplicate: boolean; reason?: string; ref?: string; version?: string | null }
 
-// The profile sections a device agent may change. Privacy, appearance and setup stay with the
-// person's own screens: a computer that was paired for its capabilities shouldn't loosen privacy.
-export const DEVICE_CONFIG_SECTIONS = ['identity', 'user', 'tuning', 'policy'] as const;
+// The profile sections a device agent may change. Privacy, policy, appearance and setup stay with
+// the person's own screens: a computer paired for its capabilities shouldn't loosen privacy or the
+// permissions and spend limits in policy (those need the person's tier-3 OK through the API).
+export const DEVICE_CONFIG_SECTIONS = ['identity', 'user', 'tuning'] as const;
 
 const KEY = /^[A-Za-z0-9_.:-]{8,100}$/;
 const CHALLENGE = /^[A-Za-z0-9_-]{16,128}$/;
