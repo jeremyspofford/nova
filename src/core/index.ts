@@ -155,6 +155,7 @@ export type { CheckpointView, CheckpointManifest } from './resilience/checkpoint
 export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.ts';
 // Every process Nova starts, so none outlives an in-place restart (Era 2's commands register too).
 export { trackChild } from './children.ts';
+export { inheritedChildEnv } from './child-env.ts';
 // Services (M10e): the definition, the driver interface, the Service Manager.
 export * from './services/index.ts';
 // Onboarding (M10f): device detection, the backend words, discovery and import sources.
