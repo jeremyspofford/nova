@@ -181,3 +181,8 @@ RELEASE — All review commands and writes end with the successful write of /hom
 [UI job125685710828](https://github.com/jeremyspofford/nova/actions/runs/41565401864/job/125685710828) passed, including the unchanged profile-removal test, accessibility advisory and artifact upload. Full UI157/157, zero fail/cancel/skip/warnings, tripwire never fired. Raw output retained privately: 233284 bytes, SHA-256 `158e4f90712cac8d280602a5e3c8997807e795764c8779b9dc6982f72d577c85`. This passing run does not establish the original intermittent failure’s causal trace.
 
 [Exact retained trigger RED/diagnostic/characterization/GREEN/final output](security-exec-ledger-ci-output-2026-11-03.md#second-ci-trigger-fixture-output) is appended to the safe output record. Independent source review is complete; another full ordinary exact-head CI must pass after this test-only correction before merge.
+
+
+## Later ordinary-CI result
+
+The next ordinary CI passed this dedup fixture but exposed a different intermittent repository-hash assertion. Its [controlled Git maintenance lifetime proof and minimal reviewed helper correction](security-exec-ledger-coding-fixture-2026-11-03.md) preserve the full protected-tree oracle; UI157/157 passed again. No later failed gate is hidden by this scoped approval.

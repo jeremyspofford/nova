@@ -1398,3 +1398,394 @@ no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fa
 ℹ duration_ms 150.054312
 no-Kubernetes tripwire: never fired
 ````
+
+
+## Third CI coding fixture output
+
+Controlled diagnostic Git scheduling is distinguished from unmodified isolated passes. The source report retains private upstream build failures/provenance; compiler/vendor output is excluded here. These original test byte streams are hashed; trailing whitespace is normalized only in displays, with exact gzip+base64 payload if needed. No passing suite was regenerated for this archive.
+
+### `ci-coding-fix-logs/01-unchanged-case.log`
+
+380 original bytes; SHA-256 `4d67799f6aa54b41541c20640aea1caa769c8be8f2f137183e97b5186e8abdf1`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (766.398799ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1124.797829
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-coding-fix-logs/02-manifest-case.log`
+
+379 original bytes; SHA-256 `467589756aa368485a6b3f72852d37723b604c99575a20568f4b26462ba99142`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (704.599535ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 999.320661
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-coding-fix-logs/08-git256-manifest-case.log`
+
+379 original bytes; SHA-256 `2ac835b837a433bac62b6f3554eba68517fb9ccf552b633a31b441ba77bca6a2`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (651.433657ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 955.973882
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-coding-fix-logs/10-controlled-case.log`
+
+1446 original bytes; SHA-256 `8afeed5735c0c1b3e9949248b288a434d1eeb5c7efa3fe15e0b4dbe7de16e870`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (647.59581ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 956.39852
+
+✖ failing tests:
+
+test at tests/core/coding.test.ts:222:1
+✖ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (647.59581ms)
+  AssertionError [ERR_ASSERTION]: the person’s repository untouched throughout
+  + actual - expected
+
+  + '69f8434e960d633e9f343f37e12621251fed1ca7a351df64b021658c9b0deb85'
+  - 'c8323fa7ffb16e9fe5fa767a5c0ab52fd227ac03807b9ec9c360642c71ce1dec'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/core/coding.test.ts:246:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '69f8434e960d633e9f343f37e12621251fed1ca7a351df64b021658c9b0deb85',
+    expected: 'c8323fa7ffb16e9fe5fa767a5c0ab52fd227ac03807b9ec9c360642c71ce1dec',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired
+````
+
+Exact original bytes (gzip+base64):
+
+```text
+H4sIAAAAAAAC/8VU227cNhB936+Yt7XR3dVtdWOLAptg2wZBnMJ2n4rCoKihl1mJVHiJ1ygK9KHfUKBAf6S/ky/pSLLbJkXyFCB6kMiZ0ZkzZ4bUZv08NGg1enTgrRrulEUG3PbYwtmRfMJ3Kzhg169AduEEXLdwzBwYDd/vrr8Di8LYdjJLrjrAN2jvQfCu+xKe//Bk//TlxTfPvoWgHfrzxds/f4cXSSwY3B24hwvzhhOCDI7SS2t6wgF+i9oz8AcEYuXdCm6Vf/vrH5TzToNUHZKJQ6f0EUzwK9DGH5S+BQKktHBWbMtNXudV0jvK+NtfMwwk09oFNdYaT5uBu8flRH4OEVwL7DpSYHa5oxqGf3betOZh2QbLvTL6pndQ58Umq6s8XUxFjnAjpyk1WyzG70hw2kckGdKrpYjNaNlQTJqmLPkMAgHsnEM71rG31lj4cX95ebO7utpfXj97efHTnGhA64yeklgcjFPeUJuD9iaIA2njD9aE2wOlI8AvgAsfeAdrwNNAI4QtWSfHsqhltc22WBdxW2QZ1jLbZjIrMUmLNEnzRGKbCF7yLE9aWWybOE2KvBJ1E7fYVPmSYNawFFWWZpKXUjZJQSCY06YoeS5i3uSpbNO05CLOqrhsahS1yIq42KaiTAQmLYrlTGh8SJVrkvGp0R5PfvMV10bf9ya4r+FsFJNFUXQwPUav0GJ/H22ocXiK7ow9eovoIk1NWvdc6bVQa6lOPthHaxNU10Yfafq2YEl6/i+TwRqBzm0evtdKHN1Ot5f4imSkFjk405SeKSJrNe+ih8DIc3e8eR0woGNJvGX5f0C5u9diKnJjg34fYeRyQ3aNdlqzJKtqVv7vf+e59VehGWN2kn5+Yox33vLhY4gHTreLcyyrSpadw88TKg0w0tHB9gW5aJwZnZfO4WpyjvIyWL4zhcvZNY8V+wRTNOM9Tif7BAM1I5phLMxYQiRplPD718T4wdkqKUeH6ocOxwn8ZaE/cAPr8R6ls2zp6PwN/8kvK6YFAAA=
+```
+
+### `ci-coding-fix-logs/11-fixture-only.log`
+
+570 original bytes; SHA-256 `eb16835dfd7ca07f303936fe7fce7fe847498cfde98a5184c7926035ad88dee6`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"before":"42391cc64dd9b8d119d7d5d42acb43d9d908c917809204e2d8bd1bf405ca20ba","after":"dee46a8349a1418a36504221ca5188c01ffe1f2bf61f88f63d87a3b4c2ff4139","onlyExpectedDelta":".git/objects/maintenance.lock"}
+✔ fixture setup alone leaves a detached Git maintenance lock; no Nova instance exists (24.293918ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 96.119778
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-coding-fix-logs/13-controlled-receipt-red.log`
+
+1449 original bytes; SHA-256 `4a2e36e1d9504c1e41bda105bd4d0d602dff47a95b72c07a14afb6c44757e6b0`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (652.377104ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 967.658897
+
+✖ failing tests:
+
+test at tests/core/coding.test.ts:222:1
+✖ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (652.377104ms)
+  AssertionError [ERR_ASSERTION]: the person’s repository untouched throughout
+  + actual - expected
+
+  + 'f7589c7d94b85254bab87443d653c8464a095ce075c449668a4d2f19bc35335f'
+  - '1f088d9241cf67e99f4d1dc40348665423d0b8a0596702fb0d0fb69228971187'
+
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/core/coding.test.ts:246:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'f7589c7d94b85254bab87443d653c8464a095ce075c449668a4d2f19bc35335f',
+    expected: '1f088d9241cf67e99f4d1dc40348665423d0b8a0596702fb0d0fb69228971187',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired
+````
+
+Exact original bytes (gzip+base64):
+
+```text
+H4sIAAAAAAAC/8VUzW7cNhC+71PMbW10d/X/xxYFNsG2DYI4he2eisKgyJHFrEQqJBWvURTooc9QoEBfpK+TJ+lIstsmRXIKEB0kcmb0zcw3H6nN9vlYo9Xo0YG3arhTFhlw26OEsyP5hO820GLXb6DpxhNwLeGYODAavt9ffwcWhbFyNjdcdYBv0N6D4F33JTz/4cnh6cuLb559C6N26M9Xb//8HV5EoWBw13IPF+YNJ4RmdJS+saYnHOC3qD0D3yJQVd5t4Fb5t7/+QTnvNDSqQzJx6JQ+ghn9BrTxrdK3QICUFs7yLN4lRRGFae8o5W9/LTgQzWs3qqnZcN4M3D0u5+qXEMG1wK4jChaXO6ph+GfnjTQPSzla7pXRN72DKi92eVaWVbGa25zwpqrm3Gy1mr5TifM+INKQXpIidpNlRzFxHLPoc1AEsHcO7dTJwVpj4cfD5eXN/urqcHn97OXFT0umAa0zes5icTBOeUOTHrU3o2iJHd9aM962lI8AvwAu/Mg72AKeBlIRSrLOjnVTZGUlClmldZnFWVrzuizSNJF5logyzVMeVpnAsMhEmlZ5XvJUxk1U1SLJkiRr1gSzhXXUhGUpqziNRJMXWFVNKiMp0jBJyzzP0jiRYV3yMKPJhHFThzJs6ryKYxpRFJXFeiloeoiWa+LxqdEeT373FddG3/dmdF/D2cQmC4KgNT0Gr9Bifx/saHJ4Cu6MPXqL6AJNU9r2XOmtUNtGnfxoH631qDoZfGTqac6i+PzfSgZrBDq3e/heK3F0ey0v8RXRSCNycKYpPVNUrNW8Cx4CA8/d8eb1iCM6RpNl2X9AubvXYm5yZ0f9PsJUyw3ZNdp5zaKkrFjxv/+d59ZfjfUUs2/o5yfGeOctHz6G2HK6YJxjSVmw5Bx+nlFJwUiHB+ULcpGeGR2YzuFmdk70Mli/o8L14lpkxT6Biha8R3WyTyCoBdEMU2PGEiJRo4Q/vKaKH5xSNc3kUP3Q4aTAX1b6A5ewnq5SOsyWjs7fEHDkqqkFAAA=
+```
+
+### `ci-coding-fix-logs/14-controlled-receipt-green.log`
+
+379 original bytes; SHA-256 `424a445efff436266cc454220aa811e32562e0fe72579afafa9911c802bd9afe`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (677.905277ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 989.634139
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-coding-fix-logs/16-final-git256-affected.log`
+
+6949 original bytes; SHA-256 `e28e4246db400931cb7c5c5ef8270307894ef6451c83ff7ee12837f746e62c37`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M10c gate: a coding request in chat ends as a reviewed diff with green tests and a running preview, asks before merge; declined, nothing is merged; confirmed, exactly the reviewed diff (3206.182495ms)
+✔ Nova’s git reaches only local paths: no network transport, no ext:: helper (37.642318ms)
+✔ Nova’s git takes no GIT_* variable of its own process, and no personal config (51.959178ms)
+✔ a branch name is never read as an option or a range (0.672303ms)
+✔ the preview’s loopback check reads the kernel’s listening sockets (1.366893ms)
+✖ a whole coding run, merge included, runs none of the person’s hooks and no fsmonitor (34.213993ms)
+✔ review 1: once a confirmed merge passed its commit point, decline, cancel and discard are refused, and the record says what git did (897.448256ms)
+✔ review 2: a preview whose shell exits takes its process group with it; decline and close leave nothing listening (3675.645233ms)
+✔ review 2: after a restart Nova stops a preview group it recorded, and only one that is still the process it started (1349.848992ms)
+✔ review 3: the agent can’t make failing tests pass through the test runner’s configuration (812.393558ms)
+✔ review 3: chat can’t widen what the agent may change; the scope in force is in the run for both sheets (299.561737ms)
+✔ review 4: a link that escapes through another link in the tree is refused (322.412593ms)
+✔ review 5: the merge is a compare-and-swap of the branch even when it is checked out; a switch in the window moves only that branch (441.11918ms)
+✔ review 5: a branch that moves in the merge’s window starts a new round, not a failure (421.822357ms)
+✔ review 6: a repository’s own protocol and insteadOf settings can’t send Nova’s git to the network (435.954834ms)
+✔ review 7: a huge file the agent leaves is refused by its size, never read (0.666893ms)
+✔ review 8: a change too big to show in full is never offered as reviewed (310.697195ms)
+✔ review 9: a merge that already moved the branch before Nova stopped is merged, not failed (388.754908ms)
+✔ review 10: a write cancelled while Nova commits leaves no worktree, no branch and no head (3260.998604ms)
+✔ review 11: any listener of the preview’s process group off loopback stops the check (503.301282ms)
+✔ review 12: a run’s records and Nova’s copy of the repository go when nothing uses them (940.024259ms)
+✔ M10c gate: a coding request ends as a reviewed diff with green tests and a running preview, asks before merge, and declining leaves nothing merged (1251.631933ms)
+✔ M10c: approving merges exactly the reviewed diff into the branch, and pushes nothing (1134.435197ms)
+✔ M10c: the branch moved after review: nothing unreviewed is merged, and Nova asks again (2035.997539ms)
+✔ M10c: a failing test run never reaches the merge ask (399.044584ms)
+✔ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (757.958902ms)
+✔ M10c: a preview that listens on every address is stopped, and the check fails (556.256015ms)
+✔ M10c: the person’s checkout with uncommitted changes is never merged over (1059.683218ms)
+✔ M10c: undo of the write removes Nova’s worktree and branch; nothing of the person’s changes (365.281067ms)
+✔ M10c: Codex’s and Relay’s stand-ins write the change too, through the same adapters (622.235083ms)
+✔ M10c: starting checks the repository, the branch, the agent and the privacy mode (225.449793ms)
+✔ M10c: two runs on one repository at once each get their own worktree and branch (342.187003ms)
+✔ M10c: after a restart the merge ask stands, says its preview stopped, and still merges only the reviewed commit (1083.092534ms)
+✔ no file outside the Decision Service reaches a seat or the wire client, and only wire.ts names the endpoint (43.212209ms)
+✔ negative controls: each planted violation is caught (0.80293ms)
+✔ the service’s index.ts and the core’s index.ts export no seat and no wire client (427.719524ms)
+✔ Part 1’s old folder is gone: its code lives in the service (0.301155ms)
+✔ text hidden by CSS is kept apart from what a reader sees, and flagged (17.340736ms)
+✔ a class that a stylesheet hides counts as hidden (0.807668ms)
+✔ instructions hidden in a page block it; so do protocol tags hidden there (0.937678ms)
+✔ comments, alt, title and meta text are read only for instructions; plain ones are fine (2.581259ms)
+✔ zero-width, direction and tag characters are flagged and removed; emoji joiners are fine (24.768156ms)
+✔ long encoded runs that decode to words are flagged; to instructions, they block; random ids are only noted (2.272131ms)
+✔ a link that shows one host and goes to another is flagged; matching and wordy links are fine (1.365205ms)
+✔ instruction-shaped text is found as spans; ordinary imperatives are not (1.682792ms)
+✔ Nova’s own protocol tags in visible text are flagged, opening and closing (1.031936ms)
+✔ mail authentication: a failing DMARC verdict is flagged; no header is unknown, never a pass (2.430409ms)
+✔ mail: a Reply-To elsewhere, and a display name that names another address, are flagged (0.991192ms)
+✔ attachments: executables and macros are flagged, archives noted, a type that fights its name flagged (1.018648ms)
+✔ an ordinary page passes the checks with nothing flagged (1.515713ms)
+✔ after reading a web page, code_change asks first and names the source; declined, no run starts (7135.231589ms)
+✔ a run that read nothing from outside starts the coding run on its own (573.171955ms)
+ℹ tests 52
+ℹ suites 0
+ℹ pass 51
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14605.907387
+
+✖ failing tests:
+
+test at tests/core/coding-git.test.ts:67:1
+✖ a whole coding run, merge included, runs none of the person’s hooks and no fsmonitor (34.213993ms)
+  Error: ENOENT: no such file or directory, open '/tmp/nova-test-HvezuH/nova-coding-hooks-NdUW27/project/.git/hooks/pre-commit'
+      at writeFileSync (node:fs:2406:20)
+      at TestContext.<anonymous> (file:///home/jeremy/.codex/worktrees/nova-main-ci-fixtures/nova-build/tests/core/coding-git.test.ts:73:5)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'open',
+    path: '/tmp/nova-test-HvezuH/nova-coding-hooks-NdUW27/project/.git/hooks/pre-commit'
+  }
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-coding-fix-logs/17-final-host-coding.log`
+
+1580 original bytes; SHA-256 `979b0631f4874e6d74822a45ac606d1472c207d6b148d3ef0a5aacf21669cf1f`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M10c gate: a coding request ends as a reviewed diff with green tests and a running preview, asks before merge, and declining leaves nothing merged (1316.721195ms)
+✔ M10c: approving merges exactly the reviewed diff into the branch, and pushes nothing (1307.820495ms)
+✔ M10c: the branch moved after review: nothing unreviewed is merged, and Nova asks again (2381.228468ms)
+✔ M10c: a failing test run never reaches the merge ask (487.207363ms)
+✔ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (901.792953ms)
+✔ M10c: a preview that listens on every address is stopped, and the check fails (587.733693ms)
+✔ M10c: the person’s checkout with uncommitted changes is never merged over (1115.118421ms)
+✔ M10c: undo of the write removes Nova’s worktree and branch; nothing of the person’s changes (325.277165ms)
+✔ M10c: Codex’s and Relay’s stand-ins write the change too, through the same adapters (760.855384ms)
+✔ M10c: starting checks the repository, the branch, the agent and the privacy mode (221.863777ms)
+✔ M10c: two runs on one repository at once each get their own worktree and branch (347.038153ms)
+✔ M10c: after a restart the merge ask stands, says its preview stopped, and still merges only the reviewed commit (1097.044199ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11412.698903
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-coding-fix-logs/18-final-typecheck.log`
+
+72 original bytes; SHA-256 `e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0`.
+
+````text
+npm notice run nova@0.1.0 typecheck
+npm notice run tsc -p tsconfig.json
+````
+
+### `ci-coding-fix-logs/20-final-git256-affected.log`
+
+5839 original bytes; SHA-256 `f4b89f31ed008ff41a1815060e976bc75813fa3d9d480c55c6afe05629040570`.
+
+````text
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ M10c gate: a coding request in chat ends as a reviewed diff with green tests and a running preview, asks before merge; declined, nothing is merged; confirmed, exactly the reviewed diff (3011.050842ms)
+✔ Nova’s git reaches only local paths: no network transport, no ext:: helper (25.700012ms)
+✔ Nova’s git takes no GIT_* variable of its own process, and no personal config (31.884635ms)
+✔ a branch name is never read as an option or a range (0.555457ms)
+✔ the preview’s loopback check reads the kernel’s listening sockets (1.063206ms)
+✔ a whole coding run, merge included, runs none of the person’s hooks and no fsmonitor (551.685417ms)
+✔ review 1: once a confirmed merge passed its commit point, decline, cancel and discard are refused, and the record says what git did (755.784902ms)
+✔ review 2: a preview whose shell exits takes its process group with it; decline and close leave nothing listening (3525.318122ms)
+✔ review 2: after a restart Nova stops a preview group it recorded, and only one that is still the process it started (1246.127193ms)
+✔ review 3: the agent can’t make failing tests pass through the test runner’s configuration (747.181491ms)
+✔ review 3: chat can’t widen what the agent may change; the scope in force is in the run for both sheets (326.388274ms)
+✔ review 4: a link that escapes through another link in the tree is refused (266.074945ms)
+✔ review 5: the merge is a compare-and-swap of the branch even when it is checked out; a switch in the window moves only that branch (406.614574ms)
+✔ review 5: a branch that moves in the merge’s window starts a new round, not a failure (445.651923ms)
+✔ review 6: a repository’s own protocol and insteadOf settings can’t send Nova’s git to the network (416.066707ms)
+✔ review 7: a huge file the agent leaves is refused by its size, never read (0.655459ms)
+✔ review 8: a change too big to show in full is never offered as reviewed (319.960319ms)
+✔ review 9: a merge that already moved the branch before Nova stopped is merged, not failed (385.889613ms)
+✔ review 10: a write cancelled while Nova commits leaves no worktree, no branch and no head (3308.291223ms)
+✔ review 11: any listener of the preview’s process group off loopback stops the check (499.832526ms)
+✔ review 12: a run’s records and Nova’s copy of the repository go when nothing uses them (958.919561ms)
+✔ M10c gate: a coding request ends as a reviewed diff with green tests and a running preview, asks before merge, and declining leaves nothing merged (1147.183416ms)
+✔ M10c: approving merges exactly the reviewed diff into the branch, and pushes nothing (1055.800634ms)
+✔ M10c: the branch moved after review: nothing unreviewed is merged, and Nova asks again (1728.99554ms)
+✔ M10c: a failing test run never reaches the merge ask (351.1468ms)
+✔ M10c: what Nova refuses from an agent: the tests, git’s own files, a link out, nothing at all (690.105263ms)
+✔ M10c: a preview that listens on every address is stopped, and the check fails (499.021617ms)
+✔ M10c: the person’s checkout with uncommitted changes is never merged over (1021.527398ms)
+✔ M10c: undo of the write removes Nova’s worktree and branch; nothing of the person’s changes (294.525082ms)
+✔ M10c: Codex’s and Relay’s stand-ins write the change too, through the same adapters (676.446174ms)
+✔ M10c: starting checks the repository, the branch, the agent and the privacy mode (225.602846ms)
+✔ M10c: two runs on one repository at once each get their own worktree and branch (316.594786ms)
+✔ M10c: after a restart the merge ask stands, says its preview stopped, and still merges only the reviewed commit (1026.506354ms)
+✔ no file outside the Decision Service reaches a seat or the wire client, and only wire.ts names the endpoint (42.253735ms)
+✔ negative controls: each planted violation is caught (1.414288ms)
+✔ the service’s index.ts and the core’s index.ts export no seat and no wire client (383.598063ms)
+✔ Part 1’s old folder is gone: its code lives in the service (0.225199ms)
+✔ text hidden by CSS is kept apart from what a reader sees, and flagged (19.252932ms)
+✔ a class that a stylesheet hides counts as hidden (0.823394ms)
+✔ instructions hidden in a page block it; so do protocol tags hidden there (0.936748ms)
+✔ comments, alt, title and meta text are read only for instructions; plain ones are fine (1.566528ms)
+✔ zero-width, direction and tag characters are flagged and removed; emoji joiners are fine (18.374993ms)
+✔ long encoded runs that decode to words are flagged; to instructions, they block; random ids are only noted (1.997453ms)
+✔ a link that shows one host and goes to another is flagged; matching and wordy links are fine (1.170466ms)
+✔ instruction-shaped text is found as spans; ordinary imperatives are not (1.294276ms)
+✔ Nova’s own protocol tags in visible text are flagged, opening and closing (0.526433ms)
+✔ mail authentication: a failing DMARC verdict is flagged; no header is unknown, never a pass (1.454363ms)
+✔ mail: a Reply-To elsewhere, and a display name that names another address, are flagged (0.786324ms)
+✔ attachments: executables and macros are flagged, archives noted, a type that fights its name flagged (1.598862ms)
+✔ an ordinary page passes the checks with nothing flagged (1.389706ms)
+✔ after reading a web page, code_change asks first and names the source; declined, no run starts (1125.115275ms)
+✔ a run that read nothing from outside starts the coding run on its own (587.103459ms)
+ℹ tests 52
+ℹ suites 0
+ℹ pass 52
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 14109.919368
+no-Kubernetes tripwire: never fired
+````
+
+### `ci-coding-fix-logs/22-final-diff-check.log`
+
+0 original bytes; SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+````text
+````

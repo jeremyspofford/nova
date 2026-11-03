@@ -1,6 +1,6 @@
 # Review packet: inherited secrets and physical execution/cleanup ownership
 
-Owner IMMEDIATE S1/S2 from whole-app main `048eea0e`. Complete current candidate artifact: `048eea0ee043f43d01bc9a36bed601ce9805373b` → `4216de43b4e59b0c48f184c87e801d9a96b02be8`. This self-contained packet includes the whole contextual source/test diff plus full Ledger and Session implementations. Diff/source display removes trailing whitespace only; pinned Git content and retained source manifests are authoritative.
+Owner IMMEDIATE S1/S2 from whole-app main `048eea0e`. Complete current candidate artifact: `048eea0ee043f43d01bc9a36bed601ce9805373b` → `c82e6cfc9f1c2e479400074457fa2c8a347216f2`. This self-contained packet includes the whole contextual source/test diff plus full Ledger and Session implementations. Diff/source display removes trailing whitespace only; pinned Git content and retained source manifests are authoritative.
 
 ## Claims
 
@@ -27,6 +27,8 @@ Initial S1/S2 task reviews and fresh whole-branch adversarial review approved so
 [Initial full reports/output/rulings](../evidence/security-exec-ledger-2026-11-02.md), [complete CI correction and independent reviews](../evidence/security-exec-ledger-ci-correction-2026-11-03.md), [safe exact correction test output](../evidence/security-exec-ledger-ci-output-2026-11-03.md), [plain-language LEDGER](../LEDGER.md). Process snapshots that included unrelated local commands are excluded from public evidence; no actual owner secrets or keychains were used. No extra owner-input gate is invented for these explicitly ordered fixes.
 
 Subsequent ordinary CI atd5 passedUI157/157 but failed one later unit dedup fixture. Test-only correction `4216de43b4e59b0c48f184c87e801d9a96b02be8` was independently approved with no findings; runtime remains identical to reviewed3d7. [Full subsequent failure/correction/review](../evidence/security-exec-ledger-trigger-correction-2026-11-03.md). Another full ordinary final-head CI is still required.
+
+Third ordinary CI failed a repository-hash assertion while UI157/157 passed. A controlled actualGit2.56 daemon and fixture-only control prove a fixture maintenance-lock lifetime race at the same unchanged assertion. The exact originalCIpath remainsUNKNOWN. Test-helper-only `c82e6cfc9f1c2e479400074457fa2c8a347216f2` joins maintenance without altering any protected-path/hash/refusal assertion; independent review approved. [Full causal evidence/review](../evidence/security-exec-ledger-coding-fixture-2026-11-03.md). Another full ordinary final-head CI is required, including the helper’s UI consumer.
 
 ## Complete contextual source/test diff
 
@@ -1832,6 +1834,36 @@ index 00000000..ca0e6558
 +    HOME: '/explicit', OPENAI_API_KEY: 'explicit-synthetic',
 +  });
 +});
+diff --git a/tests/support/coding.ts b/tests/support/coding.ts
+index 178c9f96..5c225b60 100644
+--- a/tests/support/coding.ts
++++ b/tests/support/coding.ts
+@@ -13,22 +13,24 @@ export const ROOT = join(import.meta.dirname, '..', '..');
+ export const FAKE_CLAUDE = join(ROOT, 'scripts/stand-ins/fake-claude.js');
+ export const FAKE_CODEX = join(ROOT, 'scripts/stand-ins/fake-codex.js');
+
+ // The project: greet() is wrong, and its test says so; server.mjs serves it (the preview).
+ export const APP = "export const greet = (name) => `Hi ${name}`;\n";
+ export const APP_FIXED = "export const greet = (name) => `Hello, ${name}!`;\n";
+ export const APP_TEST = "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { greet } from './app.mjs';\n\ntest('greets', () => assert.equal(greet('Sam'), 'Hello, Sam!'));\n";
+ export const SERVER = "import { createServer } from 'node:http';\nimport { greet } from './app.mjs';\nconst host = process.env.HOST || '127.0.0.1';\ncreateServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end(greet('preview')); }).listen(Number(process.env.PORT), host);\n";
+
+ // Test-side git: none of the person's or this machine's settings, a placeholder identity.
++// Join automatic maintenance before returning: a detached Git worker could otherwise change
++// the fixture after its byte-for-byte baseline (including .git) has been recorded.
+ export function git(cwd: string, ...args: string[]): string {
+-  return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Example Person', '-c', 'user.email=person@example.com', '-c', 'init.defaultBranch=main', '-c', 'commit.gpgSign=false', ...args], {
++  return execFileSync('git', ['-c', 'maintenance.autoDetach=false', '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Example Person', '-c', 'user.email=person@example.com', '-c', 'init.defaultBranch=main', '-c', 'commit.gpgSign=false', ...args], {
+     cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+     env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: cwd, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', LC_ALL: 'C' },
+   }).trim();
+ }
+
+ export interface Repos { dir: string; person: string; remote: string }
+
+ export function makeRepos(prefix = 'nova-coding-'): Repos {
+   const dir = mkdtempSync(join(tmpdir(), prefix));
+   const person = join(dir, 'project');
 ````
 
 ## Complete Ledger
