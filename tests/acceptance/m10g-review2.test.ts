@@ -252,17 +252,17 @@ test('R15 (p15): a computer away through five planned promotions follows the cha
 });
 
 test('minor: the name token never reaches the agent and is a secret to diagnostics; epochs are never made past the ceiling', async () => {
-  const env = agentEnv({ NOVA_MESH_NAME_TOKEN: 'a-test-token-for-the-stable-name', PATH: '/bin' } as never) as Record<string, string>;
-  assert.equal(env.NOVA_MESH_NAME_TOKEN, undefined);
-  assert.equal(env.PATH, '/bin');
-  const s = knownSecrets({ vault: { list: () => [], get: () => null, keyForStandby: () => null } } as never, { home: '/nonexistent', env: { NOVA_MESH_NAME_TOKEN: 'a-test-token-for-the-stable-name' } });
-  assert.ok(s.secrets.includes('a-test-token-for-the-stable-name'));
-  // A kept list names saved secrets by name, never by value.
-  const said = summarize([{ tbl: 'vault', pk: 'row-1', op: 'upsert' }, { tbl: 'memory', pk: 'm-1', op: 'upsert' }], ['GITHUB_TOKEN']);
-  assert.match(said, /1 saved secret \(GITHUB_TOKEN\)/);
-  assert.match(said, /1 memory record \(m-1\)/);
   const p = await pair({});
   try {
+    const env = agentEnv({ NOVA_MESH_NAME_TOKEN: 'a-test-token-for-the-stable-name', PATH: '/bin' } as never) as Record<string, string>;
+    assert.equal(env.NOVA_MESH_NAME_TOKEN, undefined);
+    assert.equal(env.PATH, '/bin');
+    const s = knownSecrets(p.a.core, { home: p.a.home, env: { NOVA_MESH_NAME_TOKEN: 'a-test-token-for-the-stable-name' } });
+    assert.ok(s.secrets.includes('a-test-token-for-the-stable-name'));
+    // A kept list names saved secrets by name, never by value.
+    const said = summarize([{ tbl: 'vault', pk: 'row-1', op: 'upsert' }, { tbl: 'memory', pk: 'm-1', op: 'upsert' }], ['GITHUB_TOKEN']);
+    assert.match(said, /1 saved secret \(GITHUB_TOKEN\)/);
+    assert.match(said, /1 memory record \(m-1\)/);
     p.a.core.db.run('UPDATE mesh_state SET epoch = ? WHERE id = 1', 2 ** 31 - 2);
     assert.throws(() => p.a.core.mesh.role.raiseEpoch(2), /highest Nova uses/);
     // Nor does a promotion, planned or emergency, make one past it.

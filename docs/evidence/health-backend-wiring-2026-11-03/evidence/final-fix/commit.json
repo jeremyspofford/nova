@@ -1,0 +1,55 @@
+[
+  {
+    "argv": [
+      "git",
+      "add",
+      "--",
+      "docs/plans/diagnostics.md",
+      "src/core/README.md",
+      "src/core/caps/index.ts",
+      "src/core/diagnostics/index.ts",
+      "tests/acceptance/caps.test.ts",
+      "tests/core/diagnostics-composition.test.ts"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "diff",
+      "--cached",
+      "--check"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "diff",
+      "--cached",
+      "--stat"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": " docs/plans/diagnostics.md                  |  10 ++-\n src/core/README.md                         |   4 +-\n src/core/caps/index.ts                     |   2 +-\n src/core/diagnostics/index.ts              |  53 +++++++++----\n tests/acceptance/caps.test.ts              |   3 +-\n tests/core/diagnostics-composition.test.ts | 115 ++++++++++++++++++++++++++++-\n 6 files changed, 167 insertions(+), 20 deletions(-)\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "git",
+      "commit",
+      "-m",
+      "fix: refuse diagnostics with incomplete secret scans"
+    ],
+    "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+    "exit_code": 0,
+    "stdout": "[codex/health-backend-wiring 4e7278d1] fix: refuse diagnostics with incomplete secret scans\n 6 files changed, 167 insertions(+), 20 deletions(-)\n",
+    "stderr": ""
+  }
+]
