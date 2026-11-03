@@ -36,19 +36,19 @@ Main integration already completed by controller as d425cc2f45b47ce2e741ae28bffc
 
 **Files:** src/broker/broker.ts, store.ts, protocol.ts; tests/core/broker-owner-findings-b-identity.test.ts; existing broker store/verbs/IPC/boundary tests.
 **Interfaces:** Produce state.device_key_fingerprint (full64hex SHA256 of decoded X25519 public-key bytes) and the same fingerprint on share_scope card using existing what/target/approving fields. Add only that public metadata key to answer schema. Existing action already binds public_key; keep binding. Broker.start must index an actually unlocked adopted store; ask adoption must zero the temporary root and stay locked.
-- [ ] Write failing real Broker tests: holder state and proposed-key card fingerprints compare; original substituted key is visibly different; no outbox change when declined. Both core and software-passkey approval modes reject changing key after approval (retained control, not claimed newly broken). Public fingerprint only, no device private key/value returned.
-- [ ] Reproduce actual Broker.start auto adoption empty-index failure and ask adoption unlock bypass using real signed outbox/inbox, metadata/ref lists and fresh broker instances. Auto lists actual refs; ask stays locked until person factor, then lists same refs. Keep signature/pin/generation/tamper rules.
-- [ ] Minimal code fix using existing crypto primitives; no new visual pattern/permission/store. Fingerprint comparison is an owner out-of-band check; never claim it cryptographically protects core-relayed approvals against compromised core.
-- [ ] Run new file + broker-store, verbs, IPC, boundary; typecheck. Keep exact RED/GREEN and completed source ownership report; commit only task files.
+- [x] Write failing real Broker tests: holder state and proposed-key card fingerprints compare; original substituted key is visibly different; no outbox change when declined. Both core and software-passkey approval modes reject changing key after approval (retained control, not claimed newly broken). Public fingerprint only, no device private key/value returned.
+- [x] Reproduce actual Broker.start auto adoption empty-index failure and ask adoption unlock bypass using real signed outbox/inbox, metadata/ref lists and fresh broker instances. Auto lists actual refs; ask stays locked until person factor, then lists same refs. Keep signature/pin/generation/tamper rules.
+- [x] Minimal code fix using existing crypto primitives; no new visual pattern/permission/store. Fingerprint comparison is an owner out-of-band check; never claim it cryptographically protects core-relayed approvals against compromised core.
+- [x] Run new file + broker-store, verbs, IPC, boundary; typecheck. Keep exact RED/GREEN and completed source ownership report; commit only task files.
 
 ## Task 2: Read legacy vault without a writer lock (B6 and low per-name cost)
 
 **Files:** src/core/vault.ts; tests/core/vault-owner-findings-b.test.ts; existing vault/owner-findings/migration-recovery/provider-vault tests.
 **Interfaces:** has/get/list/status on valid committed data are read-only and do not acquire/delete .writer-lock or pending files. Mutators retain #withWrite(refresh=true). Authenticated interrupted-rekey repair and file-to-keychain promotion/removal remain serialized mutations; separate probing from recovery. Preserve existing public Vault API and file format.
-- [ ] RED stale-lock cold/warm get/has/list/status on valid file, fresh observation after another cooperating writer, no lock/tmp changes. Mutations still refuse an existing lock and never steal it. Include valid current data plus unrelated pending file.
-- [ ] RED/controls for interrupted rekey that actually needs rename: recover only under exclusive lock after revalidation; stale lock refuses that exceptional repair without touching bytes. Preserve existing same-vault/authenticated recovery and keychain file-promotion behavior using injected stores only.
-- [ ] Refactor #open/read versus mutation internals minimally. A cache may compare encrypted serialized bytes or stable identity, not serve stale committed data or perform housekeeping on ordinary reads. Never infer successful recovery from key fingerprint alone; authenticate pending ciphertext.
-- [ ] Affected unit/acceptance tests, typecheck/boundary. Keep exact proof; commit/report, no subagents.
+- [x] RED stale-lock cold/warm get/has/list/status on valid file, fresh observation after another cooperating writer, no lock/tmp changes. Mutations still refuse an existing lock and never steal it. Include valid current data plus unrelated pending file.
+- [x] RED/controls for interrupted rekey that actually needs rename: recover only under exclusive lock after revalidation; stale lock refuses that exceptional repair without touching bytes. Preserve existing same-vault/authenticated recovery and keychain file-promotion behavior using injected stores only.
+- [x] Refactor #open/read versus mutation internals minimally. A cache may compare encrypted serialized bytes or stable identity, not serve stale committed data or perform housekeeping on ordinary reads. Never infer successful recovery from key fingerprint alone; authenticate pending ciphertext.
+- [x] Affected unit/acceptance tests, typecheck/boundary. Keep exact proof; commit/report, no subagents.
 
 ## Task 3: Metadata-only migration epochs and honest cleanup failure (B2/low finish wording)
 
