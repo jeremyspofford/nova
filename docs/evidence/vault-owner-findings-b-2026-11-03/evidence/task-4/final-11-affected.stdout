@@ -1,0 +1,101 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ src/broker is its own tree: Node’s standard library and its own files, nothing from core, no package (8.202296ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (11.392947ms)
+✔ the size budget: no more than 3,000 lines of broker code, tests aside, so one reviewer can read all of it (0.623495ms)
+✔ no network surface in the source: no HTTP server, nothing listens on a port, no inspector (5.618099ms)
+✔ the fixed protocol: seven verbs, three messages, a fixed refusal list (2.036727ms)
+✔ the client has no method that returns a value: no get, resolve, reveal or export (0.521452ms)
+✔ canaries planted in the broker appear in no answer, log, ledger record, file, backup, bundle or core heap (2708.360657ms)
+(node:340) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ migration resumes: a name already moved from the same old vault counts as moved; the old vault keeps only Nova’s own keys (1702.005871ms)
+✔ a public name that resolves to a private address is refused; a loopback binding must stay on loopback (84.382545ms)
+✔ TLS: a pinned LAN device is reached only with its own certificate; unpinned, a name resolving here is refused before any TLS (92.905151ms)
+(node:737) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the process: permission model, empty environment, a 0600 socket in a 0700 folder, and nothing else listening (92.813036ms)
+(node:744) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the protocol: hello with a token, seven verbs and three messages; everything else refused (124.468494ms)
+(node:751) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ no network surface: no inet listener after every verb; a use aimed at an unbound host makes no connection; answers fit the schema (1465.466847ms)
+(node:1002) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the launcher: the broker runs the bound program itself; a swapped binary gets nothing; no loader variables from core (1651.428268ms)
+✔ broker migration resumes an interrupted authenticated rekey without reopening the old vault in core (221.969694ms)
+✔ pending legacy rekey recovery refuses malformed ciphertext without changing any file or key (126.747803ms)
+✔ pending legacy rekey recovery refuses tampered ciphertext without changing any file or key (134.107895ms)
+✔ pending legacy rekey recovery refuses different-id ciphertext without changing any file or key (138.74426ms)
+✔ pending legacy rekey recovery refuses wrong-format ciphertext without changing any file or key (130.698303ms)
+✔ pending rekey recovery never bypasses an existing legacy writer lock (203.827437ms)
+✔ an openable current legacy file is never replaced by unrelated pending ciphertext (132.555015ms)
+✔ I1 confirmed absent connectors-directory permits migration (in-process) (214.860673ms)
+✔ I1 confirmed absent gmail-directory permits migration (in-process) (190.944049ms)
+✔ I1 confirmed absent gmail-files permits migration (in-process) (192.129041ms)
+✔ I1 dangling connectors ancestor is not confirmed absence (in-process) (124.478604ms)
+✔ I1 dangling gmail ancestor is not confirmed absence (in-process) (123.916444ms)
+✔ I1 dangling Gmail source refuses stage and preserves source authority (in-process) (124.240947ms)
+✔ I1 dangling Gmail source refuses restage and preserves source authority (in-process) (185.875657ms)
+✔ I1 dangling Gmail source refuses finish and preserves source authority (in-process) (191.46271ms)
+✔ I1 inaccessible Gmail source refuses stage and preserves source authority (in-process) (123.618337ms)
+✔ I1 inaccessible Gmail source refuses restage and preserves source authority (in-process) (185.384824ms)
+✔ I1 inaccessible Gmail source refuses finish and preserves source authority (in-process) (192.408053ms)
+(node:2312) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent connectors-directory permits migration (permission IPC) (1526.760303ms)
+(node:2578) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent gmail-directory permits migration (permission IPC) (1567.367418ms)
+(node:2844) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 confirmed absent gmail-files permits migration (permission IPC) (1574.214823ms)
+(node:3110) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling connectors ancestor is not confirmed absence (permission IPC) (1506.509641ms)
+(node:3370) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling gmail ancestor is not confirmed absence (permission IPC) (1537.703828ms)
+(node:3630) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling Gmail source refuses stage and preserves source authority (permission IPC) (1564.286972ms)
+(node:3890) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling Gmail source refuses restage and preserves source authority (permission IPC) (1586.563159ms)
+(node:4156) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 dangling Gmail source refuses finish and preserves source authority (permission IPC) (1630.479321ms)
+(node:4422) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 inaccessible Gmail source refuses stage and preserves source authority (permission IPC) (1548.15158ms)
+(node:4682) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 inaccessible Gmail source refuses restage and preserves source authority (permission IPC) (1603.281786ms)
+(node:4948) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ I1 inaccessible Gmail source refuses finish and preserves source authority (permission IPC) (1578.550225ms)
+✔ I1 Node permission denial remains ERR_ACCESS_DENIED instead of absent Gmail (56.758288ms)
+✔ B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control (7503.787898ms)
+✔ B3 four lanes remain held during TERM escalation; stopPrograms awaits cleanup and refuses new uses (6088.051418ms)
+✔ B3 ambiguous leftover directory refuses a fresh credentialed process without killing its recorded PID (67.087891ms)
+✔ B3 delayed file open succeeds normally; bad cwd spawn error and exit/timeout races settle without stale timers (2299.600762ms)
+✔ B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context (1660.669402ms)
+✔ B5 explicit keychain missing refuses migration even with a valid file key (3.22274ms)
+✔ B5 explicit keychain wrong refuses migration even with a valid file key (0.63833ms)
+✔ B5 explicit keychain unavailable refuses migration even with a valid file key (0.504089ms)
+✔ B3 synchronous launcher spawn failure releases exactly once and leaves no stale owned entry (153.980588ms)
+✔ B3 normal parent exit cleans inherited descendants even after they close their output pipes (1328.989274ms)
+✔ B3 main graceful shutdown awaits real owned descendant cleanup (6552.609234ms)
+✔ B3 broker SIGKILL leaves ownership evidence and restarted broker refuses reuse without stale PID killing (1571.633466ms)
+✔ B3 cleanup failure retains evidence and blocks further credentialed use (542.1479ms)
+✔ B3 Windows credentialed process branch refuses before run directory or value injection (67.177927ms)
+✔ B3 denied owned-group signal blocks new use immediately and shutdown rejects while retaining ownership (6068.014591ms)
+ℹ tests 59
+ℹ suites 0
+ℹ pass 59
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 63128.052589
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,14 @@
+{
+  "base": "196ed6e42096754e20e70ddb1a33a693c87f179c",
+  "commit": "8e58b51ba57a2d52c244745340dee923a9051a06",
+  "broker_lines": 2820,
+  "files": {
+    "src/broker/broker.ts": "4581d14452917c9888e3f94ff57075b7d1034d9ec3eb824627a275eba6c44072",
+    "src/broker/keystore.ts": "9ac57feacd54076677a26be24794116592cce2e6b16b7c4856f535239fd2ffe1",
+    "src/broker/launch.ts": "63bfce9363443f685877e86a18c4cb5ebae6ded622d7ecbe43913db46f9d64c0",
+    "src/broker/main.ts": "ceba8c3edd3e5a8e790f9adf8744307733fa892c75f677fac089920751972410",
+    "src/broker/oldvault.ts": "b76bff5c36df5f79a69e7ac6b4445c88e93e1de76da3df33e32f2b7cd16c7519",
+    "src/broker/spawn.ts": "36d654bf3c158e6d176b6db5de7363b9901a4c138dcd46b76732bea6d1b89c03",
+    "tests/core/broker-owner-findings-b-launch.test.ts": "9127ef37fbd708cc33b337e7958bdfce08d727c941b2962a131cf287ec2737d2"
+  }
+}

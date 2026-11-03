@@ -1,0 +1,18 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control (5426.32425ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5539.633222
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:52:1
+✖ B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control (5426.32425ms)
+  Error: condition reached before deadline: {"id":7,"error":"failed","words":"A previous program run needs operator recovery.","record":{"seq":6,"at":"2026-11-03T06:51:54.929Z","device":"50d436f2-8f4e-4b0f-9318-0558325f043f","verb":"use","ref":"ib2386e6e9e6e989808085dbead5fa1","target":"/tmp/nova-owned-launch-CJwazL/program.py#sha256:ed38eb65c73ce809fd5596b9c258740f56ff9030434d4a57b23217dad4cc83f3","scope_item":"RUN","outcome":"failed:request","tier":1,"approval_id":"ap_9de6dc2cbe7c3a3e5652bf18","task":null,"role":"core","prev":"af190e3f8498f5f9c47e6cc77dfb63139e4ba8c3dd5d54defd0ca22792ca973a","hash":"29116b7f887844b68b78bd61b276bcc8a8934fcf9f5ccbc5324cf347dbafdf8d"}}
+      at file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:59:67
+no-Kubernetes tripwire: never fired

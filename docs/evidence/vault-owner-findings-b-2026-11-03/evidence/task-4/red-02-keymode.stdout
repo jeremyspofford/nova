@@ -1,0 +1,57 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B5 explicit keychain missing refuses migration even with a valid file key (5.033184ms)
+✖ B5 explicit keychain wrong refuses migration even with a valid file key (0.670814ms)
+✖ B5 explicit keychain unavailable refuses migration even with a valid file key (0.608514ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 0
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 124.022795
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:173:3
+✖ B5 explicit keychain missing refuses migration even with a valid file key (5.033184ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:178:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:173:3
+✖ B5 explicit keychain wrong refuses migration even with a valid file key (0.670814ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:178:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:173:3
+✖ B5 explicit keychain unavailable refuses migration even with a valid file key (0.608514ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:178:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'throws',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

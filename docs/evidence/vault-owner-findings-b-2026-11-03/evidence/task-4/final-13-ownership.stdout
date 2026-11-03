@@ -1,0 +1,36 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+(node:32) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control (6828.855538ms)
+✔ B3 four lanes remain held during TERM escalation; stopPrograms awaits cleanup and refuses new uses (6090.982628ms)
+✔ B3 ambiguous leftover directory refuses a fresh credentialed process without killing its recorded PID (62.602809ms)
+✔ B3 delayed file open succeeds normally; bad cwd spawn error and exit/timeout races settle without stale timers (2306.380081ms)
+(node:470) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context (1636.626184ms)
+✔ B5 explicit keychain missing refuses migration even with a valid file key (3.223453ms)
+✔ B5 explicit keychain wrong refuses migration even with a valid file key (0.689614ms)
+✔ B5 explicit keychain unavailable refuses migration even with a valid file key (0.648098ms)
+✔ B3 synchronous and asynchronous launcher spawn failures releases exactly once and leaves no stale owned entry (152.145157ms)
+✔ B3 normal parent exit cleans inherited descendants even after they close their output pipes (1325.863666ms)
+(node:860) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ B3 main graceful shutdown awaits real owned descendant cleanup (6474.872124ms)
+(node:1115) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:1370) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ B3 broker SIGKILL leaves ownership evidence and restarted broker refuses reuse without stale PID killing (1530.006683ms)
+✔ B3 cleanup failure retains evidence and blocks further credentialed use (533.229649ms)
+✔ B3 Windows credentialed process branch refuses before run directory or value injection (64.770892ms)
+✔ B3 denied owned-group signal blocks new use immediately and shutdown rejects while retaining ownership (6067.25906ms)
+✔ B3 normal exit near the timeout boundary settles each lane once (4101.13928ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 37346.669896
+no-Kubernetes tripwire: never fired

@@ -456,3 +456,17 @@ Ruling: discard and zero any prior staged migration data before every restage at
 Ruling: permit a proven exact fixed connectors-root/subtree read grant, including missing/future root if supported, as the existing intended migration read authority needed to distinguish confirmed absence. Why: real permission IPC shows ENOENT-only correctness exposes denial for genuinely absent connectors. Cost if wrong: that exact intended credential-source root remains readable by the migration launcher as it already is when present; no whole-home/filesystem access, stage connector writes, generic denial catch or new source roots. Actual synthetic permission behavior and no-connectors control required before acceptance.
 
 The conditional exact-root grant allowance above was **not needed or applied**: the runtime probe proved the existing grant already allows inspection of the exact missing connectors root. Production grants remain unchanged. Task4 process/env, Task5 policy, named takeover NOTES, complete final gate/LEDGER/merge/preview remain pending.
+
+
+## Task4 approved checkpoint
+
+Process lifetime and both trusted keychain-context hops are approved after one fix round at fde6fdef. Shutdown now waits for every captured ownership cleanup before reporting failure; failed lanes/directories remain retained and block new uses. Explicit keychain mode no longer falls back to a disk key. Final18ownership tests and2strengthened immediate-cleanup regressions pass; existingIPC4 andboundary6 pass on finalproduction; typecheck0, broker2822/3000.
+
+[Full Task4 report and all retained attempts](vault-owner-findings-b-2026-11-03/task-4-report.md), [independent Important shutdown finding](vault-owner-findings-b-2026-11-03/task-4-review.md), [scoped approval](vault-owner-findings-b-2026-11-03/task-4-fix1-review.md), and [extended raw artifact manifest](vault-owner-findings-b-2026-11-03/manifest.json). Physical Linux fixture proof, signal/cleanup ambiguity, original interrupted-attempt provenance, diagnostic-pipe and mutation-history limitations, and Node warnings remain explicit. No full-phase or product-cutover claim.
+
+## Task4 controller rulings with costs
+
+Ruling: Task4 treats zombie-only group existence as non-executing, without new /proc read authority or indefinite waits for container PID1. Owned lane/directory stay held through successful group SIGKILL delivery (or confirmed ESRCH), launcher close and credential-directory cleanup; signal/cleanup ambiguity retains lane/evidence and refuses further uses. Why: orphan zombies may never be reaped by container PID1, while timeout/TERM alone does not establish cleanup. Cost if wrong: exact guarantee is group signal delivery plus launcher close/cleanup, not universal OS containment or zombie disappearance; unkillable kernel states/escaped malicious processes remain limits, and actual synthetic PID-state tests must prove no executable running plus unrelated-control safety.
+
+Ruling: extend Task4 narrowly to oldvault.ts explicit-keychain selection: no valid disk-key fallback when keychain mode is deliberately selected and its key is missing/wrong/unavailable. Why: source audit found readOldVault always tries [kc,disk], contradicting the existing deliberate key-mode/no-silent-fallback contract. Cost if wrong: migration requires repairing keychain or deliberately choosing file mode; preserve sources, auto/file behavior and authenticated pending recovery, with behavioral RED before code and private fake stores only.
+

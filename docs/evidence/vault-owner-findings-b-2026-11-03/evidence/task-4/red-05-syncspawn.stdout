@@ -1,0 +1,11 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ B3 synchronous launcher spawn failure releases exactly once and leaves no stale owned entry (150.450797ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 261.037979
+no-Kubernetes tripwire: never fired

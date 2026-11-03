@@ -1,0 +1,80 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control (11457.531635ms)
+✖ B3 four lanes remain held during TERM escalation; stopPrograms awaits cleanup and refuses new uses (1461.460751ms)
+✖ B3 ambiguous leftover directory refuses a fresh credentialed process without killing its recorded PID (146.00558ms)
+✔ B3 delayed file open succeeds normally; bad cwd spawn error and exit/timeout races settle without stale timers (2305.173854ms)
+✖ B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context (106.324588ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 1
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 15598.293598
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:52:1
+✖ B3 timeout kills owned TERM-resistant descendants, preserves delayed file read and unrelated control (11457.531635ms)
+  AssertionError [ERR_ASSERTION]: condition reached before deadline
+      at until (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:18:10)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:66:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:77:1
+✖ B3 four lanes remain held during TERM escalation; stopPrograms awaits cleanup and refuses new uses (1461.460751ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'undefined'
+  - 'function'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:87:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'undefined',
+    expected: 'function',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:96:1
+✖ B3 ambiguous leftover directory refuses a fresh credentialed process without killing its recorded PID (146.00558ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:104:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:127:1
+✖ B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context (106.324588ms)
+  Error: The broker couldn’t start: The broker is set to keep its key in the system keychain, but none answers: .
+      at ChildProcess.<anonymous> (file:///workspace/src/broker/spawn.ts:46:33)
+      at Object.onceWrapper (node:events:631:12)
+      at ChildProcess.emit (node:events:509:20)
+      at emit (node:internal/child_process:956:14)
+      at process.processTicksAndRejections (node:internal/process/task_queues:91:21)
+no-Kubernetes tripwire: never fired

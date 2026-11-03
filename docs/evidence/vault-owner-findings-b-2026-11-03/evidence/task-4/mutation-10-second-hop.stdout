@@ -1,0 +1,33 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context (1544.630012ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1660.376347
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:128:1
+✖ B5 actual broker and migration stage/finish reach only the private synthetic keychain with finite context (1544.630012ms)
+  AssertionError [ERR_ASSERTION]: {"id":4,"error":"failed","words":"The old vault couldn’t be read; nothing was staged.","record":{"seq":3,"at":"2026-11-03T06:55:11.704Z","device":"fc2e57c9-597f-4d08-acef-1df0f6124e2d","verb":"create","ref":null,"target":null,"scope_item":null,"outcome":"failed:request","tier":null,"approval_id":null,"task":null,"role":"core","prev":"1f3a6d60da47046c20a3a0a1f0e4944aad30266dcd5a8203c5f8afe9e790cd26","hash":"610a7615282e6438b3900d8ff6ddd2fbc3c4fcd3c11933d92c4082d5ed71ab0c"}}
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:157:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

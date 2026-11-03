@@ -1,0 +1,32 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ B3 denied owned-group signal blocks new use immediately and shutdown rejects while retaining ownership (1786.812908ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1906.189199
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-launch.test.ts:288:1
+✖ B3 denied owned-group signal blocks new use immediately and shutdown rejects while retaining ownership (1786.812908ms)
+  AssertionError [ERR_ASSERTION]: ambiguity blocks a fifth or second use alike
+  + actual - expected
+  
+  + undefined
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-launch.test.ts:303:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

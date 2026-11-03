@@ -1,0 +1,9 @@
+{
+  "base": "8e58b51ba57a2d52c244745340dee923a9051a06",
+  "commit": "fde6fdefdace1735b32d671ea5400ffa50f4949e",
+  "broker_lines": 2822,
+  "files": {
+    "src/broker/broker.ts": "9e185108c8382c337dbc7d07666e94293345f0a62a2ae526f1cd5d75967cf488",
+    "tests/core/broker-owner-findings-b-launch.test.ts": "8368738a2e96aa685787446b3474ee726b7717c2d9ee3215f40d4ea7238d68d6"
+  }
+}
