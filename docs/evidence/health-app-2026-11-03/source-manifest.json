@@ -1,10 +1,10 @@
 {
-  "base": "c071b5360224bd1e83b5e352a1c05bd448237a2f",
-  "note": "Fix1 current source hashes. Runtime Git identity remains c071; the mounted two-file source change is identified by these hashes. Original c071 source manifest is retained verbatim as source-manifest-c071.json. Early original probe provenance limits remain; these are not retroactive hashes.",
+  "base": "308c88735b782a49cd6688b9b701bae3c5368f1c",
+  "note": "Fix2 current source hashes, relative to308c. Runtime Git identity remains308c; changed app/test bytes are identified by hashes. Original c071 and308c manifests remain byte-exact archives. Earlier probe gaps and explicitly post-start offline-test supplement are not retroactive proof.",
   "files": {
     "ui/js/app.js": {
-      "sha256": "4787137e1f6c8b52fdb34c1954d8528427170a60339e090fb05c01432a00910b",
-      "git_blob": "f56d903fbe372389a3a67e7e9a12e390022001db"
+      "sha256": "cd4f395c8ce4b9a9557110c1502b1942da975793b97c4b86eff912fc20224cd4",
+      "git_blob": "2198aa41f9ec2d473106372850939ae877fb0587"
     },
     "ui/js/surfaces.js": {
       "sha256": "1df0f98707b74c4e1b77f269eee7e7ab1590da2d4ccc6e739b74957bbafcbdac",
@@ -31,8 +31,8 @@
       "git_blob": "3fea9b6aac5e3e2dd468e76011ccb554f637e28d"
     },
     "tests/ui/health-caps-diagnostics.test.ts": {
-      "sha256": "a84db07c93051390d8a47a1ca8ae0a39cbbd01cc100989c143e0cf5f27935837",
-      "git_blob": "ae0995ddd7c33cd3fda5c89220aab4b218e619ad"
+      "sha256": "6313b9388795a4dcb928174bcfc4ca67f3375970694d36c7cf45da125cd70e04",
+      "git_blob": "be39bca1355a52a89e7b40b9fc91346b287d6ba1"
     },
     "tests/ui/navigation-reachability.test.ts": {
       "sha256": "8a5b99412e79ef42a664a5010916c36dba086c5963670bc0f622e02ee7ca84b0",

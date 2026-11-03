@@ -408,6 +408,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         let initiallyUnavailable = true;
         await unloaded.ctx.route('**/*', route => new URL(route.request().url()).origin !== m.base ? route.abort() : initiallyUnavailable && new URL(route.request().url()).pathname === '/api/v1/caps' ? route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Synthetic initial outage"}' }) : route.continue());
         trackDocument(unloaded.page);
+        const liveCoreStream = unloaded.page.waitForResponse(r => new URL(r.url()).pathname === '/api/v1/events');
         await unloaded.page.goto(`${m.base}/`);
         await drawn(unloaded.page);
         const unloadedDoor = unloaded.page.locator('#home a[href="/health"], #aside a[href="/health"]').filter({ visible: true }).first();
@@ -415,6 +416,26 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         await unloaded.page.locator('[data-work-costs-state="unavailable"]').waitFor();
         assert.equal(await unloaded.page.locator('[data-save-work-limits]').isDisabled(), true);
         assert.equal(await unloaded.page.locator('[name="task.tokens"]').inputValue(), '');
+        // Only Caps fails. A local endpoint refusal must not declare the live Core offline
+        // or remove the native action that can help diagnose that very partial failure.
+        assert.equal((await unloaded.page.request.get(`${m.base}/api/health`)).status(), 200);
+        assert.equal((await unloaded.page.request.get(`${m.base}/api/v1/health`)).status(), 200);
+        const liveStream = await liveCoreStream;
+        assert.equal(liveStream.status(), 200);
+        assert.match(liveStream.headers()['content-type']!, /text\/event-stream/);
+        assert.equal(await unloaded.page.locator('#banner').isVisible(), false, 'Caps-only failure does not claim the live Core is unreachable');
+        assert.notEqual(await unloaded.page.locator('.orb[data-orb-live]').first().getAttribute('data-state'), 'offline');
+        const partialDiagnostics = unloaded.page.locator('[data-download-diagnostics]');
+        assert.equal(await partialDiagnostics.getAttribute('href'), '/api/v1/diagnostics');
+        assert.equal(await partialDiagnostics.getAttribute('download'), '');
+        const partialDownloading = unloaded.page.waitForEvent('download');
+        if (touch) await partialDiagnostics.tap(); else await partialDiagnostics.click();
+        const partialDownload = await partialDownloading;
+        const partialBundle = JSON.parse(readFileSync((await partialDownload.path())!, 'utf8'));
+        assert.equal(partialBundle.redaction.marker, MARKER);
+        assert.equal(partialBundle.about.nova, '0.1.0');
+        assert.equal(documentRequests(unloaded.page).filter(url => new URL(url).pathname !== '/api/v1/diagnostics').length, 1, 'native partial-failure diagnostics retains the Home-start document');
+        console.log(`HEALTH PARTIAL ${engine}/${posture}: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON`);
         initiallyUnavailable = false;
         await unloaded.page.getByRole('button', { name: 'Retry work costs', exact: true }).click();
         await unloaded.page.locator('[data-work-costs-state="ready"]').waitFor();

@@ -1,0 +1,15 @@
+{
+  "full_staged_check_exit": 2,
+  "full_staged_check_stdout": "docs/evidence/health-app-2026-11-03/fix-2-partial-red/stdout.txt:20: trailing whitespace.\n+  \ndocs/evidence/health-app-2026-11-03/fix-2-partial-red/stdout.txt:22: trailing whitespace.\n+  \n",
+  "full_staged_check_stderr": "",
+  "full_stdout_sha256": "7c43e33d7d018e71a3e09658dcccf1f880d54ade619001e096a77a9e6d7ce3c9",
+  "exact_immutable_raw_exclusions": [
+    {
+      "path": "docs/evidence/health-app-2026-11-03/fix-2-partial-red/stdout.txt",
+      "working_and_staged_sha256": "caab2b17fab6128e39b556cb8921721606342ae6f575211fe191e1037b9a8843"
+    }
+  ],
+  "separate_source_doc_check_exit": 0,
+  "separate_source_doc_check_stdout": "",
+  "note": "All full diagnostic bytes losslessly JSON-escaped, avoiding recursive raw copies. Only exact hash-recorded raw stdout paths excluded from separately labeled source/doc check; raw bytes preserved, no global clean claim/config/attributes exception."
+}
