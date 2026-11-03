@@ -498,7 +498,13 @@ export function createCore(o: CoreOptions) {
     },
     screening: () => decisionService.standing('ingest-screen'),
     infer: (r) => models!.infer(r),
-    secrets: () => { try { return vault.list().map((n) => vault.get(n)).filter((v): v is string => typeof v === 'string'); } catch { return []; } },
+    // An unavailable vault or an entry disappearing during enumeration is an incomplete scan,
+    // never evidence that no secrets exist. The outbound guard refuses until it can check again.
+    secrets: () => vault.list().map((n) => {
+      const value = vault.get(n);
+      if (typeof value !== 'string') throw new CoreError('conflict', 'The vault changed while checking saved passwords or keys. Try again.');
+      return value;
+    }),
     memory: () => memory.active().map((r) => r.content),
   });
   // Nova Browser (M10b): sign-ins from the vault, the co-pilot on the local sorting model (Noul,

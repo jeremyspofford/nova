@@ -303,12 +303,25 @@ export class Ingest {
   // ---- the outbound guard (plan §7) -------------------------------------------------------------
 
   outbound(payload: { text: string }, o: { tainted: boolean }): OutboundResult {
-    const read = (f: (() => string[]) | undefined, what: string) => { try { return f?.() ?? []; } catch (e) { this.#o.log?.warn('ingest', `The outbound guard couldn’t read ${what}.`, { error: (e as Error).message }); return []; } };
-    return outbound(payload.text, {
-      tainted: o.tainted,
-      secrets: read(this.#o.secrets, 'the vault'),
-      mine: () => shingles([...read(this.#o.memory, 'memory'), ...read(this.#o.standing, 'the standing files')]),
-    });
+    let source = 'the vault';
+    try {
+      return outbound(payload.text, {
+        tainted: o.tainted,
+        secrets: this.#o.secrets?.() ?? [],
+        mine: () => {
+          source = 'memory';
+          const memory = this.#o.memory?.() ?? [];
+          source = 'the standing files';
+          return shingles([...memory, ...(this.#o.standing?.() ?? [])]);
+        },
+      });
+    } catch {
+      // A failed or partial check must stop the step, not silently become an empty source.
+      // Neither the payload nor a storage error (which may contain credentials) goes in the reason.
+      const words = `Nova couldn’t check ${source} for private information. Try again when it is available.`;
+      this.#o.log?.warn('ingest', words);
+      return { ok: false, matched: [{ kind: source === 'the vault' ? 'secret' : 'memory', words }] };
+    }
   }
 
   // ---- holds: things from outside that wait for the person (plan §6) ----------------------------
