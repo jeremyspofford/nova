@@ -1,0 +1,3 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"empty":{"status":200,"attachment":true,"noStore":true,"warnings":0,"canaryPresent":false,"format":"nova-diagnostics"},"readable":{"status":200,"attachment":true,"noStore":true,"warnings":0,"canaryPresent":false,"format":"nova-diagnostics"},"unavailable":{"status":200,"attachment":true,"noStore":true,"warnings":1,"canaryPresent":true,"format":"nova-diagnostics"}}
+no-Kubernetes tripwire: never fired

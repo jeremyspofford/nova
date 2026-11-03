@@ -1,0 +1,68 @@
+[
+  {
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--cached",
+      "--check"
+    ],
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--cached",
+      "--stat"
+    ],
+    "exit_code": 0,
+    "stdout": " docs/LEDGER.md                                    |   5 +\n docs/evidence/health-backend-wiring-2026-11-03.md | 106 ++++++++++++++++++++++\n 2 files changed, 111 insertions(+)\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--name-only",
+      "0134b074b3c97ed67c4d5765a1ba788be1205145"
+    ],
+    "exit_code": 0,
+    "stdout": ".superpowers/sdd/health-caps-diagnostics-2026-11-03/task-3-report.md\ndocs/LEDGER.md\ndocs/evidence/health-backend-wiring-2026-11-03.md\ndocs/plans/diagnostics.md\nsrc/core/README.md\nsrc/core/caps/index.ts\nsrc/core/index.ts\nsrc/server.js\nsrc/sessions.js\ntests/acceptance/caps-api.test.ts\ntests/acceptance/caps.test.ts\ntests/core/caps-composition.test.ts\ntests/core/diagnostics-composition.test.ts\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "status",
+      "--short"
+    ],
+    "exit_code": 0,
+    "stdout": "M  docs/LEDGER.md\nA  docs/evidence/health-backend-wiring-2026-11-03.md\n",
+    "stderr": ""
+  },
+  {
+    "package_bytes": {
+      "package.json": {
+        "sha256": "4e5463f62336020fbbb0733b931050e4ee4a424142d4db56ebe60d7b766172c2",
+        "source_equal": true
+      },
+      "package-lock.json": {
+        "sha256": "6879ef97e46aec6de9e8371192c5dac06de4c0e4532d58e08884ead00b9bd305",
+        "source_equal": true
+      }
+    },
+    "source_blob_matches": 11
+  }
+]

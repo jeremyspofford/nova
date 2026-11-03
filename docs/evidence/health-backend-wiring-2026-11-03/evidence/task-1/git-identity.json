@@ -1,0 +1,5 @@
+{
+  "head": "254d75ab978c33e5aef8f98d18d9b4734ea605a9",
+  "source": "git cat-file commit HEAD; exact SHA-1 validated",
+  "scope": "single actual commit object, detached HEAD, empty refs, local-only minimal config; no shared Git directory/history/config"
+}

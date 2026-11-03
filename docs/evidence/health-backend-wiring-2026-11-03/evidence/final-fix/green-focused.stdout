@@ -1,0 +1,39 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ production caps API persists ceilings, validates input and preserves person and mutation guards (1158.987219ms)
+✔ a stuck loop is stopped before its 5th identical call, says what it spent, and its resume waits for an OK; approved, it continues and reports (242.171119ms)
+✔ the day’s ceiling stops the next task before its first model call, and offers its resume (150.392515ms)
+✔ without the caps, the same loop runs to max_tool_steps (today’s only bound), and nothing is offered (116.618562ms)
+✔ a person’s own conversation is metered even above every autonomous ceiling (110.72339ms)
+✔ Core Caps uses its injected clock and dynamically reads profile timezone before detected timezone and UTC (151.786296ms)
+✔ defaults are conservative and set; ceilings change in plain words, null is no ceiling (1.629872ms)
+✔ the loop detector: near-identical calls (case, spacing, key order, numbers) count 1, 3, 5, 7, 9 (0.444821ms)
+✔ a stuck loop is stopped before its 5th identical call; varied work isn’t (15.770018ms)
+✔ tokens: reported as given, otherwise estimated (4 characters a token) and said so; stopped once over the task’s ceiling (1.037624ms)
+✔ dollars: local is free, a priced model is priced from the model manager’s table, an unpriced one is said so and held by tokens (0.760018ms)
+✔ the day’s ceiling holds across tasks (in the person’s timezone), and a person’s conversation doesn’t count against it (0.970278ms)
+✔ the month per provider and model, conversations and reported usage included; the view and the routes (1.588491ms)
+✔ session log counts inspect directory entries only, including main, run and helper logs without interpreting content (1.123864ms)
+✔ production diagnostics downloads fresh numeric Era2 counts with person access and no persisted bundle or excluded content (378.347732ms)
+✔ production diagnostics refuses a populated vault after real key loss, while empty and readable vaults download (118.529352ms)
+▶ production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors
+  ✔ list throws (72.647122ms)
+  ✔ second lookup throws (68.915444ms)
+  ✔ second lookup missing (70.078937ms)
+  ✔ key lookup throws (70.096968ms)
+  ✔ key file unreadable (66.067863ms)
+  ✔ identity unreadable (66.579255ms)
+  ✔ identity malformed (68.453581ms)
+  ✔ identity incomplete (72.762182ms)
+✔ production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors (557.936904ms)
+✔ the scrubber: keys that name secrets, every known value in every form, and secret-shaped strings (1.983628ms)
+✔ the bundle holds no canary from anywhere Nova keeps a secret, no personal content, and still says what is going on (185.101029ms)
+✔ Nova has no way to send the bundle anywhere: the builder imports no network module and writes no file (0.568255ms)
+ℹ tests 28
+ℹ suites 0
+ℹ pass 28
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5265.566967
+no-Kubernetes tripwire: never fired

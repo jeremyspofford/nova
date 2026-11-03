@@ -87,26 +87,47 @@ export class Scrubber {
   }
 }
 
-// Every value Nova knows as a secret, from where it keeps them. What can't be read is said in
-// `warnings` (the allow-list and the key layer still hold).
+// A failed required scan must never turn into a partial set or a warning carrying raw errors.
+// Keep the reason fixed: source errors can themselves contain credentials and private paths.
+class SecretScanUnavailable extends Error {
+  constructor() {
+    super('Diagnostics could not be downloaded because Nova could not complete its secret check. Try again when the secret stores are available.');
+  }
+}
+
+// Every value Nova knows as a secret, from where it keeps them. Finish this scan before reading
+// included metadata/free text. Empty vaults are valid; a missing enumerated entry is not.
 export function knownSecrets(core: Pick<Core, 'vault'>, o: { home: string; env?: NodeJS.ProcessEnv }): { secrets: string[]; warnings: string[] } {
   const secrets: string[] = [];
-  const warnings: string[] = [];
   const add = (v: unknown) => {
     if (typeof v !== 'string' || v.length < 6) return;
     secrets.push(v);
     if (v.startsWith('{')) { try { for (const x of Object.values(JSON.parse(v) as Record<string, unknown>)) add(x); } catch { /* not JSON */ } }
   };
-  try { for (const name of core.vault.list()) add(core.vault.get(name)); } catch (e) { warnings.push(`The vault’s values couldn’t be read to check against (${(e as Error).message}); keys and shapes were still redacted.`); }
-  try { add(core.vault.keyForStandby()); } catch { /* no key yet */ }
-  try { add(readFileSync(join(o.home, 'vault', 'key')).toString('base64')); } catch { /* keychain-held, or none */ }
   try {
+    const names = core.vault.list();
+    for (const name of names) {
+      const value = core.vault.get(name);
+      if (typeof value !== 'string' || !value.length) throw new SecretScanUnavailable();
+      add(value);
+    }
+    const key = core.vault.keyForStandby();
+    if (names.length && !key) throw new SecretScanUnavailable();
+    add(key);
+    // A file key may be absent for an empty vault or a keychain-held key. Other read failures
+    // cannot establish absence and must not silently omit a known-secret source.
+    try { add(readFileSync(join(o.home, 'vault', 'key')).toString('base64')); }
+    catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+    // Core creates its mesh identity at startup, so both private keys must be readable here.
     const id = JSON.parse(readFileSync(join(o.home, 'mesh', 'identity.json'), 'utf8')) as Record<string, Record<string, unknown>>;
+    for (const name of ['ed25519', 'x25519']) {
+      if (typeof id?.[name]?.private !== 'string' || !id[name]!.private) throw new SecretScanUnavailable();
+    }
     for (const part of Object.values(id)) if (part && typeof part === 'object') add(part.private);
-  } catch { /* no identity yet */ }
-  // The stable name's control token (M10g) is a secret too.
-  for (const [k, v] of Object.entries(o.env ?? process.env)) if (/^NOVA_SECRET_/.test(k) || k === 'NOVA_MESH_NAME_TOKEN') add(v);
-  return { secrets, warnings };
+    // The stable name's control token (M10g) is a secret too.
+    for (const [k, v] of Object.entries(o.env ?? process.env)) if (/^NOVA_SECRET_/.test(k) || k === 'NOVA_MESH_NAME_TOKEN') add(v);
+  } catch { throw new SecretScanUnavailable(); }
+  return { secrets, warnings: [] };
 }
 
 const clip = (s: unknown, n: number) => { const t = String(s ?? ''); return t.length > n ? `${t.slice(0, n)}… [${t.length - n} more characters]` : t; };
@@ -202,12 +223,18 @@ export async function buildDiagnostics(core: Core, o: DiagnosticsOptions) {
 
 export const fileName = (at: Date) => `nova-diagnostics-${at.toISOString().slice(0, 16).replace(/[-:T]/g, (c) => (c === 'T' ? '-' : '')).replace(/^(\d{8})-(\d{4})$/, (_m, d, t) => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}-${t}`)}.json`;
 
-// The route, ready for the composition root to wire (docs/plans/diagnostics.md, NOTES): the
-// bundle as an attachment, to the person's own browser; never stored, never sent elsewhere.
+// Mounted by Core: the bundle as an attachment to the person’s own browser; never stored,
+// never sent elsewhere. An incomplete required secret scan returns only a fixed error.
 export function diagnosticsRoutes(build: () => ReturnType<typeof buildDiagnostics>, now: () => Date = () => new Date()): Route[] {
   return [{
     method: 'GET', path: '/diagnostics',
     summary: 'One-click diagnostics: versions, health, recent logs and config, with every secret replaced by **REDACTED** and no personal content (counts and states only). Built for this request, returned as a file to download; Nova keeps no copy and sends it nowhere.',
-    handle: async () => new Reply(await build(), { 'content-disposition': `attachment; filename="${fileName(now())}"` }),
+    handle: async () => {
+      try { return new Reply(await build(), { 'content-disposition': `attachment; filename="${fileName(now())}"` }); }
+      catch (e) {
+        if (e instanceof SecretScanUnavailable) return new Reply({ error: e.message }, {}, 503);
+        throw e;
+      }
+    },
   }];
 }

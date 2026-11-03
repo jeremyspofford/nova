@@ -1,0 +1,30 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ the day’s ceiling stops the next task before its first model call, and offers its resume (231.122686ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 548.249656
+
+✖ failing tests:
+
+test at tests/acceptance/caps.test.ts:102:1
+✖ the day’s ceiling stops the next task before its first model call, and offers its resume (231.122686ms)
+  AssertionError [ERR_ASSERTION]: The input was expected to not match the regular expression /Health/. Input:
+  
+  "Nova's chat model (example-model-command) couldn't do it: Second check didn't finish. Stopped at today’s ceiling for all tasks: 20,000 tokens. Today’s tasks spent 16 steps, 22,898 tokens (estimated), $0.00; this one, 0 steps, 0 tokens, $0.00. Resuming waits for your OK in Tasks, and runs once there is room under today’s ceiling (it starts again at midnight); the ceilings are in Health."
+  
+      at TestContext.<anonymous> (file:///workspace/tests/acceptance/caps.test.ts:112:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "Nova's chat model (example-model-command) couldn't do it: Second check didn't finish. Stopped at today’s ceiling for all tasks: 20,000 tokens. Today’s tasks spent 16 steps, 22,898 tokens (estimated), $0.00; this one, 0 steps, 0 tokens, $0.00. Resuming waits for your OK in Tasks, and runs once there is room under today’s ceiling (it starts again at midnight); the ceilings are in Health.",
+    expected: /Health/,
+    operator: 'doesNotMatch',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

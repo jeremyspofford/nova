@@ -1,0 +1,435 @@
+{
+  "scope": "Complete new controlled backend integration/fix/qualification reports and raw records. Original-health45file private snapshot is retained separately; original pinned public evidence linked inREADME. Synthetic Git identity objects only; no owner/shared gitdir.",
+  "files": [
+    {
+      "file": "task-1-report.md",
+      "bytes": 43967,
+      "sha256": "066d0f088d54870e94ac11f579f68c3fed5ec3ab41092d90ed806fd8118a089f"
+    },
+    {
+      "file": "final-review.md",
+      "bytes": 14567,
+      "sha256": "c51e84bf1c1b30279cf99ae72256254bbace0792a5518cf782b2cfe4e19f05d3"
+    },
+    {
+      "file": "final-fix-report.md",
+      "bytes": 17493,
+      "sha256": "bcc8b78b283e38ebb363feae2b372e61ac5d2bc1e6f0bbe156b961d1049d0fc1"
+    },
+    {
+      "file": "final-fix-review.md",
+      "bytes": 11283,
+      "sha256": "e93d21bb5fb297801a09ef321d16365baa4cd395ccf1932f3aee4cebe3cc4937"
+    },
+    {
+      "file": "task-2-fixture-review.md",
+      "bytes": 4974,
+      "sha256": "d7748dfc04d80dbd1019350a67aa52e295005dabf4894b0c5892f9070a7a0056"
+    },
+    {
+      "file": "evidence/final-fix/commit.json",
+      "bytes": 1720,
+      "sha256": "79597b59a1892c573b8f5fa5ba6fb74c5b528f33270d107d88f10d4114ad0681"
+    },
+    {
+      "file": "evidence/final-fix/qualification-r1-red.json",
+      "bytes": 2218,
+      "sha256": "feeca6a4133f5aa0883a79b776584059a70d692f93aa01640c54fba2c4f14b8c"
+    },
+    {
+      "file": "evidence/final-fix/qualification-r1-green.stdout",
+      "bytes": 399,
+      "sha256": "8ce3462a76059cb6e584971cbfcc064b96897326ccd9c3253f76e4eadf19e5eb"
+    },
+    {
+      "file": "evidence/final-fix/git-identity.json",
+      "bytes": 242,
+      "sha256": "2c887a93b2d9aeb380f276f88031d8d0e606c79b2411168fa94ef9eb60fa9b0b"
+    },
+    {
+      "file": "evidence/final-fix/source.diff",
+      "bytes": 22401,
+      "sha256": "718402352333f7b07ff0b14a0756b7b511ac8b617764f94e8652cd88cd9fe9de"
+    },
+    {
+      "file": "evidence/final-fix/rereview-name-token.stdout",
+      "bytes": 1180,
+      "sha256": "fe9c328ae3eff88f252f2a30460a19f52993243c4c54c60ec5c7dac6e2e1499b"
+    },
+    {
+      "file": "evidence/final-fix/green-focused.stdout",
+      "bytes": 3182,
+      "sha256": "63bacd1f470c8f0b3b55ef46e00a5569904e6352d6e8441ca067854735d564af"
+    },
+    {
+      "file": "evidence/final-fix/runtime-identity.json",
+      "bytes": 2415,
+      "sha256": "57137e06aa5b63bd9e583dc70610422507f7ce4307ad4d4f2b0cd096803b0a68"
+    },
+    {
+      "file": "evidence/final-fix/red-i1.json",
+      "bytes": 2357,
+      "sha256": "16cc9125321ebb45fddc23dfd7d574bcc66c5ac1c748614874f89302c3aced5f"
+    },
+    {
+      "file": "evidence/final-fix/compiler.stderr",
+      "bytes": 72,
+      "sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0"
+    },
+    {
+      "file": "evidence/final-fix/rereview-name-token.sha256.json",
+      "bytes": 301,
+      "sha256": "0aac444d74546902590189228513b593ff6b1acedb0e453cdba3d3d5bf17487a"
+    },
+    {
+      "file": "evidence/final-fix/red-m1.stdout",
+      "bytes": 1846,
+      "sha256": "c33eec63f8e86d4ea0e03161d6bed04eb897f0db3dc0b69a7756c8441077e33a"
+    },
+    {
+      "file": "evidence/final-fix/qualification-r1-green.json",
+      "bytes": 2309,
+      "sha256": "a2e77320c0240641a38d6e392955ee2e74b38b43896dd192f7746cf4b5ab312d"
+    },
+    {
+      "file": "evidence/final-fix/qualification-r1-typecheck.json",
+      "bytes": 2035,
+      "sha256": "512543b9e723b49c045ed5226ba6da4c6281e976b2247a80f9f888626aec15c7"
+    },
+    {
+      "file": "evidence/final-fix/green-focused.json",
+      "bytes": 2903,
+      "sha256": "957d10b0f87ed53225a3026a4e849d4e192ba6d377436c6f6b5c8344e409edca"
+    },
+    {
+      "file": "evidence/final-fix/qualification-r1-red.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/final-fix/rereview-name-token.json",
+      "bytes": 2160,
+      "sha256": "aacf97893ece0d534fb801119bf1d15fa10cb3fa9593381d103c364054c3c9f2"
+    },
+    {
+      "file": "evidence/final-fix/report.py",
+      "bytes": 15147,
+      "sha256": "cec814081b1abfa00963d1fd622abaf3244b522fecaa1132d39510823c0375ba"
+    },
+    {
+      "file": "evidence/final-fix/compiler.stdout",
+      "bytes": 149,
+      "sha256": "a365b26d2be4b5397cda01c7e7547d385993c009272b0432640e78e074a0cd72"
+    },
+    {
+      "file": "evidence/final-fix/qualification-r1-typecheck.stdout",
+      "bytes": 149,
+      "sha256": "a365b26d2be4b5397cda01c7e7547d385993c009272b0432640e78e074a0cd72"
+    },
+    {
+      "file": "evidence/final-fix/red-i1.stdout",
+      "bytes": 9179,
+      "sha256": "fdb57ef01fa12a56d2765ae240426f38fc4982f5f05feefa8f77aced00c30495"
+    },
+    {
+      "file": "evidence/final-fix/runtime-identity.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/final-fix/postcommit.json",
+      "bytes": 2306,
+      "sha256": "2e149e50ba2c6abd5d43688b0efb0f6a4f867b15f3e5644703fa2357d9bdbf78"
+    },
+    {
+      "file": "evidence/final-fix/launcher.py",
+      "bytes": 2725,
+      "sha256": "47717fdaeae12331d2b97b7a9b998da4a9dcbbd2e29e2f9fd708af9bc20bb7ec"
+    },
+    {
+      "file": "evidence/final-fix/provenance.json",
+      "bytes": 5927,
+      "sha256": "86aa853dce2c321025c4e17b80c882abee27e6fa3f589844b93f995ed30d99a0"
+    },
+    {
+      "file": "evidence/final-fix/green-focused.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/final-fix/red-m1.json",
+      "bytes": 2307,
+      "sha256": "43b8c39d779ef290dc88404abd7b9c0c271cb5b2894df3e9a7a5adcdead9e419"
+    },
+    {
+      "file": "evidence/final-fix/qualification-r1-red.stdout",
+      "bytes": 1180,
+      "sha256": "329f8dc4da9accde6d414042859bef41e776a9d04ede8000d252fbe015fb2848"
+    },
+    {
+      "file": "evidence/final-fix/rereview-name-token.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/final-fix/runtime-identity.stdout",
+      "bytes": 198,
+      "sha256": "4a4430a3f7e570285eeee340aa39473ce54c97aff872a7c8f03898dc1eb373d5"
+    },
+    {
+      "file": "evidence/final-fix/qualification-r1-green.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/final-fix/task-2-fixture-report.md",
+      "bytes": 3946,
+      "sha256": "b00ee0347d36c1f667bd937f6cd0227a0c127ea14b92f508b19069bb33321174"
+    },
+    {
+      "file": "evidence/final-fix/red-i1.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/final-fix/red-m1.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/final-fix/sha256.json",
+      "bytes": 2466,
+      "sha256": "a17455ce0d8b14b9c7c9328cecb74bff0485cf5c030b3a02f78ada9e1038cfa2"
+    },
+    {
+      "file": "evidence/final-fix/git-pointer",
+      "bytes": 101,
+      "sha256": "f759fd44b9bcca318309f9ed65b347b3a4a3f86bdbb206ab850c7d4d9c3e2c28"
+    },
+    {
+      "file": "evidence/final-fix/qualification-r1-typecheck.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/final-fix/compiler.json",
+      "bytes": 2337,
+      "sha256": "419aea829a9adcc16d988dfd034aae4ed79ab444dfd32f58231f61bd1bc7e453"
+    },
+    {
+      "file": "evidence/task-1/precommit-checks.json",
+      "bytes": 1945,
+      "sha256": "137658ac8f1694eb015f6dcf3be4c1f2a8bc43c4d6c2bd51226ddce65e266355"
+    },
+    {
+      "file": "evidence/task-1/git-identity-probe.json",
+      "bytes": 1854,
+      "sha256": "465f07446fbb78d26e46bf41c4b238aa4e6d2d4b78b0cf3630146269e6c0b8b2"
+    },
+    {
+      "file": "evidence/task-1/review-vault-unavailable.stdout",
+      "bytes": 516,
+      "sha256": "0ec4e52a66f43ee7d03a0c823322ffa9daa1c43a3a32af5c6e74ffdc4d8bb16a"
+    },
+    {
+      "file": "evidence/task-1/runtime.stdout",
+      "bytes": 157,
+      "sha256": "d2f9ae120eb1182562ea6a2055ed2e5e08035eefdec5665515c00588f2ead69f"
+    },
+    {
+      "file": "evidence/task-1/git-identity.json",
+      "bytes": 256,
+      "sha256": "cdc9f6bf39a5a4e07e978a7633daf64a78652e338e0d3de24bcf5dddc7680722"
+    },
+    {
+      "file": "evidence/task-1/source-blobs.json",
+      "bytes": 3315,
+      "sha256": "21d29d1889cb89d935445f289c4c4242b186ba2708e29bafbc826a9e1f6f2cb0"
+    },
+    {
+      "file": "evidence/task-1/review-vault-unavailable.sha256.json",
+      "bytes": 418,
+      "sha256": "74eb365bb4aec3d3bd9400d4ccd9e76f859a1d2ccfee23649ccd8d980ec71dad"
+    },
+    {
+      "file": "evidence/task-1/review-vault-unavailable.stderr",
+      "bytes": 569,
+      "sha256": "6108b7dc061135391c6c3864863fbbde8326d2b6fa3c19eb93908bfc24e217e7"
+    },
+    {
+      "file": "evidence/task-1/diagnostics-corrected.json",
+      "bytes": 1836,
+      "sha256": "7ad691c108fa29f6b92eaa2e9cdf8eecded340f6b992b9245d87bf4f2022397e"
+    },
+    {
+      "file": "evidence/task-1/diagnostics-corrected.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/task-1/postcommit-checks.json",
+      "bytes": 2988,
+      "sha256": "56c3ec25b39f7612aa14fb8edfdd4cc75878b012e91400680291fda2c4905a16"
+    },
+    {
+      "file": "evidence/task-1/review-vault-unavailable.mjs",
+      "bytes": 2718,
+      "sha256": "e2a403c6f13ba6935fd9c374ffc1ffcd9af0eb69c67326dfed99418834589d14"
+    },
+    {
+      "file": "evidence/task-1/review-vault-unavailable.json",
+      "bytes": 2032,
+      "sha256": "c703b618860923a44b8745da6975c096eeb9826d1a59dc465f961d3875a7f7c7"
+    },
+    {
+      "file": "evidence/task-1/git-boundary.stderr",
+      "bytes": 91,
+      "sha256": "4f986f4883c0cdf3ad039bf4c41af278648145986d609d8e06ce132c92d1fb9f"
+    },
+    {
+      "file": "evidence/task-1/compiler.stderr",
+      "bytes": 72,
+      "sha256": "e8180baa00ad9e924316d504d52e1481d7865b7c7920b00f90f09701440c5da0"
+    },
+    {
+      "file": "evidence/task-1/git-identity-probe.stdout",
+      "bytes": 157,
+      "sha256": "f9d25c7415d1a20ffa1d1ded0dfe5af5a727382de18c7a5e9de14a6b9b96f511"
+    },
+    {
+      "file": "evidence/task-1/compiler.stdout",
+      "bytes": 149,
+      "sha256": "a365b26d2be4b5397cda01c7e7547d385993c009272b0432640e78e074a0cd72"
+    },
+    {
+      "file": "evidence/task-1/collect_provenance.py",
+      "bytes": 3181,
+      "sha256": "4a7020c81617e269d54f888cfb20aa97d6764b33196c71cfa1418978c7134fcc"
+    },
+    {
+      "file": "evidence/task-1/focused.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/task-1/focused.stdout",
+      "bytes": 4486,
+      "sha256": "a26d36eab72b94c35dab63eeeaac3f0bd6c9d5ed0cc1d706944403eb3d939627"
+    },
+    {
+      "file": "evidence/task-1/git-boundary.json",
+      "bytes": 1651,
+      "sha256": "739502275acf7a9f004195258f76f1a58adfc6bbc54cfec8d04a375111d933df"
+    },
+    {
+      "file": "evidence/task-1/launcher.py",
+      "bytes": 2322,
+      "sha256": "d0e2abe51bee85b130bef50aa8aaf236e3fb503b7b9476a389964dbb7cbcaf89"
+    },
+    {
+      "file": "evidence/task-1/write_report.py",
+      "bytes": 20440,
+      "sha256": "351abb37e4d73f525a5e8192edd3d23c088c0c2249544d8f0d92c992b0f021ab"
+    },
+    {
+      "file": "evidence/task-1/precommit-checks-initial.json",
+      "bytes": 1775,
+      "sha256": "6e509e1bb2b511a312f909933b0629394ca4d078f65c7eddede36a42c6277c21"
+    },
+    {
+      "file": "evidence/task-1/diagnostics-corrected.stdout",
+      "bytes": 538,
+      "sha256": "85302d3c6cfaa72f709c9de0c352ff770e8aa13147752b34f8e61e8717512e2d"
+    },
+    {
+      "file": "evidence/task-1/runtime.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/task-1/git-boundary.stdout",
+      "bytes": 162,
+      "sha256": "1a9950366afda91876d7376507c4df8281110e15b00135905817b144439a2e3b"
+    },
+    {
+      "file": "evidence/task-1/git-identity-probe.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "evidence/task-1/runtime.json",
+      "bytes": 1535,
+      "sha256": "2c9e4907796c6e55e82345f50453f99269a66f721e5a6121328f97e636daf64b"
+    },
+    {
+      "file": "evidence/task-1/launcher-initial.py",
+      "bytes": 2233,
+      "sha256": "c3cb183e9f5c0d8074b8d1507b058e65cf9db22de75ac50e1b9da6080088de81"
+    },
+    {
+      "file": "evidence/task-1/sha256.json",
+      "bytes": 8738,
+      "sha256": "d7a8d0a5f4c00b71ed64bf1f42430c6c551069ac60267cd3c41c18cfea0fb061"
+    },
+    {
+      "file": "evidence/task-1/protected-scope.json",
+      "bytes": 651,
+      "sha256": "fed94c385f8a78dfe7c5214448deb23e154eecb50fee86270a0ed8036f364e51"
+    },
+    {
+      "file": "evidence/task-1/focused.json",
+      "bytes": 2065,
+      "sha256": "982cac84508ff2d24a5259c6676ae776a17b8c0a174bbd94399bfdbb17ff9749"
+    },
+    {
+      "file": "evidence/task-1/git-pointer",
+      "bytes": 98,
+      "sha256": "473205783e1e15a282d0ecf3a8e059eb69c2d735fdffdd0cc6cdc2b4972b3ccb"
+    },
+    {
+      "file": "evidence/task-1/original-health-manifest.json",
+      "bytes": 15261,
+      "sha256": "e6ca4621cfdebed5fb7d3a1fe35dbb29175d72ba6b5e416a89bc4d928786e7ab"
+    },
+    {
+      "file": "evidence/task-1/compiler.json",
+      "bytes": 1555,
+      "sha256": "29625fdc38314b820deb3d3aa513f1c2afc2c3dac1e124170040e9a55560be72"
+    },
+    {
+      "file": "evidence/task-1/protected-scope-final.json",
+      "bytes": 742,
+      "sha256": "168037d75f710f390ec9c2000a22c1f062381da2e58386c6a94d7a9fd19b908e"
+    },
+    {
+      "file": "evidence/task-1/git-identity/HEAD",
+      "bytes": 41,
+      "sha256": "84bf331e67166a80bd3cb19079f253ebb65e3f74eec993fea3d81e0d3df8a30d"
+    },
+    {
+      "file": "evidence/task-1/git-identity/config",
+      "bytes": 50,
+      "sha256": "850b95ebbbb9dc7827cb07d1099222cebf6e0d98f7294879fbdbb49c1fc6de64"
+    },
+    {
+      "file": "evidence/task-1/git-identity/objects/25/4d75ab978c33e5aef8f98d18d9b4734ea605a9",
+      "bytes": 268,
+      "sha256": "f16c1286a395debc3df32672ba30ca8dd122cd1a1ede3959bca973ac0d6c4f93"
+    },
+    {
+      "file": "evidence/final-fix/git-identity/HEAD",
+      "bytes": 41,
+      "sha256": "f4c66ef82578e008851fc430b8d9be0b4c5611e4001ae19ce141674a27f627e2"
+    },
+    {
+      "file": "evidence/final-fix/git-identity/config",
+      "bytes": 50,
+      "sha256": "850b95ebbbb9dc7827cb07d1099222cebf6e0d98f7294879fbdbb49c1fc6de64"
+    },
+    {
+      "file": "evidence/final-fix/git-identity/objects/f9/ffbb0c2b241b60ba5161cc55bbdb8c3462b819",
+      "bytes": 211,
+      "sha256": "60263c548986b4489cba59ee95f930d16749b1c259a9d7371e803bfe987310d7"
+    }
+  ]
+}

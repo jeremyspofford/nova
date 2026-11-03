@@ -42,6 +42,13 @@ export class SessionStore {
     return out;
   }
 
+  // Diagnostics counts persisted logs, including main/runs/helpers, without opening content.
+  countLogs() {
+    if (!existsSync(this.dir)) return 0;
+    return readdirSync(this.dir, { withFileTypes: true })
+      .filter((f) => f.isFile() && f.name.endsWith('.jsonl') && validId(f.name.slice(0, -6))).length;
+  }
+
   // The conversations the person started. The main conversation and the
   // logs of scheduled runs and helpers are kept here too, but not listed.
   list() {

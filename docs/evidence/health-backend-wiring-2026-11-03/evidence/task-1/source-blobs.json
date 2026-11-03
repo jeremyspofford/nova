@@ -1,0 +1,84 @@
+{
+  "base": "0134b074b3c97ed67c4d5765a1ba788be1205145",
+  "reviewed": "1572f294d319791bfaa73ccf224335eb06eb1bbc",
+  "tested_head": "254d75ab978c33e5aef8f98d18d9b4734ea605a9",
+  "files": [
+    {
+      "path": ".superpowers/sdd/health-caps-diagnostics-2026-11-03/task-3-report.md",
+      "reviewed_blob": "6608cb31f5b912f8d0be6ddf0a15441216326c5e",
+      "integration_blob": "6608cb31f5b912f8d0be6ddf0a15441216326c5e",
+      "worktree_blob": "6608cb31f5b912f8d0be6ddf0a15441216326c5e",
+      "equal": true
+    },
+    {
+      "path": "docs/plans/diagnostics.md",
+      "reviewed_blob": "86f65a0bc2ddf94ed6403493f22d1a8c48612d8b",
+      "integration_blob": "86f65a0bc2ddf94ed6403493f22d1a8c48612d8b",
+      "worktree_blob": "86f65a0bc2ddf94ed6403493f22d1a8c48612d8b",
+      "equal": true
+    },
+    {
+      "path": "src/core/README.md",
+      "reviewed_blob": "36afb4a5f9ad17743361a140d50ec5bfea214fbe",
+      "integration_blob": "36afb4a5f9ad17743361a140d50ec5bfea214fbe",
+      "worktree_blob": "36afb4a5f9ad17743361a140d50ec5bfea214fbe",
+      "equal": true
+    },
+    {
+      "path": "src/core/caps/index.ts",
+      "reviewed_blob": "cb75d02b5fcec82073335ce1bb92a466d62d07ab",
+      "integration_blob": "cb75d02b5fcec82073335ce1bb92a466d62d07ab",
+      "worktree_blob": "cb75d02b5fcec82073335ce1bb92a466d62d07ab",
+      "equal": true
+    },
+    {
+      "path": "src/core/index.ts",
+      "reviewed_blob": "4983545b13fd3acd51e67703bf1c1ccd440cef99",
+      "integration_blob": "4983545b13fd3acd51e67703bf1c1ccd440cef99",
+      "worktree_blob": "4983545b13fd3acd51e67703bf1c1ccd440cef99",
+      "equal": true
+    },
+    {
+      "path": "src/server.js",
+      "reviewed_blob": "78f483d90cd2fa7a809ff96195b5d0ed7917ae4f",
+      "integration_blob": "78f483d90cd2fa7a809ff96195b5d0ed7917ae4f",
+      "worktree_blob": "78f483d90cd2fa7a809ff96195b5d0ed7917ae4f",
+      "equal": true
+    },
+    {
+      "path": "src/sessions.js",
+      "reviewed_blob": "6c3d49596e7f9dfc14166097f4490aa83be7d215",
+      "integration_blob": "6c3d49596e7f9dfc14166097f4490aa83be7d215",
+      "worktree_blob": "6c3d49596e7f9dfc14166097f4490aa83be7d215",
+      "equal": true
+    },
+    {
+      "path": "tests/acceptance/caps-api.test.ts",
+      "reviewed_blob": "ce191f30ad4a8e655c7d7556b1a745ab2ed4634a",
+      "integration_blob": "ce191f30ad4a8e655c7d7556b1a745ab2ed4634a",
+      "worktree_blob": "ce191f30ad4a8e655c7d7556b1a745ab2ed4634a",
+      "equal": true
+    },
+    {
+      "path": "tests/acceptance/caps.test.ts",
+      "reviewed_blob": "f599f7c9441ce8605a934954bd1729a9087fbd4f",
+      "integration_blob": "f599f7c9441ce8605a934954bd1729a9087fbd4f",
+      "worktree_blob": "f599f7c9441ce8605a934954bd1729a9087fbd4f",
+      "equal": true
+    },
+    {
+      "path": "tests/core/caps-composition.test.ts",
+      "reviewed_blob": "838652c17d2209bb7f021d7faf33d5837cd0d60c",
+      "integration_blob": "838652c17d2209bb7f021d7faf33d5837cd0d60c",
+      "worktree_blob": "838652c17d2209bb7f021d7faf33d5837cd0d60c",
+      "equal": true
+    },
+    {
+      "path": "tests/core/diagnostics-composition.test.ts",
+      "reviewed_blob": "dc7a72f589b2e4cdcb7476dc3989717dde2872a0",
+      "integration_blob": "dc7a72f589b2e4cdcb7476dc3989717dde2872a0",
+      "worktree_blob": "dc7a72f589b2e4cdcb7476dc3989717dde2872a0",
+      "equal": true
+    }
+  ]
+}

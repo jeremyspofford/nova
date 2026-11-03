@@ -82,6 +82,8 @@ import { Restarter } from './resilience/restart.ts';
 import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
 import { Self } from './self.ts';
+import { Caps, capsRoutes } from './caps/index.ts';
+import { buildDiagnostics, diagnosticsRoutes } from './diagnostics/index.ts';
 import { CODE_ROOT } from './resilience/sandbox.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -273,6 +275,8 @@ export interface CoreOptions {
   // What this instance is for (NOVA_INSTANCE): preview, production or development. Said in the
   // agent's briefing.
   instance?: string;
+  // Era 2 hands diagnostics numeric counts only, evaluated for each download.
+  diagnostics?: { era2: () => Record<string, number> };
   now?: () => Date;
 }
 
@@ -304,6 +308,10 @@ export function createCore(o: CoreOptions) {
   let meshRole: MeshRole | null = null;
   log.local = () => (meshRole ? meshRole.role() : place.role) !== 'hub';
   const profile = new Profile(db, now);
+  const caps = new Caps({
+    home: o.home, profile, now,
+    timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
+  });
   const workspace = new Workspace(join(o.home, 'workspace'));
   const verifier = new Verifier(workspace, now);
   for (const [system, check] of Object.entries(o.confirmations ?? {})) verifier.registerConfirmation(system, check);
@@ -1506,6 +1514,9 @@ export function createCore(o: CoreOptions) {
     // ---- capture (M6 plan §1) ----
     ...captureRoutes(capture),
     ...models.routes(),
+    ...capsRoutes(caps),
+    // The getter runs only when a person requests a download, after Core is constructed.
+    ...diagnosticsRoutes(() => buildDiagnostics(core, { home: o.home, version: o.version, commit: self.build(), instance: o.instance, now, era2: o.diagnostics?.era2 }), now),
     // ---- the Decision Service's settings (DS1 NOTE 4; owner decision 2) ----
     { method: 'GET', path: '/models/decisions', summary: 'The decision model: Tev1 and Jev as Nova sees them, the person’s choices (the Jev key only as set or not), what Nova recommends, a plain notice for each choice it doesn’t and for each opt-in that is on, each model’s eval scorecard, and what each opt-in means.', handle: () => decisionsView() },
     {
@@ -1649,10 +1660,10 @@ export function createCore(o: CoreOptions) {
     ...(o.chat ? { chat: o.chat } : {}),
   });
 
-  return {
+  const core = {
     self,
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network,
-    ingest, vault, broker: o.broker ?? null, connectors, capture, models, changes,
+    ingest, vault, broker: o.broker ?? null, connectors, capture, models, changes, caps,
     // The Decision Service (DS1): its view of the seats, a refresh, how a template stands, and
     // asking for a template. Never a seat: nothing reaches a decision model except through it.
     decisionService: { view: decisionService.view, refresh: decisionService.refresh, standing: decisionService.standing, ask: decisionService.service.ask.bind(decisionService.service) }, foundry, resilience: keep, checkpoints, restarter, reset,
@@ -1749,6 +1760,7 @@ export function createCore(o: CoreOptions) {
       db.close();
     },
   };
+  return core;
 }
 
 // Replaces the hub's keys after they were exposed (the README's “If the hub’s keys were exposed”):
