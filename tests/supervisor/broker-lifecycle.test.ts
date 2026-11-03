@@ -212,3 +212,51 @@ test('concurrent restarts admit one replacement broker/Core pair', async () => {
     assert.match(results.find((r) => !r.ok)!.said, /restart.*running/i);
   } finally { await f.sup.close(); rmSync(f.dir, { recursive: true, force: true }); }
 });
+
+test('supervised keychain reset retries interruption without reading/recreating removed keys and preserves unrelated accounts', { timeout: 30000 }, async () => {
+  const f = fixture();
+  const bin = join(f.dir, 'bin'), keys = join(f.dir, 'keys'); mkdirSync(bin); mkdirSync(keys);
+  const denied = join(f.dir, 'deny-sign');
+  writeFileSync(join(keys, 'nova-broker-unrelated'), 'keep-other-account');
+  writeFileSync(join(bin, 'secret-tool'), `#!/usr/bin/python3
+import os,sys
+args=sys.argv
+service=args[args.index('service')+1]; account=args[args.index('account')+1]
+p=os.path.join(${JSON.stringify(keys)},service+'-'+account)
+if args[1]=='lookup':
+    if not os.path.exists(p): sys.exit(1)
+    print(open(p).read())
+elif args[1]=='store': open(p,'w').write(sys.stdin.read())
+elif args[1]=='clear':
+    if account.startswith('sign-') and os.path.exists(${JSON.stringify(denied)}):
+        print('private injected denial',file=sys.stderr); sys.exit(7)
+    if os.path.exists(p): os.unlink(p)
+    else: sys.exit(1)
+`, { mode: 0o755 });
+  Object.assign(f.sup.o.env, { NOVA_VAULT_KEY: 'keychain', PATH: `${bin}:/usr/bin:/bin`, DBUS_SESSION_BUS_ADDRESS: 'unix:path=/tmp/private-fake-no-socket' });
+  const firstCore = open(f.home); await firstCore.close();
+  try {
+    await f.sup.run(); await until(() => f.sup.state.mode === 'running', 'running');
+    const base = `http://127.0.0.1:${f.sup.server!.port}`;
+    const p = new Person(async (m, fields = {}) => (await fetch(`${base}/test-broker`, { method: 'POST', body: JSON.stringify({ m, f: fields }) })).json());
+    await p.setup();
+    const old = JSON.parse(readFileSync(join(f.home, 'broker/device.json'), 'utf8')).id;
+    // A synthetic signing entry covers both fixed accounts even if no outbox was needed yet.
+    writeFileSync(join(keys, `nova-broker-sign-${old}`), Buffer.alloc(32, 9).toString('base64'));
+    const c = open(f.home);
+    const stage = await c.reset.stage({ confirm: true, who: { principal: { kind: 'console' }, listener: 'console', address: '127.0.0.1' } });
+    await stage.done; await c.close(); writeFileSync(denied, 'deny');
+    assert.equal((await f.sup.restart()).ok, false);
+    await until(() => f.sup.state.mode === 'safe_mode', 'interrupted reset held');
+    assert.equal(existsSync(join(keys, `nova-broker-device-${old}`)), false);
+    assert.equal(existsSync(join(keys, `nova-broker-sign-${old}`)), true);
+    assert.equal(JSON.parse(readFileSync(join(f.home, 'broker/device.json'), 'utf8')).id, old);
+    assert.ok(existsSync(join(f.home, 'factory-reset.json')));
+    rmSync(denied);
+    assert.equal((await f.sup.recover()).ok, true);
+    assert.equal(existsSync(join(keys, `nova-broker-sign-${old}`)), false);
+    assert.notEqual(JSON.parse(readFileSync(join(f.home, 'broker/device.json'), 'utf8')).id, old);
+    assert.equal(readFileSync(join(keys, 'nova-broker-unrelated'), 'utf8'), 'keep-other-account');
+    assert.equal(existsSync(join(f.home, 'factory-reset.json')), false);
+  } finally { await f.sup.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
