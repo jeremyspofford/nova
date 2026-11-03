@@ -129,7 +129,10 @@ export function removeDeviceKeys(dir: string, store: (account: string) => KeySto
     if (existsSync(p) && (!lstatSync(p).isDirectory() || readdirSync(p).some((n) => !(allowed as readonly string[]).includes(n)))) throw new Error('Owned program cleanup needs operator recovery.');
   }
   const file = join(dir, 'device.json');
-  if (!existsSync(file)) return;
+  if (!existsSync(file)) {
+    if (readdirSync(dir).some((name) => name !== 'run')) throw new Error('Missing broker device record; operator recovery is required.');
+    return;
+  }
   if (!lstatSync(file).isFile()) throw new Error('Invalid broker device record.');
   const d = JSON.parse(readFileSync(file, 'utf8')) as { id?: unknown };
   if (typeof d.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(d.id)) throw new Error('Invalid broker device record.');

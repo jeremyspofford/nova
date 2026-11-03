@@ -62,3 +62,14 @@ test('broker bootstrap refuses a symlinked storage directory before touching its
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('reset refuses broker data with a missing device record instead of losing unknown-account evidence', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nova-broker-missing-record-'));
+  const fake = (): keys.KeyStore => { throw new Error('no account may be guessed'); };
+  try {
+    assert.doesNotThrow(() => keys.removeDeviceKeys(dir, fake), 'empty uninitialized directory has no account record');
+    writeFileSync(join(dir, 'vault.json'), 'retained synthetic broker data');
+    assert.throws(() => keys.removeDeviceKeys(dir, fake), /device record|operator recovery/i);
+    assert.ok(existsSync(join(dir, 'vault.json')));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
