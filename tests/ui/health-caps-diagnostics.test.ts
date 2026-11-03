@@ -35,6 +35,19 @@ async function healthFromHome(p: Page, touch: boolean) {
   assert.equal(await p.locator('[data-download-diagnostics]').getAttribute('href'), '/api/v1/diagnostics');
 }
 
+// Include the actual outer panels: the WCAG-tag component scan alone misses duplicate landmarks.
+async function healthLandmarks(p: Page, label: string) {
+  const violations = await p.evaluate(async () => (await (window as any).axe.run({ include: ['#health-view'] }, { runOnly: { type: 'rule', values: ['landmark-unique'] } })).violations.map((v: any) => ({ id: v.id, targets: v.nodes.map((n: any) => n.target) })));
+  console.log(`HEALTH LANDMARK ${label} ${JSON.stringify(violations)}`);
+  assert.deepEqual(violations, [], 'actual Health has no duplicate named landmarks');
+  for (const name of ['Work costs', 'Diagnostics']) assert.equal(await p.getByRole('region', { name, exact: true }).count(), 1, `one named region for ${name}`);
+  const duplicateIds = await p.evaluate(() => {
+    const panels = ['#h-work-costs', '#h-diagnostics'].map(id => document.querySelector(id)!.parentElement!);
+    return panels.flatMap(panel => [...panel.querySelectorAll('[id]')].map(e => e.id)).filter(id => document.querySelectorAll(`[id="${CSS.escape(id)}"]`).length !== 1);
+  });
+  assert.deepEqual(duplicateIds, [], 'all new-surface IDs are unique in the actual document');
+}
+
 // A real installed-worker upgrade, with only the old static worker response pinned. All API
 // replies and the download still come from production createNova and its private fixture stores.
 async function diagnosticsWorkerUpgrade(b: Browser, m: ReturnType<typeof blank>, nova: ReturnType<typeof createNova>) {
@@ -161,6 +174,8 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         assert.equal(await p.locator('#banner').isVisible(), false, 'live Core responses override the browser network hint');
         assert.notEqual(await p.locator('.orb[data-orb-live]').first().getAttribute('data-state'), 'offline', 'live Core is not shown as an offline orb');
         await healthFromHome(p, touch);
+        await p.addScriptTag({ content: axe });
+        await healthLandmarks(p, `${engine}/${posture}/Home-entry`);
         // Conversation metering emits no Caps/profile/task event. Leaving and reopening Health
         // must read current usage, even in one visible document with an unsaved limits draft.
         const previousMonth = (await m.get('/api/v1/caps')).month;
@@ -502,6 +517,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         await p.addScriptTag({ content: axe });
         const accessibility = await p.evaluate(async () => (await (window as any).axe.run({ include: ['.work-costs', '.diagnostics-download'] }, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })).violations.map((v: any) => ({ id: v.id, impact: v.impact, targets: v.nodes.map((n: any) => n.target) })));
         assert.deepEqual(accessibility, [], 'bounded WCAG AA check of the two new surfaces');
+        await healthLandmarks(p, `${engine}/${posture}/after-save-reload-SSE`);
         console.log(`HEALTH ${engine}/${posture}: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0`);
         // An explicit case list narrows only Diagnostics witness artifacts; every functional
         // engine/posture assertion above still runs. Normal capture runs retain the full matrix.

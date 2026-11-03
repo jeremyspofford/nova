@@ -127,3 +127,17 @@ One run, no source change or public matrix replacement. All eight app/specimen p
 | Run | Exit | Exact command | Raw output |
 | --- | --- | --- | --- |
 | final-all-diagnostics-verification | 0 | [argv](final-all-diagnostics-verification/command.json) | [stdout](final-all-diagnostics-verification/stdout.txt) |
+
+## Ordinary-CI qualification repair — base3b
+
+Seven bounded attempts; three causal REDs, M9/Health qualified passes and complete-provenance focal static/compiler. Initial static green remains recorded; three direct test-file start hashes were missing, so pre-coverage runner is archived and one focal static pass repeats with complete start coverage. No extra browser repeat. [Hashes](ci-repair-command-hashes.json); [source variants](ci-repair-source-variants.json).
+
+| Run | Exit | Exact command | Raw output |
+| --- | --- | --- | --- |
+| ci-repair-m9-original-red | 1 | [argv](ci-repair-m9-original-red/command.json) | [stdout](ci-repair-m9-original-red/stdout.txt) |
+| ci-repair-landmark-red | 1 | [argv](ci-repair-landmark-red/command.json) | [stdout](ci-repair-landmark-red/stdout.txt) |
+| ci-repair-m9-total-red | 1 | [argv](ci-repair-m9-total-red/command.json) | [stdout](ci-repair-m9-total-red/stdout.txt) |
+| ci-repair-m9-qualified | 0 | [argv](ci-repair-m9-qualified/command.json) | [stdout](ci-repair-m9-qualified/stdout.txt) |
+| ci-repair-health-qualified | 0 | [argv](ci-repair-health-qualified/command.json) | [stdout](ci-repair-health-qualified/stdout.txt) |
+| ci-repair-static-qualified | 0 | [argv](ci-repair-static-qualified/command.json) | [stdout](ci-repair-static-qualified/stdout.txt) |
+| ci-repair-static-complete-provenance | 0 | [argv](ci-repair-static-complete-provenance/command.json) | [stdout](ci-repair-static-complete-provenance/stdout.txt) |

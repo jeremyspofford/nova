@@ -1,0 +1,48 @@
+3b6c9f0dce8e709ddb465f00e4291e177f8a7de8
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+HEALTH RUNTIME chromium=141.0.7390.37 node=v26.3.1
+HEALTH LANDMARK chromium/phone/Home-entry [{"id":"landmark-unique","targets":[["section[aria-labelledby=\"h-work-costs\"]"],["section[aria-labelledby=\"h-diagnostics\"]"]]}]
+✖ Health app: chromium Home spend refresh, save, freshness, SSE draft island and native diagnostics (1345.346378ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1836.187373
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:145:3
+✖ Health app: chromium Home spend refresh, save, freshness, SSE draft island and native diagnostics (1345.346378ms)
+  AssertionError [ERR_ASSERTION]: actual Health has no duplicate named landmarks
+  + actual - expected
+  
+  + [
+  +   {
+  +     id: 'landmark-unique',
+  +     targets: [
+  +       [
+  +         'section[aria-labelledby="h-work-costs"]'
+  +       ],
+  +       [
+  +         'section[aria-labelledby="h-diagnostics"]'
+  +       ]
+  +     ]
+  +   }
+  + ]
+  - []
+  
+      at healthLandmarks (file:///work/tests/ui/health-caps-diagnostics.test.ts:42:10)
+      at async TestContext.<anonymous> (file:///work/tests/ui/health-caps-diagnostics.test.ts:178:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ { id: 'landmark-unique', targets: [Array] } ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

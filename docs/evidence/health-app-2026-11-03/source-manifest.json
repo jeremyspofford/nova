@@ -1,14 +1,14 @@
 {
-  "base": "6ea82d7b211375dc390aed44bb2f53fed4f51500",
-  "note": "Final combined wave from actual6ea base. UI application/component/style/SW bytes remain unchanged. New workflow/test/helper and evidence-runner bytes are identified here. Historical hash gaps remain disclosed; current hashes do not retroactively qualify earlier probe variants.",
+  "base": "3b6c9f0dce8e709ddb465f00e4291e177f8a7de8",
+  "note": "Ordinary-CI repair from3b: one shared initial loader-part list, redundant outer Health landmarks removed, actual M9/Health regressions. Historical provenance limits unchanged; new qualified source starts match this source tree. Runner metadata coverage adds M9 inputs and three explicitly run static files; prior runner archived.",
   "files": {
     "ui/js/app.js": {
       "sha256": "cd4f395c8ce4b9a9557110c1502b1942da975793b97c4b86eff912fc20224cd4",
       "git_blob": "2198aa41f9ec2d473106372850939ae877fb0587"
     },
     "ui/js/surfaces.js": {
-      "sha256": "1df0f98707b74c4e1b77f269eee7e7ab1590da2d4ccc6e739b74957bbafcbdac",
-      "git_blob": "5a686aa344e456bf92a4392c192da830bd940a64"
+      "sha256": "deaa66b348b3120910b42361ffb6105460e80952e3a527e3e517e7d63224966b",
+      "git_blob": "a74b0b878f8183621f2aa22a0dd2a8b7bccfdad5"
     },
     "ui/js/components.js": {
       "sha256": "9880ee80f0803d66a3ee6fd4ac33a6b43925b492b0759f81f8246de5b8130e82",
@@ -31,8 +31,8 @@
       "git_blob": "3fea9b6aac5e3e2dd468e76011ccb554f637e28d"
     },
     "tests/ui/health-caps-diagnostics.test.ts": {
-      "sha256": "477083dd8c61ea7a08d22d457cbf99beb34c14eb3a67d1c1c1dd8c1c30893072",
-      "git_blob": "1ae54626999d3a88338790fa6e0d375ef287793a"
+      "sha256": "0796df088f958455713aab19aaacf0e2d10457d201190698257f8c74600e26ab",
+      "git_blob": "4b4d68fde34d2ca82152e93365bedad464f02a41"
     },
     "tests/ui/navigation-reachability.test.ts": {
       "sha256": "8a5b99412e79ef42a664a5010916c36dba086c5963670bc0f622e02ee7ca84b0",
@@ -123,8 +123,32 @@
       "git_blob": "06c703e7cdbde9336db2e7c40b3b0dc25d7c873e"
     },
     "docs/evidence/health-app-2026-11-03/run.py": {
-      "sha256": "934dadcdddbd4a35b091f64c652f62c51170081f06301e60a37dae1535b73807",
-      "git_blob": "ab13acfd412a9b3d0e2055ef3652c8c2b1e7c92e"
+      "sha256": "651e51fa6c6e7bc7091004b083fec3307337b84f78140fe0f6907eb0493f7891",
+      "git_blob": "7a9d211714697ab5b0786d430b2ab3f38fbe3bfd"
+    },
+    "tests/ui/m9-progress.test.ts": {
+      "sha256": "cec27b1f8892d058992b0f33a3a13490a28a495e08ea954d504aa13511419dc6",
+      "git_blob": "813dd237dc11352aacb572fd93513bba3589aefe"
+    },
+    "tests/ui/m9-support.ts": {
+      "sha256": "40c83114c075a535803f0003a9e7ce935a8c23b971b66f1818e1d10f718d70fc",
+      "git_blob": "d9118ffb6c27eed65d1cb73418c09441dc46ba1c"
+    },
+    "tests/ui/m9-thinker.js": {
+      "sha256": "f130483c6bb60ce0d2595c6198a304f3e061abbdbcb4d6737fe59dba88be0444",
+      "git_blob": "2849e8d698b93ef979ab571f38be9ffdfd5d4cd8"
+    },
+    "tests/ui-components.test.js": {
+      "sha256": "7a12b99ae9ab787d7b048c0c16484f0acd98c1eb02c1c145d5ff6576097ae41b",
+      "git_blob": "17b768817d14e5d7ec6517c45fac1e3c7f5e1994"
+    },
+    "tests/ui-logic.test.js": {
+      "sha256": "2d8b4ff6d1fc1690451a624d9cde390e510744c6f43af5f6e5bc5956607b9a4d",
+      "git_blob": "ff0d21c9fc09a9624a866f370b14f11143891655"
+    },
+    "tests/navigation-registry.test.js": {
+      "sha256": "a6254c2193afa8ad742d35f59049bc92b215d56dabf6b1f296873d9d6ea26d3a",
+      "git_blob": "4abe4d6819effdf3f57cbbd27091355b23614d0f"
     }
   },
   "archived_probes": {

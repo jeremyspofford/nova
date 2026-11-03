@@ -1,0 +1,16 @@
+3b6c9f0dce8e709ddb465f00e4291e177f8a7de8
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+M9 all-pending held GETs ["/api/v1/design-systems","/api/v1/design-systems/active","/api/v1/profile","/api/v1/design-systems/schema","/api/v1/capture","/api/v1/tasks","/api/v1/problems","/api/v1/health","/api/v1/profile","/api/v1/identity","/api/v1/memory","/api/v1/triggers/rules","/api/v1/messages","/api/v1/workers","/api/v1/mesh/devices","/api/v1/mesh/status","/api/v1/mesh/requests","/api/v1/resilience","/api/v1/caps","/api/v1/capture"]; Loading Tasks… · 0 of 13 parts · 11 s so far · it usually takes under a second
+M9 only-Caps-completed {"text":"Loading Tasks… · 1 of 13 parts · about 3 minutes left","elapsed":13643,"total":"13"}
+✔ M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real units (3034.138757ms)
+✔ M9 gate, progress: chat names the real phase from 1 s, counts after 10 s, and streams only real pieces (29260.690336ms)
+✔ M9 gate, progress: optimistic UI is honest — a slow send says so, a failed one gives the words back, an edit is saved only when it is (5868.249342ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 38377.954044
+no-Kubernetes tripwire: never fired

@@ -30,7 +30,8 @@ export const store = {
 };
 
 const settle = (p, fallback) => p.catch(() => fallback);
-export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers', 'devices', 'mesh', 'requests', 'resilience', 'caps']) {
+const INITIAL_PARTS = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers', 'devices', 'mesh', 'requests', 'resilience', 'caps'];
+export async function load(parts = INITIAL_PARTS) {
   const capsRead = parts.includes('caps') ? ++capsSequence : 0;
   if (capsRead) { store.capsState = store.caps && ['ready', 'refreshing'].includes(store.capsState) ? 'refreshing' : 'loading'; store.capsError = ''; begin('health-costs'); costsChanged(); }
   // Each part comes back as [value, stale].
@@ -122,7 +123,7 @@ const today = (now = new Date()) => now.toLocaleDateString('en-US', { weekday: '
 
 export function renderHome(el, now = new Date()) {
   // Before the first answer, the view waits (skeleton.js): never an empty state that isn't true.
-  if (!store.loaded && !store.tried) { if (!el.querySelector('[data-skeleton], .view-waiting')) showWaiting('home', el, 'Loading Home', { total: 12, done: 0 }); return; }
+  if (!store.loaded && !store.tried) { if (!el.querySelector('[data-skeleton], .view-waiting')) showWaiting('home', el, 'Loading Home', { total: INITIAL_PARTS.length, done: 0 }); return; }
   const name = store.identity?.address_as ?? store.identity?.user_name ?? '';
   const unread = store.messages.filter((m) => (m.hold === 'needs_ok' || (m.delivered_at && !m.read_at)));
   const asking = store.tasks.filter(asksYou);
@@ -165,7 +166,7 @@ const GROUPS = [
 ];
 
 export function renderTasks(el, now = new Date()) {
-  if (!store.loaded && !store.tried) { if (!el.querySelector('[data-skeleton], .view-waiting')) showWaiting('tasks', el, 'Loading Tasks', { total: 12, done: 0 }); return; }
+  if (!store.loaded && !store.tried) { if (!el.querySelector('[data-skeleton], .view-waiting')) showWaiting('tasks', el, 'Loading Tasks', { total: INITIAL_PARTS.length, done: 0 }); return; }
   const by = new Map(GROUPS.map(([k]) => [k, []]));
   for (const t of store.tasks) by.get(statusOf(t))?.push(t);
   const groups = GROUPS.filter(([k]) => by.get(k).length).map(([k, title]) => `<section class="panel task-group" aria-labelledby="tg-${k}">
@@ -449,8 +450,8 @@ export function renderHealth(el) {
 <section class="panel" aria-labelledby="h-problems"><h3 class="section-title" id="h-problems">Problems</h3>
 ${store.problems.length ? `<ul class="settings-list">${store.problems.map((p) => problem(p, true)).join('')}</ul>` : emptyState({ title: 'Nothing needs you', line: 'No problems are open.' })}</section>
 ${keepingRunning()}
-<section class="panel" aria-labelledby="h-work-costs"><h3 class="section-title" id="h-work-costs">Work costs</h3>${workCosts({ view: store.caps, state: costsState(), error: costs.error, invalid: costs.invalid })}${store.capsState === 'unavailable' ? `<p class="settings-note" role="status">${esc(store.capsError)}</p><button class="btn" type="button" data-retry-work-costs>Retry work costs</button>` : ''}</section>
-<section class="panel" aria-labelledby="h-diagnostics"><h3 class="section-title" id="h-diagnostics">Diagnostics</h3>${diagnosticsDownload({ available: !!store.health && store.reachable })}</section>
+<div class="panel"><h3 class="section-title" id="h-work-costs">Work costs</h3>${workCosts({ view: store.caps, state: costsState(), error: costs.error, invalid: costs.invalid })}${store.capsState === 'unavailable' ? `<p class="settings-note" role="status">${esc(store.capsError)}</p><button class="btn" type="button" data-retry-work-costs>Retry work costs</button>` : ''}</div>
+<div class="panel"><h3 class="section-title" id="h-diagnostics">Diagnostics</h3>${diagnosticsDownload({ available: !!store.health && store.reachable })}</div>
 <section class="panel" aria-labelledby="h-checks"><h3 class="section-title" id="h-checks">Checks</h3>
 ${h ? `<ul class="settings-list">${checks}</ul><p class="settings-note">Version ${esc(h.version)} · running for ${esc(uptime(h.uptime_s))}.</p>` : waitingLine('Checking Nova’s health', { key: 'health' })}</section>
 ${store.resolved.length ? `<details class="panel raw"><summary>Dealt with recently</summary><ul class="settings-list">${store.resolved.map((p) => problem(p, false)).join('')}</ul></details>` : ''}`;

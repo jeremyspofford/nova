@@ -1,0 +1,29 @@
+3b6c9f0dce8e709ddb465f00e4291e177f8a7de8
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+M9 all-pending held GETs ["/api/v1/design-systems","/api/v1/design-systems/active","/api/v1/profile","/api/v1/design-systems/schema","/api/v1/tasks","/api/v1/problems","/api/v1/health","/api/v1/profile","/api/v1/identity","/api/v1/memory","/api/v1/triggers/rules","/api/v1/messages","/api/v1/workers","/api/v1/mesh/devices","/api/v1/mesh/status","/api/v1/mesh/requests","/api/v1/resilience","/api/v1/caps","/api/v1/capture","/api/v1/capture"]; Loading Tasks… · 0 of 12 parts · 11 s so far · it usually takes under a second
+✖ M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real units (3004.242515ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3256.93264
+
+✖ failing tests:
+
+test at tests/ui/m9-progress.test.ts:40:1
+✖ M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real units (3004.242515ms)
+  AssertionError [ERR_ASSERTION]: after 10 s: zero completed real parts and a general estimate, with no history on this device (Loading Tasks… · 0 of 12 parts · 11 s so far · it usually takes under a second)
+      at TestContext.<anonymous> (file:///work/tests/ui/m9-progress.test.ts:66:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'Loading Tasks… · 0 of 12 parts · 11 s so far · it usually takes under a second',
+    expected: /^Loading Tasks… · 0 of 13 parts · 1\d s so far · it usually takes under a second$/,
+    operator: 'match',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired
