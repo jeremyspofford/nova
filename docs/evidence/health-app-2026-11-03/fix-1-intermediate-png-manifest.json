@@ -1,0 +1,369 @@
+{
+  "policy": "Exact intermediate image paths only ignored; binaries retained privately, current40 public byte copies separately tracked. Original583 images and original40 public PNGs unchanged.",
+  "pngs": [
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-diagnostics-download-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 427378,
+      "sha256": "a192b8774e42b5c06c61c3482e030410dce330fdb9cd26ac06ae9d78084c7445"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-diagnostics-download-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 194304,
+      "sha256": "279fe117fe776ef619befe5cf44ffbe764ecaae076d07f3c3f30c6841f0f6434"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-diagnostics-download-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 126723,
+      "sha256": "84255a754f4ea63d44d6b5b89124b89ba725391836929e1afd44f1b1a11fd7b3"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-diagnostics-download-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 359913,
+      "sha256": "a6571773cdf73456ede0aac04fff679a47f4040dfa69b4df373000f68250268e"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-limits-action-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 415328,
+      "sha256": "02c0bdeeed4b07ff11c92eb7e00b05120166b2785707575af3143749d4d338ee"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-limits-action-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 188330,
+      "sha256": "e6e2703b8ec7b98841476c70a8cc96b8d68a80d2d6bb2f588ffea0f228b5c32a"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-limits-action-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 144827,
+      "sha256": "6c439faf44a2ea448b4fd67890309f89fd5b818e2e090b9d7c05235747bc6837"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-limits-action-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 325375,
+      "sha256": "4d32baf513b28f555dbf79ed9b3c261d5800c4bc92d013c736bc8cfaf895f3d9"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-work-costs-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 444333,
+      "sha256": "85521ef97a79acc30823ba1bd9380839737ababb76c80836005ad91d6b0e88ab"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-work-costs-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 227222,
+      "sha256": "7d3b3d6ea69853515d9f7a50d9c637d75d476a06a126d1f90172ab5957b63ce7"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-work-costs-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 169886,
+      "sha256": "68a95a0005b0425d05c1a9d6526448134fc94db218aa48508e67914e9ed05c5e"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/app-work-costs-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 366839,
+      "sha256": "91a61ff5b700723033e74f15fd4fdd595bffe9f9872d440a6b26bcdbc0eba6ec"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/styleguide-diagnostics-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 353714,
+      "sha256": "7061e8cf95fe2057557b7fec5a9dd303e39224080d3e4512f9eefdc0c1880fe6"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/styleguide-diagnostics-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 162893,
+      "sha256": "abad550d67efc61c78154b9e310da8e1685c6ec287106b18e818276286d9aac7"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/styleguide-diagnostics-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 127065,
+      "sha256": "731d9970073dcc7f10c102760f3d8a45d98e1214471ed412abbd439c195d82b8"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/styleguide-diagnostics-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 317151,
+      "sha256": "b846c181cb7bac0272bdcdfb03a247096e226b6909cca88196d9a693bf7ee6dc"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/styleguide-work-costs-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 224323,
+      "sha256": "a2728397375911f2e434ba381ab6e411a6199fefd3d3475ea866633ca04cbc0a"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/styleguide-work-costs-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 117211,
+      "sha256": "18234c80751fb03729b9065e2fa7f24017d2730772fd3a2c7708ff4d48a0483c"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/styleguide-work-costs-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 112223,
+      "sha256": "7a4096cb39e387c15499ccd8028d3a8d074394ac0b8cf1c6a73d77f0ed4feb8f"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/chromium/styleguide-work-costs-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 190641,
+      "sha256": "8eb2bbf0edf6f3b656a3565c87e91fa6eb201f1900616ede4848c51f4010d7ad"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-diagnostics-download-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 209646,
+      "sha256": "20b42eb54f26b735330eb7af57270279a445cdb2a1f1aa043a5b748996fc1d72"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-diagnostics-download-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 123971,
+      "sha256": "334655679f475571399d86cee02d6b0549e88bf2ecd6bef70cb93a52ff992dc2"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-diagnostics-download-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 106224,
+      "sha256": "77078ba3e80c236b517f0238ef7dce028d21bb09c55685e7c3adc276071717eb"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-diagnostics-download-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 189502,
+      "sha256": "52146fd7ee5c3c77cc318c3d51383ed2adef98a9ee99b2b42dd3d9f3a804cd1d"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-limits-action-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 201543,
+      "sha256": "3dac5a504046ec4caae823a0ec3f8253fe8be12236f3b6f8ad1b02286bcc2f3f"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-limits-action-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 98079,
+      "sha256": "263bed8535d872e417ed89c141d9dbc3b3c22a5aa1e41cbb5e1692f6f02b6f80"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-limits-action-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 92075,
+      "sha256": "5c6c3348d5ef28597d3163ba095507169ddcc6a04a85c43e32126587c263889d"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-limits-action-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 164364,
+      "sha256": "b8fc3a5b2baf6221fb6b7235c7e9bf1d72ccd911f7dd2bf0a76aff97d9171fd6"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-work-costs-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 227668,
+      "sha256": "bdba7e4cdfa219486e8fe01537b8d78a4c30fb3a1807008a4d29a9555308272b"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-work-costs-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 134596,
+      "sha256": "ff28f95c6d7665cb1f360b48652bbe89c26baaa38ac7171331632a648c7facda"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-work-costs-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 112394,
+      "sha256": "f6237ef2d8133b77e5e132297a36fb948628833b23b6214127f79beb8daf269b"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/app-work-costs-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 204397,
+      "sha256": "3f1e055d790c54c35952bffe8745f2f584c8e269beba11f41136d4e030b52808"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/styleguide-diagnostics-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 160987,
+      "sha256": "8e86c8a6ea7ece18749eeec67fd8bce877867badc1769fe9630eab8ea147ec1d"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/styleguide-diagnostics-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 92276,
+      "sha256": "bae6ce4a6f1c5b16c3161a3fc5e04d55db891cc4a2c82a6a350fc5f84e3434c9"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/styleguide-diagnostics-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 84253,
+      "sha256": "2032e8b7b7d52ca9c06547397d68ee09f09e14ec1e2370aa6a702c88b5edad15"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/styleguide-diagnostics-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 157778,
+      "sha256": "22f594bd52a61a784f673265269a12f65f9458f9ef2d2b8991372e59393a5292"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/styleguide-work-costs-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 121552,
+      "sha256": "0a0d5f6da8d7a98afb3957d4def16d2983d48f519c6023fc3f7e848ad9538cc5"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/styleguide-work-costs-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 86846,
+      "sha256": "2c8c5f50ec3780dbc994e5dc728745d242cc7d39fff47c19010b53d38b935c9e"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/styleguide-work-costs-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 80612,
+      "sha256": "98a748e25887a1877e1604815259127b765b01139e58533ac8691bbe909edefc"
+    },
+    {
+      "path": "fix-1-browser-qualified/output/screenshots/webkit/styleguide-work-costs-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 131378,
+      "sha256": "cd4a401e401c3646f58e95ce616c70d22a2db0fbe0fa428425a531d50c987c55"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/phone-health-costs-diagnostics.png",
+      "width": 390,
+      "height": 900,
+      "bytes": 162529,
+      "sha256": "4242fb198de6b2472b25f723d4e5ea4ba5c75e50de7d6b12b974b489ca9a2fb5"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/phone-home-devices.png",
+      "width": 390,
+      "height": 900,
+      "bytes": 178096,
+      "sha256": "9e16dba100e437712d75c11c34ebb8984a07df348606ac1964f0bc8de3eb5ff7"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/phone-home.png",
+      "width": 390,
+      "height": 900,
+      "bytes": 176960,
+      "sha256": "152e70fa8a450ce882d6761a8dc628d68336011cf40d43980f31a3fa9fd90c3d"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/phone-settings-capture.png",
+      "width": 390,
+      "height": 900,
+      "bytes": 159544,
+      "sha256": "165a81f6d65ba93f835ab6b098a4333a85c7bc37db0bfbed2c9c8eae1db4c712"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/phone-settings-devices.png",
+      "width": 390,
+      "height": 900,
+      "bytes": 152166,
+      "sha256": "e4636692333d760b54c4a97814fb3834ca6604b19cfefc73db1db0be1ce34ca3"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/phone-settings-list.png",
+      "width": 390,
+      "height": 900,
+      "bytes": 155272,
+      "sha256": "71dea458b335e619029932c6d5a6bbf2fc73c6e639c54cae67cbe2f195ecd11a"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/rail-health-costs-diagnostics.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 438325,
+      "sha256": "e2e168ed6000b615763155de092190f00d0f45abaaa117582135d4433b078796"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/rail-home-devices.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 377610,
+      "sha256": "6a2fc53439e1516565b09129dfa47bfda0f5e07c662e0da5a4088b44178794d4"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/rail-home.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 377586,
+      "sha256": "b534fb81e34c762b0efcf4e14ead546a3b3d90e6f40907955b84f7529f5743bb"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/rail-settings-capture.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 439113,
+      "sha256": "2dc685b84b325297b5d3d516cf7c7358d7f0d55d34bde128e34e11f43f66bbef"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/rail-settings-devices.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 359896,
+      "sha256": "28bcb4fecfd898d164ebd12e9b75041b5e5644c7569e9b44d2c96d473f818f6a"
+    },
+    {
+      "path": "fix-1-home-crawl/output/navigation/rail-settings-list.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 338149,
+      "sha256": "f39ee7f3bbc86a0c014a381174066bbb5eb0f4151bc6ba09b26c56b44d187d4d"
+    }
+  ]
+}

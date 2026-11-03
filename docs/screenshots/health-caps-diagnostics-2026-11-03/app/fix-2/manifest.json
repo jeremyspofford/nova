@@ -1,0 +1,369 @@
+{
+  "browser_run": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/command.json",
+  "base": "308c88735b782a49cd6688b9b701bae3c5368f1c",
+  "note": "All40 screenshot bytes were produced by the current amended-source run. Byte-identical prior public captures are linked without duplication and hash-proven against current private outputs; distinct captures are new files. Original captures/manifests remain unchanged.",
+  "reused_exact_prior_png_count": 38,
+  "new_public_png_count": 2,
+  "screenshots": [
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-diagnostics-download-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 427378,
+      "sha256": "a192b8774e42b5c06c61c3482e030410dce330fdb9cd26ac06ae9d78084c7445",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-diagnostics-download-desktop.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-diagnostics-download-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 194304,
+      "sha256": "279fe117fe776ef619befe5cf44ffbe764ecaae076d07f3c3f30c6841f0f6434",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-diagnostics-download-halfopen.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-diagnostics-download-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 126723,
+      "sha256": "84255a754f4ea63d44d6b5b89124b89ba725391836929e1afd44f1b1a11fd7b3",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-diagnostics-download-phone.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-2/chromium/app-diagnostics-download-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 360022,
+      "sha256": "8fca7d6a19cb6f025c9f902b68d412251c07828e5f88ecdfa508b8d86a4d6f32",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-diagnostics-download-tablet.png",
+      "reused_prior_public_bytes": false
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-limits-action-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 415328,
+      "sha256": "02c0bdeeed4b07ff11c92eb7e00b05120166b2785707575af3143749d4d338ee",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-limits-action-desktop.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-limits-action-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 188330,
+      "sha256": "e6e2703b8ec7b98841476c70a8cc96b8d68a80d2d6bb2f588ffea0f228b5c32a",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-limits-action-halfopen.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-limits-action-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 144827,
+      "sha256": "6c439faf44a2ea448b4fd67890309f89fd5b818e2e090b9d7c05235747bc6837",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-limits-action-phone.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-limits-action-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 325375,
+      "sha256": "4d32baf513b28f555dbf79ed9b3c261d5800c4bc92d013c736bc8cfaf895f3d9",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-limits-action-tablet.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-work-costs-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 444333,
+      "sha256": "85521ef97a79acc30823ba1bd9380839737ababb76c80836005ad91d6b0e88ab",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-work-costs-desktop.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-work-costs-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 227222,
+      "sha256": "7d3b3d6ea69853515d9f7a50d9c637d75d476a06a126d1f90172ab5957b63ce7",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-work-costs-halfopen.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-work-costs-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 169886,
+      "sha256": "68a95a0005b0425d05c1a9d6526448134fc94db218aa48508e67914e9ed05c5e",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-work-costs-phone.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/app-work-costs-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 366839,
+      "sha256": "91a61ff5b700723033e74f15fd4fdd595bffe9f9872d440a6b26bcdbc0eba6ec",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/app-work-costs-tablet.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-diagnostics-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 353714,
+      "sha256": "7061e8cf95fe2057557b7fec5a9dd303e39224080d3e4512f9eefdc0c1880fe6",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/styleguide-diagnostics-desktop.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-diagnostics-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 162893,
+      "sha256": "abad550d67efc61c78154b9e310da8e1685c6ec287106b18e818276286d9aac7",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/styleguide-diagnostics-halfopen.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-diagnostics-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 127065,
+      "sha256": "731d9970073dcc7f10c102760f3d8a45d98e1214471ed412abbd439c195d82b8",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/styleguide-diagnostics-phone.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-diagnostics-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 317151,
+      "sha256": "b846c181cb7bac0272bdcdfb03a247096e226b6909cca88196d9a693bf7ee6dc",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/styleguide-diagnostics-tablet.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-work-costs-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 224323,
+      "sha256": "a2728397375911f2e434ba381ab6e411a6199fefd3d3475ea866633ca04cbc0a",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/styleguide-work-costs-desktop.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-work-costs-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 117211,
+      "sha256": "18234c80751fb03729b9065e2fa7f24017d2730772fd3a2c7708ff4d48a0483c",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/styleguide-work-costs-halfopen.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-work-costs-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 112223,
+      "sha256": "7a4096cb39e387c15499ccd8028d3a8d074394ac0b8cf1c6a73d77f0ed4feb8f",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/styleguide-work-costs-phone.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/chromium/styleguide-work-costs-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 190641,
+      "sha256": "8eb2bbf0edf6f3b656a3565c87e91fa6eb201f1900616ede4848c51f4010d7ad",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/chromium/styleguide-work-costs-tablet.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-diagnostics-download-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 209646,
+      "sha256": "20b42eb54f26b735330eb7af57270279a445cdb2a1f1aa043a5b748996fc1d72",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-diagnostics-download-desktop.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-diagnostics-download-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 123971,
+      "sha256": "334655679f475571399d86cee02d6b0549e88bf2ecd6bef70cb93a52ff992dc2",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-diagnostics-download-halfopen.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-diagnostics-download-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 106224,
+      "sha256": "77078ba3e80c236b517f0238ef7dce028d21bb09c55685e7c3adc276071717eb",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-diagnostics-download-phone.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-2/webkit/app-diagnostics-download-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 189551,
+      "sha256": "1e9b1fb85f1aa07e4cdf21ef71df413d50fab993f3e7f6eab5d5e69aa386a52e",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-diagnostics-download-tablet.png",
+      "reused_prior_public_bytes": false
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-limits-action-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 201543,
+      "sha256": "3dac5a504046ec4caae823a0ec3f8253fe8be12236f3b6f8ad1b02286bcc2f3f",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-limits-action-desktop.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-limits-action-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 98079,
+      "sha256": "263bed8535d872e417ed89c141d9dbc3b3c22a5aa1e41cbb5e1692f6f02b6f80",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-limits-action-halfopen.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-limits-action-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 92075,
+      "sha256": "5c6c3348d5ef28597d3163ba095507169ddcc6a04a85c43e32126587c263889d",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-limits-action-phone.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-limits-action-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 164364,
+      "sha256": "b8fc3a5b2baf6221fb6b7235c7e9bf1d72ccd911f7dd2bf0a76aff97d9171fd6",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-limits-action-tablet.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-work-costs-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 227668,
+      "sha256": "bdba7e4cdfa219486e8fe01537b8d78a4c30fb3a1807008a4d29a9555308272b",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-work-costs-desktop.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-work-costs-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 134596,
+      "sha256": "ff28f95c6d7665cb1f360b48652bbe89c26baaa38ac7171331632a648c7facda",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-work-costs-halfopen.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-work-costs-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 112394,
+      "sha256": "f6237ef2d8133b77e5e132297a36fb948628833b23b6214127f79beb8daf269b",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-work-costs-phone.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/app-work-costs-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 204397,
+      "sha256": "3f1e055d790c54c35952bffe8745f2f584c8e269beba11f41136d4e030b52808",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/app-work-costs-tablet.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/styleguide-diagnostics-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 160987,
+      "sha256": "8e86c8a6ea7ece18749eeec67fd8bce877867badc1769fe9630eab8ea147ec1d",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/styleguide-diagnostics-desktop.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/styleguide-diagnostics-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 92276,
+      "sha256": "bae6ce4a6f1c5b16c3161a3fc5e04d55db891cc4a2c82a6a350fc5f84e3434c9",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/styleguide-diagnostics-halfopen.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/styleguide-diagnostics-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 84253,
+      "sha256": "2032e8b7b7d52ca9c06547397d68ee09f09e14ec1e2370aa6a702c88b5edad15",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/styleguide-diagnostics-phone.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/styleguide-diagnostics-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 157778,
+      "sha256": "22f594bd52a61a784f673265269a12f65f9458f9ef2d2b8991372e59393a5292",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/styleguide-diagnostics-tablet.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/styleguide-work-costs-desktop.png",
+      "width": 1440,
+      "height": 900,
+      "bytes": 121552,
+      "sha256": "0a0d5f6da8d7a98afb3957d4def16d2983d48f519c6023fc3f7e848ad9538cc5",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/styleguide-work-costs-desktop.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/styleguide-work-costs-halfopen.png",
+      "width": 842,
+      "height": 675,
+      "bytes": 86846,
+      "sha256": "2c8c5f50ec3780dbc994e5dc728745d242cc7d39fff47c19010b53d38b935c9e",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/styleguide-work-costs-halfopen.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/styleguide-work-costs-phone.png",
+      "width": 390,
+      "height": 844,
+      "bytes": 80612,
+      "sha256": "98a748e25887a1877e1604815259127b765b01139e58533ac8691bbe909edefc",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/styleguide-work-costs-phone.png",
+      "reused_prior_public_bytes": true
+    },
+    {
+      "path": "docs/screenshots/health-caps-diagnostics-2026-11-03/app/fix-1/webkit/styleguide-work-costs-tablet.png",
+      "width": 820,
+      "height": 1180,
+      "bytes": 131378,
+      "sha256": "cd4a401e401c3646f58e95ce616c70d22a2db0fbe0fa428425a531d50c987c55",
+      "current_run_capture": "docs/evidence/health-app-2026-11-03/fix-2-browser-qualified/output/screenshots/webkit/styleguide-work-costs-tablet.png",
+      "reused_prior_public_bytes": true
+    }
+  ]
+}

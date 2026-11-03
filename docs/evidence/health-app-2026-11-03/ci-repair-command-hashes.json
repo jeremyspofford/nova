@@ -1,0 +1,44 @@
+[
+  {
+    "run": "ci-repair-m9-original-red",
+    "exit_code": 1,
+    "command_sha256": "6b47d6137617304f10a2132ea6c2d17166d9583dd76c6c6052528636193c0cbe",
+    "stdout_sha256": "cf4e730fb803e3f2b995c1db58d67ec52d47c86b40104c4ba2c7c4b97ee69dbc"
+  },
+  {
+    "run": "ci-repair-landmark-red",
+    "exit_code": 1,
+    "command_sha256": "111f7556fee7217bfff6a8dfad194f6502f2b35edddc1ef3593b3bb03503569b",
+    "stdout_sha256": "e9b893a59e819d35b1cc042065beb6247246ea1bd061856f307479730abb95cd"
+  },
+  {
+    "run": "ci-repair-m9-total-red",
+    "exit_code": 1,
+    "command_sha256": "67c5b9a94d1309dc89993229a7090bf52bcb249fbb7b693fe7e92a3bbf0671be",
+    "stdout_sha256": "74bfb00309cfff2b51b1d3c6fcc760ad75f8fdbdd2016c3028a845438fc4a9fa"
+  },
+  {
+    "run": "ci-repair-m9-qualified",
+    "exit_code": 0,
+    "command_sha256": "cda0308a7a5996206d28e24f00ba198e2d25b07f30881a7d63c4008abb2d313e",
+    "stdout_sha256": "b7d5f00572277215b0bdb84934a46a6c063cb349ecfa3190cb5ec692ef94481b"
+  },
+  {
+    "run": "ci-repair-health-qualified",
+    "exit_code": 0,
+    "command_sha256": "97079144af279a6745ac4eebdb96f82175b8142dd464c982783b94723e4b3593",
+    "stdout_sha256": "deaccc000a79fd43e6c7b83952a7008ea80c3de05711d3378eb51bdd8daab6ff"
+  },
+  {
+    "run": "ci-repair-static-qualified",
+    "exit_code": 0,
+    "command_sha256": "7eddc8a93f3f9a51ff0b3ca96094147898057906e96c93a632d5aefd8e5e3577",
+    "stdout_sha256": "2de84cf7c5b0d086301b89ea7988cece78bc09715d9ab9e039ed29c595920d14"
+  },
+  {
+    "run": "ci-repair-static-complete-provenance",
+    "exit_code": 0,
+    "command_sha256": "bd646c44507a70f174a05b99978a9132303f81531d755e6063f68f39b89d8d7f",
+    "stdout_sha256": "78b54f3a32bbfa32e2fb8b3f358f6044fec3b01ccbac644c6dd781269a058e52"
+  }
+]

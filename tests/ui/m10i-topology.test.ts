@@ -178,11 +178,21 @@ test('M10i: a real controlling service worker never revives cached topology as c
     // Poison the cache deliberately: network-only topology must ignore even an existing hit.
     await p.evaluate(async () => { const c = await caches.open('nova-shell-v14'); await c.put('/api/v1/services/topology', new Response(JSON.stringify({ captured_at: new Date().toISOString(), fresh_for_ms: 120000, machines: [], mermaid: 'POISON', issues: [] }), { headers: { 'content-type': 'application/json' } })); });
     await detail(p, f.hubId);
+    assert.equal(await p.locator('[data-topology-action="promote"]').isVisible(), true, 'ordinary service exposes its real promotion control before outage');
+    assert.equal(await p.locator('[data-topology-action="promote"]').isEnabled(), true, 'ordinary service promotion is available before outage');
     const port = (f.nova.server.address() as import('node:net').AddressInfo).port;
     await new Promise<void>(resolve => { f.nova.server.close(() => resolve()); f.nova.server.closeAllConnections(); });
     await d.ctx.setOffline(true);
-    await p.waitForFunction(() => document.querySelector<HTMLButtonElement>('[data-topology-action="promote"]')?.disabled);
+    await p.waitForFunction(() => {
+      const view = document.querySelector<HTMLElement>('#topology-view');
+      return !!view?.checkVisibility() && !!view.querySelector('.topology') && !view.querySelector('[data-topology-action="promote"]:enabled') && /health is unknown/i.test(view.textContent ?? '');
+    });
+    assert.equal(await p.locator('[data-topology-action="promote"]:enabled').count(), 0, 'no promotion can be issued after outage');
     assert.equal(await p.locator('[data-topology-export]').isDisabled(), true);
+    // A failed read may show the safe failed-observation view with no promotion control.
+    // Open the actual last-observation door to inspect the selected service's unknown state.
+    const previous = p.locator('[data-topology-return]');
+    if (await previous.isVisible()) await previous.click();
     assert.match(await p.locator('.topology').innerText(), /Current service health is unknown/);
     const offline = await p.evaluate(async () => { const r = await fetch('/api/v1/services/topology'); return { status: r.status, stale: r.headers.get('x-nova-offline'), text: await r.text() }; });
     assert.equal(offline.status, 503); assert.equal(offline.stale, '1'); assert.ok(!offline.text.includes('POISON'));

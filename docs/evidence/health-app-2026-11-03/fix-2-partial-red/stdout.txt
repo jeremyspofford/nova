@@ -1,0 +1,33 @@
+308c88735b782a49cd6688b9b701bae3c5368f1c
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+HEALTH RUNTIME chromium=141.0.7390.37 node=v26.3.1
+HEALTH ENTRY chromium/phone: real conversation 1,500 tokens, $0.125; actual Home return; draft retained; no reload/visibility/profile/save trigger
+✖ Health app: chromium Home spend refresh, save, freshness, SSE draft island and native diagnostics (7406.910242ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7985.742184
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:131:3
+✖ Health app: chromium Home spend refresh, save, freshness, SSE draft island and native diagnostics (7406.910242ms)
+  AssertionError [ERR_ASSERTION]: Caps-only failure does not claim the live Core is unreachable
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///work/tests/ui/health-caps-diagnostics.test.ts:426:16)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,80 @@
+{
+  "targets": [
+    {
+      "selector": "#h-diagnostics",
+      "text": "Diagnostics",
+      "x": 152,
+      "y": 25.5,
+      "width": 76.5,
+      "height": 14,
+      "color": [
+        189,
+        218,
+        214
+      ],
+      "inside": false,
+      "hit": false,
+      "scroller": {
+        "x": 84,
+        "y": 52,
+        "width": 758,
+        "height": 285.5
+      },
+      "posture": "half-open-vertical",
+      "ink": 0
+    },
+    {
+      "selector": ".diagnostics-download summary",
+      "text": "Review before sharing",
+      "x": 165.765625,
+      "y": 167.25,
+      "width": 124.875,
+      "height": 17,
+      "color": [
+        189,
+        218,
+        214
+      ],
+      "inside": true,
+      "hit": true,
+      "scroller": {
+        "x": 84,
+        "y": 52,
+        "width": 758,
+        "height": 285.5
+      },
+      "posture": "half-open-vertical",
+      "ink": 0
+    },
+    {
+      "selector": "[data-download-diagnostics]",
+      "text": "Download diagnostics",
+      "x": 169,
+      "y": 229.125,
+      "width": 123.84375,
+      "height": 17,
+      "color": [
+        238,
+        250,
+        248
+      ],
+      "inside": true,
+      "hit": true,
+      "scroller": {
+        "x": 84,
+        "y": 52,
+        "width": 758,
+        "height": 285.5
+      },
+      "posture": "half-open-vertical",
+      "ink": 0
+    }
+  ],
+  "failures": [
+    "#h-diagnostics: clipped by the real scroller",
+    "#h-diagnostics: obscured",
+    "#h-diagnostics: no painted text",
+    ".diagnostics-download summary: no painted text",
+    "[data-download-diagnostics]: no painted text"
+  ]
+}

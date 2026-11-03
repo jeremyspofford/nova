@@ -1,0 +1,31 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+HEALTH RUNTIME chromium=141.0.7390.37 node=v26.3.1
+HEALTH chromium/phone expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/phone: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH SW script request /sw.js; legacy=true
+HEALTH initial installed worker versions [ 'nova-shell-v14' ]
+HEALTH SW script request /sw.js; legacy=false
+HEALTH upgraded worker versions [ 'nova-shell-v15' ]
+HEALTH cache names before diagnostic assertion [ 'other-app-public-example', 'nova-shell-v15' ]
+HEALTH installed SW expected outage console messages [
+  'Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING',
+  'Failed to load resource: the server responded with a status of 503 ()'
+]
+HEALTH installed SW nova-shell-v14 → nova-shell-v15: legacy owned diagnostic cache removed; native attachment; current/query responses never cached; diagnostics offline 503; ordinary tasks offline 200
+HEALTH chromium/desktop expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/desktop: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH chromium/tablet expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/tablet: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH chromium/halfopen expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/halfopen: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+✔ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (32330.992615ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 32784.608422
+no-Kubernetes tripwire: never fired

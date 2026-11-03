@@ -1,0 +1,63 @@
+3b6c9f0dce8e709ddb465f00e4291e177f8a7de8
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+(node:38) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ work costs renders Caps totals without treating unpriced or estimated tokens as extra usage (9.946249ms)
+✔ work costs escapes provider, model, period, error and input strings without mutation (0.458571ms)
+✔ unloaded and unavailable costs cannot save; null is explicitly unlimited (0.913628ms)
+✔ diagnostics supplies a native attachment link and no live action when unavailable (0.204103ms)
+✔ work costs loading and saving use the retained shared wait clock (0.695213ms)
+(node:45) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the bands: nothing under 1 s, an indicator to 10 s, then real progress (0.539836ms)
+✔ progress is in real units: no fraction without a total, never full before it is done (0.658005ms)
+✔ a general estimate, in words, from a measured rate only, erring long (0.221513ms)
+✔ a long wait says what is done, an estimate where there is a basis, else the time so far (0.135155ms)
+✔ after 10 s there is always a general estimate: this device’s own history, else what is usual for the kind of wait (1.177342ms)
+✔ a waiting line carries when the wait began, so a redraw keeps its age; it is hidden for its first second (0.713052ms)
+✔ no artificial delay: every timer in the PWA is named for what it is (4.162662ms)
+✔ no fake work: no “checking…” or padding, and every wait is drawn by wait.js (0.571053ms)
+✔ no simulated streaming: text grows only from the server’s deltas, never replayed (1.892386ms)
+✔ navigation model accounts for every app view, including Settings children (1.805325ms)
+✔ adding an app registration extends the missing-view oracle (0.658989ms)
+✔ rendered-root oracle derives DOM IDs from actual registration and element mapping (1.633602ms)
+✔ rendered-root oracle fails closed on unresolved, duplicate and uninventoried mappings (0.462912ms)
+✔ accent-lit controls keep their labels readable in every built-in design system (1.604128ms)
+✔ the orb has every state and no face, ever (0.451311ms)
+✔ Verified always carries its evidence affordance (9.467678ms)
+✔ the evidence viewer shows each check, what was found and why (0.454496ms)
+✔ the evidence viewer names the Relay run a task’s work came from: its id and branch (0.223165ms)
+✔ the approval sheet is tiered: tier 3 needs an explicit confirmation (0.205032ms)
+✔ the approval sheet for running what a provider wrote: tier 2, the files and a preview of each change, and what running it means (0.319052ms)
+✔ Nova is handling shows at most three open tasks, never finished or silent ones (0.568132ms)
+✔ honest surfaces: the brief is empty, devices are only this one (0.360453ms)
+✔ health and memory cards say what is true (0.758599ms)
+✔ voice is off in local-only, and says why; otherwise only where the browser supports it (0.310105ms)
+✔ rows and notices (0.345319ms)
+✔ a chat bubble already on screen does not animate again (0.94278ms)
+✔ the coding sheets: the check says it runs the agent’s code; the merge shows diff, tests and preview, Merge waits for the box (0.940397ms)
+✔ the apply and network sheets: the plan in full and the budget, the diff and the switch; Apply waits for the box (0.736121ms)
+✔ layout follows the viewport: narrow is phone, medium is tablet, wide is desktop (0.735188ms)
+✔ the bands are the derived widths, not round numbers (UX review 2026-10-31, F8/F9) (0.612915ms)
+✔ posture overrides width: a folded cover screen is a phone, half-open is two panes (0.128748ms)
+✔ posture comes from the ?posture= hook first, then viewport segments, then the Device Posture API (0.11732ms)
+✔ the quiet cards: a desktop right column with room, unless closed; a half-open tablet's second pane; never a flat tablet or a phone (0.574401ms)
+✔ breakpoints live in layout.css only: bands derived from the regions, plus viewport segments (0.683069ms)
+✔ every layout models the same eleven destinations, including Settings children (0.269573ms)
+✔ phone has five tabs (four destinations and More); the rail has the orb and at most six (0.193787ms)
+✔ paths map to destinations, and Era 2 paths keep working (0.332333ms)
+✔ ledger states map onto the one status vocabulary (0.264773ms)
+✔ Era 2 activity states use the same words, and never claim Verified (0.155995ms)
+✔ the orb takes its state from real signals, most urgent first (0.092363ms)
+✔ a problem turns the orb red only when it stops Nova; any other is amber (0.164617ms)
+✔ the greeting follows the hour (0.232656ms)
+✔ Era 2 tool steps: deletions and irreversible-looking commands are tier 3 (0.567265ms)
+ℹ tests 48
+ℹ suites 0
+ℹ pass 48
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 620.226712
+no-Kubernetes tripwire: never fired

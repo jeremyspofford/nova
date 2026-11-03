@@ -1,0 +1,104 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+HEALTH RUNTIME chromium=141.0.7390.37 node=v26.3.1
+HEALTH chromium/phone expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/phone: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH SW script request /sw.js; legacy=true
+HEALTH initial installed worker versions [ 'nova-shell-v14' ]
+HEALTH SW script request /sw.js; legacy=false
+HEALTH upgraded worker versions [ 'nova-shell-v15' ]
+HEALTH cache names before diagnostic assertion [ 'other-app-public-example', 'nova-shell-v15' ]
+HEALTH installed SW expected outage console messages [
+  'Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING',
+  'Failed to load resource: the server responded with a status of 503 ()'
+]
+HEALTH installed SW nova-shell-v14 → nova-shell-v15: legacy owned diagnostic cache removed; native attachment; current/query responses never cached; diagnostics offline 503; ordinary tasks offline 200
+HEALTH controlled Save pointer trace [
+  {
+    type: 'input',
+    target: 'task.iterations',
+    value: '0',
+    fresh: 'ready',
+    mode: 'success',
+    disabled: false
+  },
+  {
+    type: 'pointerdown',
+    target: 'BUTTON',
+    value: '',
+    fresh: 'ready',
+    mode: 'ready',
+    disabled: false
+  },
+  {
+    type: 'change',
+    target: 'task.iterations',
+    value: '0',
+    fresh: 'ready',
+    mode: 'ready',
+    disabled: false
+  },
+  {
+    type: 'click',
+    target: 'BUTTON',
+    value: '',
+    fresh: 'refreshing',
+    mode: 'ready',
+    disabled: false
+  },
+  {
+    type: 'submit',
+    target: 'FORM',
+    value: undefined,
+    fresh: 'refreshing',
+    mode: 'ready',
+    disabled: false
+  }
+]
+HEALTH chromium/desktop expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/desktop: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH chromium/tablet expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/tablet: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+HEALTH chromium/halfopen expected offline request failures: ["net::ERR_INTERNET_DISCONNECTED"]; manualRetry=false
+HEALTH chromium/halfopen: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0
+✔ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (34037.477384ms)
+HEALTH RUNTIME webkit=26.0 node=v26.3.1
+✖ Health app: webkit Home save, freshness, SSE draft island and native diagnostics (38321.685759ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 73022.72555
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:131:3
+✖ Health app: webkit Home save, freshness, SSE draft island and native diagnostics (38321.685759ms)
+  locator.click: Timeout 30000ms exceeded.
+  Call log:
+    - waiting for locator('[data-save-work-limits]')
+      - locator resolved to <button disabled class="btn" type="submit" data-save-work-limits="">Save limits</button>
+    - attempting click action
+      - waiting for element to be visible, enabled and stable
+      - element is not stable
+    - retrying click action
+      - waiting for element to be visible, enabled and stable
+      - element is not enabled
+    - retrying click action
+      - waiting 20ms
+      2 × waiting for element to be visible, enabled and stable
+        - element is not enabled
+      - retrying click action
+        - waiting 100ms
+      56 × waiting for element to be visible, enabled and stable
+         - element is not enabled
+       - retrying click action
+         - waiting 500ms
+  
+      at TestContext.<anonymous> (/work/tests/ui/health-caps-diagnostics.test.ts:389:136) {
+    name: 'TimeoutError'
+  }
+no-Kubernetes tripwire: never fired

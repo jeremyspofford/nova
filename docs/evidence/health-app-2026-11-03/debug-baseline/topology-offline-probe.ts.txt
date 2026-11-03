@@ -1,0 +1,45 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { browser, device, ready, ROOT } from './support.ts';
+import { topologyFixture } from './m10i-support.ts';
+import type { Page } from 'playwright-core';
+async function map(page: Page, base: string) { await page.goto(`${base}/topology`); await ready(page); await page.locator('#topology-view [data-topology-machine]').first().waitFor(); }
+async function detail(page: Page, hub: string, service = 'ordinary') { await page.locator(`[data-topology-machine="${hub}"]`).click(); await page.locator(`[data-topology-service="${hub}/${service}"]`).click(); }
+test('M10i: a real controlling service worker never revives cached topology as current offline', async (t) => {
+  const b = await browser(); if (typeof b === 'string') return t.skip(b);
+  const f = await topologyFixture();
+  // Pin only the four frontend files changed by Task4. All original assertions below remain.
+  const normal = f.nova.server.listeners('request')[0] as import('node:http').RequestListener;
+  f.nova.server.removeListener('request', normal);
+  f.nova.server.on('request', (req, res) => {
+    const names: Record<string, string> = { '/js/app.js': 'docs/evidence/health-app-2026-11-03/debug-baseline/app.js', '/js/surfaces.js': 'docs/evidence/health-app-2026-11-03/debug-baseline/surfaces.js', '/js/components.js': 'docs/evidence/health-app-2026-11-03/debug-baseline/components.js', '/sw.js': 'tests/support/fixtures/health-sw-v14.js.txt' };
+    const file = names[req.url ?? ''];
+    if (file) { res.writeHead(200, { 'content-type': 'application/javascript', 'cache-control': 'no-store' }); res.end(readFileSync(join(ROOT, file), 'utf8')); }
+    else normal.call(f.nova.server, req, res);
+  });
+  try {
+    const d = await device(b); const p = d.page;
+    await map(p, f.base); await p.evaluate(() => navigator.serviceWorker.ready); await p.reload(); await ready(p);
+    await p.waitForFunction(() => !!navigator.serviceWorker.controller);
+    await p.locator('#topology-view [data-topology-machine]').first().waitFor();
+    // Poison the cache deliberately: network-only topology must ignore even an existing hit.
+    await p.evaluate(async () => { const c = await caches.open('nova-shell-v14'); await c.put('/api/v1/services/topology', new Response(JSON.stringify({ captured_at: new Date().toISOString(), fresh_for_ms: 120000, machines: [], mermaid: 'POISON', issues: [] }), { headers: { 'content-type': 'application/json' } })); });
+    await detail(p, f.hubId);
+    const port = (f.nova.server.address() as import('node:net').AddressInfo).port;
+    await new Promise<void>(resolve => { f.nova.server.close(() => resolve()); f.nova.server.closeAllConnections(); });
+    await d.ctx.setOffline(true);
+    try { await p.waitForFunction(() => document.querySelector<HTMLButtonElement>('[data-topology-action="promote"]')?.disabled); }
+    catch (error) { console.log('PINNED TOPOLOGY OFFLINE', await p.evaluate(() => ({ online: navigator.onLine, text: document.querySelector('#topology-view')?.textContent, button: document.querySelector('[data-topology-action="promote"]')?.outerHTML }))); await p.screenshot({ path: '/evidence/topology-offline-baseline.png' }); throw error; }
+    assert.equal(await p.locator('[data-topology-export]').isDisabled(), true);
+    assert.match(await p.locator('.topology').innerText(), /Current service health is unknown/);
+    const offline = await p.evaluate(async () => { const r = await fetch('/api/v1/services/topology'); return { status: r.status, stale: r.headers.get('x-nova-offline'), text: await r.text() }; });
+    assert.equal(offline.status, 503); assert.equal(offline.stale, '1'); assert.ok(!offline.text.includes('POISON'));
+    await p.reload(); await ready(p); await p.getByText(/map could not refresh/i).waitFor();
+    assert.equal(await p.locator('[data-topology-machine]').count(), 0, 'offline deep link has shell but no fabricated observations');
+    await new Promise<void>(resolve => f.nova.server.listen(port, '127.0.0.1', resolve));
+    await d.ctx.setOffline(false); await p.locator('[data-topology-refresh]').click(); await p.locator('[data-topology-machine]').first().waitFor();
+    assert.equal(await p.locator('[data-topology-export]').isEnabled(), true);
+  } finally { await b.close(); await f.close(); }
+});

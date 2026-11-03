@@ -1,0 +1,34 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+2026-11-03T13:48:28.933Z pw:browser <launching> /ms-playwright/webkit-2215/pw_run.sh --inspector-pipe --headless --no-startup-window
+2026-11-03T13:48:28.935Z pw:browser <launched> pid=376
+2026-11-03T13:48:29.364Z pw:browser [pid=376][err] 
+2026-11-03T13:48:29.365Z pw:browser [pid=376][err] ** (MiniBrowser:382): CRITICAL **: 13:48:29.364: WebKitWebView is-controlled-by-automation set but automation is not allowed in the context, falling back to default session.
+2026-11-03T13:48:32.931Z pw:browser [pid=376][err] /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/optional:479: _Tp &std::_Optional_base_impl<unsigned long, std::_Optional_base<unsigned long>>::_M_get() [_Tp = unsigned long, _Dp = std::_Optional_base<unsigned long>]: Assertion 'this->_M_is_engaged()' failed.
+2026-11-03T13:48:32.952Z pw:browser [pid=376] <gracefully close start>
+2026-11-03T13:48:32.962Z pw:browser [pid=376] <process did exit: exitCode=0, signal=null>
+2026-11-03T13:48:32.962Z pw:browser [pid=376] starting temporary directories cleanup
+2026-11-03T13:48:32.964Z pw:browser [pid=376] finished temporary directories cleanup
+2026-11-03T13:48:32.964Z pw:browser [pid=376] <gracefully close end>
+✖ Health app: webkit Home save, freshness, SSE draft island and native diagnostics (4190.232239ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4656.294122
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:34:3
+✖ Health app: webkit Home save, freshness, SSE draft island and native diagnostics (4190.232239ms)
+  page.reload: Page crashed
+  Call log:
+    - waiting for navigation until "load"
+  
+      at TestContext.<anonymous> (/work/tests/ui/health-caps-diagnostics.test.ts:134:17) {
+    name: 'Error'
+  }
+no-Kubernetes tripwire: never fired
