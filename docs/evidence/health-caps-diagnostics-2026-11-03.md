@@ -526,3 +526,62 @@ Ruling: use explicit per-field Unlimited selection for null limits and reject ac
 Ruling: start independent backend Task2 after Task1 implementer releases source while Task1 read-only review runs against immutable package. No dependent UI composition starts, no simultaneous implementation writers; any Task1 fixes wait for source handoff. Cost if wrong: later small reconciliation/review delay, not unreviewed rendered shipping.
 
 Ruling: retain W1 Nova-runner accounting scope, not add provider cross-store report reconciliation in mounting work. Existing Models DB durably dedups provider reports while Caps JSONL has no idempotent linkage; owner W1 explicitly mounts existing Caps/runner. Cost if wrong: provider-managed task usage remains absent from these day/month totals and is not live capped; API metadata, UI, docs and inventory must say so directly, never complete billing or vague only-when-reported. Models accounting stays separate. Queue provider Caps report integration with proven durable per-attempt/crash/month idempotence as a named follow-up, no silent discard.
+
+## Task1 accounting alignment — full independent scoped review
+
+# Task 1 accounting alignment scoped review
+
+## Spec compliance
+
+**Verdict: Spec compliant for the accounting alignment amendment.** **Critical: 0. Important: 0. Minor: 0.**
+
+Reviewed only the supplied immutable package for `68b09020730e91d08b89b268abb745c52d66764e` through `3916795e70dc825faf47a44212c14cbbd466ab93`, against `task-1-accounting-alignment-brief.md`, the appended accounting follow-up report, and the original Global Constraints. This verdict covers the new alignment requirement and regressions introduced by this range; it does not reopen or replace the original Task 1 review or certify backend work.
+
+- The compact renderer states the exact required exclusion, including when the view is unavailable: `ui/js/components.js:496` defines “Nova runner usage on this machine; provider-managed tasks are not included.” and `ui/js/components.js:512` renders it outside the disclosure. It no longer promises that provider-managed reports will appear after reporting to Nova.
+- Expanded details consume `view.accounting.words`, with a scope-equivalent fallback for missing accounting/view data: `ui/js/components.js:497`. The API words are escaped at the rendering boundary: `ui/js/components.js:515`. This preserves provider-loop, conversation, estimated/unpriced, local-node, profile-timezone, resume and incomplete-billing qualifications.
+- Empty-state and autonomous-stop wording now identify Nova runner work, avoiding the former broader implication: `ui/js/components.js:501` and `ui/js/components.js:513`.
+- The styleguide fixture carries `scope: 'this-node-runner'`, `provider_reports_included: false`, and the API explanation; its provider rows are explicitly documented as direct model calls: `ui/js/styleguide.js:272`. The dedicated entry description is aligned at `ui/js/styleguide.js:397`.
+- The diff changes no controls, CSS, native diagnostics renderer, save/download bindings, Core/server/app/surfaces code, dependencies, or configuration store. The original owner-recognition boundary remains explicit at `docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/README.md:3`; scope and screenshot supersession are documented at `docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/README.md:5`.
+- Test-first evidence records the old compact claim failing before implementation. Final affected runs show 8/8 component/coverage tests and 2/2 browser tests passing, plus passing typecheck and token lint. Screenshot capture remains dedicated and scoped; no global `NOVA_UI_SHOTS` was used in the recorded commands.
+
+**Still deferred:** owner recognition, app composition/reachability, real save/download behavior, eventual full ordinary CI, and backend enforcement/access-control review. This amendment neither implements nor claims a provider-report reconciliation bridge.
+
+## Strengths
+
+- The exclusion is visible before opening details, including loading/unavailable states, rather than being hidden solely in explanatory text: `ui/js/components.js:512`, `tests/ui/health-styleguide.test.ts:47`.
+- Expanded copy comes from the API while remaining escaped, preserving the source contract without admitting markup: `ui/js/components.js:497`, `ui/js/components.js:515`, `tests/health-components.test.js:29`.
+- Both compact and expanded tests reject the old inclusion promises and retain the uncapped-provider-loop qualification: `tests/health-components.test.js:18` and `tests/ui/health-styleguide.test.ts:70`. Existing validation, interaction, overflow, default-value, and network guards were not relaxed.
+- The appended report preserves prior evidence/history while explicitly superseding the earlier copy/screenshots and correcting the resolved empty-directory concern.
+
+## Issues
+
+### Critical
+
+None.
+
+### Important
+
+None.
+
+### Minor
+
+None.
+
+## Named focused checks
+
+1. **Risk: amended UI and synthetic explanation differ from the actual reviewed Caps contract.** Per the amendment, inspected the narrow `Caps.view().accounting` block at `src/core/caps/index.ts:233`. It declares `this-node-runner`, `provider_reports_included: false`, and the same explanation used by the fixture/fallback. No broader backend review or provider-store read was performed.
+2. **Risk: API-supplied prose introduces executable markup or changes renderer behavior.** Inspected the complete renderer hunk in the immutable package. The only new variable input is passed through `esc(accountingWords)` at `ui/js/components.js:515`; form field generation, locking, actions and native diagnostics remain unchanged. The adversarial test adds accounting.words to its supplied attack at `tests/health-components.test.js:29`.
+3. **Risk: new copy is hidden, clipped, or visually disrupts existing controls.** Viewed actual updated `chromium/work-costs-mixed-phone.png`, `webkit/work-costs-details-desktop.png`, and `webkit/work-costs-unavailable-phone.png` under `docs/screenshots/health-caps-diagnostics-2026-11-03/styleguide/`. The exact exclusion is visible with the disclosure closed in both phone samples. The desktop disclosure shows the API explanation and remaining limits clearly; the panel grows vertically without clipping controls. No new visual defect appeared in these representative images. This is not owner approval or a claim to have visually inspected every PNG.
+4. **Risk: regenerated screenshot manifest is incomplete or inconsistent.** Reconstructed its final contents from the original full manifest and amended unified diff, then checked all 120 unique paths against actual bytes, SHA-256 hashes, and PNG dimensions. Result: 39,166,713 bytes, zero mismatches. Unchanged diagnostic PNGs remaining identical is consistent with the unchanged diagnostic renderer. This was a read-only artifact check, not a suite rerun.
+5. **Risk: passing claims lack real failing evidence or conceal failures.** Read complete retained `evidence/task-1-accounting-unit-red.txt` and `task-1-accounting-ui-red.txt`: 7/8 and 0/2 respectively, failing on the absent required exclusion in the old compact view. Read `task-1-accounting-unit-green.txt` and `task-1-accounting-ui-capture-green.txt`: 8/8 and 2/2 pass, zero failures/skips/cancellations, tripwire never fired. Read `task-1-accounting-typecheck.txt`, `task-1-accounting-tokens.txt`, and `task-1-accounting-commands.txt`: typecheck and token lint pass, no unresolved warnings, one dedicated final capture command with the required cached image, user 1000, read-only Node 26 mount, CI, and tripwire. No tests were repeated by this reviewer.
+6. **Risk: superseded filesystem concern remains unresolved.** The appended report includes the required correction and preserves the earlier failed sudo attempt. Read `evidence/task-1-accounting-cleanup-readback.txt`: both exact accidental paths are absent. No cleanup was attempted during this review.
+
+## Assessment
+
+**Task quality: Approved for the scoped accounting alignment.**
+
+The amended renderer accurately communicates that provider-managed task reports are absent from these totals and are not live capped. API prose is escaped, original controls/interactions remain intact, and focused evidence plus representative images show no new regression. Original owner-recognition and subsequent integration gates remain pending with the controller.
+
+Review was read-only except for this explicitly requested report. No subagents, source/index/branch/HEAD mutations, pushes, merges, or test reruns occurred.
+
+**RELEASE**
