@@ -279,7 +279,7 @@ export class Meter {
     const spent = scope === 'task' ? `This task spent ${spentWords(this.spent)}.` : `Today’s tasks spent ${spentWords(spentNow)}; this one, ${spentWords(this.spent)}.`;
     const resume = scope === 'task'
       ? `Resuming waits for your OK in Tasks; it gets a fresh allowance (${limitWords('iterations', l.task.iterations)}, ${limitWords('tokens', l.task.tokens)}, ${limitWords('usd', l.task.usd)}), and today’s ceiling still holds.`
-      : 'Resuming waits for your OK in Tasks, and runs once there is room under today’s ceiling (it starts again at midnight); the ceilings are in Health.';
+      : 'Resuming waits for your OK in Tasks, and runs once there is room under today’s ceiling (it starts again at midnight).';
     return { scope, what, limit, spent: { ...(scope === 'task' ? this.spent : spentNow) }, loop: !!loop, words: [head, loop.trim(), extra, spent, resume].filter(Boolean).join(' ') };
   }
 

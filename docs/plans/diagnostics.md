@@ -80,8 +80,14 @@ planted secrets survive.
      - common token prefixes (`sk-`, `ghp_`, `xox?-`, …).
 
 A redacted value is replaced by `**REDACTED**`. **The redaction never fails open.** If the builder
-can't read the vault's values, the bundle is still built, without the value layer, and says so in
-`redaction.warnings`. Layers 1 and 2 still hold.
+can't complete the required known-secret scan (vault enumeration and each listed value, the vault
+key, or the mesh identity's private keys), it stops before collecting included metadata and free
+text. The route returns HTTP 503 with a fixed, non-sensitive error and `cache-control: no-store`,
+without an attachment, raw scan error, warning, or partial bundle. A confirmed empty vault still
+downloads normally. The optional file-key probe may be absent for an empty vault or a keychain-held
+key; other read failures refuse the download. Successful bundles retain an empty
+`redaction.warnings` array. This protects known-secret sources and supported encodings, not unknown
+personal free text in included fields.
 
 ## Local only
 

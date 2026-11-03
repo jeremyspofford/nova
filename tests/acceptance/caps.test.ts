@@ -109,7 +109,8 @@ test('the day’s ceiling stops the next task before its first model call, and o
     assert.equal(second.state, 'failed');
     assert.match(second.reason ?? '', /Second check didn't finish\. Stopped at today’s ceiling for all tasks: 20,000 tokens\. Today’s tasks spent \d+ steps, [\d,]+ tokens \(estimated\), \$0\.00; this one, 0 steps, 0 tokens, \$0\.00\./);
     assert.deepEqual(toolsOf(h.nova, second.brief.inputs!.run as string), [0], 'no step, no model call');
-    assert.match(second.reason ?? '', /the ceilings are in Health\./);
+    assert.doesNotMatch(second.reason ?? '', /Health/);
+    assert.match(second.reason ?? '', /Resuming waits for your OK in Tasks, and runs once there is room under today’s ceiling \(it starts again at midnight\)\./);
     assert.ok(h.chatRuns().some((x) => x.brief.inputs?.resume === second.id && x.state === 'waiting'));
   } finally {
     await h.close();
