@@ -1,0 +1,13 @@
+{
+  "docs/evidence/backups-settings-2026-11-03/task-2/run.py": "a07f4d61730b6353f94c724355ad910cdff9564484461a7aa95427b4b477af00",
+  "docs/evidence/backups-settings-2026-11-03/task-2/red-home/command.json": "4c0cd25ed7095a4cffc9856f498a3d54f94b9b02cb04c34dfc095b74342a4b79",
+  "docs/evidence/backups-settings-2026-11-03/task-2/red-home/stdout.txt": "bd8757589480487141358d218d280418a405a907e568ce147c021044707ecd83",
+  "docs/evidence/backups-settings-2026-11-03/task-2/red-home/stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "docs/evidence/backups-settings-2026-11-03/task-2/green-home-1/command.json": "0ba16493b0ccd943a626040b0651f2829a40893ae8f2863633dc154b3be5ce53",
+  "docs/evidence/backups-settings-2026-11-03/task-2/green-home-1/stdout.txt": "d965db9b9f89715ae0bf019c5eca83f1032649c705885ca4d4bf954478cca780",
+  "docs/evidence/backups-settings-2026-11-03/task-2/green-home-1/stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "docs/evidence/backups-settings-2026-11-03/task-2/green-home-1/output/egress.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "docs/evidence/backups-settings-2026-11-03/task-2/green-home-1/output/screenshots/phone-empty.png": "588426d87627541329ad5a44ef0690b22aa0ebd0b2c266da944161c62094392f",
+  "docs/evidence/backups-settings-2026-11-03/task-2/green-home-1/output/screenshots/rail-empty.png": "56f18b7c24715cc6fdec9cf040ff960ddc674716980f9f233c0927b991c92216",
+  "docs/evidence/backups-settings-2026-11-03/task-2/red-home/output/egress.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

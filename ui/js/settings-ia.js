@@ -14,7 +14,7 @@ export const CATEGORIES = Object.freeze([
   { id: 'devices', label: 'Devices', summary: 'Phones and computers paired with Nova', parts: ['devices'] },
   { id: 'capture', label: 'Capture', summary: 'Sources, consent, and what Nova remembers', parts: ['capture'] },
   { id: 'services', label: 'Services', summary: 'How Nova runs its services here', parts: ['services'] },
-  { id: 'backups', label: 'Backups and changes', summary: 'Checkpoints, restores, Nova’s own changes', parts: ['checkpoints', 'changes'] },
+  { id: 'backups', label: 'Backups and changes', summary: 'Backup folders, checkpoints, restores and changes', parts: ['backups', 'checkpoints', 'changes'] },
   { id: 'danger', label: 'Start over', summary: 'Export everything, or erase Nova here', parts: ['danger'] },
 ]);
 
@@ -48,7 +48,7 @@ export const ENTRIES = Object.freeze([
   { cat: 'devices', label: 'Device roles', target: 'devices', words: ['roles', 'role', 'purpose', 'what it is for', 'thin client', 'hub candidate', 'compute', 'storage', 'capture source', 'general server'] },
   { cat: 'services', label: 'How services run', target: 'services-backend', words: ['services', 'service', 'backend', 'supervisor', 'k3s', 'kubernetes', 'containers', 'cluster', 'ordinary programs', 'switch backend'] },
   { cat: 'devices', label: 'Install Nova', target: 'install-row', words: ['install', 'app', 'home screen', 'pwa', 'add to home screen', 'shortcut'] },
-  { cat: 'backups', label: 'Backups', target: 'checkpoints', words: ['restore', 'backup', 'backups', 'back up', 'checkpoint', 'checkpoints', 'restore', 'snapshot', 'roll back', 'undo everything'] },
+  { cat: 'backups', label: 'Backups', target: 'settings-backups', words: ['folder', 'encrypted', 'recovery key', 'retention', 'restore', 'backup', 'backups', 'back up', 'checkpoint', 'checkpoints', 'restore', 'snapshot', 'roll back', 'undo everything'] },
   { cat: 'backups', label: 'Changes', target: 'changes', words: ['changes', 'updates', 'update', 'extensions', 'plugins', 'add-ons', 'upgrade', 'new features'] },
   { cat: 'danger', label: 'Erase Nova', target: 'danger-zone', words: ['reset', 'erase', 'delete everything', 'start over', 'factory reset', 'wipe', 'export', 'remove nova', 'uninstall'] },
 ]);

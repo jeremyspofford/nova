@@ -11,6 +11,7 @@ import { recommend } from './contrast.js';
 import { contrastView, undoPlan } from './look.js';
 import { openTakeover } from './takeover.js';
 import { over, waitingLine } from './wait.js';
+import { renderBackupsSettings } from './view.js';
 import { showWaiting, waitingUnits } from './skeleton.js';
 
 // What the core has told this page, kept fresh by the event stream.
@@ -19,7 +20,7 @@ export const store = {
   memory: [], rules: [], messages: [], workers: [], reachable: true, stale: false, loaded: false, tried: false,
   // The device mesh: the registry, whether other devices can reach Nova (and who this page is),
   // and devices waiting for an OK.
-  devices: [], mesh: null, requests: [],
+  devices: [], mesh: null, meshFresh: false, requests: [],
   // Settings › Providers: GET /providers, loaded when Settings opens (M5a).
   providers: null,
   // The recommended chat model’s eval scorecard status, shown before a switch (Amendment B Part 4).
@@ -54,6 +55,7 @@ export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'm
   let any = false;
   let wasStale = false;
   for (const [p, v, s] of results) {
+    if (p === 'mesh') store.meshFresh = v !== undefined && !s;
     if (v === undefined) continue;
     any = true;
     wasStale ||= s;
@@ -375,7 +377,7 @@ function keepingRunning() {
   const dep = rel?.deploy;
   const canary = dep && dep.outcome === 'running' && dep.canary ? `<p class="settings-note" data-canary>Canary for ${esc(dep.version)}: ${dep.canary.probes.length} probe${dep.canary.probes.length === 1 ? '' : 's'} so far${dep.canary.probes.length ? `, the last: ${esc(dep.canary.probes.at(-1).said)}` : ''}. It rolls back by itself if health fails before ${esc(new Date(dep.canary.until).toLocaleTimeString())}.</p>` : '';
   const lastDeploy = dep && dep.outcome !== 'running' ? `${esc(dep.version)}: ${esc({ promoted: 'live', rolled_back: 'rolled back by itself', stopped: 'stopped before the switch', refused: 'going back was refused' }[dep.outcome] ?? dep.outcome)}, ${esc(ago(dep.started_at))}` : '';
-  const backupLine = !b.settings.target ? 'No backup folder yet. Choose one with PUT /api/v1/backups/settings; Nova then backs up nightly and drills weekly.'
+  const backupLine = !b.settings.target ? 'No backup folder yet. Choose one in Settings › Backups; Nova then backs up nightly and drills weekly.'
     : b.target_present === false ? `The backup folder ${b.settings.target} isn’t there (a drive not plugged in?).${b.last_ok ? ` Last backup ${ago(b.last_ok.at)}.` : ''}`
     : b.last_ok ? `Last backup ${ago(b.last_ok.at)}, to ${b.settings.target}. ${b.count} kept (up to ${b.settings.keep}).${b.encrypted !== null ? ` ${b.encrypted} encrypted cop${b.encrypted === 1 ? 'y' : 'ies'} in ${b.settings.encrypted_target}.` : ''}`
     : `Nothing backed up yet to ${b.settings.target}.`;
@@ -386,7 +388,7 @@ function keepingRunning() {
 <dl class="facts" data-resilience>
   <dt>Supervisor</dt><dd>${sup ? `${esc(MODE_WORDS[sup.mode] ?? sup.mode)}${sup.server?.restarts ? `; restarted ${sup.server.restarts} time${sup.server.restarts === 1 ? '' : 's'}` : ''}.${sup.safe_mode ? ` ${esc(sup.safe_mode.reason)}` : ''}` : 'Not running under the supervisor. node src/supervisor/main.ts run keeps Nova running and takes releases.'}</dd>
   ${rel ? `<dt>Release</dt><dd>${esc(releaseName(rel.current))}${rel.previous ? `; ${esc(releaseName(rel.previous))} is kept to go back to` : ''}.${lastDeploy ? ` Last deploy: ${lastDeploy}.` : ''}</dd>` : ''}
-  <dt>Backups</dt><dd>${esc(backupLine + strays)}</dd>
+  <dt>Backups</dt><dd>${esc(backupLine + strays)} <a class="link" href="/settings#backups">Backup settings</a></dd>
   <dt>Restore drill</dt><dd>${esc(drillLine)}${d?.task_id ? ` <a class="link" href="/tasks" data-action="open-task" data-task="${esc(d.task_id)}">Its evidence</a>` : ''}</dd>
   ${r.clock?.held ? `<dt>Clock</dt><dd>${esc(r.clock.held)}</dd>` : ''}
 </dl>
@@ -426,6 +428,162 @@ export async function ruleAction(action, id) {
 }
 
 // ---- Settings: you and Nova, privacy, appearance, devices -------------------------------------
+
+// Backups has its own freshness. A failed read never marks all Core endpoints offline.
+// Plaintext lives only in this closure and the dedicated visible recovery section.
+let backups = { settings: null, draft: null, state: 'loading', errors: {}, notice: '', recovery: { state: 'hidden' }, loadingSince: null, fresh: false };
+let backupsChanged = () => {};
+let backupsActive = false;
+let backupsEpoch = 0;
+let backupsRevision = 0;
+let backupsPending = false;
+let backupsLoading = null;
+const backupSettingsOnly = (s) => ({ target: s.target ?? null, keep: s.keep ?? 7, encrypted_target: s.encrypted_target ?? null });
+function backupsPermissions() {
+  const m = store.mesh;
+  const known = store.meshFresh && !!m?.you && typeof m.you.console === 'boolean' && typeof m.you.can_approve === 'boolean';
+  const readOnlyReason = !known ? 'Backup settings are read-only until this device’s permissions are available.'
+    : m.replica || m.role === 'replica' ? 'This is a standby. Change backup settings on the hub.'
+    : !backups.fresh ? 'Backup settings could not be refreshed. Try again before making changes.'
+    : !m.you.can_approve ? 'Only an approver can change backup settings. Use Nova’s console or an approving device.' : '';
+  return { canEdit: !readOnlyReason, console: known && m.you.console === true, readOnlyReason };
+}
+export function hideBackupsKey() {
+  backupsEpoch++;
+  backups.recovery = { state: 'hidden' };
+  backupsChanged();
+}
+export function leaveBackups() { backupsActive = false; hideBackupsKey(); }
+export function enterBackups() { backupsActive = true; }
+let backupsLastPermissions = null;
+function syncBackupsPermissions() {
+  const p = backupsPermissions();
+  if (!p.canEdit || (backupsLastPermissions?.console && !p.console)) hideBackupsKey();
+  backupsLastPermissions = p;
+}
+export function loadBackups() {
+  if (backupsLoading) return backupsLoading;
+  backups.loadingSince = Date.now();
+  backupsChanged();
+  backupsLoading = Promise.all([request('GET', '/backups'), load(['mesh'])]).then(([r]) => {
+    backups.settings = backupSettingsOnly(r.data.settings);
+    backups.draft ??= { ...backups.settings };
+    backups.fresh = !r.stale;
+    if (!backupsPending) backups.state = 'ready';
+  }).catch(() => {
+    backups.fresh = false;
+    backups.state = 'error';
+    backups.notice = 'Backup settings could not be loaded. Try again.';
+    backups.draft ??= { target: '', keep: 7, encrypted_target: '' };
+  }).finally(() => {
+    backupsLoading = null;
+    syncBackupsPermissions();
+    backupsChanged();
+  });
+  return backupsLoading;
+}
+export function drawBackups(box) {
+  const next = document.createElement('template');
+  next.innerHTML = renderBackupsSettings({ ...backups, settings: backups.draft ?? {}, permissions: backupsPermissions(), recovery: { ...backups.recovery, previouslyShown: !!store.profile?.backups?.recovery_shown } }, { id: 'backups' });
+  // Keep native input nodes (including number-input lexical buffers), focus and caret through
+  // ordinary SSE, request state and errors. Permissions still update immediately under focus.
+  const active = document.activeElement;
+  const focused = box.contains(active) ? active : null;
+  const focusAction = focused?.dataset.action;
+  for (const input of box.querySelectorAll('input[name="target"], input[name="keep"], input[name="encrypted_target"]')) {
+    const replacement = next.content.querySelector(`input[name="${input.name}"]`);
+    if (!replacement) continue;
+    const desired = replacement.value;
+    for (const attr of [...input.attributes]) if (!replacement.hasAttribute(attr.name)) input.removeAttribute(attr.name);
+    for (const attr of replacement.attributes) if (attr.name !== 'value') input.setAttribute(attr.name, attr.value);
+    if (input.value !== desired && input !== active) input.value = desired;
+    replacement.replaceWith(input);
+  }
+  box.replaceChildren(next.content);
+  if (focused?.isConnected && !focused.disabled) focused.focus({ preventScroll: true });
+  else if (focusAction) box.querySelector(`[data-action="${focusAction}"]`)?.focus({ preventScroll: true });
+}
+async function requireBackupsPermission(consoleOnly = false) {
+  await load(['mesh']);
+  syncBackupsPermissions();
+  const p = backupsPermissions();
+  if (!backupsActive || !p.canEdit || (consoleOnly && !p.console)) throw new Error('This device cannot make that change. Check its permissions and try again.');
+}
+async function saveBackups(clear = null) {
+  if (backupsPending || !backupsPermissions().canEdit || !backupsActive) return;
+  const draft = { ...backups.draft };
+  const body = { target: draft.target, keep: Number(draft.keep), encrypted_target: draft.encrypted_target };
+  const errors = {};
+  if (!/^\d+$/.test(String(draft.keep)) || !Number.isInteger(body.keep) || body.keep < 1 || body.keep > 365) errors.keep = 'Enter a whole number from 1 to 365.';
+  for (const field of ['target', 'encrypted_target']) {
+    if (String(body[field] ?? '').trim() === '') {
+      if (backups.settings?.[field] && !clear) errors[field] = 'Use Remove to stop using the saved folder.';
+      else body[field] = null;
+    }
+  }
+  if (clear === 'target') { body.target = null; body.encrypted_target = null; delete errors.target; delete errors.encrypted_target; }
+  if (clear === 'encrypted_target') { body.encrypted_target = null; delete errors.encrypted_target; }
+  if (body.encrypted_target && !body.target) errors.encrypted_target = 'Choose a backup folder first.';
+  if (body.encrypted_target && body.encrypted_target === body.target) errors.encrypted_target = 'Choose a different folder for encrypted copies.';
+  backups.errors = errors;
+  if (Object.keys(errors).length) { backups.state = 'error'; backups.notice = 'Check the backup settings below.'; backupsChanged(); return; }
+  backupsPending = true;
+  backups.state = 'saving'; backups.notice = '';
+  const epoch = backupsEpoch, revision = backupsRevision;
+  backupsChanged();
+  try {
+    await requireBackupsPermission();
+    const result = await api('PUT', '/backups/settings', body);
+    backups.settings = backupSettingsOnly(result);
+    if (revision === backupsRevision) backups.draft = { ...backups.settings };
+    if (result.recovery_key && epoch === backupsEpoch && backupsActive && backupsPermissions().canEdit) backups.recovery = { state: 'first-shown', key: result.recovery_key };
+    backups.state = 'ready'; backups.notice = 'Backup settings saved.';
+    // GET never populates recovery state. Refresh shared Health facts and shown metadata only.
+    await load(['profile', 'resilience']);
+  } catch (e) {
+    backups.state = 'error'; backups.notice = e.message;
+  } finally { backupsPending = false; backupsChanged(); }
+}
+async function revealBackupsKey() {
+  if (backupsPending || !backupsActive || backups.recovery.state !== 'confirm' || !backups.recovery.confirmed || !backupsPermissions().console || !backupsPermissions().canEdit) return;
+  const epoch = backupsEpoch;
+  backupsPending = true; backups.state = 'saving'; backupsChanged();
+  try {
+    await requireBackupsPermission(true);
+    // Cancellation/navigation while the permission read was pending cancels the reveal itself.
+    if (epoch !== backupsEpoch) return;
+    const r = await api('POST', '/backups/recovery-key', { confirm: true });
+    if (epoch === backupsEpoch && backupsActive && backupsPermissions().canEdit && backupsPermissions().console) backups.recovery = { state: 'shown', key: r.recovery_key };
+  } catch {
+    if (epoch === backupsEpoch) backups.recovery = { state: 'unavailable', error: 'The recovery key is unavailable. Check the connection and try again from the console.' };
+  } finally { backupsPending = false; backups.state = 'ready'; backupsChanged(); }
+}
+export function bindBackups(root, changed) {
+  backupsChanged = changed;
+  root.addEventListener('input', (e) => {
+    if (!e.target.closest('#settings-backups')) return;
+    if (['target', 'keep', 'encrypted_target'].includes(e.target.name)) { backups.draft[e.target.name] = e.target.value; backupsRevision++; }
+  });
+  root.addEventListener('change', (e) => {
+    if (e.target.closest('#settings-backups') && e.target.name === 'confirm') { backups.recovery.confirmed = e.target.checked; backupsChanged(); }
+  });
+  root.addEventListener('submit', (e) => { if (e.target.closest('#settings-backups')) { e.preventDefault(); saveBackups(); } });
+  root.addEventListener('click', (e) => {
+    const b = e.target.closest('#settings-backups [data-action]');
+    if (!b || b.disabled) return;
+    const action = b.dataset.action;
+    if (action === 'backups-hide' || action === 'backups-cancel') hideBackupsKey();
+    else if (action === 'backups-reveal' && backupsPermissions().canEdit && backupsPermissions().console) { hideBackupsKey(); backups.recovery = { state: 'confirm', confirmed: false }; backupsChanged(); }
+    else if (action === 'backups-confirm') revealBackupsKey();
+    else if (action === 'backups-clear-target') saveBackups('target');
+    else if (action === 'backups-clear-encrypted') saveBackups('encrypted_target');
+    else if (action === 'backups-copy' && e.isTrusted && backupsActive && backupsPermissions().canEdit && ['first-shown', 'shown'].includes(backups.recovery.state) && backups.recovery.key) {
+      // The native clipboard is called only in this explicit click, without a hidden fallback.
+      navigator.clipboard?.writeText(backups.recovery.key).catch(() => { backups.recovery.error = 'The key could not be copied. Select it to copy it yourself.'; backupsChanged(); });
+    }
+  });
+  window.addEventListener('nova:devices', () => { syncBackupsPermissions(); backupsChanged(); });
+}
 
 const PRIVACY = [
   ['local-only', 'Local-only', 'Model calls stay on your own devices.'],
