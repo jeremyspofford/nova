@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-03 · Roadmap · A goal and replacement test for Nova**
+- What changed: filed the owner's [replacement roadmap](builder-packet/nova-replacement-roadmap-2026-11-03.md) and linked it from the milestone roadmap. REPLAY and COMPOUNDS are the flagships; the matrix defines replacement per job as 30 consecutive days of owner use without the incumbent. The roadmap also records the PWA-first mobile direction, approved notifications input awaiting its write-up, and offline tiers L1–L3.
+- What you can now do: review the declared direction and its acceptance criteria in the builder packet. Work after the current queue must follow this roadmap; in-flight order and gates are unchanged.
+- Still unfinished: this is documentation only. Replay queries, prospective graph traces, gated skill distillation, notifications, native mobile and offline-tier capabilities retain their actual implementation/review/evidence gates. No incumbent has been declared replaced by filing the roadmap or before its 30-day test.
+
 **2026-11-03 · #285 · Work costs and Diagnostics have controls in Health**
 - What changed: Health shows this machine's Nova-runner month-to-date spend and six task/day limits. You can save positive values or explicitly choose Unlimited; drafts and typing survive live refresh. Diagnostics is a normal download, with no app cache copy. A browser's network hint no longer reports Nova offline when Core actually answers.
 - What you can now do: reach both from Home on phone or desktop, change and read back limits, and download the guarded JSON attachment. The owner approved both rendered entries before implementation. Evidence, matched screenshots, preserved failing runs and all builder decisions are in [the Health delivery record](evidence/health-app-2026-11-03/delivery.md).
