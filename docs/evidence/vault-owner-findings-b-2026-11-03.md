@@ -469,3 +469,14 @@ Process lifetime and both trusted keychain-context hops are approved after one f
 Ruling: Task4 treats zombie-only group existence as non-executing, without new /proc read authority or indefinite waits for container PID1. Owned lane/directory stay held through successful group SIGKILL delivery (or confirmed ESRCH), launcher close and credential-directory cleanup; signal/cleanup ambiguity retains lane/evidence and refuses further uses. Why: orphan zombies may never be reaped by container PID1, while timeout/TERM alone does not establish cleanup. Cost if wrong: exact guarantee is group signal delivery plus launcher close/cleanup, not universal OS containment or zombie disappearance; unkillable kernel states/escaped malicious processes remain limits, and actual synthetic PID-state tests must prove no executable running plus unrelated-control safety.
 
 Ruling: extend Task4 narrowly to oldvault.ts explicit-keychain selection: no valid disk-key fallback when keychain mode is deliberately selected and its key is missing/wrong/unavailable. Why: source audit found readOldVault always tries [kc,disk], contradicting the existing deliberate key-mode/no-silent-fallback contract. Cost if wrong: migration requires repairing keychain or deliberately choosing file mode; preserve sources, auto/file behavior and authenticated pending recovery, with behavioral RED before code and private fake stores only.
+
+
+## Task5 approved checkpoint
+
+Task5 policy work is independently approved at401c1140 (0 Critical/Important/Minor). Process approval and grants bind normalized argv/cwd/allow-listed env/stdin/timeout; HTTP binds query while headers/body remain explicitly excluded. Grants expire at five minutes without use renewing them; generation policy is validated, shown and bound before generation, including sealed future replacements. Final production70affected tests pass, then25strengthened policy cases and compiler pass. Broker2850/3000.
+
+[Complete report and retained RED/GREEN evidence](vault-owner-findings-b-2026-11-03/task-5-report.md), [independent review](vault-owner-findings-b-2026-11-03/task-5-review.md), [updated raw artifact manifest](vault-owner-findings-b-2026-11-03/manifest.json). Prior per-name CoreVault cost and Node permission warnings remain for final triage. Task6 supervisor/reset/SECRET_DIRS/diagnostics/seal integration, fresh full adversarial gate, final source/claims packet, ordinary final-head CI/LEDGER/merge/preview remain pending.
+
+## Earlier checkpoint CI
+
+Ordinary run41592057202 passed all four jobs at source196ed6e4 (before Task4/5): unit1794pass/1808total with14existing opt-in skips, UI157/157, audit0, advisoryaxe0nodes across90view/posture pairs, bothtripwires never. Unit warnings3existing localStorage ExperimentalWarnings and18child-process SecurityWarnings retained; UIzero. This is historical checkpoint evidence, not CI for current Task4/5 or full-phase qualification.

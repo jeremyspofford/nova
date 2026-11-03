@@ -1,0 +1,35 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ process argv substitution cannot spend an approval or reuse a task grant (245.589615ms)
+✔ process cwd substitution cannot spend an approval or reuse a task grant (232.340262ms)
+✔ process env substitution cannot spend an approval or reuse a task grant (217.197ms)
+✔ process stdin substitution cannot spend an approval or reuse a task grant (215.092182ms)
+✔ process timeout_ms substitution cannot spend an approval or reuse a task grant (209.571935ms)
+✔ process task grant refuses changed argv before launching (134.615082ms)
+✔ process task grant refuses changed cwd before launching (134.929699ms)
+✔ process task grant refuses changed env before launching (137.617152ms)
+✔ process task grant refuses changed stdin before launching (136.008647ms)
+✔ process task grant refuses changed timeout_ms before launching (139.832797ms)
+✔ process cards identify each caller input safely; audit never carries env or stdin (64.355746ms)
+✔ standing process consent cards explain argv cwd allow-listed env stdin and timeout breadth (209.105413ms)
+✔ task grants expire exactly five minutes after approval despite repeated same-task reuse (79.590771ms)
+✔ HTTP query substitution needs matching approval and a new grant; audit retains bare path (71.06931ms)
+✔ HTTP card identifies query changes without showing raw query (63.674827ms)
+✔ generate creation approval binds generation policy length (62.290618ms)
+✔ generate creation approval binds generation policy alphabet (64.128752ms)
+✔ generate create card shows validated policy, including future generated replacements (68.606059ms)
+✔ sealed creation approval binds generation policy length (61.995666ms)
+✔ sealed creation approval binds generation policy alphabet (66.824639ms)
+✔ sealed create card shows validated policy, including future generated replacements (63.907802ms)
+✔ generation policy validation rejects coercion and unsafe policies before offering approval (61.404684ms)
+✔ generation rejects the biased byte tail and samples distinct symbols uniformly (1.119187ms)
+✔ equivalent normalized program defaults reuse the approval and task grant (215.043112ms)
+✔ HTTP query changes cannot reuse an already-issued task grant (64.886217ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 25
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3132.807102
+no-Kubernetes tripwire: never fired

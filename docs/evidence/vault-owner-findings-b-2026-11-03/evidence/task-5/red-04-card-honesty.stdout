@@ -1,0 +1,50 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ standing process consent cards explain argv cwd allow-listed env stdin and timeout breadth (85.333365ms)
+✖ HTTP card identifies query changes without showing raw query (74.596737ms)
+✔ generation rejects the biased byte tail and samples distinct symbols uniformly (1.061428ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 1
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 273.048417
+
+✖ failing tests:
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:89:1
+✖ standing process consent cards explain argv cwd allow-listed env stdin and timeout breadth (85.333365ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(!asked.challenge.card.approving.includes('requests inside RUN /'))
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:95:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/core/broker-owner-findings-b-policy.test.ts:149:1
+✖ HTTP card identifies query changes without showing raw query (74.596737ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /[Hh]eaders and body are not bound/. Input:
+  
+  'Allows this exact request for this task for five minutes after approval; reuse does not extend it.'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/core/broker-owner-findings-b-policy.test.ts:156:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'Allows this exact request for this task for five minutes after approval; reuse does not extend it.',
+    expected: /[Hh]eaders and body are not bound/,
+    operator: 'match',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired
