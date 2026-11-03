@@ -125,6 +125,7 @@ export class Session extends EventEmitter {
   #now: () => Date;
   #browser: Launched | null = null;
   #closing: Promise<void> | null = null;
+  #acquiring: Promise<void> | null = null;
   #refuser: Server | null = null;
   #sockets = new Set<Socket>();
   #cdp: Cdp | null = null;
@@ -182,12 +183,32 @@ export class Session extends EventEmitter {
   // ---- starting and stopping ---------------------------------------------------------------
 
   async open(): Promise<void> {
-    this.#refuser = await this.#startRefuser();
-    const { port } = this.#refuser.address() as { port: number };
-    const width = this.#o.width ?? 1280;
-    const height = this.#o.height ?? 800;
-    this.#meta = { width, height };
-    this.#browser = await (this.#o.launch ?? launch)({ path: this.#o.chromium, bypass: this.hosts, refuser: `http://127.0.0.1:${port}`, sandbox: this.#o.sandbox, width, height, ...(this.#o.profile ? { profile: this.#o.profile } : {}) });
+    if (this.#closing) throw new Error('The browser closed while starting.');
+    const acquiring = Promise.withResolvers<void>();
+    this.#acquiring = acquiring.promise;
+    try {
+      await this.#openNow(acquiring.resolve);
+    } catch (error) {
+      await this.#closeNow('the browser could not start');
+      throw error;
+    }
+  }
+
+  async #openNow(acquired: () => void): Promise<void> {
+    try {
+      this.#refuser = await this.#startRefuser();
+      if (this.#closing) throw new Error('The browser closed while starting.');
+      const { port } = this.#refuser.address() as { port: number };
+      const width = this.#o.width ?? 1280;
+      const height = this.#o.height ?? 800;
+      this.#meta = { width, height };
+      this.#browser = await (this.#o.launch ?? launch)({ path: this.#o.chromium, bypass: this.hosts, refuser: `http://127.0.0.1:${port}`, sandbox: this.#o.sandbox, width, height, ...(this.#o.profile ? { profile: this.#o.profile } : {}) });
+    } finally {
+      // Close owns anything acquired late. Release this handoff before open's error path
+      // awaits close, so neither side waits on the other's completion.
+      acquired();
+    }
+    if (this.#closing) throw new Error('The browser closed while starting.');
     const cdp = this.#browser.cdp;
     this.#cdp = cdp;
     cdp.on('close', (why: string) => { if (this.mode !== 'closed') this.#closeNow(`the browser stopped (${why})`); });
@@ -214,15 +235,16 @@ export class Session extends EventEmitter {
     await cdp.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => {});
     await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     // The first page may already exist; attach to it if auto-attach didn't.
-    for (let i = 0; i < 40 && !this.#page; i++) await new Promise((r) => setTimeout(r, 25));
+    for (let i = 0; i < 40 && !this.#page && !this.#closing; i++) await new Promise((r) => setTimeout(r, 25));
     if (!this.#page) {
       const { targetInfos } = await cdp.send<{ targetInfos: { targetId: string; type: string }[] }>('Target.getTargets');
       const page = targetInfos.find((t) => t.type === 'page');
       if (!page) throw new Error('Chromium opened no page.');
       await cdp.send('Target.attachToTarget', { targetId: page.targetId, flatten: true });
-      for (let i = 0; i < 80 && !this.#page; i++) await new Promise((r) => setTimeout(r, 25));
+      for (let i = 0; i < 80 && !this.#page && !this.#closing; i++) await new Promise((r) => setTimeout(r, 25));
       if (!this.#page) throw new Error('Nova couldn’t attach to the browser’s page.');
     }
+    if (this.#closing) throw new Error('The browser closed while starting.');
     this.mode = 'working';
     this.emit('change');
   }
@@ -465,6 +487,7 @@ export class Session extends EventEmitter {
     for (const fn of this.#handedBack.splice(0)) fn();
     this.emit('change');
     this.emit('closed', why);
+    await this.#acquiring;
     await this.#browser?.close().catch(() => {});
     for (const s of this.#sockets) s.destroy();
     await new Promise<void>((r) => (this.#refuser ? this.#refuser.close(() => r()) : r()));

@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:net';
 import type { ChildProcess } from 'node:child_process';
 import { Cdp, type Transport } from '../../src/core/browser/cdp.ts';
 import { Browser } from '../../src/core/browser/worker.ts';
@@ -23,7 +24,7 @@ import { until } from './connector-support.ts';
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex').toString('base64');
 
 // A browser that answers what the worker asks; `on(method)` lets the test step in before an answer.
-function standIn(hook: (method: string, params: Record<string, unknown>) => Promise<void> | void) {
+function standIn(hook: (method: string, params: Record<string, unknown>) => Promise<void> | void, rejectMethod?: string) {
   const sent: { method: string; params: Record<string, unknown> }[] = [];
   let data: (c: string) => void = () => {};
   let closed: (why: string) => void = () => {};
@@ -50,6 +51,10 @@ function standIn(hook: (method: string, params: Record<string, unknown>) => Prom
       sent.push({ method: m.method, params: m.params });
       void (async () => {
         await hook(m.method, m.params);
+        if (m.method === rejectMethod && !m.sessionId) {
+          reply({ id: m.id, error: { message: 'fixture initialization failed' } });
+          return;
+        }
         reply({ id: m.id, result: answer(m.method, m.params), ...(m.sessionId ? { sessionId: m.sessionId } : {}) });
         // The first page shows up once auto-attach is on.
         if (m.method === 'Target.setAutoAttach' && !m.sessionId) {
@@ -189,3 +194,196 @@ for (const first of ['caller', 'transport'] as const) {
     }
   });
 }
+
+
+// Reclaim the owned listening address: a connect error is not a reliable close oracle
+// on every developer network, but a still-listening refuser prevents this bind.
+async function assertRefuserClosed(address: string): Promise<void> {
+  const url = new URL(address);
+  const server = createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(Number(url.port), url.hostname, resolve);
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+test('close during launch retains cleanup ownership and never restores working mode', async () => {
+  const fake = standIn(() => {});
+  const entered = Promise.withResolvers<void>();
+  const launching = Promise.withResolvers<void>();
+  const cleaning = Promise.withResolvers<void>();
+  const releaseCleanup = Promise.withResolvers<void>();
+  const profile = mkdtempSync(join(tmpdir(), 'nova-launch-close-'));
+  const launched = await fake.launch();
+  let physicalCloses = 0;
+  let refuser = '';
+  const session = new Session({
+    taskId: 'task-launch-close', chromium: process.execPath, hosts: [], sandbox: false,
+    launch: async (options) => {
+      refuser = options.refuser;
+      entered.resolve();
+      await launching.promise;
+      return { ...launched, profile, close: async () => {
+        physicalCloses++;
+        cleaning.resolve();
+        await releaseCleanup.promise;
+        await launched.close();
+        rmSync(profile, { recursive: true, force: true });
+      } };
+    },
+  });
+  const opening = session.open().then(() => null, (error: unknown) => error);
+  let closing: Promise<void> | undefined;
+  try {
+    await entered.promise;
+    closing = session.close('aborted while launching');
+    assert.equal(session.mode, 'closed', 'authority is revoked synchronously');
+    let completed = false;
+    void closing.then(() => { completed = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(completed, false, 'close retains the resource handoff from pending launch');
+    launching.resolve();
+    await cleaning.promise;
+    assert.equal(completed, false, 'close also waits for late browser cleanup');
+    assert.equal(existsSync(profile), true);
+    await assert.rejects(assertRefuserClosed(refuser), { code: 'EADDRINUSE' }, 'the refuser is still owned during browser cleanup');
+    releaseCleanup.resolve();
+    assert.match(String(await opening), /closed.*starting/i, 'open cannot succeed after closure');
+    await closing;
+    await session.close('worker finally');
+    assert.equal(session.mode, 'closed');
+    assert.equal(physicalCloses, 1);
+    assert.equal(launched.cdp.closed, true);
+    assert.equal(existsSync(profile), false);
+    await assertRefuserClosed(refuser);
+  } finally {
+    launching.resolve();
+    releaseCleanup.resolve();
+    await opening;
+    await closing;
+    await session.close();
+    await launched.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('open failure after acquiring the browser waits for cleanup without a circular close wait', async () => {
+  const fake = standIn(() => {}, 'Target.setAutoAttach');
+  const profile = mkdtempSync(join(tmpdir(), 'nova-open-failure-'));
+  const launched = await fake.launch();
+  let physicalCloses = 0;
+  let refuser = '';
+  const session = new Session({
+    taskId: 'task-open-failure', chromium: process.execPath, hosts: [], sandbox: false,
+    launch: async (options) => {
+      refuser = options.refuser;
+      return { ...launched, profile, close: async () => {
+        physicalCloses++;
+        await launched.close();
+        rmSync(profile, { recursive: true, force: true });
+      } };
+    },
+  });
+  try {
+    await assert.rejects(session.open(), /fixture initialization failed/);
+    assert.equal(session.mode, 'closed', 'failed initialization closes the session');
+    assert.equal(physicalCloses, 1, 'open failure owns cleanup before returning');
+    assert.equal(launched.cdp.closed, true);
+    assert.equal(existsSync(profile), false);
+    await assertRefuserClosed(refuser);
+    await session.close();
+    assert.equal(physicalCloses, 1, 'later close shares the completed cleanup');
+  } finally {
+    await session.close();
+    await launched.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('worker abort during launch retains its session until the late browser is physically closed', async () => {
+  const fake = standIn(() => {});
+  const launched = await fake.launch();
+  const entered = Promise.withResolvers<void>();
+  const launching = Promise.withResolvers<void>();
+  const cleaning = Promise.withResolvers<void>();
+  const releaseCleanup = Promise.withResolvers<void>();
+  let physicalCloses = 0;
+  const home = mkdtempSync(join(tmpdir(), 'nova-worker-launch-close-'));
+  const db = new Db(':memory:');
+  db.migrate();
+  const browser = new Browser({ home, log: new Log(db, null), env: { NOVA_CHROMIUM: process.execPath }, launch: async () => {
+    entered.resolve();
+    await launching.promise;
+    return { ...launched, close: async () => {
+      physicalCloses++;
+      cleaning.resolve();
+      await releaseCleanup.promise;
+      await launched.close();
+    } };
+  } });
+  const controller = new AbortController();
+  const reason = new Error('fixture abort during launch');
+  const brief: Brief = {
+    envelope: ENVELOPE_VERSION, task_id: 'task-worker-launch-close', goal: 'Look at the fixture.', context_refs: [], constraints: {}, privacy_mode: 'local-only', approval_tier: 0,
+    evidence_required: [{ kind: 'url' }], idempotency_key: 'launch-close',
+    inputs: { allowed_hosts: ['127.0.0.1:4321'], steps: [{ do: 'navigate', url: 'http://127.0.0.1:4321/' }], verify: { url: 'http://127.0.0.1:4321/', expect: ['Received'] } },
+  };
+  const running = Promise.resolve(browser.worker.run(brief, controller.signal)).then(() => null, (error: unknown) => error);
+  try {
+    await entered.promise;
+    const session = browser.sessions.get(brief.task_id)!;
+    controller.abort(reason);
+    assert.equal(session.mode, 'closed');
+    launching.resolve();
+    await cleaning.promise;
+    assert.equal(browser.sessions.get(brief.task_id), session, 'worker ownership survives pending physical cleanup');
+    releaseCleanup.resolve();
+    assert.equal(await running, reason, 'the original abort is preserved');
+    assert.equal(browser.sessions.has(brief.task_id), false, 'ownership is released after physical cleanup');
+    assert.equal(session.mode, 'closed');
+    assert.equal(physicalCloses, 1);
+    assert.equal(launched.cdp.closed, true);
+  } finally {
+    launching.resolve();
+    releaseCleanup.resolve();
+    await running;
+    await browser.close();
+    await launched.close();
+    db.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+
+test('launch rejection after close still releases the acquired refuser', async () => {
+  const entered = Promise.withResolvers<void>();
+  const launching = Promise.withResolvers<Launched>();
+  const failure = new Error('fixture launch failed');
+  let refuser = '';
+  const session = new Session({
+    taskId: 'task-launch-failure', chromium: process.execPath, hosts: [], sandbox: false,
+    launch: async (options) => {
+      refuser = options.refuser;
+      entered.resolve();
+      return launching.promise;
+    },
+  });
+  const opening = session.open().then(() => null, (error: unknown) => error);
+  try {
+    await entered.promise;
+    const closing = session.close();
+    launching.reject(failure);
+    assert.equal(await opening, failure, 'launch failure survives cleanup');
+    await closing;
+    assert.equal(session.mode, 'closed');
+    await assertRefuserClosed(refuser);
+  } finally {
+    launching.reject(failure);
+    await opening;
+    await session.close();
+  }
+});
