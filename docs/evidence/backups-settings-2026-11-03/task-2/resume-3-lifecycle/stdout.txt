@@ -1,0 +1,52 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+(node:26) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Backups has its own rendered styleguide entry rather than a helper exemption (1.486296ms)
+✔ folder and retention drafts have associated labels, help and explicit removal actions (0.623179ms)
+✔ loading and read-only capabilities cannot mutate settings or reveal a key (0.764229ms)
+✔ a paired approver can receive the first key once but cannot repeat a reveal (0.238343ms)
+✔ repeated reveal uses explicit tier-3 confirmation with no hidden key bytes (0.25474ms)
+✔ only visible authorized key states emit escaped key text, only inside code (0.2408ms)
+✔ saving prevents duplicate submit while retaining editable drafts and failed fields (0.290234ms)
+✔ empty settings use default retention without converting an invalid draft or promising folder creation (0.275437ms)
+✔ all arbitrary strings and identifiers are escaped; rendering is pure and deterministic (0.255583ms)
+✔ Backups loading uses the caller’s actual start through quiet, indicator and long-wait redraws (0.919418ms)
+✔ Backups loading without a valid start stays busy without inventing an elapsed wait (0.235502ms)
+✔ Backups from Home: phone saves, confirms, clears and retains drafts (2675.711223ms)
+✔ Backups from Home: rail saves, confirms, clears and retains drafts (2267.344107ms)
+✔ Backups search within the same category clears a shown key (1400.917688ms)
+✔ Backups initial endpoint failure stays local and offers a real retry (1577.166872ms)
+✔ Backups delayed first key cannot appear after route exit or category return (1889.390535ms)
+✔ Backups delayed repeat key respects Not now, hash navigation and Hide during save (2745.175762ms)
+✔ Backups native clipboard changes only on explicit Copy click (1738.596813ms)
+✔ Backups preserves inflight edits and duplicate submit guard, then validates blanks and nulls (2212.067802ms)
+✔ Backups failed mesh refresh clears key and stays read-only; fresh retry recovers drafts (1602.88145ms)
+✖ Backups offline save failure keeps draft and allows a real retry (31409.239665ms)
+✔ Backups real paired viewer and approver enforce roles, initial-only key and live role loss (2179.608913ms)
+✔ Backups loading clock is a stable request start and stale GET stays read-only (1315.943132ms)
+✔ Backups generic reconnect with failed mesh has a local retry, and revalidation blocks PUT (1846.993004ms)
+✔ Backups delayed reveal cannot return after fresh authorization becomes unavailable (1703.516277ms)
+✔ Backups unchecked confirmation keeps keyboard focus through toggle and profile SSE (1524.056575ms)
+✔ Backups failed-save feedback survives unrelated actual profile SSE until retry (1676.334765ms)
+ℹ tests 27
+ℹ suites 0
+ℹ pass 26
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 60234.251742
+
+✖ failing tests:
+
+test at tests/ui/backups-settings.test.ts:271:1
+✖ Backups offline save failure keeps draft and allows a real retry (31409.239665ms)
+  locator.waitFor: Timeout 30000ms exceeded.
+  Call log:
+    - waiting for getByText('Backup settings saved.', { exact: true }) to be visible
+  
+      at /work/tests/ui/backups-settings.test.ts:282:67
+      at async appCase (/work/tests/ui/backups-settings.test.ts:125:5) {
+    name: 'TimeoutError'
+  }
+no-Kubernetes tripwire: never fired

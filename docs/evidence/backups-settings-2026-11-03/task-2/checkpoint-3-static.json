@@ -1,0 +1,13 @@
+{
+  "start_utc": "2026-11-03T18:33:47.216836+00:00",
+  "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+  "argv": [
+    "git",
+    "diff",
+    "--check"
+  ],
+  "end_utc": "2026-11-03T18:33:47.222960+00:00",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

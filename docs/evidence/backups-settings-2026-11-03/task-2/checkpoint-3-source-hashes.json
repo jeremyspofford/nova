@@ -1,0 +1,13 @@
+{
+  "ui/js/app.js": "5986e7bf2c66ae8c06f3059ec05c98b253cf1ccad4a5ee384ae387c601c0dcfb",
+  "ui/js/surfaces.js": "065439dd424f84e849ab95457eee035f4ff52d7f213856d81ba741304ea6134e",
+  "ui/js/view.js": "d8886545f2beb59803832ed6dd6498048782f047f6bfd5d6f1f7dcbbca765083",
+  "tests/ui/backups-settings.test.ts": "e3eebe3b9b90e9b1973b1c178c9b194d0fdac38349dccc444be62998635d5dc0",
+  "tests/backups-settings-view.test.js": "875266914b92c5e0ad7097699b2a67b4b2b40e83c93ab55b9e259c241cb849eb",
+  "tests/ui/backups-settings-visual.test.ts": "b34d663fff73c1a2c8e3f7ec62ed210bc6681f4a6ebd8eb1fd697b6ea6ac46be",
+  "tests/ui/backups-settings-styleguide.test.ts": "cb0258a26a19753090218e5bcd68159f1d26e2fabc2b4af2e95097e2f85df1c5",
+  "tests/ui/navigation-reachability.test.ts": "e55e1bcc615002b04b7f14f77ee69948ab4e220b80775fd8782d5415e9fd1bbe",
+  "package.json": "4e5463f62336020fbbb0733b931050e4ee4a424142d4db56ebe60d7b766172c2",
+  "package-lock.json": "6879ef97e46aec6de9e8371192c5dac06de4c0e4532d58e08884ead00b9bd305",
+  "docs/evidence/backups-settings-2026-11-03/task-2/run.py": "422f49979720e5b96114d518b6939387d96a399a62f2cacc17e63c0e806f9926"
+}

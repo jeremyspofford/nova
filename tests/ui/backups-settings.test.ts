@@ -278,8 +278,15 @@ test('Backups offline save failure keeps draft and allows a real retry', async (
   assert.equal(await page.locator('#settings-backups [name="keep"]').inputValue(), '23');
   assert.equal(await page.locator('[data-action="backups-save"]').isEnabled(), true);
   await page.unroute('**/api/v1/backups/settings');
+  // Record only this key-free fixture's ordinary settings/feedback if retry fails.
+  const retryTraffic: { method: string; status: number }[] = [];
+  page.on('response', r => { if (r.url().endsWith('/api/v1/backups/settings')) retryTraffic.push({ method: r.request().method(), status: r.status() }); });
   await page.locator('[data-action="backups-save"]').click();
-  await page.getByText('Backup settings saved.', { exact: true }).waitFor();
+  try { await page.getByText('Backup settings saved.', { exact: true }).waitFor(); }
+  catch (error) {
+    console.error('Backups key-free offline retry diagnostic', JSON.stringify({ retryTraffic, settings: (await m.get('/api/v1/backups')).settings, feedback: await page.locator('#settings-backups > section > [role]').allTextContents(), draft: await page.locator('#settings-backups [name="target"]').inputValue(), keep: await page.locator('#settings-backups [name="keep"]').inputValue(), saveDisabled: await page.locator('[data-action="backups-save"]').isDisabled() }));
+    throw error;
+  }
   assert.deepEqual((await m.get('/api/v1/backups')).settings, { target, keep: 23, encrypted_target: null });
 }));
 
@@ -389,3 +396,64 @@ test('Backups delayed reveal cannot return after fresh authorization becomes una
   await page.unroute('**/api/v1/mesh/status'); await page.locator('[data-action="backups-retry"]').click();
   await page.locator('[data-action="backups-save"]').waitFor(); await noKey(page);
 }));
+
+// Would fail if redrawing an unchecked confirmation discards native keyboard focus.
+test('Backups unchecked confirmation keeps keyboard focus through toggle and profile SSE', async () => appCase(async ({ m, page, target, encrypted }) => {
+  await openBackups(page); await configure(page, target, encrypted);
+  await page.locator('[data-action="backups-hide"]').click();
+  await page.locator('[data-action="backups-reveal"]').click();
+  const confirm = page.getByLabel('I understand that the recovery key will be visible on this screen.');
+  await confirm.press('Space');
+  assert.equal(await confirm.isChecked(), true);
+  assert.equal(await confirm.evaluate(e => document.activeElement === e), true, 'checked focus retained');
+  await page.keyboard.press('Space');
+  assert.equal(await confirm.isChecked(), false);
+  assert.equal(await confirm.evaluate(e => document.activeElement === e), true, 'unchecked focus retained');
+  await refreshProfileBackups(m, page, 'Synthetic unchecked focus');
+  assert.equal(await confirm.isChecked(), false);
+  assert.equal(await confirm.evaluate(e => document.activeElement === e), true, 'unchecked focus retained after actual SSE redraw');
+  assert.equal(await page.locator('[data-action="backups-confirm"]').isDisabled(), true);
+  await page.keyboard.press('Space');
+  assert.equal(await confirm.isChecked(), true);
+  await page.keyboard.press('Tab');
+  assert.equal(await page.locator('[data-action="backups-confirm"]').evaluate(e => document.activeElement === e), true, 'native keyboard continues to confirmation action');
+  await noKey(page);
+}));
+
+// Would fail if an unrelated successful GET erases a failed mutation's feedback.
+test('Backups failed-save feedback survives unrelated actual profile SSE until retry', async () => appCase(async ({ m, page, target }) => {
+  await openBackups(page);
+  const folder = page.locator('#settings-backups [name="target"]');
+  const alert = page.locator('#settings-backups [role="alert"]');
+  const save = page.locator('[data-action="backups-save"]');
+  await folder.fill(`${target}/missing`); await save.click();
+  await alert.waitFor();
+  const failure = await alert.innerText();
+  assert.ok(failure.length > 0, 'actual backend error shown');
+  assert.equal((await m.get('/api/v1/backups')).settings.target, null);
+  await folder.focus(); await folder.evaluate((e: HTMLInputElement) => e.setSelectionRange(2, 5));
+  await refreshProfileBackups(m, page, 'Synthetic failed save refresh');
+  assert.equal(await alert.count(), 1, 'failed-save alert survives successful unrelated refresh');
+  assert.equal(await alert.innerText(), failure, 'same actionable backend feedback retained');
+  assert.equal(await folder.inputValue(), `${target}/missing`);
+  assert.deepEqual(await folder.evaluate((e: HTMLInputElement) => [document.activeElement === e, e.selectionStart, e.selectionEnd]), [true, 2, 5]);
+  assert.equal(await save.isEnabled(), true);
+  await folder.fill(target); await save.click();
+  await page.getByText('Backup settings saved.', { exact: true }).waitFor();
+  assert.equal(await alert.count(), 0, 'successful retry clears old failure');
+  assert.equal((await m.get('/api/v1/backups')).settings.target, target);
+}));
+
+// Observe completion of the real profile-triggered Backups/mesh GETs and their actual redraw.
+async function refreshProfileBackups(m: ReturnType<typeof blank>, page: Page, name: string) {
+  await page.evaluate(() => {
+    (window as any).__backupsRefreshDraws = 0;
+    new MutationObserver(() => { (window as any).__backupsRefreshDraws++; }).observe(document.querySelector('#settings-backups')!, { childList: true, subtree: true });
+  });
+  const backups = page.waitForResponse(r => r.url().endsWith('/api/v1/backups'));
+  const mesh = page.waitForResponse(r => r.url().endsWith('/api/v1/mesh/status'));
+  await m.send('PUT', '/api/v1/profile/user/name', { value: name });
+  await Promise.all([(await backups).finished(), (await mesh).finished()]);
+  await page.waitForFunction(async expected => (window as any).__backupsRefreshDraws > 0 && (await import(String('/js/surfaces.js'))).store.profile?.user?.name === expected, name);
+  await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+}
