@@ -1,6 +1,7 @@
 # Plan: the diagnostics bundle, redacted by construction (Amendment 2026-10-31-B Part 6, first bullet)
 
-Track 3, branch `diagnostics/bundle`. The scope is the diagnostics bundle only. The integrity scrub
+Originally Track 3, branch `diagnostics/bundle`; production API mounting is now in Core and the
+server. The scope is the diagnostics bundle only. The integrity scrub
 in Part 6 folds into Track 1's Health work, and is not built here.
 
 The amendment asks for one-click diagnostics:
@@ -16,7 +17,7 @@ The owner adds one more requirement: personal content is left out too.
 ## The rule, plainly
 
 **Counts and states, never content; names of secrets at most, never their values.** The bundle
-says *how many* memories, conversations, captured events, tasks and receipts there are, and *what
+says *how many* memories, persisted chat logs, captured events, tasks and receipts there are, and *what
 state* each part of Nova is in. It never holds:
 - memory text;
 - conversation or chat transcripts;
@@ -42,7 +43,7 @@ these sections:
 | `models` | devices with hardware and runtime, roles, and installed models by name and digest; the cloud model's name and address, with its key shown only as set or not | `core.models.view()` |
 | `capture` | each source's kind, device, status, its plain-words detail, and whether a key is saved; how many events there are, by kind | `core.capture.sources()` and `status()` |
 | `connectors`, `devices`, `network`, `infra` | names, kinds, states, where each sends data, whether a token is saved | the modules' own views |
-| `work` | ledger counts by state and by worker; memory, receipt, trigger and extension counts | `counts()` |
+| `work` | ledger counts by state and by worker; memory, receipt, trigger and extension counts; Era 2 numeric `chat_logs`, `schedules`, `skills` | `counts()` and the server's request-time callback |
 | `problems` | open and recent problems: when, source, message, and detail clipped to 2,000 characters | `core.log.problems()` |
 | `logs` | the last 500 lines of `logs/nova.log`, with time, level, source and message only. A line's data fields are dropped, since they can carry content | the log file |
 | `redaction` | the marker, the rule above, and how many values and keys were redacted | the builder itself |
@@ -90,7 +91,7 @@ can't read the vault's values, the bundle is still built, without the value laye
 - It isn't kept on disk.
 - The tests check both.
 
-## Canary coverage (`tests/core/diagnostics.test.ts` and the eval task)
+## Canary coverage (`tests/core/diagnostics.test.ts`, `tests/core/diagnostics-composition.test.ts` and the eval task)
 
 A canary is planted in every place Nova keeps a secret:
 
@@ -143,10 +144,14 @@ safety invariants. It runs only where the core can build a bundle; the harness b
 ## Files (owned)
 
 - `src/core/diagnostics/index.ts`: the builder, the redaction, the scrub and the route function.
-- `src/core/index.ts`: one additive export line, which the boundary rule needs. It is not wiring.
+- `src/core/index.ts`: the module's public exports and production route mounting, with a late Core
+  getter, existing clock and build metadata.
+- `src/server.js`: the request-time numeric Era 2 callback; `src/sessions.js`: directory-only log counts.
 - `tests/core/diagnostics.test.ts`: a full core, with every secret store and the personal content.
   A whole Nova, chat included, is covered by the eval task `safety.diagnostics-no-canary`, which
-  runs in `npm test`'s regression gate.
+  runs in `npm test`'s regression gate. `tests/core/diagnostics-composition.test.ts` also downloads
+  from actual console and mesh listeners, using an approved browser cookie, checks public denial,
+  response headers and no persisted bundle, and checks fresh numeric Era 2 counts.
 - `src/core/README.md`: one row.
 
 ## Limits, said plainly
@@ -164,13 +169,22 @@ safety invariants. It runs only where the core can build a bundle; the harness b
     pass the value layer, and a problem's detail is clipped to 2,000 characters.
 - **A keychain-held vault key isn't read.** It isn't in Nova's home, and nothing in the bundle could
   carry it. A file-held key is read, and checked against.
-- **Era 2's state is counts only.** Conversations, schedules and skills come from the server's
-  `era2` callback (NOTES §2). Without it, they are missing, not guessed.
+- **Era 2's state is counts only.** `chat_logs`, schedules and skills come from the server's
+  `era2` callback (NOTES §2). Without it, they are missing, not guessed. `chat_logs` counts regular
+  `.jsonl` files whose basename is a valid session id, including `main`, scheduled runs and helpers.
+  It is not the number of person-started conversations. `SessionStore.countLogs()` reads directory
+  entries only: no kind, title, metadata or transcript is opened. Empty or malformed logs still
+  count; symlinks, directories and invalid filenames do not. Schedules and skills use the existing
+  store views and return only their lengths.
+- **Free text remains a limit.** Excluded content stores are not projected. Included log/problem
+  messages and other configured names or service details can still contain arbitrary personal
+  words that are neither known secrets nor secret-shaped; the scrubber cannot recognize all such
+  words. Canary coverage does not establish universal removal of arbitrary personal free text.
 
 ## NOTES for Track 1
 
-**What this branch touched outside its own module:**
-- an additive export line in `src/core/index.ts`, not wiring;
+**Original bundle branch changes outside its own module (before production mounting):**
+- an additive export line in `src/core/index.ts`;
 - a row in `src/core/README.md`;
 - the eval task in `tests/evals/tasks/regression.ts`, the manifest, and the negative-control
   exception in `tests/acceptance/evals-regression.test.ts`.
@@ -179,28 +193,29 @@ safety invariants. It runs only where the core can build a bundle; the harness b
 
 ```ts
 import { buildDiagnostics, diagnosticsRoutes } from './diagnostics/index.ts';
-// in the route table, after the health route:
-...diagnosticsRoutes(() => buildDiagnostics(core, { home: o.home, version: o.version, commit: self.build(), instance: o.instance, era2: () => era2Counts?.() ?? {} })),
+// in the existing Core route table, alongside capsRoutes:
+...diagnosticsRoutes(() => buildDiagnostics(core, { home: o.home, version: o.version, commit: self.build(), instance: o.instance, now, era2: o.diagnostics?.era2 }), now),
 ```
 
-`core` is the object `createCore` returns. Build it first and add the route after, or pass a
-getter. That gives `GET /api/v1/diagnostics` at the default `person` access.
+`core` is the object `createCore` returns. The closure is evaluated only for a request after Core
+construction. This mounts `GET /api/v1/diagnostics` at the default `person` access.
 - **The response:** the bundle as JSON with
   `content-disposition: attachment; filename="nova-diagnostics-YYYY-MM-DD-HHMM.json"` and
   `cache-control: no-store`.
 - **Nothing is kept.** It is built per request, and never stored or sent.
-- **Optional test:** check through the API that it answers the console and refuses `public`.
+- **Production test:** the API answers console and approved browser-cookie requests, and refuses public.
 
 ### 2. Era 2's counts (`src/server.js`)
 
-Hand the core a counts-only callback, the same way `core.self.attach` gets Era 2's state:
+The server hands Core a late counts-only callback in its construction options:
 
 ```js
-core.diagnosticsEra2 = () => ({ conversations: store.list().length, schedules: runner.schedules.list().length, skills: runner.skills.installed().length });
+diagnostics: { era2: () => ({ chat_logs: store.countLogs(), schedules: runner.schedules.list().length, skills: runner.skills.installed().length }) },
 ```
 
-Use whatever hook shape you prefer (`createCore` option, `attach`). It must return numbers
-only.
+Only numbers are returned. The stores and runner exist by the time a request invokes the callback.
+The name `chat_logs` avoids the secret-key scrubber's deliberate `session` match; that scrubber is
+unchanged, including its handling of numeric secret-named fields.
 
 ### 3. Health: "Download diagnostics" (`ui/js/surfaces.js` `renderHealth`)
 

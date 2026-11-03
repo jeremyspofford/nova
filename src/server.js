@@ -64,6 +64,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   const core = createCore({
     home: config.home, version, instance: config.instance, detectedTimezone: config.timezone, trustedOrigin: (host) => allowedHost(host), chat: { program, egress: config.agentEgress },
     mesh: meshInfo,
+    // Late counts: no session title, kind or transcript is opened for diagnostics.
+    diagnostics: { era2: () => ({ chat_logs: store.countLogs(), schedules: runner.schedules.list().length, skills: runner.skills.installed().length }) },
     // Nova's own listeners, which a browser task never reaches (browser/plan.ts). Read when a
     // task is checked or run, by then both are listening (port 0 means the port they got).
     hubPorts: () => {
