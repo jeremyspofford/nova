@@ -108,18 +108,33 @@ export const GMAIL_FILES: Record<string, string> = { 'client.json': 'connector/g
 // authenticated journal or protection against hostile same-user/root metadata manipulation.
 // No size, content, or access time participates. Unknown/non-regular identities refuse staging
 // and cleanup; stable regular files still migrate normally.
-function gmailEpoch(path: string): string | null {
-  const s = lstatSync(path, { bigint: true });
+function gmailStat(path: string) {
+  try { return lstatSync(path, { bigint: true }); }
+  catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw e; // Access denial and inspection failure are never proof of absence.
+  }
+}
+function gmailEpoch(path: string): string | null | undefined {
+  const s = gmailStat(path);
+  if (!s) return undefined;
   return s.isFile() && s.ino > 0n && s.mtimeNs > 0n && s.ctimeNs > 0n
     ? `gmail:${s.dev}:${s.ino}:${s.mtimeNs}:${s.ctimeNs}` : null;
 }
 export function readGmailFiles(home: string) {
   const out = new Map<string, string>();
   const epochs = new Map<string, string>();
+  // Inspect fixed ancestors first. Node grants the exact connectors root even when missing,
+  // but not its descendants; an inaccessible or symlinked ancestor is not confirmed absence.
+  for (const dir of [join(home, 'connectors'), join(home, 'connectors', 'gmail')]) {
+    const s = gmailStat(dir);
+    if (!s) return { items: out, epochs };
+    if (!s.isDirectory()) throw new Error('A Gmail source directory cannot be inspected safely.');
+  }
   for (const [file, name] of Object.entries(GMAIL_FILES)) {
     const p = join(home, 'connectors', 'gmail', file);
-    if (!there(p)) continue;
     const before = gmailEpoch(p);
+    if (before === undefined) continue;
     if (before === null) throw new Error('A Gmail source has no trustworthy write epoch.');
     const text = readFileSync(p, 'utf8');
     const after = gmailEpoch(p);
