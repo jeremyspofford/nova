@@ -1,0 +1,39 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Backups app/specimen chromium: four postures, native recovery bands and accessibility (1583.907186ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2067.455273
+
+✖ failing tests:
+
+test at tests/ui/backups-settings-visual.test.ts:50:3
+✖ Backups app/specimen chromium: four postures, native recovery bands and accessibility (1583.907186ms)
+  AssertionError [ERR_ASSERTION]: duplicate IDs
+  + actual - expected
+  
+  + [
+  +   'handling-card-title',
+  +   'device-mesh-card-title',
+  +   'health-card-title'
+  + ]
+  - []
+  
+      at geometry (file:///work/tests/ui/backups-settings-visual.test.ts:27:87)
+      at runNextTicks (node:internal/process/task_queues:65:5)
+      at process.processImmediate (node:internal/timers:472:9)
+      at async TestContext.<anonymous> (file:///work/tests/ui/backups-settings-visual.test.ts:89:13)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'handling-card-title', 'device-mesh-card-title', 'health-card-title' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

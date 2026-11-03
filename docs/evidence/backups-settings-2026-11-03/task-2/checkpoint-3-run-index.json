@@ -1,0 +1,50 @@
+[
+  {
+    "run": "resume-3-red",
+    "start_utc": "2026-11-03T18:29:19.701107+00:00",
+    "end_utc": "2026-11-03T18:29:24.180360+00:00",
+    "exit_code": 1,
+    "egress_bytes": 0,
+    "command_metadata": "resume-3-red/command.json"
+  },
+  {
+    "run": "resume-3-green",
+    "start_utc": "2026-11-03T18:30:14.122123+00:00",
+    "end_utc": "2026-11-03T18:30:18.705260+00:00",
+    "exit_code": 0,
+    "egress_bytes": 0,
+    "command_metadata": "resume-3-green/command.json"
+  },
+  {
+    "run": "resume-3-lifecycle",
+    "start_utc": "2026-11-03T18:30:29.275467+00:00",
+    "end_utc": "2026-11-03T18:31:29.951438+00:00",
+    "exit_code": 1,
+    "egress_bytes": 0,
+    "command_metadata": "resume-3-lifecycle/command.json"
+  },
+  {
+    "run": "resume-3-compiler",
+    "start_utc": "2026-11-03T18:31:29.984358+00:00",
+    "end_utc": "2026-11-03T18:31:31.237085+00:00",
+    "exit_code": 0,
+    "egress_bytes": 0,
+    "command_metadata": "resume-3-compiler/command.json"
+  },
+  {
+    "run": "resume-3-offline-diagnostic",
+    "start_utc": "2026-11-03T18:32:10.640847+00:00",
+    "end_utc": "2026-11-03T18:32:13.008365+00:00",
+    "exit_code": 0,
+    "egress_bytes": 0,
+    "command_metadata": "resume-3-offline-diagnostic/command.json"
+  },
+  {
+    "run": "resume-3-current-compiler",
+    "start_utc": "2026-11-03T18:32:50.064970+00:00",
+    "end_utc": "2026-11-03T18:32:51.208211+00:00",
+    "exit_code": 0,
+    "egress_bytes": 0,
+    "command_metadata": "resume-3-current-compiler/command.json"
+  }
+]

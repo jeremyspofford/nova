@@ -1,0 +1,1698 @@
+{
+  "run": "browser-release",
+  "theme": "orb-teal",
+  "mode": "auto, dark OS preference",
+  "frozen_time": "2026-11-03T12:00:00Z",
+  "source_hashes": {
+    "ui/js/view.js": "4ff240946a2e8b8dfb64c70d673efc4fb510c862378fb392eaca2e956ad9c78d",
+    "ui/js/styleguide.js": "92aadd8fd876dac29d751e3342ebb43159a966804b669c20d15071db4102d07b",
+    "ui/styles/views.css": "7c66d744690cbd0d724b06e093200acafab6ccef8e444f23a8711ac030c76730",
+    "ui/styles/styleguide.css": "0f518b739f7319f4e12af4d2cea867550d790e31e38898479a118ba503e52e4e",
+    "tests/backups-settings-view.test.js": "a52eb2fc38bd209e585f9bbb94e86c9fe7a2ae42fb172178698baa29bc9a6b24",
+    "tests/ui/backups-settings-styleguide.test.ts": "d06fa27d517f73743ef89359b40b55bee8b36623fc88a90babc6918a8595f663",
+    "package.json": "4e5463f62336020fbbb0733b931050e4ee4a424142d4db56ebe60d7b766172c2",
+    "package-lock.json": "6879ef97e46aec6de9e8371192c5dac06de4c0e4532d58e08884ead00b9bd305"
+  },
+  "screenshots": [
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/configured-desktop.png",
+      "engine": "chromium",
+      "state": "configured",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1165
+      ],
+      "sha256": "feed86c080a0853b8c990417bd19a02d9797e27b6e1cc04f316bf61589bd8f26"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/configured-halfopen.png",
+      "engine": "chromium",
+      "state": "configured",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1165
+      ],
+      "sha256": "5bed06b1a5476e3351dc1698e75550588fa2efe9811bcb2a63e491b5a99a41a9"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/configured-phone.png",
+      "engine": "chromium",
+      "state": "configured",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1702
+      ],
+      "sha256": "065105a6fe76bd9dfe472b0306ad78bfbafb50ffe1ba927a3fa19fd4a3ad3fd2"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/configured-tablet.png",
+      "engine": "chromium",
+      "state": "configured",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "67bd4f3e85691be48c83f5eadbccaf8cb8468c0f3cc2ba88336b9143f5d75a96"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/confirm-desktop.png",
+      "engine": "chromium",
+      "state": "confirm",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1328
+      ],
+      "sha256": "a6d47ec5272d962d473858599d5f346a7556448dc3d3a80026f69ca19aad2c75"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/confirm-halfopen.png",
+      "engine": "chromium",
+      "state": "confirm",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1328
+      ],
+      "sha256": "f709188fc9371621bef4c4325d943dd7a102dab8232c933ee4dd606b195c3386"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/confirm-phone.png",
+      "engine": "chromium",
+      "state": "confirm",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1829
+      ],
+      "sha256": "dcb680fc581040f3b2fe04259ca6f650edd9129f5dd1124ba6b601e697c534ef"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/confirm-tablet.png",
+      "engine": "chromium",
+      "state": "confirm",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1328
+      ],
+      "sha256": "dbf329d95058d9e877741635de5a8d3f4e2750f8f32494fa5d777d7cb3a9b490"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/empty-desktop.png",
+      "engine": "chromium",
+      "state": "empty",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1184
+      ],
+      "sha256": "cb152454444bafb48e4751b3252912ca1425ed319a9e4d56c3cfcf4ac047d7bb"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/empty-halfopen.png",
+      "engine": "chromium",
+      "state": "empty",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1184
+      ],
+      "sha256": "fc14dd3215b043741e04a0170ce0c57b79c2e74fa96ef5de5f22c2edafa1382f"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/empty-phone.png",
+      "engine": "chromium",
+      "state": "empty",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1601
+      ],
+      "sha256": "8115d2c7ef24bc473aae4d5e45aeafdc1377bf6f50cbe86f9b6fa01ced3ba929"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/empty-tablet.png",
+      "engine": "chromium",
+      "state": "empty",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1196
+      ],
+      "sha256": "3db413683beb89720c6a781606d481a824a949132c6f69fb777e19e792f2e5ca"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/error-desktop.png",
+      "engine": "chromium",
+      "state": "error",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1222
+      ],
+      "sha256": "976f89eb5429e000520ba2d11cc0a05722f6189a0be3d7f9cedc132609b5824d"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/error-halfopen.png",
+      "engine": "chromium",
+      "state": "error",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1222
+      ],
+      "sha256": "01e73f49d5fc05fae0d2f8614af42de830ccc358fdf6217ae9f5082768f1837e"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/error-phone.png",
+      "engine": "chromium",
+      "state": "error",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1848
+      ],
+      "sha256": "8147f42f098215b8b5f5cd76f3736186382049d03c7c1c361b856660c32f115b"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/error-tablet.png",
+      "engine": "chromium",
+      "state": "error",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1222
+      ],
+      "sha256": "dd454f34cdafbeee8bcbdcc608125dba6176b256c487075c5d4f2a889c943c6d"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/first-key-desktop.png",
+      "engine": "chromium",
+      "state": "first-key",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1237
+      ],
+      "sha256": "251456369aa2bc5a27da20b8770e69292b95a895d519d02965f649acb790fa9a"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/first-key-halfopen.png",
+      "engine": "chromium",
+      "state": "first-key",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1237
+      ],
+      "sha256": "a27125cba3c4cd2f2e4b42ffc8e9699a0d7b4ef33c988bd3d878277b593bd0a0"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/first-key-phone.png",
+      "engine": "chromium",
+      "state": "first-key",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1777
+      ],
+      "sha256": "d6e3ffc5a556faeda88a4c12c6242fa8efd5249003127506f69afad75728d7d7"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/first-key-tablet.png",
+      "engine": "chromium",
+      "state": "first-key",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1237
+      ],
+      "sha256": "bf7a07c00fcbebc1fb1d0bf3698d486c1d1109364eaa0d2d29ac876b9476ef71"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/loading-desktop.png",
+      "engine": "chromium",
+      "state": "loading",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        900
+      ],
+      "sha256": "ca71a12b9c6385fc186feec0188ce435551058112105801a903f2e6048cb6cc3"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/loading-halfopen.png",
+      "engine": "chromium",
+      "state": "loading",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        677
+      ],
+      "sha256": "9c5a9c72e19726f9eb0d8d5ae86571349b5901e0f11f5634faceb8c4b5d73bc5"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/loading-phone.png",
+      "engine": "chromium",
+      "state": "loading",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        852
+      ],
+      "sha256": "c7cb2f80638541cda6b62adab8ef0cc103450cac05714484722e4257867affc6"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/loading-tablet.png",
+      "engine": "chromium",
+      "state": "loading",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "475a5ce73cf9e99cc4809d750012ccff844473a23d60e2790d1c868d1bbc0cfe"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/long-paths-desktop.png",
+      "engine": "chromium",
+      "state": "long-paths",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1165
+      ],
+      "sha256": "3315fa2436f171d9b3f35bb102c73e8baa8eb4afb48d18843c016a8f82f5ec64"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/long-paths-halfopen.png",
+      "engine": "chromium",
+      "state": "long-paths",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1165
+      ],
+      "sha256": "ced00a98b70b031cc9c19f6c864e8580300abaa97096bbf48f57106a76d6828a"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/long-paths-phone.png",
+      "engine": "chromium",
+      "state": "long-paths",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1702
+      ],
+      "sha256": "f3d094aecacc05d737bf31fd93a240cff5f8bd6f5156c2aa349535d4710efe24"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/long-paths-tablet.png",
+      "engine": "chromium",
+      "state": "long-paths",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "d88c7175597752e7eeca6b83de596976f788a25f590048c4f2e2bc23062aa481"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-approver-desktop.png",
+      "engine": "chromium",
+      "state": "paired-approver",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1165
+      ],
+      "sha256": "e0e3797156470dd3d2e4d62056386bd7ff607dcfb5a38618d582f72d587e816a"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-approver-halfopen.png",
+      "engine": "chromium",
+      "state": "paired-approver",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1165
+      ],
+      "sha256": "0e89c03cdaeb705a039529c594a873758ead1d24bab5aed4fe0471ec8c2c28e5"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-approver-phone.png",
+      "engine": "chromium",
+      "state": "paired-approver",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1685
+      ],
+      "sha256": "cd880fb1fb611bb9ef73b752376342a2befa4778ad254379f16165e5de7b349b"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-approver-tablet.png",
+      "engine": "chromium",
+      "state": "paired-approver",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "43de9ede586568ac8afec45fd7d033678cc81846732985d266115c4b42721acf"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-first-key-desktop.png",
+      "engine": "chromium",
+      "state": "paired-first-key",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1237
+      ],
+      "sha256": "cfc94fe7e3aa5ca6412405e9d69b61c8f7d7655762377194a12554d0c5a8ac93"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-first-key-halfopen.png",
+      "engine": "chromium",
+      "state": "paired-first-key",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1237
+      ],
+      "sha256": "6ef0324023db477b60bc9213c3dbb6010bdefe7860011b8111aec5f3ea5643fa"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-first-key-phone.png",
+      "engine": "chromium",
+      "state": "paired-first-key",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1777
+      ],
+      "sha256": "6fd1d61552f281e6bf8cb200e04ff522a876b0ed4dc254a8b675e0faee487019"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-first-key-tablet.png",
+      "engine": "chromium",
+      "state": "paired-first-key",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1237
+      ],
+      "sha256": "4c50f0321fe7ab2a884538d23efb4363cf89f5661b722bd42eb3f7bfce10c711"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-viewer-desktop.png",
+      "engine": "chromium",
+      "state": "paired-viewer",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1125
+      ],
+      "sha256": "ded91af5e64f0e0f69eee28036119034c52b713ed6994986287d559ae3529225"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-viewer-halfopen.png",
+      "engine": "chromium",
+      "state": "paired-viewer",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1125
+      ],
+      "sha256": "15b86817ecf90d7bb6a1a2f6269a08ed27c6331bb3453b6b211ca135c3598b41"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-viewer-phone.png",
+      "engine": "chromium",
+      "state": "paired-viewer",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1522
+      ],
+      "sha256": "abe7ff4a6876001195ad8b46f1de85fd0f104bc8d8080f4441e98cec5de89fb0"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/paired-viewer-tablet.png",
+      "engine": "chromium",
+      "state": "paired-viewer",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "fe0ac03a553182f100b76ecea9e8aa66d56c31065f57eb6123e5a16188621313"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/saving-desktop.png",
+      "engine": "chromium",
+      "state": "saving",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1165
+      ],
+      "sha256": "e3a43e63a9ddcb57e6ca25003bc49eb2df9a39bde98e12604ced5541d7ec0f4e"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/saving-halfopen.png",
+      "engine": "chromium",
+      "state": "saving",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1165
+      ],
+      "sha256": "4d0402efcf6a777e41d3daa364c8de46982b913bb1b5465a80993a5dfcd4dedc"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/saving-phone.png",
+      "engine": "chromium",
+      "state": "saving",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1702
+      ],
+      "sha256": "8e18d79f4be1d78eb406a6b58774b9c8d126c53d6ce2979ce83684ba07c2ff37"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/saving-tablet.png",
+      "engine": "chromium",
+      "state": "saving",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "81657d8f9e71e2a149e38167d4c5e1f38c8ab582e9959b06913feeae7c9341a9"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/shown-desktop.png",
+      "engine": "chromium",
+      "state": "shown",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1237
+      ],
+      "sha256": "3c160336a08b251ed8117466fdf5a780f1e3f5740582b2b5744f6f0f6681e5d3"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/shown-halfopen.png",
+      "engine": "chromium",
+      "state": "shown",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1237
+      ],
+      "sha256": "aa523196476b155c082e87708ece0b77b538290d81fa6f31c67ab2035fa53ee4"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/shown-phone.png",
+      "engine": "chromium",
+      "state": "shown",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1758
+      ],
+      "sha256": "d3a249419c58036dc3d7bf2f21faa5cbdede105cd25a868217bac7f3f4f30663"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/shown-tablet.png",
+      "engine": "chromium",
+      "state": "shown",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1237
+      ],
+      "sha256": "8c9fc6446518faed6a1409b6e59a674349bb36837bb2da0ca4e1c927c4288b26"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/standby-desktop.png",
+      "engine": "chromium",
+      "state": "standby",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1125
+      ],
+      "sha256": "0a6cdf0465ec08c64b31cbff944c8b7078790c33c6bf1494bed9022b3f813ba6"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/standby-halfopen.png",
+      "engine": "chromium",
+      "state": "standby",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1125
+      ],
+      "sha256": "c77d884f7a2149467f5dc33ec2b2542586525bbc4f51aa22a8074432c9db742c"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/standby-phone.png",
+      "engine": "chromium",
+      "state": "standby",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1522
+      ],
+      "sha256": "fe9d2001cf1720a22f114755cf1630be344d83bc1895ea99c9a57b4073a9d30c"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/standby-tablet.png",
+      "engine": "chromium",
+      "state": "standby",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "2dd1f4f35fb08df2244938529f859cec06008cabdd9d56f49654253c43b48ce6"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/unavailable-desktop.png",
+      "engine": "chromium",
+      "state": "unavailable",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1148
+      ],
+      "sha256": "48c48b888939e79160d7c5b1b74985983577e4db1a0306530999ba397d3b6f07"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/unavailable-halfopen.png",
+      "engine": "chromium",
+      "state": "unavailable",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1148
+      ],
+      "sha256": "5beb4f13df2ecf6502d7561035e4320a1478ca793308c2ced25a918a22736d9d"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/unavailable-phone.png",
+      "engine": "chromium",
+      "state": "unavailable",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1565
+      ],
+      "sha256": "beaedba19651d931e3ebd2a826a27b4c8a0593bd32896256ae07bc082a2bed52"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/chromium/unavailable-tablet.png",
+      "engine": "chromium",
+      "state": "unavailable",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "25d0116b8c10d4ce3d63a1a14493bc5d16238d7b54cfc8d07f39dbf2bbf2a1e5"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/configured-desktop.png",
+      "engine": "webkit",
+      "state": "configured",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1157
+      ],
+      "sha256": "94cd042af955b47a6c3131a9ebd489e97211bafd3c03c2d4d274660bcef1de35"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/configured-halfopen.png",
+      "engine": "webkit",
+      "state": "configured",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1173
+      ],
+      "sha256": "117d21baf394d84ba412f54c4f2cd2d77b2452b6913c26b4f868982d2b8c3ce6"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/configured-phone.png",
+      "engine": "webkit",
+      "state": "configured",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1731
+      ],
+      "sha256": "64ebd0d1521764b3570a2e3e4350a3af8e07db8d4929955dd6c98478cb1297ba"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/configured-tablet.png",
+      "engine": "webkit",
+      "state": "configured",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "161d5d84540946925cd832c441ce653693b42b4997ec68df0bf210c13e0f4a17"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/confirm-desktop.png",
+      "engine": "webkit",
+      "state": "confirm",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1319
+      ],
+      "sha256": "ca1387293a0d6d756c693ad07ffc0dc7e65eeb0749c6a6c7428c00a863ad51cc"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/confirm-halfopen.png",
+      "engine": "webkit",
+      "state": "confirm",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1339
+      ],
+      "sha256": "a05471b93ddd6f852034125a26e4a02a4d7f352b19295fcecd304e170016b000"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/confirm-phone.png",
+      "engine": "webkit",
+      "state": "confirm",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1861
+      ],
+      "sha256": "715bdc5a8ed9da7557abdcfd7be09eef410953e4cc29a6ef6eec324b89b4df44"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/confirm-tablet.png",
+      "engine": "webkit",
+      "state": "confirm",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1339
+      ],
+      "sha256": "3b57a7c809c5f72aeecc6a459287e1fcda72037ed8b1e3c47ffaf4c89068fa1b"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/empty-desktop.png",
+      "engine": "webkit",
+      "state": "empty",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1175
+      ],
+      "sha256": "57f907c5100aa160465333f6a57fa7e3d6520b2df8ab6b21e2bb8012bccf4578"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/empty-halfopen.png",
+      "engine": "webkit",
+      "state": "empty",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1187
+      ],
+      "sha256": "2feff8301ead705ed9a9f3fd24eab76e2eadfc02c021acac479938a25e1bdb0f"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/empty-phone.png",
+      "engine": "webkit",
+      "state": "empty",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1616
+      ],
+      "sha256": "78eb02ab1d9a1efcecb49af7fbca00a3ab24145e224fcff1289f50fd5fc66083"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/empty-tablet.png",
+      "engine": "webkit",
+      "state": "empty",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1187
+      ],
+      "sha256": "3ce23bec622c5a2148124aff2f9f1642ddfafc59815ecebd3002a173cd9ecbcb"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/error-desktop.png",
+      "engine": "webkit",
+      "state": "error",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1215
+      ],
+      "sha256": "c85b8c576f8404bbbb101820e9d5e7a9b68c56e891b004bc7c3f0ebf17c93e0e"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/error-halfopen.png",
+      "engine": "webkit",
+      "state": "error",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1243
+      ],
+      "sha256": "a78a18825d60bca87192d1405e280a0bd162c636f26d028275febb1fb5b49c36"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/error-phone.png",
+      "engine": "webkit",
+      "state": "error",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1874
+      ],
+      "sha256": "66a2b6afd6a7b08dac26c73a5c984d4d7665a716196b3221048bb080085bf79c"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/error-tablet.png",
+      "engine": "webkit",
+      "state": "error",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1243
+      ],
+      "sha256": "c4fe1b0a6f9a6e608d7a15046bb9aee14e762f209108a2bc1a7334ce1b27890d"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/first-key-desktop.png",
+      "engine": "webkit",
+      "state": "first-key",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1228
+      ],
+      "sha256": "49a57c216b91f8b30808703b2438a591f699cd751fb6a07dbc7ab0bb8e51fa6d"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/first-key-halfopen.png",
+      "engine": "webkit",
+      "state": "first-key",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1244
+      ],
+      "sha256": "a835047226c02eac4ee691e7fc51a07af2599763713e990297443767305fa64d"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/first-key-phone.png",
+      "engine": "webkit",
+      "state": "first-key",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1804
+      ],
+      "sha256": "ed2e12ab0906ebf652650ad71cd185a70694e9e582b5553b477b576a8a2eed50"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/first-key-tablet.png",
+      "engine": "webkit",
+      "state": "first-key",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1244
+      ],
+      "sha256": "1b094da244cad0ca9ebe04a128280d1f34f6bfd042a04d5fc41e7126bf886a4a"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/loading-desktop.png",
+      "engine": "webkit",
+      "state": "loading",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        900
+      ],
+      "sha256": "d0d2f233067b0da99227c4a3bc1d84084719dc21e87cbb20da22ef0ac6af1a17"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/loading-halfopen.png",
+      "engine": "webkit",
+      "state": "loading",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        675
+      ],
+      "sha256": "c8bfddc193c543bc4614db0e193bc1411eddd4b4c076b38f15087ffe577fda1a"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/loading-phone.png",
+      "engine": "webkit",
+      "state": "loading",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        847
+      ],
+      "sha256": "a302af44499fedb75c79d6968295ee6bf26f0ad1b66f38a6d9d39fbebc56dfa3"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/loading-tablet.png",
+      "engine": "webkit",
+      "state": "loading",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "1c96a6e68e7134ef262a83fda61653c9e6db5cc4b3c79b071490ca889abdf664"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/long-paths-desktop.png",
+      "engine": "webkit",
+      "state": "long-paths",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1157
+      ],
+      "sha256": "f8da38a168c1052c5a81f7b067a867d299acf741760bc94e28cfa08f31ef904c"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/long-paths-halfopen.png",
+      "engine": "webkit",
+      "state": "long-paths",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1173
+      ],
+      "sha256": "d2b44bc1b1ec7f349e356a4bb51baa445c804888815b7c93d0f750bb74040795"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/long-paths-phone.png",
+      "engine": "webkit",
+      "state": "long-paths",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1731
+      ],
+      "sha256": "b034f696fe8ea5a2783501e3f601aa623549210095ff2265e2a1b004c4cba811"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/long-paths-tablet.png",
+      "engine": "webkit",
+      "state": "long-paths",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "885e7349c5467b38142d608ece1c29b4ce623d42fffff7610da5bdaa1d3f33fd"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-approver-desktop.png",
+      "engine": "webkit",
+      "state": "paired-approver",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1156
+      ],
+      "sha256": "b409dbf3444f6d6957092289f5639c6faf6d6dbd57f7eb4228b656826f09931c"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-approver-halfopen.png",
+      "engine": "webkit",
+      "state": "paired-approver",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1168
+      ],
+      "sha256": "dd93efb061cd1353bdec0a4d3a697667adff26abd3161045ee1ce4ba86cf29a9"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-approver-phone.png",
+      "engine": "webkit",
+      "state": "paired-approver",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1709
+      ],
+      "sha256": "fa149ebb994157806b56a5e541af2f139a8d9eca3bc8a4e9c741848d70c82bd7"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-approver-tablet.png",
+      "engine": "webkit",
+      "state": "paired-approver",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "683e782098ad835576bc740414d69bdb3c2f841776a60129d1f6e0842b337c31"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-first-key-desktop.png",
+      "engine": "webkit",
+      "state": "paired-first-key",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1228
+      ],
+      "sha256": "940056712478fd86ddad3d95abb5dbd0e2e11ec884d9e55589aba5785ab2d2e8"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-first-key-halfopen.png",
+      "engine": "webkit",
+      "state": "paired-first-key",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1244
+      ],
+      "sha256": "e608d893d7adee232fe994535089b65cd74c999512bfc078e8e36173a978a2fa"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-first-key-phone.png",
+      "engine": "webkit",
+      "state": "paired-first-key",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1804
+      ],
+      "sha256": "ae3e1e4460bf6d3eca45583bc348a9f1a636f39d60caa7041865d3b0352fa793"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-first-key-tablet.png",
+      "engine": "webkit",
+      "state": "paired-first-key",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1244
+      ],
+      "sha256": "6d517bfcd666c63a18d5ca4567d29eb52acc1fbf2ca62f144af3338ad9264253"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-viewer-desktop.png",
+      "engine": "webkit",
+      "state": "paired-viewer",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1116
+      ],
+      "sha256": "f15c93eef84ed1ad0c2bb3793acecb8ff153052044108c1ded7f5f7aed5be412"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-viewer-halfopen.png",
+      "engine": "webkit",
+      "state": "paired-viewer",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1124
+      ],
+      "sha256": "2598defb11816b06ef6de1112e8050a08fb09ccf3db37736c0e8468329f351d7"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-viewer-phone.png",
+      "engine": "webkit",
+      "state": "paired-viewer",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1534
+      ],
+      "sha256": "3f10a4292a2313d1cadadd791692b8c45e9ec1ba564b21ad45c27147cd4be186"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/paired-viewer-tablet.png",
+      "engine": "webkit",
+      "state": "paired-viewer",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "469417a4cc49a0ed6ecfd44e6ae689b8df00aaf85f062ccd4632f4062692d73e"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/saving-desktop.png",
+      "engine": "webkit",
+      "state": "saving",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1157
+      ],
+      "sha256": "cb4083be77315518f04e2410d27fec4f578d72c8f883ef3fce64abea4d0238ea"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/saving-halfopen.png",
+      "engine": "webkit",
+      "state": "saving",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1173
+      ],
+      "sha256": "02e03e5f46bfd0ee39aaaba0482c82d0aa27a721fa73cd03c4e6a685098dc72b"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/saving-phone.png",
+      "engine": "webkit",
+      "state": "saving",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1731
+      ],
+      "sha256": "8f82739fb266a2267d6ca8ecc321821861d815e526afdb618f9c052f3903ac27"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/saving-tablet.png",
+      "engine": "webkit",
+      "state": "saving",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "fecbafcaa62f83aa7da5c5c465685b443e61a2a355912585517246d04c7c10c9"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/shown-desktop.png",
+      "engine": "webkit",
+      "state": "shown",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1228
+      ],
+      "sha256": "c058acb583d678b7eacb0be60551dbb03e41eea43c0d209cf94b7b24529d6496"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/shown-halfopen.png",
+      "engine": "webkit",
+      "state": "shown",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1244
+      ],
+      "sha256": "3b89ac55fabfb460154a8cb6383d2add7922a716216510f28ccc4fffe70f251d"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/shown-phone.png",
+      "engine": "webkit",
+      "state": "shown",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1785
+      ],
+      "sha256": "fdaa03632774c1d0c2cae62ec176b92029b2e19279c1ad799c7f6161c87672c0"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/shown-tablet.png",
+      "engine": "webkit",
+      "state": "shown",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1244
+      ],
+      "sha256": "11bbfcd04076b39eab53728e69a66d040d920810da6c512ac586aa94f172b077"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/standby-desktop.png",
+      "engine": "webkit",
+      "state": "standby",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1116
+      ],
+      "sha256": "a61f48de439ea7ee9f7539578a6cd42b01555c3864f698c8832a26475c9fe101"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/standby-halfopen.png",
+      "engine": "webkit",
+      "state": "standby",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1124
+      ],
+      "sha256": "4eea699c6b71c26ca78896d393b04418f428010673ea4182686a6f99a9ffc929"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/standby-phone.png",
+      "engine": "webkit",
+      "state": "standby",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1534
+      ],
+      "sha256": "0e25f136956ee8ac8a4ab963870b9466846ed6f124bc4597253df8ac569adcab"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/standby-tablet.png",
+      "engine": "webkit",
+      "state": "standby",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "35d0743ebb80435cc5f8f14908c0f20ba721a7d011af79ac23a1040d60557a34"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/unavailable-desktop.png",
+      "engine": "webkit",
+      "state": "unavailable",
+      "posture": "desktop",
+      "viewport": [
+        1440,
+        900
+      ],
+      "png_dimensions": [
+        1440,
+        1139
+      ],
+      "sha256": "4efd68b19b03362b12e8e08a68f1892d6d077bde292cdc1cfa42e0bdbcdb41d0"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/unavailable-halfopen.png",
+      "engine": "webkit",
+      "state": "unavailable",
+      "posture": "halfopen",
+      "viewport": [
+        842,
+        675
+      ],
+      "png_dimensions": [
+        842,
+        1147
+      ],
+      "sha256": "36d466363e8edde4cec86111f8d74ed2c59daab24d0cb6efa339495ac591ccd2"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/unavailable-phone.png",
+      "engine": "webkit",
+      "state": "unavailable",
+      "posture": "phone",
+      "viewport": [
+        390,
+        844
+      ],
+      "png_dimensions": [
+        390,
+        1576
+      ],
+      "sha256": "9900f1b66841d852b0577d73dde4c14bd0193412d22be6fcd13c0f51067b6bec"
+    },
+    {
+      "path": "docs/screenshots/backups-settings-2026-11-03/webkit/unavailable-tablet.png",
+      "engine": "webkit",
+      "state": "unavailable",
+      "posture": "tablet",
+      "viewport": [
+        820,
+        1180
+      ],
+      "png_dimensions": [
+        820,
+        1180
+      ],
+      "sha256": "f893f6e20d67c0c3946b0ef00ec7903e31ad7e81e2f10b03fd4418aad8c5a9ef"
+    }
+  ]
+}

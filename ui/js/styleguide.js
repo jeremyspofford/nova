@@ -6,7 +6,7 @@
 const schema = await fetch('/api/v1/design-systems/schema').then((r) => r.json());
 const tokensOf = (test) => schema.tokens.filter(test).map((t) => t.css);
 import { MODES, apply, current, previewCss } from './theme.js';
-import { icons, memoryIndex, renderActivity, renderEmpty, renderGmail, renderHandoff, renderMemory, renderPermissions, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
+import { icons, memoryIndex, renderActivity, renderBackupsSettings, renderEmpty, renderGmail, renderHandoff, renderMemory, renderPermissions, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
 import { ICONS, ORB_SIZES, addDeviceSheet, allowApproveSheet, approvalSheet, briefCard, chatBubble, codingSheet, coldPromotionSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, infraSheet, joinRequestSheet, lookingIntoItCard, memoryHighlightCard, networkSheet, orb, proactiveBanner, promoteSheet, promotionActionSheet, promotionSheet, revokeSheet, rolesReviewSheet, rolesSheet, settingsRow, status, takeoverPanel, taskRow, triggerRow, verifiedResultCard, voiceState } from './components.js';
 import { waitingLine } from './wait.js';
 import { ORB_STATES } from './status.js';
@@ -261,6 +261,67 @@ function bindTopology() {
   });
 }
 
+// Backups uses only public dummy geometry, never a real recovery key or folder.
+const backupDemoKey = '01234567-89abcdef-01234567-89abcdef-01234567-89abcdef-01234567-89abcdef';
+const backupStates = [
+  ['loading', 'Loading'], ['empty', 'No folders'], ['configured', 'Configured'], ['saving', 'Saving'],
+  ['error', 'Failed save and field errors'], ['first-key', 'First key shown'], ['confirm', 'Console confirmation'],
+  ['shown', 'Console key shown'], ['paired-viewer', 'Paired viewer'], ['paired-approver', 'Paired approver'],
+  ['paired-first-key', 'Paired approver: first key once'], ['standby', 'Standby / read-only'],
+  ['unavailable', 'Source unavailable / unknown permissions'], ['long-paths', 'Long folder paths'],
+];
+let backupState = 'configured';
+function backupModel() {
+  const model = { settings: { target: '/srv/backup-copies', keep: 7, encrypted_target: '/media/encrypted-copies' }, permissions: { canEdit: true, console: true }, state: 'ready', errors: {}, recovery: { state: 'hidden' } };
+  if (backupState === 'loading') Object.assign(model, { state: 'loading', loadingSince: t0.getTime() - 1500 });
+  if (backupState === 'empty') model.settings = { target: null, keep: 7, encrypted_target: null };
+  if (backupState === 'saving') model.state = 'saving';
+  if (backupState === 'error') Object.assign(model, { settings: { ...model.settings, keep: 0 }, state: 'error', notice: 'Could not save. The encrypted copy folder is not writable. Your entries are still here.', errors: { target: 'Choose a private folder outside Nova’s home.', keep: 'Enter a whole number from 1 to 365.', encrypted_target: 'Choose a different folder you can write to.' } });
+  if (['first-key', 'paired-first-key'].includes(backupState)) model.recovery = { state: 'first-shown', key: backupDemoKey };
+  if (backupState === 'shown') model.recovery = { state: 'shown', key: backupDemoKey };
+  if (backupState === 'confirm') model.recovery = { state: 'confirm', confirmed: false };
+  if (backupState.startsWith('paired')) model.permissions = { canEdit: backupState !== 'paired-viewer', console: false, ...(backupState === 'paired-viewer' ? { readOnlyReason: 'This paired device can view backup settings. Ask an approver to make changes.' } : {}) };
+  if (backupState === 'standby') model.permissions = { canEdit: false, console: false, readOnlyReason: 'This is a standby. Change backup settings on the active Nova.' };
+  if (backupState === 'unavailable') Object.assign(model, { state: 'error', notice: 'Backup settings could not be loaded. Check the connection before making changes.', permissions: { canEdit: false, console: false, readOnlyReason: 'Device permissions are unavailable. Backup settings are read-only.' }, recovery: { state: 'unavailable', error: 'The recovery key is unavailable while Nova cannot be reached.' } });
+  if (backupState === 'long-paths') model.settings = { target: '/srv/backups/shared-reference-library/monthly-archive-with-a-long-neutral-folder-name/backup-copies', keep: 365, encrypted_target: '/media/archive/' + 'long-neutral-folder-name-'.repeat(8) };
+  return model;
+}
+function backupSpecimen(model = backupModel()) {
+  return `<div data-backups-specimen="${backupState}">${renderBackupsSettings(model, { id: `sg-backups-${backupState}` })}</div>`;
+}
+function backupsEntry() {
+  return `<label class="sg-pick" for="backups-state">Specimen state <select class="input" id="backups-state">${backupStates.map(([id, name]) => `<option value="${id}"${id === backupState ? ' selected' : ''}>${name}</option>`).join('')}</select></label><p class="sg-about">Demo controls only. Folders and keys below are public examples; no backup settings or clipboard are changed.</p><div data-backups-content>${backupSpecimen()}</div><p class="settings-note" role="status" data-backups-demo-notice></p>`;
+}
+function bindBackups() {
+  const entry = sg.querySelector('#sg-backups-settings');
+  if (!entry) return;
+  const note = (text) => { entry.querySelector('[data-backups-demo-notice]').textContent = text; };
+  const paint = (model) => { entry.querySelector('[data-backups-content]').innerHTML = backupSpecimen(model); };
+  entry.addEventListener('submit', (e) => { e.preventDefault(); note('Demo only. Your draft is unchanged; no backup settings were saved.'); });
+  entry.addEventListener('change', (e) => {
+    if (e.target.id === 'backups-state') { backupState = e.target.value; paint(); note(''); }
+    if (e.target.name === 'confirm') entry.querySelector('[data-action="backups-confirm"]').disabled = !e.target.checked;
+  });
+  entry.addEventListener('click', (e) => {
+    const action = e.target.closest('[data-action]')?.dataset.action;
+    if (!action?.startsWith('backups-')) return;
+    if (action === 'backups-copy') { note('Demo only. The clipboard is unchanged.'); return; }
+    if (action === 'backups-clear-target' || action === 'backups-clear-encrypted') { note('Demo only. Removing a folder needs an explicit save in Settings; no saved folder was removed.'); return; }
+    const model = backupModel();
+    if (action === 'backups-reveal') model.recovery = { state: 'confirm', confirmed: false };
+    if (action === 'backups-confirm') {
+      if (!entry.querySelector('[name="confirm"]')?.checked) return;
+      model.recovery = { state: 'shown', key: backupDemoKey };
+    }
+    if (['backups-hide', 'backups-cancel'].includes(action)) model.recovery = { state: 'hidden' };
+    if (['backups-reveal', 'backups-confirm', 'backups-hide', 'backups-cancel'].includes(action)) {
+      paint(model);
+      entry.querySelector('.backups-recovery button')?.focus();
+      note('Demo only. No recovery key was requested.');
+    }
+  });
+}
+
 // Health specimens are local examples, never a second source of configuration. The browser test
 // compares these public example limits to Caps.DEFAULT_LIMITS; Core is never bundled here.
 const costStates = ['loading', 'unavailable', 'zero', 'mixed', 'configured', 'unlimited', 'invalid', 'saving', 'save-error', 'success', 'adversarial'];
@@ -421,6 +482,8 @@ ${state('Grown: a long message', `<div class="dock"><form class="composer is-gro
 ${state('While Nova replies: Stop', `<div class="dock"><form class="composer" onsubmit="return false"><textarea rows="1" placeholder="Ask Nova anything…" aria-label="Sample composer while replying"></textarea><button class="send is-stop" aria-label="Stop">${icons.stop}</button></form></div>`)}`],
       ['notices', 'Toast, ProactiveBanner and banner', 'A toast says what just happened, with Undo where it can; a proactive message is one line and one action; the banner says what holds for the whole app.',
         () => `${state('Toasts', '<div class="sg-frame sg-toasts"><div class="toast">Forgotten.<button type="button" class="toast-btn">Undo</button></div><div class="toast" data-tone="alert">The heartbeat couldn’t check the schedules.<button type="button" class="toast-btn">See Health</button></div><div class="toast" data-tone="attention">Saved on this device. Syncing when the hub is back.</div></div>')}${state('Proactive messages', `${proactiveBanner({ id: 'm1', text: 'The weekly review is ready when you are.' })}${proactiveBanner({ id: 'm2', text: 'I held this one because I wasn’t sure it should go out now.', hold: 'needs_ok' })}`)}${state('Banner', '<div class="banner">You’re offline. What you see was saved earlier; nothing new can arrive or be sent until you’re back.</div>')}`],
+      ['backups-settings', 'Backups settings', 'Folder settings, retention and the encrypted-copy recovery key, including first setup and console-only repeated reveal.',
+        () => backupsEntry()],
       ['settings-row', 'SettingsRow', 'A setting: its name, what it does in a line, and its control.',
         () => `<ul class="settings-list">${settingsRow({ title: 'Your name', note: 'What Nova calls you.', control: '<input class="input" value="Alex" aria-label="Your name"><button type="button" class="btn small">Save</button>' })}${settingsRow({ title: 'Appearance id', note: 'It lets this browser keep its own appearance.' })}</ul>`],
       ['empty-state', 'EmptyState', '“Nothing needs you” is a designed state: what is true now, and what will appear here. Never a blank or a placeholder.',
@@ -474,6 +537,7 @@ function render() {
   }
   if (healthFocus?.isConnected) healthFocus.focus({ preventScroll: true });
   bindTopology();
+  bindBackups();
   bindHealthSpecimens();
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();

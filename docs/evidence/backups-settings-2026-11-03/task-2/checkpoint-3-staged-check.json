@@ -1,0 +1,14 @@
+{
+  "start_utc": "2026-11-03T18:34:34.818173+00:00",
+  "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+  "argv": [
+    "git",
+    "diff",
+    "--cached",
+    "--check"
+  ],
+  "end_utc": "2026-11-03T18:34:34.825532+00:00",
+  "exit_code": 2,
+  "stdout": "docs/evidence/backups-settings-2026-11-03/task-2/resume-3-lifecycle/stdout.txt:47: trailing whitespace.\n+  \ndocs/evidence/backups-settings-2026-11-03/task-2/resume-3-red/stdout.txt:18: trailing whitespace.\n+  \ndocs/evidence/backups-settings-2026-11-03/task-2/resume-3-red/stdout.txt:20: trailing whitespace.\n+  \ndocs/evidence/backups-settings-2026-11-03/task-2/resume-3-red/stdout.txt:36: trailing whitespace.\n+  \ndocs/evidence/backups-settings-2026-11-03/task-2/resume-3-red/stdout.txt:38: trailing whitespace.\n+  \n",
+  "stderr": ""
+}

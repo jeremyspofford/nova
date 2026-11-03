@@ -1,0 +1,2914 @@
+[
+  {
+    "engine": "webkit",
+    "posture": "phone",
+    "state": "configured",
+    "kind": "app",
+    "measured": {
+      "top": 351,
+      "bottom": 538,
+      "clipTop": 116,
+      "clipBottom": 773.984375,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 351,
+          "bottom": 364,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 372,
+          "bottom": 410,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 422,
+          "bottom": 442,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 446,
+          "bottom": 465,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 477,
+          "bottom": 525,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "phone",
+    "state": "configured",
+    "kind": "specimen",
+    "measured": {
+      "top": 581,
+      "bottom": 768,
+      "clipTop": 0,
+      "clipBottom": 844,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 581,
+          "bottom": 594,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 602,
+          "bottom": 640,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 652,
+          "bottom": 672,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 676,
+          "bottom": 695,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 707,
+          "bottom": 755,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "phone",
+    "state": "confirm",
+    "kind": "app",
+    "measured": {
+      "top": 294,
+      "bottom": 611,
+      "clipTop": 116,
+      "clipBottom": 773.984375,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 294,
+          "bottom": 307,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 315,
+          "bottom": 353,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 361,
+          "bottom": 377,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 393,
+          "bottom": 431,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 455,
+          "bottom": 535,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 563,
+          "bottom": 611,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 563,
+          "bottom": 611,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "phone",
+    "state": "confirm",
+    "kind": "specimen",
+    "measured": {
+      "top": 451,
+      "bottom": 768,
+      "clipTop": 0,
+      "clipBottom": 844,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 451,
+          "bottom": 464,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 472,
+          "bottom": 510,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 518,
+          "bottom": 534,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 550,
+          "bottom": 588,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 612,
+          "bottom": 692,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 720,
+          "bottom": 768,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 720,
+          "bottom": 768,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "phone",
+    "state": "shown",
+    "kind": "app",
+    "measured": {
+      "top": 294,
+      "bottom": 535,
+      "clipTop": 116,
+      "clipBottom": 773.984375,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 294,
+          "bottom": 307,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 315,
+          "bottom": 353,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 357,
+          "bottom": 395,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 421,
+          "bottom": 457,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 487,
+          "bottom": 535,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 487,
+          "bottom": 535,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "phone",
+    "state": "shown",
+    "kind": "specimen",
+    "measured": {
+      "top": 527,
+      "bottom": 768,
+      "clipTop": 0,
+      "clipBottom": 844,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 527,
+          "bottom": 540,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 548,
+          "bottom": 586,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 590,
+          "bottom": 628,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 654,
+          "bottom": 690,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 720,
+          "bottom": 768,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 720,
+          "bottom": 768,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "phone",
+    "state": "unavailable",
+    "kind": "app",
+    "measured": {
+      "top": 198,
+      "bottom": 344,
+      "clipTop": 116,
+      "clipBottom": 773.984375,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 198,
+          "bottom": 211,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 219,
+          "bottom": 257,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 269,
+          "bottom": 289,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 293,
+          "bottom": 331,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "phone",
+    "state": "unavailable",
+    "kind": "specimen",
+    "measured": {
+      "top": 558,
+      "bottom": 704,
+      "clipTop": 0,
+      "clipBottom": 844,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 558,
+          "bottom": 571,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 579,
+          "bottom": 617,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 629,
+          "bottom": 649,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 653,
+          "bottom": 691,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "rail",
+    "state": "configured",
+    "kind": "app",
+    "measured": {
+      "top": 731,
+      "bottom": 840,
+      "clipTop": 97,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 731,
+          "bottom": 744,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 752,
+          "bottom": 771,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 783.5,
+          "bottom": 803.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 807.5,
+          "bottom": 826.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 783,
+          "bottom": 827,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "rail",
+    "state": "configured",
+    "kind": "specimen",
+    "measured": {
+      "top": 715,
+      "bottom": 824,
+      "clipTop": 0,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 715,
+          "bottom": 728,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 736,
+          "bottom": 755,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 767.5,
+          "bottom": 787.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 791.5,
+          "bottom": 810.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 767,
+          "bottom": 811,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "rail",
+    "state": "confirm",
+    "kind": "app",
+    "measured": {
+      "top": 610,
+      "bottom": 900,
+      "clipTop": 97,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 610,
+          "bottom": 623,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 631,
+          "bottom": 650,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 658,
+          "bottom": 674,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 690,
+          "bottom": 728,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 752,
+          "bottom": 828,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 856,
+          "bottom": 900,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 856,
+          "bottom": 900,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "rail",
+    "state": "confirm",
+    "kind": "specimen",
+    "measured": {
+      "top": 629,
+      "bottom": 900,
+      "clipTop": 0,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 629,
+          "bottom": 642,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 650,
+          "bottom": 669,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 677,
+          "bottom": 693,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 709,
+          "bottom": 728,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 752,
+          "bottom": 828,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 856,
+          "bottom": 900,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 856,
+          "bottom": 900,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "rail",
+    "state": "shown",
+    "kind": "app",
+    "measured": {
+      "top": 610,
+      "bottom": 809,
+      "clipTop": 97,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 610,
+          "bottom": 623,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 631,
+          "bottom": 650,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 654,
+          "bottom": 692,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 718,
+          "bottom": 735,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 765,
+          "bottom": 809,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 765,
+          "bottom": 809,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "rail",
+    "state": "shown",
+    "kind": "specimen",
+    "measured": {
+      "top": 644,
+      "bottom": 824,
+      "clipTop": 0,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 644,
+          "bottom": 657,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 665,
+          "bottom": 684,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 688,
+          "bottom": 707,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 733,
+          "bottom": 750,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 780,
+          "bottom": 824,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 780,
+          "bottom": 824,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "rail",
+    "state": "unavailable",
+    "kind": "app",
+    "measured": {
+      "top": 574,
+      "bottom": 682,
+      "clipTop": 97,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 574,
+          "bottom": 587,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 595,
+          "bottom": 614,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 626,
+          "bottom": 646,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 650,
+          "bottom": 669,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "rail",
+    "state": "unavailable",
+    "kind": "specimen",
+    "measured": {
+      "top": 656,
+      "bottom": 764,
+      "clipTop": 0,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 656,
+          "bottom": 669,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 677,
+          "bottom": 696,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 708,
+          "bottom": 728,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 732,
+          "bottom": 751,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "tablet",
+    "state": "configured",
+    "kind": "app",
+    "measured": {
+      "top": 799,
+      "bottom": 912,
+      "clipTop": 97,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 799,
+          "bottom": 812,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 820,
+          "bottom": 839,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 853.5,
+          "bottom": 873.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 877.5,
+          "bottom": 896.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 851,
+          "bottom": 899,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "tablet",
+    "state": "configured",
+    "kind": "specimen",
+    "measured": {
+      "top": 984,
+      "bottom": 1097,
+      "clipTop": 0,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 984,
+          "bottom": 997,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 1005,
+          "bottom": 1024,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 1038.5,
+          "bottom": 1058.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 1062.5,
+          "bottom": 1081.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1036,
+          "bottom": 1084,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "tablet",
+    "state": "confirm",
+    "kind": "app",
+    "measured": {
+      "top": 799,
+      "bottom": 1097,
+      "clipTop": 97,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 799,
+          "bottom": 812,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 820,
+          "bottom": 839,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 847,
+          "bottom": 863,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 879,
+          "bottom": 917,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 941,
+          "bottom": 1021,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1049,
+          "bottom": 1097,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1049,
+          "bottom": 1097,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "tablet",
+    "state": "confirm",
+    "kind": "specimen",
+    "measured": {
+      "top": 901,
+      "bottom": 1180,
+      "clipTop": 0,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 901,
+          "bottom": 914,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 922,
+          "bottom": 941,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 949,
+          "bottom": 965,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 981,
+          "bottom": 1000,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 1024,
+          "bottom": 1104,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1132,
+          "bottom": 1180,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1132,
+          "bottom": 1180,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "tablet",
+    "state": "shown",
+    "kind": "app",
+    "measured": {
+      "top": 799,
+      "bottom": 1002,
+      "clipTop": 97,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 799,
+          "bottom": 812,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 820,
+          "bottom": 839,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 843,
+          "bottom": 881,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 907,
+          "bottom": 924,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 954,
+          "bottom": 1002,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 954,
+          "bottom": 1002,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "tablet",
+    "state": "shown",
+    "kind": "specimen",
+    "measured": {
+      "top": 920,
+      "bottom": 1104,
+      "clipTop": 0,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 920,
+          "bottom": 933,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 941,
+          "bottom": 960,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 964,
+          "bottom": 983,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 1009,
+          "bottom": 1026,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1056,
+          "bottom": 1104,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1056,
+          "bottom": 1104,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "tablet",
+    "state": "unavailable",
+    "kind": "app",
+    "measured": {
+      "top": 759,
+      "bottom": 867,
+      "clipTop": 97,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 759,
+          "bottom": 772,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 780,
+          "bottom": 799,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 811,
+          "bottom": 831,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 835,
+          "bottom": 854,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "tablet",
+    "state": "unavailable",
+    "kind": "specimen",
+    "measured": {
+      "top": 932,
+      "bottom": 1040,
+      "clipTop": 0,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 932,
+          "bottom": 945,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 953,
+          "bottom": 972,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 984,
+          "bottom": 1004,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 1008,
+          "bottom": 1027,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "halfopen",
+    "state": "configured",
+    "kind": "app",
+    "measured": {
+      "top": 302,
+      "bottom": 470,
+      "clipTop": 97,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 302,
+          "bottom": 315,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 323,
+          "bottom": 342,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 354,
+          "bottom": 374,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 378,
+          "bottom": 397,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 409,
+          "bottom": 457,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "halfopen",
+    "state": "configured",
+    "kind": "specimen",
+    "measured": {
+      "top": 486,
+      "bottom": 599,
+      "clipTop": 0,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 486,
+          "bottom": 499,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 507,
+          "bottom": 526,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 540.5,
+          "bottom": 560.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 564.5,
+          "bottom": 583.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 538,
+          "bottom": 586,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "halfopen",
+    "state": "confirm",
+    "kind": "app",
+    "measured": {
+      "top": 255,
+      "bottom": 553,
+      "clipTop": 97,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 255,
+          "bottom": 268,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 276,
+          "bottom": 295,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 303,
+          "bottom": 319,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 335,
+          "bottom": 373,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 397,
+          "bottom": 477,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 505,
+          "bottom": 553,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 505,
+          "bottom": 553,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "halfopen",
+    "state": "confirm",
+    "kind": "specimen",
+    "measured": {
+      "top": 396,
+      "bottom": 675,
+      "clipTop": 0,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 396,
+          "bottom": 409,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 417,
+          "bottom": 436,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 444,
+          "bottom": 460,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 476,
+          "bottom": 495,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 519,
+          "bottom": 599,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 627,
+          "bottom": 675,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 627,
+          "bottom": 675,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "halfopen",
+    "state": "shown",
+    "kind": "app",
+    "measured": {
+      "top": 255,
+      "bottom": 477,
+      "clipTop": 97,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 255,
+          "bottom": 268,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 276,
+          "bottom": 295,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 299,
+          "bottom": 337,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 363,
+          "bottom": 399,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 429,
+          "bottom": 477,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 429,
+          "bottom": 477,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "halfopen",
+    "state": "shown",
+    "kind": "specimen",
+    "measured": {
+      "top": 415,
+      "bottom": 599,
+      "clipTop": 0,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 415,
+          "bottom": 428,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 436,
+          "bottom": 455,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 459,
+          "bottom": 478,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 504,
+          "bottom": 521,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 551,
+          "bottom": 599,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 551,
+          "bottom": 599,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "halfopen",
+    "state": "unavailable",
+    "kind": "app",
+    "measured": {
+      "top": 159,
+      "bottom": 267,
+      "clipTop": 97,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 159,
+          "bottom": 172,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 180,
+          "bottom": 199,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 211,
+          "bottom": 231,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 235,
+          "bottom": 254,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "webkit",
+    "posture": "halfopen",
+    "state": "unavailable",
+    "kind": "specimen",
+    "measured": {
+      "top": 427,
+      "bottom": 535,
+      "clipTop": 0,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 427,
+          "bottom": 440,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 448,
+          "bottom": 467,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 479,
+          "bottom": 499,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 503,
+          "bottom": 522,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  }
+]

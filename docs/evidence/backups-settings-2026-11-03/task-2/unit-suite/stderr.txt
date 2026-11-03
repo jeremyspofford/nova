@@ -1,0 +1,2 @@
+npm notice run nova@0.1.0 test
+npm notice run sh scripts/test.sh 'tests/*.test.js' 'tests/core/*.test.ts' 'tests/acceptance/*.test.ts' 'tests/supervisor/*.test.ts' 'tests/chaos/*.test.ts' 'tests/ingest/*.test.ts' 'tests/ingest/*.test.js'

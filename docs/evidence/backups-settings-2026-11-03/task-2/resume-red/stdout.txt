@@ -1,0 +1,51 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Backups search within the same category clears a shown key (1499.597886ms)
+✖ Backups initial endpoint failure stays local and offers a real retry (1225.407153ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2942.789341
+
+✖ failing tests:
+
+test at tests/ui/backups-settings.test.ts:135:1
+✖ Backups search within the same category clears a shown key (1499.597886ms)
+  AssertionError [ERR_ASSERTION]: no hidden or visible key remains in Settings
+  
+  1 !== 0
+  
+      at noKey (file:///work/tests/ui/backups-settings.test.ts:132:43)
+      at async file:///work/tests/ui/backups-settings.test.ts:140:3
+      at async appCase (file:///work/tests/ui/backups-settings.test.ts:116:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/ui/backups-settings.test.ts:144:1
+✖ Backups initial endpoint failure stays local and offers a real retry (1225.407153ms)
+  AssertionError [ERR_ASSERTION]: retry reachable
+  
+  0 !== 1
+  
+      at file:///work/tests/ui/backups-settings.test.ts:148:10
+      at async appCase (file:///work/tests/ui/backups-settings.test.ts:116:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

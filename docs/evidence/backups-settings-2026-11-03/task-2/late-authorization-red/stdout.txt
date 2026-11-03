@@ -1,0 +1,44 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Backups delayed reveal cannot return after fresh authorization becomes unavailable (31667.15517ms)
+✖ Backups missing retained key reports fixed unavailable state without creating a key (977.344262ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 33095.251883
+
+✖ failing tests:
+
+test at tests/ui/backups-settings.test.ts:379:1
+✖ Backups delayed reveal cannot return after fresh authorization becomes unavailable (31667.15517ms)
+  locator.click: Timeout 30000ms exceeded.
+  Call log:
+    - waiting for locator('[data-action="backups-retry"]')
+  
+      at /work/tests/ui/backups-settings.test.ts:389:100
+      at async appCase (/work/tests/ui/backups-settings.test.ts:125:5) {
+    name: 'TimeoutError'
+  }
+
+test at tests/ui/backups-settings.test.ts:393:1
+✖ Backups missing retained key reports fixed unavailable state without creating a key (977.344262ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  400 !== 200
+  
+      at file:///work/tests/ui/backups-settings.test.ts:394:10
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async appCase (file:///work/tests/ui/backups-settings.test.ts:125:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 400,
+    expected: 200,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

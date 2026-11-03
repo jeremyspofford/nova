@@ -1,0 +1,24 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{
+  "node": "v26.3.1",
+  "cwd": "/work",
+  "env": {
+    "CI": "1",
+    "HOME": "/tmp/backups-home",
+    "NOVA_EGRESS_LOG": "/evidence/egress.log",
+    "TMPDIR": "/tmp",
+    "NOVA_BACKUPS_STYLEGUIDE_SHOTS": "/evidence/screenshots",
+    "PATH": "/tmp/nova-tripwire-zb1a4M/bin:/opt/node/bin:/usr/bin:/bin",
+    "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "NOVA_VAULT_KEY": "file",
+    "TZ": "UTC"
+  },
+  "deps": {
+    "playwright-core": "1.56.1",
+    "axe-core": "4.14.0",
+    "typescript": "7.0.2"
+  }
+}
+no-Kubernetes tripwire: never fired

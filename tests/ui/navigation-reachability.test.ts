@@ -17,7 +17,7 @@ type ControlEvidence = { tag: string; id: string; text: string; ariaLabel: strin
 type CrawlState = { path: string; view: string; steps: Step[]; sections: string[]; links: Door[]; headings: string[]; controls: ControlEvidence[] };
 type Report = {
   layout: string; registered: string[]; reached: Record<string, Step[]>; states: CrawlState[];
-  doors: Record<string, Door[]>; required: { homeTopology: boolean; devicesTopology: boolean; captureCategory: boolean; healthCosts: boolean; healthDiagnostics: boolean };
+  doors: Record<string, Door[]>; required: { homeTopology: boolean; devicesTopology: boolean; captureCategory: boolean; backupControls: boolean; healthCosts: boolean; healthDiagnostics: boolean };
   requiredPaths: Record<string, Step[]>; forbidden: string[]; documentRequests?: string[]; healthMesh?: boolean; attempting?: Step[]; missing?: string[]; error?: string;
 };
 const at = (page: Page) => new URL(page.url()).pathname + new URL(page.url()).hash;
@@ -50,13 +50,17 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
     if (typeof b === 'string') throw new Error(b);
     const m = blank(`nova-navigation-${layout}-`);
     const nova = await m.start({ NOVA_AGENT_CMD: 'node scripts/fake-agent.js', NOVA_AGENT_EGRESS: 'none' });
-    const report: Report = { layout, registered: registeredViews(), reached: {}, states: [], doors: {}, required: { homeTopology: false, devicesTopology: false, captureCategory: false, healthCosts: false, healthDiagnostics: false }, requiredPaths: {}, forbidden: [] };
+    const report: Report = { layout, registered: registeredViews(), reached: {}, states: [], doors: {}, required: { homeTopology: false, devicesTopology: false, captureCategory: false, backupControls: false, healthCosts: false, healthDiagnostics: false }, requiredPaths: {}, forbidden: [] };
     const output = process.env.NOVA_NAV_EVIDENCE ?? (process.env.NOVA_UI_SHOTS ? join(process.env.NOVA_UI_SHOTS, 'navigation') : null);
     const evidence = output ? resolve(output) : null;
     let crawlPage: Page | undefined;
     if (evidence) mkdirSync(evidence, { recursive: true });
     try {
       await finishSetup(m);
+      const backupTarget = join(m.dir, 'backups');
+      const encryptedTarget = join(m.dir, 'encrypted');
+      mkdirSync(backupTarget, { mode: 0o700 }); mkdirSync(encryptedTarget, { mode: 0o700 });
+      assert.equal((await m.send('PUT', '/api/v1/backups/settings', { target: backupTarget, encrypted_target: encryptedTarget })).status, 200);
       // One neutral conversation supplies a finite representative of the /c/:id family.
       writeFileSync(join(m.home, 'sessions', '2026-11-02-nav001.jsonl'), [
         { ts: '2026-11-02T12:00:00Z', type: 'session', id: '2026-11-02-nav001', title: 'Navigation example', v: 1 },
@@ -152,6 +156,16 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
             report.required.devicesTopology = links.some(l => l.href === '/topology' && l.label === 'Machines and services');
             if (evidence) await page.screenshot({ path: join(evidence, `${layout}-settings-devices.png`), fullPage: true });
           }
+          if (key === '/settings#backups') {
+            const backup = page.locator('#settings-backups');
+            report.required.backupControls = await backup.locator('input[name="target"], input[name="keep"], input[name="encrypted_target"]').count() === 3
+              && await backup.locator('input:disabled').count() === 0
+              && await backup.locator('[data-action="backups-save"], [data-action="backups-reveal"]').count() === 2;
+            assert.equal(await page.evaluate(async () => (await import(String('/js/surfaces.js'))).store.mesh?.you?.console), true, 'reveal affordance uses actual console principal');
+            assert.equal(await backup.locator('code').count(), 0, 'crawl never reveals a key');
+            report.requiredPaths.backupControls = path;
+            if (evidence) await page.screenshot({ path: join(evidence, `${layout}-settings-backups.png`), fullPage: true });
+          }
           if (key.startsWith('/settings#capture') && evidence) await page.screenshot({ path: join(evidence, `${layout}-settings-capture.png`), fullPage: true });
         }
         for (const link of links) {
@@ -202,7 +216,7 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
       console.log(`DOCUMENT ${layout}: main-document requests=${documentRequests(page).length}`);
       for (const family of ['/new', '/c/2026-11-02-nav001', '/schedules#sc-navigation-example']) assert.ok(report.states.some(s => s.path === family), `actual conversation family: ${family}`);
       assert.deepEqual(report.missing, [], 'every production registered view has a rendered door');
-      assert.deepEqual(report.required, { homeTopology: true, captureCategory: true, devicesTopology: true, healthCosts: true, healthDiagnostics: true }, 'required ordinary Home and Settings doors');
+      assert.deepEqual(report.required, { homeTopology: true, captureCategory: true, devicesTopology: true, backupControls: true, healthCosts: true, healthDiagnostics: true }, 'required ordinary Home and Settings doors');
       assert.equal(readFileSync(m.egress, 'utf8'), '', 'no external Core egress');
     } catch (error) {
       report.error = String(error); console.log(`NAVIGATION FAILED ${layout}: ${report.error}`); throw error;

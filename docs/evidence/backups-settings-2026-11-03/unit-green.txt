@@ -1,0 +1,31 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ Backups has its own rendered styleguide entry rather than a helper exemption (2.505615ms)
+✔ folder and retention drafts have associated labels, help and explicit removal actions (1.385597ms)
+✔ loading and read-only capabilities cannot mutate settings or reveal a key (0.457544ms)
+✔ a paired approver can receive the first key once but cannot repeat a reveal (0.376259ms)
+✔ repeated reveal uses explicit tier-3 confirmation with no hidden key bytes (0.404437ms)
+✔ only visible authorized key states emit escaped key text, only inside code (0.503058ms)
+✔ saving prevents duplicate submit while retaining editable drafts and failed fields (0.459778ms)
+✔ empty settings use default retention without converting an invalid draft or promising folder creation (0.42364ms)
+✔ all arbitrary strings and identifiers are escaped; rendering is pure and deterministic (0.35381ms)
+✔ spacing: one step of the 4pt scale, never a half step, a sum or another family (4.54059ms)
+✔ type: the type scale’s own tokens for size and line height (0.649294ms)
+✔ radius: one token by size class; never a fraction, and never the pill on what grows (1.005752ms)
+✔ gradients light the orb and the page, nothing else; no emoji (1.79813ms)
+✔ scripts: the styles they write and the icons they draw (0.751195ms)
+✔ the command fails on an off-scale value, with file:line, and passes once it is gone (673.480979ms)
+✔ all of ui/ is on the designed scales (73.395606ms)
+✔ the packages: the lead is on the scales; spacing is the system’s in every package (4.910727ms)
+✔ every component ui/js/components.js exports is in the styleguide (4.333406ms)
+✔ every component ui/js/view.js exports is in the styleguide (0.96401ms)
+✔ each styleguide entry has its own anchor and address, so it can be approved alone (0.481286ms)
+✔ the styleguide’s content is neutral: no real people, services or data (0.297193ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 21
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1197.052886
+no-Kubernetes tripwire: never fired

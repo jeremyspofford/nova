@@ -1,0 +1,35 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ chat: no orb or avatar on any message; Nova’s turn is un-bubbled, yours is a bubble with no tail (14.19554ms)
+✔ chat: a group is one author within five minutes; its first message shows the time (2.924947ms)
+✔ chat: every message’s exact time is there to reveal; dividers mark days and long gaps (1.952648ms)
+✔ chat: a work-trail entry says how long it took and when it finished (1.667227ms)
+✔ settings: one structure, grouped by task, one level deep, every part in exactly one place (3.455087ms)
+✔ settings search knows people’s words, not just labels, and shows the path (4.23852ms)
+✔ the page’s live check reads colours the way the core does, and agrees with it (4.856107ms)
+✔ Nova recommends one design, with a reason: its own design at the bar first, else the starter that fits and reads well (57.034353ms)
+✔ timestamps use a colour that passes 4.5:1 in every package, never the faint one (2.516007ms)
+✔ scrolling: the OS scrollbar, a stable gutter, and no vertical scroller inside a view (1.052214ms)
+✔ the service worker caches every module the app imports (1.203832ms)
+✔ Backups from Home: phone saves, confirms, clears and retains drafts (2648.003837ms)
+✔ Backups from Home: rail saves, confirms, clears and retains drafts (2219.740165ms)
+✔ Backups search within the same category clears a shown key (1334.67897ms)
+✔ Backups initial endpoint failure stays local and offers a real retry (1327.467972ms)
+✔ Backups delayed first key cannot appear after route exit or category return (1628.691708ms)
+✔ Backups delayed repeat key respects Not now, hash navigation and Hide during save (2285.859668ms)
+✔ Backups native clipboard changes only on explicit Copy click (1436.906703ms)
+✔ Backups preserves inflight edits and duplicate submit guard, then validates blanks and nulls (1730.541536ms)
+✔ Backups failed mesh refresh clears key and stays read-only; fresh retry recovers drafts (1468.816339ms)
+✔ Backups offline save failure keeps draft and allows a real retry (1469.163646ms)
+✔ Backups real paired viewer and approver enforce roles, initial-only key and live role loss (2062.736655ms)
+✔ Backups loading clock is a stable request start and stale GET stays read-only (1233.016867ms)
+✔ Backups generic reconnect with failed mesh has a local retry, and revalidation blocks PUT (1775.023238ms)
+✔ Backups delayed reveal cannot return after fresh authorization becomes unavailable (1721.304565ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 25
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 24802.766186
+no-Kubernetes tripwire: never fired

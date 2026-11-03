@@ -1,0 +1,68 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ chat: no orb or avatar on any message; Nova’s turn is un-bubbled, yours is a bubble with no tail (15.375843ms)
+✔ chat: a group is one author within five minutes; its first message shows the time (2.728056ms)
+✔ chat: every message’s exact time is there to reveal; dividers mark days and long gaps (2.22374ms)
+✔ chat: a work-trail entry says how long it took and when it finished (1.728871ms)
+✖ settings: one structure, grouped by task, one level deep, every part in exactly one place (1.111541ms)
+✔ settings search knows people’s words, not just labels, and shows the path (6.834742ms)
+✔ the page’s live check reads colours the way the core does, and agrees with it (4.018319ms)
+✔ Nova recommends one design, with a reason: its own design at the bar first, else the starter that fits and reads well (58.981919ms)
+✔ timestamps use a colour that passes 4.5:1 in every package, never the faint one (4.898125ms)
+✔ scrolling: the OS scrollbar, a stable gutter, and no vertical scroller inside a view (0.940521ms)
+✔ the service worker caches every module the app imports (1.340974ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 10
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 411.07793
+
+✖ failing tests:
+
+test at tests/ui-fixes.test.js:90:1
+✖ settings: one structure, grouped by task, one level deep, every part in exactly one place (1.111541ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   'backups',
+      'capture',
+      'changes',
+      'checkpoints',
+      'connections',
+      'danger',
+  
+      at TestContext.<anonymous> (file:///work/tests/ui-fixes.test.js:92:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [
+      'backups',     'capture',
+      'changes',     'checkpoints',
+      'connections', 'danger',
+      'devices',     'look',
+      'models',      'perms',
+      'privacy',     'providers',
+      'services',    'sites',
+      'you'
+    ],
+    expected: [
+      'capture',     'changes',
+      'checkpoints', 'connections',
+      'danger',      'devices',
+      'look',        'models',
+      'perms',       'privacy',
+      'providers',   'services',
+      'sites',       'you'
+    ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

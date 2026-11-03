@@ -1,0 +1,30 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ Backups search within the same category clears a shown key (1470.804998ms)
+✔ Backups initial endpoint failure stays local and offers a real retry (1309.223168ms)
+✔ Backups delayed first key cannot appear after route exit or category return (1604.901522ms)
+✔ Backups delayed repeat key respects Not now, hash navigation and Hide during save (2426.811422ms)
+✔ Backups native clipboard changes only on explicit Copy click (1467.512038ms)
+✖ Backups preserves inflight edits and duplicate submit guard, then validates blanks and nulls (1383.068688ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 5
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9891.766839
+
+✖ failing tests:
+
+test at tests/ui/backups-settings.test.ts:212:1
+✖ Backups preserves inflight edits and duplicate submit guard, then validates blanks and nulls (1383.068688ms)
+  locator.waitFor: Error: strict mode violation: locator('#settings-backups [aria-invalid="true"]') resolved to 2 elements:
+      1) <input value="" type="text" class="input" name="target" autocomplete="off" spellcheck="false" id="backups-target" aria-invalid="true" aria-describedby="backups-target-help backups-target-error"/> aka getByRole('textbox', { name: 'Backup folder' })
+      2) <input value="" type="text" class="input" autocomplete="off" spellcheck="false" aria-invalid="true" name="encrypted_target" id="backups-encrypted_target" aria-describedby="backups-encrypted_target-help backups-encrypted_target-error"/> aka getByRole('textbox', { name: 'Encrypted copy folder' })
+  
+  Call log:
+    - waiting for locator('#settings-backups [aria-invalid="true"]') to be visible
+  
+      at /work/tests/ui/backups-settings.test.ts:218:65
+      at async appCase (/work/tests/ui/backups-settings.test.ts:116:5)
+no-Kubernetes tripwire: never fired

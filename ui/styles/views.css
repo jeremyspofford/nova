@@ -970,3 +970,19 @@ kbd {
 .contrast-title { font-weight: 600; color: var(--text-primary); }
 .contrast-list { margin: var(--space-2) 0 0; padding-left: var(--space-5); color: var(--text-primary); }
 .proactive-banner[data-held] { border-color: var(--status-attention); }
+
+/* Shared Backups entry: SettingsRow/Field/Button/Confirmation/CodeBlock patterns. */
+.backups-settings { min-width: 0; max-width: var(--layout-content-max); }
+.backups-settings .view-title { margin-bottom: var(--space-5); }
+.backups-settings .settings-group-title { padding: 0; margin: var(--space-5) 0 var(--space-2); }
+.backups-settings .settings-control { flex: 1 1 calc(var(--space-8) * 4); min-width: 0; }
+.backups-settings .input { width: 100%; min-width: 0; box-sizing: border-box; }
+.backups-settings .settings-control .settings-note { width: 100%; margin: 0; }
+.backups-settings .settings-note { overflow-wrap: anywhere; }
+.backups-settings .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.backups-settings .confirm { margin-top: var(--space-3); min-height: var(--hit); }
+.backups-settings .confirm input { flex-shrink: 0; min-height: var(--hit); }
+.backups-settings .code-block { margin-top: var(--space-3); }
+.backups-settings .code-block pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.backups-error { color: var(--text-primary); }
+.backups-settings .input[aria-invalid="true"] { border-color: var(--status-attention); }

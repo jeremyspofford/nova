@@ -1,0 +1,14 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ Backups entry exists in chromium (591.313081ms)
+✔ Backups chromium: every state, posture and installed theme; local interactions and accessibility (26820.387321ms)
+✔ Backups entry exists in webkit (766.421866ms)
+✔ Backups webkit: every state, posture and installed theme; local interactions and accessibility (23865.232265ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 52493.043487
+no-Kubernetes tripwire: never fired
