@@ -1,6 +1,6 @@
 {
-  "base": "308c88735b782a49cd6688b9b701bae3c5368f1c",
-  "note": "Fix2 current source hashes, relative to308c. Runtime Git identity remains308c; changed app/test bytes are identified by hashes. Original c071 and308c manifests remain byte-exact archives. Earlier probe gaps and explicitly post-start offline-test supplement are not retroactive proof.",
+  "base": "6ea82d7b211375dc390aed44bb2f53fed4f51500",
+  "note": "Final combined wave from actual6ea base. UI application/component/style/SW bytes remain unchanged. New workflow/test/helper and evidence-runner bytes are identified here. Historical hash gaps remain disclosed; current hashes do not retroactively qualify earlier probe variants.",
   "files": {
     "ui/js/app.js": {
       "sha256": "cd4f395c8ce4b9a9557110c1502b1942da975793b97c4b86eff912fc20224cd4",
@@ -31,8 +31,8 @@
       "git_blob": "3fea9b6aac5e3e2dd468e76011ccb554f637e28d"
     },
     "tests/ui/health-caps-diagnostics.test.ts": {
-      "sha256": "6313b9388795a4dcb928174bcfc4ca67f3375970694d36c7cf45da125cd70e04",
-      "git_blob": "be39bca1355a52a89e7b40b9fc91346b287d6ba1"
+      "sha256": "477083dd8c61ea7a08d22d457cbf99beb34c14eb3a67d1c1c1dd8c1c30893072",
+      "git_blob": "1ae54626999d3a88338790fa6e0d375ef287793a"
     },
     "tests/ui/navigation-reachability.test.ts": {
       "sha256": "8a5b99412e79ef42a664a5010916c36dba086c5963670bc0f622e02ee7ca84b0",
@@ -89,6 +89,42 @@
     "ui/js/topology-view.js": {
       "sha256": "51d04a73dce7794b8c713ddfc9cbbfc5123591978a19f9a48b820415ff8abfe9",
       "git_blob": "3d5867fbb1a7ed04a1978808775c7a0ca559f23b"
+    },
+    ".github/workflows/ci.yml": {
+      "sha256": "b7b1b3c11825148b67f852e80115476e04e530d4ff2ea7621e49a8e45a741577",
+      "git_blob": "8255292c25a213317497865b02f09d41444a02f3"
+    },
+    "scripts/ci-changes.sh": {
+      "sha256": "72271c0328ff8cdebd9a97123a6f34258505c68d92db1e79e6012c7ab99b6f37",
+      "git_blob": "f706e2f37940f74fcccb6d557a5a27a78607dcbe"
+    },
+    "tests/ci-changes.test.js": {
+      "sha256": "71578a590c3339348be25df2e8ea28f0e86eeb63fb9335e80a5564f72cae8653",
+      "git_blob": "7088902b087cb602c67338b0c58697e2c5ea95b7"
+    },
+    "tests/ui/health-diagnostics-visual.ts": {
+      "sha256": "9425aacbe22e3088aef6e471d9d299dcf94618d9a0d6db32e4d1a4a93d3a4c1b",
+      "git_blob": "e46b8681c4dc48d2cd7ad1a096203cacc116aa30"
+    },
+    "src/core/browser/png.ts": {
+      "sha256": "e1b06de34220bc6afa371b4863f1fb7f9a238f9c742c96490f14ebe53a4c33f1",
+      "git_blob": "a9c6948da9d2451af11b63f19162051358bfa7be"
+    },
+    "tests/ui/support.ts": {
+      "sha256": "ddcc40e28b51331a41e82f3be0e134c161e49c0dfe3b33a6150ab713515cec15",
+      "git_blob": "ee40aaa481c40fa20597402a5476925a300d5a61"
+    },
+    "ui/styles/components.css": {
+      "sha256": "3c3ec46433623dbec0e8d4ed3c18d598ff2b920ffaa7624b6adc54c13f2bc95e",
+      "git_blob": "c6c62074e67d94047eada212ded9e7ca008770dd"
+    },
+    "ui/styles/layout.css": {
+      "sha256": "20d0ac7bedf4d5cc95531a9186b26a0381938606209d57fcdad3464c18e42877",
+      "git_blob": "06c703e7cdbde9336db2e7c40b3b0dc25d7c873e"
+    },
+    "docs/evidence/health-app-2026-11-03/run.py": {
+      "sha256": "934dadcdddbd4a35b091f64c652f62c51170081f06301e60a37dae1535b73807",
+      "git_blob": "ab13acfd412a9b3d0e2055ef3652c8c2b1e7c92e"
     }
   },
   "archived_probes": {

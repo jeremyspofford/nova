@@ -105,3 +105,17 @@ All four commands retain exact current app/browser-test hashes, full stdout and 
 | fix-2-core-outage-qualified | 0 | [argv](fix-2-core-outage-qualified/command.json) | [stdout](fix-2-core-outage-qualified/stdout.txt) |
 | fix-2-partial-red | 1 | [argv](fix-2-partial-red/command.json) | [stdout](fix-2-partial-red/stdout.txt) |
 | fix-2-static-qualified | 0 | [argv](fix-2-static-qualified/command.json) | [stdout](fix-2-static-qualified/stdout.txt) |
+
+## Final combined wave — base6ea, visual witnesses and shallow CI checkout
+
+Seven exact commands; all raw failures retained. [Hashes](final-wave-command-hashes.json). Added start-hash coverage names workflow/classifier/CI test, visual helper, PNG decoder and unchanged layout/style/support inputs. [Initial-RED and framing-probe source snapshots](final-visual-debug/) round-trip to actual start hashes; current final source is separately recorded. Earlier provenance limits remain unchanged.
+
+| Run | Exit | Exact command | Raw output |
+| --- | --- | --- | --- |
+| final-ci-depth-red | 1 | [argv](final-ci-depth-red/command.json) | [stdout](final-ci-depth-red/stdout.txt) |
+| final-ci-depth-green | 0 | [argv](final-ci-depth-green/command.json) | [stdout](final-ci-depth-green/stdout.txt) |
+| final-visual-red | 1 | [argv](final-visual-red/command.json) | [stdout](final-visual-red/stdout.txt) |
+| final-visual-phone-framing-probe | 1 | [argv](final-visual-phone-framing-probe/command.json) | [stdout](final-visual-phone-framing-probe/stdout.txt) |
+| final-visual-halfopen-framing-probe | 1 | [argv](final-visual-halfopen-framing-probe/command.json) | [stdout](final-visual-halfopen-framing-probe/stdout.txt) |
+| final-visual-qualified | 0 | [argv](final-visual-qualified/command.json) | [stdout](final-visual-qualified/stdout.txt) |
+| final-wave-static-qualified | 0 | [argv](final-wave-static-qualified/command.json) | [stdout](final-wave-static-qualified/stdout.txt) |

@@ -2,7 +2,7 @@
 // Production createNova, real Caps/profile/routes; private homes and fake local runtime only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
@@ -15,6 +15,7 @@ import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
 import { hubHardware } from '../support/models.ts';
 import { blank, browser, webkitBrowser, device, finishSetup, still } from './support.ts';
 import { drawn, trackDocument, documentRequests } from './navigation-support.ts';
+import { diagnosticsPaint } from './health-diagnostics-visual.ts';
 
 const require = createRequire(import.meta.url);
 const axe = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
@@ -502,11 +503,30 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         const accessibility = await p.evaluate(async () => (await (window as any).axe.run({ include: ['.work-costs', '.diagnostics-download'] }, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })).violations.map((v: any) => ({ id: v.id, impact: v.impact, targets: v.nodes.map((n: any) => n.target) })));
         assert.deepEqual(accessibility, [], 'bounded WCAG AA check of the two new surfaces');
         console.log(`HEALTH ${engine}/${posture}: Home tap/click; six finite and null saves; invalid no PUT; reload; zero-blur SSE/caret; in-flight ordering; save failure; stale/failed/unloaded and real offline/reconnect retry; native JSON/headers/no retention; axe new surfaces=0`);
-        if (out) {
-          for (const part of ['work-costs', 'diagnostics-download']) { await p.locator(`.${part}`).evaluate(e => e.scrollIntoView({ block: 'start' })); await still(p); await p.screenshot({ path: join(out, `app-${part}-${posture}.png`), animations: 'disabled', caret: 'hide' }); }
-          await form.locator('[data-save-work-limits]').scrollIntoViewIfNeeded(); await still(p); await p.screenshot({ path: join(out, `app-limits-action-${posture}.png`), animations: 'disabled', caret: 'hide' });
+        // An explicit case list narrows only Diagnostics witness artifacts; every functional
+        // engine/posture assertion above still runs. Normal capture runs retain the full matrix.
+        const witnesses = process.env.NOVA_HEALTH_DIAGNOSTICS_WITNESSES?.split(',');
+        if (out && (!witnesses || witnesses.includes(`${engine}/${posture}`))) {
+          for (const part of witnesses ? ['diagnostics-download'] : ['work-costs', 'diagnostics-download']) {
+            if (part === 'diagnostics-download') {
+              // Include the panel's heading, then wait for native scroll/action stability.
+              // An animation-only check can accept the first offscreen raster before text paints.
+              await p.locator('.diagnostics-download').evaluate(e => e.parentElement!.scrollIntoView({ block: 'start' }));
+              await p.locator('#h-diagnostics').scrollIntoViewIfNeeded();
+              await p.locator('[data-download-diagnostics]').scrollIntoViewIfNeeded();
+            } else await p.locator(`.${part}`).evaluate(e => e.scrollIntoView({ block: 'start' }));
+            await still(p);
+            const png = await p.screenshot({ path: join(out, `app-${part}-${posture}.png`), animations: 'disabled', caret: 'hide' });
+            if (part === 'diagnostics-download') {
+              const painted = await diagnosticsPaint(p, png);
+              writeFileSync(join(out, `diagnostics-${posture}-audit.json`), JSON.stringify(painted, null, 2));
+              console.log(`HEALTH VISUAL ${engine}/${posture} ${JSON.stringify(painted)}`);
+              assert.deepEqual(painted.failures, [], 'Diagnostics title, disclosure and action must be painted and unobscured');
+            }
+          }
+          if (!witnesses) { await form.locator('[data-save-work-limits]').scrollIntoViewIfNeeded(); await still(p); await p.screenshot({ path: join(out, `app-limits-action-${posture}.png`), animations: 'disabled', caret: 'hide' }); }
           const specimen = await d.ctx.newPage();
-          for (const entry of ['work-costs', 'diagnostics']) { await specimen.goto(`${m.base}/styleguide?entry=${entry}`); await specimen.locator(`#sg-${entry}`).waitFor(); await specimen.locator(`#${entry}-state`).selectOption(entry === 'work-costs' ? 'configured' : 'available'); await specimen.locator(entry === 'work-costs' ? '.work-costs' : '.diagnostics-download').evaluate(e => e.scrollIntoView({ block: 'start' })); await still(specimen); await specimen.screenshot({ path: join(out, `styleguide-${entry}-${posture}.png`), animations: 'disabled', caret: 'hide' }); }
+          for (const entry of witnesses ? ['diagnostics'] : ['work-costs', 'diagnostics']) { await specimen.goto(`${m.base}/styleguide?entry=${entry}`); await specimen.locator(`#sg-${entry}`).waitFor(); await specimen.locator(`#${entry}-state`).selectOption(entry === 'work-costs' ? 'configured' : 'available'); await specimen.locator(entry === 'work-costs' ? '.work-costs' : '.diagnostics-download').evaluate(e => e.scrollIntoView({ block: 'start' })); await still(specimen); await specimen.screenshot({ path: join(out, `styleguide-${entry}-${posture}.png`), animations: 'disabled', caret: 'hide' }); }
           await specimen.close();
         }
         const expectedOutages = d.errors.filter(error => /Failed to load resource:.*50[03]/.test(error));

@@ -678,3 +678,23 @@
 /fix-2-browser-qualified/output/screenshots/webkit/styleguide-work-costs-halfopen.png
 /fix-2-browser-qualified/output/screenshots/webkit/styleguide-work-costs-phone.png
 /fix-2-browser-qualified/output/screenshots/webkit/styleguide-work-costs-tablet.png
+
+# Final combined wave: exact intermediate images only; originals retained privately.
+/final-visual-red/output/screenshots/chromium/app-diagnostics-download-phone.png
+/final-visual-red/output/screenshots/chromium/app-work-costs-phone.png
+/final-visual-phone-framing-probe/output/screenshots/chromium/app-diagnostics-download-phone.png
+/final-visual-phone-framing-probe/output/screenshots/chromium/app-work-costs-phone.png
+/final-visual-phone-framing-probe/output/screenshots/chromium/probe-phone-action.png
+/final-visual-phone-framing-probe/output/screenshots/chromium/probe-phone-heading.png
+/final-visual-phone-framing-probe/output/screenshots/chromium/probe-phone-original.png
+/final-visual-phone-framing-probe/output/screenshots/chromium/probe-phone-restored.png
+/final-visual-halfopen-framing-probe/output/screenshots/chromium/app-diagnostics-download-halfopen.png
+/final-visual-halfopen-framing-probe/output/screenshots/chromium/app-work-costs-halfopen.png
+/final-visual-halfopen-framing-probe/output/screenshots/chromium/probe-halfopen-action.png
+/final-visual-halfopen-framing-probe/output/screenshots/chromium/probe-halfopen-heading.png
+/final-visual-halfopen-framing-probe/output/screenshots/chromium/probe-halfopen-original.png
+/final-visual-halfopen-framing-probe/output/screenshots/chromium/probe-halfopen-restored.png
+/final-visual-qualified/output/screenshots/chromium/app-diagnostics-download-halfopen.png
+/final-visual-qualified/output/screenshots/chromium/app-diagnostics-download-phone.png
+/final-visual-qualified/output/screenshots/chromium/styleguide-diagnostics-halfopen.png
+/final-visual-qualified/output/screenshots/chromium/styleguide-diagnostics-phone.png
