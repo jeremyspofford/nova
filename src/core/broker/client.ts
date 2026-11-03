@@ -37,6 +37,7 @@ export class BrokerError extends Error {
 export class BrokerClient {
   readonly socket: string;
   #token: string;
+  #closed = false;
   #sock: Socket | null = null;
   #ready: Promise<void> | null = null;
   #n = 0;
@@ -52,9 +53,11 @@ export class BrokerClient {
   }
 
   #open(): Promise<void> {
+    if (this.#closed) return Promise.reject(new Error('The broker client is closed.'));
     if (this.#ready) return this.#ready;
     this.#ready = new Promise((ok, fail) => {
       const s = connect(this.socket);
+      this.#sock = s;
       s.setEncoding('utf8');
       s.on('data', (c: string) => {
         this.#buf += c;
@@ -70,7 +73,7 @@ export class BrokerClient {
         }
       });
       const gone = () => { this.#sock = null; this.#ready = null; for (const w of this.#waiting.values()) w({ id: -1, error: 'failed', words: 'Nova’s vault isn’t running.' }); this.#waiting.clear(); };
-      s.on('close', gone);
+      s.on('close', () => { gone(); fail(new Error('The broker connection closed.')); });
       s.once('error', (e) => { gone(); fail(new Error(`Nova’s vault isn’t running (${(e as NodeJS.ErrnoException).code ?? e.message}).`)); });
       s.once('connect', async () => {
         this.#sock = s;
@@ -91,10 +94,11 @@ export class BrokerClient {
 
   async call(m: string, f: Record<string, unknown> = {}): Promise<Answer> {
     await this.#open();
+    if (this.#closed) throw new Error('The broker client is closed.');
     return this.#send(m, f);
   }
 
-  close(): void { this.#sock?.end(); this.#sock = null; this.#ready = null; }
+  close(): void { this.#closed = true; this.#token = ''; this.#sock?.destroy(); this.#sock = null; this.#ready = null; }
 
   // ---- the protocol messages and the seven verbs ----------------------------------------------
 

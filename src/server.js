@@ -3,6 +3,7 @@
 // mesh listener, serves paired devices when one is configured (src/core/mesh/access.ts
 // says who may do what on either).
 import { createServer } from 'node:http';
+import { stripTypeScriptTypes } from 'node:module';
 import { createServer as createTlsServer } from 'node:https';
 import { createReadStream, existsSync, readFileSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
@@ -20,7 +21,7 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { KIND_WORDS, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, ipcLink, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
+import { BrokerClient, KIND_WORDS, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, ipcBroker, ipcLink, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -39,6 +40,13 @@ function modelOptions(env) {
   if (Number(env.NOVA_MODELS_WATCH_MS) > 0) o.watchMs = Number(env.NOVA_MODELS_WATCH_MS);
   if (Number(env.NOVA_MODELS_WAKE_POLL_MS) > 0) o.wakePollMs = Number(env.NOVA_MODELS_WAKE_POLL_MS);
   return o;
+}
+
+// Read only the public browser helper from this release. Type erasure does not execute it;
+// no route can choose another source file, and Core never imports broker runtime code.
+let sealModule;
+function publicSealModule() {
+  return sealModule ??= stripTypeScriptTypes(readFileSync(new URL('./broker/seal.ts', import.meta.url), 'utf8'), { mode: 'strip' });
 }
 
 export function createNova(config = loadConfig(), deps = {}) {
@@ -83,6 +91,8 @@ export function createNova(config = loadConfig(), deps = {}) {
     ...(deps.decisions ? { decisions: deps.decisions } : {}),
     // Started by the supervisor (src/supervisor), it can ask for a deploy or rollback (M7b).
     supervisor: deps.supervisor ?? ipcLink(process),
+    broker: deps.broker ?? null,
+    sealModule: publicSealModule,
     ...(deps.topologyCluster ? { topologyCluster: deps.topologyCluster } : {}),
     // A sandbox copy started by the change pipeline (M7a): no outside work, no changes taken.
     sandbox: process.env.NOVA_SANDBOX === '1',
@@ -620,7 +630,8 @@ export function createNova(config = loadConfig(), deps = {}) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   let nova;
   try {
-    nova = createNova();
+    const context = await ipcBroker(process);
+    nova = createNova(undefined, { broker: context ? new BrokerClient(context) : null });
   } catch (e) {
     if (!(e instanceof ConfigError)) throw e;
     console.error(`Nova didn't start: ${e.message}`);

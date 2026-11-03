@@ -26,6 +26,7 @@ import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { egressOf, info, permits, stricter, type Egress } from './workers.ts';
+import { BrokerClient } from './broker/client.ts';
 import { createApi, Raw, Reply, type Route, type Who } from './api.ts';
 import { createDecisionService, DbLog, OPT_IN_WORDS, validateSettings, DEFAULT_SETTINGS as DEFAULT_DECISION_SETTINGS, type DecisionSettings, type VerdictStore } from './decision-service/index.ts';
 import { Scorecards, scorecardRoutes, targetsFrom, REGRESSION_FINGERPRINT } from './evals/index.ts';
@@ -134,7 +135,8 @@ export type { Connector, ConnectorContext, ConnectorFactory, ConnectorStatus, Co
 export { HA_ID, HA_MANIFEST, DEFAULT_TIER3, tokenIssuer } from './connectors/home-assistant.ts';
 export { redactText } from './log.ts';
 // Resilience (M7b): the supervisor's link and shared pieces (src/supervisor imports only this file).
-export { ipcLink, consoleStatus } from './resilience/link.ts';
+export { BrokerClient } from './broker/client.ts';
+export { ipcLink, ipcBroker, consoleStatus } from './resilience/link.ts';
 export type { SupervisorLink, SupervisorState, SupervisorProblem, ReleaseSlot, Stage as DeployStage, ProbeLine, ServerMode } from './resilience/link.ts';
 export { PLAYBOOKS } from './resilience/playbooks.ts';
 export { CODE_ROOT, copyHome, smoke, startSandbox, sandboxEnv } from './resilience/sandbox.ts';
@@ -241,6 +243,10 @@ export interface CoreOptions {
   decisions?: { verdicts?: VerdictStore };
   // The supervisor that started this server, when one did (resilience/link.ts: ipcLink).
   supervisor?: SupervisorLink | null;
+  // Supplied only by the private supervisor bootstrap; legacy consumers remain on vault.ts.
+  broker?: BrokerClient | null;
+  // Fixed public source supplied by server.js; never a caller-selected file or broker import.
+  sealModule?: () => string;
   // Trusted adapter only; no cluster is invented or contacted when absent.
   topologyCluster?: () => ClusterObservation | null | Promise<ClusterObservation | null>;
   // Onboarding (M10f): a stand-in OS detection (NOVA_DETECT_OS), discovery's transport (stand-ins on
@@ -1060,6 +1066,7 @@ export function createCore(o: CoreOptions) {
   };
 
   const routes: Route[] = [
+    ...(o.sealModule ? [{ method: 'GET' as const, path: '/broker/seal.js', access: 'person' as const, summary: 'The fixed public browser helper for sealed credential entry.', handle: () => new Raw('text/javascript; charset=utf-8', o.sealModule!()) }] : []),
     { method: 'GET', path: '/health', summary: 'Whether each part of the core is working, in plain words.', handle: () => health() },
     // The ingest gate (Amendment 2026-10-30-C Part 3).
     { method: 'GET', path: '/ingest/screens', summary: 'The latest screens of outside content: source, scores, flags and verdict, by hash; never the content. ?limit=', handle: ({ query }) => ingest.list(Number(query.get('limit')) || 50) },
@@ -1645,7 +1652,7 @@ export function createCore(o: CoreOptions) {
   return {
     self,
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network,
-    ingest, vault, connectors, capture, models, changes,
+    ingest, vault, broker: o.broker ?? null, connectors, capture, models, changes,
     // The Decision Service (DS1): its view of the seats, a refresh, how a template stands, and
     // asking for a template. Never a seat: nothing reaches a decision model except through it.
     decisionService: { view: decisionService.view, refresh: decisionService.refresh, standing: decisionService.standing, ask: decisionService.service.ask.bind(decisionService.service) }, foundry, resilience: keep, checkpoints, restarter, reset,
@@ -1728,6 +1735,7 @@ export function createCore(o: CoreOptions) {
     },
     // Waits briefly for running work; anything still running is requeued on the next start.
     async close() {
+      o.broker?.close();
       stopHub();
       promotions.close();
       await role.close();

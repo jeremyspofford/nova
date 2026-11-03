@@ -18,21 +18,18 @@ function fixture(change?: (root: string) => void) {
   const repo = fakeRepo(dir);
   cpSync(join(ROOT, 'src/broker'), join(repo, 'src/broker'), { recursive: true });
   cpSync(join(ROOT, 'src/core/broker'), join(repo, 'src/core/broker'), { recursive: true });
+  cpSync(join(ROOT, 'src/core/resilience/link.ts'), join(repo, 'src/core/resilience/link.ts'));
   const file = join(repo, 'src/server.js');
   writeFileSync(file, readFileSync(file, 'utf8').replace("const marker =", `import { BrokerClient } from './core/broker/client.ts';
+import { ipcBroker } from './core/resilience/link.ts';
 let broker;
-const boot = new Promise((done) => process.on('message', async (m) => {
-  if (m?.nova !== 'broker') return;
-  if (m.context) {
-    broker = new BrokerClient(m.context);
-    const a = await broker.listRefs();
-    if (!a.ok || Object.keys(m.context).sort().join() !== 'socket,token') process.exit(71);
-    // The supervisor role token is never present in this child or its launch context.
-    if (Object.values(process.env).includes(m.context.token) || process.argv.includes(m.context.token)) process.exit(72);
-  }
-  done();
-}));
-if (process.send && process.env.NOVA_SANDBOX !== '1') { process.send({ nova: 'broker-ready' }); await boot; }
+const context = await ipcBroker(process);
+if (context) {
+  broker = new BrokerClient(context);
+  const a = await broker.listRefs();
+  if (!a.ok || Object.keys(context).sort().join() !== 'socket,token') process.exit(71);
+  if (Object.values(process.env).includes(context.token) || process.argv.includes(context.token)) process.exit(72);
+}
 const marker =`).replace("const u = req.url || '';", `const u = req.url || '';
   if (u === '/test-broker' && req.method === 'POST') {
     let body = ''; for await (const chunk of req) body += chunk;
