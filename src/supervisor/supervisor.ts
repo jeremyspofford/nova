@@ -21,11 +21,9 @@ import { createServer as createNet, type Server as NetServer, type Socket } from
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
+import { ensureMark, unsafeHome, supervisorResetPending, finishReset, homeEntries, sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
 import { runningPid } from '../home.js';
 import { startBroker, stopBroker, type Started } from '../broker/spawn.ts';
-import { ensureMark, unsafeHome } from '../core/resilience/home-mark.ts';
-import { supervisorResetPending, finishReset, homeEntries } from '../core/resilience/reset.ts';
 import { ServerProcess } from './server.ts';
 import { CrashWindow } from './crashes.ts';
 import { SupervisorDriver } from './services.ts';

@@ -145,8 +145,8 @@ export { CODE_ROOT, copyHome, smoke, startSandbox, sandboxEnv } from './resilien
 export type { Sandbox, ProbeResult } from './resilience/sandbox.ts';
 export { restoreInto, backupFiles, sha256File, openEncrypted } from './resilience/backup.ts';
 // Factory reset (M7 amendment §2): finished at start, before the database opens (server.js too).
-export { RESET_MARKER, RESET_REPORT, finishReset, homeEntries } from './resilience/reset.ts';
-export { HOME_MARK, ensureMark } from './resilience/home-mark.ts';
+export { RESET_MARKER, RESET_REPORT, finishReset, homeEntries, supervisorResetPending } from './resilience/reset.ts';
+export { HOME_MARK, ensureMark, unsafeHome } from './resilience/home-mark.ts';
 export type { ResetReport } from './resilience/reset.ts';
 export { makeScratch, dropScratch } from './resilience/scratch.ts';
 export type { Manifest as BackupManifest } from './resilience/backup.ts';

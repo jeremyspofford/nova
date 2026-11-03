@@ -170,6 +170,26 @@ export interface DiagnosticsOptions {
   era2?: () => Record<string, number>;
 }
 
+// Optional broker probe: retain only typed counts/states, never refs, identities, entry keys,
+// fingerprints, or free-form problem/error text. A locked broker cannot report its item count.
+async function brokerMetadata(core: Core) {
+  if (!core.broker) return { available: false, problem: false };
+  try {
+    const answer = await core.broker.listRefs();
+    const s = answer.state as Record<string, unknown> | undefined;
+    if (!answer.ok || !s || typeof s.exists !== 'boolean' || typeof s.locked !== 'boolean' || !Array.isArray(answer.refs)) {
+      return { available: false, problem: true };
+    }
+    return {
+      available: true, exists: s.exists, locked: s.locked,
+      visible_items: s.locked ? null : answer.refs.length,
+      unlock_mode: s.unlock_mode === 'auto' || s.unlock_mode === 'ask' ? s.unlock_mode : null,
+      device_store: s.device_key === 'file' || s.device_key === 'keychain' ? s.device_key : null,
+      problem: !!s.problem,
+    };
+  } catch { return { available: false, problem: true }; }
+}
+
 export async function buildDiagnostics(core: Core, o: DiagnosticsOptions) {
   const now = (o.now ?? (() => new Date()))();
   const { secrets, warnings } = knownSecrets(core, o);
@@ -190,6 +210,7 @@ export async function buildDiagnostics(core: Core, o: DiagnosticsOptions) {
       for (const n of core.vault.list()) { const k = n.split('/')[0]!; kinds[k] = (kinds[k] ?? 0) + 1; }
       return { ok: s.ok, stored: s.secrets, by_kind: kinds, key_store: s.key, problem: s.problem };
     }, unread),
+    broker: await brokerMetadata(core),
     providers: safe(() => core.providers.list().map((p) => ({ id: p.id, name: p.name, class: p.class, state: p.state, model: p.model, where: p.egress, health: p.health, config: p.config })), unread),
     models,
     capture: safe(() => ({
