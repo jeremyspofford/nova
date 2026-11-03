@@ -1,0 +1,48 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ a stuck loop is stopped before its 5th identical call, says what it spent, and its resume waits for an OK; approved, it continues and reports (251.95275ms)
+✔ the day’s ceiling stops the next task before its first model call, and offers its resume (153.040906ms)
+✔ without the caps, the same loop runs to max_tool_steps (today’s only bound), and nothing is offered (119.507597ms)
+✔ a person’s own conversation is metered even above every autonomous ceiling (101.410443ms)
+✔ session log counts inspect directory entries only, including main, run and helper logs without interpreting content (1.089435ms)
+✔ production diagnostics downloads fresh numeric Era2 counts with person access and no persisted bundle or excluded content (394.475589ms)
+✔ production diagnostics refuses a populated vault after real key loss, while empty and readable vaults download (124.898332ms)
+▶ production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors
+  ✔ list throws (72.199408ms)
+  ✔ second lookup throws (70.920398ms)
+  ✔ second lookup missing (71.720286ms)
+  ✔ key lookup throws (73.050326ms)
+  ✔ key file unreadable (69.194941ms)
+  ✔ identity unreadable (71.080824ms)
+  ✔ identity malformed (72.02379ms)
+  ✔ identity incomplete (73.577218ms)
+✔ production diagnostics rejects incomplete secret scans before reading included free text, without leaking errors (576.305875ms)
+✔ the scrubber: keys that name secrets, every known value in every form, and secret-shaped strings (2.163782ms)
+✔ the bundle holds no canary from anywhere Nova keeps a secret, no personal content, and still says what is going on (195.893907ms)
+✔ Nova has no way to send the bundle anywhere: the builder imports no network module and writes no file (0.621841ms)
+(node:73) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ work costs renders Caps totals without treating unpriced or estimated tokens as extra usage (9.48126ms)
+✔ work costs escapes provider, model, period, error and input strings without mutation (0.498308ms)
+✔ unloaded and unavailable costs cannot save; null is explicitly unlimited (0.919979ms)
+✔ diagnostics supplies a native attachment link and no live action when unavailable (0.170816ms)
+(node:80) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the bands: nothing under 1 s, an indicator to 10 s, then real progress (0.613432ms)
+✔ progress is in real units: no fraction without a total, never full before it is done (0.62287ms)
+✔ a general estimate, in words, from a measured rate only, erring long (0.271909ms)
+✔ a long wait says what is done, an estimate where there is a basis, else the time so far (0.14713ms)
+✔ after 10 s there is always a general estimate: this device’s own history, else what is usual for the kind of wait (1.469773ms)
+✔ a waiting line carries when the wait began, so a redraw keeps its age; it is hidden for its first second (1.277284ms)
+✔ no artificial delay: every timer in the PWA is named for what it is (4.216893ms)
+✔ no fake work: no “checking…” or padding, and every wait is drawn by wait.js (0.60671ms)
+✔ no simulated streaming: text grows only from the server’s deltas, never replayed (1.737121ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3191.397038
+no-Kubernetes tripwire: never fired

@@ -1,8 +1,8 @@
 // The PWA's own surfaces, drawn from the core (/api/v1): Home, the right column, Tasks, Health,
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
-import { api, deviceId, request } from './core.js';
-import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, promotionSheet, promotionActionSheet, coldPromotionSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard } from './components.js';
+import { api, deviceId, request, Unreachable } from './core.js';
+import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, promotionSheet, promotionActionSheet, coldPromotionSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard, workCosts, diagnosticsDownload } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
@@ -10,7 +10,7 @@ import { MODES, current as appearance, endPreview, fixContrast, follow, preview,
 import { recommend } from './contrast.js';
 import { contrastView, undoPlan } from './look.js';
 import { openTakeover } from './takeover.js';
-import { over, waitingLine } from './wait.js';
+import { begin, over, waitingLine } from './wait.js';
 import { showWaiting, waitingUnits } from './skeleton.js';
 
 // What the core has told this page, kept fresh by the event stream.
@@ -26,16 +26,20 @@ export const store = {
   chatCard: null,
   // Keeping Nova running (M7b): the supervisor, releases, backups, the last drill, playbooks.
   resilience: null,
+  caps: null, capsState: 'loading', capsError: '',
 };
 
 const settle = (p, fallback) => p.catch(() => fallback);
-export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers', 'devices', 'mesh', 'requests', 'resilience']) {
+export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers', 'devices', 'mesh', 'requests', 'resilience', 'caps']) {
+  const capsRead = parts.includes('caps') ? ++capsSequence : 0;
+  if (capsRead) { store.capsState = store.caps && ['ready', 'refreshing'].includes(store.capsState) ? 'refreshing' : 'loading'; store.capsError = ''; begin('health-costs'); costsChanged(); }
   // Each part comes back as [value, stale].
   const get1 = (path) => request('GET', path).then((r) => [r.data, r.stale]);
   const get = {
     tasks: () => get1('/tasks?limit=100'),
     problems: () => get1('/problems'),
     health: () => get1('/health'),
+    caps: () => get1('/caps'),
     resilience: () => get1('/resilience'),
     profile: () => Promise.all([get1('/profile'), get1('/identity')]).then(([a, b]) => [[a[0], b[0]], a[1] || b[1]]),
     memory: () => get1('/memory'),
@@ -54,7 +58,14 @@ export async function load(parts = ['tasks', 'problems', 'health', 'profile', 'm
   let any = false;
   let wasStale = false;
   for (const [p, v, s] of results) {
-    if (v === undefined) continue;
+    if (p === 'caps') {
+      if (capsRead !== capsSequence) continue; // A newer refresh owns freshness.
+      over('health-costs');
+      store.capsState = v !== undefined && !s ? 'ready' : 'unavailable';
+      store.capsError = s ? 'Work costs were saved earlier. Reconnect and retry before saving limits.' : v === undefined ? 'Work costs could not be read. Retry before saving limits.' : '';
+      if (v !== undefined && !s) store.caps = v;
+    }
+    if (v === undefined || (p === 'caps' && s)) continue;
     any = true;
     wasStale ||= s;
     if (p === 'problems') { store.problems = v.filter((x) => !x.resolved_at); store.resolved = v.filter((x) => x.resolved_at).slice(0, 10); }
@@ -327,7 +338,102 @@ function meshRoleLine(c) {
   return `This is the hub (epoch ${c.epoch}). The standby “${c.standby.name}” is ${lag}.`;
 }
 
+// Health's editor is an island inside the existing surface renderer. No second limits store:
+// `draft` holds only strings/checkbox intent; saved limits and spend always come from Caps.
+let capsSequence = 0;
+const costs = { draft: null, invalid: {}, dirty: false, revision: 0, pending: false, state: 'ready', error: '' };
+const costNames = ['task.iterations', 'task.tokens', 'task.usd', 'day.iterations', 'day.tokens', 'day.usd'];
+const costsChanged = () => window.dispatchEvent(new CustomEvent('nova:work-costs'));
+const costsState = () => store.capsState === 'unavailable' ? 'unavailable' : costs.pending ? 'saving' : costs.state === 'save-error' ? 'save-error' : store.capsState === 'loading' ? 'loading' : costs.state;
+const costsAvailable = () => !!store.caps && ['ready', 'refreshing'].includes(store.capsState);
+function syncCostsForm(form) {
+  if (store.caps && !costs.dirty && !costs.pending && store.capsState === 'ready') {
+    const previous = costs.draft;
+    costs.draft = Object.fromEntries(costNames.map(name => {
+      const [scope, key] = name.split('.');
+      const value = store.caps.limits[scope][key];
+      return [name, { value: value === null ? previous?.[name]?.value ?? '' : String(value), unlimited: value === null }];
+    }));
+  }
+  for (const name of costNames) {
+    const field = form.elements.namedItem(name);
+    const checkbox = form.elements.namedItem(`${name}.unlimited`);
+    const draft = costs.draft?.[name];
+    // Assign only changed values: assigning a focused input can reset its caret on WebKit.
+    if (draft && field.value !== draft.value) field.value = draft.value;
+    if (draft) checkbox.checked = draft.unlimited;
+    const locked = !costsAvailable();
+    field.disabled = locked || checkbox.checked;
+    checkbox.disabled = locked;
+    const errorId = `${field.id}-error`;
+    form.querySelector(`[id="${errorId}"]`)?.remove();
+    field.removeAttribute('aria-invalid'); field.removeAttribute('aria-describedby');
+    if (costs.invalid[name]) {
+      field.setAttribute('aria-invalid', 'true'); field.setAttribute('aria-describedby', errorId);
+      const line = document.createElement('p'); line.id = errorId; line.className = 'card-line work-limit-error';
+      line.textContent = costs.invalid[name]; field.parentElement.append(line);
+    }
+  }
+  if (store.capsState === 'refreshing' && !costs.pending && costs.state !== 'save-error') form.querySelector('[data-work-costs-notice]').innerHTML = waitingLine('Refreshing work costs and limits', { key: 'health-costs', tag: 'span' });
+  if (costs.state === 'success' && costs.dirty && !costs.pending) form.querySelector('[data-work-costs-notice]').textContent = 'Submitted limits saved on this node. Your newer edits are not saved yet.';
+  form.querySelector('[data-save-work-limits]').disabled = !costsAvailable() || costs.pending || Object.keys(costs.invalid).length > 0;
+}
+export function editWorkCosts(form) {
+  const draft = Object.fromEntries(costNames.map(name => [name, { value: form.elements.namedItem(name).value, unlimited: form.elements.namedItem(`${name}.unlimited`).checked }]));
+  // Browsers emit both input and change, sometimes around submission. An unchanged
+  // trailing event is not a new edit and must not erase validation or a save refusal.
+  if (costs.draft && costNames.every(name => draft[name].value === costs.draft[name].value && draft[name].unlimited === costs.draft[name].unlimited)) return;
+  costs.draft = draft;
+  costs.dirty = true; costs.revision++; costs.invalid = {}; costs.state = 'ready'; costs.error = '';
+  costsChanged();
+}
+export async function retryWorkCosts() { costs.state = 'ready'; costs.error = ''; await load(['caps']); costsChanged(); }
+export async function saveWorkCosts() {
+  if (costs.pending || !costsAvailable() || !costs.draft) return;
+  const submitted = { task: {}, day: {} };
+  costs.invalid = {};
+  for (const name of costNames) {
+    const [scope, key] = name.split('.');
+    const draft = costs.draft[name];
+    const value = Number(draft.value);
+    if (!draft.unlimited && (!draft.value.trim() || !Number.isFinite(value) || value <= 0 || (key !== 'usd' && !Number.isInteger(value)))) costs.invalid[name] = key === 'usd' ? 'Enter a finite number greater than zero, or choose Unlimited.' : 'Enter a positive whole number, or choose Unlimited.';
+    submitted[scope][key] = draft.unlimited ? null : value;
+  }
+  if (Object.keys(costs.invalid).length) { costsChanged(); return; }
+  costs.pending = true; costs.error = ''; begin('health-costs-save'); costsChanged();
+  const revision = costs.revision;
+  let validated = false;
+  try {
+    // Revalidate live access/freshness at the mutation boundary; another endpoint is no proof.
+    const check = await request('GET', '/caps');
+    if (check.stale) { store.capsState = 'unavailable'; store.capsError = 'Work costs were saved earlier. Reconnect and retry before saving limits.'; throw new Error(store.capsError); }
+    store.caps = check.data; validated = true;
+    const response = await request('PUT', '/caps/limits', submitted);
+    if (response.stale) throw new Error('The server has not confirmed these limits. Retry before saving again.');
+    // Invalidate any older in-flight GET so it cannot overwrite a completed save.
+    capsSequence++; store.caps = response.data.view; store.capsState = 'ready';
+    costs.state = 'success'; costs.dirty = costs.revision !== revision;
+  } catch (e) {
+    costs.state = 'save-error'; costs.error = e.message;
+    // An access or read failure must not leave the prior cached answer editable.
+    if (!validated || e.status === 401 || e.status === 403 || e instanceof Unreachable || !store.caps) { capsSequence++; store.capsState = 'unavailable'; store.capsError = e.message; }
+  } finally { costs.pending = false; over('health-costs-save'); costsChanged(); }
+}
+
+// Replace facts around a live child, without disconnecting that child or its ancestors.
+// This is deliberately bounded to Health's editor, not a whole-app DOM reconciler.
+function aroundCosts(current, next, island, placeholder) {
+  for (const node of [...current.childNodes]) if (node !== island) node.remove();
+  let after = false;
+  for (const node of [...next.childNodes]) {
+    if (node === placeholder) { after = true; continue; }
+    current.insertBefore(node, after ? null : island);
+  }
+}
+
 export function renderHealth(el) {
+  const retained = el.querySelector('[data-work-limits]');
+  const opened = [...el.querySelectorAll('.work-costs details, .diagnostics-download details')].map(d => d.open);
   const h = store.health;
   const problem = (p, open) => `<li class="settings-row" id="pr-${esc(String(p.id))}">
   <div class="settings-text"><p class="settings-label">${esc(p.message)}</p><p class="settings-note">${open ? `${status(p.stops ? 'failed' : 'needs-you')} ` : ''}${esc(p.source)} · ${esc(ago(p.at))}${p.task_id ? ` · <a class="link" href="/tasks" data-action="open-task" data-task="${esc(p.task_id)}">the task</a>` : ''}</p>
@@ -337,14 +443,31 @@ export function renderHealth(el) {
 </li>`;
   const fine = (k, c) => c.ok && !(k === 'mesh' && (c.standby?.lag?.behind || c.replica?.sync?.unreachable_since || c.replica?.sync?.refused));
   const checks = h ? Object.entries(h.checks).map(([k, c]) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(CHECK_NAMES[k] ?? k)}</p><p class="settings-note">${esc(checkLine(k, c))}${k === 'mesh' ? ' <a class="link" href="/topology">View machines and services</a>' : ''}</p></div>${fine(k, c) ? '<span class="pill is-on">Fine</span>' : '<span class="pill is-warn">Needs a look</span>'}</li>`).join('') : '';
-  el.innerHTML = `<header class="view-head"><h2 class="view-title">Health</h2>
+  const next = document.createElement('div');
+  next.innerHTML = `<header class="view-head"><h2 class="view-title">Health</h2>
 <p class="view-lede">${!store.reachable ? 'Nova isn’t answering. This page reconnects when it’s back.' : store.problems.length ? 'Something went wrong. Each problem says what happened; the detail is one tap away.' : 'Everything Nova runs on, and anything that went wrong.'}</p></header>
 <section class="panel" aria-labelledby="h-problems"><h3 class="section-title" id="h-problems">Problems</h3>
 ${store.problems.length ? `<ul class="settings-list">${store.problems.map((p) => problem(p, true)).join('')}</ul>` : emptyState({ title: 'Nothing needs you', line: 'No problems are open.' })}</section>
 ${keepingRunning()}
+<section class="panel" aria-labelledby="h-work-costs"><h3 class="section-title" id="h-work-costs">Work costs</h3>${workCosts({ view: store.caps, state: costsState(), error: costs.error, invalid: costs.invalid })}${store.capsState === 'unavailable' ? `<p class="settings-note" role="status">${esc(store.capsError)}</p><button class="btn" type="button" data-retry-work-costs>Retry work costs</button>` : ''}</section>
+<section class="panel" aria-labelledby="h-diagnostics"><h3 class="section-title" id="h-diagnostics">Diagnostics</h3>${diagnosticsDownload({ available: !!store.health && store.reachable })}</section>
 <section class="panel" aria-labelledby="h-checks"><h3 class="section-title" id="h-checks">Checks</h3>
 ${h ? `<ul class="settings-list">${checks}</ul><p class="settings-note">Version ${esc(h.version)} · running for ${esc(uptime(h.uptime_s))}.</p>` : waitingLine('Checking Nova’s health', { key: 'health' })}</section>
 ${store.resolved.length ? `<details class="panel raw"><summary>Dealt with recently</summary><ul class="settings-list">${store.resolved.map((p) => problem(p, false)).join('')}</ul></details>` : ''}`;
+  const fresh = next.querySelector('[data-work-limits]');
+  if (retained) {
+    retained.querySelector('[data-work-costs-notice]').replaceWith(fresh.querySelector('[data-work-costs-notice]'));
+    const currentCosts = retained.parentElement;
+    const nextCosts = fresh.parentElement;
+    const panel = currentCosts.parentElement;
+    const nextPanel = nextCosts.parentElement;
+    aroundCosts(currentCosts, nextCosts, retained, fresh);
+    currentCosts.dataset.workCostsState = nextCosts.dataset.workCostsState;
+    aroundCosts(panel, nextPanel, currentCosts, nextCosts);
+    aroundCosts(el, next, panel, nextPanel);
+  } else el.replaceChildren(...next.childNodes);
+  syncCostsForm(el.querySelector('[data-work-limits]'));
+  [...el.querySelectorAll('.work-costs details, .diagnostics-download details')].forEach((d, i) => { d.open = opened[i] ?? false; });
 }
 
 // A problem's playbook (M7b): what Nova already did about it, and the steps that are the person's.

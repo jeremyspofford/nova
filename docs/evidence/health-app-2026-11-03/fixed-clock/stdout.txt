@@ -1,0 +1,29 @@
+e92f2369f2c3253602567817283c7aefa9bae6dd
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+(node:30) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ work costs renders Caps totals without treating unpriced or estimated tokens as extra usage (9.863743ms)
+✔ work costs escapes provider, model, period, error and input strings without mutation (0.474472ms)
+✔ unloaded and unavailable costs cannot save; null is explicitly unlimited (0.932358ms)
+✔ diagnostics supplies a native attachment link and no live action when unavailable (0.216514ms)
+✔ work costs loading and saving use the retained shared wait clock (0.781013ms)
+(node:37) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the bands: nothing under 1 s, an indicator to 10 s, then real progress (0.636848ms)
+✔ progress is in real units: no fraction without a total, never full before it is done (0.687811ms)
+✔ a general estimate, in words, from a measured rate only, erring long (0.274129ms)
+✔ a long wait says what is done, an estimate where there is a basis, else the time so far (0.166208ms)
+✔ after 10 s there is always a general estimate: this device’s own history, else what is usual for the kind of wait (1.17789ms)
+✔ a waiting line carries when the wait began, so a redraw keeps its age; it is hidden for its first second (0.941167ms)
+✔ no artificial delay: every timer in the PWA is named for what it is (4.704934ms)
+✔ no fake work: no “checking…” or padding, and every wait is drawn by wait.js (0.581896ms)
+✔ no simulated streaming: text grows only from the server’s deltas, never replayed (1.948433ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 183.252525
+no-Kubernetes tripwire: never fired

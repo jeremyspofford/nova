@@ -46,7 +46,6 @@ const state = {
   live: null,
   pending: null,        // a message on its way to the server
   reachable: true,
-  online: navigator.onLine,
   stick: true,
   notice: '',
   view: 'home',         // home | chat | tasks | memory | automations | skills | activity | health | settings
@@ -200,7 +199,7 @@ function showSignals() {
   const stopped = stoppingProblems(problems).length;
   setBadge('health', problems.length ? { tone: problemTone(problems), label: `${problems.length} problem${problems.length === 1 ? '' : 's'}` } : null);
   signal({
-    reachable: state.reachable && state.online,
+    reachable: state.reachable,
     listening: state.listening,
     stopped,
     needsYou: asking + state.busy.waiting + (problems.length - stopped),
@@ -612,11 +611,10 @@ function renderChrome() {
 
   // Honest about being offline: what's on screen may be from before.
   let banner = '';
-  if (!state.online) banner = 'You’re offline. What you see was saved earlier; nothing new can arrive or be sent until you’re back.';
-  else if (!state.reachable) banner = 'Nova’s server isn’t answering. Your conversations are safe on disk; this page reconnects when it’s back.';
+  if (!state.reachable) banner = 'Nova’s server isn’t answering. Your conversations are safe on disk; this page reconnects when it’s back.';
   else if (core.store.stale) banner = 'Some of this was saved earlier, while Nova was out of reach.';
   // A standby (or a hub that stepped down) says so on every screen, with which node is hub.
-  const replica = state.online && state.reachable ? core.store.mesh?.replica : null;
+  const replica = state.reachable ? core.store.mesh?.replica : null;
   if (!banner && replica) banner = replica.reason;
   el.banner.hidden = !banner;
   el.banner.textContent = banner;
@@ -814,7 +812,7 @@ function inApp(href) {
 }
 function followLink(e) {
   const a = e.target.closest('a[href]');
-  if (!a || a.target === '_blank' || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0 || !inApp(a.getAttribute('href'))) return false;
+  if (!a || a.hasAttribute('download') || a.target === '_blank' || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0 || !inApp(a.getAttribute('href'))) return false;
   e.preventDefault();
   closeDrawer();
   closeMore();
@@ -1864,7 +1862,7 @@ function scheduleRefresh(parts) {
   clearTimeout(pendingTimer);
   pendingTimer = setTimeout(() => { const list = [...pending]; pending = new Set(); refreshCore(list); }, 120); // wait: debounce: many events at once
 }
-onCore('task', () => scheduleRefresh(['tasks']));
+onCore('task', () => scheduleRefresh(['tasks', 'caps']));
 onCore('problem', (p) => {
   scheduleRefresh(['problems', 'health', 'resilience']);
   notify(p?.message ?? 'Something went wrong inside Nova.', { tone: p?.stops ? 'alert' : 'attention', action: { label: 'See Health', run: () => navigate('/health') } });
@@ -1873,7 +1871,7 @@ onCore('message', () => scheduleRefresh(['messages']));
 // A repair playbook moved (M7b): what Nova did shows under its problem.
 onCore('playbook', () => scheduleRefresh(['resilience', 'problems']));
 onCore('trigger', () => scheduleRefresh(['rules', 'messages']));
-onCore('profile', () => scheduleRefresh(['profile']));
+onCore('profile', () => scheduleRefresh(['profile', 'caps']));
 // A connection changed (connected, dropped, reconnecting, disconnected), here or elsewhere.
 onCore('connector', () => { if (state.view === 'settings') loadConnections(); });
 // Capture (M6a): the indicator on every page, Settings › Capture and the Capture view.
@@ -1933,13 +1931,20 @@ onCore('provider', () => { if (state.view === 'settings') core.loadProviders(); 
 onCore('device', () => scheduleRefresh(['devices', 'mesh']));
 // Hub or standby changed (promoted, stepped down); on a standby, the hub's changes arrived.
 onCore('mesh', () => scheduleRefresh(['mesh', 'devices', 'health']));
-onCore('sync', () => scheduleRefresh(['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'devices', 'mesh']));
+onCore('sync', () => scheduleRefresh(['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'devices', 'mesh', 'caps']));
 onCore('join_request', (r) => {
   scheduleRefresh(['requests']);
   if (r?.state === 'pending') core.promptJoin(r);
   else core.joinDecided(r);
 });
 window.addEventListener('nova:devices', () => { if (state.view === 'settings') renderSettingsView({ only: 'devices' }); renderCore(); renderChrome(); });
+
+// Health redraws its facts around the retained editor, including live per-part freshness.
+window.addEventListener('nova:work-costs', () => { if (state.view === 'health') core.renderHealth(el.health); });
+el.health.addEventListener('input', e => { const form = e.target.closest('[data-work-limits]'); if (form) core.editWorkCosts(form); });
+el.health.addEventListener('change', e => { const form = e.target.closest('[data-work-limits]'); if (form) core.editWorkCosts(form); });
+el.health.addEventListener('submit', e => { if (e.target.matches('[data-work-limits]')) { e.preventDefault(); core.saveWorkCosts(); } });
+el.health.addEventListener('click', e => { if (e.target.closest('[data-retry-work-costs]')) core.retryWorkCosts(); });
 
 // Actions on the core's surfaces, wherever they appear: Home, the right column, Tasks, Health,
 // Automations, and the sheet.
@@ -2086,8 +2091,10 @@ function keepSession() {
 // ---- start -----------------------------------------------------------------
 
 window.addEventListener('nova:unreachable', () => setReachable(false));
-window.addEventListener('online', () => { state.online = true; renderChrome(); showSignals(); refreshCore(); });
-window.addEventListener('offline', () => { state.online = false; renderChrome(); showSignals(); });
+// Browser network hints can be false while this local Core answers. Probe Core on either
+// hint; only live responses, failed requests and cache provenance determine reachability.
+window.addEventListener('online', () => refreshCore());
+window.addEventListener('offline', () => refreshCore());
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !setupShowing()) { loadList(); refreshCore(); } });
 
 // The app shell is cached so Nova opens without a connection; the API stays network-first.

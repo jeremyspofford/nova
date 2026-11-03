@@ -1,0 +1,24 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (4208.696547ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4672.567188
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:33:3
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (4208.696547ms)
+  locator.waitFor: Timeout 3000ms exceeded.
+  Call log:
+    - waiting for locator('[data-work-costs-state="ready"]') to be visible
+  
+      at healthFromHome (/work/tests/ui/health-caps-diagnostics.test.ts:26:54)
+      at async TestContext.<anonymous> (/work/tests/ui/health-caps-diagnostics.test.ts:58:9) {
+    name: 'TimeoutError'
+  }
+no-Kubernetes tripwire: never fired

@@ -17,7 +17,7 @@ type ControlEvidence = { tag: string; id: string; text: string; ariaLabel: strin
 type CrawlState = { path: string; view: string; steps: Step[]; sections: string[]; links: Door[]; headings: string[]; controls: ControlEvidence[] };
 type Report = {
   layout: string; registered: string[]; reached: Record<string, Step[]>; states: CrawlState[];
-  doors: Record<string, Door[]>; required: { homeTopology: boolean; devicesTopology: boolean; captureCategory: boolean };
+  doors: Record<string, Door[]>; required: { homeTopology: boolean; devicesTopology: boolean; captureCategory: boolean; healthCosts: boolean; healthDiagnostics: boolean };
   requiredPaths: Record<string, Step[]>; forbidden: string[]; documentRequests?: string[]; healthMesh?: boolean; attempting?: Step[]; missing?: string[]; error?: string;
 };
 const at = (page: Page) => new URL(page.url()).pathname + new URL(page.url()).hash;
@@ -50,7 +50,7 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
     if (typeof b === 'string') throw new Error(b);
     const m = blank(`nova-navigation-${layout}-`);
     const nova = await m.start({ NOVA_AGENT_CMD: 'node scripts/fake-agent.js', NOVA_AGENT_EGRESS: 'none' });
-    const report: Report = { layout, registered: registeredViews(), reached: {}, states: [], doors: {}, required: { homeTopology: false, devicesTopology: false, captureCategory: false }, requiredPaths: {}, forbidden: [] };
+    const report: Report = { layout, registered: registeredViews(), reached: {}, states: [], doors: {}, required: { homeTopology: false, devicesTopology: false, captureCategory: false, healthCosts: false, healthDiagnostics: false }, requiredPaths: {}, forbidden: [] };
     const output = process.env.NOVA_NAV_EVIDENCE ?? (process.env.NOVA_UI_SHOTS ? join(process.env.NOVA_UI_SHOTS, 'navigation') : null);
     const evidence = output ? resolve(output) : null;
     let crawlPage: Page | undefined;
@@ -123,6 +123,23 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
         })));
         report.states.push({ path: key, view, steps: path, sections, links, headings, controls });
         report.doors[key] = links;
+        if (view === 'health') {
+          // Inspect the surface reached through the ordinary Home crawl, without saving or
+          // downloading here. Native attachment behavior belongs to the dedicated UI gate.
+          await page.locator('[data-work-costs-state="ready"]').waitFor();
+          const form = page.locator('[data-work-limits]');
+          report.required.healthCosts = await form.locator('input[type="number"]').count() === 6
+            && await form.locator('input[type="checkbox"]').count() === 6
+            && /Month to date/i.test(await page.locator('.work-costs').innerText())
+            && await form.locator('[data-save-work-limits]').isEnabled();
+          const download = page.locator('[data-download-diagnostics]');
+          report.required.healthDiagnostics = await download.isVisible()
+            && await download.getAttribute('href') === '/api/v1/diagnostics'
+            && await download.getAttribute('download') === '';
+          report.requiredPaths.healthCosts = path;
+          report.requiredPaths.healthDiagnostics = path;
+          if (evidence) await page.screenshot({ path: join(evidence, `${layout}-health-costs-diagnostics.png`), fullPage: true });
+        }
         if (view === 'settings') {
           if (key === '/settings' && evidence) {
             const captureEntry = page.locator('#settings-nav a[data-cat="capture"]');
@@ -185,7 +202,7 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
       console.log(`DOCUMENT ${layout}: main-document requests=${documentRequests(page).length}`);
       for (const family of ['/new', '/c/2026-11-02-nav001', '/schedules#sc-navigation-example']) assert.ok(report.states.some(s => s.path === family), `actual conversation family: ${family}`);
       assert.deepEqual(report.missing, [], 'every production registered view has a rendered door');
-      assert.deepEqual(report.required, { homeTopology: true, captureCategory: true, devicesTopology: true }, 'required ordinary Home and Settings doors');
+      assert.deepEqual(report.required, { homeTopology: true, captureCategory: true, devicesTopology: true, healthCosts: true, healthDiagnostics: true }, 'required ordinary Home and Settings doors');
       assert.equal(readFileSync(m.egress, 'utf8'), '', 'no external Core egress');
     } catch (error) {
       report.error = String(error); console.log(`NAVIGATION FAILED ${layout}: ${report.error}`); throw error;

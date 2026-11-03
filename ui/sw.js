@@ -3,7 +3,7 @@
 // When it isn't, a GET is answered from the cache and marked x-nova-offline, and the page says
 // so: an honest offline state, never stale data presented as live. Changes (POST, PUT, DELETE)
 // and the event streams are never cached or answered offline.
-const VERSION = 'nova-shell-v14';
+const VERSION = 'nova-shell-v15';
 const SHELL = [
   '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png',
   '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css',
@@ -25,7 +25,9 @@ const SHELL = [
 // is resilience (checkpoints, M7 amendment): after a restore, only what is there now may show. Nor is a
 // factory reset: what it would erase, and whether it happened, are live. The topology is live
 // health and action availability too, so even a pre-existing cached copy must be ignored.
-const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/capture|v1\/models|v1\/changes|v1\/resilience|v1\/reset|v1\/services\/topology)(?:\/|$)/;
+// Diagnostics is a per-request attachment; included diagnostic logs may contain free text,
+// so neither its current response nor a legacy cached copy may be kept or served offline.
+const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/capture|v1\/models|v1\/changes|v1\/resilience|v1\/reset|v1\/services\/topology|v1\/diagnostics)(?:\/|$)/;
 // Pages the app answers with its shell.
 const PAGES = /^\/(?:|chat|new|tasks|memory|automations|skills|schedules|activity|health|settings|capture|topology|c\/[\w-]+)$/;
 
@@ -33,8 +35,9 @@ self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 
+// Upgrading removes only Nova's versioned offline stores, never another cache on this origin.
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => /^nova-shell-v\d+$/.test(k) && k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 const offline = (res) => {

@@ -1,0 +1,7 @@
+# Health app and specimen captures
+
+40 exact-viewport PNGs from the [qualified browser run](../../../evidence/health-app-2026-11-03/release-qualified-browser/command.json): Chromium141.0.7390.37 and WebKit26.0, phone390×844, desktop1440×900, tablet820×1180, half-open842×675. Actual folded DevicePosture is asserted before/after save reload. Default Orb Teal/dark preference; no global screenshot flag or baseline overwrite.
+
+Per engine/posture: app Work costs, native Diagnostics, lower limits/action, configured Work costs specimen and available Diagnostics specimen. These use the same approved components; app zero usage/custom saved limits and specimen mixed usage differ intentionally. The corrected existing Core banner/orb no longer declares offline while local Core answers under a false browser network hint.
+
+[Exact paths, dimensions and SHA-256](manifest.json). [Commands, failures, provenance and limits](../../../evidence/health-app-2026-11-03/README.md). Intermediate binaries remain private with a complete hash manifest. Original approved specimen/F0 PNGs are untouched.

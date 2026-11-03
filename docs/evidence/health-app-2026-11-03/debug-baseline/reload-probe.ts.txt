@@ -1,0 +1,24 @@
+// Temporary diagnostic for a reproducible cached WebKit crash, not an application test hook.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { rmSync, readFileSync } from 'node:fs';
+import { blank, webkitBrowser, device, finishSetup } from './support.ts';
+import { stop } from '../acceptance/support.ts';
+test('isolate WebKit routing and reload', async () => {
+ const b = await webkitBrowser(); if (typeof b === 'string') throw new Error(b);
+ const m = blank('nova-health-reload-probe-'); const n = await m.start();
+ try {
+  await finishSetup(m);
+  const d = await device(b, {width:390,height:844,touch:true,serviceWorkers:'block'}); const p=d.page;
+  let failCaps = false;
+  await d.ctx.route('**/*', route => new URL(route.request().url()).origin !== m.base ? route.abort() : failCaps && new URL(route.request().url()).pathname === '/api/v1/caps' ? route.fulfill({status:503,contentType:'application/json',body:'{"error":"Synthetic outage"}'}) : ['/js/app.js','/js/components.js','/js/surfaces.js'].includes(new URL(route.request().url()).pathname) ? route.fulfill({contentType:'application/javascript',body:readFileSync('/work/docs/evidence/health-app-2026-11-03/debug-baseline/'+new URL(route.request().url()).pathname.split('/').at(-1),'utf8')}) : route.continue());
+  await p.goto(m.base+'/'); await p.locator('#home a[href="/health"]').click();
+  await p.waitForFunction(async () => { const {store}=await import(String('/js/surfaces.js')); return !!store.health; });
+  await p.reload(); await p.waitForFunction(async () => { const {store}=await import(String('/js/surfaces.js')); return !!store.health; });
+  failCaps = false;
+  p.on('request', r=>console.log('RELOAD REQUEST',r.resourceType(),new URL(r.url()).pathname));
+  p.on('requestfailed', r=>console.log('RELOAD FAILED',new URL(r.url()).pathname,r.failure()));
+  await p.reload(); await p.waitForFunction(async () => { const {store}=await import(String('/js/surfaces.js')); return !!store.health; });
+  assert.equal(await p.locator('[data-work-limits]').count(),0, 'baseline has no Health composition');
+ } finally {await b.close();await stop(n);rmSync(m.dir,{recursive:true,force:true});}
+});

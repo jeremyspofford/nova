@@ -1,0 +1,32 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (3696.108888ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4162.439014
+
+✖ failing tests:
+
+test at tests/ui/health-caps-diagnostics.test.ts:35:3
+✖ Health app: chromium Home save, freshness, SSE draft island and native diagnostics (3696.108888ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /no-store/. Input:
+  
+  'undefined'
+  
+      at TestContext.<anonymous> (file:///work/tests/ui/health-caps-diagnostics.test.ts:154:16)
+      at runNextTicks (node:internal/process/task_queues:65:5)
+      at process.processImmediate (node:internal/timers:472:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'undefined',
+    expected: /no-store/,
+    operator: 'match',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

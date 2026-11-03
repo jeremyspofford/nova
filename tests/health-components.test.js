@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as components from '../ui/js/components.js';
+import { begin, over } from '../ui/js/wait.js';
 import { DEFAULT_LIMITS } from '../src/core/caps/index.ts';
 
 const zero = { tokens_in: 0, tokens_out: 0, estimated_tokens: 0, unpriced_tokens: 0, usd: 0, iterations: 0 };
@@ -54,4 +55,22 @@ test('diagnostics supplies a native attachment link and no live action when unav
   const unavailable = components.diagnosticsDownload({ available: false });
   assert.ok(!unavailable.includes('href='));
   assert.match(unavailable, /disabled/);
+});
+
+// Waiting HTML intentionally reads the shared clock/history. Pin the clock rather than claiming
+// byte-purity across wall time; both request keys retain the caller's actual start on redraw.
+test('work costs loading and saving use the retained shared wait clock', (t) => {
+  t.mock.method(Date, 'now', () => 10_000);
+  begin('health-costs', 10_000);
+  const first = components.workCosts({ state: 'loading' });
+  assert.match(first, /data-waiting="health-costs" data-since="10000"/);
+  assert.doesNotMatch(first, /waiting is-late/);
+  t.mock.method(Date, 'now', () => 15_000);
+  const redrawn = components.workCosts({ state: 'loading' });
+  assert.match(redrawn, /class="waiting is-late"[^>]*data-waiting="health-costs" data-since="10000"/);
+  begin('health-costs-save', 15_000);
+  const saving = components.workCosts({ view, state: 'saving' });
+  assert.match(saving, /data-waiting="health-costs-save" data-since="15000"/);
+  assert.match(saving, /Saving limits/);
+  over('health-costs'); over('health-costs-save');
 });

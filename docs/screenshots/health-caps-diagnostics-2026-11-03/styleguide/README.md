@@ -1,6 +1,6 @@
 # Health cost caps and diagnostics specimens
 
-Review addresses: `/styleguide?entry=work-costs` (`#sg-work-costs`) and `/styleguide?entry=diagnostics` (`#sg-diagnostics`). These are local fixtures only; saving and downloading have no live effect. App composition awaits rendered owner recognition.
+Review addresses: `/styleguide?entry=work-costs` (`#sg-work-costs`) and `/styleguide?entry=diagnostics` (`#sg-diagnostics`). These are local fixtures only; saving and downloading have no live effect. Owner recognition of both rendered entries was recorded before Task 4 app composition; see the separate [app proof](../../../evidence/health-app-2026-11-03/README.md).
 
 Accounting scope, aligned with the implemented Caps API: **Nova runner usage on this machine; provider-managed tasks are not included.** Their reports live outside these Caps totals, so reporting usage elsewhere in Nova does not make it appear here. The visible scope, expanded explanation and fixtures reflect `accounting.scope: this-node-runner` and `provider_reports_included: false`. These captures supersede the earlier conditional-report wording; geometry and controls are unchanged.
 
@@ -27,4 +27,4 @@ Capture: `NOVA_HEALTH_STYLEGUIDE_SHOTS=1` with `tests/ui/health-styleguide.test.
 | Mixed icon styles | N/A: no added icons. | N/A: no added icons; native disclosure marker. |
 | Placeholder empty states | Pass: zero and unavailable explain what is recorded or why editing is disabled. | Pass: unavailable explains when to retry. |
 
-Limitations: these are specimens, not proof of app reachability, live enforcement, successful persistence, route access control, or a real diagnostics attachment. Other designs, installed iOS behavior and a formal accessibility audit are outside this focused capture. The owner has not approved these entries yet.
+Limitations: these are specimens, not proof of app reachability, live enforcement, successful persistence, route access control, or a real diagnostics attachment. Other designs, installed iOS behavior and a formal accessibility audit are outside this focused capture. Both entries were subsequently owner approved. These original specimen captures remain unchanged; app reachability and real save/download proof are recorded separately.

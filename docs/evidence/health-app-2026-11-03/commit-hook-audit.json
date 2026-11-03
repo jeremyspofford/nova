@@ -1,0 +1,11 @@
+{
+  "global_config": "disabled; owner global Git config not mounted/read",
+  "local_hook_setting_present": false,
+  "active_commit_hooks": {
+    "pre-commit": false,
+    "prepare-commit-msg": false,
+    "commit-msg": false,
+    "post-commit": false
+  },
+  "note": "No hook setting is changed or bypassed."
+}
