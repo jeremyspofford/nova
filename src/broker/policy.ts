@@ -127,9 +127,21 @@ export class Rates {
 // Generated values: the CSPRNG under a per-site policy (24 characters by default, as M10d's
 // generatePassword has), with rejection sampling so every character is equally likely.
 export const DEFAULT_POLICY = { length: 24, alphabet: 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_.!@#%' };
+export function generationPolicy(input: unknown = DEFAULT_POLICY): { length: number; alphabet: string } {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('A generation policy names a length and alphabet.');
+  const p = input as { length?: unknown; alphabet?: unknown };
+  const length = p.length === undefined ? DEFAULT_POLICY.length : p.length;
+  const alphabet = p.alphabet === undefined ? DEFAULT_POLICY.alphabet : p.alphabet;
+  if (typeof length !== 'number' || !Number.isInteger(length) || length < 16 || length > 128 || typeof alphabet !== 'string' || !/^[\x21-\x7e]+$/.test(alphabet) || new Set(alphabet).size < 16 || alphabet.length > 256) throw new Error('a generation policy is 16–128 characters from at least 16 distinct ones');
+  return { length, alphabet };
+}
+export function policyCard(policy: { length: number; alphabet: string }): string {
+  const { length, alphabet } = generationPolicy(policy);
+  const distinct = new Set(alphabet).size;
+  return `Generation policy (also for future replacements): ${length} characters; ${distinct} distinct symbols; at least ${Math.floor(length * Math.log2(distinct))} bits of entropy; alphabet ${JSON.stringify(alphabet)}.`;
+}
 export function generate(policy: { length: number; alphabet: string } = DEFAULT_POLICY): Buffer {
-  const { length, alphabet } = policy;
-  if (!Number.isInteger(length) || length < 16 || length > 128 || typeof alphabet !== 'string' || !/^[\x21-\x7e]+$/.test(alphabet) || new Set(alphabet).size < 16 || alphabet.length > 256) throw new Error('a generation policy is 16–128 characters from at least 16 distinct ones');
+  const { length, alphabet } = generationPolicy(policy);
   const chars = [...new Set(alphabet)];
   const out = Buffer.alloc(length);
   const limit = 256 - (256 % chars.length);

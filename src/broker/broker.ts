@@ -15,7 +15,7 @@ import { entryKey, openEnvelope, type Envelope, type Kdf } from './crypto.ts';
 import { send, EgressError, type Resolver } from './http.ts';
 import { chooseStore, FILE_NOTICE, internalEnv, type KeyStore } from './keystore.ts';
 import { BUILT, canonicalTarget, checkScope, inScope, lookalikes, requestPath, suggestClass } from './origin.ts';
-import { Approvals, Rates, digestOf, generate, DEFAULT_POLICY, USES_PER_REF_HOUR, type ApprovalIn } from './policy.ts';
+import { Approvals, Rates, digestOf, generate, generationPolicy, policyCard, DEFAULT_POLICY, APPROVAL_MS, USES_PER_REF_HOUR, type ApprovalIn } from './policy.ts';
 import { REFUSALS, canonical, type Binding, type Card, type Frame, type Inject, type Refusal, type Role } from './protocol.ts';
 import { Scrubber } from './scrub.ts';
 import { Store, sameBytes, type Meta, type OutboxHeader } from './store.ts';
@@ -43,6 +43,7 @@ const grantsIf = (flags: string[]) => ((process as { permission?: unknown }).per
 // variables (LD_PRELOAD, NODE_OPTIONS, BASH_ENV, TF_CLI_CONFIG_FILE…). PATH and HOME are the
 // launcher's own.
 const PROGRAM_ENV = /^(LANG|LC_[A-Z]+|TZ|TERM|NO_COLOR|TF_IN_AUTOMATION|TF_INPUT|TF_VAR_[A-Za-z0-9_]+)$/;
+const PROCESS_CONSENT = 'Standing consent covers any caller-provided argv, cwd, allow-listed env, stdin and timeout within broker limits for this bound program.';
 const CONSENT_SENSITIVE = 'A sensitive credential always asks first (once per task, or on every use): it can’t have a standing consent.';
 const KINDS = new Set(['api_key', 'token', 'login', 'secret', 'oauth', 'signing_key']);
 const str = (v: unknown, max = 300): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
@@ -68,7 +69,7 @@ export class Broker {
   #programs = new Map<string, { stop: () => void; done: Promise<void> }>();
   #stopping = false;
   #programFailure = false;
-  #grants = new Set<string>();
+  #grants = new Map<string, number>();
   #index = new Map<string, Meta & { version: number; pending: boolean }>();
   #health = new Map<string, { reused: boolean; old: boolean }>();
   #broken: string[] = [];
@@ -333,20 +334,30 @@ export class Broker {
     const run = b.kind === 'process' ? programRequest(req) : null;
     // Class, consent, approval.
     const key = `${id}|${b.target}`;
-    // A tier-2 approval covers this request (method and path, or a program's exact arguments) for
-    // this task, nothing wider. The arguments are on the card and in the digest, never the ledger.
-    const grant = `${key}|${ctx.task?.id ?? '-'}|${ctx.rec.scope_item}|${which}|${argv ? JSON.stringify(argv) : ''}`;
+    // Bind the normalized request, but expose only safe caller-input metadata on the card.
+    // The audit retains the bare path/RUN; no raw query, environment or stdin goes into it.
+    const action = { verb: 'use', ref: id, target: b.target, scope_item: ctx.rec.scope_item, class: m.class, version: which,
+      ...(run ? { program: { argv, ...run } } : { path }) };
+    const grant = `${id}|${this.#digest(action, ctx)}`;
+    const now = this.#now().getTime();
+    for (const [g, expires] of this.#grants) if (expires <= now) this.#grants.delete(g);
+    const flags = run ? [
+      callerInput('cwd', run.cwd ?? null), callerInput('env', run.env), callerInput('stdin', run.stdin),
+      `Caller timeout_ms: ${run.timeout}.`,
+    ] : method === 'VERIFY' ? ['Verification covers caller-provided body/signature pairs; no network request.']
+      : [`Request: ${method} ${bare}.`, callerInput('query', path.includes('?') ? path.slice(path.indexOf('?') + 1) : ''), 'Headers and body are not bound by this approval.'];
+    const coverage = run ? 'this exact program request' : method === 'VERIFY' ? 'verification of caller-provided body/signature pairs' : 'this method and path including query';
     const standing = m.class === 'standard' && !m.per_use && !!b.consent && (method === 'RUN' || method === 'VERIFY' || inScope(b.consent.scope, method, bare));
     if (standing) {
       ctx.rec.tier = 1;
       ctx.rec.approval_id = b.consent!.approval_id;
       if (!this.#rates.take(`c|${key}`, b.consent!.rate_per_hour)) throw new Refused('rate');
     } else if (m.per_use || !this.#grants.has(grant)) {
-      this.#approve(ctx, { verb: 'use', ref: id, target: b.target, scope_item: ctx.rec.scope_item, class: m.class, version: which, ...(argv ? { argv } : {}) }, {
+      this.#approve(ctx, action, {
         verb: 'use', what: `Use your ${m.kind === 'login' ? 'sign-in' : 'credential'} “${m.name}” for ${b.target}`, name: m.name, origin: m.origin, username: m.username, target: b.target,
-        scope: b.scope, class: m.class, tier: 2, approving: m.per_use ? 'Allows this one use.' : 'Allows uses like this one for this task.', ...(argv ? { argv: argv as string[] } : {}),
+        scope: b.scope, class: m.class, tier: 2, flags, approving: `Allows ${coverage}${m.per_use ? ' for this one use.' : ' for this task for five minutes after approval; reuse does not extend it.'}${b.kind === 'http' && method !== 'VERIFY' ? ' Headers and body are not bound.' : ''}`, ...(argv ? { argv: argv as string[] } : {}),
       }, m.class === 'sensitive');
-      if (!m.per_use) this.#grants.add(grant);
+      if (!m.per_use) this.#grants.set(grant, now + APPROVAL_MS);
     } else ctx.rec.tier = 2;
     if (!this.#rates.take(`r|${id}`, USES_PER_REF_HOUR)) throw new Refused('rate');
     this.store.touch(id);
@@ -488,16 +499,15 @@ export class Broker {
     if (mi.origin !== undefined && mi.origin !== null) { try { origin = canonicalTarget({ kind: 'http', origin: mi.origin }).target; } catch { throw new Failed('The site isn’t a canonical https origin.'); } }
     const suggested = suggestClass(origin, mi.kind);
     const cls = mi.class === 'standard' || mi.class === 'sensitive' ? mi.class : suggested;
-    const pol = mi.policy as { length?: unknown; alphabet?: unknown } | undefined;
-    const policy = pol ? { length: Number(pol.length ?? DEFAULT_POLICY.length), alphabet: String(pol.alphabet ?? DEFAULT_POLICY.alphabet) } : DEFAULT_POLICY;
-    if (pol) { try { zero(generate(policy)); } catch (e) { throw new Failed((e as Error).message); } }
+    let policy: Meta['policy'];
+    try { policy = generationPolicy(mi.policy); } catch (e) { throw new Failed((e as Error).message); }
     const bindings = Array.isArray(f.bind) ? f.bind.slice(0, 20).map((x) => this.#binding(x)) : [];
     if (cls === 'sensitive' && bindings.some((b) => b.consent)) throw new Refused('class_policy', CONSENT_SENSITIVE);
     const kind = src === 'generate' ? 'generate' : src === 'sealed' || (src && typeof src === 'object' && 'sealed' in src) ? 'sealed' : null;
     if (!kind) throw new Failed('A value comes from generate or sealed entry (or migrate).');
     const meta: Meta = { name: mi.name, aliases: [alias], kind: mi.kind, origin, username: str(mi.username, 300) ? mi.username : null, class: cls, per_use: mi.per_use === true, created_at: this.#now().toISOString(), last_used: null, last_rotated: null, bindings, policy };
-    const action = { verb: 'create', name: meta.name, kind: meta.kind, origin, username: meta.username, class: cls, per_use: meta.per_use, bindings: bindings.map(cardBinding), source: kind };
-    const flags = bindings.flatMap((b) => this.#flags(b.target, b.kind));
+    const action = { verb: 'create', name: meta.name, kind: meta.kind, origin, username: meta.username, class: cls, per_use: meta.per_use, bindings: bindings.map(cardBinding), source: kind, policy };
+    const flags = [policyCard(policy), ...bindings.flatMap((b) => this.#flags(b.target, b.kind))];
     const { id: approval, passkey } = this.#approve(ctx, action, { verb: 'create', what: kind === 'generate' ? `Make a new password for ${origin ?? meta.name}` : `Save a credential for ${origin ?? meta.name}`, name: meta.name, origin, username: meta.username, class: cls, flags, tier: 3, items: bindings.map(cardBinding), approving: `Saves it in Nova Vault${bindings.length ? `, usable only on ${bindings.map((b) => b.target).join(', ')}` : ', unbound (usable nowhere until you bind it)'}. Suggested class: ${suggested}.` }, true, this.#envelopeHash(src));
     for (const b of meta.bindings) if (b.consent) b.consent.approval_id = approval;
     meta.provenance = kind === 'generate' ? 'generated' : passkey ? 'sealed-passkey' : 'sealed';
@@ -546,8 +556,8 @@ export class Broker {
     }
     const kind = c.value === 'generate' ? 'generate' : c.value === 'sealed' || (c.value && typeof c.value === 'object' && 'sealed' in c.value) ? 'sealed' : null;
     if (!kind) throw new Failed('A new value comes from generate or sealed entry.');
-    const action = { verb: 'update', ref: id, value: kind };
-    const { passkey } = this.#approve(ctx, action, { verb: 'update', what: kind === 'generate' ? `Make a new value for “${m.name}”` : `Replace the value of “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: 'Replaces the value inside the broker. The site itself isn’t changed by this.' }, true, this.#envelopeHash(c.value));
+    const action = { verb: 'update', ref: id, value: kind, ...(kind === 'generate' ? { policy: m.policy } : {}) };
+    const { passkey } = this.#approve(ctx, action, { verb: 'update', what: kind === 'generate' ? `Make a new value for “${m.name}”` : `Replace the value of “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, flags: kind === 'generate' ? [policyCard(m.policy)] : [], approving: 'Replaces the value inside the broker. The site itself isn’t changed by this.' }, true, this.#envelopeHash(c.value));
     const value = kind === 'generate' ? generate(m.policy) : this.#sealed((c.value as { sealed: unknown }).sealed, this.#digest(action, ctx));
     try {
       const version = this.store.setValue(id, value);
@@ -567,7 +577,7 @@ export class Broker {
     if (f.phase === 'abandon') { if (m.pending) this.store.dropPending(id); this.#forgetGrants(id); this.#reindex(); return { ref: id, version: m.version, pending: false }; }
     if (f.phase !== 'begin' && f.phase !== 'commit') throw new Failed('A rotation begins, then commits or is abandoned.');
     if (f.phase === 'commit' && !m.pending) throw new Failed('There is no rotation to commit.');
-    this.#approve(ctx, { verb: 'rotate', ref: id, phase: f.phase }, { verb: 'rotate', what: f.phase === 'begin' ? `Make a new password for “${m.name}”, kept aside until the site takes it` : `Keep the new password for “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, approving: f.phase === 'begin' ? 'Generates it inside the broker. Typing it into the site’s change form is a separate, visible step.' : 'The new value replaces the old one.' }, true);
+    this.#approve(ctx, { verb: 'rotate', ref: id, phase: f.phase, ...(f.phase === 'begin' ? { policy: m.policy } : {}) }, { verb: 'rotate', what: f.phase === 'begin' ? `Make a new password for “${m.name}”, kept aside until the site takes it` : `Keep the new password for “${m.name}”`, name: m.name, origin: m.origin, username: m.username, class: m.class, tier: 3, flags: f.phase === 'begin' ? [policyCard(m.policy)] : [], approving: f.phase === 'begin' ? 'Generates it inside the broker. Typing it into the site’s change form is a separate, visible step.' : 'The new value replaces the old one.' }, true);
     this.#forgetGrants(id);
     let version: number;
     if (f.phase === 'begin') { const v = generate(m.policy); try { version = this.store.setPending(id, v); } finally { zero(v); } }
@@ -636,7 +646,7 @@ export class Broker {
     const before = m.bindings.find((x) => x.target === b.target);
     const { id: id_ } = this.#approve(ctx, { verb: 'bind', ref: id, binding: cardBinding(b) }, {
       verb: 'bind', what: `${before ? 'Change' : 'Allow'} “${m.name}” ${before ? 'on' : 'to be used on'} ${b.target}`, name: m.name, origin: m.origin, username: m.username, target: b.target, scope: b.scope, class: m.class, flags, tier: 3, items: [cardBinding(b)],
-      approving: `${b.consent ? `Standing consent: requests inside ${b.consent.scope.methods.join(', ')} ${b.consent.scope.paths.join(', ')} go ahead without asking, up to ${b.consent.rate_per_hour} an hour. ` : 'Every use asks first. '}Nothing else is covered: no other host, subdomain or port.`,
+      approving: `${b.consent ? `${b.kind === 'process' ? PROCESS_CONSENT : `Standing consent: requests inside ${b.consent.scope.methods.join(', ')} ${b.consent.scope.paths.join(', ')} go ahead without asking.`} Up to ${b.consent.rate_per_hour} an hour. ` : 'Every use asks first. '}Nothing else is covered: no other host, subdomain or port.`,
     }, true);
     if (b.consent) b.consent.approval_id = id_;
     this.store.setMeta(id, stripIndex({ ...m, bindings: [...m.bindings.filter((x) => x.target !== b.target), b] }));
@@ -652,7 +662,7 @@ export class Broker {
     for (const id of ids) this.#forgetGrants(id);
     this.#reindex();
   }
-  #forgetGrants(id: string): void { for (const g of [...this.#grants]) if (g.startsWith(`${id}|`)) this.#grants.delete(g); }
+  #forgetGrants(id: string): void { for (const g of this.#grants.keys()) if (g.startsWith(`${id}|`)) this.#grants.delete(g); }
 
   // ---- share_scope (tier 3) -------------------------------------------------------------------
 
@@ -832,7 +842,13 @@ function programRequest(req: { cwd?: unknown; env?: unknown; stdin?: unknown; ti
 const unlockDigest = (vid: string, factor: string, boot: string) => createHash('sha256').update(`nova-broker-unlock|${vid}|${factor}|${boot}`).digest('hex');
 
 const stripIndex = (m: Meta & { version?: number; pending?: boolean }): Meta => { const { version: _v, pending: _p, ...rest } = m; return rest; };
-const cardBinding = (b: Binding) => ({ target: b.target, kind: b.kind, scope: b.scope, inject: b.inject, consent: b.consent ? { scope: b.consent.scope, rate_per_hour: b.consent.rate_per_hour } : null, lan: !!b.lan, pin: b.pin ?? null, embed_on: b.embed_on ?? [] });
+const cardBinding = (b: Binding) => ({ target: b.target, kind: b.kind, scope: b.scope, inject: b.inject, consent: b.consent ? { scope: b.consent.scope, rate_per_hour: b.consent.rate_per_hour } : null, lan: !!b.lan, pin: b.pin ?? null, embed_on: b.embed_on ?? [], ...(b.kind === 'process' && b.consent ? { approving: PROCESS_CONSENT } : {}) });
+
+// These identities describe caller inputs only, never the broker's held credential.
+function callerInput(field: string, input: unknown): string {
+  const bytes = Buffer.byteLength(typeof input === 'string' ? input : canonical(input));
+  return `Caller ${field}: ${bytes} UTF-8 bytes; sha256:${digestOf({ field, input })}.`;
+}
 
 const REFUSED_HEADERS = /^(authorization|proxy-authorization|cookie|host|content-length|transfer-encoding|connection|upgrade|te|trailer|expect|keep-alive|proxy-connection)$/i;
 function callerHeaders(h: unknown, inj: Inject): Record<string, string> {
