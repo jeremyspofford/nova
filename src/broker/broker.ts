@@ -468,7 +468,9 @@ export class Broker {
     this.#stopping = true;
     const programs = [...this.#programs.values()];
     for (const p of programs) p.stop();
-    await Promise.all(programs.map((p) => p.done));
+    const results = await Promise.allSettled(programs.map((p) => p.done));
+    const failed = results.find((r) => r.status === 'rejected');
+    if (failed) throw failed.reason;
     if (this.#programFailure) throw new Failed('Owned program cleanup needs operator recovery.');
   }
 

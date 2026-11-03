@@ -332,3 +332,54 @@ test('B3 normal exit near the timeout boundary settles each lane once', async ()
     await b.local!.broker.stopPrograms();
   } finally { await b.close(); }
 });
+
+for (const alreadyRejected of [false, true]) {
+  test(`I1 shutdown awaits recoverable owned group before reporting ${alreadyRejected ? 'already-rejected' : 'concurrent'} cleanup failure`, { timeout: 20000 }, async () => {
+    const b = await program(stubborn);
+    const logs = [join(b.home, 'denied-group'), join(b.home, 'recoverable-group')];
+    const uses = logs.map((log, i) => b.use({ env: { TF_VAR_LOG: log }, ...(alreadyRejected && i === 0 ? { timeout_ms: 1000 } : {}) }));
+    const kill = process.kill;
+    let groups: number[] = [];
+    let recoverableSettled = false;
+    void uses[1]!.then(() => { recoverableSettled = true; });
+    try {
+      await until(() => logs.every(existsSync));
+      const owned = logs.map((log) => JSON.parse(readFileSync(log, 'utf8')) as [number, number, string]);
+      groups = owned.map(([pid]) => Number(readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]!.split(' ')[2]));
+      assert.ok(groups.every((pid) => pid > 0));
+      assert.notEqual(groups[0], groups[1]);
+      const delivered: Array<{ group: number; signal: number | NodeJS.Signals | undefined }> = [];
+      process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+        if (pid === -groups[0]!) throw Object.assign(new Error('synthetic denied owned group'), { code: 'EPERM' });
+        const result = kill(pid, signal);
+        if (pid < 0) delivered.push({ group: -pid, signal });
+        return result;
+      }) as typeof process.kill;
+      if (alreadyRejected) {
+        assert.equal((await uses[0]!).error, 'failed');
+        assert.equal(recoverableSettled, false, 'other owned group is still active when shutdown starts');
+      }
+      await assert.rejects(b.local!.broker.stopPrograms(), /cleanup/);
+      // These observations are made immediately on rejection, when main would process.exit(1).
+      assert.ok(delivered.some((x) => x.group === groups[1] && x.signal === 'SIGKILL'), 'recoverable group receives KILL before shutdown rejects');
+      assert.equal(running(groups[1]!), false, 'recoverable launcher has exited');
+      assert.ok(owned[1]!.slice(0, 2).every((pid) => !running(Number(pid))), 'recoverable executables have stopped before shutdown rejects');
+      assert.equal(existsSync(join(owned[1]![2], '..')), false, 'recoverable directory removed before shutdown rejects');
+      // The close handler removes this directory before resolving internal cleanup; the outer
+      // request/audit promise may need further microtasks to deliver its answer.
+      assert.ok((await uses[1]!).outcome.exit !== 0);
+      assert.ok(existsSync(owned[0]![2]), 'failed group retains credential and ownership evidence');
+      assert.equal(readdirSync(join(b.dir, 'run/programs')).length, 1, 'only failed ownership remains');
+      assert.equal((await uses[0]!).error, 'failed');
+      assert.equal((await b.use()).error, 'failed', 'new credential uses remain blocked');
+    } finally {
+      process.kill = kill;
+      for (const group of groups) {
+        try { kill(-group, 'SIGKILL'); }
+        catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e; }
+      }
+      await Promise.all(uses);
+      await b.close();
+    }
+  });
+}
