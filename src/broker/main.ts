@@ -3,6 +3,7 @@
 // folder, no inspector, --disable-sigusr1. Its two tokens arrive over Node's IPC channel, never on
 // argv or in the environment.
 //   node src/broker/main.ts <broker folder>
+import { fileStores, keychainStore, removeDeviceKeys } from './keystore.ts';
 import { Broker } from './broker.ts';
 import { serve, socketPath, type Tokens } from './server.ts';
 
@@ -12,8 +13,18 @@ if (!dir || !process.send) {
   process.exit(2);
 }
 
-process.once('message', async (msg: { tokens?: Tokens; key_mode?: 'auto' | 'file' | 'keychain' }) => {
+process.once('message', async (msg: { tokens?: Tokens; key_mode?: 'auto' | 'file' | 'keychain'; reset?: boolean }) => {
   try {
+    if (msg.reset === true) {
+      removeDeviceKeys(dir, (account) => {
+        if (msg.key_mode === 'file') return fileStores(dir)(account);
+        const store = keychainStore('nova-broker', account);
+        if (!store || !store.available().ok) throw new Error('Broker keychain cleanup is unavailable.');
+        return store;
+      });
+      process.send!({ ready: true });
+      process.exit(0);
+    }
     const broker = new Broker({ dir, ...(msg.key_mode ? { keyMode: msg.key_mode } : {}) });
     broker.start();
     const path = socketPath(dir);
@@ -28,6 +39,7 @@ process.once('message', async (msg: { tokens?: Tokens; key_mode?: 'auto' | 'file
     };
     process.on('SIGTERM', stop);
     process.on('SIGINT', stop);
+    process.on('disconnect', stop);
     process.send!({ ready: true, socket: path, locked: !broker.store.unlocked });
     process.channel?.unref();
   } catch (e) {

@@ -5,8 +5,8 @@
 // command line. The migrate launcher also reads the old vault's key through these (service
 // nova-vault, account vault-<id>).
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 // Trusted internal OS context only; never use this for a credentialed target's environment.
 export function internalEnv(env: NodeJS.ProcessEnv, keychain = true): NodeJS.ProcessEnv {
@@ -73,7 +73,7 @@ export function keychainStore(service: string, account: string, o: { platform?: 
       available: () => { const r = run('security', ['default-keychain']); return { ok: r.code === 0, detail: r.code === 0 ? 'security' : (r.error ?? r.stderr.trim()) }; },
       read: () => { const r = run('security', ['find-generic-password', '-s', service, '-a', account, '-w']); if (r.code === 0) return decode(r.stdout); if (r.code === 44) return null; throw fail('security', r); },
       write: (k) => { const r = run('security', ['-i'], `add-generic-password -U -s ${service} -a ${account} -l "Nova broker key" -w ${k.toString('base64')}\n`); if (r.code !== 0 || r.stderr.trim()) throw fail('security', r); },
-      remove: () => { run('security', ['delete-generic-password', '-s', service, '-a', account]); },
+      remove: () => { const r = run('security', ['delete-generic-password', '-s', service, '-a', account]); if (r.code !== 0 && r.code !== 44) throw fail('security', r); },
     };
   }
   if (platform === 'win32') {
@@ -85,7 +85,7 @@ export function keychainStore(service: string, account: string, o: { platform?: 
       available: () => { const r = ps('exit 0'); return { ok: r.code === 0, detail: r.code === 0 ? 'PasswordVault' : (r.error ?? r.stderr.trim()) }; },
       read: () => { const r = ps(`${find} $c.RetrievePassword(); [Console]::Out.Write($c.Password)`); if (r.code === 0) return decode(r.stdout); if (r.code === 44) return null; throw fail('PowerShell', r); },
       write: (k) => { const r = ps(`$p = [Console]::In.ReadToEnd().Trim(); $v.Add((New-Object Windows.Security.Credentials.PasswordCredential('${service}', '${account}', $p)))`, k.toString('base64')); if (r.code !== 0) throw fail('PowerShell', r); },
-      remove: () => { ps(`${find} $v.Remove($c)`); },
+      remove: () => { const r = ps(`try { foreach ($c in $v.RetrieveAll()) { if ($c.Resource -ceq '${service}' -and $c.UserName -ceq '${account}') { $v.Remove($c) } } } catch { exit 1 }`); if (r.code !== 0) throw fail('PowerShell', r); },
     };
   }
   if (platform !== 'linux' && platform !== 'freebsd' && platform !== 'openbsd') return null;
@@ -99,7 +99,7 @@ export function keychainStore(service: string, account: string, o: { platform?: 
     },
     read: () => { const r = run('secret-tool', ['lookup', ...attrs]); if (r.code === 0) return decode(r.stdout); if (r.code === 1 && !r.stderr.trim()) return null; throw fail('secret-tool', r); },
     write: (k) => { const r = run('secret-tool', ['store', `--label=Nova broker key (${account})`, ...attrs], k.toString('base64')); if (r.code !== 0) throw fail('secret-tool', r); },
-    remove: () => { run('secret-tool', ['clear', ...attrs]); },
+    remove: () => { const r = run('secret-tool', ['clear', ...attrs]); if (r.code !== 0 && !(r.code === 1 && !r.stderr.trim())) throw fail('secret-tool', r); },
   };
 }
 
@@ -118,4 +118,20 @@ export function chooseStore(service: string, account: string, file: string, o: {
   if (kc && up?.ok) return kc;
   if (mode === 'keychain') throw new Error(`The broker is set to keep its key in the system keychain, but none answers${up ? `: ${up.detail}` : ''}.`);
   return fileKeyStore(file);
+}
+
+// Trusted parent-only reset: fixed broker directory, no key reads and no caller-supplied accounts.
+// Keep device.json until the authenticated home reset completes, so interruption is retryable.
+export function removeDeviceKeys(dir: string, store: (account: string) => KeyStore): void {
+  if (!lstatSync(dir).isDirectory()) throw new Error('The broker directory is not owned storage.');
+  for (const [part, allowed] of [['run', ['broker.sock', 'programs']], ['run/programs', []]] as const) {
+    const p = join(dir, part);
+    if (existsSync(p) && (!lstatSync(p).isDirectory() || readdirSync(p).some((n) => !(allowed as readonly string[]).includes(n)))) throw new Error('Owned program cleanup needs operator recovery.');
+  }
+  const file = join(dir, 'device.json');
+  if (!existsSync(file)) return;
+  if (!lstatSync(file).isFile()) throw new Error('Invalid broker device record.');
+  const d = JSON.parse(readFileSync(file, 'utf8')) as { id?: unknown };
+  if (typeof d.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(d.id)) throw new Error('Invalid broker device record.');
+  for (const prefix of ['device', 'sign']) store(`${prefix}-${d.id}`).remove();
 }

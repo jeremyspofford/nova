@@ -129,6 +129,7 @@ export function validate(input: unknown, o: { devices?: DeviceView[] } = {}): Va
   for (const k of Object.keys(d)) if (!KEYS.has(k)) p.push(`“${k}” isn’t part of a service definition.`);
   const name = typeof d.service === 'string' ? d.service : '';
   if (!NAME.test(name)) p.push('service is its name: lowercase letters, digits and dashes, starting with a letter, at most 53 characters.');
+  if (name === 'nova-broker') p.push('nova-broker is reserved for the trusted supervisor, never an editable workload.');
   const isConsole = name === CONSOLE;
   if (typeof d.version !== 'string' || !VERSION.test(d.version)) p.push('version is letters, digits, dots, dashes or underscores, at most 64 characters.');
   else if (!isConsole && RESERVED.has(d.version.toLowerCase())) p.push(`version can’t be “${d.version}”: the supervisor uses that name itself.`);

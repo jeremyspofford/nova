@@ -25,7 +25,9 @@ test('core reaches the broker only through its client, and the client imports th
   const outside = [...walk(join(ROOT, 'src'))].filter((f) => !f.startsWith(BROKER));
   const lands = (f: string, from: string) => from.startsWith('.') && resolve(dirname(f), from).startsWith(`${BROKER}/`);
   const users = outside.filter((f) => imports(f).some((i) => lands(f, i.from)));
-  assert.deepEqual(users.map((f) => relative(ROOT, f)), ['src/core/broker/client.ts']);
+  assert.deepEqual(users.map((f) => relative(ROOT, f)), ['src/core/broker/client.ts', 'src/supervisor/supervisor.ts']);
+  const bootstrap = imports(join(ROOT, 'src/supervisor/supervisor.ts')).filter((i) => lands(join(ROOT, 'src/supervisor/supervisor.ts'), i.from));
+  assert.deepEqual(bootstrap.map((i) => i.from), ['../broker/spawn.ts'], 'only the fixed trusted supervisor spawn import');
   const client = join(ROOT, 'src', 'core', 'broker', 'client.ts');
   const typed = imports(client).filter((x) => lands(client, x.from));
   assert.ok(typed.length >= 1);
