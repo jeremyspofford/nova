@@ -42,6 +42,12 @@ async function fixture(run: (base: string) => Promise<void>) {
   }
 }
 
+// preview() swaps the theme CSS and then redraws the whole catalogue on the next frame. Wait for
+// that redraw too, or a later step can read a specimen node the redraw is about to replace.
+async function themeApplied(page: Page, css: string) {
+  await page.waitForFunction((text) => document.getElementById('ds')?.textContent === text && !document.getElementById('ds-boot'), css);
+  await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+}
 async function choose(page: Page, state: string) {
   await page.getByLabel('Specimen state').selectOption(state);
   await page.locator(`[data-backups-specimen="${state}"]`).waitFor();
@@ -105,7 +111,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
             const response = p.waitForResponse((r) => r.url().includes('/preview.css') && r.status() === 200);
             await p.locator('#sg-ds').selectOption(theme);
             const css = await (await response).text();
-            await p.waitForFunction((text) => document.getElementById('ds')?.textContent === text && !document.getElementById('ds-boot'), css);
+            await themeApplied(p, css);
             await still(p);
             for (const state of STATES) {
               await choose(p, state);
@@ -209,7 +215,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
             const response = p.waitForResponse((r) => r.url().includes('/preview.css') && r.status() === 200);
             await p.locator('#sg-ds').selectOption(theme);
             const css = await (await response).text();
-            await p.waitForFunction((text) => document.getElementById('ds')?.textContent === text && !document.getElementById('ds-boot'), css);
+            await themeApplied(p, css);
             for (const [phase, elapsed] of [['quiet', 400], ['indicator', 1500], ['long', 12000]] as const) {
               await p.clock.setFixedTime(new Date(since + elapsed));
               await choose(p, 'loading');
