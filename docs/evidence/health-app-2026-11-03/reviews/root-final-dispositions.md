@@ -19,3 +19,5 @@ Every declined-to-judge line, in report order:
 | FinalhostedCI/merge/preview/proposedcheckoutfix | Root active release gates, NOT setaside completion. Current run cancelled5m checkout beforetests; delegated checkout proof/ordinaryfreshCI/matchingmerge/approvedpreview required. |
 
 These exclusions follow existing explicit scope/owner queue/evidence limits; they do not authorize deleting a feature, weakening a gate or silently claiming unperformed proof. Costs are the listed unproven/deferred limitations. This disposition file must be published with final review before scratch cleanup.
+
+Final scoped review at695: visual I1 ADDRESSED, checkout delta APPROVED;0 Critical/Important. M1 warning remains deferred under Ruling27. M2 incorrect default-CI raster wording is corrected in Root-owned docs under Ruling28; dedicated proof remains valid, ordinary always-on raster coverage is explicitly unshipped. This is a documentation correction, no second source fix wave. Fresh exact-head ordinary CI/matching merge/preview remain mandatory.
