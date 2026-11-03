@@ -67,3 +67,4 @@
 .sg-back { margin-bottom: var(--space-4); }
 .sg-broken { padding: var(--space-3) var(--space-4); border: 1px solid var(--status-error); border-radius: var(--radius-input); color: var(--status-error); }
 .sg-cards > .sg-state { margin: 0; }
+.health-specimen { max-width: var(--layout-content-max); padding: var(--space-5); }
