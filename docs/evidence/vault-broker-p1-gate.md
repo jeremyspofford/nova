@@ -1,19 +1,46 @@
-# Vault broker, Phase 1: gate evidence
+# Vault broker, Phase1: current gate and historical evidence
+
+**Current source:** `44a8deb563324ac2847c02dc82dfc6e3aec32d85`, Tasks1–6 accepted, owner B RECEIVED and source fixes independently reviewed. [Self-contained actual source/claims/threat-model packet](../reviews/vault-broker-phase1-review-packet.md), [all12 B dispositions](vault-owner-findings-b-2026-11-03/b-mapping.md), [Task7 exact commands/raw/provenance](vault-owner-findings-b-2026-11-03/task-7-report.md).
+
+**Global C1 is NOT met across running Nova.** It remains the full Phase1 acceptance requirement. Core still handles legacy credential values and app forms are plaintext until P1b; no module-only canary, heap snapshot, metadata route or browser helper proves a whole-product cutover. P1b/P1c are unbuilt/unproven. No full Phase1, credentialed M10j/M10k, physical keychain, new app surface or universal OS containment claim follows.
+
+Current impacted qualification was necessary because the broker spawn helper changed in Task6's final lifecycle fix while its focused77 checks omitted the broad A/B/legacy/canary/backup/mesh surfaces. This did not repeat the old119/77/UI suites. Check02 passed46/46 backup/recovery/sync/promotion and actual two-process drill; check04 naturally passed18/18 B3; check05 passed138 of139 with the one unchanged optional desktop-keychain skip (no secret-tool or desktop session). Check01 recorded68 individual passes and one B3 failure before an owned-container stop137; it is an incomplete failed attempt, not a successful suite/guard run. Canary+heap assertions are among its individual passes; there is no claim of a completed green broad qualification from01. Diagnostic03 passed1/1 only with force-exit and is diagnostic, not natural proof. Natural04 did not reproduce the initial failure: its cause remains **UNPROVEN**; a possible fixture abort is not a confirmed diagnosis. Ruling28 permits that one bounded natural run plus only never-reached files; ordinary full CI remains mandatory. No code/assertions/skips/timeouts were changed. Counts overlap and are not summed.
+
+| Gate | Current broker/P1a evidence | Full Phase1 disposition |
+|---|---|---|
+| 1 no canary in answers/logs/records/files/backups/bundles/sync | `broker-canary.test.ts` individually passed in incomplete01, checking eight forms and synthetic broker/client/diagnostics/backup surfaces. Task6 metadata projection/exclusions have accepted combined49 evidence. | **Partial.** Actual Core consumer logs/memory/transcripts/receipts/Work Ledger/sync still use legacy values; no whole-product pass. |
+| 2 no canary in Core heap | Separate client-only Core process retains all responses, actual v8 snapshot with positive controls; assertion passed inside failed01. | **Partial.** Live app heap after actual consumer flows remains P1b/P1c. |
+| 3 non-bound origin refused | Verbs/origin/egress/approval controls in01/05; near misses, redirect and pinned loopback TLS checks. | Broker HTTP scope only; web framing/form/relay enforcement unbuilt P1b. |
+| 4 broker policy authority | Natural05 A/B policy, sensitive/passkey/rate/replay/expiry/full input binding; approved Task5 proofs. | Broker proof; actual person-facing app approval flows/ledger wiring remain P1b. |
+| 5 fixed protocol/no getter | Boundary and real IPC checks individually passed01; accepted Task6 boundary77 unchanged. Seven verbs+hello/unlock/lock; no raw getter/ticket/new listener. | Broker boundary proof; does not mean legacy Core has no read API. |
+| 6 no inbound network surface | Source and actual socket/listener/target-refusal checks in01; egress/local TLS. All completed current runs' egress/tripwire logs empty. | Broker-only no-listener proof; same-user/child-process limitations remain, no universal OS containment. |
+| 7 store/no escrow/rekey | Natural05 store and historical live-review fixes; AEAD/tamper/swap/delete/revocation/authenticated recovery and holder keys. | Broker store proof. S6 already-received holder material/old headers cannot be retracted. |
+| 8 migration | Natural05 metadata epochs/equality-oracle controls; source inspection/rekey/captured snapshot assertions in01; no assertion weakening. | Broker migration proof under cooperating writers; Gmail quiescence/uncertainty limits. Actual Core boot barrier/cards/consumer switch unbuilt. |
+| 9 backup/sync/promotion | Natural02 46/46 actual backup/recovery and legacy mesh/promotion/drill; natural05 store/adoption/legacy replication; accepted Task6 exclusions. | **Partial.** Broker outbox transport and promotion after actual P1b cutover remain unbuilt/unproven; legacy drill is not broker-enabled whole-product promotion proof. S4 old checkpoint copies remain. |
+| 10 every consumer | HTTP/sign/verify/process module stand-ins; natural04 B3 lifetime/fake keychain context and05 A/B checks. | Actual provider streaming/SSE, connectors, WebSocket, Gmail OAuth, browser sign-ins, infra multi-values and holder transport remain P1b; no credentialed J/K proof. |
+| 11 fresh-user/claims | No new UI/copy surface. Current source documentation explicitly stages claims. | Fresh-user/full product claims gate remains P1c; Health285 owner entry recognition pending. |
+| 12 independent reviews/current packet | B received; all12 entries mapped; accepted Tasks1–6 reviews including Task6 I1/I2 closure; current complete source/hash manifest published. | Root Task7 scoped review then a fresh most-capable whole-code+new live adversarial seat still pending (Ruling27); existing tests are not that gate. |
+
+P1a named NOTES: supervisor start/private IPC and joined lifetime, fixed-home marker-bound reset/key removal, SECRET_DIRS/git/journal/backup/checkpoint exclusion, production diagnostics metadata (required legacy scan failure503/no attachment), fixed person-only seal module and plain LEDGER/ROADMAP/inventory are applied. [Exact NOTE-by-NOTE mapping](../plans/vault-broker-phase1.md#notes-for-track-1). Module proof is not actual app form/consumer cutover. C18/C19 remain backend active/app Not shipped,51row282 mapping/historical70 gaps unchanged, Secrets partial.
+
+Root gates remain unchecked: fresh Task7 spec/quality review, fresh final whole-code/live adversarial probes, ordinary exact-head all-required CI, same-PR final plain-language record, matched normal merge and authorized preview. Owner B is no longer missing; Q6/reveal/size/factors and Health285 approval are not inferred. [Rulings22–28 and costs](vault-owner-findings-b-2026-11-03/rulings-22-27.md).
+
+## Historical qualification records (dates/source scopes retained)
 
 **Sources:** the ADR, `docs/plans/vault-broker.md` (§10, "The Phase 1 gate"), and the build plan, `docs/plans/vault-broker-phase1.md`.
 
-**Scope:** Phase 1 lands in three PRs, and this file grows with each. Only P1a's section exists so far. The full gate, the adversarial review and the second-model review's findings are P1c's.
+**Historical scope:** the following2026-11-01 record predates owner B/current integration. Read the current table above for status; these outcomes are not new44a8 executions.
 
 **The run:** 2026-11-01 (UTC), on this machine (Linux 6.18, WSL2, Node 26.3.1).
 - Temp folders came from `mkdtemp(os.tmpdir())`, with canaries only, the file key store only (no keychain was touched), and stand-ins on 127.0.0.1 only.
 - No real vault, key file or secret on this machine was read.
 - The no-Kubernetes tripwire was armed for every run.
 
-## Takeover live review — completed, owner B still pending
+## Historical takeover live review — B was pending at this checkpoint
 
 Independent review pinned `8ca4b827` and verified all three test-first fixes at `3faa3463`; the coordinated branch merges main without rebasing. Final independent suite: 88 passed, one real-keychain skip, zero failed. The coordinator independently reran all six live synthetic probes, with the same passing outcomes. After merging M10h and resolving Nova-owned entries to retain both broker/ and capture/, disposable Docker verification passed 89 tests with one real-keychain skip (90 total), including all broker/legacy-vault tests and the existing M7 factory-reset browser flow. Typecheck and diff check passed. Broker/client/legacy-writer sources are byte-for-byte identical to independently reviewed `3faa3463`. Report: `docs/reviews/vault-independent-live-review-2026-11-01.md`; individual RED/GREEN records: `vault-proposal-policy-review-fixes.md`, `vault-migration-recovery-review-fix.md`, `vault-proposal-card-review-fix.md` in this directory.
 
-S4 and S6 remain permitted, demonstrated deferrals: old checkpoints retain old credentials/keys, and revocation cannot retract already delivered holder material. Core consumers remain on the legacy vault; no live confidentiality cutover is claimed. The owner’s second findings set B, exact-head CI and merge-time Track 1 NOTES still gate merging #275.
+S4 and S6 remain permitted, demonstrated deferrals: old checkpoints retain old credentials/keys, and revocation cannot retract already delivered holder material. Core consumers remain on the legacy vault; no live confidentiality cutover is claimed. At that historical checkpoint B was pending; it is now received, source fixes/named P1a NOTES accepted, and the current root final-review/CI gates above still apply.
 
 ## P1a: the broker, Nova Vault, fixed verbs and IPC
 

@@ -1,0 +1,35 @@
+# Root rulings22–29: decisions, reasons and costs
+
+Earlier rulings1–21 remain in the [historical evidence index](../vault-owner-findings-b-2026-11-03.md); none is replaced. These eight later rulings are the controller’s decisions, not owner approvals. The private progress log, backend archive and preview data are not published.
+
+## Ruling 22
+
+Ruling: Task6 reset uses authenticated fixed-home pending-reset validation and supervisor-owned stop/reset-only child cleanup, with call-scoped internal completion attestation bound to the same marker and revalidated before deletion; no persistent receipt/store. Why: it preserves cleanup ordering and interrupted-reset idempotence without leaving a new authority artifact. Cost if wrong: standalone Core reset with broker data and ambiguous retained runs refuse until supervised cleanup/recovery; no caller JSON/boolean bypass, unknown-run deletion, stalePID kill or key recreation is allowed.
+
+## Ruling 23
+
+Ruling: Task6 keychain removal propagates genuine CLI failures instead of ignoring nonzero status; tolerate only documented item-not-found outcomes and keep ambiguous/unreachable keychain cleanup fail-closed. Why: supervisor/reset must not report device/sign keys removed when deletion failed. Cost if wrong: reset may require keychain recovery/operator action, especially conservative auto mode; explicit file-mode fixtures remain usable, platform semantics need primary-source verification/fake distinction and no physical Windows/mac proof is claimed.
+
+## Ruling 24
+
+Ruling: narrow the temporary qualified-main wait to diagnostics composition and final combined-source qualification; resume independently implementable Core private bootstrap/client lifecycle and fixed public seal serving now. Why: inspected286Core/server diff is additive Caps/diagnostics imports/options/routes/return and runner.caps; private IPC bootstrap/seal serving does not consume those interfaces. The prior rootbrief broadly held allCore/server work, stricter than bindingTask6plan which only forbids copying unmerged diagnostics composition. Cost if wrong: concurrent independent work in different branches can create Core/server merge conflicts and require scoped retesting; checkpoint changes, merge only qualified main neverrebase when root sends exactSHA, preserve Caps/503/R1, no copying unmerged286 code or finalTask6 qualification before merge. No UI/consumer cutover or gate waiver.
+
+## Ruling 25
+
+Ruling: Task6 review keeps a complete master618..FINAL package, but its primary diff may omit only byte-identical evidence artifacts inherited from qualifiedmain702dd under docs/evidence/health-backend-wiring-2026-11-03/. Record every omitted path/blob and verify exact equality to702dd; include ALL Task6source/tests/docs, integration resolutions and backend runtime/test contract changes. Why: preliminary immutablec3bc full diff602241bytes/120paths repeats the independently accepted286 raw evidence, obscuring the actualTask6 trust-boundary review and wasting reviewer context. Cost if wrong: taskreviewer relies on earlier component qualification for those exact historical records rather than rereading them; fullmaster+originalreports/sourcepack remain available for any named concrete doubt. If any artifact diverges, it must be included; no production/test file or Task6 evidence is excluded, no security/cutover/wholebranch gate waiver.
+
+## Ruling 26
+
+Ruling: correct combined45 fixture environment with minimal own private Git metadata, not a production/test assertion change: validate actual ownHEAD commit object/hash, ownHEAD/emptyrefs/minimal safe config, read-only ownmetadata withpointeroverlay or exactgitdirpath target; no sharedGit/common-dir/config/ownerHOME mount. Why: Self.build needs Gitidentity, but worktree.git references host-only metadata outside the isolated readonly mount; the same qualifiedbackend harness issue was already solved this way. Cost if wrong: fixture sees a deliberately limited Gitidentity and cannot establish full checkout/revision integrity; record actualhostHEAD, visibleGitSHA and exact uncommittedsource/test blobs contemporaneously, never claim finalsourcecommit provenance from historicalbase. Keep about.build assertion/no matcher/source weakenings, preservefailed45 and distinct newrawcommands; actualcombinedsuite/compilerrequired after real Supervisor boundary fix.
+
+## Ruling 27
+
+Ruling: Task7's fresh most-capable final whole-branch review will also perform the required fresh independent live adversarial probes, as one comprehensive independent gate after a separate task-scoped review of Task7 publication/test evidence. Why: original takeover65–74 requires a second adversarial review with live probes/temp homes and applied NOTES, not two redundant whole-broker reviewer passes; both required coverage types can be owned by the same fresh independent final reviewer. Cost if wrong: that seat must budget full-source reading plus live attack design in one context; root must reject missing coverage/probe evidence and obtain any additional focused review actually needed. No Task6reviewseat reused as final, no existing test pass substituted for live probes, no source/claim/canary/CI/ownerB gate waived.
+
+## Ruling 28
+
+Ruling: after preserving Task7broad01failedB3/heldresourceattempt(exit137 exactownedcontainerstop) and onefocusedTAP force-exit diagnostic03thatpassedwithoutreproducingoriginalassertion, permit ONE bounded natural fullB3file TAP invocation plus only never-reached remainingbrokerfiles. Why: broad01cannotqualifythosepaths, heldoriginalbroker/launcher/programsuggests pre-SIGKILLfixtureabortbutcauseNOTestablished; diagnostic03isNOTnaturalpassingproof. Cost if wrong: an intermittent realissuecanescapeonepassingrerun; publishoriginalfailure/unprovencausality, mandatoryordinaryfullCIremains, repeatedfailure/hangrequiresconcreteevidencedebuggingbeforefurtherretries/no assertionweakening/sourcefixguess. DoNOTrepeatpassed46recoverydrills/Task6green77/119/othercompletedgreens. No sourceorassertionchangeauthorizedbythisruling; currentTask7writerretained.
+
+## Ruling 29
+
+Ruling: retain the full `git diff --check` result with38 trailing-space diagnostics from newly copied hash-sealed Task6 stdout as raw-evidence formatting. The prose/tooling diff check may exclude only explicitly listed byte-verified immutable Task6 stdout paths. Why: rewriting captured output would destroy the required original byte-level evidence; the14 exact paths are independently compared to retained private originals and their SHA256/byte counts recorded. No source/test/general-folder exemption, Git config change, whitespace rewrite or claim that full diff-check passed. Cost if wrong: the full generic whitespace check remains nonzero on authentic raw output; reviewers must distinguish captured-output spacing from author prose. Full failed check and exact filtered command/exclusion/hash proof are published. Git-check stdout/stderr are reversibly encoded in JSON with their hashes, retaining original private stream bytes without creating a new whitespace exemption.

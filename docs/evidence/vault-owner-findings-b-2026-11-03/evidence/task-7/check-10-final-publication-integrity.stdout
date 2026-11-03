@@ -1,0 +1,4 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{"original_artifacts":250,"original_bytes":796493,"public_artifacts":480,"public_bytes":1990707,"all_src_unchanged":256,"packet_complete_files":30,"broker_boundary":2896,"new_report_links_checked":285,"result":"PASS"}
+no-Kubernetes tripwire: never fired
+Task7 egress guard: never fired

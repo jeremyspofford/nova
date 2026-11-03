@@ -1,0 +1,31 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ private Core bootstrap asks parent over IPC, accepts only fixed role context and rejects malformed delivery (1.763944ms)
+✔ Core owns only its metadata client, closes it permanently, and standalone Core honestly has no broker (291.40259ms)
+✔ a deliberately closed metadata client cannot reconnect with its retained role token (111.92088ms)
+✔ src/broker is its own tree: Node’s standard library and its own files, nothing from core, no package (3.912206ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (52.922869ms)
+✔ the size budget: no more than 3,000 lines of broker code, tests aside, so one reviewer can read all of it (0.526477ms)
+✔ no network surface in the source: no HTTP server, nothing listens on a port, no inspector (2.113394ms)
+✔ the fixed protocol: seven verbs, three messages, a fixed refusal list (0.987858ms)
+✔ the client has no method that returns a value: no get, resolve, reveal or export (0.208264ms)
+(node:65) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the process: permission model, empty environment, a 0600 socket in a 0700 folder, and nothing else listening (97.195663ms)
+(node:72) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the protocol: hello with a token, seven verbs and three messages; everything else refused (140.389692ms)
+(node:79) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ no network surface: no inet listener after every verb; a use aimed at an unbound host makes no connection; answers fit the schema (1520.983839ms)
+(node:330) SecurityWarning: The flag --allow-child-process must be used with extreme caution. It could invalidate the permission model.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ the launcher: the broker runs the bound program itself; a swapped binary gets nothing; no loader variables from core (1545.231587ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4252.115473
+no-Kubernetes tripwire: never fired

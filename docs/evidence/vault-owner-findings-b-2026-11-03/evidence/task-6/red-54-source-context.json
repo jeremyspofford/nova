@@ -1,0 +1,6 @@
+{
+  "baseline": "2827e53ba94c1f6589ddb7bed95ab2e849f1ccd4",
+  "replayed_file": "src/broker/spawn.ts",
+  "baseline_sha256": "6cbb0bc3758cb924d50836ebb7a1dd9754dda0c222066dfb0869ae79ca506f2c",
+  "restored_sha256": "10dd40750327b48fec944844a52fe3945eddd352492f83c97b1354f57d98faa8"
+}

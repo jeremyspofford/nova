@@ -1,0 +1,12 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ module boundary: outside src/core, only src/core/index.ts is imported (src/device: only mesh/wire.ts and models/hardware.ts) (4.318688ms)
+✔ core reaches the broker only through its client, and the client imports the broker’s types only (11.822665ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 320.016062
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,77 @@
+{
+  "at": "2026-11-03T11:04:50.981366+00:00",
+  "id": "df6db356d85891f661a628685e7efca90c4782d848a77f0b437a9d9a2d4e0644",
+  "command": [
+    "sh",
+    "-c",
+    "mkdir -m 700 \"$HOME\"; \"$@\"; result=$?; if [ -s /tmp/task7-egress.log ]; then cat /tmp/task7-egress.log >&2; exit 97; fi; echo \"Task7 egress guard: never fired\"; exit \"$result\"",
+    "task7",
+    "sh",
+    "scripts/tripwire.sh",
+    "env",
+    "NOVA_EGRESS_LOG=/tmp/task7-egress.log",
+    "node",
+    "--import",
+    "./tests/acceptance/egress-guard.ts",
+    "--test",
+    "--test-concurrency=1",
+    "--test-timeout=120000",
+    "tests/core/broker-canary.test.ts",
+    "tests/core/broker-egress.test.ts",
+    "tests/core/broker-store.test.ts",
+    "tests/core/broker-verbs.test.ts",
+    "tests/core/broker-ipc.test.ts",
+    "tests/core/broker-review-1.test.ts",
+    "tests/core/broker-owner-findings.test.ts",
+    "tests/core/broker-owner-findings-b-identity.test.ts",
+    "tests/core/broker-owner-findings-b-migration.test.ts",
+    "tests/core/broker-owner-findings-b-launch.test.ts",
+    "tests/core/broker-owner-findings-b-policy.test.ts",
+    "tests/core/broker-migration-recovery.test.ts",
+    "tests/core/broker-migration-source-inspection.test.ts",
+    "tests/core/broker-policy-proposals.test.ts",
+    "tests/core/broker-proposal-card.test.ts",
+    "tests/core/broker-boundary.test.ts",
+    "tests/core/vault.test.ts",
+    "tests/core/vault-owner-findings-b.test.ts",
+    "tests/core/provider-vault.test.ts"
+  ],
+  "mounts": [
+    {
+      "Type": "bind",
+      "Source": "/tmp/nova-task7-docker-home-wbdp4h82/git-identity",
+      "Destination": "/home/jeremy/workspace/nova-build/.git/worktrees/nova-build5",
+      "Mode": "",
+      "RW": false,
+      "Propagation": "rprivate"
+    },
+    {
+      "Type": "bind",
+      "Source": "/home/jeremy/.codex/worktrees/nova-vault-integration/nova-build",
+      "Destination": "/workspace",
+      "Mode": "",
+      "RW": false,
+      "Propagation": "rprivate"
+    },
+    {
+      "Type": "bind",
+      "Source": "/home/jeremy/.local/share/mise/installs/node/26.3.1",
+      "Destination": "/opt/node",
+      "Mode": "",
+      "RW": false,
+      "Propagation": "rprivate"
+    }
+  ],
+  "top_before": "PID                 PPID                ELAPSED             COMMAND\n89403               89380               03:38               sh -c mkdir -m 700 \"$HOME\"; \"$@\"; result=$?; if [ -s /tmp/task7-egress.log ]; then cat /tmp/task7-egress.log >&2; exit 97; fi; echo \"Task7 egress guard: never fired\"; exit \"$result\" task7 sh scripts/tripwire.sh env NOVA_EGRESS_LOG=/tmp/task7-egress.log node --import ./tests/acceptance/egress-guard.ts --test --test-concurrency=1 --test-timeout=120000 tests/core/broker-canary.test.ts tests/core/broker-egress.test.ts tests/core/broker-store.test.ts tests/core/broker-verbs.test.ts tests/core/broker-ipc.test.ts tests/core/broker-review-1.test.ts tests/core/broker-owner-findings.test.ts tests/core/broker-owner-findings-b-identity.test.ts tests/core/broker-owner-findings-b-migration.test.ts tests/core/broker-owner-findings-b-launch.test.ts tests/core/broker-owner-findings-b-policy.test.ts tests/core/broker-migration-recovery.test.ts tests/core/broker-migration-source-inspection.test.ts tests/core/broker-policy-proposals.test.ts tests/core/broker-proposal-card.test.ts tests/core/broker-boundary.test.ts tests/core/vault.test.ts tests/core/vault-owner-findings-b.test.ts tests/core/provider-vault.test.ts\n89417               89403               03:38               sh scripts/tripwire.sh env NOVA_EGRESS_LOG=/tmp/task7-egress.log node --import ./tests/acceptance/egress-guard.ts --test --test-concurrency=1 --test-timeout=120000 tests/core/broker-canary.test.ts tests/core/broker-egress.test.ts tests/core/broker-store.test.ts tests/core/broker-verbs.test.ts tests/core/broker-ipc.test.ts tests/core/broker-review-1.test.ts tests/core/broker-owner-findings.test.ts tests/core/broker-owner-findings-b-identity.test.ts tests/core/broker-owner-findings-b-migration.test.ts tests/core/broker-owner-findings-b-launch.test.ts tests/core/broker-owner-findings-b-policy.test.ts tests/core/broker-migration-recovery.test.ts tests/core/broker-migration-source-inspection.test.ts tests/core/broker-policy-proposals.test.ts tests/core/broker-proposal-card.test.ts tests/core/broker-boundary.test.ts tests/core/vault.test.ts tests/core/vault-owner-findings-b.test.ts tests/core/provider-vault.test.ts\n89428               89417               03:38               node --import ./tests/acceptance/egress-guard.ts --test --test-concurrency=1 --test-timeout=120000 tests/core/broker-canary.test.ts tests/core/broker-egress.test.ts tests/core/broker-store.test.ts tests/core/broker-verbs.test.ts tests/core/broker-ipc.test.ts tests/core/broker-review-1.test.ts tests/core/broker-owner-findings.test.ts tests/core/broker-owner-findings-b-identity.test.ts tests/core/broker-owner-findings-b-migration.test.ts tests/core/broker-owner-findings-b-launch.test.ts tests/core/broker-owner-findings-b-policy.test.ts tests/core/broker-migration-recovery.test.ts tests/core/broker-migration-source-inspection.test.ts tests/core/broker-policy-proposals.test.ts tests/core/broker-proposal-card.test.ts tests/core/broker-boundary.test.ts tests/core/vault.test.ts tests/core/vault-owner-findings-b.test.ts tests/core/provider-vault.test.ts\n95080               89428               03:09               /opt/node/bin/node --test-coverage-functions=0 --test-concurrency=1 --inspect-publish-uid=stderr,http --inspect-port=127.0.0.1:9229 --stack-trace-limit=10 --report-signal=SIGUSR2 --test-coverage-lines=0 --test-isolation=process --heap-prof-interval=524288 --cpu-prof-interval=1000 --import=./tests/acceptance/egress-guard.ts --v8-pool-size=4 --trace-event-file-pattern=node_trace.${rotation}.log --secure-heap-min=2 --test-coverage-branches=0 --watch-kill-signal=SIGTERM --tls-cipher-list=TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:DHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA256:HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA --use-largepages=off --max-http-header-size=16384 --test-timeout=120000 --node-snapshot --secure-heap=0 --network-family-autoselection-attempt-timeout=500 --heapsnapshot-near-heap-limit=0 --import ./tests/acceptance/egress-guard.ts --test-timeout=120000 tests/core/broker-owner-findings-b-launch.test.ts\n96351               95080               02:43               /opt/node/bin/node --permission --allow-fs-read=/workspace/src/broker/ --allow-fs-read=/tmp/nova-owned-launch-Kdv4Hh/broker/ --allow-fs-write=/tmp/nova-owned-launch-Kdv4Hh/broker/ --allow-net --allow-child-process --no-experimental-sqlite --no-experimental-webstorage --disable-sigusr1 --diagnostic-dir=/tmp/nova-owned-launch-Kdv4Hh/broker --disable-warning=ExperimentalWarning /workspace/src/broker/main.ts /tmp/nova-owned-launch-Kdv4Hh/broker\n96598               96351               02:42               /opt/node/bin/node --allow-fs-read=/tmp/nova-owned-launch-Kdv4Hh/program.py --allow-fs-write=/tmp/nova-owned-launch-Kdv4Hh/broker/run/programs/nova-run-tHEMrk/ --disable-sigusr1 --disable-warning=ExperimentalWarning --disable-warning=SecurityWarning /workspace/src/broker/launch.ts run\n96604               96598               02:41               /usr/bin/python3 /tmp/nova-owned-launch-Kdv4Hh/program.py\n96605               96604               02:41               /usr/bin/python3 /tmp/nova-owned-launch-Kdv4Hh/program.py\n",
+  "reason": "Existing B3 SIGKILL fixture failed before killing original broker; after all cases file process held by original live broker/launcher/target. Exact Task7 argv/workspace read-only mount ownership verified; stop only this container. Failure details require scoped TAP diagnostic; no production finding inferred.",
+  "stop_argv": [
+    "docker",
+    "stop",
+    "--timeout",
+    "2",
+    "df6db356d85891f661a628685e7efca90c4782d848a77f0b437a9d9a2d4e0644"
+  ],
+  "exit": 0,
+  "stdout": "df6db356d85891f661a628685e7efca90c4782d848a77f0b437a9d9a2d4e0644\n",
+  "stderr": ""
+}

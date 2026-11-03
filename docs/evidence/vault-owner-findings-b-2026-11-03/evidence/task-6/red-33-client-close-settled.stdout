@@ -1,0 +1,28 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ a deliberately closed metadata client cannot reconnect with its retained role token (156.128882ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 496.80602
+
+✖ failing tests:
+
+test at tests/core/broker-bootstrap.test.ts:46:1
+✖ a deliberately closed metadata client cannot reconnect with its retained role token (156.128882ms)
+  AssertionError [ERR_ASSERTION]: Missing expected rejection.
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (file:///workspace/tests/core/broker-bootstrap.test.ts:53:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /closed/i,
+    operator: 'rejects',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

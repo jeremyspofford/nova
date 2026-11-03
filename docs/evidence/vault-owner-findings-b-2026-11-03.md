@@ -1,6 +1,12 @@
-# Vault findings B — staged evidence
+# Vault findings B — current publication and historical staged evidence
 
-Unmerged P1a work. Owner B received; all fixes/integration/live adversarial/fullCI/merge not yet complete. Earlier A/S4/S6 source and limits preserved. Main merged without rebase d425; plan/spec2c; first B1/B4 source939.
+Owner B is **RECEIVED**; Tasks1–6 source fixes/integration are independently approved at `44a8deb563324ac2847c02dc82dfc6e3aec32d85`. Task7 publication/impacted-check implementation complete; root scoped review, fresh final whole-code/live probes and ordinary exact-head full CI/matched merge/preview remain pending. Global C1 remains a full Phase1 requirement **not met by running Nova** until actual P1b consumer/form cutover. No whole-phase/credentialed J/K/Health285 approval or app-surface promotion is inferred. S4/S6 retained-copy limits and Task2 M1 per-name cost remain explicit.
+
+Current: [all12 B dispositions](vault-owner-findings-b-2026-11-03/b-mapping.md), [self-contained actual source packet](../reviews/vault-broker-phase1-review-packet.md), [full current phase gate](vault-broker-p1-gate.md), [Task7 commands/results/raw/provenance](vault-owner-findings-b-2026-11-03/task-7-report.md), [artifact README](vault-owner-findings-b-2026-11-03/README.md), [extended SHA256 manifest](vault-owner-findings-b-2026-11-03/manifest.json), [original250-artifact seal](vault-owner-findings-b-2026-11-03/manifest-tasks1-5.json), [source blobs/hash/line manifest](vault-owner-findings-b-2026-11-03/source-manifest-44a8.json).
+
+Task6: [complete implementation/fix report](vault-owner-findings-b-2026-11-03/task-6-report.md), [initial Important findings I1/I2](vault-owner-findings-b-2026-11-03/task-6-review.md), [scoped closure0newC/I/M](vault-owner-findings-b-2026-11-03/task-6-fix-1-review.md). All61 attempts, failures/warnings and actual source/context receipts are retained separately; reports are linked once rather than re-inlined. [Root rulings22–29, reasons/costs](vault-owner-findings-b-2026-11-03/rulings-22-27.md) supplement the earlier21 rulings preserved below. Task7 broad01 failed/incomplete137, diagnostic03 force-exit only, natural04 18/18, remaining05 138/139 with one unchanged desktop skip, recovery02 46/46. Failure cause remains unproven; ordinary full CI required.
+
+The following original inline Task1–3 reports/rulings and Task4–5 checkpoint entries are preserved as historical records; their then-pending Task6/7/B statuses are not current claims. The owner reviewer ran no tests from Windows; synthetic RED/GREEN evidence belongs to the implementers/reviewers.
 
 ## Task1 full implementer report
 

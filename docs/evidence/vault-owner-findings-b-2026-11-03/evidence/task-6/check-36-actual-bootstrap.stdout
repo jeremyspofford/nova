@@ -1,0 +1,13 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ closing during the initial metadata handshake settles the pending caller without reconnecting (107.359915ms)
+✔ actual supervisor starts broker before Core IPC, rotates roles on restart, uses release code and stops both (2989.535335ms)
+✔ a restore under the supervisor: it restarts Nova itself, twice in a row if asked, and that is no crash (2846.576603ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6699.290065
+no-Kubernetes tripwire: never fired

@@ -2,9 +2,9 @@
 
 **Sources:** the ADR, `docs/plans/vault-broker.md` (binding, with its Owner decisions); the owner's text in `docs/builder-packet/nova-vault-broker-design-2026-10-31.md`, `INPUT-2026-10-31-VAULT-BROKER-INSTRUCTION.md` and `INPUT-2026-10-31-VAULT-BROKER-DECISIONS.md`.
 
-**Status:** P1a (this PR) is built, and revised after its first adversarial review (§9). P1b and P1c aren't.
+**Status (2026-11-03):** P1a source Tasks1–6 accepted at44a8, owner B received and source fixes independently reviewed. Task7 publication/impacted checks are recorded in the [current evidence](../evidence/vault-owner-findings-b-2026-11-03.md); fresh whole-branch/live review and ordinary exact-head CI/merge remain root gates. P1b/P1c are unbuilt/unproven. Global C1 is still a full Phase1 requirement and is **not met by running Nova**: legacy Core consumers and plaintext forms remain.
 
-The honest-claims rule governs this document: within Nova, the capability to read a credential's value exists only inside the broker (its process, and the launcher it starts itself for a program it hands a credential to). Nothing here says more than that.
+The honest-claims rule governs the target requirement in this document; it is not a current whole-app guarantee: within Nova, the capability to read a credential's value exists only inside the broker (its process, and the launcher it starts itself for a program it hands a credential to). Nothing here says more than that.
 
 ## 1. The three PRs
 
@@ -31,7 +31,7 @@ The ADR's §13 splits Phase 1 into three PRs. This plan keeps that split, with o
 
 ## 2. What P1a builds
 
-`src/broker/` is 2,666 lines, under the ADR's budget of 3,000. That leaves 334 lines for P1b's relay, which is tight (§7).
+`src/broker/` is **2,896/3,000** lines under the existing boundary count at44a8, leaving104. The budget is unchanged; this is not a claim that P1b streaming/relay fits. Full current code and immutable file hashes are in the [review packet](../reviews/vault-broker-phase1-review-packet.md).
 
 | File | What it is |
 |---|---|
@@ -167,7 +167,7 @@ Each change is unavoidable once a `broker/` folder can exist in a home. Each is 
 ## 7. Questions for the owner
 
 1. **Q6's reveal:** the terminal launcher gated by the passphrase, or a native helper gated by biometrics (§4)?
-2. **The size budget.** P1a uses 2,666 of the 3,000 lines. The browser relay (CDP pass-through, origin checks, scrubbing every message) is the larger part of P1b. Raise the budget to about 3,500 for Phase 1, or have the relay live in the launcher's own file and count it?
+2. **The size budget.** P1a currently uses2,896 of the unchanged3,000 lines (historical question below remains parked, not approved). The browser relay (CDP pass-through, origin checks, scrubbing every message) is the larger part of P1b. Raise the budget to about 3,500 for Phase 1, or have the relay live in the launcher's own file and count it?
 3. **Adding factors after setup** (§4): `unlock` with `add`, gated by a passkey where one is registered?
 
 ## 8. The tests
@@ -203,7 +203,24 @@ Each finding was reproduced as a test first, in `tests/core/broker-review-1.test
 
 ## NOTES for Track 1
 
-Proposed patches for Track 1 to apply. Nothing below is applied by this PR.
+Current NOTES disposition at44a8 (accepted Task6). The original numbered handoff below is retained as historical requirements; the table is authoritative about what is actually applied. [Complete report](../evidence/vault-owner-findings-b-2026-11-03/task-6-report.md), [initial review](../evidence/vault-owner-findings-b-2026-11-03/task-6-review.md), [scoped I1/I2 closure](../evidence/vault-owner-findings-b-2026-11-03/task-6-fix-1-review.md).
+
+| NOTE | Actual P1a status and proof | Remaining work/limit |
+|---|---|---|
+| 1 supervisor start/ownership | Applied: fixed release broker before Core; private role token IPC, restart/safe mode, stop/reset/release lifecycle. `tests/supervisor/broker-lifecycle.test.ts`; final I1 rollback admission and I2 joined start/reset/stop/close proofs77/9. | Health rendered affordance/audit wiring P1b; old unsupported releases get no credential context. Failure keeps evidence; timeout is not physical exit. |
+| 2 Core wiring | Private bootstrap/client ownership applied: `tests/core/broker-bootstrap.test.ts`, `broker-ipc.test.ts`. | Work Ledger onRecord/sequence/Health, migration boot barrier/proposals, all actual consumers/secret-env refusal and ingest changes remain P1b. Core still constructs/reads legacy Vault. |
+| 3 reset | Applied: fixed-home authenticated marker revalidated, joined owned shutdown then reset-only broker key cleanup, exact device/sign accounts, then directory removal. `broker-reset-lifecycle.test.ts`, `broker-reset-keys.test.ts`, supervisor lifecycle. | Fake CLI/file stores only; genuine keychain failures refuse, missing device identity retains data. No physical Windows/macOS proof. |
+| 4 diagnostics | Metadata projection applied through actual guarded production composition: count/kind/lock/mode/problem only; `broker-diagnostics.test.ts` and existing diagnostics-composition tests. | Legacy scanning/scrubbing remains required until consumer cutover; scan failure503/no attachment. No generic free-text privacy guarantee or Health button. |
+| 5 sealed console entry | Fixed person-only `/api/v1/broker/seal.js` module serving applied; actual browser module seals→real broker proof in `broker-seal-module.test.ts`. | Plaintext app forms/routes are unchanged until P1b. No owner entry recognition or app cutover claimed. |
+| 6 dependencies/package | No new dependency/script. | None introduced. |
+| 7 schema | No broker credential rows in nova.db. | Work Ledger record wiring is later and is not a credential store. |
+| 8 LEDGER | Current unmerged plain-language entry and partial claims applied. | Main merge entry/qualification finalization stays root-owned. |
+| 9 ROADMAP | Current P1a/remaining P1b/P1c status applied. | Root review/CI/merge still pending. |
+| 10 inventory | Secrets stays Building/Partial;51row282 mapping/historical70 gaps and C18/C19 backend-active/app-Not-shipped retained. | Health285 entry recognition pending; no app promotion. |
+| 11 checkpoints/S4 | Existing broker exclusion verified by `broker-exclusions.test.ts`, backup/checkpoint suites. | Old checkpoint copies of pre-migration vault/key/Era2 files remain a stated limit; no retroactive erasure claim. Proposed rewriting/deleting old copies below has not been implemented or required to redefine S4. |
+| 12 client API | No launch/migrateFinish/getter/ticket. `broker-boundary.test.ts`; migrateStage takes no folder. | Actual consumer/relay integration P1b. |
+
+SECRET_DIRS/git/journal/backup/checkpoint and sync broker exclusions are verified separately; S6 retained holder data remains explicit. The original historical proposed text follows; its dates/counts and aspirational cutover sentences are not new current claims.
 
 **1. Starting the broker** (`src/supervisor/supervisor.ts`; P1b).
 - Start the broker as a second child, before the Nova server, with `startBroker(join(home, 'broker'), { keyMode })` from `src/broker/spawn.ts`.
@@ -241,7 +258,7 @@ Proposed patches for Track 1 to apply. Nothing below is applied by this PR.
 
 **3. A factory reset** (`src/core/resilience/reset.ts`; required before the broker runs in a home with a keychain).
 - `broker/` is now one of Nova's own entries (this PR), so a reset removes the folder, and with it a file-held device key.
-- Still owed: the reset stops the broker first (supervisor), and removes the keychain items `nova-broker / device-<id>` and `sign-<id>` (id from `broker/device.json`). The broker's `Store.forget()` does the same from inside the broker.
+- Applied by Task6: the reset stops the broker first (supervisor), and removes the keychain items `nova-broker / device-<id>` and `sign-<id>` (id from `broker/device.json`). The broker's `Store.forget()` does the same from inside the broker.
 
 **4. Diagnostics** (`src/core/diagnostics/index.ts`; P1b).
 - Once the switch lands, `knownSecrets` loses `core.vault.get` for credentials.

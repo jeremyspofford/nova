@@ -1,0 +1,5 @@
+{
+  "head": "2827e53ba94c1f6589ddb7bed95ab2e849f1ccd4",
+  "probe_sha256": "11b210854f4809f2dd8421b5330555c148318230276c351020bc571b849d01f6",
+  "source": "immutable Task6 fixture prefix and same injected cleanup failure, new rollback assertion; no source modifications"
+}

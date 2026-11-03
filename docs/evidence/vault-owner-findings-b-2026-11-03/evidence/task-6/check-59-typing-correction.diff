@@ -1,0 +1,11 @@
+--- before-compiler59
++++ after-compiler59
+@@ -340,7 +340,7 @@
+       requested = true;
+       let settled = false, secondSettled = false;
+       closing = f.sup.close().then(() => ({ ok: true }), (error: Error) => ({ ok: false, error })).then((r) => { settled = true; return r; });
+-      const second = f.sup.close().then(() => ({ ok: true }), (error: Error) => ({ ok: false, error })).then((r) => { secondSettled = true; return r; });
++      const second: Promise<{ ok: boolean; error?: Error }> = f.sup.close().then(() => ({ ok: true }), (error: Error) => ({ ok: false, error })).then((r) => { secondSettled = true; return r; });
+       await new Promise((r) => setTimeout(r, 60));
+       const before = { settled, secondSettled, pidFile: existsSync(join(f.sup.o.dir, 'supervisor.pid')) };
+       process.kill(pid, 0); // The controlled child is physically alive at this observation.

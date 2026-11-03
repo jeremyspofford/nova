@@ -1,0 +1,32 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ failed broker owned shutdown never starts replacement Core or reports broker running (240.069545ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 558.984752
+
+✖ failing tests:
+
+test at tests/supervisor/broker-lifecycle.test.ts:160:1
+✖ failed broker owned shutdown never starts replacement Core or reports broker running (240.069545ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'running'
+  - 'failed'
+  
+      at TestContext.<anonymous> (file:///workspace/tests/supervisor/broker-lifecycle.test.ts:169:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'running',
+    expected: 'failed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

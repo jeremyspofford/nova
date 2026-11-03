@@ -1,0 +1,31 @@
+{
+  "started_at": "2026-11-03T11:16:00.888534+00:00",
+  "ended_at": "2026-11-03T11:16:00.903559+00:00",
+  "cwd": "/home/jeremy/.codex/worktrees/nova-vault-integration/nova-build",
+  "env": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/tmp",
+    "LANG": "C.UTF-8",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null"
+  },
+  "argv": [
+    "git",
+    "diff",
+    "--cached",
+    "--check",
+    "--",
+    ".",
+    ":(exclude)docs/evidence/vault-owner-findings-b-2026-11-03/evidence/task-6/*.stdout"
+  ],
+  "exit_code": 0,
+  "scope": "Host read-only Git index publication check; runtime tests remain isolated as recorded. Original raw evidence is never rewritten.",
+  "stdout": "",
+  "stdout_bytes": 0,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr": "",
+  "stderr_bytes": 0,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "publication_encoding": "Streams retained as exact reversible JSON strings with byte count/SHA256; private original stream files unchanged. No whitespace rewritten.",
+  "status": "Historical initial glob-filtered check, superseded by check09 exact-path/byte-verified exclusions under Ruling29."
+}

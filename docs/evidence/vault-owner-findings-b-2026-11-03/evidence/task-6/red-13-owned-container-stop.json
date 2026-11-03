@@ -1,0 +1,21 @@
+{
+  "id": "ed19cc8a4e3dfc0a9d84e2d6fafd96bccaccee1bafd5f0c353667088e5b9722d",
+  "command": [
+    "sh",
+    "-c",
+    "mkdir -m 700 \"$HOME\" && exec \"$@\"",
+    "task6",
+    "sh",
+    "scripts/tripwire.sh",
+    "node",
+    "--test",
+    "--test-name-pattern=failed broker owned",
+    "--test-concurrency=1",
+    "--test-timeout=10000",
+    "tests/supervisor/broker-lifecycle.test.ts"
+  ],
+  "reason": "failed assertion exposed control socket leak; stopped exact owned fixture container",
+  "exit": 0,
+  "stdout": "Flag --time has been deprecated, use --timeout instead\ned19cc8a4e3dfc0a9d84e2d6fafd96bccaccee1bafd5f0c353667088e5b9722d\n",
+  "stderr": ""
+}
