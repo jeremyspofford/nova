@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Supervisor } from '../../src/supervisor/supervisor.ts';
 import { fakeRepo, fakeRelease, git, FAST } from './fake.ts';
 import { Person } from '../support/broker-support.ts';
+import { startBroker } from '../../src/broker/spawn.ts';
 import { fileSha256 } from '../../src/broker/origin.ts';
 import { readMark } from '../../src/core/resilience/home-mark.ts';
 import { open } from '../core/resilience-support.ts';
@@ -267,4 +268,172 @@ test('supervisor refuses a foreign home before broker retries or problem writes'
     assert.equal((db.prepare('SELECT count(*) AS n FROM problem').get() as any).n, 0);
     assert.equal(existsSync(join(f.home, 'broker')), false);
   } finally { db.close(); await f.sup.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+// Review I1: cleanup failure must hold at the shared admission boundary, including rollback.
+test('rollback retains failed owned cleanup and refuses every replacement admission', { timeout: 20000 }, async () => {
+  const f = fixture((root) => {
+    const path = join(root, 'src/broker/main.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('await broker.stopPrograms();', 'await Promise.reject(new Error("injected owned cleanup failure"));'));
+  });
+  try {
+    fakeRelease(f.repo, 'v1.1.0', 'two');
+    await f.sup.slots.ensure('v1.1.0'); f.sup.slots.point('v1.1.0');
+    await f.sup.run(); await until(() => f.sup.state.mode === 'running', 'running');
+    const result = await f.sup.rollback({ auto: false, reason: 'cleanup contract', target: 'base' });
+    assert.equal(result.ok, false);
+    assert.equal(f.sup.server === null, true, 'rollback must not start Core after unconfirmed cleanup');
+    assert.equal(f.sup.state.mode, 'safe_mode');
+    assert.equal((f.sup.state as any).broker.status, 'failed');
+    assert.doesNotMatch(result.said, /kept .* running/);
+    await assert.rejects(() => f.sup.restart(), /cleanup/);
+    await assert.rejects(() => f.sup.recover(), /cleanup/);
+    assert.equal((await f.sup.rollback({ auto: false, reason: 'repeat', target: 'base' })).ok, false);
+    assert.equal(f.sup.server, null);
+    assert.ok(existsSync(join(f.home, 'broker/device.json')));
+  } finally { await f.sup.close().catch(() => {}); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+// Only the private copied release is instrumented, never production. The real broker child
+// reports its PID at a readiness barrier inside its allowed folder and waits for our release.
+function readinessFixture() {
+  return fixture((root) => {
+    const path = join(root, 'src/broker/main.ts');
+    let text = readFileSync(path, 'utf8');
+    text = "import { existsSync, writeFileSync } from 'node:fs';\nimport { join } from 'node:path';\n" + text;
+    text = text.replace("process.once('message'", `async function barrier(kind: string) {
+  const hold = join(dir!, 'test-hold-' + kind);
+  if (!existsSync(hold)) return;
+  writeFileSync(join(dir!, 'test-ready-' + kind), String(process.pid));
+  while (existsSync(hold)) await new Promise((r) => setTimeout(r, 10));
+}
+process.once('message'`);
+    text = text.replace('process.send!({ ready: true });', "await barrier('reset'); process.send!({ ready: true });");
+    text = text.replace('process.send!({ ready: true, socket:', "await barrier('normal'); process.send!({ ready: true, socket:");
+    text = text.replace('await broker.stopPrograms();', `if (existsSync(join(dir!, 'test-fail-stop'))) throw new Error('injected late cleanup failure'); await broker.stopPrograms();`);
+    writeFileSync(path, text);
+  });
+}
+
+for (const scenario of ['replacement', 'initial', 'reset', 'late-failure'] as const) {
+  test(`close joins owned startup readiness and cleanup: ${scenario}`, { timeout: 20000 }, async (t) => {
+    const f = readinessFixture(); const kind = scenario === 'reset' ? 'reset' : 'normal';
+    const hold = join(f.home, 'broker', 'test-hold-' + kind), ready = join(f.home, 'broker', 'test-ready-' + kind);
+    let starting: Promise<unknown> | undefined, closing: Promise<{ ok: boolean; error?: Error }> | undefined;
+    let requested = false, lateResume = 0, lateTimers = 0;
+    const resume = f.sup.services.resume.bind(f.sup.services), interval = globalThis.setInterval;
+    t.mock.method(f.sup.services, 'resume', async () => { if (requested) lateResume++; await resume(); });
+    t.mock.method(globalThis, 'setInterval', (...args: Parameters<typeof setInterval>) => { if (requested && args[1] === f.sup.t.healthEveryMs) lateTimers++; return interval(...args); });
+    try {
+      // The real Core creates the home mark before any broker storage, including initial boot.
+      const c = open(f.home); await c.close();
+      if (scenario !== 'initial') { await f.sup.run(); await until(() => f.sup.state.mode === 'running', 'initial pair'); }
+      if (scenario === 'reset') {
+        const c = open(f.home);
+        try { const staged = await c.reset.stage({ confirm: true, who: { principal: { kind: 'console' }, listener: 'console', address: '127.0.0.1' } }); await staged.done; } finally { await c.close(); }
+      }
+      mkdirSync(join(f.home, 'broker'), { recursive: true }); writeFileSync(hold, 'hold');
+      starting = (scenario === 'initial' ? f.sup.run() : f.sup.restart()).catch((e) => e);
+      await until(() => existsSync(ready), 'actual child waiting before readiness', 4000);
+      const pid = Number(readFileSync(ready, 'utf8')); process.kill(pid, 0);
+      if (scenario === 'late-failure') writeFileSync(join(f.home, 'broker/test-fail-stop'), 'fail');
+      requested = true;
+      let settled = false, secondSettled = false;
+      closing = f.sup.close().then(() => ({ ok: true }), (error: Error) => ({ ok: false, error })).then((r) => { settled = true; return r; });
+      const second: Promise<{ ok: boolean; error?: Error }> = f.sup.close().then(() => ({ ok: true }), (error: Error) => ({ ok: false, error })).then((r) => { secondSettled = true; return r; });
+      await new Promise((r) => setTimeout(r, 60));
+      const before = { settled, secondSettled, pidFile: existsSync(join(f.sup.o.dir, 'supervisor.pid')) };
+      process.kill(pid, 0); // The controlled child is physically alive at this observation.
+      rmSync(hold); await starting; const result = await closing, again = await second;
+      assert.deepEqual(before, { settled: false, secondSettled: false, pidFile: true }, 'both close callers must await the owned child, not only request cleanup');
+      assert.equal(result.ok, scenario !== 'late-failure'); assert.equal(again.ok, result.ok);
+      if (!result.ok) {
+        assert.match(result.error!.message, /cleanup/); assert.equal(again.error, result.error);
+        assert.equal(f.sup.state.mode, 'safe_mode'); assert.ok(existsSync(join(f.sup.o.dir, 'supervisor.pid')));
+      } else assert.equal(existsSync(join(f.sup.o.dir, 'supervisor.pid')), false);
+      assert.throws(() => process.kill(pid, 0), 'close joined actual child exit');
+      assert.equal(f.sup.server, null); assert.equal(lateResume, 0); assert.equal(lateTimers, 0);
+      if (scenario === 'reset') assert.ok(existsSync(join(f.home, 'factory-reset.json')), 'closing cannot continue reset directory deletion or boot');
+      assert.equal(existsSync(join(f.sup.o.dir, 'control.sock')), false);
+    } finally {
+      rmSync(hold, { force: true });
+      await starting; await closing; await f.sup.close().catch(() => {});
+      t.mock.restoreAll(); rmSync(f.dir, { recursive: true, force: true });
+    }
+  });
+}
+
+
+after(() => {
+  const log = process.env.NOVA_EGRESS_LOG;
+  if (log) { assert.equal(existsSync(log) ? readFileSync(log, 'utf8') : '', '', 'lifecycle egress guard never fired'); console.log('lifecycle egress guard: never fired'); }
+});
+
+test('failed release Core startup with confirmed broker cleanup can recover the previous release', { timeout: 20000 }, async () => {
+  const f = fixture((root) => {
+    const path = join(root, 'src/server.js');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('const waiting =', "if (marker === 'two' && process.env.NOVA_SANDBOX !== '1') process.exit(1);\nconst waiting ="));
+  });
+  try {
+    fakeRelease(f.repo, 'v1.1.0', 'two');
+    await f.sup.run(); await until(() => f.sup.state.mode === 'running', 'original ready');
+    const result = await f.sup.deploy('v1.1.0');
+    assert.equal(result.ok, true, result.said); assert.match(result.said, /Rolled back/);
+    assert.equal(f.sup.state.releases.current, 'base'); assert.equal(f.sup.state.mode, 'running');
+    assert.ok(f.sup.server); assert.equal((f.sup.state as any).broker.status, 'running');
+  } finally { await f.sup.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('failed broker readiness remains pending until the actual child closes', { timeout: 10000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'nova-start-failure-')), dir = join(root, 'broker'), source = join(root, 'source');
+  mkdirSync(dir); mkdirSync(source);
+  const hold = join(dir, 'hold'), at = join(dir, 'pid'); writeFileSync(hold, 'hold');
+  writeFileSync(join(source, 'main.ts'), `import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const dir = process.argv[2];
+process.once('message', async () => {
+  process.send({ ready: false, problem: 'synthetic refused startup' });
+  writeFileSync(join(dir, 'pid'), String(process.pid));
+  while (existsSync(join(dir, 'hold'))) await new Promise((r) => setTimeout(r, 10));
+  process.exit(1);
+});`);
+  let settled = false;
+  const pending = startBroker(dir, { source, keyMode: 'file', pipe: true }).then(() => { throw new Error('unexpected ready'); }, (e: Error) => e).then((r) => { settled = true; return r; });
+  try {
+    await until(() => existsSync(at), 'actual failing child', 2000);
+    const pid = Number(readFileSync(at, 'utf8')); await new Promise((r) => setTimeout(r, 60)); process.kill(pid, 0);
+    const early = settled; rmSync(hold); const error = await pending;
+    assert.equal(early, false, 'a failed ready message must not detach the child lifetime');
+    assert.match(error.message, /synthetic refused startup/);
+    assert.throws(() => process.kill(pid, 0));
+  } finally { rmSync(hold, { force: true }); await pending; rmSync(root, { recursive: true, force: true }); }
+});
+
+test('close joins a replacement stop already draining the actual Core child', { timeout: 15000 }, async () => {
+  const f = fixture((root) => {
+    const path = join(root, 'src/server.js');
+    let text = readFileSync(path, 'utf8').replace("import { readFileSync }", "import { readFileSync, existsSync, writeFileSync }");
+    text = text.replace("process.on('SIGTERM', () => process.exit(0));", `process.on('SIGTERM', async () => {
+      const hold = process.env.NOVA_HOME + '/broker/test-core-hold';
+      if (existsSync(hold)) {
+        writeFileSync(process.env.NOVA_HOME + '/broker/test-core-stopping', String(process.pid));
+        while (existsSync(hold)) await new Promise((r) => setTimeout(r, 10));
+      }
+      process.exit(0);
+    });`);
+    writeFileSync(path, text);
+  });
+  const hold = join(f.home, 'broker/test-core-hold'), at = join(f.home, 'broker/test-core-stopping');
+  let restarting: Promise<unknown> | undefined, closing: Promise<void> | undefined;
+  try {
+    await f.sup.run(); await until(() => f.sup.state.mode === 'running', 'running');
+    writeFileSync(hold, 'hold'); restarting = f.sup.restart();
+    await until(() => existsSync(at), 'Core physically draining');
+    const pid = Number(readFileSync(at, 'utf8')); let done = false;
+    closing = f.sup.close().then(() => { done = true; });
+    await new Promise((r) => setTimeout(r, 60)); process.kill(pid, 0);
+    const early = done; rmSync(hold); await restarting; await closing;
+    assert.equal(early, false, 'close must join the stop that already owns this live Core');
+    assert.throws(() => process.kill(pid, 0)); assert.equal(f.sup.server, null);
+  } finally { rmSync(hold, { force: true }); await restarting; await closing; await f.sup.close(); rmSync(f.dir, { recursive: true, force: true }); }
 });

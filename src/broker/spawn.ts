@@ -40,11 +40,10 @@ export function startBroker(dir: string, o: { keyMode?: 'auto' | 'file' | 'keych
   const tokens: Tokens = { core: randomBytes(32).toString('hex'), supervisor: randomBytes(32).toString('hex') };
   const child = spawn(process.execPath, brokerCommand(dir, o.source), { cwd: dir, env: childEnv, stdio: ['ignore', o.pipe ? 'pipe' : 'inherit', o.pipe ? 'pipe' : 'inherit', 'ipc'] });
   const stopped = new Promise<void>((ok, fail) => {
-    child.once('error', () => fail(new Error('The broker could not start.')));
     child.once('close', (code, signal) => code === 0 && signal === null ? ok() : fail(new Error('Broker owned cleanup was not confirmed; operator recovery may be needed.')));
   });
   void stopped.catch(() => {});
-  return new Promise((ok, fail) => {
+  const ready = new Promise<Started>((ok, fail) => {
     const timer = setTimeout(() => { child.kill(); fail(new Error('The broker didn’t start in time.')); }, o.timeoutMs ?? 20_000);
     child.once('error', () => { clearTimeout(timer); fail(new Error('The broker could not start.')); });
     child.once('exit', (code) => { clearTimeout(timer); fail(new Error(`The broker exited at start (code ${code}).`)); });
@@ -56,6 +55,9 @@ export function startBroker(dir: string, o: { keyMode?: 'auto' | 'file' | 'keych
     });
     child.send({ tokens, ...(o.keyMode ? { key_mode: o.keyMode } : {}), ...(o.reset ? { reset: true } : {}) });
   });
+  // Failed readiness is not physical completion. Even a timed-out/failed child remains owned
+  // until close; callers (including supervisor shutdown) must receive the failure only then.
+  return ready.catch(async (e) => { await stopped.catch(() => {}); throw e; });
 }
 
 // No timeout is evidence of cleanup. A failed/ambiguous stop retains the owned run directories.
