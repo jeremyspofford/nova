@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState } from '../core/index.ts';
 import { runningPid } from '../home.js';
 import { startBroker, stopBroker, type Started } from '../broker/spawn.ts';
-import { ensureMark } from '../core/resilience/home-mark.ts';
+import { ensureMark, unsafeHome } from '../core/resilience/home-mark.ts';
 import { supervisorResetPending, finishReset, homeEntries } from '../core/resilience/reset.ts';
 import { ServerProcess } from './server.ts';
 import { CrashWindow } from './crashes.ts';
@@ -175,6 +175,7 @@ export class Supervisor {
     if (st.mode & 0o077) throw new Error(`The supervisor’s folder ${this.o.dir} is open to other users (mode ${(st.mode & 0o777).toString(8)}). Close it first: chmod 700 ${this.o.dir}`);
     const other = runningPid(this.o.home);
     if (other) throw new Error(`A Nova server is already running this home (process ${other}). Stop it first: the supervisor starts its own.`);
+    if (unsafeHome(this.o.home) || !ensureMark(this.o.home)) throw new Error('The supervisor needs a safe, Nova-owned home folder.');
     const pidFile = join(this.o.dir, 'supervisor.pid');
     const prev = Number(readOr(pidFile, '0'));
     if (prev && prev !== process.pid && alive(prev)) throw new Error(`Another supervisor (process ${prev}) is already running with ${this.o.dir}.`);

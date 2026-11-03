@@ -260,3 +260,14 @@ elif args[1]=='clear':
     assert.equal(existsSync(join(f.home, 'factory-reset.json')), false);
   } finally { await f.sup.close(); rmSync(f.dir, { recursive: true, force: true }); }
 });
+
+test('supervisor refuses a foreign home before broker retries or problem writes', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const f = fixture(); const db = new DatabaseSync(join(f.home, 'nova.db'));
+  db.exec('CREATE TABLE problem (id INTEGER PRIMARY KEY, at TEXT, source TEXT, message TEXT, detail TEXT, resolved_at TEXT)');
+  try {
+    await assert.rejects(() => f.sup.run(), /home|folder|Nova/i);
+    assert.equal((db.prepare('SELECT count(*) AS n FROM problem').get() as any).n, 0);
+    assert.equal(existsSync(join(f.home, 'broker')), false);
+  } finally { db.close(); await f.sup.close(); rmSync(f.dir, { recursive: true, force: true }); }
+});
