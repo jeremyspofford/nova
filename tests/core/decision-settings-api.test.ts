@@ -3,6 +3,7 @@
 // notice before saving, each model's scorecard), the device record's decision model, Health's
 // "Outside content" lines, and the eval scorecards route. The hub's Ollama is a closed port, so no
 // real model is touched; nothing calls TypeSafe.
+import { signed } from '../acceptance/passkey-support.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,6 +23,7 @@ async function boot() {
   await new Promise<void>((r) => nova.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(nova.server.address() as AddressInfo).port}/api/v1`;
   const call = async (method: string, path: string, body?: unknown) => {
+    body = await signed(base.slice(0, -'/api/v1'.length), method, `/api/v1${path}`, body);
     const res = await fetch(base + path, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const text = await res.text();
     return { status: res.status, text, body: text ? JSON.parse(text) : null };

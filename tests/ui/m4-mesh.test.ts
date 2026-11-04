@@ -244,6 +244,9 @@ test('M4 gate: phone by QR and computer by command; revoke one; kill the hub, pr
     // ---- promote the standby from its own screen (tier 3) ------------------------------------------------
     const sb = await device(b, { width: 1280, height: 900 });
     await sb.page.goto(`${standby.base}/health`);
+    // Both consoles are http://localhost:4317 on their own machines in a real mesh; here they share one
+    // machine on two ports, so the standby's screen signs as the address the passkeys were added at.
+    await sb.page.evaluate((o) => { (window as unknown as { __novaPasskey: object }).__novaPasskey = { origin: o }; }, hub.base.replace('//127.0.0.1', '//localhost'));
     await ready(sb.page);
     const banner = sb.page.locator('#banner');
     await banner.locator('[data-action="promote"]').waitFor({ timeout: 15000 }).catch(async () => {

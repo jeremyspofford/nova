@@ -14,6 +14,7 @@ const HELPERS = {
     takeoverState: 'what the takeover panel says', takeoverActions: 'buttons inside the takeover panel', takeoverRefused: 'a line inside the takeover panel',
     problemsSummary: 'words inside HealthCard', voiceState: 'words beside the composer',
     configField: 'one setting inside the config setup step (config doors)',
+    passkeyLine: 'a line inside ApprovalSheet and every tier-3 sheet (passkey.js)', passkeyConfirm: 'drawn inside ApprovalSheet', passkeyAction: 'buttons inside ApprovalSheet',
     // Known debt, said plainly: exported but drawn nowhere in the app (the shell draws its own toast).
     toast: 'unused: the app’s toast is drawn by shell.js, whose markup the styleguide shows',
   },

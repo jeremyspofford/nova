@@ -49,6 +49,9 @@ test('M4c: the standby says what it is, the hub shows its lag, and the standby i
     assert.equal(await section.locator('[data-action="add-device"], [data-action="revoke-device"]').count(), 0, 'devices are added and revoked on the hub');
     if (shots) await shoot(sb.page, join(shots, 'standby-banner-devices.png'));
     await sb.page.goto(`${s.standby.base}/health`);
+    // Both consoles are http://localhost:4317 on their own machines in a real mesh; here they share one
+    // machine on two ports, so the standby's screen signs as the address the passkeys were added at.
+    await sb.page.evaluate((o) => { (window as unknown as { __novaPasskey: object }).__novaPasskey = { origin: o }; }, s.hub.base.replace('//127.0.0.1', '//localhost'));
     await ready(sb.page);
     await sb.page.getByText(/Last copied/).waitFor();
     assert.ok(await banner.isVisible(), 'the banner is on every page');

@@ -79,6 +79,12 @@ import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
 import { Checkpoints, dropPartials, finishStaged, stagedPending, takeCheckpoint } from './resilience/checkpoints.ts';
 import { ConsolePasskeys } from './passkeys.ts';
+
+const PASSKEY_NEEDED = 'Tier-3 actions on Nova’s own screen are confirmed with a passkey, and this request had none, so nothing was approved.';
+// The one route that takes {confirm: true} at tier 2 (rolling a change back by hand): asked once,
+// no passkey. ui/js/core.js skips the step for the same path.
+const TIER2_CONFIRM = /^\/changes\/[^/]+\/rollback$/;
+const NO_PASSKEY = 'No passkey yet: tier-3 actions on Nova’s own screen wait until you add one in Settings › Security. Nothing was approved.';
 import { Restarter } from './resilience/restart.ts';
 import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
@@ -1050,8 +1056,20 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
       changes: changes.health(),
       ingest: ingest.health(),
       computer: computer.health(),
+      passkeys: passkeysHealth(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
+  }
+
+  // The console's passkeys (Insertion #3 T2): how many, the first one's date (taken on trust), and a
+  // warning while fewer than two exist. Not a fault: tier 3 simply waits until there is one.
+  function passkeysHealth() {
+    const s = passkeys.state();
+    const first = s.first_enrolled_at ? s.first_enrolled_at.slice(0, 10) : '';
+    const detail = !s.count ? 'No passkey yet: tier-3 actions on Nova’s own screen wait until you add one in Settings › Security.'
+      : s.count === 1 ? `1 passkey, added ${first} on trust. Add a second: with only one, losing it means a factory reset.`
+      : `${s.count} passkeys; the first added ${first} on trust.`;
+    return { ok: true, count: s.count, complete: s.complete, first_enrolled_at: s.first_enrolled_at, detail };
   }
 
   // Names only, never values; where the key lives, said plainly when it is a file.
@@ -1316,13 +1334,17 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     ...(['promote', 'rollback'] as const).map(action => ({
       method: 'POST' as const, path: `/services/hub/{service}/${action}`, access: 'approver' as const,
       summary: 'A fixed service change through the supervisor’s current Service Manager; confirmation and readiness remain authoritative.',
-      handle: async ({ params, body }: { params: Record<string, string>; body: Record<string, unknown> }) => {
+      handle: async ({ params, body, who, passkey }: { params: Record<string, string>; body: Record<string, unknown>; who: Who; passkey?: boolean }) => {
         const service = params.service!;
         const allowed = action === 'promote' ? ['version', 'confirm', 'expected'] : ['confirm', 'expected'];
         if (!/^[a-z][a-z0-9-]{0,127}$/.test(service) || Object.keys(body).some(k => !allowed.includes(k)) || typeof body.confirm !== 'string' || (action === 'promote' && (typeof body.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.version)))) throw new CoreError('validation', 'Only a service version and typed confirmation are accepted.');
         if (!validServiceExpected(body.expected)) throw new CoreError('validation', 'A closed approved service state is required.');
         if (body.confirm !== (action === 'promote' ? `${service}@${body.version}` : 'rollback')) throw new CoreError('validation', 'The typed confirmation does not match this action.');
         if (!o.supervisor?.service) throw new CoreError('conflict', 'The supervisor service authority is unavailable.');
+        // Tier 3 asked from Nova's own screen needs its passkey (T2). The tier is the supervisor's own
+        // policy for that version; a version without one counts as tier 3 (absence never grants).
+        const tier = action === 'promote' ? o.supervisor.state?.()?.service_policies?.find((p) => p.service === service && p.version === body.version)?.promotion_tier ?? 3 : 2;
+        if (tier === 3 && who.principal.kind === 'console' && !passkey) throw new CoreError('forbidden', passkeys.state().count ? PASSKEY_NEEDED : NO_PASSKEY);
         const r = await o.supervisor.service(action === 'promote' ? { action, service, version: body.version as string, confirm: body.confirm, expected: body.expected } : { action, service, confirm: body.confirm, expected: body.expected });
         if (!r.ok) throw new CoreError('conflict', r.said);
         return r;
@@ -1336,7 +1358,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     {
       method: 'POST', path: '/services/devices/deploy', access: 'approver', body: '{definition, confirm?}',
       summary: 'Deploy a version to the device its placement resolves to: installed and checked there, started alongside if it can run twice, with no traffic (tier 1). A command no approved version ran asks first, typed (<service>@<version>; tier 3 for capture).',
-      handle: async ({ body }) => {
+      handle: async ({ body, who, passkey }) => {
         await placementDevices();
         const v = validate(body.definition, { devices: placementDevicesNow().filter((d) => d.trust === 'trusted').map((d) => ({ id: d.id, platform: d.platform, roles: [...d.purposes] })) });
         if (!v.ok) throw new CoreError('validation', 'The definition can’t be used.', v.problems);
@@ -1344,7 +1366,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
         if (!where.device) throw new CoreError('conflict', `It can’t go to a device: ${where.refused.join(' ')}`);
         const m = deviceServices(where.device.id);
         const plan = m.plan(body.definition);
-        const r = await m.deploy(body.definition, () => {}, body.confirm);
+        const r = await m.deploy(body.definition, () => {}, body.confirm, who.principal.kind !== 'console' || !!passkey);
         if (!r.ok) throw new CoreError(r.asks ? 'validation' : 'conflict', r.said);
         return { ...r, device: { id: where.device.id, name: where.device.name }, plan: plan.ok ? plan.plan : null };
       },
@@ -1352,10 +1374,13 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     {
       method: 'POST', path: '/services/devices/{device}/{service}/promote', access: 'approver', body: '{version, confirm}',
       summary: 'Move a device’s workload to a version that passed its health there (tier 2; tier 3 for anything with OS permissions, such as capture, every time): type <service>@<version>.',
-      handle: async ({ params, body }) => {
+      handle: async ({ params, body, who, passkey }) => {
         const expected = body.expected;
         if (Object.keys(body).some(k => !['version', 'confirm', 'expected'].includes(k)) || (expected !== undefined && !validServiceExpected(expected))) throw new CoreError('validation', 'Only a version, confirmation and closed approved service state are accepted.');
-        const r = await deviceServices(params.device!).promote(params.service!, String(body.version ?? ''), body.confirm, () => {}, expected);
+        const m = deviceServices(params.device!);
+        const pre = m.promotionCheck(params.service!, String(body.version ?? ''), body.confirm, expected);
+        if (pre.ok && pre.tier === 3 && who.principal.kind === 'console' && !passkey) throw new CoreError('forbidden', passkeys.state().count ? PASSKEY_NEEDED : NO_PASSKEY);
+        const r = await m.promote(params.service!, String(body.version ?? ''), body.confirm, () => {}, expected);
         if (!r.ok) throw new CoreError(r.tier && body.confirm !== `${params.service}@${body.version}` ? 'validation' : 'conflict', r.said);
         return r;
       },
@@ -1642,11 +1667,13 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   }
   // On a standby (or a hub that stepped down) every change is refused, saying which node is hub;
   // the only change it takes is becoming the hub.
-  const REPLICA_WRITES = new Set(['/api/v1/mesh/promote', '/api/v1/mesh/promotion/ready', '/api/v1/mesh/promotion/transfer', '/api/v1/mesh/promotion/fence', '/api/v1/mesh/promotion/cold', '/api/v1/mesh/promotion/transfer-status', '/api/v1/mesh/promotion/take-back', '/api/v1/mesh/seen']);
+  // A passkey approval challenge (T2) is held in memory, never written: a standby's own screen asks
+  // for one to promote itself, and a hub holding writes asks for one to cancel or take back.
+  const REPLICA_WRITES = new Set(['/api/v1/security/approvals', '/api/v1/mesh/promote', '/api/v1/mesh/promotion/ready', '/api/v1/mesh/promotion/transfer', '/api/v1/mesh/promotion/fence', '/api/v1/mesh/promotion/cold', '/api/v1/mesh/promotion/transfer-status', '/api/v1/mesh/promotion/take-back', '/api/v1/mesh/seen']);
   // While a hub holds writes to hand over (M10g), the mesh's own calls still pass: sessions, the
   // standby's acknowledgements and the promotion's steps. Every other change is refused, saying why.
   let inflightWrites = 0;
-  const HOLD_PASSES = (path: string) => path === '/api/v1/mesh/session' || path === '/api/v1/mesh/sync/ack' || path.startsWith('/api/v1/mesh/promotion');
+  const HOLD_PASSES = (path: string) => path === '/api/v1/security/approvals' || path === '/api/v1/mesh/session' || path === '/api/v1/mesh/sync/ack' || path.startsWith('/api/v1/mesh/promotion');
 
   // GET /join.sh and GET /device-agent.tar: the one-line command's script, and the agent it unpacks.
   let tarCache: Buffer | null = null;
@@ -1666,6 +1693,20 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
 
   const api = createApi({
     routes, stream, version: o.version, trustedOrigin: o.trustedOrigin,
+    // Tier 3 on Nova's own screen is a person, not just a program here: an explicit confirmation
+    // from the console needs a passkey approval of exactly this request (T2). A paired device
+    // proves itself with its own key and never sends one.
+    approval: (method, path, body, who) => {
+      if (!('passkey_approval' in body)) {
+        if (body.confirm === true && who.principal.kind === 'console' && !TIER2_CONFIRM.test(path)) throw new CoreError('forbidden', passkeys.state().count ? PASSKEY_NEEDED : NO_PASSKEY);
+        return false;
+      }
+      if (who.principal.kind !== 'console') throw new CoreError('validation', 'Only Nova’s own screen confirms with a passkey; this device approves with its own key.');
+      const why = passkeys.verify(ConsolePasskeys.action(method, path, body), body.passkey_approval);
+      delete body.passkey_approval;
+      if (why) throw new CoreError('forbidden', `That passkey didn’t confirm this request (${why}), so nothing was approved.`);
+      return true;
+    },
     // The approval prompt goes only where it can be answered.
     visible: (event, p) => event !== 'join_request' || allows('approver', p) === 'ok',
     onError: (e) => log.problem('api', 'Something went wrong inside Nova while answering a request.', { detail: (e as Error)?.stack ?? String(e) }),
