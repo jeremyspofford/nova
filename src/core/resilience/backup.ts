@@ -32,7 +32,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { DatabaseSync } from 'node:sqlite';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
-import { cleanDbFile } from '../backups.ts';
+import { SKILL, cleanDbFile, skillDir } from '../backups.ts';
 import { CoreError } from '../errors.ts';
 import { decryptTo, encryptDir, keyFingerprint, readHeader, safeRel, verifyFile } from './archive.ts';
 import { dropScratch, makeScratch } from './scratch.ts';
@@ -610,13 +610,15 @@ export function cleanBackup(dir: string, table: string, ids: string[], words: st
   m.files.forEach((f) => safeRel(f.path));
   const db = join(dir, 'nova.db');
   const originals = new Set(cleanDbFile(db, table, ids, words).map((id) => `capture/raw/${id}`));
+  const skills = table === SKILL ? ids.map(skillDir) : [];
   m.files = m.files.filter((f) => {
-    if (!originals.has(f.path)) return true;
+    if (!originals.has(f.path) && !skills.some((d) => f.path.startsWith(d))) return true;
     rmSync(join(dir, 'files', safeRel(f.path)), { force: true });
     return false;
   });
+  for (const d of skills) rmSync(join(dir, 'files', safeRel(d)), { recursive: true, force: true });
   m.db = { path: 'nova.db', sha256: sha256File(db), bytes: statSync(db).size };
-  const ws = words.map((w) => w.trim()).filter((w) => w.length >= 3);
+  const ws =words.map((w) => w.trim()).filter((w) => w.length >= 3);
   if (ws.length) {
     m.files.forEach((f) => {
       const p = join(dir, 'files', safeRel(f.path));
