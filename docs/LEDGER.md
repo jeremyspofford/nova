@@ -7,6 +7,19 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · UI rebuild (Stage 2) · Nova takes the calmer look**
+- What changed: Nova now has the calmer look you approved:
+  - one quiet light from above instead of layered glows;
+  - solid surfaces instead of frosted glass;
+  - on Home, one leading card and the rest as a list;
+  - the right column as one simple list;
+  - a flatter orb in the side rail, with a small bar marking where you are;
+  - Health as plain sections.
+
+  A conversation is one reading column: the side column starts closed there. Its toggle opens it, and Nova remembers that choice for conversations separately. Links in lists read as underlined text, so they stay readable in the light design too.
+- What you can now do: use the app with the new look on every screen size.
+- Still unfinished: the look is one stylesheet laid over the older rules. It gets folded into each surface's own rules as each surface is rebuilt in turn. The Nova/Aurora indigo decision is still open.
+
 **2026-11-04 · UI rebuild (design) · A proposed calmer look, shown on the real app**
 - What changed: a proposed redesign of Nova's look, shown on the real app, for your reaction. Nothing in the app changes yet. It keeps the layout and changes the surfaces:
   - one quiet light from above instead of layered glows;
