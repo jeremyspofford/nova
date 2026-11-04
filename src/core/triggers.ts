@@ -341,8 +341,7 @@ export class Triggers extends EventEmitter {
     // 4. Triage, through System 1 when the template is there, else the same rules directly.
     const action = rule?.action ?? input.action ?? null;
     const name = rule?.name ?? input.name ?? input.source;
-    const policy = this.#policy();
-    const off = Array.isArray(policy.proactive_off) ? policy.proactive_off.map((x) => String(x).toLowerCase()) : [];
+    const off = this.#off();
     const inputs: Inputs = {
       class: input.class,
       action: action?.kind ?? 'none',
@@ -404,6 +403,13 @@ export class Triggers extends EventEmitter {
     return record;
   }
 
+  // What the person turned off, read one way everywhere (B4): only a list counts, in lower case, so
+  // a stray value can't stop the heartbeat and a case difference can't deliver a held message.
+  #off(): string[] {
+    const v = this.#policy().proactive_off;
+    return Array.isArray(v) ? v.map((x) => String(x).toLowerCase()) : [];
+  }
+
   // A request the person made directly. It acts by definition; the record links the work to it.
   reactive(task: Task, source = 'api'): TriggerRecord {
     const trigger_id = randomUUID();
@@ -423,8 +429,8 @@ export class Triggers extends EventEmitter {
       for (const m of this.#db.all<Message>(`SELECT * FROM message WHERE delivered_at IS NULL AND hold = 'quiet' ORDER BY at`)) {
         // Only if what sent it still stands: the rule exists, isn't paused, isn't turned off.
         const rule = this.#db.get<{ id: string; name: string; class: string; paused: number }>('SELECT r.id, r.name, r.class, r.paused FROM trigger t JOIN trigger_rule r ON r.id = t.rule_id WHERE t.trigger_id = ?', m.trigger_id);
-        const off = this.#policy().proactive_off ?? [];
-        if (!rule || rule.paused || off.includes(rule.class) || off.includes(rule.name)) {
+        const off = this.#off();
+        if (!rule || rule.paused || off.includes(rule.class.toLowerCase()) || off.includes(rule.name.toLowerCase())) {
           this.#db.run(`UPDATE message SET hold = 'withdrawn' WHERE id = ?`, m.id);
           continue;
         }

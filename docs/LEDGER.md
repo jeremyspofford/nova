@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-03 · B4 · A bad setting can no longer stop Nova's scheduled checks**
+- What changed: the list of automation kinds you turned off is now read the same way everywhere. A malformed setting no longer stops every scheduled check, and a message held during quiet hours for a rule you turned off is withdrawn even when the name's capitalisation differs, instead of being delivered.
+- What you can now do: trust that turning a rule or kind off also stops its messages that were waiting for quiet hours to end.
+- Still unfinished: the settings API still accepts any value for this setting; Nova now ignores one that isn't a list rather than rejecting it.
+
 **2026-11-03 · #287 · Backups has its settings in Settings**
 - What changed: Settings now has a Backups section built from the approved design. You choose a backup folder, how many copies to keep (1–365) and an optional encrypted copy folder, then save explicitly. Removing a folder is its own button, so an empty or wrong entry never drops a saved folder. When you set up an encrypted copy, the recovery key that opens those copies is shown once to an approving device; showing it again needs Nova's console and a confirmation every time. Paired viewers and a standby see the settings read-only, with the reason. Drafts survive live refresh, and a failed save keeps what you typed and says why.
 - What you can now do: reach Backups from Home on phone and desktop, set or change backup folders, and get the encrypted-copy recovery key the safe way. This key is for encrypted backup copies only; it does not replace Nova Vault recovery.
