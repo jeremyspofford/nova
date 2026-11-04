@@ -770,7 +770,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   const connectors = new Connectors({
     extensions, vault, triggers, log, now,
     privacy: () => profile.privacyDefault(),
-    meshHosts: () => devices.list().flatMap((d) => { try { return d.address ? [new URL(d.address).hostname.replace(/^\[|\]$/g, '')] : []; } catch { return []; } }),
+    meshHosts: () => [...meshHosts()],
     delegate: (owner, input) => {
       const task = ledger.create({ ...input, owner, origin: { kind: 'user' } } as TaskInput);
       triggers.reactive(task, `connector:${owner}`);
