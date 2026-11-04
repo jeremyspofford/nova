@@ -134,8 +134,6 @@ export class Skills {
     return files;
   }
 
-  restore(id, files) { return this.commit(this.prepareRestore(id, files)); }
-
   // What restoring would write, checked, without writing it (the ingest gate screens it first).
   prepareRestore(id, files) {
     if (!ID.test(String(id))) throw new SkillError(400, 'Not a skill name.');
@@ -179,12 +177,9 @@ export class Skills {
     return this.get(id);
   }
 
-  // A skill the person brings: a folder's files or a .zip's, as
-  // { path: Buffer | string | { base64 } }. SKILL.md may sit at the top or in
-  // one folder; its name (or that folder's) becomes the skill's id.
-  add(given) { return this.commit(this.prepare(given)); }
-
-  // What adding would write, checked, without writing anything.
+  // What adding a skill the person brings would write, checked, without writing anything: a folder's
+  // files or a .zip's, as { path: Buffer | string | { base64 } }. SKILL.md may sit at the top or in
+  // one folder; its name (or that folder's) becomes the skill's id. The server screens it, then commits.
   prepare(given) {
     let entries = Object.entries(given ?? {})
       .map(([p, v]) => [String(p).replace(/\\/g, '/').replace(/^\/+/, ''), Buffer.isBuffer(v) ? v : decodeFile(v)])

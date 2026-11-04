@@ -524,4 +524,3 @@ function longDay(day) {
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-GB', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-export const searchMemory = (home, query, opts) => new Memory(home).search(query, opts);
