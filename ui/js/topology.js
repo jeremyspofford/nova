@@ -1,6 +1,7 @@
 // Live topology controller. The renderer remains presentation-only; this module owns the
 // captured snapshot, independent source ages, visible-route polling and fixed approval actions.
-import { request } from './core.js';
+import { api, request } from './core.js';
+import { approvalFor } from './passkey.js';
 import { renderTopology } from './topology-view.js';
 import { approvalSheet } from './components.js';
 import { escapeHtml as esc } from './markdown.js';
@@ -167,7 +168,10 @@ export async function submitTopology(form) {
     if (!next || signature(next) !== signature(before)) { notice = 'The target or its policy changed. Review the refreshed versions before asking again.'; if (ownsApproval(before, form)) closeSheet(); return; }
     submitting = true;
     // No retry: a lost acknowledgement may still have changed an assignment or restarted Nova.
-    const response = await request('POST', next.action.path, { ...(next.kind === 'promote' ? { version: next.version } : {}), confirm: next.action.confirm, expected: next.action.expected }, true);
+    const body = { ...(next.kind === 'promote' ? { version: next.version } : {}), confirm: next.action.confirm, expected: next.action.expected };
+    // A typed tier-3 confirmation is a person's too: the passkey step, for exactly this request (T2).
+    const signed = next.action.tier === 3 ? await approvalFor(api, 'POST', next.action.path, body) : null;
+    const response = await request('POST', next.action.path, signed ? { ...body, passkey_approval: signed } : body, true);
     notice = response.data.accepted ? 'Accepted by the supervisor. This does not confirm that the version is serving. Refresh to observe the outcome.' : next.action.path.startsWith('/services/devices/') ? 'The device assignment was acknowledged. This does not confirm that the version is serving. Refresh to observe the outcome.' : 'The authority acknowledged the request. Refresh to observe whether the version is serving.';
     if (ownsApproval(before, form)) closeSheet();
   } catch (e) {

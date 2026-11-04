@@ -1,6 +1,7 @@
 // The supervisor under test, as a real process, with releases that are real git tags. The release
 // repository is a scratch one made from this working tree (never the project's own repository, so
 // no tag or worktree lands there), and every home, state folder and port is the test's own.
+import { signed } from '../acceptance/passkey-support.ts';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -93,7 +94,9 @@ export async function until(ok: () => boolean | Promise<boolean>, what: string, 
   assert.fail(`Timed out waiting for ${what}`);
 }
 
+// As Nova's own screen sends it: an explicit confirmation carries a passkey approval (T2).
 export async function api(base: string, method: string, path: string, body?: unknown) {
+  body = await signed(base, method, path, body);
   const r = await fetch(base + path, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const text = await r.text();
   return { status: r.status, body: text ? JSON.parse(text) : null };
