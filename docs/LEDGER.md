@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-03 · B3 · A revoked device no longer counts as yours for connector privacy**
+- What changed: when you revoke a device, Nova no longer treats a connector pointing at that device's address as staying on your own devices. Under the local-only privacy setting, such a connector is now refused, the same way providers and capture already treat revoked devices.
+- What you can now do: revoke a device knowing its address stops counting as yours for privacy everywhere in Nova.
+- Still unfinished: nothing for this fix.
+
 **2026-11-03 · #287 · Backups has its settings in Settings**
 - What changed: Settings now has a Backups section built from the approved design. You choose a backup folder, how many copies to keep (1–365) and an optional encrypted copy folder, then save explicitly. Removing a folder is its own button, so an empty or wrong entry never drops a saved folder. When you set up an encrypted copy, the recovery key that opens those copies is shown once to an approving device; showing it again needs Nova's console and a confirmation every time. Paired viewers and a standby see the settings read-only, with the reason. Drafts survive live refresh, and a failed save keeps what you typed and says why.
 - What you can now do: reach Backups from Home on phone and desktop, set or change backup folders, and get the encrypted-copy recovery key the safe way. This key is for encrypted backup copies only; it does not replace Nova Vault recovery.
