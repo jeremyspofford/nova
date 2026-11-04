@@ -12,6 +12,11 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: open Nova at http://localhost on this computer, go to Settings › Security and add two passkeys (a security key and this computer's fingerprint or screen lock, say). Tier-3 actions on this screen then confirm with one of them.
 - Still unfinished: the server checks a passkey when the screen sends one, but doesn't yet require one, so a program on this computer can still approve tier 3 by not sending one. That is the accepted window, and step 3 closes it. Passkeys can't be removed from the screen yet; the API supports it. A passkey only works when Nova is opened at localhost, not at 127.0.0.1 or the mesh address.
 
+**2026-11-04 · Test stability · The Health work-costs test stops failing at random**
+- What changed: a Health test that sometimes failed for no product reason now checks the right thing. After a lost save, Nova's work-costs panel does go to "unavailable" with Save disabled. A normal background refresh can then make it fresh again a moment later, and the test used to lose that race. It now records every state the panel passes through and checks that the transition happened. It also presses Retry only if the panel still needs it.
+- What you can now do: nothing new in the app. CI should fail less often for no reason.
+- Still unfinished: the other intermittent UI tests (WebKit cancelled requests, the reset 503, browser-profile cleanup, R13 replay) are next in the stability pass.
+
 **2026-11-04 · T2 (1 of 3) · Nova can keep and check passkeys for its own screen**
 - What changed: Nova's core can now keep passkeys for its own screen and check them: adding one, confirming a single exact action with one, and removing one. The first passkey is taken on trust; every later add or remove needs one you already have; setup counts as complete with two; the last one can't be removed. Only public keys are kept, and they are copied to a standby, so a standby that becomes hub asks for the same passkeys.
 - What you can now do: nothing yet in the app. This is the first of three steps; the next adds the screens to set passkeys up and the passkey step to tier-3 sheets, and the last makes tier 3 on this screen require a passkey.
