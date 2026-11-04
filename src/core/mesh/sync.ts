@@ -30,6 +30,9 @@ export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
   // forgets still waiting for a device's acknowledgement; and raw-to-event mappings needed to read
   // and forget fetched originals and their recovery copies. A hub that takes over keeps all four.
   device_workload: ['device_id', 'service'], capture_batch: ['id'], capture_device_tombstone: ['id'], capture_raw_fetch: ['id'],
+  // Migration 0024 (T2): the console's passkeys, public keys only, so a hub that takes over asks for
+  // the same ones instead of taking a first passkey on trust again.
+  console_passkey: ['id'],
 };
 // Columns a release added to a replicated table, by the schema version that added them (M10f review,
 // finding 3: one mechanism for every such column). A standby a release behind doesn't have them:

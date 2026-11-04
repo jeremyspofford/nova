@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · T2 (1 of 3) · Nova can keep and check passkeys for its own screen**
+- What changed: Nova's core can now keep passkeys for its own screen and check them: adding one, confirming a single exact action with one, and removing one. The first passkey is taken on trust; every later add or remove needs one you already have; setup counts as complete with two; the last one can't be removed. Only public keys are kept, and they are copied to a standby, so a standby that becomes hub asks for the same passkeys.
+- What you can now do: nothing yet in the app. This is the first of three steps; the next adds the screens to set passkeys up and the passkey step to tier-3 sheets, and the last makes tier 3 on this screen require a passkey.
+- Still unfinished: until the third step lands, any program on this computer can still approve tier-3 actions through the console (the accepted window). A passkey tied to one computer's hardware won't work on a standby after a failover; a security key or a synced passkey will.
+
 **2026-11-03 · B8+B9 · Local settings stay out of git; the right Node version is documented**
 - What changed: a `nova.config.json` in the repository folder is now ignored by git, so a token put in it can't be committed and published by accident. The instructions now say Node 26 or newer, which is what Nova actually needs, and the stale `.nvmrc` that pointed at Node 22 is gone.
 - What you can now do: keep personal settings in `nova.config.json` without risking them in a commit, and set up the right Node version from the README.
