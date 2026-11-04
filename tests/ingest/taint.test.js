@@ -44,17 +44,19 @@ for (const [what, first] of [
   });
 }
 
-test('a run that read nothing from outside keeps its yes: the same steps run on their own', async () => {
+test('a run that read nothing from outside keeps its yes: the same steps run on their own, except a standing-file change after tool output (T3)', async () => {
   const m = scripted(guarded(call('read_file', { path: 'USER.md' })));
   const h = await startNova({ agent: m.agent, yes: YES, gmail: true });
   try {
     await h.connectGmail();
+    const before = readFileSync(join(h.home, 'USER.md'), 'utf8');
     const { s, asked } = await h.run('Tidy up.', () => 'deny');
-    assert.deepEqual(asked, [], 'nothing asked');
+    // T3: standing files load into every future prompt; once the run has seen tool output, a change asks.
+    assert.deepEqual(asked.map((t) => [t.name, t.guard?.what]), [['write_file', 'change your standing files']]);
     const tools = s.session.turns[0].items.filter((i) => i.kind === 'tool');
     assert.equal(tools[0].result.screen, undefined, 'a standing file is the person’s own: not screened');
-    assert.deepEqual(tools.slice(1).map((t) => [t.name, t.approval?.auto ?? false, t.result.ok]), [['exec', true, true], ['write_file', false, true], ['schedule_set', true, true], ['gmail_draft', true, true]]);
-    assert.match(readFileSync(join(h.home, 'USER.md'), 'utf8'), /Changed/);
+    assert.deepEqual(tools.slice(1).filter((t) => t.name !== 'write_file').map((t) => [t.name, t.approval?.auto ?? false, t.result.ok]), [['exec', true, true], ['schedule_set', true, true], ['gmail_draft', true, true]]);
+    assert.equal(readFileSync(join(h.home, 'USER.md'), 'utf8'), before, 'denied: unchanged');
     assert.equal(h.google.state.drafts.length, 1);
   } finally { await h.close(); }
 });
