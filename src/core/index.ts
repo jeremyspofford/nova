@@ -1577,7 +1577,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     // ---- passkeys for tier 3 on the hub's own screen (Insertion #3 T2) ----
     ...passkeys.routes(),
     // ---- configuration in and out as a file (config onboarding, door 1) ----
-    ...configRoutes({ profile, log: (said, keys) => log.info('config', said, { keys }) }),
+    ...configRoutes({ profile, timezone: () => o.detectedTimezone ?? 'UTC', log: (said, keys) => log.info('config', said, { keys }) }),
     // ---- checkpoints (M7 amendment §1) ----
     ...checkpoints.routes(),
     // ---- factory reset (M7 amendment §2) ----
