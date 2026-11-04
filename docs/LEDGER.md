@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Config onboarding (design) · A proposed design for setting Nova up three ways**
+- What changed: the living styleguide shows a proposed design for setting Nova up and changing its configuration. There are three ways in: bring in a file, fill in a form, or ask Nova in chat. All three show the same list of changes before anything is applied. Every setting says which layer set it (Nova's default, this hub, or your pack) and can go back to the default. A key or password in an imported file is left out, with a pointer to where it belongs. A first schema draft maps today's settings to these layers.
+- What you can now do: look at the design across desktop, tablet, phone and foldable sizes, and react before it's built.
+- Still unfinished: nothing is built. Nova still reads `nova.config.json` as before. The real import, form and chat doors come after your reaction.
+
 **2026-11-04 · T2 (1 of 3) · Nova can keep and check passkeys for its own screen**
 - What changed: Nova's core can now keep passkeys for its own screen and check them: adding one, confirming a single exact action with one, and removing one. The first passkey is taken on trust; every later add or remove needs one you already have; setup counts as complete with two; the last one can't be removed. Only public keys are kept, and they are copied to a standby, so a standby that becomes hub asks for the same passkeys.
 - What you can now do: nothing yet in the app. This is the first of three steps; the next adds the screens to set passkeys up and the passkey step to tier-3 sheets, and the last makes tier 3 on this screen require a passkey.
