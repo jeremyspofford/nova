@@ -1664,11 +1664,13 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   }
   // On a standby (or a hub that stepped down) every change is refused, saying which node is hub;
   // the only change it takes is becoming the hub.
-  const REPLICA_WRITES = new Set(['/api/v1/mesh/promote', '/api/v1/mesh/promotion/ready', '/api/v1/mesh/promotion/transfer', '/api/v1/mesh/promotion/fence', '/api/v1/mesh/promotion/cold', '/api/v1/mesh/promotion/transfer-status', '/api/v1/mesh/promotion/take-back', '/api/v1/mesh/seen']);
+  // A passkey approval challenge (T2) is held in memory, never written: a standby's own screen asks
+  // for one to promote itself, and a hub holding writes asks for one to cancel or take back.
+  const REPLICA_WRITES = new Set(['/api/v1/security/approvals', '/api/v1/mesh/promote', '/api/v1/mesh/promotion/ready', '/api/v1/mesh/promotion/transfer', '/api/v1/mesh/promotion/fence', '/api/v1/mesh/promotion/cold', '/api/v1/mesh/promotion/transfer-status', '/api/v1/mesh/promotion/take-back', '/api/v1/mesh/seen']);
   // While a hub holds writes to hand over (M10g), the mesh's own calls still pass: sessions, the
   // standby's acknowledgements and the promotion's steps. Every other change is refused, saying why.
   let inflightWrites = 0;
-  const HOLD_PASSES = (path: string) => path === '/api/v1/mesh/session' || path === '/api/v1/mesh/sync/ack' || path.startsWith('/api/v1/mesh/promotion');
+  const HOLD_PASSES = (path: string) => path === '/api/v1/security/approvals' || path === '/api/v1/mesh/session' || path === '/api/v1/mesh/sync/ack' || path.startsWith('/api/v1/mesh/promotion');
 
   // GET /join.sh and GET /device-agent.tar: the one-line command's script, and the agent it unpacks.
   let tarCache: Buffer | null = null;

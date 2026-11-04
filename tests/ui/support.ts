@@ -21,8 +21,13 @@ const authenticator = (o: { jwk: object; spki: string; base: number }) => {
   const enc = new TextEncoder();
   const b64u = (b: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const unb = (s: string) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-  const origin = () => location.origin.replace('//127.0.0.1', '//localhost');
-  const key = crypto.subtle.importKey('jwk', o.jwk as JsonWebKey, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  // A console of another node at the same address (a standby at http://localhost:4317 on its own
+  // machine) is said with `__novaPasskey.origin`; tests on one machine run nodes on different ports.
+  const origin = () => (window as unknown as { __novaPasskey?: { origin?: string } }).__novaPasskey?.origin ?? location.origin.replace('//127.0.0.1', '//localhost');
+  // WebAuthn and WebCrypto exist only in a secure context; elsewhere there is nothing to stand in for.
+  if (!globalThis.crypto?.subtle) return;
+  let imported: Promise<CryptoKey> | null = null;
+  const key = () => (imported ??= crypto.subtle.importKey('jwk', o.jwk as JsonWebKey, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']));
   const int = (b: Uint8Array) => { let i = 0; while (i < b.length - 1 && b[i] === 0 && !(b[i + 1]! & 0x80)) i++; const t = [...b.slice(i)]; return t[0]! & 0x80 ? [0, ...t] : t; };
   const der = (raw: ArrayBuffer) => { const v = new Uint8Array(raw); const r = int(v.slice(0, 32)); const s = int(v.slice(32)); return new Uint8Array([0x30, r.length + s.length + 4, 0x02, r.length, ...r, 0x02, s.length, ...s]); };
   const hash = async (b: Uint8Array) => new Uint8Array(await crypto.subtle.digest('SHA-256', b as BufferSource));
@@ -38,7 +43,7 @@ const authenticator = (o: { jwk: object; spki: string; base: number }) => {
     const count = new Uint8Array(4); new DataView(count.buffer).setUint32(0, Date.now() - o.base + 2);
     const auth = new Uint8Array([...await hash(enc.encode(p.rpId)), 0x05, ...count]);
     const cdj = enc.encode(JSON.stringify({ type: 'webauthn.get', challenge: b64u(p.challenge), origin: origin() }));
-    const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, await key, new Uint8Array([...auth, ...await hash(cdj)]));
+    const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, await key(), new Uint8Array([...auth, ...await hash(cdj)]));
     const id = b64u(p.allowCredentials[0]!.id);
     return { id, rawId: unb(id).buffer, type: 'public-key', response: { authenticatorData: auth.buffer, clientDataJSON: cdj.buffer, signature: der(sig).buffer, userHandle: null } };
   };
