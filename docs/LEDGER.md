@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-03 · B2 · A crafted email can no longer break Nova's Gmail tools**
+- What changed: a web page or email containing a malformed character reference (such as `&#xzz;`) no longer breaks Nova's Gmail search and reading or a page fetch. Nova now decodes these with the same bounds-checked decoder its safety screen uses, and leaves a bad reference as written.
+- What you can now do: keep using Gmail tools and email summaries even when someone sends a message built to break them.
+- Still unfinished: nothing for this fix. Pages and email are still screened as outside content, as before.
+
 **2026-11-03 · #287 · Backups has its settings in Settings**
 - What changed: Settings now has a Backups section built from the approved design. You choose a backup folder, how many copies to keep (1–365) and an optional encrypted copy folder, then save explicitly. Removing a folder is its own button, so an empty or wrong entry never drops a saved folder. When you set up an encrypted copy, the recovery key that opens those copies is shown once to an approving device; showing it again needs Nova's console and a confirmation every time. Paired viewers and a standby see the settings read-only, with the reason. Drafts survive live refresh, and a failed save keeps what you typed and says why.
 - What you can now do: reach Backups from Home on phone and desktop, set or change backup folders, and get the encrypted-copy recovery key the safe way. This key is for encrypted backup copies only; it does not replace Nova Vault recovery.

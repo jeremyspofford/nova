@@ -5,7 +5,7 @@
 // Nova runs the tool (asking the user first where required) and calls the model
 // again with the result in the transcript.
 import { spawn } from 'node:child_process';
-import { inheritedChildEnv, trackChild } from './core/index.ts';
+import { decodeEntities, inheritedChildEnv, trackChild } from './core/index.ts';
 import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { inHome, inSecretDir } from './home.js';
@@ -612,19 +612,13 @@ export function runCommand(command, { cwd, signal, timeoutMs = 120_000 }) {
   });
 }
 
-const ENTITIES = {
-  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ndash: '–', mdash: '—', hellip: '…',
-  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', laquo: '«', raquo: '»', middot: '·', bull: '•',
-  copy: '©', reg: '®', trade: '™', times: '×', deg: '°', euro: '€', pound: '£', cent: '¢', yen: '¥',
-};
-
+// Character references go through core's bounds-checked decoder: one a sender wrote can't throw (B2).
 export function htmlToText(html) {
-  return html
+  return decodeEntities(html
     .replace(/<(script|style|noscript|svg|head)[\s\S]*?<\/\1>/gi, ' ')
     .replace(/<\/(p|div|h[1-6]|li|tr|br|section|article|header|footer)>|<br\s*\/?>/gi, '\n')
     .replace(/<li[^>]*>/gi, '- ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&(#?\w+);/g, (m, e) => ENTITIES[e] ?? (e.startsWith('#') ? String.fromCodePoint(parseInt(e.slice(1).replace(/^x/, '0x'))) : m))
+    .replace(/<[^>]+>/g, ' '))
     .replace(/[ \t\f\v]+/g, ' ')
     .replace(/ *\n */g, '\n')
     .replace(/\n\s*\n\s*/g, '\n\n')

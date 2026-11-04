@@ -71,6 +71,11 @@ test('htmlToText keeps the words and drops the markup', () => {
   assert.equal(htmlToText('<html><head><title>x</title></head><body><script>bad()</script><p>Hello &amp; <b>welcome</b></p><li>one</li></body></html>'), 'Hello & welcome\n- one');
 });
 
+// B2: any page or email sender controls these references; a bad one must not break Gmail or web_fetch.
+test('htmlToText leaves hostile character references as they are and still decodes valid ones', () => {
+  assert.equal(htmlToText('<p>&#xzz; &#x110000; &#99999999; &#0; &#65;&#x42; &AMP;</p>'), '&#xzz; &#x110000; &#99999999; &#0; AB &');
+});
+
 test('the protocol lists every tool on offer', () => {
   const p = toolProtocol(availableTools({ gmail: true, skills: 1, delegate: true, self: true, coding: true, ops: true }));
   for (const name of Object.keys(TOOLS)) assert.ok(p.includes(name));

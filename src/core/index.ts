@@ -178,6 +178,7 @@ export type { FirstAction, FirstView } from './onboard/first.ts';
 // The ingest gate (Amendment 2026-10-30-C Part 3): what Era 2's agent loop screens with, escapes
 // with, and says when something is blocked.
 export { Ingest, BLOCK_LINE, DEFAULT_LINK_CAPS, PROTOCOL_NAMES, KIND_WORDS, cleanOrigin, escapeProtocol, fold, wrapData } from './ingest/index.ts';
+export { decodeEntities } from './ingest/checks.ts';
 export type { Screened, Source as IngestSource, SourceKind, Taint, Verdict, Candidate as MemoryCandidate, Hold } from './ingest/index.ts';
 // Grounding: what this Nova is, from its own registries, for the chat agent's briefing and tools.
 export { IMPORT_DIR } from './self.ts';
