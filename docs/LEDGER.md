@@ -12,6 +12,11 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: keep using Gmail tools and email summaries even when someone sends a message built to break them.
 - Still unfinished: nothing for this fix. Pages and email are still screened as outside content, as before.
 
+**2026-11-03 · T1 · A paired device can no longer act as you**
+- What changed: a task a paired computer or phone sends through its inbox now waits for your OK before it runs, whatever approval level the device asked for. It can't loosen your privacy setting: the stricter of the device's request and your default applies. Its words are screened by Nova's own checks like any outside content, and a request that tries to hide instructions is refused and kept with the reason. The record says which device asked, not "You asked for it". Devices also can no longer change policy settings (permissions such as test auto-run, and spend limits) through the inbox; those stay on your own screens with their usual confirmation.
+- What you can now do: pair computers without letting one quietly start work as you. Device requests appear in Tasks waiting for your OK.
+- Still unfinished: the related local-approval (T2) and standing-file (T3) fixes are next. A device can still change its identity, user and tuning settings, server-wins as before. Requests already in the ledger from before this change are not re-screened.
+
 **2026-11-03 · #287 · Backups has its settings in Settings**
 - What changed: Settings now has a Backups section built from the approved design. You choose a backup folder, how many copies to keep (1–365) and an optional encrypted copy folder, then save explicitly. Removing a folder is its own button, so an empty or wrong entry never drops a saved folder. When you set up an encrypted copy, the recovery key that opens those copies is shown once to an approving device; showing it again needs Nova's console and a confirmation every time. Paired viewers and a standby see the settings read-only, with the reason. Drafts survive live refresh, and a failed save keeps what you typed and says why.
 - What you can now do: reach Backups from Home on phone and desktop, set or change backup folders, and get the encrypted-copy recovery key the safe way. This key is for encrypted backup copies only; it does not replace Nova Vault recovery.
