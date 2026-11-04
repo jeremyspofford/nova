@@ -427,7 +427,7 @@ export function createNova(config = loadConfig(), deps = {}) {
         let skill = null;
         let files;
         if (action === 'install') { skill = skills.install(id); runner.trustSkill(id); }
-        else if (action === 'remove') { files = skills.remove(id); core.ingest.release('skill', id); }
+        else if (action === 'remove') { files = skills.remove(id); core.ingest.release('skill', id); core.mesh.sync.removed(); }
         else if (action === 'restore') {
           // Put back from Undo: screened again, exactly as when it came in.
           const prepared = skills.prepareRestore(id, (await readBody(req)).files);

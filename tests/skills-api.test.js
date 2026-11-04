@@ -2,7 +2,7 @@
 // HTTP API with the scripted model and a stand-in Google.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createNova } from '../src/server.js';
@@ -121,9 +121,15 @@ test('shopping uses the web search and the playbook', async () => {
 
 test('removing a skill leaves nothing behind, and undo brings it back', async () => {
   const home = nova.config.home;
+  // The standby journal copies the playbook into the database; removing must leave no copy in its files.
+  const playbook = 'Nova researches; the person buys';
+  const inDb = () => ['nova.db', 'nova.db-wal'].filter((f) => existsSync(join(home, f)) && readFileSync(join(home, f)).includes(playbook));
+  nova.core.mesh.sync.scan();
+  assert.ok(inDb().length, 'the journal holds the playbook before removal');
   const { files } = await (await post('/api/skills/shopping/remove')).json();
   assert.ok(files['SKILL.md']);
   assert.equal(existsSync(join(home, 'skills', 'shopping')), false);
+  assert.deepEqual(inDb(), [], 'no copy of the playbook in the database files');
   assert.deepEqual((await get('/api/skills')).installed.map((s) => s.id), ['email-summary']);
   const { s } = await ask('Which merino socks should I buy?');
   assert.ok(!s.session.turns[0].items.some((i) => i.kind === 'skill'));
