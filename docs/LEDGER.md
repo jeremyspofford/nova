@@ -12,6 +12,11 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: trust that turning a rule or kind off also stops its messages that were waiting for quiet hours to end.
 - Still unfinished: the settings API still accepts any value for this setting; Nova now ignores one that isn't a list rather than rejecting it.
 
+**2026-11-03 · B3 · A revoked device no longer counts as yours for connector privacy**
+- What changed: when you revoke a device, Nova no longer treats a connector pointing at that device's address as staying on your own devices. Under the local-only privacy setting, such a connector is now refused, the same way providers and capture already treat revoked devices.
+- What you can now do: revoke a device knowing its address stops counting as yours for privacy everywhere in Nova.
+- Still unfinished: nothing for this fix.
+
 **2026-11-03 · B2 · A crafted email can no longer break Nova's Gmail tools**
 - What changed: a web page or email containing a malformed character reference (such as `&#xzz;`) no longer breaks Nova's Gmail search and reading or a page fetch. Nova now decodes these with the same bounds-checked decoder its safety screen uses, and leaves a bad reference as written.
 - What you can now do: keep using Gmail tools and email summaries even when someone sends a message built to break them.
