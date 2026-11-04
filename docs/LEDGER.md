@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Config onboarding (door 1) · Bring settings in from a file, or take them out**
+- What changed: Settings has a new Configuration section. You can bring in a settings file, and Nova checks it first and shows every change before anything is applied. A key or password in the file is left out, with a note on where it belongs. The hub's own settings (devices, models, backups, capture) are also left out, because those are changed on their own screens. A change to privacy or to what asks first counts as tier 3, so it needs your passkey. You can also export your settings as a file with no secrets in it. Every import is recorded in the activity log.
+- What you can now do: move your personal settings between Nova installs, or keep a copy, with Export and "Choose a file" in Settings › Configuration.
+- Still unfinished: the other two ways in, a guided setup form (with Settings generated from the schema) and asking Nova in chat, come next. Where and how Nova starts (its folder, port and mesh address) stays in `nova.config.json`, because Nova needs those before it can read anything else.
+
 **2026-11-04 · T2 (3 of 3) · Tier 3 on Nova’s own screen needs a passkey**
 - What changed: Nova's own screen now needs a passkey for tier 3. A tier-3 request from this computer that carries no passkey approval is refused, even if it has Nova's X-Nova header (which any program here can send). With no passkey yet, the answer says to add one in Settings › Security. Typed confirmations work the same way: a tier-3 service promotion or a device deployment needs the passkey too, while their tier-2 steps don't. A paired phone or browser that may approve still approves with its own device key, as before.
 - What you can now do: rely on tier 3 at this computer meaning a person was there. No other program on it can approve tier-3 work, change a gate, erase Nova or move the hub.
