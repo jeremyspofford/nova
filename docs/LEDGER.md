@@ -7,6 +7,18 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · UI rebuild (design) · A proposed calmer look, shown on the real app**
+- What changed: a proposed redesign of Nova's look, shown on the real app, for your reaction. Nothing in the app changes yet. It keeps the layout and changes the surfaces:
+  - one quiet light from above instead of layered glows;
+  - solid surfaces instead of frosted glass;
+  - on Home, one leading card and the rest as a calm list;
+  - the right column as a single list "at a glance";
+  - a conversation as one reading column;
+  - a flatter orb in the side rail;
+  - Health as plain sections instead of boxes in boxes.
+- What you can now do: compare before and after for Home, a conversation, Tasks, Health, Settings and Topology, at every screen size from a folded phone to a wide desktop, and say what to keep or change.
+- Still unfinished: after your reaction, each surface is rebuilt to match, and its screenshots are compared against the approved design.
+
 **2026-11-04 · Config onboarding (design) · A proposed design for setting Nova up three ways**
 - What changed: the living styleguide shows a proposed design for setting Nova up and changing its configuration. There are three ways in: bring in a file, fill in a form, or ask Nova in chat. All three show the same list of changes before anything is applied. Every setting says which layer set it (Nova's default, this hub, or your pack) and can go back to the default. A key or password in an imported file is left out, with a pointer to where it belongs. A first schema draft maps today's settings to these layers.
 - What you can now do: look at the design across desktop, tablet, phone and foldable sizes, and react before it's built.
