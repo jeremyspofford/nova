@@ -606,12 +606,6 @@ export class Infra {
     };
   }
 
-  runOf(taskId: string): string | null {
-    let t: Task;
-    try { t = this.#o.ledger.get(taskId); } catch { return null; }
-    return t.owner === INFRA_WORKER ? String(t.brief.inputs?.run_id ?? '') || null : null;
-  }
-
   // The person says no to the apply: its task is cancelled (the run then ends, declined).
   decline(id: string) {
     const r = this.#run_(id);

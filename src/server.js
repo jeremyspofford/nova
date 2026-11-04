@@ -345,7 +345,6 @@ export function createNova(config = loadConfig(), deps = {}) {
     }
 
     if (resource === 'health') return json(res, 200, { ok: true, agent: config.agentCmd.trim().split(/\s+/)[0] });
-    if (resource === 'config') return json(res, 200, { theme: config.theme, timezone: config.timezone });
 
     if (resource === 'events' && req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });

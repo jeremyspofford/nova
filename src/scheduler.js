@@ -155,17 +155,6 @@ export class Scheduler extends EventEmitter {
     return {};
   }
 
-  // Runs not started yet, oldest first.
-  get queue() {
-    return this.tasks().filter((t) => !begun(this.store, t.brief.inputs.run))
-      .map((t) => ({ id: t.brief.inputs.schedule, due: new Date(t.brief.inputs.due), run: t.brief.inputs.run, task: t.id }));
-  }
-
-  get running() {
-    const t = this.tasks().find((x) => x.state === 'active' && begun(this.store, x.brief.inputs.run));
-    return t ? this.status(t.brief.inputs.schedule).running : null;
-  }
-
   // Runs that stepped aside to wait for the person's answer.
   get waiting() {
     return new Map(this.tasks().filter((t) => t.state === 'waiting' && begun(this.store, t.brief.inputs.run))

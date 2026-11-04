@@ -163,10 +163,6 @@ export class Caps {
     return (tokens_in * p.usd_per_mtok_in + tokens_out * p.usd_per_mtok_out) / 1e6;
   }
 
-  priced(model: string, where: string): boolean {
-    return this.price(model, where, 0, 0) !== null;
-  }
-
   // ---- the store ---------------------------------------------------------------------------------
 
   #file(month: string): string { return join(this.dir, `${month}.jsonl`); }
@@ -216,15 +212,6 @@ export class Caps {
     return { month: monthKey, providers, total, words: `This month: ${n(tokensOf(total))} tokens${total.estimated_tokens ? ` (${n(total.estimated_tokens)} estimated)` : ''}, ${usd(total.usd)}${total.unpriced_tokens ? `, and ${n(total.unpriced_tokens)} tokens with no price` : ''}.` };
   }
 
-  // Usage a provider task reported after the fact (Claude Code, Codex, Relay): counted toward the
-  // day and the month. (Not capped live: those agents run their own loops.)
-  report(o: { task_id: string; provider: string; model: string; where: string; tokens_in?: number; tokens_out?: number; cost_usd?: number | null }): void {
-    const ti = Math.max(0, Math.round(o.tokens_in ?? 0));
-    const to = Math.max(0, Math.round(o.tokens_out ?? 0));
-    if (!ti && !to && !o.cost_usd) return;
-    this.#append({ kind: 'report', task_id: o.task_id, session_id: null, provider: o.provider, model: o.model, where: o.where, tokens_in: ti, tokens_out: to, estimated: false, usd: this.price(o.model, o.where, ti, to, o.cost_usd ?? null) });
-  }
-
   // The view for Settings and Health.
   view() {
     const today = this.dayOf();
@@ -268,8 +255,6 @@ export class Meter {
     this.#o = o;
     this.#append = append;
   }
-
-  get capped(): boolean { return this.#o.capped; }
 
   #stop(scope: 'task' | 'day', what: What, limit: number | null, spentNow: Spend, extra = ''): Stop {
     const l = this.#caps.limits();

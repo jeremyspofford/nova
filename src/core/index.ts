@@ -209,8 +209,6 @@ export interface CoreOptions {
   workers?: LanedWorker[];
   // Confirmation checkers by system, for systems Nova can read itself ("nova-sessions").
   confirmations?: Record<string, Checker>;
-  // Where the built-in design systems live; defaults to design-systems/ in the repo.
-  designSystems?: string;
   // The mesh listener, when there is one: where devices reach Nova, and what carries it.
   mesh?: MeshListenerInfo | null;
   // Where this hub runs (M10h, the capture data path's privacy rule): one of the person's own
@@ -344,7 +342,7 @@ export function createCore(o: CoreOptions) {
   const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace')), templates.worker, browser.worker, ...(o.workers ?? [])], defaultPrivacy: () => profile.privacyDefault(), now });
   templates.bind(ledger);
   browser.bind(ledger);
-  // Remote decision providers (JevProvider) are registered only once configured; local-only skips them anyway.
+  // Decisions here run on the local rules; Jev is a Decision Service seat (decision-service/seats/jev.ts).
   const decisions = new Decisions({ templates, providers: [rules], privacy: () => profile.privacyDefault(), log });
   const triggers = new Triggers({
     db, log, ledger, templates, rules, decisions, now, sandbox: o.sandbox === true,
@@ -370,7 +368,7 @@ export function createCore(o: CoreOptions) {
   };
   const setup = new Setup({ profile, ledger, now, onboarding, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
-  const design = new Design({ extensions, profile, ...(o.designSystems ? { dir: o.designSystems } : {}) });
+  const design = new Design({ extensions, profile });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
   const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)) });
   // A decision model's receipt is checked against the person's settings as they are at the send.

@@ -9,7 +9,7 @@ import { Ledger } from '../../src/core/ledger.ts';
 import { Verifier } from '../../src/core/verify.ts';
 import { Profile } from '../../src/core/profile.ts';
 import { Workspace, workspaceWorker } from '../../src/core/workspace.ts';
-import { Decisions, JevProvider, RulesProvider, Templates, type DecisionProvider } from '../../src/core/decide.ts';
+import { Decisions, QUESTION_TYPES, RulesProvider, Templates, type DecisionProvider } from '../../src/core/decide.ts';
 import { Triggers, type RuleInput } from '../../src/core/triggers.ts';
 
 function setup(opts: { providers?: (rules: RulesProvider) => DecisionProvider[]; at?: string } = {}) {
@@ -292,7 +292,7 @@ test('a paused heartbeat does not run, and does not catch up for the time it was
 
 test('in local-only mode the remote decision provider is never called, even when registered first', async () => {
   let calls = 0;
-  const jev = new JevProvider();
+  const jev: DecisionProvider = { id: 'jev', egress: 'remote', questionTypes: QUESTION_TYPES, decide: async () => { throw new Error('The Jev decision provider is not configured.'); } };
   const spy: DecisionProvider = { id: jev.id, egress: jev.egress, questionTypes: jev.questionTypes, decide: (t, i) => { calls += 1; return jev.decide(t, i); } };
   const { triggers, profile } = setup({ providers: (rules) => [spy, rules] });
   assert.equal(profile.privacyDefault(), 'local-only');
