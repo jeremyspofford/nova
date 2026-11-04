@@ -411,13 +411,14 @@ export class Triggers extends EventEmitter {
   }
 
   // A request the person made directly. It acts by definition; the record links the work to it.
-  reactive(task: Task, source = 'api'): TriggerRecord {
+  // A paired device's request says so instead (it is never the person, and waits for their OK).
+  reactive(task: Task, source = 'api', reason = 'You asked for it.'): TriggerRecord {
     const trigger_id = randomUUID();
     this.#db.run(
       `INSERT INTO trigger (trigger_id, rule_id, class, source, payload_ref, ledger_task_id, at) VALUES (?, NULL, 'reactive', ?, ?, ?, ?)`,
       trigger_id, source, sha256(JSON.stringify({ task_id: task.id })), task.id, this.#now().toISOString(),
     );
-    return this.#settle(trigger_id, { decision: 'act', reason: 'You asked for it.', model: null });
+    return this.#settle(trigger_id, { decision: 'act', reason, model: null });
   }
 
   // The heartbeat. Each due time is claimed once (rule:<id>@<due>), so overlapping ticks or a
