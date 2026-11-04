@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Config onboarding (door 2) · All your settings in one list, and a few questions**
+- What changed: Settings › Configuration now lists each of your own settings: timezone, quiet hours, your name, what Nova calls you, Nova's name, directness, warmth, speaking up and privacy. Each one shows where it came from, Nova's default or your pack. "Answer a few questions" goes through them in three steps (where and when, how Nova talks, privacy) and ends with the same list of changes as a file import. Nothing is saved until you say so. A change to privacy or quiet hours counts as tier 3, so it needs your passkey. "Use the default" puts one setting back, and that's recorded in the activity log. Nova now checks values at every door: a value that doesn't fit, in a file, a chat or this list, is named in plain words and nothing changes.
+- What you can now do: see and change every personal setting in one place, and put any one of them back to its default.
+- Still unfinished: the first-run setup conversation doesn't offer the questions yet. "This hub" settings don't have a layer of their own yet. You and Nova and Privacy still have their own controls beside this list, and the Privacy choice there still saves without the passkey (being fixed separately).
+
 **2026-11-04 · Config onboarding (door 3) · Change settings by asking Nova**
 - What changed: you can ask Nova in a conversation to change one of your settings, for example "set my timezone to Asia/Tokyo". Nova shows exactly what would change, in the same list as Settings › Configuration, and nothing changes until you allow it. A change to privacy or to what asks first counts as tier 3 and needs your passkey. Secrets and the hub's own settings are left out, saying why. Every change is recorded in the activity log.
 - What you can now do: change your personal settings by talking to Nova.
