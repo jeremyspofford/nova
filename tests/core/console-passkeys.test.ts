@@ -81,6 +81,19 @@ test('an approval confirms exactly one action, once', () => {
   assert.match(p.verify(action, a.get(c2, { origin: 'http://localhost:9999' })) ?? '', /origin/, 'signed on another page');
 });
 
+test('a tier-3 request is approved for exactly its method, path and body', () => {
+  const { p } = setup();
+  const a = new SoftKey();
+  const o = p.options(ORIGIN);
+  p.add({ registration: o.registration, ...a.create(o.challenge) }, ORIGIN);
+  const c = p.requestChallenge({ method: 'post', path: '/mesh/promote', body: { confirm: true } });
+  const signed = a.get(c);
+  const same = ConsolePasskeys.action('POST', '/mesh/promote', { confirm: true, passkey_approval: signed });
+  assert.match(p.verify(ConsolePasskeys.action('POST', '/mesh/promote', { confirm: true, extra: 1 }), signed) ?? '', /another action/, 'another body');
+  assert.equal(p.verify(same, signed), null, 'the approval itself is not part of the action');
+  refused(() => p.requestChallenge({ method: 'GET', path: '/x', body: {} }), 'validation', /names the request/);
+});
+
 test('passkeys only on localhost, with presence and verification, for this site', () => {
   const { p } = setup();
   refused(() => p.options('http://127.0.0.1:4318'), 'validation', /localhost/);

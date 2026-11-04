@@ -163,6 +163,21 @@ export class ConsolePasskeys {
 
   removeChallenge(id: string) { return this.challenge({ op: 'remove-passkey', id }, 'Remove a passkey'); }
 
+  // The action a tier-3 request on this screen is: its method, path and body, less the approval
+  // itself. A challenge is issued for that, and the request is checked against the same (T2).
+  static action(method: string, path: string, body: Record<string, unknown>): Record<string, unknown> {
+    const { passkey_approval: _drop, ...rest } = body ?? {};
+    return { method: method.toUpperCase(), path, body: rest };
+  }
+
+  requestChallenge(body: Record<string, unknown>) {
+    const method = typeof body.method === 'string' ? body.method : '';
+    const path = typeof body.path === 'string' ? body.path : '';
+    if (!/^(POST|PUT|PATCH|DELETE)$/i.test(method) || !path.startsWith('/')) throw new CoreError('validation', 'An approval names the request it is for: method, path and body.');
+    const inner = body.body && typeof body.body === 'object' && !Array.isArray(body.body) ? body.body as Record<string, unknown> : {};
+    return this.challenge(ConsolePasskeys.action(method, path, inner), `${method.toUpperCase()} ${path}`);
+  }
+
   remove(id: string, approval: unknown): PasskeysState {
     const rows = this.#rows();
     if (!rows.some((r) => r.id === id)) throw new CoreError('not_found', 'There is no such passkey.');
@@ -179,6 +194,7 @@ export class ConsolePasskeys {
       { method: 'GET', path: '/security/passkeys', summary: 'The passkeys that confirm tier-3 actions on this screen: how many, since when, and whether setup is complete (two).', handle: ({ who }) => { only(who); return this.state(); } },
       { method: 'POST', path: '/security/passkeys/options', summary: 'Start adding a passkey: a registration challenge, and an approval challenge to sign with an existing passkey when one exists.', handle: ({ who, headers }) => { only(who); return this.options(headers.origin); } },
       { method: 'POST', path: '/security/passkeys', summary: 'Add a passkey: its public key and WebAuthn creation data; after the first, an approval from an existing passkey.', body: '{registration, credential_id, public_key, authenticator_data, client_data_json, name?, approval?}', status: 201, handle: ({ who, body, headers }) => { only(who); return this.add(body, headers.origin); } },
+      { method: 'POST', path: '/security/approvals', summary: 'An approval challenge for one exact tier-3 request on this screen (its method, path and body), to sign with a passkey.', body: '{method, path, body}', handle: ({ who, body }) => { only(who); return this.requestChallenge(body); } },
       { method: 'POST', path: '/security/passkeys/{id}/remove-challenge', summary: 'An approval challenge for removing a passkey, to sign with one you keep.', handle: ({ who, params }) => { only(who); return this.removeChallenge(params.id!); } },
       { method: 'DELETE', path: '/security/passkeys/{id}', summary: 'Remove a passkey, with an approval from an existing one. The last passkey can’t be removed.', body: '{approval}', handle: ({ who, params, body }) => { only(who); return this.remove(params.id!, body.approval); } },
     ];
