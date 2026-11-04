@@ -13,6 +13,7 @@ const HELPERS = {
     card: 'the frame every card is drawn in (BriefCard, HandlingCard, …)', deviceDetail: 'words inside DeviceRow', pickedRoles: 'reads a form',
     takeoverState: 'what the takeover panel says', takeoverActions: 'buttons inside the takeover panel', takeoverRefused: 'a line inside the takeover panel',
     problemsSummary: 'words inside HealthCard', voiceState: 'words beside the composer',
+    configField: 'one setting inside the config setup step (config doors)',
     // Known debt, said plainly: exported but drawn nowhere in the app (the shell draws its own toast).
     toast: 'unused: the app’s toast is drawn by shell.js, whose markup the styleguide shows',
   },

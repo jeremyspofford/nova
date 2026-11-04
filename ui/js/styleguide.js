@@ -305,7 +305,7 @@ const configChanges = [
   { key: 'connectors.mail.key', label: 'Mail key', refused: 'This line had a key in it. Secrets never go in a configuration file, so it was left out. Add the key in Settings › Connections, where it goes to the vault.' },
 ];
 const configFields = [
-  { key: 'user.timezone', label: 'Timezone', help: 'Times and quiet hours follow it.', value: 'America/New_York', options: ['UTC', 'America/New_York', 'Europe/Lisbon'], layer: 'pack' },
+  { key: 'user.timezone', label: 'Timezone', help: 'Times and quiet hours follow it.', value: 'America/New_York', options: ['UTC', 'America/New_York', 'Asia/Tokyo'], layer: 'pack' },
   { key: 'notifications.quiet_hours', label: 'Quiet hours', help: 'Nova holds anything that can wait.', value: '22:00–07:00', layer: 'default' },
   { key: 'hub.home', label: 'Where Nova keeps your things', help: 'One folder of plain files on this hub.', value: '~/Nova', layer: 'hub' },
 ];
