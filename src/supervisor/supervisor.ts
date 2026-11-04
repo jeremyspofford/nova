@@ -495,15 +495,13 @@ export class Supervisor {
     if (msg?.nova !== 'request' || typeof msg.id !== 'string') return;
     const reply = (ok: boolean, said: string) => s.send({ nova: 'reply', id: msg.id, ok, said });
     if (msg.type === 'service-promote' || msg.type === 'service-rollback') {
-      const allowed = msg.type === 'service-promote' ? ['nova', 'id', 'type', 'service', 'version', 'confirm', 'expected', 'attested'] : ['nova', 'id', 'type', 'service', 'confirm', 'expected'];
+      const allowed = msg.type === 'service-promote' ? ['nova', 'id', 'type', 'service', 'version', 'confirm', 'expected'] : ['nova', 'id', 'type', 'service', 'confirm', 'expected'];
       if (Object.keys(msg).some(k => !allowed.includes(k)) || typeof msg.service !== 'string' || !/^[a-z][a-z0-9-]{0,127}$/.test(msg.service) || typeof msg.confirm !== 'string' || (msg.type === 'service-promote' && (typeof msg.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(msg.version)))) return void reply(false, 'Invalid service request.');
       if (!validServiceExpected(msg.expected)) return void reply(false, 'Invalid approved service state.');
       const expected = msg.expected;
       const service = msg.service, version = msg.version, confirm = msg.confirm, promote = msg.type === 'service-promote';
       const checked = promote ? this.manager.promotionCheck(service, version!, confirm, expected) : this.manager.rollbackCheck(service, confirm, expected);
       if (!checked.ok) return void reply(false, 'The service manager refused the change: check confirmation, readiness and the kept version.');
-      // Tier 3 asked from Nova's own screen without a passkey (T2): a program there, not the person.
-      if (promote && (checked as { tier?: number }).tier === 3 && (msg as { attested?: unknown }).attested === false) return void reply(false, 'Tier-3 actions on Nova’s own screen are confirmed with a passkey, and this request had none, so nothing was approved.');
       if (service === CONSOLE && this.#deploying) return void reply(false, 'A console deploy is already running.');
       s.send({ nova: 'reply', id: msg.id, ok: true, accepted: true, said: 'The service change was accepted. Refresh to observe the outcome; this does not confirm it is serving.' });
       // Give the requesting server a chance to return HTTP before a console switch stops it.

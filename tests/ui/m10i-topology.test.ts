@@ -115,7 +115,9 @@ test('M10i: server policy tiers, exact fixed action bodies, all rollbacks, reval
       await p.locator('#sheet:not([open])').waitFor({ state: 'attached' });
       assert.match(await p.locator('[data-topology-notice]').innerText(), /Accepted.*not.*serving/i);
       assert.equal(posts.length, n + 1, 'pending double click sends only once');
-      assert.deepEqual(posts.at(-1), { path: `/api/v1/services/hub/${service}/${action}`, body: action === 'promote' ? { version: '2.0.0', confirm: `${service}@2.0.0`, expected: { live: '1.0.0', previous: '0.9.0', assigned: null } } : { confirm: 'rollback', expected: { live: '1.0.0', previous: '0.9.0', assigned: null } } });
+      const { passkey_approval: approval, ...sent } = (posts.at(-1)!.body ?? {}) as Record<string, unknown>;
+      assert.equal(!!approval, expectedTier === 3, 'tier 3 carries its passkey approval (T2); tier 2 none');
+      assert.deepEqual({ path: posts.at(-1)!.path, body: sent }, { path: `/api/v1/services/hub/${service}/${action}`, body: action === 'promote' ? { version: '2.0.0', confirm: `${service}@2.0.0`, expected: { live: '1.0.0', previous: '0.9.0', assigned: null } } : { confirm: 'rollback', expected: { live: '1.0.0', previous: '0.9.0', assigned: null } } });
     }
     await map(p, f.base); await detail(p, f.hubId); await p.locator('[data-topology-action="promote"]').click();
     const before = posts.length; f.controls.policy = 3;

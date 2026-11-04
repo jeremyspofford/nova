@@ -1341,8 +1341,11 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
         if (!validServiceExpected(body.expected)) throw new CoreError('validation', 'A closed approved service state is required.');
         if (body.confirm !== (action === 'promote' ? `${service}@${body.version}` : 'rollback')) throw new CoreError('validation', 'The typed confirmation does not match this action.');
         if (!o.supervisor?.service) throw new CoreError('conflict', 'The supervisor service authority is unavailable.');
-        const attested = who.principal.kind !== 'console' || !!passkey;
-        const r = await o.supervisor.service(action === 'promote' ? { action, service, version: body.version as string, confirm: body.confirm, expected: body.expected, ...(attested ? {} : { attested: false }) } : { action, service, confirm: body.confirm, expected: body.expected });
+        // Tier 3 asked from Nova's own screen needs its passkey (T2). The tier is the supervisor's own
+        // policy for that version; a version without one counts as tier 3 (absence never grants).
+        const tier = action === 'promote' ? o.supervisor.state?.()?.service_policies?.find((p) => p.service === service && p.version === body.version)?.promotion_tier ?? 3 : 2;
+        if (tier === 3 && who.principal.kind === 'console' && !passkey) throw new CoreError('forbidden', passkeys.state().count ? PASSKEY_NEEDED : NO_PASSKEY);
+        const r = await o.supervisor.service(action === 'promote' ? { action, service, version: body.version as string, confirm: body.confirm, expected: body.expected } : { action, service, confirm: body.confirm, expected: body.expected });
         if (!r.ok) throw new CoreError('conflict', r.said);
         return r;
       },

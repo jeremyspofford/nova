@@ -36,6 +36,8 @@ export function assertion(c: { id: string; digest: string; challenge: string }, 
 export async function enrollPasskeys(send: Send, base: string) {
   const origin = consoleOrigin(base);
   const h = { 'x-nova': '1', origin };
+  // A node that has them already (a standby, by replication) keeps them.
+  if ((await send('GET', '/api/v1/security/passkeys', undefined, h)).body?.count >= PASSKEY.ids.length) return;
   for (const [i, id] of PASSKEY.ids.entries()) {
     const o = (await send('POST', '/api/v1/security/passkeys/options', {}, h)).body;
     const cred = Buffer.from(id, 'base64url');
