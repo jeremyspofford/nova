@@ -361,13 +361,24 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         const lostPutRequests: string[] = [];
         p.on('requestfailed', r => { if (r.method() === 'PUT' && r.url().endsWith('/caps/limits')) lostPutRequests.push(r.failure()?.errorText ?? ''); });
         await p.route('**/api/v1/caps/limits', route => route.abort('connectionrefused'));
+        // Every state the panel passes through, with whether Save could be pressed then: a passive
+        // live read (task, profile or sync events) may legitimately restore freshness right after
+        // the failure, so the test checks the transition happened rather than racing to see it.
+        await p.evaluate(() => {
+          const seen: string[] = ((window as unknown as { __costStates: string[] }).__costStates = []);
+          const note = () => { const s = document.querySelector('.work-costs')?.getAttribute('data-work-costs-state') ?? ''; const save = document.querySelector('[data-save-work-limits]') as HTMLButtonElement | null; const v = `${s}:${save?.disabled ? 'disabled' : 'enabled'}`; if (seen.at(-1) !== v) seen.push(v); };
+          new MutationObserver(note).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-work-costs-state', 'disabled'] });
+        });
         await form.locator('[data-save-work-limits]').click();
-        await p.locator('[data-work-costs-state="save-error"], [data-work-costs-state="unavailable"]').waitFor();
-        assert.equal(await p.locator('.work-costs').getAttribute('data-work-costs-state'), 'unavailable', 'a failed mutation connection invalidates freshness until retry');
-        assert.equal(await form.locator('[data-save-work-limits]').isDisabled(), true);
+        await p.waitForFunction(() => (window as unknown as { __costStates: string[] }).__costStates.some(s => s.startsWith('unavailable:')));
+        const states = await p.evaluate(() => (window as unknown as { __costStates: string[] }).__costStates);
+        assert.ok(states.includes('unavailable:disabled'), `a failed mutation connection invalidates freshness and disables Save until a live read: ${states.join(' → ')}`);
+        assert.ok(!states.some(s => s.startsWith('success:')), 'a lost save never shows as saved');
         assert.deepEqual((await m.get('/api/v1/caps')).limits, beforeLostSave);
         await p.unroute('**/api/v1/caps/limits');
-        await p.getByRole('button', { name: 'Retry work costs', exact: true }).click();
+        // Retry if the page still says unavailable; a newer live read may already have restored it.
+        // Checked and pressed in one step in the page, so it can't vanish between the two.
+        await p.evaluate(() => (document.querySelector('[data-retry-work-costs]') as HTMLButtonElement | null)?.click());
         await p.locator('[data-work-costs-state="ready"]').waitFor();
         const beforeRefusal = (await m.get('/api/v1/caps')).limits;
         await p.route('**/api/v1/caps/limits', route => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"Synthetic save refused"}' }));

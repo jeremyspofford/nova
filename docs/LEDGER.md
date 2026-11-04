@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Test stability · The Health work-costs test stops failing at random**
+- What changed: a Health test that sometimes failed for no product reason now checks the right thing. After a lost save, Nova's work-costs panel does go to "unavailable" with Save disabled. A normal background refresh can then make it fresh again a moment later, and the test used to lose that race. It now records every state the panel passes through and checks that the transition happened. It also presses Retry only if the panel still needs it.
+- What you can now do: nothing new in the app. CI should fail less often for no reason.
+- Still unfinished: the other intermittent UI tests (WebKit cancelled requests, the reset 503, browser-profile cleanup, R13 replay) are next in the stability pass.
+
 **2026-11-04 · T2 (1 of 3) · Nova can keep and check passkeys for its own screen**
 - What changed: Nova's core can now keep passkeys for its own screen and check them: adding one, confirming a single exact action with one, and removing one. The first passkey is taken on trust; every later add or remove needs one you already have; setup counts as complete with two; the last one can't be removed. Only public keys are kept, and they are copied to a standby, so a standby that becomes hub asks for the same passkeys.
 - What you can now do: nothing yet in the app. This is the first of three steps; the next adds the screens to set passkeys up and the passkey step to tier-3 sheets, and the last makes tier 3 on this screen require a passkey.
