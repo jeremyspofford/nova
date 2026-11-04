@@ -1,4 +1,4 @@
-// T2 design-first: the proposed passkey confirmation for tier 3, in the living styleguide only.
+// T2 design-first: the passkey confirmation for tier 3 (approved in #291), in the living styleguide.
 // No app flow, no WebAuthn call, no approval: the specimen must never touch navigator.credentials.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -89,7 +89,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
           const changes: string[] = [];
           p.on('request', (r) => { if (!['GET', 'HEAD'].includes(r.method())) changes.push(`${r.method()} ${r.url()}`); });
           await p.goto(`${base}/styleguide?entry=passkey-approval`);
-          assert.equal(await p.getByRole('heading', { name: 'Passkey confirmation (proposed)', exact: true }).count(), 1);
+          assert.equal(await p.getByRole('heading', { name: 'Passkey confirmation', exact: true }).count(), 1);
           const themes = await p.locator('#sg-ds option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
           assert.equal(themes.length, 6);
           for (const theme of themes) {
