@@ -584,7 +584,7 @@ export function passkeyConfirm({ state = 'ready', confirmed = false } = {}) {
 }
 export function passkeyAction({ state = 'ready', confirmed = false } = {}) {
   const b = (action, label, o = {}) => `<button type="${o.submit ? 'submit' : 'button'}" class="btn ${o.quiet ? 'quiet' : 'primary'}" data-action="${action}"${o.disabled ? ' disabled' : ''}${o.busy ? ' aria-busy="true"' : ''}>${esc(label)}</button>`;
-  if (state === 'waiting') return `${b('passkey-wait', 'Waiting for your passkey…', { disabled: true, busy: true })}${b('passkey-stop', 'Stop waiting', { quiet: true })}`;
+  if (state === 'waiting') return `${b('passkey-wait', 'Waiting for your passkey', { disabled: true, busy: true })}${b('passkey-stop', 'Stop waiting', { quiet: true })}`;
   if (state === 'expired') return b('passkey-ask-again', 'Ask again');
   if (state === 'no-passkey') return b('passkey-add', 'Add a passkey');
   if (state === 'unavailable' || state === 'confirmed') return '';
@@ -607,7 +607,7 @@ export function passkeySetup({ state = 'start', name = 'This computer’s passke
   };
   const [role, line] = lines[state] ?? lines.start;
   const label = state === 'failed' ? 'Try again' : count === 1 ? 'Add a second passkey' : count >= 2 ? 'Add another passkey' : 'Add a passkey';
-  const action = state === 'waiting' ? '<button type="button" class="btn primary" data-action="passkey-setup-wait" disabled aria-busy="true">Waiting for your browser…</button>'
+  const action = state === 'waiting' ? '<button type="button" class="btn primary" data-action="passkey-setup-wait" disabled aria-busy="true">Waiting for your browser</button>'
     : state !== 'unavailable' ? `<button type="button" class="btn ${count >= 2 && state !== 'failed' ? '' : 'primary'}" data-action="passkey-setup">${label}</button>` : '';
   const list = passkeys.length ? `<ul class="settings-list">${passkeys.map((p) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(p.name)}</p><p class="settings-note">Added ${esc(new Date(p.created_at).toLocaleDateString())}${p.created_at === first ? ', the first, taken on trust' : ''}</p></div></li>`).join('')}</ul>` : '';
   return `<section class="passkey-setup" aria-labelledby="passkey-setup-title" data-passkey-count="${count}"><h3 class="settings-group-title" id="passkey-setup-title">Passkeys for tier-3 actions</h3>${list}<p class="settings-note" role="${role}" data-passkey-setup-state="${esc(state)}">${esc(line)}</p>${action ? `<div class="connection-actions">${action}</div>` : ''}</section>`;
