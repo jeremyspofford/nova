@@ -12,6 +12,11 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: nothing new to do; capture sources behave as before, with less background churn.
 - Still unfinished: nothing for this fix.
 
+**2026-11-03 · B5 · Nova starts from a folder with a space in its name**
+- What changed: Nova's server and its supervisor now start from any folder. Before, they silently did nothing when started from a native Windows path or a folder whose name needs encoding in a web address, such as one with a space in it.
+- What you can now do: keep Nova in a folder like "my code" and start it normally.
+- Still unfinished: native Windows is still not a tested platform; this fixes the start check, not every Windows path elsewhere.
+
 **2026-11-03 · B4 · A bad setting can no longer stop Nova's scheduled checks**
 - What changed: the list of automation kinds you turned off is now read the same way everywhere. A malformed setting no longer stops every scheduled check, and a message held during quiet hours for a rule you turned off is withdrawn even when the name's capitalisation differs, instead of being delivered.
 - What you can now do: trust that turning a rule or kind off also stops its messages that were waiting for quiet hours to end.

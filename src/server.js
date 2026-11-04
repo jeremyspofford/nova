@@ -7,6 +7,7 @@ import { stripTypeScriptTypes } from 'node:module';
 import { createServer as createTlsServer } from 'node:https';
 import { createReadStream, existsSync, readFileSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { ConfigError, loadConfig } from './config.js';
 import { ensureGit, seedHome } from './home.js';
 import { SessionStore, validId } from './sessions.js';
@@ -630,7 +631,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   return { server, mesh, meshInfo, runner, store, scheduler, helpers, chatRun, config, seeded, started, core };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// As device/boot.ts does: a native Windows path or one needing URL encoding must still match (B5).
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   let nova;
   try {
     const context = await ipcBroker(process);
