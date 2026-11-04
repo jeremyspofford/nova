@@ -30,6 +30,7 @@ import { createInterface } from 'node:readline/promises';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { CODE_ROOT, type SupervisorState } from '../core/index.ts';
 import { loadConfig } from '../config.js';
 import { BASE, DEFAULT_TIMINGS, Supervisor, type Timings } from './supervisor.ts';
@@ -238,4 +239,5 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   return a.cmd === 'help' ? 0 : 2;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) process.exitCode = await main();
+// As device/boot.ts does: a native Windows path or one needing URL encoding must still match (B5).
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) process.exitCode = await main();

@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-03 · B5 · Nova starts from a folder with a space in its name**
+- What changed: Nova's server and its supervisor now start from any folder. Before, they silently did nothing when started from a native Windows path or a folder whose name needs encoding in a web address, such as one with a space in it.
+- What you can now do: keep Nova in a folder like "my code" and start it normally.
+- Still unfinished: native Windows is still not a tested platform; this fixes the start check, not every Windows path elsewhere.
+
 **2026-11-03 · B3 · A revoked device no longer counts as yours for connector privacy**
 - What changed: when you revoke a device, Nova no longer treats a connector pointing at that device's address as staying on your own devices. Under the local-only privacy setting, such a connector is now refused, the same way providers and capture already treat revoked devices.
 - What you can now do: revoke a device knowing its address stops counting as yours for privacy everywhere in Nova.
