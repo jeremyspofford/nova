@@ -1,0 +1,2914 @@
+[
+  {
+    "engine": "chromium",
+    "posture": "phone",
+    "state": "configured",
+    "kind": "app",
+    "measured": {
+      "top": 350.25,
+      "bottom": 539.5,
+      "clipTop": 117,
+      "clipBottom": 773.25,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 350.25,
+          "bottom": 364,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 372,
+          "bottom": 411,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 423,
+          "bottom": 443,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 447,
+          "bottom": 466.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 478.5,
+          "bottom": 526.5,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "phone",
+    "state": "configured",
+    "kind": "specimen",
+    "measured": {
+      "top": 578.25,
+      "bottom": 767.5,
+      "clipTop": 0,
+      "clipBottom": 844,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 578.25,
+          "bottom": 592,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 600,
+          "bottom": 639,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 651,
+          "bottom": 671,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 675,
+          "bottom": 694.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 706.5,
+          "bottom": 754.5,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "phone",
+    "state": "confirm",
+    "kind": "app",
+    "measured": {
+      "top": 293.25,
+      "bottom": 613.25,
+      "clipTop": 117,
+      "clipBottom": 773.25,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 293.25,
+          "bottom": 307,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 315,
+          "bottom": 354,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 362,
+          "bottom": 378.25,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 394.25,
+          "bottom": 433.25,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 457.25,
+          "bottom": 537.25,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 565.25,
+          "bottom": 613.25,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 565.25,
+          "bottom": 613.25,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "phone",
+    "state": "confirm",
+    "kind": "specimen",
+    "measured": {
+      "top": 448.25,
+      "bottom": 768.25,
+      "clipTop": 0,
+      "clipBottom": 844,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 448.25,
+          "bottom": 462,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 470,
+          "bottom": 509,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 517,
+          "bottom": 533.25,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 549.25,
+          "bottom": 588.25,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 612.25,
+          "bottom": 692.25,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 720.25,
+          "bottom": 768.25,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 720.25,
+          "bottom": 768.25,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "phone",
+    "state": "shown",
+    "kind": "app",
+    "measured": {
+      "top": 293.25,
+      "bottom": 538,
+      "clipTop": 117,
+      "clipBottom": 773.25,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 293.25,
+          "bottom": 307,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 315,
+          "bottom": 354,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 358,
+          "bottom": 397,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 423,
+          "bottom": 459.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 490,
+          "bottom": 538,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 490,
+          "bottom": 538,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "phone",
+    "state": "shown",
+    "kind": "specimen",
+    "measured": {
+      "top": 523.25,
+      "bottom": 768,
+      "clipTop": 0,
+      "clipBottom": 844,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 523.25,
+          "bottom": 537,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 545,
+          "bottom": 584,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 588,
+          "bottom": 627,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 653,
+          "bottom": 689.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 720,
+          "bottom": 768,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 720,
+          "bottom": 768,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "phone",
+    "state": "unavailable",
+    "kind": "app",
+    "measured": {
+      "top": 197.25,
+      "bottom": 346,
+      "clipTop": 117,
+      "clipBottom": 773.25,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 197.25,
+          "bottom": 211,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 219,
+          "bottom": 258,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 270,
+          "bottom": 290,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 294,
+          "bottom": 333,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "phone",
+    "state": "unavailable",
+    "kind": "specimen",
+    "measured": {
+      "top": 554.75,
+      "bottom": 703.5,
+      "clipTop": 0,
+      "clipBottom": 844,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 554.75,
+          "bottom": 568.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 576.5,
+          "bottom": 615.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 627.5,
+          "bottom": 647.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 651.5,
+          "bottom": 690.5,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "rail",
+    "state": "configured",
+    "kind": "app",
+    "measured": {
+      "top": 736.25,
+      "bottom": 846.5,
+      "clipTop": 97.5,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 736.25,
+          "bottom": 750,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 758,
+          "bottom": 777.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 789.75,
+          "bottom": 809.75,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 813.75,
+          "bottom": 833.25,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 789.5,
+          "bottom": 833.5,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "rail",
+    "state": "configured",
+    "kind": "specimen",
+    "measured": {
+      "top": 713.75,
+      "bottom": 824,
+      "clipTop": 0,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 713.75,
+          "bottom": 727.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 735.5,
+          "bottom": 755,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 767.25,
+          "bottom": 787.25,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 791.25,
+          "bottom": 810.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 767,
+          "bottom": 811,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "rail",
+    "state": "confirm",
+    "kind": "app",
+    "measured": {
+      "top": 607.25,
+      "bottom": 899.75,
+      "clipTop": 97.5,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 607.25,
+          "bottom": 621,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 629,
+          "bottom": 648.5,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 656.5,
+          "bottom": 672.75,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 688.75,
+          "bottom": 727.75,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 751.75,
+          "bottom": 827.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 855.75,
+          "bottom": 899.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 855.75,
+          "bottom": 899.75,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "rail",
+    "state": "confirm",
+    "kind": "specimen",
+    "measured": {
+      "top": 626.75,
+      "bottom": 899.75,
+      "clipTop": 0,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 626.75,
+          "bottom": 640.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 648.5,
+          "bottom": 668,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 676,
+          "bottom": 692.25,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 708.25,
+          "bottom": 727.75,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 751.75,
+          "bottom": 827.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 855.75,
+          "bottom": 899.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 855.75,
+          "bottom": 899.75,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "rail",
+    "state": "shown",
+    "kind": "app",
+    "measured": {
+      "top": 607.25,
+      "bottom": 809,
+      "clipTop": 97.5,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 607.25,
+          "bottom": 621,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 629,
+          "bottom": 648.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 652.5,
+          "bottom": 691.5,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 717.5,
+          "bottom": 734.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 765,
+          "bottom": 809,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 765,
+          "bottom": 809,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "rail",
+    "state": "shown",
+    "kind": "specimen",
+    "measured": {
+      "top": 641.75,
+      "bottom": 824,
+      "clipTop": 0,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 641.75,
+          "bottom": 655.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 663.5,
+          "bottom": 683,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 687,
+          "bottom": 706.5,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 732.5,
+          "bottom": 749.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 780,
+          "bottom": 824,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 780,
+          "bottom": 824,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "rail",
+    "state": "unavailable",
+    "kind": "app",
+    "measured": {
+      "top": 571.25,
+      "bottom": 681,
+      "clipTop": 97.5,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 571.25,
+          "bottom": 585,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 593,
+          "bottom": 612.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 624.5,
+          "bottom": 644.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 648.5,
+          "bottom": 668,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "rail",
+    "state": "unavailable",
+    "kind": "specimen",
+    "measured": {
+      "top": 654.25,
+      "bottom": 764,
+      "clipTop": 0,
+      "clipBottom": 900,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 654.25,
+          "bottom": 668,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 676,
+          "bottom": 695.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 707.5,
+          "bottom": 727.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 731.5,
+          "bottom": 751,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "tablet",
+    "state": "configured",
+    "kind": "app",
+    "measured": {
+      "top": 804.25,
+      "bottom": 918.5,
+      "clipTop": 97.5,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 804.25,
+          "bottom": 818,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 826,
+          "bottom": 845.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 859.75,
+          "bottom": 879.75,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 883.75,
+          "bottom": 903.25,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 857.5,
+          "bottom": 905.5,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "tablet",
+    "state": "configured",
+    "kind": "specimen",
+    "measured": {
+      "top": 990.75,
+      "bottom": 1105,
+      "clipTop": 0,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 990.75,
+          "bottom": 1004.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 1012.5,
+          "bottom": 1032,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 1046.25,
+          "bottom": 1066.25,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 1070.25,
+          "bottom": 1089.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1044,
+          "bottom": 1092,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "tablet",
+    "state": "confirm",
+    "kind": "app",
+    "measured": {
+      "top": 804.25,
+      "bottom": 1104.75,
+      "clipTop": 97.5,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 804.25,
+          "bottom": 818,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 826,
+          "bottom": 845.5,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 853.5,
+          "bottom": 869.75,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 885.75,
+          "bottom": 924.75,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 948.75,
+          "bottom": 1028.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1056.75,
+          "bottom": 1104.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1056.75,
+          "bottom": 1104.75,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "tablet",
+    "state": "confirm",
+    "kind": "specimen",
+    "measured": {
+      "top": 898.75,
+      "bottom": 1179.75,
+      "clipTop": 0,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 898.75,
+          "bottom": 912.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 920.5,
+          "bottom": 940,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 948,
+          "bottom": 964.25,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 980.25,
+          "bottom": 999.75,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 1023.75,
+          "bottom": 1103.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1131.75,
+          "bottom": 1179.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1131.75,
+          "bottom": 1179.75,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "tablet",
+    "state": "shown",
+    "kind": "app",
+    "measured": {
+      "top": 804.25,
+      "bottom": 1010,
+      "clipTop": 97.5,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 804.25,
+          "bottom": 818,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 826,
+          "bottom": 845.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 849.5,
+          "bottom": 888.5,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 914.5,
+          "bottom": 931.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 962,
+          "bottom": 1010,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 962,
+          "bottom": 1010,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "tablet",
+    "state": "shown",
+    "kind": "specimen",
+    "measured": {
+      "top": 917.75,
+      "bottom": 1104,
+      "clipTop": 0,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 917.75,
+          "bottom": 931.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 939.5,
+          "bottom": 959,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 963,
+          "bottom": 982.5,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 1008.5,
+          "bottom": 1025.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1056,
+          "bottom": 1104,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 1056,
+          "bottom": 1104,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "tablet",
+    "state": "unavailable",
+    "kind": "app",
+    "measured": {
+      "top": 764.25,
+      "bottom": 874,
+      "clipTop": 97.5,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 764.25,
+          "bottom": 778,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 786,
+          "bottom": 805.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 817.5,
+          "bottom": 837.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 841.5,
+          "bottom": 861,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "tablet",
+    "state": "unavailable",
+    "kind": "specimen",
+    "measured": {
+      "top": 930.25,
+      "bottom": 1040,
+      "clipTop": 0,
+      "clipBottom": 1180,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 930.25,
+          "bottom": 944,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 952,
+          "bottom": 971.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 983.5,
+          "bottom": 1003.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 1007.5,
+          "bottom": 1027,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "halfopen",
+    "state": "configured",
+    "kind": "app",
+    "measured": {
+      "top": 301.75,
+      "bottom": 471.5,
+      "clipTop": 97.5,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 301.75,
+          "bottom": 315.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 323.5,
+          "bottom": 343,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 355,
+          "bottom": 375,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 379,
+          "bottom": 398.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 410.5,
+          "bottom": 458.5,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "halfopen",
+    "state": "configured",
+    "kind": "specimen",
+    "measured": {
+      "top": 484.75,
+      "bottom": 599,
+      "clipTop": 0,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 484.75,
+          "bottom": 498.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 506.5,
+          "bottom": 526,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 540.25,
+          "bottom": 560.25,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 564.25,
+          "bottom": 583.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 538,
+          "bottom": 586,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-reveal",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "halfopen",
+    "state": "confirm",
+    "kind": "app",
+    "measured": {
+      "top": 374.75,
+      "bottom": 675.25,
+      "clipTop": 97.5,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 374.75,
+          "bottom": 388.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 396.5,
+          "bottom": 416,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 424,
+          "bottom": 440.25,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 456.25,
+          "bottom": 495.25,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 519.25,
+          "bottom": 599.25,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 627.25,
+          "bottom": 675.25,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 627.25,
+          "bottom": 675.25,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "halfopen",
+    "state": "confirm",
+    "kind": "specimen",
+    "measured": {
+      "top": 393.75,
+      "bottom": 674.75,
+      "clipTop": 0,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 393.75,
+          "bottom": 407.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 415.5,
+          "bottom": 435,
+          "unobscured": true
+        },
+        {
+          "tag": "H3",
+          "top": 443,
+          "bottom": 459.25,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 475.25,
+          "bottom": 494.75,
+          "unobscured": true
+        },
+        {
+          "tag": "LABEL",
+          "top": 518.75,
+          "bottom": 598.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 626.75,
+          "bottom": 674.75,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 626.75,
+          "bottom": 674.75,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "confirm",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-confirm",
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-cancel",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "halfopen",
+    "state": "shown",
+    "kind": "app",
+    "measured": {
+      "top": 253.75,
+      "bottom": 479,
+      "clipTop": 97.5,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 253.75,
+          "bottom": 267.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 275.5,
+          "bottom": 295,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 299,
+          "bottom": 338,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 364,
+          "bottom": 400.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 431,
+          "bottom": 479,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 431,
+          "bottom": 479,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "halfopen",
+    "state": "shown",
+    "kind": "specimen",
+    "measured": {
+      "top": 412.75,
+      "bottom": 599,
+      "clipTop": 0,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 412.75,
+          "bottom": 426.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 434.5,
+          "bottom": 454,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 458,
+          "bottom": 477.5,
+          "unobscured": true
+        },
+        {
+          "tag": "CODE",
+          "top": 503.5,
+          "bottom": 520.5,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 551,
+          "bottom": 599,
+          "unobscured": true
+        },
+        {
+          "tag": "BUTTON",
+          "top": 551,
+          "bottom": 599,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-save",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-target",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-clear-encrypted",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-copy",
+        "disabled": false
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-hide",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "halfopen",
+    "state": "unavailable",
+    "kind": "app",
+    "measured": {
+      "top": 157.75,
+      "bottom": 267.5,
+      "clipTop": 97.5,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 157.75,
+          "bottom": 171.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 179.5,
+          "bottom": 199,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 211,
+          "bottom": 231,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 235,
+          "bottom": 254.5,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  },
+  {
+    "engine": "chromium",
+    "posture": "halfopen",
+    "state": "unavailable",
+    "kind": "specimen",
+    "measured": {
+      "top": 425.25,
+      "bottom": 535,
+      "clipTop": 0,
+      "clipBottom": 675,
+      "painted": [
+        {
+          "tag": "H3",
+          "top": 425.25,
+          "bottom": 439,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 447,
+          "bottom": 466.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 478.5,
+          "bottom": 498.5,
+          "unobscured": true
+        },
+        {
+          "tag": "P",
+          "top": 502.5,
+          "bottom": 522,
+          "unobscured": true
+        }
+      ]
+    },
+    "controls": [
+      {
+        "tag": "INPUT",
+        "name": "target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "keep",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "INPUT",
+        "name": "encrypted_target",
+        "action": null,
+        "disabled": true
+      },
+      {
+        "tag": "BUTTON",
+        "name": null,
+        "action": "backups-retry",
+        "disabled": false
+      }
+    ]
+  }
+]

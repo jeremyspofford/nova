@@ -1,0 +1,18 @@
+{
+  "utc": "2026-11-03T18:02:31.295057+00:00",
+  "files": {
+    "ui/js/app.js": "5986e7bf2c66ae8c06f3059ec05c98b253cf1ccad4a5ee384ae387c601c0dcfb",
+    "ui/js/surfaces.js": "812eeee436a3cc3aa85181d8bb73f003987b16130806189e4c6d39f9a16eefb3",
+    "ui/js/view.js": "d8886545f2beb59803832ed6dd6498048782f047f6bfd5d6f1f7dcbbca765083",
+    "ui/js/settings-ia.js": "5d66a3c07999e3081619178994bfb16efacd0b32761ef7a490d41c5bb9f13061",
+    "tests/ui/backups-settings.test.ts": "6bba41804c0cd146f1577145067a3e3c7a8a8b8b2c38edb22393bdcce08c3d25",
+    "tests/ui/backups-settings-visual.test.ts": "b34d663fff73c1a2c8e3f7ec62ed210bc6681f4a6ebd8eb1fd697b6ea6ac46be",
+    "tests/ui/navigation-reachability.test.ts": "e55e1bcc615002b04b7f14f77ee69948ab4e220b80775fd8782d5415e9fd1bbe",
+    "tests/ui-fixes.test.js": "5bdb8543ea77181e7732a2e064fced4245f2a3cad2923e9025cfebbf28594230",
+    "tests/ui/backups-settings-styleguide.test.ts": "cb0258a26a19753090218e5bcd68159f1d26e2fabc2b4af2e95097e2f85df1c5",
+    "ui/js/components.js": "a0d6391e0e8d8c0dfebe5e2c666e60980e410c69af6a6f80f82fa85939ce261f",
+    "src/core/resilience/index.ts": "1cfb45fe8752fefb7826bb0d51e5c7c38b1e1e28fd254b8c686d898f16e50c48",
+    "package.json": "4e5463f62336020fbbb0733b931050e4ee4a424142d4db56ebe60d7b766172c2",
+    "package-lock.json": "6879ef97e46aec6de9e8371192c5dac06de4c0e4532d58e08884ead00b9bd305"
+  }
+}

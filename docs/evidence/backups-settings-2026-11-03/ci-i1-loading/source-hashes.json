@@ -1,0 +1,18 @@
+{
+  "current": {
+    "ui/js/view.js": "07fd0c1ed92870f6cda54adcdc40f6fe9985ee80822a2816608851d1e755e949",
+    "ui/js/styleguide.js": "87c4f2c279aa8d0124306b7938c854dcdfc4cd36f23fd14aff315b061a492d18",
+    "ui/styles/views.css": "7c66d744690cbd0d724b06e093200acafab6ccef8e444f23a8711ac030c76730",
+    "ui/styles/styleguide.css": "0f518b739f7319f4e12af4d2cea867550d790e31e38898479a118ba503e52e4e",
+    "tests/backups-settings-view.test.js": "875266914b92c5e0ad7097699b2a67b4b2b40e83c93ab55b9e259c241cb849eb",
+    "tests/ui/backups-settings-styleguide.test.ts": "cb0258a26a19753090218e5bcd68159f1d26e2fabc2b4af2e95097e2f85df1c5",
+    "package.json": "4e5463f62336020fbbb0733b931050e4ee4a424142d4db56ebe60d7b766172c2",
+    "package-lock.json": "6879ef97e46aec6de9e8371192c5dac06de4c0e4532d58e08884ead00b9bd305",
+    "ui/js/wait.js": "0b6b1301204f6087b30670306aef0173ae1d4cfd2e945612f96137b3fa07937a",
+    "tests/m9-wait.test.js": "41d61f51ad3c137f5508cb6345bb39cf4490ed50afc129c6571aacaea95687bc"
+  },
+  "unchanged_shared_wait_and_gate": [
+    "ui/js/wait.js",
+    "tests/m9-wait.test.js"
+  ]
+}

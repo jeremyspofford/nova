@@ -9132,7 +9132,7 @@
       "id": "C50",
       "original_line": 73,
       "capability": "Storage (ADR-4: SQLite + plain files)",
-      "app_shipping": "Partial: Checkpoints list/Create control and Health reached. Restore/delete/backup/drill conditional; nightly/encrypted target, recovery key and encrypted drill setup API-only.",
+      "app_shipping": "Partial, verified in synthetic Task2 app tests: Home \u2192 Settings \u2192 Backups reaches folder/retention/encrypted-copy controls and console recovery confirmation in phone/rail; real save/readback, first key, repeated console confirmation, paired/viewer guards, explicit removal and retained-file sentinel exercised. Checkpoints and Health controls retained. Encrypted drill selection remains API-only; storage/migration/hash/remote-target and original UNPROVEN guarantees unchanged.",
       "orphan_ids": [
         "O58",
         "O59",
@@ -9148,7 +9148,14 @@
           "/health"
         ]
       },
-      "conditional_operations_exercised": false
+      "conditional_operations_exercised": false,
+      "task2_verification": {
+        "date": "2026-11-03",
+        "evidence": "docs/evidence/backups-settings-2026-11-03/task-2/README.md",
+        "home_crawl": "canonical-crawl",
+        "real_app_behavior": "lifecycle-green",
+        "scope": "Synthetic private fixtures only; independent review/qualified Health integration/full hosted CI remain Root gates. O58 partially resolved, O59/O60 retained."
+      }
     },
     {
       "id": "C51",

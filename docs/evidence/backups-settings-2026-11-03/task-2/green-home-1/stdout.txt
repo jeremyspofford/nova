@@ -1,0 +1,12 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✔ Backups from Home: phone saves, confirms, clears and retains drafts (2964.578546ms)
+✔ Backups from Home: rail saves, confirms, clears and retains drafts (2284.045004ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5528.776035
+no-Kubernetes tripwire: never fired

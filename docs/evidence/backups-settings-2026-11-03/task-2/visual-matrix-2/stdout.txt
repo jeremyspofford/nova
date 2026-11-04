@@ -1,0 +1,48 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ Backups app/specimen chromium: four postures, native recovery bands and accessibility (2769.848306ms)
+✖ Backups app/specimen webkit: four postures, native recovery bands and accessibility (3483.654543ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6697.452744
+
+✖ failing tests:
+
+test at tests/ui/backups-settings-visual.test.ts:59:3
+✖ Backups app/specimen chromium: four postures, native recovery bands and accessibility (2769.848306ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(await app.page.locator('#settings-backups code').innerText() === KEY)
+  
+      at TestContext.<anonymous> (file:///work/tests/ui/backups-settings-visual.test.ts:87:20)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/ui/backups-settings-visual.test.ts:59:3
+✖ Backups app/specimen webkit: four postures, native recovery bands and accessibility (3483.654543ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(await app.page.locator('#settings-backups code').innerText() === KEY)
+  
+      at TestContext.<anonymous> (file:///work/tests/ui/backups-settings-visual.test.ts:87:20)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

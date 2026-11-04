@@ -1,0 +1,18 @@
+{
+  "start_utc": "2026-11-03T18:34:34.869541+00:00",
+  "cwd": "/home/jeremy/.codex/worktrees/nova-health-backend-wiring/nova-build",
+  "argv": [
+    "git",
+    "diff",
+    "--cached",
+    "--check",
+    "--",
+    "ui/js/surfaces.js",
+    "tests/ui/backups-settings.test.ts",
+    "docs/evidence/backups-settings-2026-11-03/task-2/checkpoint-3-report.md"
+  ],
+  "end_utc": "2026-11-03T18:34:34.875700+00:00",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

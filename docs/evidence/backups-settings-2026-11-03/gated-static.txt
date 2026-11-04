@@ -1,0 +1,9 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✓ token lint: 48 files reference only schema tokens; no hardcoded colors, fonts, radii, shadows or motion values; spacing, type and radius on the designed scales; one icon stroke; no decorative gradients or emoji
+✓ aurora.json (Aurora): complete, values well-formed, contrast passes in default and dark modes, reduced motion honoured, the orb’s 7 states distinct in more than colour, iPhone status bar default when light, translucent when dark; not yet at the design bar (6 off the scales, and not yet approved)
+✓ companion-light.json (Companion Light): complete, values well-formed, contrast passes, reduced motion honoured, the orb’s 7 states distinct in more than colour, iPhone status bar default; not yet at the design bar (6 off the scales, and not yet approved)
+✓ nova.json (Nova): complete, values well-formed, contrast passes, reduced motion honoured, the orb’s 7 states distinct in more than colour, iPhone status bar translucent; not yet at the design bar (6 off the scales, and not yet approved)
+✓ obsidian.json (Obsidian): complete, values well-formed, contrast passes, reduced motion honoured, the orb’s 7 states distinct in more than colour, iPhone status bar translucent; not yet at the design bar (6 off the scales, and not yet approved)
+✓ orb-teal.json (Orb Teal): complete, values well-formed, contrast passes, reduced motion honoured, the orb’s 7 states distinct in more than colour, iPhone status bar translucent; on the designed scales (lead; rendered owner review required)
+✓ paper.json (Paper): complete, values well-formed, contrast passes in default and dark modes, reduced motion honoured, the orb’s 7 states distinct in more than colour, iPhone status bar default when light, translucent when dark; not yet at the design bar (6 off the scales, and not yet approved)
+no-Kubernetes tripwire: never fired

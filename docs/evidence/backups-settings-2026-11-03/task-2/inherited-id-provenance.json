@@ -1,0 +1,21 @@
+{
+  "utc": "2026-11-03T17:57:02.596442+00:00",
+  "baseline": "702ddc4d5ce3ec097f4a4dda7427fb8bc277de25",
+  "provenance": "git show of qualified baseline; no baseline browser rerun claimed",
+  "home_and_aside_block_byte_equal": true,
+  "block_sha256": "81e0ea528ea0336d4f7b761e0241875fb68b9a9e741580139c0baca8965be7f9",
+  "components_byte_equal": true,
+  "components_sha256": "a0d6391e0e8d8c0dfebe5e2c666e60980e410c69af6a6f80f82fa85939ce261f",
+  "each_card_called_in_baseline_home_and_aside": {
+    "handlingCard": 2,
+    "deviceMeshCard": 2,
+    "healthCard": 2
+  },
+  "actual_runtime_duplicates_recorded_in": "visual-ids/stdout.txt; Ruling9 pins exact IDs/count2 in visual test",
+  "inherited_ids_count": {
+    "handling-card-title": 2,
+    "device-mesh-card-title": 2,
+    "health-card-title": 2
+  },
+  "followup": "Stage2/F7 nonrepeating-right-column work; inherited ARIA heading-reference ambiguity remains; no global pristine a11y claim"
+}

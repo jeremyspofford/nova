@@ -285,7 +285,7 @@ function setView(view) {
   el.dock.hidden = view !== 'chat';
   el.menu.hidden = view !== 'chat';
   if (view !== 'chat') el.jump.hidden = true;
-  if (was === 'settings' && view !== 'settings') core.cancelPreview();
+  if (was === 'settings' && view !== 'settings') { core.cancelPreview(); core.leaveBackups(); }
   // Capture and Topology belong to Settings in the navigation.
   markCurrent(['capture', 'topology'].includes(view) ? 'settings' : view);
   if (was !== view) showSignals();
@@ -1565,6 +1565,7 @@ function settingsTarget(hash) {
 }
 
 function selectSettings(cat) {
+  if (settingsUi.cat !== cat) core.hideBackupsKey();
   settingsUi.cat = cat && categoryOf(cat) ? cat : null;
   const list = settingsList();
   const open = settingsUi.cat ?? (list ? null : CATEGORIES[0].id);
@@ -1583,7 +1584,7 @@ function selectSettings(cat) {
 
 // From the list or the sidebar to a category, as its own step in the history.
 function openSettingsCat(cat, { push = true } = {}) {
-  if (push) history.pushState(null, '', `/settings#${cat}`);
+  if (push) { core.hideBackupsKey(); history.pushState(null, '', `/settings#${cat}`); }
   selectSettings(cat);
   el.scroller.scrollTop = 0;
   const heading = el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(cat)}"] h2`);
@@ -1635,6 +1636,7 @@ function moveSettingsResult(dir) {
 }
 
 function chooseSettingsResult(option) {
+  core.hideBackupsKey();
   const target = $(option.dataset.target) ?? el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(option.dataset.cat)}"]`);
   $('settings-search').value = '';
   renderSettingsResults('');
@@ -1646,6 +1648,8 @@ function showSettings() {
   stream?.close();
   stream = null;
   Object.assign(state, { id: null, live: null, pending: null });
+  core.hideBackupsKey();
+  core.enterBackups();
   setView('settings');
   el.scroller.scrollTop = 0;
   renderChrome();
@@ -1654,7 +1658,7 @@ function showSettings() {
   settingsUi.touched = false;
   selectSettings(settingsTarget(location.hash).cat);
   const opened = location.hash;
-  Promise.all([loadPermissions(), refreshCore(['profile']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset()]).then(() => {
+  Promise.all([core.loadBackups(), loadPermissions(), refreshCore(['profile']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset()]).then(() => {
     renderSettingsView({ only: 'you' });
     renderSettingsView({ only: 'privacy' });
     // The person has moved on since (typed in search, opened something): leave them be.
@@ -1677,6 +1681,7 @@ const PARTS = {
   capture: () => renderCaptureSettings(),
   models: () => renderModels(),
   changes: () => renderChanges(),
+  backups: { draw: (box) => core.drawBackups(box) },
   checkpoints: () => renderCheckpoints(),
   // Drawn in place, so its live regions stay the same elements (surfaces.js drawAppearance).
   look: { draw: (box) => core.drawAppearance(box) },
@@ -1734,7 +1739,7 @@ function renderSettingsView({ enter: entering = false, only = null } = {}) {
     const box = $(`settings-${k}`);
     const active = document.activeElement;
     // Don't redraw a part under the person's typing.
-    if (box.contains(active) && active.matches('input[type="text"], input[type="number"], input[type="password"], input[type="url"], input[type="search"], input:not([type]), textarea')) continue;
+    if (k !== 'backups' && box.contains(active) && active.matches('input[type="text"], input[type="number"], input[type="password"], input[type="url"], input[type="search"], input:not([type]), textarea')) continue;
     const focus = box.contains(active) ? (active.dataset.id ? `[data-id="${CSS.escape(active.dataset.id)}"]` : active.name ? `input[name="${CSS.escape(active.name)}"]:checked` : active.dataset.action ? `[data-action="${CSS.escape(active.dataset.action)}"]${active.dataset.ds ? `[data-ds="${CSS.escape(active.dataset.ds)}"]` : ''}${active.dataset.scope ? `[data-scope="${CSS.escape(active.dataset.scope)}"]` : ''}` : null) : null;
     // Capture's forms sit under a status that changes by itself; what is typed there is kept.
     const restore = k === 'capture' ? keepEdits(box) : () => {};
@@ -1923,6 +1928,8 @@ bindSites(el.settings, () => { if (state.view === 'settings' && $('settings-site
 bindModels(el.settings, () => { if (state.view === 'settings' && $('settings-models')) renderSettingsView({ only: 'models' }); });
 // Settings › Changes (M7a): the change pipeline, the one waiting for you, canaries, roll back.
 bindChanges(el.settings, () => { if (state.view === 'settings' && $('settings-changes')) renderSettingsView({ only: 'changes' }); });
+core.bindBackups(el.settings, () => { if ($('settings-backups')) renderSettingsView({ only: 'backups' }); });
+onCore('profile', () => { if (state.view === 'settings') core.loadBackups(); });
 // Settings › Backups › Checkpoints (M7 amendment): take one, restore (the hub's screen only), delete.
 bindCheckpoints(el.settings, () => { if (state.view === 'settings' && $('settings-checkpoints')) renderSettingsView({ only: 'checkpoints' }); });
 bindServices(() => { if (state.view === 'settings' && $('settings-services')) renderSettingsView({ only: 'services' }); });
@@ -2021,6 +2028,7 @@ el.mainLink.addEventListener('click', (e) => {
   closeDrawer();
   navigate('/chat');
 });
+window.addEventListener('hashchange', () => { core.hideBackupsKey(); });
 window.addEventListener('popstate', route);
 
 // Conversations are a drawer over the page, in every layout.

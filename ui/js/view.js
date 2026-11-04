@@ -2,7 +2,7 @@
 // permissions): state in, HTML out. Used by the app and by the living style reference, so the
 // reference always shows the real components. The PWA's own components are in components.js.
 import { escapeHtml as esc, renderMarkdown } from './markdown.js';
-import { ICONS, status } from './components.js';
+import { ICONS, settingsRow, status } from './components.js';
 import { activityStatus, toolTier } from './status.js';
 import { since, waitState, waitingLine } from './wait.js';
 
@@ -861,4 +861,54 @@ export function renderPermissions(list) {
 <p class="memory-lede">Each kind of step that changes something outside the conversation starts at Ask first. Turn a switch on and Nova does that without asking, in a conversation or while it works on its own; Activity shows each time. A command that follows outside content still asks.</p>
 ${list.length ? `<ul class="perm-list">${rows}</ul>` : '<p class="memory-none">Nothing Nova can do asks first right now.</p>'}
 <p class="perm-foot">When Nova gets a new tool, from an update, a plugin or a connector, anything it can change shows up here, set to Ask first. These switches are kept in permissions.md in your Nova folder.</p></section>`;
+}
+
+// ---- backup settings -----------------------------------------------------
+// Pure shared entry: Task1 has no app handlers, requests, clipboard or persistence.
+// canEdit is the approver capability. Only console can request a repeated reveal;
+// a paired approver may still receive the first encrypted-setup key once.
+export function renderBackupsSettings(model = {}, { id = 'settings-backups' } = {}) {
+  const { settings = {}, permissions = {}, state = 'loading', errors = {}, notice = '', recovery = {} } = model;
+  const prefix = esc(id);
+  const heading = `<h2 class="view-title" id="${prefix}-title">Backups</h2>`;
+  if (state === 'loading') {
+    // The caller owns the request start. Never allocate/reset its age during a render.
+    const wait = Number.isFinite(model.loadingSince) && model.loadingSince > 0
+      ? waitingLine('Loading backup settings', { key: 'view-backups', since: model.loadingSince })
+      : '<p class="settings-note" role="status">Backup settings are not available yet.</p>';
+    return `<section class="backups-settings" aria-labelledby="${prefix}-title" aria-busy="true">${heading}${wait}</section>`;
+  }
+  const editable = permissions.canEdit === true && !permissions.readOnlyReason;
+  const consoleReveal = editable && permissions.console === true;
+  const saving = state === 'saving';
+  const button = (action, text, { disabled = false, primary = false } = {}) => `<button type="button" class="btn${primary ? ' primary' : ''}" data-action="backups-${action}"${disabled ? ' disabled' : ''}>${text}</button>`;
+  const field = (name, label, help, value, number = false) => {
+    const error = errors[name];
+    return `<li class="settings-row"><div class="settings-text"><label class="settings-label" for="${prefix}-${name}">${label}</label><p class="settings-note" id="${prefix}-${name}-help">${help}</p></div><div class="settings-control"><input class="input" id="${prefix}-${name}" name="${name}" type="${number ? 'number' : 'text'}" value="${esc(value ?? '')}"${number ? ' min="1" max="365" step="1" required' : ' autocomplete="off" spellcheck="false"'} aria-describedby="${prefix}-${name}-help${error ? ` ${prefix}-${name}-error` : ''}"${error ? ' aria-invalid="true"' : ''}${editable ? '' : ' disabled'}>${error ? `<p class="settings-note backups-error" id="${prefix}-${name}-error">${esc(error)}</p>` : ''}</div></li>`;
+  };
+  const folders = !settings.target && !settings.encrypted_target
+    ? `<p class="settings-note">No backup folders selected. Choose a backup folder to keep copies outside Nova.</p>` : '';
+  const reason = editable ? '' : `<p class="settings-note" role="status">${esc(permissions.readOnlyReason || 'Backup settings are read-only until this device’s permissions are available.')}</p>`;
+  const fields = `<h3 class="settings-group-title">Backup copies</h3>${folders}<ul class="settings-list">${field('target', 'Backup folder', 'A private folder that already exists, outside Nova’s home and not containing it.', settings.target)}${field('keep', 'Copies to keep', 'Keep 1–365 copies. Older copies are removed as new ones arrive.', settings.keep ?? 7, true)}${field('encrypted_target', 'Encrypted copy folder', 'A different folder that already exists. Choose a backup folder first.', settings.encrypted_target)}</ul>`;
+  const actions = editable ? `<div class="connection-actions"><button type="submit" class="btn primary" data-action="backups-save"${saving ? ' disabled' : ''}>${saving ? 'Saving backup settings…' : 'Save backup settings'}</button>${settings.target ? button('clear-target', settings.encrypted_target ? 'Remove backup folders' : 'Remove backup folder', { disabled: saving }) : ''}${settings.encrypted_target ? button('clear-encrypted', 'Remove encrypted copy', { disabled: saving }) : ''}</div><p class="settings-note">Remove a folder explicitly to stop using it. An empty or invalid entry does not remove a saved folder. Saved files stay on disk.</p>` : '';
+  const feedback = notice ? `<p class="settings-note${state === 'error' ? ' backups-error' : ''}" role="${state === 'error' ? 'alert' : 'status'}">${esc(notice)}</p>` : '';
+  // Hidden/confirmation/unavailable states never interpolate key bytes into any attribute or node.
+  const visible = !!recovery.key && editable && (recovery.state === 'first-shown' || (recovery.state === 'shown' && consoleReveal));
+  let keyBody;
+  if (visible) {
+    keyBody = `<p class="settings-note">${recovery.state === 'first-shown' ? 'The encrypted copy is set up. This is its first, one-time key display.' : 'Your recovery key is visible on this console.'} Keep this key somewhere safe, separate from the backup.</p><div class="code-block"><pre><code>${esc(recovery.key)}</code></pre></div><div class="connection-actions">${button('copy', 'Copy key')}${button('hide', 'Hide key')}</div>`;
+  } else if (recovery.state === 'confirm' && consoleReveal) {
+    keyBody = `<div class="approval-sheet" data-tier="3" role="group" aria-labelledby="${prefix}-confirm-title"><h3 class="sheet-heading" id="${prefix}-confirm-title">Show the recovery key?</h3><p class="settings-note">Anyone who can see this screen can read the key. This needs your explicit confirmation every time.</p><label class="confirm" for="${prefix}-confirm"><input id="${prefix}-confirm" type="checkbox" name="confirm"${recovery.confirmed === true ? ' checked' : ''}> I understand that the recovery key will be visible on this screen.</label><div class="connection-actions">${button('confirm', 'Show recovery key', { disabled: recovery.confirmed !== true || saving })}${button('cancel', 'Not now')}</div></div>`;
+  } else {
+    let note = 'Set up an encrypted copy folder to get its recovery key.';
+    let control = '';
+    if (recovery.state === 'unavailable') note = recovery.error || 'The recovery key is unavailable. Check the connection and try again from the console.';
+    else if (!editable) note = 'A recovery key cannot be shown while these settings are read-only.';
+    else if (!consoleReveal) note = 'A paired approver may see the key once when setting up an encrypted copy. To show it again, use Nova’s console.';
+    else if (settings.encrypted_target || recovery.previouslyShown === true) { note = 'To show the key again, confirm on Nova’s console.'; control = button('reveal', 'Show recovery key', { disabled: saving }); }
+    keyBody = `<ul class="settings-list">${settingsRow({ title: 'Recovery key', note, control })}</ul>`;
+  }
+  const keyError = recovery.error && recovery.state !== 'unavailable' ? `<p class="settings-note backups-error" role="alert">${esc(recovery.error)}</p>` : '';
+  const body = `${reason}${feedback}${editable ? `<form aria-label="Backup settings" aria-busy="${saving}">${fields}${actions}</form>` : fields}<section class="backups-recovery" aria-labelledby="${prefix}-recovery-title"><h3 class="settings-group-title" id="${prefix}-recovery-title">Recovery key</h3><p class="settings-note">For encrypted backup copies. It does not replace Nova Vault recovery factors.</p>${keyBody}${keyError}</section>`;
+  return `<section class="backups-settings" aria-labelledby="${prefix}-title" aria-busy="${saving}">${heading}${body}${state === 'error' && !editable ? `<div class="connection-actions">${button('retry', 'Try again')}</div>` : ''}</section>`;
 }

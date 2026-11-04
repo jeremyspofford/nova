@@ -1,0 +1,43 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+(node:26) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Backups has its own rendered styleguide entry rather than a helper exemption (1.177018ms)
+✔ folder and retention drafts have associated labels, help and explicit removal actions (0.88414ms)
+✔ loading and read-only capabilities cannot mutate settings or reveal a key (0.797709ms)
+✔ a paired approver can receive the first key once but cannot repeat a reveal (0.355845ms)
+✔ repeated reveal uses explicit tier-3 confirmation with no hidden key bytes (0.461021ms)
+✔ only visible authorized key states emit escaped key text, only inside code (0.551191ms)
+✔ saving prevents duplicate submit while retaining editable drafts and failed fields (0.623496ms)
+✔ empty settings use default retention without converting an invalid draft or promising folder creation (1.035122ms)
+✔ all arbitrary strings and identifiers are escaped; rendering is pure and deterministic (0.447112ms)
+✔ Backups loading uses the caller’s actual start through quiet, indicator and long-wait redraws (1.802312ms)
+✔ Backups loading without a valid start stays busy without inventing an elapsed wait (0.471467ms)
+✔ a backup holds a consistent snapshot and the home’s files, with hashes; never the vault key or the private keys (127.767381ms)
+✔ retention keeps the newest by sequence, even when the clock went back; old ones go only after a new one is complete (106.338633ms)
+✔ the encrypted copy: unreadable without the vault key, restored whole, refused when changed (86.439433ms)
+✔ forgetting holds in the nightly backups and the encrypted copies: the database and the files are cleaned (106.082787ms)
+✔ a backup folder that isn’t there is refused, never created; the task fails into its playbook, which retries once it is back (101.749283ms)
+✔ a crash the supervisor handled closes once Nova is up, and Nova never restarts a healthy server for it (106.19084ms)
+✔ a server killed while it records a problem leaves no problem without its playbook: the next of its kind finds the one open (392.438286ms)
+✔ restarting Nova, choosing the backup folder and seeing the recovery key again are not any paired phone’s (184.911308ms)
+✔ freeing scratch deletes only Nova’s own leftovers, never a folder another process is using (113.511906ms)
+✔ chat: no orb or avatar on any message; Nova’s turn is un-bubbled, yours is a bubble with no tail (13.866133ms)
+✔ chat: a group is one author within five minutes; its first message shows the time (2.57983ms)
+✔ chat: every message’s exact time is there to reveal; dividers mark days and long gaps (1.895544ms)
+✔ chat: a work-trail entry says how long it took and when it finished (1.770517ms)
+✔ settings: one structure, grouped by task, one level deep, every part in exactly one place (3.34852ms)
+✔ settings search knows people’s words, not just labels, and shows the path (4.093462ms)
+✔ the page’s live check reads colours the way the core does, and agrees with it (4.934506ms)
+✔ Nova recommends one design, with a reason: its own design at the bar first, else the starter that fits and reads well (55.58445ms)
+✔ timestamps use a colour that passes 4.5:1 in every package, never the faint one (2.677419ms)
+✔ scrolling: the OS scrollbar, a stable gutter, and no vertical scroller inside a view (0.96928ms)
+✔ the service worker caches every module the app imports (1.210489ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 31
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1133.895848
+no-Kubernetes tripwire: never fired
