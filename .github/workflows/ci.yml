@@ -118,6 +118,30 @@ jobs:
           path: ${{ runner.temp }}/ui-shots
           if-no-files-found: ignore
 
+  # The Era-2 walkthrough (scripts/shots.js, Ponytail D4): the only browser run of the install-skill,
+  # schedule, helper, zip-add, memory and Gmail flows, plus the golden screens in every theme. The
+  # shots go to $RUNNER_TEMP and up as an artifact, never into git (decision N2; D5 deleted the
+  # committed copies). Not in the gate's needs yet: it fails on main today (see docs/LEDGER.md,
+  # Ponytail Step 3). Add it to `gate` once it passes.
+  shots:
+    name: shots (Era-2 walkthrough, not gating yet)
+    needs: changes
+    if: needs.changes.outputs.heavy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: mcr.microsoft.com/playwright:v1.56.1-noble
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: npm ci
+      - run: sh scripts/tripwire.sh node scripts/shots.js "$RUNNER_TEMP/shots"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: shots
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore
+
   # The one required check. It always runs. It passes when the heavy jobs passed, or were skipped
   # because the change is docs only, and fails on anything else, so a skipped job never blocks a
   # merge and a failed or cancelled one always does.

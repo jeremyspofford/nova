@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Ponytail Step 3 · The old full walkthrough runs on every change again**
+- What changed: `scripts/shots.js`, the long browser walkthrough of the older screens (memory, skills, Gmail, schedules, helpers, and the golden screens in every theme), now runs in CI on every code change. Its screenshots are saved with the run as a download called "shots", and never go into git again: it writes to a temporary folder, not `docs/screenshots`. It also finds its browser the normal Playwright way, so it starts on any machine that has one. Some of its checks were out of date, and now match how Nova works today: Gmail's app password is checked in the encrypted vault (and proven absent as plain text), and the browser's "offline" hint no longer counts as Nova being offline (the real outage check stays).
+- What you can now do: open any PR's CI run, see the walkthrough pass or fail, and download its screenshots to look at.
+- Still unfinished: it fails on main today, so it does not block merges yet. It stops about halfway (65 checks passed), and four checks fail first: the message box isn't focused when a conversation opens (that also stops the walkthrough), "send shows feedback within 100 ms" measures about 110 to 125 ms, the approval to open a web page after reading mail still appears but no longer says it is because Nova read your email, and a removed skill's text is still in the database's write-ahead file. Each needs a decision (fix Nova or update the check). Once the walkthrough passes, it joins the required gate.
+
 **2026-11-04 · UI rebuild (design) · A proposed calmer look, shown on the real app**
 - What changed: a proposed redesign of Nova's look, shown on the real app, for your reaction. Nothing in the app changes yet. It keeps the layout and changes the surfaces:
   - one quiet light from above instead of layered glows;

@@ -3,18 +3,23 @@
 // captures the golden screens in every theme, walks the keyboard path,
 // exercises each state, and measures the performance budgets.
 // Usage: node scripts/shots.js [outDir]   (CHROMIUM=/path/to/chrome to override)
+// outDir defaults to $RUNNER_TEMP/shots in CI, else a temp folder: the shots are artifacts and
+// never go into git (docs/screenshots held them until Ponytail D5 deleted them).
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright-core';
+import { Vault } from '../src/core/index.ts';
 import { sampleMail, startFakeGoogle, startFakeImap } from './fake-google.js';
 import { makeZip } from './make-zip.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
-const out = resolve(process.argv[2] ?? join(root, 'docs/screenshots'));
+const out = resolve(process.argv[2] ?? (process.env.RUNNER_TEMP ? join(process.env.RUNNER_TEMP, 'shots') : join(tmpdir(), 'nova-shots')));
 mkdirSync(out, { recursive: true });
+console.log(`shots → ${out}`);
 const home = mkdtempSync(join(tmpdir(), 'nova-shots-'));
+const appPassword = () => new Vault({ home, mode: 'file' }).get('connector/gmail/GMAIL_APP_PASSWORD');
 const port = 4400 + Math.floor(Math.random() * 400);
 const base = `http://localhost:${port}`;
 const results = { budgets: {}, checks: [] };
@@ -34,7 +39,7 @@ function startServer() {
 }
 
 let current = null;
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || chromium.executablePath() });
 
 const v1 = (method, path, body) => fetch(`${base}/api/v1${path}`, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body ? { body: JSON.stringify(body) } : {}) }).then((r) => r.json());
 let devices = 0;
@@ -82,7 +87,8 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   check('cold start ≤ 2 s (server + page)', serverMs + results.budgets.pageInteractiveMs <= 2000, `${Math.round(serverMs)} ms server + ${results.budgets.pageInteractiveMs} ms page`);
 
   // ---- the keyboard path: send, read, approve, never touching the mouse --------
-  check('the composer is focused on arrival', await p.evaluate(() => document.activeElement.id === 'input'));
+  const arrival = await p.evaluate(() => `${document.activeElement.tagName}#${document.activeElement.id}`);
+  check('the composer is focused on arrival', arrival.endsWith('#input'), arrival);
   await p.evaluate(() => document.activeElement.blur());
   await p.keyboard.press('/');
   check('"/" focuses the composer', await p.evaluate(() => document.activeElement.id === 'input'));
@@ -180,12 +186,8 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForFunction((b) => location.pathname !== b, before);
   check('Alt ↑/↓ moves between conversations', true);
 
-  // Offline (the browser) and unreachable (the server)
-  await p.context().setOffline(true);
-  await p.waitForSelector('.banner:not([hidden])');
-  await shot(p, 'paper-offline');
-  check('offline banner', /offline/.test(await p.textContent('.banner')));
-  await p.context().setOffline(false);
+  // No browser-offline banner any more: the page trusts Core's answers over the browser's network
+  // hint (ui/js/app.js, the 'offline' listener). The real outage is "server unreachable" below.
   check('page has no script errors', p.errors.length === 0, p.errors.join(' | '));
 }
 
@@ -318,8 +320,10 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForSelector('.connection[data-state="connected"]');
   await p.waitForFunction(() => /Gmail is connected as/.test(document.querySelector('#toast').textContent));
   check('an app password connects Gmail, with a confirmation', true);
-  const mode = (f) => (statSync(join(home, 'connectors', 'gmail', f)).mode & 0o777).toString(8);
-  check('the app password is readable only by you', mode('password.json') === '600', mode('password.json'));
+  // Since Era 2's plaintext files moved into the vault (src/connectors/gmail.js), the app password
+  // is kept encrypted there, and its text is in no file in the Nova home.
+  const plain = (() => { try { return execFileSync('grep', ['-rlF', 'abcd efgh', home], { encoding: 'utf8' }).trim(); } catch { return ''; } })();
+  check('the app password is kept only in the vault, encrypted', appPassword() !== null && plain === '', plain);
   await p.waitForTimeout(3400);
   await p.click('#s-email-summary .skill-playbook summary');
   await p.waitForTimeout(300);
@@ -929,7 +933,7 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   // Disconnecting deletes the app password, and says how to remove it at Google too.
   await p.click('[data-action="disconnect-gmail"]');
   await p.waitForSelector('.connection[data-state="setup"]');
-  check('disconnecting deletes the app password', !existsSync(join(home, 'connectors', 'gmail', 'password.json')) && /app password is gone/.test(await p.textContent('#toast')));
+  check('disconnecting deletes the app password', appPassword() === null && /app password is gone/.test(await p.textContent('#toast')));
 }
 
 // ---- reduced motion ------------------------------------------------------------------
