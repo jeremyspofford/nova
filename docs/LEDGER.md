@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-03 · B1 · Capture sources are no longer re-announced on every heartbeat**
+- What changed: when a paired computer reports what it can capture, Nova now announces a new capture source once instead of twice, and no longer re-announces every source on every heartbeat. Screens that show capture sources stop refreshing for no reason every few minutes.
+- What you can now do: nothing new to do; capture sources behave as before, with less background churn.
+- Still unfinished: nothing for this fix.
+
 **2026-11-03 · B2 · A crafted email can no longer break Nova's Gmail tools**
 - What changed: a web page or email containing a malformed character reference (such as `&#xzz;`) no longer breaks Nova's Gmail search and reading or a page fetch. Nova now decodes these with the same bounds-checked decoder its safety screen uses, and leaves a bad reference as written.
 - What you can now do: keep using Gmail tools and email summaries even when someone sends a message built to break them.
