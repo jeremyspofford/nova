@@ -9,6 +9,7 @@ import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, 
 import { apply as applyTheme } from './theme.js';
 import { api, fromCache, on as onCore, stream as coreStream } from './core.js';
 import { approvalFor, loadSecurity, renderSecurity, setupPasskey } from './passkey.js';
+import { bindConfig, renderConfig } from './config.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
 import { problemTone, stoppingProblems } from './status.js';
@@ -281,6 +282,8 @@ function setView(view) {
   const was = state.view;
   state.view = view;
   document.body.dataset.view = view;
+  // The glance column's default differs in a conversation (shell.js): read the layout again.
+  if ((was === 'chat') !== (view === 'chat')) { readLayout(); window.dispatchEvent(new CustomEvent('nova:layout', { detail: { ...layout } })); }
   topologyVisible(view === 'topology');
   for (const [v, key] of Object.entries(VIEWS)) el[key].hidden = v !== view;
   el.dock.hidden = view !== 'chat';
@@ -1695,6 +1698,7 @@ const PARTS = {
   devices: () => core.renderDevices(),
   services: () => renderServices(),
   security: () => renderSecurity(),
+  config: () => renderConfig(),
   // The Danger zone (M7 amendment §2) stays last, set apart.
   danger: () => renderReset(),
 };
@@ -1937,6 +1941,7 @@ bindModels(el.settings, () => { if (state.view === 'settings' && $('settings-mod
 // Settings › Changes (M7a): the change pipeline, the one waiting for you, canaries, roll back.
 bindChanges(el.settings, () => { if (state.view === 'settings' && $('settings-changes')) renderSettingsView({ only: 'changes' }); });
 core.bindBackups(el.settings, () => { if ($('settings-backups')) renderSettingsView({ only: 'backups' }); });
+bindConfig(el.settings, () => renderSettingsView({ only: 'config' }));
 onCore('profile', () => { if (state.view === 'settings') core.loadBackups(); });
 // Settings › Backups › Checkpoints (M7 amendment): take one, restore (the hub's screen only), delete.
 bindCheckpoints(el.settings, () => { if (state.view === 'settings' && $('settings-checkpoints')) renderSettingsView({ only: 'checkpoints' }); });

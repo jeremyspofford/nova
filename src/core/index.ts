@@ -80,6 +80,7 @@ import { Changes } from './changes/pipeline.ts';
 import { Checkpoints, dropPartials, finishStaged, stagedPending, takeCheckpoint } from './resilience/checkpoints.ts';
 import { ConsolePasskeys, NO_PASSKEY, PASSKEY_NEEDED } from './passkeys.ts';
 export { ConsolePasskeys } from './passkeys.ts';
+import { configRoutes } from './config-doors.ts';
 
 // The one route that takes {confirm: true} at tier 2 (rolling a change back by hand): asked once,
 // no passkey. ui/js/core.js skips the step for the same path.
@@ -1574,6 +1575,8 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     ...keep.routes((w) => { if (w.principal.kind !== 'console') throw new CoreError('forbidden', 'Releases are deployed and rolled back from the hub’s own screen only.'); }),
     // ---- passkeys for tier 3 on the hub's own screen (Insertion #3 T2) ----
     ...passkeys.routes(),
+    // ---- configuration in and out as a file (config onboarding, door 1) ----
+    ...configRoutes({ profile, log: (said, keys) => log.info('config', said, { keys }) }),
     // ---- checkpoints (M7 amendment §1) ----
     ...checkpoints.routes(),
     // ---- factory reset (M7 amendment §2) ----
