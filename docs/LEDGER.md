@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-03 · B6 · Nightly backups work to another Windows drive**
+- What changed: on Windows, a nightly backup to a folder on a different drive from Nova's home (for example home on C:, backups on D:) no longer fails every night with "the backup folder is inside Nova's home". Nova now uses the same folder check the Backups settings already used. A folder whose name starts with two dots, inside the home, is also correctly treated as inside.
+- What you can now do: back up to a second drive.
+- Still unfinished: Nova keeps four copies of this folder check; they are merged into one in the clean-up pass that follows.
+
 **2026-11-03 · B4 · A bad setting can no longer stop Nova's scheduled checks**
 - What changed: the list of automation kinds you turned off is now read the same way everywhere. A malformed setting no longer stops every scheduled check, and a message held during quiet hours for a rule you turned off is withdrawn even when the name's capitalisation differs, instead of being delivered.
 - What you can now do: trust that turning a rule or kind off also stops its messages that were waiting for quiet hours to end.
