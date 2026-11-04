@@ -224,6 +224,8 @@ export interface IngestOptions {
 export interface Candidate { id: string; at: string; op: 'remember' | 'note' | 'forget'; kind: string | null; content: string | null; target: string | null; replaces: string | null; source: string | null; taint: Taint[] }
 export interface Hold { kind: string; ref: string; screen: string; reasons: string[]; at: string }
 
+const screenRow = (r: Record<string, unknown>) => ({ ...r, partial: !!r.partial, scores: r.scores ? JSON.parse(String(r.scores)) : null, flags: JSON.parse(String(r.flags)) });
+
 export class Ingest {
   readonly thresholds: Thresholds;
   #o: IngestOptions;
@@ -287,12 +289,15 @@ export class Ingest {
   }
 
   list(limit = 50): Record<string, unknown>[] {
-    return (this.#o.db?.all<Record<string, unknown>>(`SELECT * FROM ingest_screen ORDER BY at DESC LIMIT ${Math.max(1, Math.min(500, limit))}`) ?? [])
-      .map((r) => ({ ...r, partial: !!r.partial, scores: r.scores ? JSON.parse(String(r.scores)) : null, flags: JSON.parse(String(r.flags)) }));
+    // A whole number from 1 to 500 goes into LIMIT; anything that isn't a number is the default.
+    const n = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.trunc(limit))) : 50;
+    return (this.#o.db?.all<Record<string, unknown>>(`SELECT * FROM ingest_screen ORDER BY at DESC LIMIT ${n}`) ?? []).map(screenRow);
   }
 
+  // By its id, however old (B7): not only among the newest 500.
   get(id: string): Record<string, unknown> | null {
-    return this.list(500).find((r) => r.id === id) ?? null;
+    const r = this.#o.db?.get<Record<string, unknown>>('SELECT * FROM ingest_screen WHERE id = ?', id);
+    return r ? screenRow(r) : null;
   }
 
   // The ledger task a block opened.

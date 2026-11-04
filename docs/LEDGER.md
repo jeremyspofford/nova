@@ -12,6 +12,11 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: nothing yet in the app. This is the first of three steps; the next adds the screens to set passkeys up and the passkey step to tier-3 sheets, and the last makes tier 3 on this screen require a passkey.
 - Still unfinished: until the third step lands, any program on this computer can still approve tier-3 actions through the console (the accepted window). A passkey tied to one computer's hardware won't work on a standby after a failover; a security key or a synced passkey will.
 
+**2026-11-03 · B7 · Older screening records can be opened again**
+- What changed: Nova can now open any record of outside content it screened, however old. Before, once more than 500 newer screenings existed, an older one showed "There is no such screen" even though it was still kept.
+- What you can now do: follow a link to an older screening record, for example from a task's evidence, and see it.
+- Still unfinished: nothing for this fix.
+
 **2026-11-03 · B1 · Capture sources are no longer re-announced on every heartbeat**
 - What changed: when a paired computer reports what it can capture, Nova now announces a new capture source once instead of twice, and no longer re-announces every source on every heartbeat. Screens that show capture sources stop refreshing for no reason every few minutes.
 - What you can now do: nothing new to do; capture sources behave as before, with less background churn.
