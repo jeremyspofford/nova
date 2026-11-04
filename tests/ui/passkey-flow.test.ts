@@ -73,8 +73,10 @@ test('T2: tier 3 on Nova’s own screen waits for a passkey; Security adds two; 
     // A passkey signed for another request is refused by the server, whatever the page sends.
     const other = await page.evaluate(async (id) => {
       (window as unknown as { __novaPasskey: object }).__novaPasskey = {};
-      const { approvalFor } = await import('/js/passkey.js');
-      const { api } = await import('/js/core.js');
+      // The page's own modules, as the app loads them (strings, so the type checker leaves them be).
+      const [pk, core] = ['/js/passkey.js', '/js/core.js'];
+      const { approvalFor } = await import(pk);
+      const { api } = await import(core);
       const a = await approvalFor(api, 'POST', `/tasks/${id}/approve`, { confirm: true });
       const res = await fetch(`/api/v1/tasks/${id}/approve`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify({ confirm: true, note: 'not what was signed', passkey_approval: a }) });
       return { status: res.status, error: (await res.json()).error };

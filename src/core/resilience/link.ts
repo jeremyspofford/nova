@@ -61,7 +61,7 @@ export interface SupervisorLink {
   mark?(m: { seq: number; problem: number }): void;
 }
 
-export type HubServiceRequest = { action: 'promote'; service: string; version: string; confirm: string; expected: ServiceExpectedState } | { action: 'rollback'; service: string; confirm: string; expected: ServiceExpectedState };
+export type HubServiceRequest = { action: 'promote'; service: string; version: string; confirm: string; expected: ServiceExpectedState; attested?: boolean } | { action: 'rollback'; service: string; confirm: string; expected: ServiceExpectedState; attested?: boolean };
 
 // The link for a server the supervisor started (server.js passes it to the core), or null.
 export function ipcLink(proc: NodeJS.Process, env: NodeJS.ProcessEnv = process.env): SupervisorLink | null {
@@ -97,7 +97,7 @@ export function ipcLink(proc: NodeJS.Process, env: NodeJS.ProcessEnv = process.e
     },
     request,
     service(r) {
-      return r.action === 'promote' ? request('service-promote', { service: r.service, version: r.version, confirm: r.confirm, expected: r.expected }) : request('service-rollback', { service: r.service, confirm: r.confirm, expected: r.expected });
+      return r.action === 'promote' ? request('service-promote', { service: r.service, version: r.version, confirm: r.confirm, expected: r.expected, ...(r.attested === false ? { attested: false } : {}) }) : request('service-rollback', { service: r.service, confirm: r.confirm, expected: r.expected });
     },
     onProblem(fn) { problems.push(fn); },
     mark(m) {

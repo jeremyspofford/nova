@@ -11,11 +11,19 @@ import {
   statusMessage, x25519Statement, type Core, type CoreOptions, type DeviceKeys, type Listener,
 } from '../../src/core/index.ts';
 
+import { withPasskey } from '../acceptance/passkey-support.ts';
+
 export const PUBLIC_URL = 'http://hub.example:4320';
 
 export interface Res { status: number; body: any; headers: Headers }
 
+// As Nova's own screen does: a request with confirm: true carries a passkey approval of exactly it
+// (T2; tests/acceptance/passkey-support.ts). A paired device's requests are left as they are.
 export async function call(base: string, method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Res> {
+  return plainCall(base, method, path, await withPasskey((m, p, b, h) => plainCall(base, m, p, b, h), base, method, path, body, headers), headers);
+}
+
+export async function plainCall(base: string, method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Res> {
   const res = await fetch(base + path, {
     method, redirect: 'manual',
     headers: { 'content-type': 'application/json', ...(method === 'GET' ? {} : { 'x-nova': '1' }), ...headers },
