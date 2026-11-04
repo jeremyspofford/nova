@@ -78,6 +78,10 @@ test('M7 amendment: the Danger zone — export first, the confirmation, erase, f
     // The only console line so far is the folder Nova refused (a 400), on purpose.
     assert.deepEqual(errors.filter((e) => !/status of 400/.test(e)), []);
     const before = errors.length;
+    // While Nova is down, this page's own service worker answers a live-only GET (the reset poll,
+    // a health check) with its offline 503. Every 503 from here on must be exactly that answer.
+    const unavailable: string[] = [];
+    page.on('response', (r) => { if (r.status() === 503) unavailable.push(r.fromServiceWorker() && r.headers()['x-nova-offline'] === '1' ? 'offline' : r.url()); });
     // Something this browser kept of the old Nova: a draft, and an offline copy.
     await page.evaluate(async () => { localStorage.setItem('nova.draft.new', 'half a thought'); await (await caches.open('nova-test')).put('/kept', new Response('old')); });
     await erase.click();
@@ -95,8 +99,13 @@ test('M7 amendment: the Danger zone — export first, the confirmation, erase, f
     // (The fresh page makes its own new entries again; nothing of the old ones is there.)
     const kept = await page.evaluate(async () => ({ draft: localStorage.getItem('nova.draft.new'), old: (await caches.keys()).includes('nova-test') }));
     assert.deepEqual(kept, { draft: null, old: false });
-    // While Nova was down, its open streams broke and a look for it found nothing: nothing else.
-    assert.deepEqual(errors.slice(before).filter((e) => !/ERR_INCOMPLETE_CHUNKED_ENCODING|ERR_CONNECTION_REFUSED|ERR_EMPTY_RESPONSE|ERR_CONNECTION_RESET/.test(e)), []);
+    // While Nova was down, its open streams broke and a look for it found nothing (directly, or as
+    // the service worker's offline answer): nothing else.
+    const later = errors.slice(before).filter((e) => !/ERR_INCOMPLETE_CHUNKED_ENCODING|ERR_CONNECTION_REFUSED|ERR_EMPTY_RESPONSE|ERR_CONNECTION_RESET/.test(e));
+    const offline = later.filter((e) => /the server responded with a status of 503 \(\)$/.test(e));
+    assert.deepEqual(later.filter((e) => !offline.includes(e)), []);
+    assert.deepEqual(unavailable.filter((u) => u !== 'offline'), [], 'no 503 came from a server');
+    assert.equal(offline.length, unavailable.length, 'each 503 line is one the service worker answered offline');
 
     // The export opens with the key the page showed, once.
     const folder = join(out, readdirSync(out)[0]!);

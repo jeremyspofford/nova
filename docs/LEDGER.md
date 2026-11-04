@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Test stability · Browser profiles really go; three tests stop failing at random**
+- What changed: Nova's browser now fully shuts down before its throwaway profile is deleted. Before, Chromium's helper processes could recreate the folder a moment after Nova removed it, and a left-behind profile can hold sign-in cookies. Three tests that sometimes failed for no product reason now check the right thing: the topology design test in WebKit, the factory-reset test, and a mesh replay test.
+- What you can now do: nothing new in the app. Leftover browser profiles stop, and CI fails less often for no reason.
+- Still unfinished: two related WebKit topology failures ("internal error" on navigation) are probably fixed by the same change, but that isn't proven yet.
+
 **2026-11-04 · UI rebuild (design) · A proposed calmer look, shown on the real app**
 - What changed: a proposed redesign of Nova's look, shown on the real app, for your reaction. Nothing in the app changes yet. It keeps the layout and changes the surfaces:
   - one quiet light from above instead of layered glows;
