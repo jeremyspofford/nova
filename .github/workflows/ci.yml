@@ -121,10 +121,9 @@ jobs:
   # The Era-2 walkthrough (scripts/shots.js, Ponytail D4): the only browser run of the install-skill,
   # schedule, helper, zip-add, memory and Gmail flows, plus the golden screens in every theme. The
   # shots go to $RUNNER_TEMP and up as an artifact, never into git (decision N2; D5 deleted the
-  # committed copies). Not in the gate's needs yet: it fails on main today (see docs/LEDGER.md,
-  # Ponytail Step 3). Add it to `gate` once it passes.
+  # committed copies). It gates, like the UI gate.
   shots:
-    name: shots (Era-2 walkthrough, not gating yet)
+    name: shots (Era-2 walkthrough)
     needs: changes
     if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-latest
@@ -148,7 +147,7 @@ jobs:
   gate:
     name: gate
     if: always()
-    needs: [changes, checks, ui-gate]
+    needs: [changes, checks, ui-gate, shots]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -157,12 +156,13 @@ jobs:
           HEAVY: ${{ needs.changes.outputs.heavy }}
           CHECKS: ${{ needs.checks.result }}
           UI: ${{ needs.ui-gate.result }}
+          SHOTS: ${{ needs.shots.result }}
         run: |
-          echo "changes: $CHANGES · heavy: $HEAVY · checks: $CHECKS · UI gate: $UI"
+          echo "changes: $CHANGES · heavy: $HEAVY · checks: $CHECKS · UI gate: $UI · shots: $SHOTS"
           [ "$CHANGES" = success ] || { echo "The change couldn't be sorted."; exit 1; }
           if [ "$HEAVY" = true ]; then
-            [ "$CHECKS" = success ] && [ "$UI" = success ] || { echo "A required job didn't pass."; exit 1; }
+            [ "$CHECKS" = success ] && [ "$UI" = success ] && [ "$SHOTS" = success ] || { echo "A required job didn't pass."; exit 1; }
           else
-            [ "$CHECKS" = skipped ] && [ "$UI" = skipped ] || { echo "Docs only, but the heavy jobs weren't skipped."; exit 1; }
+            [ "$CHECKS" = skipped ] && [ "$UI" = skipped ] && [ "$SHOTS" = skipped ] || { echo "Docs only, but the heavy jobs weren't skipped."; exit 1; }
             echo "Docs only: the heavy jobs were skipped."
           fi
