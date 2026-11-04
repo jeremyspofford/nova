@@ -12,6 +12,11 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: let Nova run commands and checks without a command's output quietly rewriting how Nova behaves in every later conversation.
 - Still unfinished: memory Nova accepted from captures is still recalled without screening, and the screen still can't catch every rephrased instruction without a model; the approval is the backstop. Local self-approval (T2) remains an accepted known window until the passkey confirmation ships.
 
+**2026-11-03 · B2 · A crafted email can no longer break Nova's Gmail tools**
+- What changed: a web page or email containing a malformed character reference (such as `&#xzz;`) no longer breaks Nova's Gmail search and reading or a page fetch. Nova now decodes these with the same bounds-checked decoder its safety screen uses, and leaves a bad reference as written.
+- What you can now do: keep using Gmail tools and email summaries even when someone sends a message built to break them.
+- Still unfinished: nothing for this fix. Pages and email are still screened as outside content, as before.
+
 **2026-11-03 · T1 · A paired device can no longer act as you**
 - What changed: a task a paired computer or phone sends through its inbox now waits for your OK before it runs, whatever approval level the device asked for. It can't loosen your privacy setting: the stricter of the device's request and your default applies. Its words are screened by Nova's own checks like any outside content, and a request that tries to hide instructions is refused and kept with the reason. The record says which device asked, not "You asked for it". Devices also can no longer change policy settings (permissions such as test auto-run, and spend limits) through the inbox; those stay on your own screens with their usual confirmation.
 - What you can now do: pair computers without letting one quietly start work as you. Device requests appear in Tasks waiting for your OK.
