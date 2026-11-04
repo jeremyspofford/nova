@@ -723,9 +723,22 @@ export function createCore(o: CoreOptions) {
         report: (d, reports) => deviceWorkloads.report(d.id, reports),
         answer: (d) => ({ workloads: deviceWorkloads.assignments(d.id) }),
       },
+      // A paired device is never the person (Insertion #3 T1): its request is outside content,
+      // screened by Nova's own checks, waits for the person's OK, and can't loosen privacy.
       task: (d, key, body) => {
-        const task = ledger.create({ ...(body as unknown as TaskInput), origin: { kind: 'device', ref: d.id }, idempotency_key: `device:${d.id}:${key}` });
-        triggers.reactive(task, `device:${d.id}`);
+        const input = body as unknown as TaskInput;
+        const screen = ingest.screenNow({ text: `${String(input.title ?? '')}
+${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.id}` } });
+        if (screen.verdict === 'block') throw new CoreError('validation', 'Nova didn’t take this request: it looked like it was trying to give instructions.');
+        const privacy = profile.privacyDefault();
+        const task = ledger.create({
+          ...input,
+          approval_tier: Math.max(Number(input.approval_tier ?? 0) || 0, 2) as TaskInput['approval_tier'],
+          privacy_mode: input.privacy_mode === undefined ? privacy : stricter(input.privacy_mode, privacy),
+          origin: { kind: 'device', ref: d.id },
+          idempotency_key: `device:${d.id}:${key}`,
+        });
+        triggers.reactive(task, `device:${d.id}`, `“${d.name}” asked for it; it waits for your OK.`);
         return task;
       },
       // A device's note is outside content: it never becomes memory without the person's OK
