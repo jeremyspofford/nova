@@ -54,7 +54,8 @@ export async function enrollPasskeys(send: Send, base: string) {
 // passkeys when there are none yet, then an approval of exactly this request.
 export async function withPasskey(send: Send, base: string, method: string, path: string, body: unknown, headers: Record<string, string> = {}) {
   const b = body as Record<string, unknown> | undefined;
-  if (!b || b.confirm !== true || 'passkey_approval' in b || !path.startsWith('/api/v1/') || /^\/api\/v1\/changes\/[^/]+\/rollback$/.test(path.split('?')[0]!)) return body;
+  // An explicit confirmation: confirm: true, or a typed one (<service>@<version>) that may be tier 3.
+  if (!b || !(b.confirm === true || (typeof b.confirm === 'string' && b.confirm !== '')) || 'passkey_approval' in b || !path.startsWith('/api/v1/') || /^\/api\/v1\/changes\/[^/]+\/rollback$/.test(path.split('?')[0]!)) return body;
   const state = await send('GET', '/api/v1/security/passkeys', undefined, headers);
   if (state.status !== 200) return body;
   if (!state.body.count) await enrollPasskeys(send, base);
