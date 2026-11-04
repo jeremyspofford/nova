@@ -11,7 +11,8 @@ import { ICONS, ORB_SIZES, addDeviceSheet, allowApproveSheet, approvalSheet, bri
 import { waitingLine } from './wait.js';
 import { ORB_STATES } from './status.js';
 import { renderTopology } from './topology-view.js';
-import { workCosts, diagnosticsDownload, passkeySetup, PASSKEY_STATES, PASSKEY_SETUP_STATES } from './components.js';
+import { escapeHtml as esc } from './markdown.js';
+import { workCosts, diagnosticsDownload, configImport, configSetup, configProposal, passkeySetup, PASSKEY_STATES, PASSKEY_SETUP_STATES } from './components.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -292,6 +293,48 @@ function backupSpecimen(model = backupModel()) {
 function backupsEntry() {
   return `<label class="sg-pick" for="backups-state">Specimen state <select class="input" id="backups-state">${backupStates.map(([id, name]) => `<option value="${id}"${id === backupState ? ' selected' : ''}>${name}</option>`).join('')}</select></label><p class="sg-about">Demo controls only. Folders and keys below are public examples; no backup settings or clipboard are changed.</p><div data-backups-content>${backupSpecimen()}</div><p class="settings-note" role="status" data-backups-demo-notice></p>`;
 }
+// Config onboarding specimens (proposed, 2026-11-04): one layered store, three doors. Demo only:
+// nothing is read, applied or exported.
+const CONFIG_SPECIMENS = ['import-choose', 'import-review', 'import-refused', 'import-applied', 'form-step', 'form-review', 'chat-asking', 'chat-asking-tier-3', 'chat-applied', 'chat-declined'];
+let configState = 'import-review';
+const configChanges = [
+  { key: 'user.timezone', label: 'Timezone', from: 'UTC', to: 'America/New_York', layer: 'pack' },
+  { key: 'notifications.quiet_hours', label: 'Quiet hours', from: '22:00–07:00', to: '21:30–08:00', layer: 'pack' },
+  { key: 'board.morning', label: 'Morning board', from: 'Day brief, inbox, held items', to: 'Standup draft, inbox, calendar, held items', layer: 'pack' },
+  { key: 'hub.port', label: 'Console port', from: '4317', to: '4318', layer: 'hub' },
+  { key: 'connectors.mail.key', label: 'Mail key', refused: 'This line had a key in it. Secrets never go in a configuration file, so it was left out. Add the key in Settings › Connections, where it goes to the vault.' },
+];
+const configFields = [
+  { key: 'user.timezone', label: 'Timezone', help: 'Times and quiet hours follow it.', value: 'America/New_York', options: ['UTC', 'America/New_York', 'Asia/Tokyo'], layer: 'pack' },
+  { key: 'notifications.quiet_hours', label: 'Quiet hours', help: 'Nova holds anything that can wait.', value: '22:00–07:00', layer: 'default' },
+  { key: 'hub.home', label: 'Where Nova keeps your things', help: 'One folder of plain files on this hub.', value: '~/Nova', layer: 'hub' },
+];
+function configSpecimen() {
+  const [door, ...rest] = configState.split('-');
+  const s = rest.join('-');
+  const html = door === 'import' ? configImport({ state: s, changes: configChanges, problems: ['“port” must be a number from 1 to 65535; the file says “forty-three”.', 'There is no setting called “mornin_board”. Did you mean “morning_board”?'] })
+    : door === 'form' ? configSetup({ state: s, title: 'Where and when', fields: configFields, changes: configChanges.slice(0, 2) })
+    : configProposal({ state: s === 'asking-tier-3' ? 'asking' : s, tier: s === 'asking-tier-3' ? 3 : 2, changes: s === 'asking-tier-3' ? [{ key: 'privacy.posture', label: 'Privacy', from: 'Local only', to: 'Balanced: outside help when it must', layer: 'pack' }] : [configChanges[2]] });
+  return `<div data-config-specimen="${esc(configState)}">${html}</div>`;
+}
+function configEntry() {
+  return `<label class="sg-pick" for="config-state">Door and state <select class="input" id="config-state">${CONFIG_SPECIMENS.map((s) => `<option value="${s}"${s === configState ? ' selected' : ''}>${s.replaceAll('-', ' ')}</option>`).join('')}</select></label>
+<p class="sg-about">Three doors into one layered store: a file, the form, a chat with Nova. Each shows the same diff before applying. Demo only: nothing is read, applied or exported.</p><div data-config-content>${configSpecimen()}</div><p class="settings-note" role="status" data-config-demo-notice></p>`;
+}
+function bindConfig() {
+  const entry = sg.querySelector('#sg-config-doors');
+  if (!entry) return;
+  const note = (text) => { entry.querySelector('[data-config-demo-notice]').textContent = text; };
+  entry.addEventListener('change', (e) => {
+    if (e.target.id === 'config-state') { configState = e.target.value; entry.querySelector('[data-config-content]').innerHTML = configSpecimen(); note(''); }
+    if (e.target.matches('[data-config-file]')) { e.target.value = ''; note('Demo only. No file was read.'); }
+  });
+  entry.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-action^="config-"]');
+    if (b && entry.contains(b)) { e.preventDefault(); note('Demo only. Nothing was applied.'); }
+  });
+}
+
 // Passkey confirmation specimens (T2, approved in #291). Never calls navigator.credentials.
 let passkeyState = 'ready';
 let passkeySetupState = 'start';
@@ -487,6 +530,7 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
       ['diagnostics', 'Diagnostics', 'A native download, its privacy limits, and an unavailable state.', () => healthEntry('diagnostics')],
       ['memory-card', 'MemoryHighlightCard', 'One thing Nova kept, or that nothing is kept yet.',
         () => `<div class="sg-cards">${state('Kept', memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] }))}${state('Nothing yet', memoryHighlightCard())}</div>`],
+      ['config-doors', 'Configuration: three doors (proposed)', 'A file, the form or a chat with Nova: one layered store, the same diff before anything applies, a layer on every setting. Demo only.', () => configEntry()],
       ['passkey-approval', 'Passkey confirmation', 'Tier 3 on Nova’s own screen, confirmed with a passkey so a program on this computer can’t approve itself. Tiers 0–2 are unchanged. Demo only: no passkey is requested.', () => passkeyEntry()],
       ['approval-sheet', 'ApprovalSheet', 'Tiered: tier 2 asks; tier 3 needs an explicit confirmation every time.',
         () => `<div class="sg-cards">${state('Tier 2', sheet(approvalSheet(task('a2', 'Send the draft reply', 'waiting', { approval_tier: 2 }))))}${state('Tier 3', sheet(approvalSheet(task('a3', 'Delete the old backups', 'waiting', { approval_tier: 3 }))))}</div>`],
@@ -567,6 +611,7 @@ function render() {
   if (healthFocus?.isConnected) healthFocus.focus({ preventScroll: true });
   bindTopology();
   bindBackups();
+  bindConfig();
   bindPasskey();
   bindHealthSpecimens();
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
