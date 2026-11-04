@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Ponytail Step 4 · Dead code and unused options removed**
+- What changed: code that nothing in Nova ever ran is gone: about 290 lines of code, net, plus about 40 lines of tests that only covered it. That includes a seat and a log file format the decision service stopped using, a placeholder for the hosted Jev provider, old pairing and clock helpers in the file every device carries, settings options nobody set, and about a hundred names the core offered that nothing outside it used. One removal is a safety gain: there was a way to install a skill that skipped Nova's screening. Only tests used it, but it is gone now. Every skill you add still goes through the screen first. Nothing you can see or do in Nova changes.
+- What you can now do: nothing new. Nova works the same, with less unused code to read, review or ship to devices.
+- Still unfinished: two kinds of cleanup from the same audit wait for later steps: merging the many copied helpers (Step 5), and the app.js tidy-up (Step 6). The Gmail connector's unused test options stay for now, because they sit inside the plaintext-secret migration code that stays until you confirm the old Gmail folder is gone. That folder still exists on this machine's Nova home.
+
 **2026-11-04 · UI rebuild (design) · A proposed calmer look, shown on the real app**
 - What changed: a proposed redesign of Nova's look, shown on the real app, for your reaction. Nothing in the app changes yet. It keeps the layout and changes the surfaces:
   - one quiet light from above instead of layered glows;
