@@ -78,6 +78,7 @@ import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
 import { Checkpoints, dropPartials, finishStaged, stagedPending, takeCheckpoint } from './resilience/checkpoints.ts';
+import { ConsolePasskeys } from './passkeys.ts';
 import { Restarter } from './resilience/restart.ts';
 import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
@@ -572,6 +573,8 @@ export function createCore(o: CoreOptions) {
   const role = meshRole;
   // Checkpoints (M7 amendment §1) and restarting in place, for a restore (and a factory reset).
   const restarter = new Restarter({ supervisor: o.supervisor ?? null, log });
+  // Passkeys that confirm tier 3 on the hub's own screen (Insertion #3 T2).
+  const passkeys = new ConsolePasskeys({ db, now });
   const checkpoints = new Checkpoints({
     db, log, home: o.home, version: o.version, now, ledger, verifier, vault,
     vaultAt: (home) => new Vault({ home, ...(o.vault ?? {}) }),
@@ -1545,6 +1548,8 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     }),
     // ---- resilience (M7 plan §2–§3): backups, the drill, playbooks, the supervisor ----
     ...keep.routes((w) => { if (w.principal.kind !== 'console') throw new CoreError('forbidden', 'Releases are deployed and rolled back from the hub’s own screen only.'); }),
+    // ---- passkeys for tier 3 on the hub's own screen (Insertion #3 T2) ----
+    ...passkeys.routes(),
     // ---- checkpoints (M7 amendment §1) ----
     ...checkpoints.routes(),
     // ---- factory reset (M7 amendment §2) ----
@@ -1677,7 +1682,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   const core = {
     self,
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network,
-    ingest, vault, broker: o.broker ?? null, connectors, capture, models, changes, caps,
+    ingest, vault, broker: o.broker ?? null, connectors, capture, models, changes, caps, passkeys,
     // The Decision Service (DS1): its view of the seats, a refresh, how a template stands, and
     // asking for a template. Never a seat: nothing reaches a decision model except through it.
     decisionService: { view: decisionService.view, refresh: decisionService.refresh, standing: decisionService.standing, ask: decisionService.service.ask.bind(decisionService.service) }, foundry, resilience: keep, checkpoints, restarter, reset,
