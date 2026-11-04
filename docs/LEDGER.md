@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Config onboarding (design) · A proposed design for setting Nova up three ways**
+- What changed: the living styleguide shows a proposed design for setting Nova up and changing its configuration. There are three ways in: bring in a file, fill in a form, or ask Nova in chat. All three show the same list of changes before anything is applied. Every setting says which layer set it (Nova's default, this hub, or your pack) and can go back to the default. A key or password in an imported file is left out, with a pointer to where it belongs. A first schema draft maps today's settings to these layers.
+- What you can now do: look at the design across desktop, tablet, phone and foldable sizes, and react before it's built.
+- Still unfinished: nothing is built. Nova still reads `nova.config.json` as before. The real import, form and chat doors come after your reaction.
+
 **2026-11-04 · T2 (3 of 3) · Tier 3 on Nova’s own screen needs a passkey**
 - What changed: Nova's own screen now needs a passkey for tier 3. A tier-3 request from this computer that carries no passkey approval is refused, even if it has Nova's X-Nova header (which any program here can send). With no passkey yet, the answer says to add one in Settings › Security. Typed confirmations work the same way: a tier-3 service promotion or a device deployment needs the passkey too, while their tier-2 steps don't. A paired phone or browser that may approve still approves with its own device key, as before.
 - What you can now do: rely on tier 3 at this computer meaning a person was there. No other program on it can approve tier-3 work, change a gate, erase Nova or move the hub.
