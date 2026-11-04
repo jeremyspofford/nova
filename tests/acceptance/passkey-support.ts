@@ -54,8 +54,8 @@ export async function enrollPasskeys(send: Send, base: string) {
 // passkeys when there are none yet, then an approval of exactly this request.
 export async function withPasskey(send: Send, base: string, method: string, path: string, body: unknown, headers: Record<string, string> = {}) {
   const b = body as Record<string, unknown> | undefined;
-  // An explicit confirmation: confirm: true, or a typed one (<service>@<version>) that may be tier 3.
-  if (!b || !(b.confirm === true || (typeof b.confirm === 'string' && b.confirm !== '')) || 'passkey_approval' in b || !path.startsWith('/api/v1/') || /^\/api\/v1\/changes\/[^/]+\/rollback$/.test(path.split('?')[0]!)) return body;
+  // An explicit confirmation: confirm: true, or a typed <service>@<version> that may be tier 3 (a typed rollback is tier 2).
+  if (!b || !(b.confirm === true || (typeof b.confirm === 'string' && b.confirm.includes('@'))) || 'passkey_approval' in b || !path.startsWith('/api/v1/') || /^\/api\/v1\/changes\/[^/]+\/rollback$/.test(path.split('?')[0]!)) return body;
   const state = await send('GET', '/api/v1/security/passkeys', undefined, headers);
   if (state.status !== 200) return body;
   if (!state.body.count) await enrollPasskeys(send, base);
@@ -63,3 +63,14 @@ export async function withPasskey(send: Send, base: string, method: string, path
   if (c.status !== 200) throw new Error(`a test passkey approval failed: ${JSON.stringify(c.body)}`);
   return { ...b, passkey_approval: assertion(c.body, signingOrigin(base)) };
 }
+
+// For a test's own request helper (an origin and an absolute /api/v1 path): the body as the screen
+// would send it.
+const plainFetch = (origin: string): Send => async (method, path, body, headers = {}) => {
+  const r = await fetch(origin + path, { method, headers: { 'content-type': 'application/json', 'x-nova': '1', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const text = await r.text();
+  let parsed: unknown = text;
+  try { parsed = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+  return { status: r.status, body: parsed };
+};
+export const signed = (origin: string, method: string, path: string, body: unknown) => withPasskey(plainFetch(origin), origin, method, path, body);

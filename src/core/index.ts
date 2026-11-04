@@ -1342,7 +1342,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
         if (body.confirm !== (action === 'promote' ? `${service}@${body.version}` : 'rollback')) throw new CoreError('validation', 'The typed confirmation does not match this action.');
         if (!o.supervisor?.service) throw new CoreError('conflict', 'The supervisor service authority is unavailable.');
         const attested = who.principal.kind !== 'console' || !!passkey;
-        const r = await o.supervisor.service(action === 'promote' ? { action, service, version: body.version as string, confirm: body.confirm, expected: body.expected, attested } : { action, service, confirm: body.confirm, expected: body.expected, attested });
+        const r = await o.supervisor.service(action === 'promote' ? { action, service, version: body.version as string, confirm: body.confirm, expected: body.expected, ...(attested ? {} : { attested: false }) } : { action, service, confirm: body.confirm, expected: body.expected });
         if (!r.ok) throw new CoreError('conflict', r.said);
         return r;
       },

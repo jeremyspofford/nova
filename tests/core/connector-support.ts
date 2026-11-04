@@ -1,5 +1,6 @@
 // A core behind a console listener on loopback, for the connector tests (M5b). Its connectors are
 // started as a hub's are. Home Assistant reconnects within milliseconds here, not a minute.
+import { signed } from '../acceptance/passkey-support.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtempSync } from 'node:fs';
@@ -31,6 +32,7 @@ export async function bootCore(over: Partial<CoreOptions> = {}) {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1`;
   const call = async (method: string, path: string, body?: unknown) => {
+    body = await signed(base.slice(0, -'/api/v1'.length), method, `/api/v1${path}`, body);
     const res = await fetch(base + path, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const text = await res.text();
     return { status: res.status, body: text ? JSON.parse(text) : null };
