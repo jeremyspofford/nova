@@ -292,7 +292,7 @@ function backupSpecimen(model = backupModel()) {
 function backupsEntry() {
   return `<label class="sg-pick" for="backups-state">Specimen state <select class="input" id="backups-state">${backupStates.map(([id, name]) => `<option value="${id}"${id === backupState ? ' selected' : ''}>${name}</option>`).join('')}</select></label><p class="sg-about">Demo controls only. Folders and keys below are public examples; no backup settings or clipboard are changed.</p><div data-backups-content>${backupSpecimen()}</div><p class="settings-note" role="status" data-backups-demo-notice></p>`;
 }
-// Passkey confirmation specimens (T2, proposed). Never calls navigator.credentials.
+// Passkey confirmation specimens (T2, approved in #291). Never calls navigator.credentials.
 let passkeyState = 'ready';
 let passkeySetupState = 'start';
 const passkeyTask = () => task('pk3', 'Delete the old backups', 'waiting', { approval_tier: 3 });
@@ -487,7 +487,7 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
       ['diagnostics', 'Diagnostics', 'A native download, its privacy limits, and an unavailable state.', () => healthEntry('diagnostics')],
       ['memory-card', 'MemoryHighlightCard', 'One thing Nova kept, or that nothing is kept yet.',
         () => `<div class="sg-cards">${state('Kept', memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] }))}${state('Nothing yet', memoryHighlightCard())}</div>`],
-      ['passkey-approval', 'Passkey confirmation (proposed)', 'Tier 3 on Nova’s own screen, confirmed with a passkey so a program on this computer can’t approve itself. Tiers 0–2 are unchanged. Demo only: no passkey is requested.', () => passkeyEntry()],
+      ['passkey-approval', 'Passkey confirmation', 'Tier 3 on Nova’s own screen, confirmed with a passkey so a program on this computer can’t approve itself. Tiers 0–2 are unchanged. Demo only: no passkey is requested.', () => passkeyEntry()],
       ['approval-sheet', 'ApprovalSheet', 'Tiered: tier 2 asks; tier 3 needs an explicit confirmation every time.',
         () => `<div class="sg-cards">${state('Tier 2', sheet(approvalSheet(task('a2', 'Send the draft reply', 'waiting', { approval_tier: 2 }))))}${state('Tier 3', sheet(approvalSheet(task('a3', 'Delete the old backups', 'waiting', { approval_tier: 3 }))))}</div>`],
       ['device-sheets', 'Device sheets', 'Adding, changing and revoking devices: what it means, said before the confirmation.',
