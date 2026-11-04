@@ -12,6 +12,11 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: nothing new to do; capture sources behave as before, with less background churn.
 - Still unfinished: nothing for this fix.
 
+**2026-11-03 · T3 · Nova asks before changing its standing files once it has seen tool output**
+- What changed: AGENTS.md, SOUL.md, IDENTITY.md and USER.md load into every future conversation, so text planted there would stay. Once a conversation has run any tool, Nova now asks before changing one of these files, even when nothing it read looked suspicious; before then (for example, when you ask it to note a preference straight away) it still writes on its own. Nova's own status tools (capture, coding, infrastructure, network, schedules, settings and instance status) are now screened like any other tool output, so outside text they pass along can mark the conversation as having read outside content.
+- What you can now do: let Nova run commands and checks without a command's output quietly rewriting how Nova behaves in every later conversation.
+- Still unfinished: memory Nova accepted from captures is still recalled without screening, and the screen still can't catch every rephrased instruction without a model; the approval is the backstop. Local self-approval (T2) remains an accepted known window until the passkey confirmation ships.
+
 **2026-11-03 · B6 · Nightly backups work to another Windows drive**
 - What changed: on Windows, a nightly backup to a folder on a different drive from Nova's home (for example home on C:, backups on D:) no longer fails every night with "the backup folder is inside Nova's home". Nova now uses the same folder check the Backups settings already used. A folder whose name starts with two dots, inside the home, is also correctly treated as inside.
 - What you can now do: back up to a second drive.

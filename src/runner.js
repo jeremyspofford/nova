@@ -43,6 +43,9 @@ export const GUARDED = {
 };
 // The person's own files: never screened when read (their writes are guarded instead).
 const STANDING_EXACT = new Set([...WRITABLE, 'MEMORY.md']);
+// Nova's own status tools can relay outside text (a coding agent's failure reason, a capture
+// error carrying page text), so their output is screened and marked like a command's (T3).
+const STATUS_TOOLS = new Set(['nova_capture', 'code_status', 'infra_status', 'network_status', 'nova_schedules', 'nova_settings', 'nova_instance']);
 const STANDING = new Set([...STANDING_EXACT].map((n) => n.normalize('NFC').toLowerCase()));
 // Addresses in text, and an address as compared: no fragment, the URL parser's own spelling.
 const URL_IN_TEXT = /https?:\/\/[^\s<>"'`)\]}]+/gi;
@@ -449,6 +452,8 @@ export class Runner extends EventEmitter {
       let hints = null;
       let ok = true;
       const taintedBefore = run.taint.length > 0;
+      // From here on this run has seen tool output: a standing-file change asks (T3).
+      run.toolOutput = true;
       try {
         output = await tool.run(call.args, ctx);
         if (output && typeof output === 'object') ({ output, summary, link, ingest: hints = null } = output);
@@ -622,6 +627,9 @@ export class Runner extends EventEmitter {
     if (!call || !tool) return null;
     const tainted = run.taint.length > 0;
     const standing = call.name === 'write_file' && this.standingPath(call.args?.path);
+    // Standing files load into every future prompt, and taint can arrive unmarked (paraphrased
+    // command output), so once a run has seen any tool output a change to them always asks.
+    const asks = tainted || (standing && !!run.toolOutput);
     // Any other step that needs an OK (a tool added later: sending, paying, sharing, pairing)
     // is guarded the same way: in a tainted run it never goes on its own.
     let what = GUARDED[call.name] ?? (standing ? 'change your standing files' : tool.needsApproval ? 'take this step' : null);
@@ -646,13 +654,13 @@ export class Runner extends EventEmitter {
     const payload = this.outboundPayload(call, preview);
     const out = payload === null ? null : this.ingest.outbound({ text: payload }, { tainted });
     const matched = out && !out.ok ? out.matched : null;
-    if (!(tainted && what) && !matched) {
+    if (!(asks && what) && !matched) {
       // A free follow, counted in the conversation's own log, so a reload or restart keeps it.
       if (follow) this.record(follow.root, { type: 'follow', host: follow.host, from: run.sessionId });
       return null;
     }
     const sources = [...new Set(run.taint.map((x) => cleanOrigin(x.origin)))].slice(0, 5);
-    return { ...(tainted && what ? { what } : {}), ...(matched ? { matched } : {}), sources };
+    return { ...(asks && what ? { what } : {}), ...(matched ? { matched } : {}), sources };
   }
 
   // What a step would send to a destination outside content could have chosen.
@@ -693,6 +701,7 @@ export class Runner extends EventEmitter {
     if (call.name === 'import_files') return { text: output, source: { kind: 'file', origin: 'workspace/import' } };
     // A command's output, in every run (Amendment 2026-10-30-C Part 3: tool output).
     if (call.name === 'exec') return { text: output, source: { kind: 'tool', origin: 'a command', ref: String(a.command ?? '').slice(0, 200) } };
+    if (STATUS_TOOLS.has(call.name)) return { text: output, source: { kind: 'tool', origin: `Nova’s ${call.name} tool` } };
     return null;
   }
 
@@ -701,7 +710,7 @@ export class Runner extends EventEmitter {
   // commands the person allowed keep running on their own. Without a model, a paraphrased
   // injection in command output that no check matches is passed on as held-back data, untainted.
   taints(call, screen) {
-    if (call.name !== 'exec') return true;
+    if (call.name !== 'exec' && !STATUS_TOOLS.has(call.name)) return true;
     return screen.verdict === 'block' || screen.flags.some((f) => f.level !== 'note') || (!!screen.model && screen.verdict !== 'pass');
   }
 
