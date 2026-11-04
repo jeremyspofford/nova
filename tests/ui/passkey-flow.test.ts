@@ -9,10 +9,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { stop, until } from '../acceptance/support.ts';
-import { blank, browser, device, finishSetup, ready, shoot, shotsDir } from './support.ts';
+import { blank, browser, device, finishSetup, ready, shoot, shotsDir, webkitBrowser } from './support.ts';
 
-test('T2: tier 3 on Nova’s own screen waits for a passkey; Security adds two; the sheet’s step approves exactly its request', { timeout: 180_000 }, async (t) => {
-  const b = await browser();
+for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]] as const) test(`T2 ${engine}: tier 3 on Nova’s own screen waits for a passkey; Security adds two; the sheet’s step approves exactly its request`, { timeout: 180_000 }, async (t) => {
+  const b = await launch();
   if (typeof b === 'string') return t.skip(b);
   const m = blank('nova-ui-passkey-');
   const nova = await m.start();
@@ -43,7 +43,7 @@ test('T2: tier 3 on Nova’s own screen waits for a passkey; Security adds two; 
     await sheet.locator('[data-action="approve"]').click();
     await sheet.locator('.passkey-line[data-passkey-state="no-passkey"]').waitFor();
     assert.equal(await sheet.locator('[data-passkey-add]').getAttribute('href'), '/settings#security');
-    if (shots) await shoot(page, join(shots, 'passkey-no-passkey.png'));
+    if (shots) await shoot(page, join(shots, `${engine}-passkey-no-passkey.png`));
     assert.equal((await m.get(`/api/v1/tasks/${created.id}`)).state, 'waiting', 'not approved');
 
     // Settings › Security: the first on trust, then a second; Health warns in between.
@@ -67,7 +67,7 @@ test('T2: tier 3 on Nova’s own screen waits for a passkey; Security adds two; 
     await page.locator('#security [data-action="passkey-setup"]').click();
     await page.locator('#security .passkey-setup[data-passkey-count="2"] [data-passkey-setup-state="added"]').waitFor();
     assert.match((await page.locator('#security').textContent()) ?? '', /Setup is complete: 2 passkeys\./);
-    if (shots) await shoot(page, join(shots, 'passkey-security-complete.png'));
+    if (shots) await shoot(page, join(shots, `${engine}-passkey-security-complete.png`));
     assert.equal((await m.get('/api/v1/health')).checks.passkeys.complete, true);
 
     // A passkey signed for another request is refused by the server, whatever the page sends.
@@ -92,7 +92,7 @@ test('T2: tier 3 on Nova’s own screen waits for a passkey; Security adds two; 
     await sheet.locator('.passkey-line[data-passkey-state="waiting"]').waitFor();
     assert.equal(await sheet.locator('[data-action="cancel-task"]').isVisible(), false, 'Cancel the task is hidden while waiting');
     assert.equal(await sheet.locator('[data-action="close-sheet"]', { hasText: 'Not now' }).isVisible(), true, 'Not now stays');
-    if (shots) await shoot(page, join(shots, 'passkey-waiting.png'));
+    if (shots) await shoot(page, join(shots, `${engine}-passkey-waiting.png`));
     await sheet.locator('[data-action="passkey-stop"]').click();
     await sheet.locator('.passkey-line[data-passkey-state="cancelled"]').waitFor();
     assert.equal(await sheet.locator('[data-action="cancel-task"]').isVisible(), true, 'Cancel the task is back once the wait ends');
