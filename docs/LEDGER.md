@@ -7,6 +7,18 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · UI rebuild (design) · A proposed calmer look, shown on the real app**
+- What changed: a proposed redesign of Nova's look, shown on the real app, for your reaction. Nothing in the app changes yet. It keeps the layout and changes the surfaces:
+  - one quiet light from above instead of layered glows;
+  - solid surfaces instead of frosted glass;
+  - on Home, one leading card and the rest as a calm list;
+  - the right column as a single list "at a glance";
+  - a conversation as one reading column;
+  - a flatter orb in the side rail;
+  - Health as plain sections instead of boxes in boxes.
+- What you can now do: compare before and after for Home, a conversation, Tasks, Health, Settings and Topology, at every screen size from a folded phone to a wide desktop, and say what to keep or change.
+- Still unfinished: after your reaction, each surface is rebuilt to match, and its screenshots are compared against the approved design.
+
 **2026-11-04 · T2 (2 of 3) · Tier-3 sheets on Nova’s own screen ask for a passkey**
 - What changed: Settings now has a Security section for adding passkeys to Nova's own screen. The first is taken on trust, the second is approved by the first, and setup counts as complete with two. Every tier-3 confirmation on this screen (approving a tier-3 task, revoking or promoting a device, erasing Nova, and the rest) now asks for a passkey after you tick the box. The sheet says what is happening: while it waits, "Cancel the task" is hidden; "Stop waiting" ends the attempt with nothing approved, and "Not now" leaves the task pending. With no passkey yet, nothing tier-3 runs here, and the sheet points to Settings › Security. Nova's server checks each passkey signature against the exact request it was made for. Health shows a Passkeys line: how many there are, when the first was added on trust, and a warning while there is only one.
 - What you can now do: open Nova at http://localhost on this computer, go to Settings › Security and add two passkeys (a security key and this computer's fingerprint or screen lock, say). Tier-3 actions on this screen then confirm with one of them.
