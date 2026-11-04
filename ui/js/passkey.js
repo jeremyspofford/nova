@@ -11,7 +11,8 @@ import { waitingLine } from './wait.js';
 
 const unb64 = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
 const b64 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)));
-const supported = () => typeof PublicKeyCredential === 'function' && typeof navigator.credentials?.get === 'function';
+// Some engines report the interface as an object, not a function: ask whether it exists.
+const supported = () => !!globalThis.PublicKeyCredential && typeof navigator.credentials?.get === 'function';
 const UNAVAILABLE = 'This browser can’t use a passkey here. Open Nova on this computer’s own address (localhost) in a browser that supports passkeys.';
 
 // Said instead of the request's own answer: the step stopped, and nothing was approved.

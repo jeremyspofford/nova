@@ -126,5 +126,5 @@ export async function finishSetup(m: ReturnType<typeof blank>, { passkeys = true
     const r = await m.send('POST', '/api/v1/setup/messages', { text });
     if (r.status !== 200) throw new Error(`setup answer "${text}" failed: ${JSON.stringify(r.body)}`);
   }
-  if (passkeys) await enrollPasskeys(m.plain, m.base);
+  if (passkeys) await enrollPasskeys(m.plain ?? m.send, m.base);
 }
