@@ -35,7 +35,7 @@ export const fromCache = (res) => res.headers.get('x-nova-offline') === '1';
 export const NO_ANSWER_MS = 10_000;
 export async function request(method, path, body, retried = false) {
   // Tier 3 on the hub's own screen: approved with a passkey first (passkey.js). Rolling a change
-  // back by hand takes confirm: true at tier 2, so it asks once (src/core/index.ts TIER2_CONFIRM, with step 3).
+  // back by hand takes confirm: true at tier 2, so it asks once (src/core/index.ts TIER2_CONFIRM).
   const bare = path.split('?')[0];
   const signed = body?.confirm === true && !body.passkey_approval && !/^\/changes\/[^/]+\/rollback$/.test(bare) ? await approvalFor(api, method, bare, body) : null;
   if (signed) body = { ...body, passkey_approval: signed };

@@ -8,7 +8,8 @@ import { APPROVER_ONLY, REFUSAL, allows, type Listener, type Principal, type Sco
 // Who is asking and how they got here (mesh/access.ts), for the scope check and for handlers that
 // need it (enrollment is only over the mesh listener; "this device" in the registry).
 export interface Who { principal: Principal; listener: Listener; address: string }
-export interface Ctx { params: Record<string, string>; query: URLSearchParams; body: Record<string, unknown>; headers: IncomingHttpHeaders; who: Who }
+// `passkey`: this request carried a passkey approval that the core checked for exactly it (T2).
+export interface Ctx { params: Record<string, string>; query: URLSearchParams; body: Record<string, unknown>; headers: IncomingHttpHeaders; who: Who; passkey?: boolean }
 export type Handler = (ctx: Ctx) => unknown;
 
 export interface Route {
@@ -117,8 +118,8 @@ export function createApi(o: {
   // Which events a principal may see on the stream (by default, all of them).
   visible?: (event: string, p: Principal) => boolean;
   // A tier-3 request's passkey approval (Insertion #3 T2): checked for exactly this request, then
-  // taken out of the body, before the route sees it.
-  approval?: (method: string, path: string, body: Record<string, unknown>, who: Who) => void;
+  // taken out of the body, before the route sees it. True when one was checked.
+  approval?: (method: string, path: string, body: Record<string, unknown>, who: Who) => boolean;
 }) {
   for (const r of o.routes) {
     if (r.auth && (r.method !== HOOK_ROUTE.method || r.path !== HOOK_ROUTE.path)) throw new Error(`${r.method} ${r.path} can't skip the X-Nova guard; only ${HOOK_ROUTE.method} ${HOOK_ROUTE.path} may.`);
@@ -167,8 +168,8 @@ export function createApi(o: {
       const decode = (v: string) => { try { return decodeURIComponent(v); } catch { throw new CoreError('validation', 'The address has a malformed escape.'); } };
       const params = Object.fromEntries(Object.entries(route.re.exec(path)!.groups ?? {}).map(([k, v]) => [k, decode(v)]));
       const body = route.method === 'GET' || route.method === 'DELETE' ? {} : await readBody(req);
-      o.approval?.(route.method, path, body, who);
-      const out = await route.handle({ params, query: url.searchParams, body, headers: req.headers, who });
+      const passkey = o.approval?.(route.method, path, body, who) ?? false;
+      const out = await route.handle({ params, query: url.searchParams, body, headers: req.headers, who, passkey });
       if (out instanceof Sse) {
         res.writeHead(route.status ?? 200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-content-type-options': 'nosniff' });
         res.write(': nova\n\n');

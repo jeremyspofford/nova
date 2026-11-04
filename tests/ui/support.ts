@@ -2,29 +2,21 @@
 // at $CHROMIUM, or where `playwright-core install chromium` puts it. With no usable browser the
 // suite is skipped with a loud notice on a developer machine, and fails in CI: the gate never
 // passes by not running. scripts/ui-test.sh runs it in a container that has the browser.
-import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { chromium, webkit, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { ROOT, blank } from '../acceptance/support.ts';
+import { PASSKEY, enrollPasskeys } from '../acceptance/passkey-support.ts';
 
-export { ROOT, blank };
+export { ROOT, blank, PASSKEY };
 
 const CI = !!process.env.CI;
 
 // A test passkey (Insertion #3 T2): tier 3 on Nova's own screen needs one, so every test browser
 // gets this software authenticator in place of the platform's, and finishSetup enrolls two
-// credentials for it. It signs as a page opened at localhost would (the console's relying party);
+// credentials for it (passkey-support.ts, the same key Node signs with). It signs as a page opened at localhost would (the console's relying party);
 // the server checks every signature for real. `window.__novaPasskey = { mode: 'hang' | 'cancel' }`
 // makes it wait until stopped, or refuse, as a person would.
-const pk = generateKeyPairSync('ec', { namedCurve: 'P-256' });
-export const PASSKEY = {
-  jwk: pk.privateKey.export({ format: 'jwk' }),
-  spki: pk.publicKey.export({ format: 'der', type: 'spki' }).toString('base64'),
-  ids: [randomBytes(32).toString('base64url'), randomBytes(32).toString('base64url')],
-  base: Date.now(),
-};
-const rpHash = () => createHash('sha256').update('localhost').digest();
 const authenticator = (o: { jwk: object; spki: string; base: number }) => {
   const enc = new TextEncoder();
   const b64u = (b: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -69,29 +61,6 @@ const authenticator = (o: { jwk: object; spki: string; base: number }) => {
   Object.defineProperty(navigator.credentials, 'get', { value: get, configurable: true });
   Object.defineProperty(navigator.credentials, 'create', { value: create, configurable: true });
 };
-
-// The two test passkeys, enrolled as the person would on Nova's own screen at localhost.
-export async function enrollPasskeys(m: ReturnType<typeof blank>) {
-  const origin = m.base.replace('//127.0.0.1', '//localhost');
-  const h = { 'x-nova': '1', origin };
-  let count = 0;
-  for (const [i, id] of PASSKEY.ids.entries()) {
-    const o = (await m.send('POST', '/api/v1/security/passkeys/options', {}, h)).body;
-    let approval;
-    if (o.approval) {
-      const n = Buffer.alloc(4); n.writeUInt32BE(++count);
-      const auth = Buffer.concat([rpHash(), Buffer.from([0x05]), n]);
-      const cdj = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge: o.approval.challenge, origin }));
-      approval = { id: o.approval.id, digest: o.approval.digest, credential_id: PASSKEY.ids[0], authenticator_data: auth.toString('base64url'), client_data_json: cdj.toString('base64url'), signature: sign('sha256', Buffer.concat([auth, createHash('sha256').update(cdj).digest()]), pk.privateKey).toString('base64url') };
-    }
-    const cred = Buffer.from(id, 'base64url');
-    const len = Buffer.alloc(2); len.writeUInt16BE(cred.length);
-    const auth = Buffer.concat([rpHash(), Buffer.from([0x45]), Buffer.alloc(4), Buffer.alloc(16), len, cred, Buffer.from([0xa0])]);
-    const cdj = Buffer.from(JSON.stringify({ type: 'webauthn.create', challenge: o.challenge, origin }));
-    const r = await m.send('POST', '/api/v1/security/passkeys', { registration: o.registration, credential_id: id, public_key: PASSKEY.spki, authenticator_data: auth.toString('base64url'), client_data_json: cdj.toString('base64url'), name: `Test passkey ${i + 1}`, ...(approval ? { approval } : {}) }, h);
-    if (r.status !== 201) throw new Error(`enrolling a test passkey failed: ${JSON.stringify(r.body)}`);
-  }
-}
 
 // Where the test's Chromium is (also handed to Nova's browser worker as NOVA_CHROMIUM).
 export const chromiumPath = (): string => process.env.CHROMIUM || chromium.executablePath();
@@ -162,5 +131,5 @@ export async function finishSetup(m: ReturnType<typeof blank>, { passkeys = true
     const r = await m.send('POST', '/api/v1/setup/messages', { text });
     if (r.status !== 200) throw new Error(`setup answer "${text}" failed: ${JSON.stringify(r.body)}`);
   }
-  if (passkeys) await enrollPasskeys(m);
+  if (passkeys) await enrollPasskeys(m.plain ?? m.send, m.base);
 }

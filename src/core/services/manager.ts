@@ -96,7 +96,8 @@ export class ServiceManager {
   }
 
   // Tier 1: started alongside, tested, never given traffic. A command not yet approved asks first.
-  async deploy(input: unknown, say: Say = () => {}, confirm?: unknown): Promise<Outcome & { tier?: 2 | 3; asks?: boolean }> {
+  // `attested`: false when a tier-3 confirmation came from Nova's own screen without a passkey (T2).
+  async deploy(input: unknown, say: Say = () => {}, confirm?: unknown, attested = true): Promise<Outcome & { tier?: 2 | 3; asks?: boolean }> {
     const p = this.plan(input);
     if (!p.ok) return { ok: false, said: `The definition can’t be used: ${p.problems.join(' ')}` };
     if (!p.plan.ok) return { ok: false, said: `The ${p.driver.name} driver can’t run ${p.def.service} ${p.def.version}: ${p.plan.refused.join(' ')}` };
@@ -111,6 +112,7 @@ export class ServiceManager {
       const approved = live ? this.definition(service, live) : null;
       if (!approved || commands(approved) !== cmds) {
         const tier = Math.max(2, promotionTier(p.def)) as 2 | 3;
+        if (tier === 3 && confirm === `${service}@${version}` && !attested) return { ok: false, tier, asks: true, said: 'Tier-3 actions on Nova’s own screen are confirmed with a passkey, and this request had none, so nothing was approved.' };
         if (confirm !== `${service}@${version}`) {
           const argv = p.plan.command ? p.plan.command.map((w) => JSON.stringify(w)).join(' ') : '(see its definition)';
           return { ok: false, tier, asks: true, said: `Deploying ${service} ${version} runs a command ${approved ? `that ${live}, the approved version, doesn’t` : 'no approved version of it has run'}: ${argv}. Running it, even alongside with no traffic, asks first (tier ${tier}): type ${service}@${version}.` };

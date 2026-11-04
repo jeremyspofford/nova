@@ -6,6 +6,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { withPasskey } from './passkey-support.ts';
+
 export const ROOT = join(import.meta.dirname, '..', '..');
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -60,7 +62,10 @@ export function blank(prefix: string) {
       return r;
     },
     get: async (p: string) => (await fetch(m.base + p)).json(),
-    send: async (method: string, p: string, body?: unknown, headers: Record<string, string> = { 'x-nova': '1' }) => {
+    // As Nova's own screen does, a request with confirm: true carries a passkey approval of exactly
+    // it (T2; passkey-support.ts). `plain` sends what it is given, as any other program could.
+    send: async (method: string, p: string, body?: unknown, headers: Record<string, string> = { 'x-nova': '1' }) => m.plain(method, p, await withPasskey(m.plain, m.base, method, p, body, headers), headers),
+    plain: async (method: string, p: string, body?: unknown, headers: Record<string, string> = { 'x-nova': '1' }) => {
       const res = await fetch(m.base + p, { method, headers: { 'content-type': 'application/json', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       const text = await res.text();
       return { status: res.status, body: text ? JSON.parse(text) : null };
