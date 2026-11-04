@@ -60,7 +60,7 @@ async function page({ theme = 'paper', mode = 'light', width = 1280, height = 82
   return p;
 }
 const shot = (p, name) => p.screenshot({ path: join(out, `${name}.png`) });
-const settle = (p) => p.waitForFunction(() => !document.querySelector('.thinking, [data-live], .record.is-running') && !document.querySelector('.send.is-stop'), null, { timeout: 15000 });
+const settle = (p) => p.waitForFunction(() => !document.querySelector('[data-live], .record.is-running') && !document.querySelector('.send.is-stop'), null, { timeout: 15000 });
 
 // ---- cold start --------------------------------------------------------------
 const { child: server, ms: serverMs } = await startServer();
@@ -97,16 +97,17 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForSelector('.empty');
   await p.keyboard.type('What should I focus on today?');
   // Measured in the page: from the Enter keydown to the first frame painted
-  // with the message on the page and Nova visibly working.
+  // with the message on the page and Nova visibly working (Send has become Stop).
+  // Not a Thinking line: by the waiting bands (DESIGN-SYSTEM, ui/js/wait.js) it stays unseen for 1 s.
   await p.evaluate(() => {
     window.__t = {};
     document.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.__t.key = performance.now(); }, { capture: true, once: true });
     new MutationObserver((_, o) => {
-      if (document.querySelector('.msg-user .bubble') && document.querySelector('.thinking, [data-live]')) {
+      if (document.querySelector('.msg-user .bubble') && document.querySelector('.send.is-stop')) {
         o.disconnect();
         requestAnimationFrame(() => { window.__t.seen = performance.now(); });
       }
-    }).observe(document.getElementById('thread'), { childList: true, subtree: true });
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   });
   await p.keyboard.press('Enter');
   await p.waitForFunction(() => window.__t.seen);
@@ -347,7 +348,9 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForSelector('.approval');
   await p.waitForTimeout(400);
   await shot(p, 'paper-skill-approval');
-  check('after reading mail, opening a web page asks first', /read your email in this conversation/.test(await p.textContent('.approval')));
+  // The ingest gate names what was read (ui/js/view.js guardLine): here, the Gmail search.
+  const why = await p.textContent('.approval');
+  check('after reading mail, opening a web page asks first', /It comes after reading Gmail search/.test(why) && /After reading something from outside, Nova asks first for this/.test(why));
   await p.keyboard.press('Escape');
   await settle(p);
   const emailChat = p.url();
@@ -399,9 +402,11 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForSelector('.toast-btn');
   await p.waitForTimeout(300);
   await shot(p, 'paper-skills-removed');
+  // Conversations keep the skill's name ("followed …, since removed"), and the standby journal in
+  // nova.db carries them, so the database files are searched for the playbook's text instead.
   const leftovers = () => {
     const hits = [];
-    const walk = (d) => { for (const f of readdirSync(d, { withFileTypes: true })) { if (['.git', 'sessions'].includes(f.name)) continue; const q = join(d, f.name); if (f.isDirectory()) walk(q); else if (/Shopping research/.test(readFileSync(q, 'utf8'))) hits.push(q); } };
+    const walk = (d) => { for (const f of readdirSync(d, { withFileTypes: true })) { if (['.git', 'sessions'].includes(f.name)) continue; const q = join(d, f.name); if (f.isDirectory()) walk(q); else if ((/^nova\.db/.test(f.name) ? /Nova researches; the person buys/ : /Shopping research/).test(readFileSync(q, 'utf8'))) hits.push(q); } };
     walk(home);
     return hits;
   };
@@ -609,8 +614,8 @@ let helperRun;
   await p.fill('#input', 'Ask a helper to take it slow reading the lease');
   await p.keyboard.press('Enter');
   await settle(p);
-  // Settings: every permission asks first until you switch it on.
-  await p.goto(`${base}/settings`);
+  // Settings: every permission asks first until you switch it on (under Privacy and permissions, ui/js/settings-ia.js).
+  await p.goto(`${base}/settings#privacy`);
   await p.waitForSelector('.perm');
   await p.waitForTimeout(500);
   await shot(p, 'paper-settings');
@@ -791,7 +796,7 @@ const golden = async (opts, prefix) => {
   await p.waitForSelector('.act-entry');
   await p.waitForTimeout(1400);
   await shot(p, `${prefix}-activity`);
-  await p.goto(`${base}/settings`);
+  await p.goto(`${base}/settings#privacy`);
   await p.waitForSelector('.perm');
   await p.waitForTimeout(500);
   await shot(p, `${prefix}-settings`);
@@ -863,7 +868,10 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   check('the conversations drawer opens from the top bar', await p.evaluate(() => document.getElementById('app').classList.contains('drawer-open') && !document.getElementById('sidebar').inert));
   await shot(p, 'nova-drawer');
   check('layouts: no script errors', p.errors.length === 0, p.errors.join(' | '));
-  for (const [w, h, layout] of [[390, 844, 'phone'], [820, 1180, 'tablet'], [960, 900, 'tablet'], [1280, 820, 'desktop']]) {
+  // The bands are derived from each design system's region minimums (F8/F9, docs/LEDGER.md
+  // 2026-10-31): Nova's three columns start near 752–793 px, so 820 and 960 are desktop there.
+  const seen = new Set();
+  for (const [w, h] of [[390, 844], [700, 1000], [820, 1180], [960, 900], [1280, 820]]) {
     const q = await page({ theme: 'nova', mode: 'dark', width: w, height: h });
     await q.goto(`${base}/c/${chat.id}`);
     await q.waitForSelector('.prose');
@@ -872,14 +880,18 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
       const sc = document.querySelector('.scroller');
       const edge = sc.getBoundingClientRect().left + sc.clientWidth;
       const past = [...document.querySelectorAll('.thread *, .dock *')].filter((e) => !e.closest('.table-wrap, pre') && e.getBoundingClientRect().right > edge + 0.5);
-      return { layout: document.body.dataset.layout, past: past.length, scroll: sc.scrollWidth - sc.clientWidth, page: document.documentElement.scrollWidth - innerWidth };
+      const band = (b) => document.querySelector(`.band-probe[data-band="${b}"]`).getBoundingClientRect().width;
+      return { layout: document.body.dataset.layout, two: band('two'), three: band('three'), past: past.length, scroll: sc.scrollWidth - sc.clientWidth, page: document.documentElement.scrollWidth - innerWidth };
     });
+    const layout = w < fit.two ? 'phone' : w < fit.three ? 'tablet' : 'desktop';
+    seen.add(fit.layout);
     check(`${w} px: the ${layout} layout, nothing cut off on the right`, fit.layout === layout && fit.past === 0 && fit.scroll === 0 && fit.page <= 0, JSON.stringify(fit));
     await q.goto(base);
     await q.waitForSelector('.home-hero');
     await q.waitForTimeout(500);
     await shot(q, `nova-home-${w}`);
   }
+  check('the widths cover the phone, tablet and desktop layouts', seen.size === 3, [...seen].join(', '));
 }
 
 // ---- mobile -------------------------------------------------------------------------
@@ -915,7 +927,7 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.waitForTimeout(1400);
   await shot(p, 'mobile-activity');
   overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
-  await p.goto(`${base}/settings`);
+  await p.goto(`${base}/settings#privacy`);
   await p.waitForSelector('.perm');
   await p.waitForTimeout(500);
   await shot(p, 'mobile-settings');
