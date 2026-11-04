@@ -55,7 +55,7 @@ export function usually(durations) {
   const d = (durations ?? []).filter((x) => x > 0).sort((a, b) => a - b);
   if (d.length < 2) return '';
   const mid = d[Math.floor(d.length / 2)];
-  return mid < 1000 ? 'under a second' : about(mid).replace(/^about /, 'about ');
+  return mid < 1000 ? 'under a second' : about(mid);
 }
 
 // What a kind of wait usually takes, in general words, before this device has any history of its own

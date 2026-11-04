@@ -25,7 +25,7 @@ export { DecisionService, Registry, INGEST_SCREEN_V1, INGEST_SCREEN_V2, CAPTURE_
 // known sensitive apps and the pattern detectors, the same code the template's precheck runs, so
 // the two can't drift. No model is reached through these.
 export { sensitiveApp, findSecrets, redactFindings };
-export { MemoryLog, FileLog, DbLog, type DecisionLog, type RecordDb } from './log.ts';
+export { MemoryLog, DbLog, type DecisionLog, type RecordDb } from './log.ts';
 export { validate } from './registry.ts';
 export { memoryVerdicts, type VerdictStore, type VerdictRecord } from './verdicts.ts';
 export type { AskOptions, RemoteReceipt } from './service.ts';

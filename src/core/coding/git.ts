@@ -46,7 +46,7 @@ export const SAFE_CONFIG: readonly string[] = Object.freeze([
 ].flatMap((kv) => ['-c', kv]));
 
 export interface GitRun { code: number; out: string; buf: Buffer; err: string }
-export interface GitOptions { cwd?: string; input?: string | Buffer; allow?: number[]; maxBytes?: number; timeoutMs?: number }
+export interface GitOptions { input?: string | Buffer; allow?: number[]; maxBytes?: number; timeoutMs?: number }
 
 // What git is handed: a PATH, a home of Nova's own (no ~/.gitconfig of the person's), the C locale
 // (so its words are always the same), and nothing else of Nova's environment, no GIT_* variable
@@ -73,17 +73,15 @@ const words = (err: string) => err.trim().split('\n').filter(Boolean).slice(-3).
 
 export class Git {
   readonly home: string;
-  #timeoutMs: number;
 
-  constructor(o: { home: string; timeoutMs?: number }) {
+  constructor(o: { home: string }) {
     this.home = o.home;
-    this.#timeoutMs = o.timeoutMs ?? 120_000;
   }
 
   #prep(args: string[], o: GitOptions) {
     mkdirSync(this.home, { recursive: true });
     if (!Array.isArray(args) || args.some((a) => typeof a !== 'string' || a.includes('\0'))) throw new CoreError('validation', 'A git argument must be plain text.');
-    return { argv: [...SAFE_CONFIG, ...args], opts: { cwd: o.cwd ?? this.home, env: gitEnv(this.home), maxBuffer: o.maxBytes ?? 64 * 1024 * 1024, timeout: o.timeoutMs ?? this.#timeoutMs, encoding: 'buffer' as const, windowsHide: true } };
+    return { argv: [...SAFE_CONFIG, ...args], opts: { cwd: this.home, env: gitEnv(this.home), maxBuffer: o.maxBytes ?? 64 * 1024 * 1024, timeout: o.timeoutMs ?? 120_000, encoding: 'buffer' as const, windowsHide: true } };
   }
 
   // Runs git; a non-zero exit not in `allow` throws with git's own last words.

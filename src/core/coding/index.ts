@@ -816,13 +816,6 @@ export class Coding {
     };
   }
 
-  // The run a task belongs to, or null.
-  runOf(taskId: string): string | null {
-    let t: Task;
-    try { t = this.#o.ledger.get(taskId); } catch { return null; }
-    return t.owner === CODING_WORKER ? String(t.brief.inputs?.run_id ?? '') || null : null;
-  }
-
   // The person says no to the merge: its task is cancelled (the run then ends, declined).
   decline(id: string): ReturnType<Coding['view']> {
     const r = this.#row(id);

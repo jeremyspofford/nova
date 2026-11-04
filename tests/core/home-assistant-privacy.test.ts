@@ -13,10 +13,9 @@ test('the socket closes when the setting stops allowing it, and opens again when
   let allowed = true;
   let config: Record<string, unknown> = { url: ha.base, since: new Date().toISOString() };
   const ctx = {
-    id: 'home-assistant',
-    secrets: { get: () => ha.token, put: () => '', delete: () => true, has: () => true },
+    secrets: { get: () => ha.token, put: () => {}, delete: () => true, has: () => true },
     config: { get: () => config, set: (p: Record<string, unknown>) => (config = { ...config, ...p }), clear: () => { config = {}; } },
-    emit: async () => null, topics: () => [], permits: () => allowed, privacy: () => (allowed ? 'cloud-allowed' : 'local-only'),
+    emit: async () => null, topics: () => [], permits: () => allowed,
     meshHosts: () => [], delegate: () => { throw new Error('no tasks here'); }, problem: () => {}, changed: () => {}, now: () => new Date(),
   } as unknown as ConnectorContext;
   const c = homeAssistant({ reconnectMs: { first: 20, max: 100 }, timeoutMs: 3000 })(ctx);

@@ -19,7 +19,7 @@ export function standInSeat(id: 'tev1' | 'jev', score: (content: string) => Scor
   const model = o.model ?? (id === 'jev' ? 'jev-1.14.0' : 'tev1:4b@aaaa4b');
   const seat: Seat = {
     id, egress: id === 'jev' ? 'remote' : 'local',
-    limits: () => ({ maxQuestions: null, contextTokens: null, perQuestionTokens: null, maxBodyBytes: null, images: false, types: ['noul', 'choice', 'score'] }),
+    limits: () => ({ maxQuestions: null, images: false, types: ['noul', 'choice', 'score'] }),
     status: () => (o.available === false ? { available: false, model: null, why: `${id} is unavailable (stand-in).` } : { available: true, model, why: `${id} stand-in.` }),
     async ask(_t: ServiceTemplate, built: BuiltState): Promise<SeatAnswer> {
       const content = String((built.state as { content?: unknown }).content ?? '');

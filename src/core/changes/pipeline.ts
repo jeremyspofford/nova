@@ -86,8 +86,6 @@ export interface ChangesOptions {
   sandbox?: boolean;
   // Canary windows on the test clock (NOVA_TEST_CLOCK): only POST /changes/tick moves them.
   testClock?: boolean;
-  // The server a sandbox runs (tests may point elsewhere).
-  server?: string;
   // An automatic checkpoint of the whole home (M7 amendment §1), taken before a change is applied
   // live; it throws when none can be taken, and the change then doesn't ship.
   checkpoint?: (reason: string) => void;
@@ -444,7 +442,7 @@ export class Changes extends EventEmitter {
       // 1. Sandbox.
       let info;
       try {
-        info = await sandbox.start({ db: this.#db, liveHome: this.#o.home, files: this.#neededFiles(c), timezone: this.#o.live.timezone(), signal, ...(this.#o.server ? { server: this.#o.server } : {}) });
+        info = await sandbox.start({ db: this.#db, liveHome: this.#o.home, files: this.#neededFiles(c), timezone: this.#o.live.timezone(), signal });
       } catch (e) { return stop('sandbox', `Nova couldn’t start a sandbox copy: ${(e as Error).message}`, { output: sandbox.output().slice(-2000) }); }
       const applied = await sandbox.call('POST', '/changes/sandbox/apply', { kind: c.kind, artifact: c.artifact, change_id: c.id });
       const sandboxEvidence = { home: `workers/changes/${c.id}/home`, pid: info.pid, port: info.port, snapshot_bytes: info.snapshot_bytes, started_ms: info.started_ms, copied: info.copied, applied: applied.status === 200 };

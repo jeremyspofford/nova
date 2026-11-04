@@ -27,7 +27,6 @@ export const GROUPS = Object.freeze([
 ]);
 
 export const categoryOf = (id) => CATEGORIES.find((c) => c.id === id) ?? null;
-export const categoryOfPart = (part) => CATEGORIES.find((c) => c.parts.includes(part)) ?? null;
 
 // What search can find: a label, the element it jumps to, and the words people use for it.
 export const ENTRIES = Object.freeze([

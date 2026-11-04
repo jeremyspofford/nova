@@ -169,7 +169,6 @@ document.addEventListener('keydown', (e) => {
 
 const signals = { reachable: true, listening: false, stopped: 0, needsYou: 0, speaking: false, working: 0 };
 let orbNow = 'idle';
-export const orbNowState = () => orbNow;
 
 // Real signals in: the orb (every live one on the page) shows the most urgent.
 export function signal(patch) {

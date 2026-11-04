@@ -264,8 +264,6 @@ export interface CaptureOptions {
   secrets?: { get(name: string): string | null; put(name: string, value: string): unknown; delete(name: string): unknown; has(name: string): boolean };
   fetch?: typeof fetch;
   pollMs?: number;
-  // How far back a Screenpipe pull asks again by default, for items reported late (5 minutes).
-  lookbackMs?: number;
   // Why retention must not delete anything now (the clock jumped, M7b), or null.
   retentionHold?: () => string | null;
   // Screening, job 1: capture-sensitive asked of the Decision Service, which routes it (never a
@@ -1378,7 +1376,7 @@ export class Capture extends EventEmitter {
 
   #lookback(r: SourceRow): number {
     const m = parse<{ lookback_minutes?: unknown }>(r.config, {}).lookback_minutes;
-    return typeof m === 'number' && m >= 1 ? m : (this.#o.lookbackMs ?? DEFAULT_LOOKBACK_MS) / 60_000;
+    return typeof m === 'number' && m >= 1 ? m : DEFAULT_LOOKBACK_MS / 60_000;
   }
 
   #egress(url: string): 'local' | 'remote' {

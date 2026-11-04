@@ -102,7 +102,7 @@ export class Tev1Seat implements Seat {
   }
 
   limits(): SeatLimits {
-    return { maxQuestions: MAX_QUESTIONS, contextTokens: this.tev1Limits.contextTokens, perQuestionTokens: null, maxBodyBytes: this.tev1Limits.maxBytes, images: false, types: ['noul', 'choice', 'score'] };
+    return { maxQuestions: MAX_QUESTIONS, images: false, types: ['noul', 'choice', 'score'] };
   }
 
   detail(): Tev1Detail { return { ...this.#detail }; }
