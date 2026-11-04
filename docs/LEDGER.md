@@ -17,6 +17,23 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: move your personal settings between Nova installs, or keep a copy, with Export and "Choose a file" in Settings › Configuration.
 - Still unfinished: the other two ways in, a guided setup form (with Settings generated from the schema) and asking Nova in chat, come next. Where and how Nova starts (its folder, port and mesh address) stays in `nova.config.json`, because Nova needs those before it can read anything else.
 
+**2026-11-04 · UI rebuild (design) · A proposed calmer look, shown on the real app**
+- What changed: a proposed redesign of Nova's look, shown on the real app, for your reaction. Nothing in the app changes yet. It keeps the layout and changes the surfaces:
+  - one quiet light from above instead of layered glows;
+  - solid surfaces instead of frosted glass;
+  - on Home, one leading card and the rest as a calm list;
+  - the right column as a single list "at a glance";
+  - a conversation as one reading column;
+  - a flatter orb in the side rail;
+  - Health as plain sections instead of boxes in boxes.
+- What you can now do: compare before and after for Home, a conversation, Tasks, Health, Settings and Topology, at every screen size from a folded phone to a wide desktop, and say what to keep or change.
+- Still unfinished: after your reaction, each surface is rebuilt to match, and its screenshots are compared against the approved design.
+
+**2026-11-04 · Config onboarding (design) · A proposed design for setting Nova up three ways**
+- What changed: the living styleguide shows a proposed design for setting Nova up and changing its configuration. There are three ways in: bring in a file, fill in a form, or ask Nova in chat. All three show the same list of changes before anything is applied. Every setting says which layer set it (Nova's default, this hub, or your pack) and can go back to the default. A key or password in an imported file is left out, with a pointer to where it belongs. A first schema draft maps today's settings to these layers.
+- What you can now do: look at the design across desktop, tablet, phone and foldable sizes, and react before it's built.
+- Still unfinished: nothing is built. Nova still reads `nova.config.json` as before. The real import, form and chat doors come after your reaction.
+
 **2026-11-04 · T2 (3 of 3) · Tier 3 on Nova’s own screen needs a passkey**
 - What changed: Nova's own screen now needs a passkey for tier 3. A tier-3 request from this computer that carries no passkey approval is refused, even if it has Nova's X-Nova header (which any program here can send). With no passkey yet, the answer says to add one in Settings › Security. Typed confirmations work the same way: a tier-3 service promotion or a device deployment needs the passkey too, while their tier-2 steps don't. A paired phone or browser that may approve still approves with its own device key, as before.
 - What you can now do: rely on tier 3 at this computer meaning a person was there. No other program on it can approve tier-3 work, change a gate, erase Nova or move the hub.
