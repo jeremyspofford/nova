@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-03 · B7 · Older screening records can be opened again**
+- What changed: Nova can now open any record of outside content it screened, however old. Before, once more than 500 newer screenings existed, an older one showed "There is no such screen" even though it was still kept.
+- What you can now do: follow a link to an older screening record, for example from a task's evidence, and see it.
+- Still unfinished: nothing for this fix.
+
 **2026-11-03 · B5 · Nova starts from a folder with a space in its name**
 - What changed: Nova's server and its supervisor now start from any folder. Before, they silently did nothing when started from a native Windows path or a folder whose name needs encoding in a web address, such as one with a space in it.
 - What you can now do: keep Nova in a folder like "my code" and start it normally.
