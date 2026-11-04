@@ -11,7 +11,7 @@ import { ICONS, ORB_SIZES, addDeviceSheet, allowApproveSheet, approvalSheet, bri
 import { waitingLine } from './wait.js';
 import { ORB_STATES } from './status.js';
 import { renderTopology } from './topology-view.js';
-import { workCosts, diagnosticsDownload } from './components.js';
+import { workCosts, diagnosticsDownload, passkeySetup, PASSKEY_STATES, PASSKEY_SETUP_STATES } from './components.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -292,6 +292,34 @@ function backupSpecimen(model = backupModel()) {
 function backupsEntry() {
   return `<label class="sg-pick" for="backups-state">Specimen state <select class="input" id="backups-state">${backupStates.map(([id, name]) => `<option value="${id}"${id === backupState ? ' selected' : ''}>${name}</option>`).join('')}</select></label><p class="sg-about">Demo controls only. Folders and keys below are public examples; no backup settings or clipboard are changed.</p><div data-backups-content>${backupSpecimen()}</div><p class="settings-note" role="status" data-backups-demo-notice></p>`;
 }
+// Passkey confirmation specimens (T2, approved in #291). Never calls navigator.credentials.
+let passkeyState = 'ready';
+let passkeySetupState = 'start';
+const passkeyTask = () => task('pk3', 'Delete the old backups', 'waiting', { approval_tier: 3 });
+function passkeySpecimen() {
+  return `<div data-passkey-specimen="${passkeyState}">${state('Tier 3 on Nova’s own screen', sheet(approvalSheet(passkeyTask(), { passkey: { state: passkeyState } })))}${state('Tier 2: unchanged, no passkey', sheet(approvalSheet(task('pk2', 'Send the draft reply', 'waiting', { approval_tier: 2 })).replace('id="sheet-title"', 'id="sheet-title-tier2"')))}</div>`;
+}
+function passkeyEntry() {
+  const pick = (id, label, list, chosen) => `<label class="sg-pick" for="${id}">${label} <select class="input" id="${id}">${list.map((s) => `<option value="${s}"${s === chosen ? ' selected' : ''}>${s.replaceAll('-', ' ')}</option>`).join('')}</select></label>`;
+  return `${pick('passkey-state', 'Confirmation state', PASSKEY_STATES, passkeyState)}<div class="sg-cards" data-passkey-content>${passkeySpecimen()}</div>${pick('passkey-setup-state', 'Setup state', PASSKEY_SETUP_STATES, passkeySetupState)}<div class="panel" data-passkey-setup-content>${passkeySetup({ state: passkeySetupState })}</div><p class="settings-note" role="status" data-passkey-demo-notice></p>`;
+}
+function bindPasskey() {
+  const entry = sg.querySelector('#sg-passkey-approval');
+  if (!entry) return;
+  const note = (text) => { entry.querySelector('[data-passkey-demo-notice]').textContent = text; };
+  entry.addEventListener('change', (e) => {
+    if (e.target.id === 'passkey-state') { passkeyState = e.target.value; entry.querySelector('[data-passkey-content]').innerHTML = passkeySpecimen(); note(''); }
+    if (e.target.id === 'passkey-setup-state') { passkeySetupState = e.target.value; entry.querySelector('[data-passkey-setup-content]').innerHTML = passkeySetup({ state: passkeySetupState }); note(''); }
+    if (e.target.name === 'confirm') { const b = e.target.closest('form')?.querySelector('[data-action="passkey-confirm"]'); if (b && passkeyState !== 'rate') b.disabled = !e.target.checked; }
+  });
+  entry.addEventListener('submit', (e) => { e.preventDefault(); note('Demo only. No passkey was requested and nothing was approved.'); });
+  entry.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-action]');
+    if (!b || !entry.contains(b)) return;
+    if (b.dataset.action.startsWith('passkey') || ['cancel-task', 'close-sheet'].includes(b.dataset.action)) { e.preventDefault(); note('Demo only. No passkey was requested and nothing was approved.'); }
+  });
+}
+
 function bindBackups() {
   const entry = sg.querySelector('#sg-backups-settings');
   if (!entry) return;
@@ -459,6 +487,7 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
       ['diagnostics', 'Diagnostics', 'A native download, its privacy limits, and an unavailable state.', () => healthEntry('diagnostics')],
       ['memory-card', 'MemoryHighlightCard', 'One thing Nova kept, or that nothing is kept yet.',
         () => `<div class="sg-cards">${state('Kept', memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] }))}${state('Nothing yet', memoryHighlightCard())}</div>`],
+      ['passkey-approval', 'Passkey confirmation', 'Tier 3 on Nova’s own screen, confirmed with a passkey so a program on this computer can’t approve itself. Tiers 0–2 are unchanged. Demo only: no passkey is requested.', () => passkeyEntry()],
       ['approval-sheet', 'ApprovalSheet', 'Tiered: tier 2 asks; tier 3 needs an explicit confirmation every time.',
         () => `<div class="sg-cards">${state('Tier 2', sheet(approvalSheet(task('a2', 'Send the draft reply', 'waiting', { approval_tier: 2 }))))}${state('Tier 3', sheet(approvalSheet(task('a3', 'Delete the old backups', 'waiting', { approval_tier: 3 }))))}</div>`],
       ['device-sheets', 'Device sheets', 'Adding, changing and revoking devices: what it means, said before the confirmation.',
@@ -538,6 +567,7 @@ function render() {
   if (healthFocus?.isConnected) healthFocus.focus({ preventScroll: true });
   bindTopology();
   bindBackups();
+  bindPasskey();
   bindHealthSpecimens();
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();

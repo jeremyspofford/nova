@@ -1050,8 +1050,20 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
       changes: changes.health(),
       ingest: ingest.health(),
       computer: computer.health(),
+      passkeys: passkeysHealth(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
+  }
+
+  // The console's passkeys (Insertion #3 T2): how many, the first one's date (taken on trust), and a
+  // warning while fewer than two exist. Not a fault: tier 3 simply waits until there is one.
+  function passkeysHealth() {
+    const s = passkeys.state();
+    const first = s.first_enrolled_at ? s.first_enrolled_at.slice(0, 10) : '';
+    const detail = !s.count ? 'No passkey yet: tier-3 actions on Nova’s own screen wait until you add one in Settings › Security.'
+      : s.count === 1 ? `1 passkey, added ${first} on trust. Add a second: with only one, losing it means a factory reset.`
+      : `${s.count} passkeys; the first added ${first} on trust.`;
+    return { ok: true, count: s.count, complete: s.complete, first_enrolled_at: s.first_enrolled_at, detail };
   }
 
   // Names only, never values; where the key lives, said plainly when it is a file.
@@ -1642,11 +1654,13 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   }
   // On a standby (or a hub that stepped down) every change is refused, saying which node is hub;
   // the only change it takes is becoming the hub.
-  const REPLICA_WRITES = new Set(['/api/v1/mesh/promote', '/api/v1/mesh/promotion/ready', '/api/v1/mesh/promotion/transfer', '/api/v1/mesh/promotion/fence', '/api/v1/mesh/promotion/cold', '/api/v1/mesh/promotion/transfer-status', '/api/v1/mesh/promotion/take-back', '/api/v1/mesh/seen']);
+  // A passkey approval challenge (T2) is held in memory, never written: a standby's own screen asks
+  // for one to promote itself, and a hub holding writes asks for one to cancel or take back.
+  const REPLICA_WRITES = new Set(['/api/v1/security/approvals', '/api/v1/mesh/promote', '/api/v1/mesh/promotion/ready', '/api/v1/mesh/promotion/transfer', '/api/v1/mesh/promotion/fence', '/api/v1/mesh/promotion/cold', '/api/v1/mesh/promotion/transfer-status', '/api/v1/mesh/promotion/take-back', '/api/v1/mesh/seen']);
   // While a hub holds writes to hand over (M10g), the mesh's own calls still pass: sessions, the
   // standby's acknowledgements and the promotion's steps. Every other change is refused, saying why.
   let inflightWrites = 0;
-  const HOLD_PASSES = (path: string) => path === '/api/v1/mesh/session' || path === '/api/v1/mesh/sync/ack' || path.startsWith('/api/v1/mesh/promotion');
+  const HOLD_PASSES = (path: string) => path === '/api/v1/security/approvals' || path === '/api/v1/mesh/session' || path === '/api/v1/mesh/sync/ack' || path.startsWith('/api/v1/mesh/promotion');
 
   // GET /join.sh and GET /device-agent.tar: the one-line command's script, and the agent it unpacks.
   let tarCache: Buffer | null = null;
@@ -1666,6 +1680,13 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
 
   const api = createApi({
     routes, stream, version: o.version, trustedOrigin: o.trustedOrigin,
+    approval: (method, path, body, who) => {
+      if (!('passkey_approval' in body)) return;
+      if (who.principal.kind !== 'console') throw new CoreError('validation', 'Only Nova’s own screen confirms with a passkey; this device approves with its own key.');
+      const why = passkeys.verify(ConsolePasskeys.action(method, path, body), body.passkey_approval);
+      delete body.passkey_approval;
+      if (why) throw new CoreError('forbidden', `That passkey didn’t confirm this request (${why}), so nothing was approved.`);
+    },
     // The approval prompt goes only where it can be answered.
     visible: (event, p) => event !== 'join_request' || allows('approver', p) === 'ok',
     onError: (e) => log.problem('api', 'Something went wrong inside Nova while answering a request.', { detail: (e as Error)?.stack ?? String(e) }),

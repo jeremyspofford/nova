@@ -14,6 +14,7 @@ export const CATEGORIES = Object.freeze([
   { id: 'devices', label: 'Devices', summary: 'Phones and computers paired with Nova', parts: ['devices'] },
   { id: 'capture', label: 'Capture', summary: 'Sources, consent, and what Nova remembers', parts: ['capture'] },
   { id: 'services', label: 'Services', summary: 'How Nova runs its services here', parts: ['services'] },
+  { id: 'security', label: 'Security', summary: 'Passkeys that confirm tier-3 actions here', parts: ['security'] },
   { id: 'backups', label: 'Backups and changes', summary: 'Backup folders, checkpoints, restores and changes', parts: ['backups', 'checkpoints', 'changes'] },
   { id: 'danger', label: 'Start over', summary: 'Export everything, or erase Nova here', parts: ['danger'] },
 ]);
@@ -22,7 +23,7 @@ export const CATEGORIES = Object.freeze([
 export const GROUPS = Object.freeze([
   { title: 'You', cats: ['you', 'appearance', 'privacy'] },
   { title: 'What Nova works with', cats: ['connections', 'models', 'devices', 'capture', 'services'] },
-  { title: 'Keeping Nova safe', cats: ['backups', 'danger'] },
+  { title: 'Keeping Nova safe', cats: ['security', 'backups', 'danger'] },
 ]);
 
 export const categoryOf = (id) => CATEGORIES.find((c) => c.id === id) ?? null;
@@ -48,6 +49,7 @@ export const ENTRIES = Object.freeze([
   { cat: 'devices', label: 'Device roles', target: 'devices', words: ['roles', 'role', 'purpose', 'what it is for', 'thin client', 'hub candidate', 'compute', 'storage', 'capture source', 'general server'] },
   { cat: 'services', label: 'How services run', target: 'services-backend', words: ['services', 'service', 'backend', 'supervisor', 'k3s', 'kubernetes', 'containers', 'cluster', 'ordinary programs', 'switch backend'] },
   { cat: 'devices', label: 'Install Nova', target: 'install-row', words: ['install', 'app', 'home screen', 'pwa', 'add to home screen', 'shortcut'] },
+  { cat: 'security', label: 'Passkeys', target: 'security', words: ['passkey', 'passkeys', 'security key', 'yubikey', 'fingerprint', 'face id', 'touch id', 'webauthn', 'security', 'tier 3', 'tier-3', 'confirm', 'second passkey'] },
   { cat: 'backups', label: 'Backups', target: 'settings-backups', words: ['folder', 'encrypted', 'recovery key', 'retention', 'restore', 'backup', 'backups', 'back up', 'checkpoint', 'checkpoints', 'restore', 'snapshot', 'roll back', 'undo everything'] },
   { cat: 'backups', label: 'Changes', target: 'changes', words: ['changes', 'updates', 'update', 'extensions', 'plugins', 'add-ons', 'upgrade', 'new features'] },
   { cat: 'danger', label: 'Erase Nova', target: 'danger-zone', words: ['reset', 'erase', 'delete everything', 'start over', 'factory reset', 'wipe', 'export', 'remove nova', 'uninstall'] },

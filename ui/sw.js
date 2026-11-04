@@ -3,13 +3,13 @@
 // When it isn't, a GET is answered from the cache and marked x-nova-offline, and the page says
 // so: an honest offline state, never stale data presented as live. Changes (POST, PUT, DELETE)
 // and the event streams are never cached or answered offline.
-const VERSION = 'nova-shell-v15';
+const VERSION = 'nova-shell-v16';
 const SHELL = [
   '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png',
   '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css',
   '/js/app.js', '/js/core.js', '/js/shell.js', '/js/layout.js', '/js/nav.js', '/js/status.js', '/js/components.js',
   '/js/surfaces.js', '/js/setup.js', '/js/theme.js', '/js/view.js', '/js/markdown.js', '/js/reduce.js', '/js/qr.js', '/js/device-key.js', '/js/takeover.js',
-  '/js/connections.js', '/js/sites.js', '/js/capture.js', '/js/models.js', '/js/changes.js', '/js/checkpoints.js', '/js/services.js', '/js/topology.js', '/js/topology-view.js', '/js/reset.js', '/js/forget-here.js', '/js/settings-ia.js', '/js/contrast.js', '/js/look.js', '/js/wait.js', '/js/skeleton.js',
+  '/js/connections.js', '/js/sites.js', '/js/capture.js', '/js/models.js', '/js/changes.js', '/js/checkpoints.js', '/js/services.js', '/js/topology.js', '/js/topology-view.js', '/js/reset.js', '/js/forget-here.js', '/js/settings-ia.js', '/js/contrast.js', '/js/look.js', '/js/wait.js', '/js/skeleton.js', '/js/passkey.js',
 ];
 // Memory and context receipts are never kept here: a forgotten memory must not survive in a
 // cache (owner's standing order 4), so these are network-only.
@@ -27,7 +27,8 @@ const SHELL = [
 // health and action availability too, so even a pre-existing cached copy must be ignored.
 // Diagnostics is a per-request attachment; included diagnostic logs may contain free text,
 // so neither its current response nor a legacy cached copy may be kept or served offline.
-const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/capture|v1\/models|v1\/changes|v1\/resilience|v1\/reset|v1\/services\/topology|v1\/diagnostics)(?:\/|$)/;
+// Passkeys (T2) are live too: a passkey removed must not look present, and a challenge is single use.
+const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/capture|v1\/models|v1\/changes|v1\/resilience|v1\/reset|v1\/services\/topology|v1\/diagnostics|v1\/security)(?:\/|$)/;
 // Pages the app answers with its shell.
 const PAGES = /^\/(?:|chat|new|tasks|memory|automations|skills|schedules|activity|health|settings|capture|topology|c\/[\w-]+)$/;
 

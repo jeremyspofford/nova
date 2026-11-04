@@ -58,11 +58,11 @@ export async function topologyFixture() {
   await new Promise<void>(r => nova.mesh!.listen(0, '127.0.0.1', r));
   const meshBase = `http://127.0.0.1:${(nova.mesh!.address() as AddressInfo).port}`;
   nova.meshInfo!.publicUrl = meshBase;
-  const send = async (method: string, path: string, body?: unknown) => {
-    const res = await fetch(base + path, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const send = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
+    const res = await fetch(base + path, { method, headers: { 'content-type': 'application/json', 'x-nova': '1', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: res.status, body: await res.json() };
   };
-  await finishSetup({ send } as Parameters<typeof finishSetup>[0]);
+  await finishSetup({ send, base } as Parameters<typeof finishSetup>[0]);
   const keys = generateDeviceKeys();
   const device = nova.core.mesh.devices.add({ name: 'Synthetic capture desktop', platform: 'linux x64', kind: 'computer', public_key: keys.ed25519.publicKey, x25519_public_key: keys.x25519.publicKey, capabilities: ['heartbeat'], purposes: ['general-server', 'capture-source'] }, 'fixture');
   captureDeviceId = device.id;

@@ -81,7 +81,9 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
       await section.getByLabel('I understand that the recovery key will be visible on this screen.').check();
       const revealed = p.waitForRequest(r => r.url().endsWith('/api/v1/backups/recovery-key') && r.method() === 'POST');
       await reveal.click();
-      assert.deepEqual((await revealed).postDataJSON(), { confirm: true });
+      const { passkey_approval: approval, ...sent } = (await revealed).postDataJSON();
+      assert.deepEqual(sent, { confirm: true });
+      assert.match(approval?.id ?? '', /^ap_/, 'showing the key again is tier 3: approved with a passkey');
       await section.locator('code').waitFor();
       assert.ok(await section.locator('code').innerText() === key);
       await section.getByRole('button', { name: 'Hide key', exact: true }).click();

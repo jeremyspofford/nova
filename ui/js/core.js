@@ -2,6 +2,7 @@
 // page; anything that wants to hear about tasks, problems, setup or the design system listens here.
 
 import { renew, sessionEnds } from './device-key.js';
+import { approvalFor, show } from './passkey.js';
 
 export const V1 = '/api/v1';
 
@@ -33,6 +34,11 @@ export const fromCache = (res) => res.headers.get('x-nova-offline') === '1';
 // instead of waiting forever (M9 review of #234). Changes (POST, PUT, DELETE) wait for their answer.
 export const NO_ANSWER_MS = 10_000;
 export async function request(method, path, body, retried = false) {
+  // Tier 3 on the hub's own screen: approved with a passkey first (passkey.js). Rolling a change
+  // back by hand takes confirm: true at tier 2, so it asks once (src/core/index.ts TIER2_CONFIRM, with step 3).
+  const bare = path.split('?')[0];
+  const signed = body?.confirm === true && !body.passkey_approval && !/^\/changes\/[^/]+\/rollback$/.test(bare) ? await approvalFor(api, method, bare, body) : null;
+  if (signed) body = { ...body, passkey_approval: signed };
   let res;
   try {
     const signal = method === 'GET' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(NO_ANSWER_MS) : undefined;
@@ -57,6 +63,7 @@ export async function request(method, path, body, retried = false) {
     if (res.ok) throw new Unreachable('Nova’s answer was cut off.');
     data = null;
   }
+  if (signed) show(res.ok ? 'confirmed' : res.status === 403 && /passkey/i.test(data?.error ?? '') ? (/expired/.test(data.error) ? 'expired' : 'failed') : 'ready');
   if (!res.ok) {
     const e = new Error((data && data.error) || 'Something went wrong.');
     e.details = data?.details ?? [];
