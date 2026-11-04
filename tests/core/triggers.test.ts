@@ -213,6 +213,31 @@ test('a proactive message traces to its trigger; in quiet hours it is held, then
   assert.equal(triggers.messages().length, 2);
 });
 
+// B4: proactive_off is read the same way by fire() and tick(): only a list counts, case doesn't.
+async function heldCheckIn() {
+  const h = setup({ at: '2026-03-02T23:00:00Z' });
+  h.profile.set('user', 'timezone', 'UTC', 'settings');
+  h.profile.set('policy', 'quiet_hours', { start: '22:00', end: '07:00' }, 'settings');
+  const { rule } = h.triggers.createRule({ name: 'Check-in', class: 'proactive', action: { kind: 'message', text: 'A reminder you asked for.' } }, 'person');
+  const t = await h.triggers.fireRule(rule.id, { n: 1 });
+  assert.equal(t.triage.decision, 'queue');
+  return h;
+}
+
+test('a held message whose rule was turned off in another case is withdrawn, not delivered', async () => {
+  const { triggers, profile, at } = await heldCheckIn();
+  profile.set('policy', 'proactive_off', ['check-in'], 'settings');
+  await triggers.tick(at('2026-03-03T07:00:30Z'));
+  assert.deepEqual(triggers.messages(), [], 'turned off is turned off, whatever the case');
+});
+
+test('a proactive_off that is not a list turns nothing off and never stops the heartbeat', async () => {
+  const { triggers, profile, at } = await heldCheckIn();
+  profile.set('policy', 'proactive_off', 5, 'settings');
+  await triggers.tick(at('2026-03-03T07:00:30Z'));
+  assert.equal(triggers.messages().length, 1, 'the held message goes out once quiet hours end');
+});
+
 test('a category the person turned off is dropped, with the reason', async () => {
   const { triggers, profile } = setup();
   profile.set('policy', 'proactive_off', ['proactive'], 'settings');
