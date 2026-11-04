@@ -7,7 +7,8 @@ import { applyEvent, emptySession } from './reduce.js';
 import { escapeHtml, renderMarkdown } from './markdown.js';
 import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderPermissions, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
 import { apply as applyTheme } from './theme.js';
-import { fromCache, on as onCore, stream as coreStream } from './core.js';
+import { api, fromCache, on as onCore, stream as coreStream } from './core.js';
+import { loadSecurity, renderSecurity, setupPasskey } from './passkey.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
 import { problemTone, stoppingProblems } from './status.js';
@@ -1658,7 +1659,8 @@ function showSettings() {
   settingsUi.touched = false;
   selectSettings(settingsTarget(location.hash).cat);
   const opened = location.hash;
-  Promise.all([core.loadBackups(), loadPermissions(), refreshCore(['profile']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset()]).then(() => {
+  Promise.all([core.loadBackups(), loadPermissions(), refreshCore(['profile']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset(), loadSecurity(api)]).then(() => {
+    renderSettingsView({ only: 'security' });
     renderSettingsView({ only: 'you' });
     renderSettingsView({ only: 'privacy' });
     // The person has moved on since (typed in search, opened something): leave them be.
@@ -1687,6 +1689,7 @@ const PARTS = {
   look: { draw: (box) => core.drawAppearance(box) },
   devices: () => core.renderDevices(),
   services: () => renderServices(),
+  security: () => renderSecurity(),
   // The Danger zone (M7 amendment §2) stays last, set apart.
   danger: () => renderReset(),
 };
@@ -1993,6 +1996,7 @@ document.addEventListener('click', (e) => {
   if (followLink(e)) return;
   const b = e.target.closest('[data-action]');
   if (b && CORE_ACTIONS.has(b.dataset.action)) { e.preventDefault(); coreAction(b); }
+  if (b?.dataset.action === 'passkey-setup') { e.preventDefault(); setupPasskey(api, () => renderSettingsView({ only: 'security' })).then(() => scheduleRefresh(['health'])); }
 });
 // The approval sheet: tier 3 needs the box ticked before Confirm can be pressed.
 $('sheet').addEventListener('submit', (e) => {

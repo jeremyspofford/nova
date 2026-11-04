@@ -1050,8 +1050,20 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
       changes: changes.health(),
       ingest: ingest.health(),
       computer: computer.health(),
+      passkeys: passkeysHealth(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
+  }
+
+  // The console's passkeys (Insertion #3 T2): how many, the first one's date (taken on trust), and a
+  // warning while fewer than two exist. Not a fault: tier 3 simply waits until there is one.
+  function passkeysHealth() {
+    const s = passkeys.state();
+    const first = s.first_enrolled_at ? s.first_enrolled_at.slice(0, 10) : '';
+    const detail = !s.count ? 'No passkey yet: tier-3 actions on Nova’s own screen wait until you add one in Settings › Security.'
+      : s.count === 1 ? `1 passkey, added ${first} on trust. Add a second: with only one, losing it means a factory reset.`
+      : `${s.count} passkeys; the first added ${first} on trust.`;
+    return { ok: true, count: s.count, complete: s.complete, first_enrolled_at: s.first_enrolled_at, detail };
   }
 
   // Names only, never values; where the key lives, said plainly when it is a file.
@@ -1666,6 +1678,13 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
 
   const api = createApi({
     routes, stream, version: o.version, trustedOrigin: o.trustedOrigin,
+    approval: (method, path, body, who) => {
+      if (!('passkey_approval' in body)) return;
+      if (who.principal.kind !== 'console') throw new CoreError('validation', 'Only Nova’s own screen confirms with a passkey; this device approves with its own key.');
+      const why = passkeys.verify(ConsolePasskeys.action(method, path, body), body.passkey_approval);
+      delete body.passkey_approval;
+      if (why) throw new CoreError('forbidden', `That passkey didn’t confirm this request (${why}), so nothing was approved.`);
+    },
     // The approval prompt goes only where it can be answered.
     visible: (event, p) => event !== 'join_request' || allows('approver', p) === 'ok',
     onError: (e) => log.problem('api', 'Something went wrong inside Nova while answering a request.', { detail: (e as Error)?.stack ?? String(e) }),

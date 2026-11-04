@@ -116,6 +116,9 @@ export function createApi(o: {
   routes: Route[]; stream: Stream; version: string; trustedOrigin: (host: string) => boolean; onError: (e: unknown) => void;
   // Which events a principal may see on the stream (by default, all of them).
   visible?: (event: string, p: Principal) => boolean;
+  // A tier-3 request's passkey approval (Insertion #3 T2): checked for exactly this request, then
+  // taken out of the body, before the route sees it.
+  approval?: (method: string, path: string, body: Record<string, unknown>, who: Who) => void;
 }) {
   for (const r of o.routes) {
     if (r.auth && (r.method !== HOOK_ROUTE.method || r.path !== HOOK_ROUTE.path)) throw new Error(`${r.method} ${r.path} can't skip the X-Nova guard; only ${HOOK_ROUTE.method} ${HOOK_ROUTE.path} may.`);
@@ -164,6 +167,7 @@ export function createApi(o: {
       const decode = (v: string) => { try { return decodeURIComponent(v); } catch { throw new CoreError('validation', 'The address has a malformed escape.'); } };
       const params = Object.fromEntries(Object.entries(route.re.exec(path)!.groups ?? {}).map(([k, v]) => [k, decode(v)]));
       const body = route.method === 'GET' || route.method === 'DELETE' ? {} : await readBody(req);
+      o.approval?.(route.method, path, body, who);
       const out = await route.handle({ params, query: url.searchParams, body, headers: req.headers, who });
       if (out instanceof Sse) {
         res.writeHead(route.status ?? 200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-content-type-options': 'nosniff' });
