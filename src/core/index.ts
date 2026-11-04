@@ -12,6 +12,7 @@ import { Workspace, workspaceWorker } from './workspace.ts';
 import { Verifier, type Checker } from './verify.ts';
 import { Ledger, STATES, TASK_CONTEXT, type LanedWorker, type State, type TaskInput } from './ledger.ts';
 import type { PrivacyMode as PrivacyModeOf } from './envelope.ts';
+import { PRIVACY_MODES } from './envelope.ts';
 import { Setup, type Onboarding } from './setup.ts';
 import { detectOs, type OsFamily } from './onboard/detect.ts';
 import { discover, realTransport, type DiscoveryTransport } from './onboard/discover.ts';
@@ -1132,6 +1133,13 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
         const section = params.section as Section;
         if (!SECTIONS.includes(section) || section === 'setup') throw new CoreError('validation', `There is no profile section called "${params.section}".`);
         if (section === 'mesh') meshSetting(params.key!, body.value, body.confirm === true, who);
+        // Letting more leave your devices loosens a gate: tier 3, confirmed every time (with the
+        // passkey on Nova's own screen). Stricter is never asked about.
+        if (section === 'privacy' && params.key === 'default') {
+          const to = PRIVACY_MODES.indexOf(body.value as PrivacyModeOf);
+          if (to < 0) throw new CoreError('validation', 'Privacy is local-only, local-preferred or cloud-allowed.');
+          if (to > PRIVACY_MODES.indexOf(profile.privacyDefault()) && body.confirm !== true) throw new CoreError('validation', 'Letting more of your work leave your devices loosens a gate (tier 3): confirm it every time (confirm: true).');
+        }
         if (section === 'providers' || (section === 'policy' && params.key === 'task_tests')) throw new CoreError('validation', 'Providers are set through /api/v1/providers, so their settings are checked.');
         if (section === 'capture') throw new CoreError('validation', 'Capture settings are set through PUT /api/v1/capture/settings, so they are checked.');
         if (section === 'models') throw new CoreError('validation', 'Models are set through /api/v1/models, so their settings are checked.');

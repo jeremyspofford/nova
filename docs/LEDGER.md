@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · T2 (follow-up) · Looser privacy needs your passkey**
+- What changed: choosing a looser privacy setting in Settings › Privacy now counts as tier 3. That means going from "local only" to "local preferred", or to letting cloud models help. On Nova's own screen it asks for your passkey, every time. Before, it saved on one click, and any program on this computer could make that change. Choosing a stricter setting still saves straight away.
+- What you can now do: rely on Nova never letting more of your work leave your devices without you confirming it.
+- Still unfinished: nothing for this fix.
+
 **2026-11-04 · Config onboarding (design) · A proposed design for setting Nova up three ways**
 - What changed: the living styleguide shows a proposed design for setting Nova up and changing its configuration. There are three ways in: bring in a file, fill in a form, or ask Nova in chat. All three show the same list of changes before anything is applied. Every setting says which layer set it (Nova's default, this hub, or your pack) and can go back to the default. A key or password in an imported file is left out, with a pointer to where it belongs. A first schema draft maps today's settings to these layers.
 - What you can now do: look at the design across desktop, tablet, phone and foldable sizes, and react before it's built.
