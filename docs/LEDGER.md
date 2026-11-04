@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · T2 (follow-up) · Irreversible steps in chat need your passkey**
+- What changed: tier-3 steps in a conversation, like deleting a schedule or running a command that looks irreversible, now need your passkey when you allow them from Nova's own screen. Before this, the confirm box only lived in the page: any program on this computer could allow such a step without a person. Nova's server now refuses an allow that carries no passkey approval for that exact step. Denying a step never needs one.
+- What you can now do: rely on irreversible commands in chat being allowed only by you.
+- Still unfinished: nothing for this fix. This closes the last tier-3 path on Nova's own screen that was outside the passkey check.
+
 **2026-11-04 · Config onboarding (design) · A proposed design for setting Nova up three ways**
 - What changed: the living styleguide shows a proposed design for setting Nova up and changing its configuration. There are three ways in: bring in a file, fill in a form, or ask Nova in chat. All three show the same list of changes before anything is applied. Every setting says which layer set it (Nova's default, this hub, or your pack) and can go back to the default. A key or password in an imported file is left out, with a pointer to where it belongs. A first schema draft maps today's settings to these layers.
 - What you can now do: look at the design across desktop, tablet, phone and foldable sizes, and react before it's built.

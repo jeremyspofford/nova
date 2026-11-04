@@ -218,6 +218,12 @@ export class Runner extends EventEmitter {
     return true;
   }
 
+  // The step waiting for the person, if any: its id, tool and arguments.
+  pendingOf(sessionId) {
+    const p = this.active.get(sessionId)?.pending;
+    return p ? { id: p.id, name: p.name, args: p.args } : null;
+  }
+
   decide(sessionId, toolId, decision) {
     const run = this.active.get(sessionId);
     if (!run?.pending || run.pending.id !== toolId) return false;
@@ -435,7 +441,7 @@ export class Runner extends EventEmitter {
       } else if (needsApproval) {
         this.setLive(sessionId, { phase: 'approval', approval: id });
         const decision = await new Promise((resolve) => {
-          run.pending = { id, resolve };
+          run.pending = { id, resolve, name: call?.name ?? 'unknown', args: call?.args ?? {} };
           signal.addEventListener('abort', () => resolve('abort'), { once: true });
         });
         run.pending = null;
