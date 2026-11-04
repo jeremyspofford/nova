@@ -28,7 +28,7 @@
 // again only at tier 3), it opens the copy on any machine, without this one's vault.
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -550,9 +550,11 @@ export class NightlyBackups {
   }
 }
 
-const inside = (path: string, root: string) => {
-  const r = relative(resolve(root), resolve(path));
-  return r === '' || (!r.startsWith('..') && !r.startsWith(sep) && !r.includes(`..${sep}`));
+// Whether `path` is `root` or inside it, as resilience/index.ts answers it (B6): a folder on another
+// Windows drive is outside. `p` is the path module (a test passes path.win32).
+export const inside = (path: string, root: string, p: Pick<typeof import('node:path'), 'relative' | 'resolve' | 'sep' | 'isAbsolute'> = { relative, resolve, sep, isAbsolute }) => {
+  const r = p.relative(p.resolve(root), p.resolve(path));
+  return r === '' || (!r.startsWith(`..${p.sep}`) && r !== '..' && !p.isAbsolute(r));
 };
 
 // Why a folder can't hold backups, or null: it must be the person's own, and no one else may
