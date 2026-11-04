@@ -12,6 +12,11 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: follow a link to an older screening record, for example from a task's evidence, and see it.
 - Still unfinished: nothing for this fix.
 
+**2026-11-03 · B6 · Nightly backups work to another Windows drive**
+- What changed: on Windows, a nightly backup to a folder on a different drive from Nova's home (for example home on C:, backups on D:) no longer fails every night with "the backup folder is inside Nova's home". Nova now uses the same folder check the Backups settings already used. A folder whose name starts with two dots, inside the home, is also correctly treated as inside.
+- What you can now do: back up to a second drive.
+- Still unfinished: Nova keeps four copies of this folder check; they are merged into one in the clean-up pass that follows.
+
 **2026-11-03 · B5 · Nova starts from a folder with a space in its name**
 - What changed: Nova's server and its supervisor now start from any folder. Before, they silently did nothing when started from a native Windows path or a folder whose name needs encoding in a web address, such as one with a space in it.
 - What you can now do: keep Nova in a folder like "my code" and start it normally.
