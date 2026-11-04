@@ -701,7 +701,7 @@ export class Runner extends EventEmitter {
     if (call.name === 'import_files') return { text: output, source: { kind: 'file', origin: 'workspace/import' } };
     // A command's output, in every run (Amendment 2026-10-30-C Part 3: tool output).
     if (call.name === 'exec') return { text: output, source: { kind: 'tool', origin: 'a command', ref: String(a.command ?? '').slice(0, 200) } };
-    if (STATUS_TOOLS.has(call.name)) return { text: output, source: { kind: 'tool', origin: `Nova’s ${call.name.replaceAll('_', ' ')}` } };
+    if (STATUS_TOOLS.has(call.name)) return { text: output, source: { kind: 'tool', origin: `Nova’s ${call.name} tool` } };
     return null;
   }
 

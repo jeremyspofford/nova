@@ -36,7 +36,7 @@ const SCRIPT: { match: RegExp; tool: string; args: Record<string, unknown>; answ
   },
   {
     match: /theme|dark|appearance/i, tool: 'nova_settings', args: { part: 'appearance' },
-    answer: (r) => `${r.split('\n')[0]} Installed: ${[...r.matchAll(/^- (.+?) \[/gm)].map((m) => m[1]).join(', ')}. Switching isn't something I can do from chat; you can pick one in Settings › Appearance.`,
+    answer: (r) => `${r.split('\n').find((l) => l.startsWith('Active:')) ?? ''} Installed: ${[...r.matchAll(/^- (.+?) \[/gm)].map((m) => m[1]).join(', ')}. Switching isn't something I can do from chat; you can pick one in Settings › Appearance.`,
   },
   {
     match: /capture/i, tool: 'nova_capture', args: {},
@@ -154,6 +154,7 @@ test('the four questions are answered from the real registry: providers, schedul
     assert.ok(briefingOf(system).includes(`Appearance: Obsidian, mode auto; installed: ${installed.join(', ')}.`));
     assert.equal(a.tool?.name, 'nova_settings');
     assert.match(a.tool!.result!.output, /^Active: Obsidian \[obsidian\] \(the person’s choice\), mode auto\./);
+    assert.match(n.calls.at(-1)!.prompt, /<tool_result name="nova_settings" ok="true">\n<outside source="tool"/, 'the model gets it as screened data (T3)');
     for (const name of installed) assert.ok(a.tool!.result!.output.includes(`- ${name} [`), name);
     assert.match(a.reply, /^Active: Obsidian/m);
     assert.match(a.reply, /Settings › Appearance/);
