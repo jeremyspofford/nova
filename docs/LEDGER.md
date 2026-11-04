@@ -12,6 +12,11 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: follow a link to an older screening record, for example from a task's evidence, and see it.
 - Still unfinished: nothing for this fix.
 
+**2026-11-03 · B1 · Capture sources are no longer re-announced on every heartbeat**
+- What changed: when a paired computer reports what it can capture, Nova now announces a new capture source once instead of twice, and no longer re-announces every source on every heartbeat. Screens that show capture sources stop refreshing for no reason every few minutes.
+- What you can now do: nothing new to do; capture sources behave as before, with less background churn.
+- Still unfinished: nothing for this fix.
+
 **2026-11-03 · T3 · Nova asks before changing its standing files once it has seen tool output**
 - What changed: AGENTS.md, SOUL.md, IDENTITY.md and USER.md load into every future conversation, so text planted there would stay. Once a conversation has run any tool, Nova now asks before changing one of these files, even when nothing it read looked suspicious; before then (for example, when you ask it to note a preference straight away) it still writes on its own. Nova's own status tools (capture, coding, infrastructure, network, schedules, settings and instance status) are now screened like any other tool output, so outside text they pass along can mark the conversation as having read outside content.
 - What you can now do: let Nova run commands and checks without a command's output quietly rewriting how Nova behaves in every later conversation.
