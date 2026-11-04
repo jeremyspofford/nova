@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Config onboarding (door 3) · Change settings by asking Nova**
+- What changed: you can ask Nova in a conversation to change one of your settings, for example "set my timezone to Asia/Tokyo". Nova shows exactly what would change, in the same list as Settings › Configuration, and nothing changes until you allow it. A change to privacy or to what asks first counts as tier 3 and needs your passkey. Secrets and the hub's own settings are left out, saying why. Every change is recorded in the activity log.
+- What you can now do: change your personal settings by talking to Nova.
+- Still unfinished: the third way in, a guided setup form (with Settings generated from the schema), comes next.
+
 **2026-11-04 · Config onboarding (door 1) · Bring settings in from a file, or take them out**
 - What changed: Settings has a new Configuration section. You can bring in a settings file, and Nova checks it first and shows every change before anything is applied. A key or password in the file is left out, with a note on where it belongs. The hub's own settings (devices, models, backups, capture) are also left out, because those are changed on their own screens. A change to privacy or to what asks first counts as tier 3, so it needs your passkey. You can also export your settings as a file with no secrets in it. Every import is recorded in the activity log.
 - What you can now do: move your personal settings between Nova installs, or keep a copy, with Export and "Choose a file" in Settings › Configuration.
