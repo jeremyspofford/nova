@@ -7,6 +7,7 @@
 import { passkeyLine, passkeySetup } from './components.js';
 import { b64url } from './device-key.js';
 import { escapeHtml as esc } from './markdown.js';
+import { waitingLine } from './wait.js';
 
 const unb64 = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
 const b64 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)));
@@ -101,7 +102,7 @@ export async function loadSecurity(api) {
 export function renderSecurity() {
   const d = view.data;
   return `<section class="memory-section" id="security" aria-labelledby="set-security"><h2 class="memory-heading" id="set-security">Security</h2>
-${d ? passkeySetup({ state: view.state, name: view.name, count: d.count, passkeys: d.passkeys, first: d.first_enrolled_at }) : `<p class="memory-lede">${esc(view.error || 'Checking your passkeys…')}</p>`}</section>`;
+${d ? passkeySetup({ state: view.state, name: view.name, count: d.count, passkeys: d.passkeys, first: d.first_enrolled_at }) : view.error ? `<p class="memory-lede">${esc(view.error)}</p>` : waitingLine('Checking your passkeys')}</section>`;
 }
 export async function setupPasskey(api, redraw) {
   view.state = 'waiting';
