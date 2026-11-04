@@ -16,6 +16,12 @@ export const PASSKEY = {
 };
 const rpHash = () => createHash('sha256').update('localhost').digest();
 export const consoleOrigin = (base: string) => base.replace('//127.0.0.1', '//localhost');
+// Where the test passkeys were added. In a real mesh every console is http://localhost:4317 on its
+// own machine; tests run nodes on one machine, so a node that got the passkeys by replication (a
+// standby) is signed for as the address they were added at.
+const enrolledAt = new Set<string>();
+let lastEnrolled: string | null = null;
+const signingOrigin = (base: string) => (enrolledAt.has(consoleOrigin(base)) || !lastEnrolled ? consoleOrigin(base) : lastEnrolled);
 
 // An approval of challenge `c`, as the browser's passkey step sends it.
 export function assertion(c: { id: string; digest: string; challenge: string }, origin: string, credential = PASSKEY.ids[0]!) {
@@ -39,6 +45,8 @@ export async function enrollPasskeys(send: Send, base: string) {
     const r = await send('POST', '/api/v1/security/passkeys', { registration: o.registration, credential_id: id, public_key: PASSKEY.spki, authenticator_data: auth.toString('base64url'), client_data_json: cdj.toString('base64url'), name: `Test passkey ${i + 1}`, ...(o.approval ? { approval: assertion(o.approval, origin) } : {}) }, h);
     if (r.status !== 201) throw new Error(`enrolling a test passkey failed: ${JSON.stringify(r.body)}`);
   }
+  enrolledAt.add(origin);
+  lastEnrolled = origin;
 }
 
 // What the screen's passkey step does before a request with confirm: true: nothing where it
@@ -52,5 +60,5 @@ export async function withPasskey(send: Send, base: string, method: string, path
   if (!state.body.count) await enrollPasskeys(send, base);
   const c = await send('POST', '/api/v1/security/approvals', { method, path: path.slice('/api/v1'.length).split('?')[0], body: b }, { 'x-nova': '1', ...headers });
   if (c.status !== 200) throw new Error(`a test passkey approval failed: ${JSON.stringify(c.body)}`);
-  return { ...b, passkey_approval: assertion(c.body, consoleOrigin(base)) };
+  return { ...b, passkey_approval: assertion(c.body, signingOrigin(base)) };
 }
