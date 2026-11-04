@@ -10,7 +10,7 @@ the project's `nova-harness-prompt.md`.
 
 ## Run it
 
-You need Node 22+ and the `claude` CLI on your PATH (or another agent command,
+You need Node 26 or newer (`mise install` reads `mise.toml`) and the `claude` CLI on your PATH (or another agent command,
 see below).
 
 ```sh
@@ -122,7 +122,7 @@ for your confirmed OK. Settings › Changes shows each one with its evidence.
 
 ## Configure
 
-Optional `nova.config.json` at the repo root (environment variables win):
+Optional `nova.config.json` at the repo root (environment variables win). It is gitignored, because it can hold tokens:
 
 | Key | Env | Default |
 | --- | --- | --- |

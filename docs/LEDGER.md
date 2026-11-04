@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-03 · B8+B9 · Local settings stay out of git; the right Node version is documented**
+- What changed: a `nova.config.json` in the repository folder is now ignored by git, so a token put in it can't be committed and published by accident. The instructions now say Node 26 or newer, which is what Nova actually needs, and the stale `.nvmrc` that pointed at Node 22 is gone.
+- What you can now do: keep personal settings in `nova.config.json` without risking them in a commit, and set up the right Node version from the README.
+- Still unfinished: a config file committed before this change would still be in history; none is tracked today.
+
 **2026-11-03 · B7 · Older screening records can be opened again**
 - What changed: Nova can now open any record of outside content it screened, however old. Before, once more than 500 newer screenings existed, an older one showed "There is no such screen" even though it was still kept.
 - What you can now do: follow a link to an older screening record, for example from a task's evidence, and see it.
