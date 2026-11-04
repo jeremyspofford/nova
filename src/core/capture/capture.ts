@@ -608,7 +608,8 @@ export class Capture extends EventEmitter {
     if (not) return { refused: true, reason: not };
     const kind = body.kind;
     if (typeof kind !== 'string' || !(KINDS as readonly string[]).includes(kind)) return { refused: true, reason: `kind must be one of ${KINDS.join(', ')}.` };
-    const id = this.#ensureDeviceSource(device.id, kind as Kind) ?? `device:${device.id}:${kind}`;
+    const id = `device:${device.id}:${kind}`;
+    if (this.#ensureDeviceSource(device.id, kind as Kind)) this.#changed('sources');
     const r = this.ingest(id, [{
       external_id: clip(body.external_id, 200) ?? `inbox:${key}`, kind: kind as Kind, at: body.at as string,
       ended_at: typeof body.ended_at === 'string' ? body.ended_at : null,
@@ -749,7 +750,8 @@ export class Capture extends EventEmitter {
     // Its capture-source role first (M10f), as for the inbox: a device that isn't one keeps nothing here.
     const not = this.#o.mayCapture?.(device.id);
     if (not) return { kept: null, status: 'not_kept', reason: not };
-    const id = this.#ensureDeviceSource(device.id, raw.kind) ?? `device:${device.id}:${raw.kind}`;
+    const id = `device:${device.id}:${raw.kind}`;
+    if (this.#ensureDeviceSource(device.id, raw.kind)) this.#changed('sources');
     const r = this.ingest(id, [raw], 'inbox');
     if (r.kept.length) return { kept: r.kept[0]!, status: 'kept', reason: null };
     const reason = Object.keys(r.dropped)[0] ?? 'unreadable';
@@ -1338,14 +1340,14 @@ export class Capture extends EventEmitter {
 
   // ---- internals ---------------------------------------------------------------------------------------
 
-  #ensureDeviceSource(deviceId: string, kind: Kind): string | null {
+  // Whether it made the source: the caller announces a new one once (B1).
+  #ensureDeviceSource(deviceId: string, kind: Kind): boolean {
     const id = `device:${deviceId}:${kind}`;
-    if (this.#db.get('SELECT 1 FROM capture_source WHERE id = ?', id)) return id;
+    if (this.#db.get('SELECT 1 FROM capture_source WHERE id = ?', id)) return false;
     const at = this.#now().toISOString();
     const label: Record<Kind, string> = { screen: 'Screen', audio: 'Audio', meeting: 'Meetings', browser: 'Browser', 'app-activity': 'App activity', sensor: 'Sensors' };
     this.#db.run(`INSERT INTO capture_source (id, device_id, adapter, name, kinds, created_at, updated_at) VALUES (?, ?, 'device', ?, ?, ?, ?)`, id, deviceId, label[kind], JSON.stringify([kind]), at, at);
-    this.#changed('sources');
-    return id;
+    return true;
   }
 
   #count(id: string, r: Ingested): void {
