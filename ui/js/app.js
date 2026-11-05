@@ -97,10 +97,15 @@ async function loadList() {
   renderToc_();
 }
 
+// A GET that fails the same way whether the server is gone or answers with an error.
+const getJson = (path) => fetch(path).then((r) => { if (!r.ok) throw new Error(); return r.json(); });
+
+// A view whose data couldn't be read: what failed, why, and a way to try again.
+const errorEmpty = (title, msg, retry) => `<div class="empty"><p class="empty-line">${title}</p><p class="memory-lede">${msg}</p><button type="button" class="btn" data-action="${retry}">Try again</button></div>`;
+
 let memoryLoad = null;
 function loadMemory() {
-  memoryLoad = fetch('/api/memory')
-    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+  memoryLoad = getJson('/api/memory')
     .then((data) => {
       state.memory = data;
       state.memoryError = '';
@@ -116,8 +121,7 @@ function loadMemory() {
 }
 
 function loadSkills() {
-  return fetch('/api/skills')
-    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+  return getJson('/api/skills')
     .then((data) => {
       state.skills = data;
       state.skillsError = '';
@@ -140,8 +144,7 @@ function loadSkills() {
 }
 
 function loadSchedules() {
-  return fetch('/api/schedules')
-    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+  return getJson('/api/schedules')
     .then((data) => {
       state.schedules = data;
       state.schedulesError = '';
@@ -170,8 +173,7 @@ function markMainSeen() {
 
 let activityLoad = null;
 function loadActivity() {
-  activityLoad = fetch('/api/activity')
-    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+  activityLoad = getJson('/api/activity')
     .then((data) => {
       state.activity = data;
       state.activityError = '';
@@ -295,15 +297,21 @@ function setView(view) {
   if (was !== view) showSignals();
 }
 
-// The core's own surfaces: Home, Tasks, Health.
-function showCore(view) {
+// Every view but a conversation opens the same way: the conversation's stream closes, and the page
+// starts at its top. `extra` is any other state the view resets.
+function leaveChat(view, extra = {}) {
   stream?.close();
   stream = null;
-  Object.assign(state, { id: null, live: null, pending: null });
+  Object.assign(state, { id: null, live: null, pending: null, ...extra });
   setView(view);
   el.scroller.scrollTop = 0;
   renderChrome();
   renderToc_();
+}
+
+// The core's own surfaces: Home, Tasks, Health.
+function showCore(view) {
+  leaveChat(view);
   renderCore({ enter: true });
   // Conversations and month rollover need no Core event; opening Health reads current spend.
   // A Caps-only failure belongs to its panel, not the whole Core's availability.
@@ -435,17 +443,13 @@ function viewLive() {
   return state.live;
 }
 
-function renderAll({ enter = false } = {}) {
+function renderAll({ enter: entering = false } = {}) {
   rendered = new Map();
   el.thread.innerHTML = '';
   el.thread.classList.add('no-anim');
   renderThread();
   requestAnimationFrame(() => el.thread.classList.remove('no-anim'));
-  if (enter) {
-    el.thread.classList.remove('view-enter');
-    void el.thread.offsetWidth;
-    el.thread.classList.add('view-enter');
-  }
+  if (entering) enter(el.thread);
   renderChrome();
   renderToc_();
   const target = /^#[th]-/.test(location.hash) && document.getElementById(location.hash.slice(1));
@@ -625,22 +629,15 @@ function renderChrome() {
   if (!banner && replica) banner = replica.reason;
   el.banner.hidden = !banner;
   el.banner.textContent = banner;
-  if (banner && replica && banner === replica.reason && !replica.demoted && core.store.mesh?.you?.can_approve) {
+  // A standby that can approve can make itself the hub. A node that stepped down copies nothing; if
+  // the hub is gone, it can become the hub from the latest backup (M10g). The sheet says first what
+  // that loses.
+  if (banner && replica && banner === replica.reason && core.store.mesh?.you?.can_approve) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'btn small';
-    b.dataset.action = 'promote';
-    b.textContent = 'Make this the hub';
-    el.banner.append(b);
-  }
-  // A node that stepped down copies nothing; if the hub is gone, it can become the hub from the
-  // latest backup (M10g). The sheet says first what that loses.
-  if (banner && replica && banner === replica.reason && replica.demoted && core.store.mesh?.you?.can_approve) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'btn small';
-    b.dataset.action = 'promote-cold';
-    b.textContent = 'Make this the hub from a backup';
+    b.dataset.action = replica.demoted ? 'promote-cold' : 'promote';
+    b.textContent = replica.demoted ? 'Make this the hub from a backup' : 'Make this the hub';
     el.banner.append(b);
   }
 
@@ -896,13 +893,7 @@ el.thread.addEventListener('click', (e) => {
 // ---- memory ------------------------------------------------------------------
 
 function showMemory() {
-  stream?.close();
-  stream = null;
-  Object.assign(state, { id: null, live: null, pending: null });
-  setView('memory');
-  el.scroller.scrollTop = 0;
-  renderChrome();
-  renderToc_();
+  leaveChat('memory');
   renderMemoryView({ enter: true });
   loadMemory().then(() => {
     const target = location.hash.startsWith('#m-') && document.getElementById(location.hash.slice(1));
@@ -913,23 +904,19 @@ function showMemory() {
 }
 
 let memoryDeferred = false;
-function renderMemoryView({ enter = false } = {}) {
+function renderMemoryView({ enter: entering = false } = {}) {
   if (el.memory.querySelector('.is-editing')) { memoryDeferred = true; return; }
   const waited = !!el.memory.querySelector('[data-skeleton], .view-waiting');
   memoryDeferred = false;
   const focused = document.activeElement?.closest?.('.memory-item')?.dataset.id;
   const at = focused ? [...el.memory.querySelectorAll('.memory-item')].findIndex((x) => x.dataset.id === focused) : -1;
   if (state.memory) el.memory.innerHTML = renderMemory(state.memory);
-  else if (state.memoryError) el.memory.innerHTML = `<div class="empty"><p class="empty-line">Memory couldn't be read.</p><p class="memory-lede">${state.memoryError}</p><button type="button" class="btn" data-action="retry-memory">Try again</button></div>`;
+  else if (state.memoryError) el.memory.innerHTML = errorEmpty("Memory couldn't be read.", state.memoryError, 'retry-memory');
   else if (!el.memory.querySelector('[data-skeleton], .view-waiting')) showWaiting('memory', el.memory, 'Loading Memory');
-  if (state.memory && (enter || waited)) rememberShape('memory', el.memory);
+  if (state.memory && (entering || waited)) rememberShape('memory', el.memory);
   // An edit gives the memory a new id; focus stays where it was in the list.
   if (focused) (document.getElementById(`m-${focused}`) ?? el.memory.querySelectorAll('.memory-item')[at])?.focus({ preventScroll: true });
-  if (enter) {
-    el.memory.classList.remove('view-enter');
-    void el.memory.offsetWidth;
-    el.memory.classList.add('view-enter');
-  }
+  if (entering) enter(el.memory);
 }
 
 function autosizeField(field) {
@@ -1046,28 +1033,30 @@ el.memory.addEventListener('click', (e) => {
   else if (b?.dataset.action === 'retry-memory') loadMemory();
   else if (item && !item.dataset.candidate && e.target.closest('.memory-text')) editMemory(item);
 });
-el.memory.addEventListener('keydown', (e) => {
-  const item = e.target.closest('.memory-item');
-  if (!item || e.target !== item) return;
-  const items = [...el.memory.querySelectorAll('.memory-item')];
-  const i = items.indexOf(item);
-  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
-  if (e.key === 'Enter') { e.preventDefault(); editMemory(item); }
-  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); forgetMemory(item); }
-});
+// A list whose items take focus: the arrow keys move between them, and Enter and Delete (or
+// Backspace) act on the focused one. Where `canEnter` or `canDel` says no, the key is the browser's.
+function rove(root, selector, { enter: onEnter, del, canEnter = () => true, canDel = () => true }) {
+  root.addEventListener('keydown', (e) => {
+    const item = e.target.closest(selector);
+    if (!item || e.target !== item) return;
+    const items = [...root.querySelectorAll(selector)];
+    const i = items.indexOf(item);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
+    if (e.key === 'Enter' && canEnter(item)) { e.preventDefault(); onEnter(item); }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && del && canDel(item)) { e.preventDefault(); del(item); }
+  });
+}
+// A skill's or schedule's playbook opens and closes with Enter.
+const togglePlaybook = (item) => { const d = item.querySelector('.skill-playbook'); d.open = !d.open; };
+
+rove(el.memory, '.memory-item', { enter: (item) => editMemory(item), del: forgetMemory });
 
 // ---- skills ----------------------------------------------------------------
 
 const isLocal = () => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
 
 function showSkills() {
-  stream?.close();
-  stream = null;
-  Object.assign(state, { id: null, live: null, pending: null });
-  setView('skills');
-  el.scroller.scrollTop = 0;
-  renderChrome();
-  renderToc_();
+  leaveChat('skills');
   renderSkillsView({ enter: true });
   loadSkills().then(() => {
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
@@ -1081,7 +1070,7 @@ function showSkills() {
 
 const GMAIL_FIELDS = ['gmail-client', 'gmail-email', 'gmail-password'];
 
-function renderSkillsView({ enter = false } = {}) {
+function renderSkillsView({ enter: entering = false } = {}) {
   // What the person was typing survives a re-render (another tab, a sign-in).
   const typed = Object.fromEntries(GMAIL_FIELDS.map((id) => [id, $(id)?.value]).filter(([, v]) => v));
   const focused = document.activeElement;
@@ -1089,17 +1078,13 @@ function renderSkillsView({ enter = false } = {}) {
   const advancedOpen = el.skills.querySelector('.connection-advanced')?.open;
   const open = [...el.skills.querySelectorAll('.skill-playbook[open]')].map((d) => d.closest('.skill').id);
   if (state.skills) el.skills.innerHTML = renderSkills(state.skills, { local: isLocal() });
-  else if (state.skillsError) el.skills.innerHTML = `<div class="empty"><p class="empty-line">Skills couldn't be shown.</p><p class="memory-lede">${state.skillsError}</p><button type="button" class="btn" data-action="retry-skills">Try again</button></div>`;
+  else if (state.skillsError) el.skills.innerHTML = errorEmpty("Skills couldn't be shown.", state.skillsError, 'retry-skills');
   else el.skills.innerHTML = '';
   for (const id of open) document.querySelector(`#${CSS.escape(id)} .skill-playbook`)?.setAttribute('open', '');
   for (const [id, v] of Object.entries(typed)) if ($(id)) $(id).value = v;
   if (advancedOpen) el.skills.querySelector('.connection-advanced')?.setAttribute('open', '');
   if (focusKey) $(focusKey)?.focus({ preventScroll: true });
-  if (enter) {
-    el.skills.classList.remove('view-enter');
-    void el.skills.offsetWidth;
-    el.skills.classList.add('view-enter');
-  }
+  if (entering) enter(el.skills);
 }
 
 async function installSkill(item) {
@@ -1299,26 +1284,12 @@ el.skills.addEventListener('click', (e) => {
     flash(card);
   } else if (action) gmailAction(action, b);
 });
-el.skills.addEventListener('keydown', (e) => {
-  const item = e.target.closest('.skill');
-  if (!item || e.target !== item) return;
-  const items = [...el.skills.querySelectorAll('.skill')];
-  const i = items.indexOf(item);
-  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
-  if (e.key === 'Enter') { e.preventDefault(); const d = item.querySelector('.skill-playbook'); d.open = !d.open; }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !item.classList.contains('is-available')) { e.preventDefault(); removeSkill(item); }
-});
+rove(el.skills, '.skill', { enter: togglePlaybook, del: removeSkill, canDel: (item) => !item.classList.contains('is-available') });
 
 // ---- schedules -------------------------------------------------------------
 
 function showSchedules() {
-  stream?.close();
-  stream = null;
-  Object.assign(state, { id: null, live: null, pending: null });
-  setView('automations');
-  el.scroller.scrollTop = 0;
-  renderChrome();
-  renderToc_();
+  leaveChat('automations');
   core.renderRules(el.rules);
   renderSchedulesView({ enter: true });
   loadSchedules().then(() => {
@@ -1328,14 +1299,14 @@ function showSchedules() {
   });
 }
 
-function renderSchedulesView({ enter = false } = {}) {
+function renderSchedulesView({ enter: entering = false } = {}) {
   const focused = document.activeElement;
   const focusKey = focused?.closest?.('.skill')?.id;
   const inForm = focused?.closest?.('form') ? focused.name : null;
   const open = [...el.schedules.querySelectorAll('.skill-playbook[open]')].map((d) => d.closest('.skill').id);
   const typed = Object.fromEntries([...el.schedules.querySelectorAll('.schedule-setup')].map((f) => [f.closest('.skill').id, { time: f.time.value, days: f.days.value }]));
   if (state.schedules) el.schedules.innerHTML = renderSchedules(state.schedules, new Date());
-  else if (state.schedulesError) el.schedules.innerHTML = `<div class="empty"><p class="empty-line">Schedules couldn't be shown.</p><p class="memory-lede">${state.schedulesError}</p><button type="button" class="btn" data-action="retry-schedules">Try again</button></div>`;
+  else if (state.schedulesError) el.schedules.innerHTML = errorEmpty("Schedules couldn't be shown.", state.schedulesError, 'retry-schedules');
   else el.schedules.innerHTML = '';
   for (const id of open) document.querySelector(`#${CSS.escape(id)} .skill-playbook`)?.setAttribute('open', '');
   for (const [id, v] of Object.entries(typed)) {
@@ -1346,11 +1317,7 @@ function renderSchedulesView({ enter = false } = {}) {
     const item = $(focusKey);
     (inForm && item?.querySelector(`[name="${inForm}"]`) || item)?.focus({ preventScroll: true });
   }
-  if (enter) {
-    el.schedules.classList.remove('view-enter');
-    void el.schedules.offsetWidth;
-    el.schedules.classList.add('view-enter');
-  }
+  if (entering) enter(el.schedules);
 }
 // "Next: tomorrow at 7:00 AM" stays true as the clock moves.
 setInterval(() => { if (state.view === 'automations' && !document.hidden) renderSchedulesView(); }, 60_000); // wait: clock: “Next: …” stays true
@@ -1428,26 +1395,12 @@ el.schedules.addEventListener('click', (e) => {
   else if (action === 'remove-schedule') removeSchedule(item);
   else if (action === 'retry-schedules') loadSchedules();
 });
-el.schedules.addEventListener('keydown', (e) => {
-  const item = e.target.closest('.skill');
-  if (!item || e.target !== item) return;
-  const items = [...el.schedules.querySelectorAll('.skill')];
-  const i = items.indexOf(item);
-  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
-  if (e.key === 'Enter') { e.preventDefault(); const d = item.querySelector('.skill-playbook'); d.open = !d.open; }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && item.classList.contains('schedule')) { e.preventDefault(); removeSchedule(item); }
-});
+rove(el.schedules, '.skill', { enter: togglePlaybook, del: removeSchedule, canDel: (item) => item.classList.contains('schedule') });
 
 // ---- activity --------------------------------------------------------------
 
 function showActivity() {
-  stream?.close();
-  stream = null;
-  Object.assign(state, { id: null, live: null, pending: null, earlier: [] });
-  setView('activity');
-  el.scroller.scrollTop = 0;
-  renderChrome();
-  renderToc_();
+  leaveChat('activity', { earlier: [] });
   renderActivityView({ enter: true });
   loadActivity().then(() => {
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
@@ -1456,7 +1409,7 @@ function showActivity() {
   });
 }
 
-function renderActivityView({ enter = false } = {}) {
+function renderActivityView({ enter: entering = false } = {}) {
   const focused = document.activeElement;
   const focusKey = focused?.closest?.('.act-entry')?.id;
   const focusAction = focused?.dataset?.action ?? null;
@@ -1466,19 +1419,15 @@ function renderActivityView({ enter = false } = {}) {
     const days = [...state.activity.days, ...state.earlier.flatMap((w) => w.days)];
     const last = state.earlier.at(-1) ?? state.activity;
     el.activity.innerHTML = renderActivity({ ...state.activity, days, more: last.more, before: last.before, earlier: state.earlier.length > 0 }, new Date());
-  } else if (state.activityError) el.activity.innerHTML = `<div class="empty"><p class="empty-line">Activity couldn't be shown.</p><p class="memory-lede">${state.activityError}</p><button type="button" class="btn" data-action="retry-activity">Try again</button></div>`;
+  } else if (state.activityError) el.activity.innerHTML = errorEmpty("Activity couldn't be shown.", state.activityError, 'retry-activity');
   else el.activity.innerHTML = '';
   for (const id of open) document.getElementById(id)?.querySelector('.act-steps')?.setAttribute('open', '');
   if (focusKey) {
     const item = $(focusKey);
     (focusAction && item?.querySelector(`[data-action="${focusAction}"]`) || item)?.focus({ preventScroll: true });
   }
-  if (!enter) el.scroller.scrollTop = top;
-  if (enter) {
-    el.activity.classList.remove('view-enter');
-    void el.activity.offsetWidth;
-    el.activity.classList.add('view-enter');
-  }
+  if (!entering) el.scroller.scrollTop = top;
+  if (entering) enter(el.activity);
 }
 // "Working for 2 min" and the days stay true as the clock moves.
 setInterval(() => { if (state.view === 'activity' && !document.hidden) renderActivityView(); }, 60_000); // wait: clock: “Working for …” stays true
@@ -1486,9 +1435,7 @@ setInterval(() => { if (state.view === 'activity' && !document.hidden) renderAct
 async function earlier(button) {
   button.disabled = true;
   try {
-    const res = await fetch(`/api/activity?before=${encodeURIComponent(button.dataset.before)}`);
-    if (!res.ok) throw new Error();
-    const week = await res.json();
+    const week = await getJson(`/api/activity?before=${encodeURIComponent(button.dataset.before)}`);
     state.earlier.push(week);
     const had = el.activity.querySelectorAll('.act-day').length;
     renderActivityView();
@@ -1524,25 +1471,15 @@ el.activity.addEventListener('click', (e) => {
   else if (action === 'earlier') earlier(b);
   else if (action === 'retry-activity') loadActivity();
 });
-el.activity.addEventListener('keydown', (e) => {
-  const item = e.target.closest('.act-entry');
-  if (!item || e.target !== item) return;
-  const items = [...el.activity.querySelectorAll('.act-entry')];
-  const i = items.indexOf(item);
-  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
-  if (e.key === 'Enter') {
-    const d = item.querySelector('.act-steps');
-    if (d) { e.preventDefault(); d.open = !d.open; }
-  }
-});
+// Enter opens an entry's steps, when it has any.
+rove(el.activity, '.act-entry', { enter: (item) => { const d = item.querySelector('.act-steps'); d.open = !d.open; }, canEnter: (item) => !!item.querySelector('.act-steps') });
 
 // ---- settings: you and Nova, privacy, permissions, appearance, devices ------------------------
 
 let permissions = null;
 let permissionsError = '';
 function loadPermissions() {
-  return fetch('/api/permissions')
-    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+  return getJson('/api/permissions')
     .then((data) => { permissions = data.permissions; permissionsError = ''; if (state.view === 'settings') renderSettingsView({ only: 'perms' }); })
     .catch(() => {
       permissionsError = "Nova's server didn't answer, so settings can't be shown right now.";
@@ -1654,15 +1591,9 @@ function chooseSettingsResult(option) {
 }
 
 function showSettings() {
-  stream?.close();
-  stream = null;
-  Object.assign(state, { id: null, live: null, pending: null });
   core.hideBackupsKey();
   core.enterBackups();
-  setView('settings');
-  el.scroller.scrollTop = 0;
-  renderChrome();
-  renderToc_();
+  leaveChat('settings');
   renderSettingsView({ enter: true });
   settingsUi.touched = false;
   selectSettings(settingsTarget(location.hash).cat);
@@ -1909,13 +1840,7 @@ function drawCapture() {
   if (focus) el.capture.querySelector(`[data-action="${CSS.escape(focus)}"]`)?.focus({ preventScroll: true });
 }
 function showCaptureView() {
-  stream?.close();
-  stream = null;
-  Object.assign(state, { id: null, live: null, pending: null });
-  setView('capture');
-  el.scroller.scrollTop = 0;
-  renderChrome();
-  renderToc_();
+  leaveChat('capture');
   drawCapture();
   enter(el.capture);
   el.capture.focus({ preventScroll: true });
@@ -1923,25 +1848,21 @@ function showCaptureView() {
 }
 bindTopology(el.topology);
 function showTopologyView() {
-  stream?.close();
-  stream = null;
-  Object.assign(state, { id: null, live: null, pending: null });
-  setView('topology');
-  el.scroller.scrollTop = 0;
-  renderChrome();
-  renderToc_();
+  leaveChat('topology');
   showTopology();
   el.topology.focus({ preventScroll: true });
 }
 el.capture.addEventListener('click', (e) => { followLink(e); });
 // The indicator opens the Capture view in place, from any page.
 $('capture-ind').addEventListener('click', (e) => { followLink(e); });
-bindConnections(el.settings, () => { if (state.view === 'settings' && $('settings-connections')) renderSettingsView({ only: 'connections' }); });
-bindSites(el.settings, () => { if (state.view === 'settings' && $('settings-sites')) renderSettingsView({ only: 'sites' }); });
+// A Settings part redraws when its own data changes, if Settings is open and the part is there.
+const bindPart = (k) => () => { if (state.view === 'settings' && $(`settings-${k}`)) renderSettingsView({ only: k }); };
+bindConnections(el.settings, bindPart('connections'));
+bindSites(el.settings, bindPart('sites'));
 // Settings › Models (M6b): hardware, roles, downloads with live progress, budgets.
-bindModels(el.settings, () => { if (state.view === 'settings' && $('settings-models')) renderSettingsView({ only: 'models' }); });
+bindModels(el.settings, bindPart('models'));
 // Settings › Changes (M7a): the change pipeline, the one waiting for you, canaries, roll back.
-bindChanges(el.settings, () => { if (state.view === 'settings' && $('settings-changes')) renderSettingsView({ only: 'changes' }); });
+bindChanges(el.settings, bindPart('changes'));
 core.bindBackups(el.settings, () => { if ($('settings-backups')) renderSettingsView({ only: 'backups' }); });
 bindConfig(el.settings, () => renderSettingsView({ only: 'config' }));
 bindConfigForm(el.settings, () => renderSettingsView({ only: 'form' }));
@@ -1949,10 +1870,10 @@ bindConfigForm(el.settings, () => renderSettingsView({ only: 'form' }));
 onCore('profile', () => { if (state.view === 'settings') loadConfigForm().then(() => renderSettingsView({ only: 'form' })); });
 onCore('profile', () => { if (state.view === 'settings') core.loadBackups(); });
 // Settings › Backups › Checkpoints (M7 amendment): take one, restore (the hub's screen only), delete.
-bindCheckpoints(el.settings, () => { if (state.view === 'settings' && $('settings-checkpoints')) renderSettingsView({ only: 'checkpoints' }); });
-bindServices(() => { if (state.view === 'settings' && $('settings-services')) renderSettingsView({ only: 'services' }); });
+bindCheckpoints(el.settings, bindPart('checkpoints'));
+bindServices(bindPart('services'));
 // Settings › Danger zone (M7 amendment §2): export, confirm, erase and start over.
-bindReset(el.settings, () => { if (state.view === 'settings' && $('settings-danger')) renderSettingsView({ only: 'danger' }); });
+bindReset(el.settings, bindPart('danger'));
 // A provider was set up, turned on or off, or checked (M5a): Settings shows it at once.
 onCore('provider', () => { if (state.view === 'settings') core.loadProviders(); });
 // The device mesh: the registry changed, or a device is asking to join (only approvers hear that).
@@ -1976,41 +1897,43 @@ el.health.addEventListener('click', e => { if (e.target.closest('[data-retry-wor
 
 // Actions on the core's surfaces, wherever they appear: Home, the right column, Tasks, Health,
 // Automations, and the sheet.
-async function coreAction(b) {
-  const action = b.dataset.action;
-  const task = b.dataset.task ?? b.closest('[data-task]')?.dataset.task;
-  if (action === 'open-task' || action === 'evidence') return core.openTask(task);
-  if (action === 'retry-task' || action === 'cancel-task') return core.taskAction(action, task);
-  if (action === 'decline-merge') return core.declineMerge(b.dataset.run);
-  if (action === 'decline-change') return core.declineChange(b.dataset.path, b.dataset.said);
-  if (action === 'close-sheet') return closeSheet();
-  if (['pause-rule', 'resume-rule', 'delete-rule'].includes(action)) return core.ruleAction(action, b.closest('[data-rule]').dataset.rule);
-  if (action === 'add-device') return core.addDevice();
-  if (action === 'copy-command') return core.copyCommand();
-  if (action === 'review-request') return core.openRequest(b.dataset.request);
-  if (action === 'deny-request') return core.denyRequest(b.dataset.request);
-  if (action === 'revoke-device') return core.revokeDevice(b.dataset.device);
-  if (action === 'allow-approve') return core.allowApprove(b.dataset.device, b.dataset.value);
-  if (action === 'edit-roles') return core.editRoles(b.dataset.device);
-  if (action === 'promote') return core.promote();
-  if (action === 'promote-device') return core.promoteDevice(b.dataset.device);
-  if (action === 'promote-cold') return core.promoteCold();
-  if (action === 'promotion-cancel') return core.promotionAction('cancel');
-  if (action === 'promotion-take-back') return core.promotionAction('take-back');
-  if (['backup-now', 'drill-now', 'repair-problem'].includes(action)) return core.resilienceAction(action, b.dataset.problem).then(() => scheduleRefresh(['resilience', 'problems', 'health', 'tasks']));
-  try {
-    if (action === 'resolve-problem') { await post(`/api/v1/problems/${encodeURIComponent(b.dataset.problem)}/resolve`); scheduleRefresh(['problems', 'health']); toast('Marked as dealt with.'); }
-    if (action === 'read-message') { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/read`); scheduleRefresh(['messages']); }
-    if (action === 'send-message') { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/approve`); scheduleRefresh(['messages']); toast('Sent.'); }
-  } catch (e) { toast(e.message); }
-}
-const CORE_ACTIONS = new Set(['open-task', 'evidence', 'retry-task', 'cancel-task', 'decline-merge', 'decline-change', 'close-sheet', 'pause-rule', 'resume-rule', 'delete-rule', 'resolve-problem', 'read-message', 'send-message',
-  'add-device', 'copy-command', 'review-request', 'deny-request', 'revoke-device', 'allow-approve', 'edit-roles', 'promote', 'promote-device', 'promote-cold', 'promotion-cancel', 'promotion-take-back', 'backup-now', 'drill-now', 'repair-problem']);
+// Each takes the button and its action. The last three show a failure as a toast.
+const taskOf = (b) => b.dataset.task ?? b.closest('[data-task]')?.dataset.task;
+const openTask = (b) => core.openTask(taskOf(b));
+const taskAction = (b, action) => core.taskAction(action, taskOf(b));
+const ruleAction = (b, action) => core.ruleAction(action, b.closest('[data-rule]').dataset.rule);
+const resilienceAction = (b, action) => core.resilienceAction(action, b.dataset.problem).then(() => scheduleRefresh(['resilience', 'problems', 'health', 'tasks']));
+const toasting = (act) => async (b) => { try { await act(b); } catch (e) { toast(e.message); } };
+const CORE_ACTIONS = {
+  'open-task': openTask, evidence: openTask, 'retry-task': taskAction, 'cancel-task': taskAction,
+  'decline-merge': (b) => core.declineMerge(b.dataset.run),
+  'decline-change': (b) => core.declineChange(b.dataset.path, b.dataset.said),
+  'close-sheet': () => closeSheet(),
+  'pause-rule': ruleAction, 'resume-rule': ruleAction, 'delete-rule': ruleAction,
+  'add-device': () => core.addDevice(),
+  'copy-command': () => core.copyCommand(),
+  'review-request': (b) => core.openRequest(b.dataset.request),
+  'deny-request': (b) => core.denyRequest(b.dataset.request),
+  'revoke-device': (b) => core.revokeDevice(b.dataset.device),
+  'allow-approve': (b) => core.allowApprove(b.dataset.device, b.dataset.value),
+  'edit-roles': (b) => core.editRoles(b.dataset.device),
+  promote: () => core.promote(),
+  'promote-device': (b) => core.promoteDevice(b.dataset.device),
+  'promote-cold': () => core.promoteCold(),
+  'promotion-cancel': () => core.promotionAction('cancel'),
+  'promotion-take-back': () => core.promotionAction('take-back'),
+  'backup-now': resilienceAction, 'drill-now': resilienceAction, 'repair-problem': resilienceAction,
+  'resolve-problem': toasting(async (b) => { await post(`/api/v1/problems/${encodeURIComponent(b.dataset.problem)}/resolve`); scheduleRefresh(['problems', 'health']); toast('Marked as dealt with.'); }),
+  'read-message': toasting(async (b) => { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/read`); scheduleRefresh(['messages']); }),
+  'send-message': toasting(async (b) => { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/approve`); scheduleRefresh(['messages']); toast('Sent.'); }),
+};
+async function coreAction(b) { return CORE_ACTIONS[b.dataset.action](b, b.dataset.action); }
 document.addEventListener('click', (e) => {
   if (e.defaultPrevented || e.target.closest('#setup')) return;
   if (followLink(e)) return;
   const b = e.target.closest('[data-action]');
-  if (b && CORE_ACTIONS.has(b.dataset.action)) { e.preventDefault(); coreAction(b); }
+  // Own keys only: an action named like an Object method (toString) is not a core action.
+  if (b && Object.hasOwn(CORE_ACTIONS, b.dataset.action)) { e.preventDefault(); coreAction(b); }
   if (b?.dataset.action === 'passkey-setup') { e.preventDefault(); setupPasskey(api, () => renderSettingsView({ only: 'security' })).then(() => scheduleRefresh(['health'])); }
 });
 // The approval sheet: tier 3 needs the box ticked before Confirm can be pressed.
