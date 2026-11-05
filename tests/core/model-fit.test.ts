@@ -379,8 +379,8 @@ test('the device budget: one GPU’s VRAM, the unified constant on a Mac, half t
   assert.deepEqual([cpu.memory, cpu.budget_bytes], ['cpu', 16 * GiB]);
   const two = deviceBudget(hw({ gpus: [8, 24].map((n) => ({ vendor: 'nvidia' as const, name: `Example ${n}GB`, vram_bytes: n * GiB, vram_free_bytes: null, unified: false })) }));
   assert.equal(two.budget_bytes, 24 * GiB);
-  const learned = deviceBudget(hw({}), { overhead: { bytes: 1.2 * GiB, n: 3, last_observed: 1.3 * GiB, updated_at: AT } });
-  assert.deepEqual([learned.overhead_bytes, learned.overhead_source], [1.2 * GiB, 'learned']);
+  const learned = deviceBudget(hw({}), { overhead: { bytes: Math.round(1.2 * GiB), n: 3, last_observed: 1.3 * GiB, updated_at: AT } });
+  assert.deepEqual([learned.overhead_bytes, learned.overhead_source], [Math.round(1.2 * GiB), 'learned']);
 });
 
 test('verdicts say what Nova can’t see, and when the work runs on the CPU', () => {
