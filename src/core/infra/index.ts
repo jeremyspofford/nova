@@ -15,7 +15,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, PRIVACY_MODES, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
+import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
 import { checkFolder } from '../computer/policy.ts';
 import { addSecretValue } from '../log.ts';
 import { tail } from '../providers/cli.ts';
@@ -56,7 +56,6 @@ interface TaskRef { step: Step; id: string }
 // resource's values (review of PR #241, S6). `now`/`after`: the month before and after, priced from
 // the plan's whole before and after (B2).
 interface Changes { priced: PricedChange[]; unpriced: string[]; now_cents: number; after_cents: number; increases: boolean; too_large?: boolean; prior_unpriced?: string[] }
-type Reporter = (status: Report['status'], summary: string, more?: Partial<Report>) => Report;
 
 export interface InfraOptions {
   db: Db; log: Log; home: string; ledger: Ledger; verifier: Verifier; vault: Vault;
@@ -399,13 +398,10 @@ export class Infra {
   }
 
   async #run(brief: Brief, signal: AbortSignal): Promise<Report> {
-    const started = performance.now();
+    const base = reporter(brief);
     let red: Redactor | null = null;
     const report: Reporter = (status, summary, more = {}) => {
-      const out: Report = {
-        envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
-        ...more, usage: { duration_ms: Math.round(performance.now() - started) },
-      };
+      const out = base(status, summary, more);
       return red ? red.value(out) : out;
     };
     const step = brief.inputs?.step as Step;

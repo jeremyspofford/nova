@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
+import { reportOf, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
 import { Sse } from '../api.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
@@ -384,10 +384,7 @@ export class Browser extends EventEmitter {
     const id = brief.task_id;
     const red = new Redactor();
     this.#reds.set(id, red);
-    const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => red.value({
-      envelope: ENVELOPE_VERSION, task_id: id, status, summary, evidence: [], artifacts: [], blockers: [], follow_up_suggestions: [],
-      usage: { duration_ms: Date.now() - started }, ...extra,
-    });
+    const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => red.value(reportOf(id, status, summary, { usage: { duration_ms: Date.now() - started }, ...extra }));
     let plan: Plan;
     try { plan = this.#plan(brief.inputs); } catch (e) {
       return report('failed', `The browser plan can’t run: ${e instanceof CoreError ? e.details.join('; ') || e.message : (e as Error).message}`);

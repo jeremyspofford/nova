@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { CoreError } from './errors.ts';
 import { validateManifest, type Extensions, type Installed, type Manifest } from './extensions.ts';
 import type { Profile } from './profile.ts';
+import { isObj } from './envelope.ts';
 
 // ---- the schema (DESIGN-SYSTEM §2, plus the weights, line heights, durations and easing M3 adds) ----
 
@@ -588,7 +589,6 @@ export function iosStatusBar(pkg: { ios_status_bar?: unknown }): { light: IosSta
   return { light: IOS_STATUS_BAR_UNDECLARED, dark: IOS_STATUS_BAR_UNDECLARED, declared: false };
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const say = (v: unknown) => JSON.stringify(v) ?? String(v);
 const ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 

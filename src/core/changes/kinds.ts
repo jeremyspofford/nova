@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { PRIVACY_MODES, type PrivacyMode } from '../envelope.ts';
+import { isObj, isStr, PRIVACY_MODES, type PrivacyMode } from '../envelope.ts';
 import { review, satisfies, validateManifest, type Manifest } from '../extensions.ts';
 import { validatePackage } from '../design.ts';
 import { validateTemplate, type DryRunCase, type TemplateDef } from '../decide.ts';
@@ -73,8 +73,6 @@ export interface KindOps {
   area(a: Record<string, unknown>): string[];
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isStr = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 const ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const ok = (name: string, why: string): Check => ({ name, ok: true, why });

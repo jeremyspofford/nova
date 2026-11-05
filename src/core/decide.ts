@@ -4,7 +4,7 @@
 // only, and a new one is activated through a ledger task whose dry runs Nova re-runs itself.
 import { CoreError } from './errors.ts';
 import { permits, stricter, type Egress, type Worker } from './workers.ts';
-import { ENVELOPE_VERSION, type Brief, type PrivacyMode, type Report } from './envelope.ts';
+import { isObj, isStr, reportOf, type Brief, type PrivacyMode, type Report } from './envelope.ts';
 import type { Db } from './db.ts';
 import type { Ledger, Task } from './ledger.ts';
 import type { Log } from './log.ts';
@@ -77,8 +77,6 @@ export const UNKNOWN = 'unknown';
 const MAX_OPTIONS = 255;
 
 type Obj = Record<string, unknown>;
-const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isStr = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
 // Schema check, listing every problem.
@@ -283,18 +281,15 @@ export class Templates {
         const started = performance.now();
         const { template_id, version } = (brief.inputs ?? {}) as { template_id?: string; version?: number };
         const t = typeof template_id === 'string' && typeof version === 'number' ? this.version(template_id, version) : null;
-        const base = { envelope: ENVELOPE_VERSION as typeof ENVELOPE_VERSION, task_id: brief.task_id, artifacts: [], blockers: [], follow_up_suggestions: [] };
-        if (!t) return { ...base, status: 'failed', summary: 'There is no such template.', evidence: [], usage: { duration_ms: performance.now() - started } };
+        if (!t) return reportOf(brief.task_id, 'failed', 'There is no such template.', { usage: { duration_ms: performance.now() - started } });
         const run = this.#run(t, t.dry_runs);
         const passed = run.ok && run.results.length > 0;
         const failed = run.results.filter((r) => !r.ok);
-        return {
-          ...base,
-          status: passed ? 'done' : 'failed',
-          summary: passed ? `All ${run.results.length} dry runs of ${t.template_id} v${t.version} passed.` : `${failed.length} of ${run.results.length} dry runs failed: ${failed.map((r) => r.why).join('; ')}`,
-          evidence: [{ kind: 'test_result', name: testName(t.template_id, t.version), passed, output: run.results.map((r) => r.why).join('\n') }],
-          usage: { duration_ms: performance.now() - started },
-        };
+        return reportOf(brief.task_id, passed ? 'done' : 'failed',
+          passed ? `All ${run.results.length} dry runs of ${t.template_id} v${t.version} passed.` : `${failed.length} of ${run.results.length} dry runs failed: ${failed.map((r) => r.why).join('; ')}`, {
+            evidence: [{ kind: 'test_result', name: testName(t.template_id, t.version), passed, output: run.results.map((r) => r.why).join('\n') }],
+            usage: { duration_ms: performance.now() - started },
+          });
       },
     };
   }

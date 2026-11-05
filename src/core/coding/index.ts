@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSy
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, PRIVACY_MODES, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
+import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
 import { sha256 } from '../workspace.ts';
 import { checkFolder } from '../computer/policy.ts';
 import { runLines, tail } from '../providers/cli.ts';
@@ -30,7 +30,6 @@ import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
 import type { Providers } from '../providers/registry.ts';
-import type { Usage } from '../providers/types.ts';
 import type { Egress } from '../workers.ts';
 
 export const CODING_WORKER = 'coding';
@@ -65,8 +64,6 @@ export interface FileChange { path: string; kind: Change['kind']; added: number 
 export interface TestRecord { id: string; task_id: string; run_id: string; round: number; command: string; commit: string; passed: boolean; exit: number | null; output: string; ms: number; at: string }
 export interface PreviewRecord { run_id: string; round: number; task_id: string; command: string; commit: string; url: string; port: number; pid: number; start?: string | null; status: number; loopback: 'yes' | 'unchecked'; started_at: string; stopped_at: string | null; why_stopped: string | null }
 interface TaskRef { step: Step; round: number; id: string }
-type More = Omit<Partial<Report>, 'usage'> & { usage?: Usage };
-type Reporter = (status: Report['status'], summary: string, more?: More) => Report;
 
 export interface StartInput { repo?: unknown; branch?: unknown; goal?: unknown; test_command?: unknown; preview_command?: unknown; agent?: unknown; editable?: unknown; privacy_mode?: unknown; title?: unknown }
 
@@ -322,11 +319,7 @@ export class Coding {
   // ---- running a step ------------------------------------------------------------------------------
 
   async #run(brief: Brief, signal: AbortSignal): Promise<Report> {
-    const started = performance.now();
-    const report: Reporter = (status, summary, more = {}) => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
-      ...more, usage: { ...(more.usage ?? {}), duration_ms: Math.round(performance.now() - started) },
-    });
+    const report = reporter(brief);
     const step = brief.inputs?.step as Step;
     const r = this.#o.db.get<RunRow>('SELECT * FROM coding_run WHERE id = ?', String(brief.inputs?.run_id ?? ''));
     if (!r) return report('failed', 'This coding run isn’t in Nova’s record any more.');

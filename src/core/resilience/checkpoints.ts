@@ -31,7 +31,7 @@ import type { Ledger, LanedWorker, Task } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
 import { Vault } from '../vault.ts';
 import type { Route, Who } from '../api.ts';
-import { ENVELOPE_VERSION, type Brief, type Report } from '../envelope.ts';
+import { reportOf, type Brief, type Report } from '../envelope.ts';
 import { cleanBackup, sha256File, writeManifest, type ManifestFile } from './backup.ts';
 import { safeRel } from './archive.ts';
 import { carryOver, droppedDevices } from './restore.ts';
@@ -992,8 +992,7 @@ export class Checkpoints {
       run: async (brief: Brief): Promise<Report> => {
         const id = String((brief.inputs as { restore_id?: string } | undefined)?.restore_id ?? '');
         const r = restoreRecord(this.#o.home, id);
-        const base = { envelope: ENVELOPE_VERSION as typeof ENVELOPE_VERSION, task_id: brief.task_id, artifacts: [] as Report['artifacts'], follow_up_suggestions: [] as string[], usage: { duration_ms: 0 } };
-        if (!r) return { ...base, status: 'failed', summary: 'Nova has no record of that restore.', evidence: [], blockers: [] };
+        if (!r) return reportOf(brief.task_id, 'failed', 'Nova has no record of that restore.');
         const c = r.carried!;
         const parts = [
           `Restored “${r.checkpoint.label}” (${r.checkpoint.at}) after checking its database and ${r.verified.files} files against their hashes.`,
@@ -1003,7 +1002,7 @@ export class Checkpoints {
           `${c.problems.carried} problem${c.problems.carried === 1 ? '' : 's'} carried over.`,
           r.before ? `A checkpoint of how Nova was just before is kept (${r.before}).` : '',
         ];
-        return { ...base, status: 'done', summary: parts.filter(Boolean).join(' '), evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `restore:${r.id}` }], blockers: [] };
+        return reportOf(brief.task_id, 'done', parts.filter(Boolean).join(' '), { evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `restore:${r.id}` }] });
       },
     };
   }

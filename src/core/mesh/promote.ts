@@ -20,7 +20,7 @@ import type { Log } from '../log.ts';
 import type { Route } from '../api.ts';
 import { TERMINAL, type LanedWorker, type Ledger, type Task } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
-import type { Brief } from '../envelope.ts';
+import { reportOf, type Brief } from '../envelope.ts';
 import type { Access } from './access.ts';
 import type { Device, Devices } from './devices.ts';
 import type { MeshIdentity } from './identity.ts';
@@ -585,12 +585,9 @@ export class MeshRole extends EventEmitter {
     run: async (brief: Brief) => {
       const epoch = Number(brief.inputs?.epoch);
       const s = this.#o.devices.state();
-      return {
-        envelope: '1', task_id: brief.task_id, status: s.role === 'hub' && s.epoch === epoch ? 'done' : 'failed',
-        summary: s.role === 'hub' && s.epoch === epoch ? `This node is the hub now, at epoch ${epoch}, with a roster signed by its own key.` : `This node isn’t hub at epoch ${epoch}.`,
-        evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `epoch-${epoch}` }],
-        artifacts: [], blockers: [], usage: { duration_ms: 0 }, follow_up_suggestions: [],
-      };
+      return reportOf(brief.task_id, s.role === 'hub' && s.epoch === epoch ? 'done' : 'failed',
+        s.role === 'hub' && s.epoch === epoch ? `This node is the hub now, at epoch ${epoch}, with a roster signed by its own key.` : `This node isn’t hub at epoch ${epoch}.`,
+        { evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `epoch-${epoch}` }] });
     },
   };
 

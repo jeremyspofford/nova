@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
+import { reportOf, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
 import { stricter, type Egress } from '../workers.ts';
 import { sha256 } from '../workspace.ts';
 import { allowed } from '../browser/plan.ts';
@@ -319,10 +319,8 @@ export class NovaComputer {
 
   async #run(brief: Brief, signal: AbortSignal): Promise<Report> {
     const started = Date.now();
-    const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary,
-      evidence: status === 'done' ? [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: brief.task_id }] : [],
-      artifacts: [], blockers: [], follow_up_suggestions: [], usage: { duration_ms: Date.now() - started }, ...extra,
+    const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => reportOf(brief.task_id, status, summary, {
+      evidence: status === 'done' ? [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: brief.task_id }] : [], usage: { duration_ms: Date.now() - started }, ...extra,
     });
     let i: Inputs;
     try { i = this.#inputs(brief.inputs); } catch (e) {

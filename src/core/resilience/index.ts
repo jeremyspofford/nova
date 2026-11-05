@@ -14,9 +14,8 @@ import type { Verifier } from '../verify.ts';
 import type { Triggers } from '../triggers.ts';
 import type { Vault } from '../vault.ts';
 import type { Backups } from '../backups.ts';
-import type { Brief, Report } from '../envelope.ts';
+import { reporter, type Brief } from '../envelope.ts';
 import type { Route, Who } from '../api.ts';
-import { ENVELOPE_VERSION } from '../envelope.ts';
 import { CoreError } from '../errors.ts';
 import { BackupError, DEFAULT_KEEP, KEY_NAME, NightlyBackups, SEAL_NAME, folderProblem, formatRecoveryKey, keyFingerprint, newKey, parseRecoveryKey, sha256File, type BackupSettings, type FailureKind, type FolderKind } from './backup.ts';
 import { drill, forgottenIn, type DrillCheck, type DrillResult } from './drill.ts';
@@ -201,11 +200,7 @@ export class Resilience {
       lane: () => ({ key: 'resilience', max: 1 }),
       health: () => ({ ok: true }),
       run: async (brief: Brief) => {
-        const started = performance.now();
-        const report = (status: Report['status'], summary: string, more: Partial<Report> = {}): Report => ({
-          envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
-          ...more, usage: { duration_ms: Math.round(performance.now() - started) },
-        });
+        const report = reporter(brief);
         const i = (brief.inputs ?? {}) as { action?: string; source?: string };
         if (i.action === 'backup') {
           try {

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { CoreError } from './errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Report } from './envelope.ts';
+import { reportOf, type Brief, type Report } from './envelope.ts';
 import type { Worker } from './workers.ts';
 
 export const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
@@ -65,14 +65,13 @@ export function workspaceWorker(ws: Workspace, stateDir = join(ws.root, '..', 'w
     health: () => (existsSync(ws.root) ? { ok: true } : { ok: false, detail: `The workspace folder ${ws.root} is missing.` }),
     async run(brief: Brief, signal: AbortSignal): Promise<Report> {
       const started = performance.now();
-      const base: Pick<Report, 'envelope' | 'task_id' | 'artifacts' | 'follow_up_suggestions'> = { envelope: ENVELOPE_VERSION, task_id: brief.task_id, artifacts: [], follow_up_suggestions: [] };
       let inputs: WriteInputs;
       let abs: string;
       try {
         inputs = inputsOf(brief);
         abs = ws.resolve(inputs.path);
       } catch (e) {
-        return { ...base, status: 'blocked', summary: (e as Error).message, evidence: [], blockers: [(e as Error).message], usage: { duration_ms: performance.now() - started } };
+        return reportOf(brief.task_id, 'blocked', (e as Error).message, { blockers: [(e as Error).message], usage: { duration_ms: performance.now() - started } });
       }
       signal.throwIfAborted();
       const already = existsSync(applied(brief.idempotency_key));
@@ -86,15 +85,11 @@ export function workspaceWorker(ws: Workspace, stateDir = join(ws.root, '..', 'w
       const back = readFileSync(abs);
       const target = ws.target(abs);
       const rel = target.slice('workspace:'.length);
-      return {
-        ...base,
-        status: 'done',
-        summary: already ? `${rel} was already done (${back.length} bytes); not repeated.` : `${inputs.action === 'append' ? 'Added to' : 'Wrote'} ${rel} (${back.length} bytes).`,
+      return reportOf(brief.task_id, 'done', already ? `${rel} was already done (${back.length} bytes); not repeated.` : `${inputs.action === 'append' ? 'Added to' : 'Wrote'} ${rel} (${back.length} bytes).`, {
         evidence: [{ kind: 'read_back', target, sha256: sha256(back), bytes: back.length }],
         artifacts: [{ kind: 'file', ref: target, sha256: sha256(back) }],
-        blockers: [],
         usage: { duration_ms: performance.now() - started },
-      };
+      });
     },
   };
 }

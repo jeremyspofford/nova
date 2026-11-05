@@ -17,7 +17,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, PRIVACY_MODES, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
+import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
 import { unifiedDiff } from '../providers/taskspace.ts';
 import { ADAPTERS, KINDS, changedPaths, checkUrl, digest, httpConfig, inexactNumbers, leafPaths, mask, mergePatch, pretty, secretChanges, shape, showPath, urlEgress, validatePatch, valueAt, without, type Config, type Json, type NetworkTarget } from './targets.ts';
 import type { Db } from '../db.ts';
@@ -61,7 +61,6 @@ type Seg = string | number;
 interface Snap { version: string; sha: string; config: Config; text: string; at: string }
 interface TaskRef { step: Step; id: string }
 interface ReadBack { change: string; task_id: string; what: 'applied' | 'reverted'; sha: string; version: string; at: string }
-type Reporter = (status: Report['status'], summary: string, more?: Partial<Report>) => Report;
 
 export interface NetworkOptions {
   db: Db; log: Log; home: string; ledger: Ledger; verifier: Verifier; vault: Vault; devices: Devices;
@@ -517,11 +516,7 @@ export class Network {
   }
 
   async #run(brief: Brief, signal: AbortSignal): Promise<Report> {
-    const started = performance.now();
-    const report: Reporter = (status, summary, more = {}) => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
-      ...more, usage: { duration_ms: Math.round(performance.now() - started) },
-    });
+    const report = reporter(brief);
     const step = brief.inputs?.step as Step;
     const c = this.#o.db.get<ChangeRow>('SELECT * FROM network_change WHERE id = ?', String(brief.inputs?.change_id ?? ''));
     if (!c) return report('failed', 'This network change isn’t in Nova’s record any more.');

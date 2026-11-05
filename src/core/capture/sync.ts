@@ -23,7 +23,7 @@ import type { Log } from '../log.ts';
 import type { Route } from '../api.ts';
 import type { Ledger, Task } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
-import type { Brief, PrivacyMode } from '../envelope.ts';
+import { isObj, reportOf, type Brief, type PrivacyMode } from '../envelope.ts';
 import type { Worker } from '../workers.ts';
 import type { Device, Devices } from '../mesh/devices.ts';
 import {
@@ -61,7 +61,6 @@ interface TombRow { id: string; device_id: string; items: string; events: string
 interface RawRow { id: string; task_id: string | null; device_id: string; event_id: string; item: string; reason: string; state: 'asked' | 'arrived' | 'failed'; sha256: string | null; size: number | null; signature: string | null; asked_at: string; done_at: string | null }
 interface SyncRow { device_id: string; acked_seq: number; synced_to: string | null; queued: number; paused: string | null; at: string }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const parse = <T>(s: string | null, f: T): T => { if (!s) return f; try { return JSON.parse(s) as T; } catch { return f; } };
 
 export class CaptureSync {
@@ -320,12 +319,9 @@ export class CaptureSync {
         const name = r ? this.#o.devices.find(r.device_id)?.name ?? 'The device' : 'The device';
         if (!r || r.state !== 'arrived') {
           if (r) this.#o.db.run(`UPDATE capture_raw_fetch SET state = 'failed', done_at = ? WHERE id = ? AND state = 'asked'`, this.#o.now().toISOString(), id);
-          return { envelope: '1', task_id: brief.task_id, status: 'blocked', summary: `${name} didn’t send it in time: it may be offline. The derived record is in the capture timeline.`, evidence: [], artifacts: [], blockers: [`${name} didn’t answer.`], usage: { duration_ms: wait }, follow_up_suggestions: [] };
+          return reportOf(brief.task_id, 'blocked', `${name} didn’t send it in time: it may be offline. The derived record is in the capture timeline.`, { blockers: [`${name} didn’t answer.`], usage: { duration_ms: wait } });
         }
-        return {
-          envelope: '1', task_id: brief.task_id, status: 'done', summary: `${name} sent the original (${r.size} bytes), signed with its key; Nova checked it against the checksum it signed.`,
-          evidence: [{ kind: 'confirmation', system: RAW_CONFIRMATION, id }], artifacts: [], blockers: [], usage: { duration_ms: 0 }, follow_up_suggestions: [],
-        };
+        return reportOf(brief.task_id, 'done', `${name} sent the original (${r.size} bytes), signed with its key; Nova checked it against the checksum it signed.`, { evidence: [{ kind: 'confirmation', system: RAW_CONFIRMATION, id }] });
       },
     };
   }

@@ -25,6 +25,7 @@ import { permits } from '../workers.ts';
 import { summarize } from './prompt.ts';
 import { safePath, walk } from './taskspace.ts';
 import { NO_REDIRECT, num, reachProblem, str, type Config, type Impl, type Usage, type Where, type WorkInput, type WorkOutcome } from './types.ts';
+import { isObj } from '../envelope.ts';
 
 const run = promisify(execFile);
 
@@ -82,7 +83,6 @@ interface Said { egress: string; workers: boolean }
 const said = new Map<string, Said>();
 
 interface Answer { status: number; body: Record<string, unknown> | null }
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 class TooBig extends Error {}
 

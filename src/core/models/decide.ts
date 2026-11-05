@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto';
 import { QUESTION_TYPES, UNKNOWN, checkInputs, type Answer, type Decision, type DecisionProvider, type Question, type Template } from '../decide.ts';
 import type { Egress } from '../workers.ts';
+import { isObj } from '../envelope.ts';
 import type { InferRequest, InferResult } from './index.ts';
 
 export const PROVIDER_ID = 'local-model';
@@ -38,13 +39,12 @@ export function checkAnswer(t: Template, text: string): { ok: true; answers: Rec
   let v: unknown;
   try { v = JSON.parse(text); } catch { return { ok: false, problems: ['the reply isn’t JSON'] }; }
   const problems: string[] = [];
-  const obj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
-  if (!obj(v)) return { ok: false, problems: ['the reply isn’t an object'] };
+  if (!isObj(v)) return { ok: false, problems: ['the reply isn’t an object'] };
   const a = v.answers;
-  if (!obj(a)) problems.push('answers is missing');
+  if (!isObj(a)) problems.push('answers is missing');
   const answers: Record<string, Answer> = {};
   for (const q of t.questions) {
-    const x = obj(a) ? a[q.id] : undefined;
+    const x = isObj(a) ? a[q.id] : undefined;
     if (q.type === 'choice') {
       if (typeof x !== 'string' || !q.options.includes(x)) problems.push(`${q.id} must be one of ${q.options.join(', ')}`);
       else answers[q.id] = x;
@@ -54,7 +54,7 @@ export function checkAnswer(t: Template, text: string): { ok: true; answers: Rec
     } else if (typeof x !== 'number' || !Number.isFinite(x) || x < 0 || x > 1) problems.push(`${q.id} must be a probability from 0 to 1`);
     else answers[q.id] = x;
   }
-  if (obj(a)) for (const k of Object.keys(a)) if (!t.questions.some((q) => q.id === k)) problems.push(`${k} isn’t a question of ${t.template_id}`);
+  if (isObj(a)) for (const k of Object.keys(a)) if (!t.questions.some((q) => q.id === k)) problems.push(`${k} isn’t a question of ${t.template_id}`);
   const c = v.confidence;
   if (typeof c !== 'number' || !Number.isFinite(c) || c < 0 || c > 1) problems.push('confidence must be a number from 0 to 1');
   if (problems.length) return { ok: false, problems };

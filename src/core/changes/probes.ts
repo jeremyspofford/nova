@@ -6,6 +6,7 @@
 //
 // `at` is a dot path into the JSON answer (`length` for a list's or text's length, numbers index a
 // list); `op` compares what is there with `value`.
+import { isObj } from '../envelope.ts';
 
 export const OPS = Object.freeze(['exists', 'missing', 'eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'includes'] as const);
 export type Op = (typeof OPS)[number];
@@ -14,7 +15,6 @@ export interface Probe { name: string; path: string; expect: Expect[] }
 export interface ProbeResult { name: string; ok: boolean; why: string }
 export type Get = (path: string) => Promise<{ status: number; body: unknown }>;
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const PATH = /^\/[A-Za-z0-9/_.~%-]*(\?[A-Za-z0-9=&_.~%:-]*)?$/;
 const MAX_EXPECT = 20;
 

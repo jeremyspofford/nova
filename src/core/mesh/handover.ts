@@ -25,7 +25,7 @@ import { tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Report } from '../envelope.ts';
+import { reportOf, type Brief, type Report } from '../envelope.ts';
 import { TERMINAL, type LanedWorker, type Ledger, type Task } from '../ledger.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -1288,9 +1288,8 @@ export class Promotions {
     lane: () => ({ key: 'promotion', max: 1 }),
     run: async (brief: Brief): Promise<Report> => {
       const i = (brief.inputs ?? {}) as { ok?: boolean; said?: string; promotion?: string; step?: string };
-      const base = { envelope: ENVELOPE_VERSION as typeof ENVELOPE_VERSION, task_id: brief.task_id, artifacts: [] as Report['artifacts'], blockers: [] as string[], usage: { duration_ms: 0 }, follow_up_suggestions: [] as string[] };
-      if (i.ok !== true) return { ...base, status: 'failed', summary: String(i.said ?? 'This step didn’t pass.'), evidence: [] };
-      return { ...base, status: 'done', summary: String(i.said ?? 'Done.'), evidence: [{ kind: 'confirmation', system: PROMOTION_SYSTEM, id: `${i.promotion}:${i.step}` }] };
+      if (i.ok !== true) return reportOf(brief.task_id, 'failed', String(i.said ?? 'This step didn’t pass.'));
+      return reportOf(brief.task_id, 'done', String(i.said ?? 'Done.'), { evidence: [{ kind: 'confirmation', system: PROMOTION_SYSTEM, id: `${i.promotion}:${i.step}` }] });
     },
   };
 

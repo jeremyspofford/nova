@@ -15,6 +15,7 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import type { Route } from '../api.ts';
+import { isObj } from '../envelope.ts';
 
 export const SPEND_DIR = join('workers', 'spend');
 export const WHATS = ['iterations', 'tokens', 'usd'] as const;
@@ -87,7 +88,6 @@ export function weightOf(sig: string, earlier: readonly string[]): number {
 
 const n = (x: number) => Math.round(x).toLocaleString('en-US');
 const usd = (x: number) => `$${x.toFixed(2)}`;
-const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
 function spentWords(s: Spend): string {
   const tok = tokensOf(s);
