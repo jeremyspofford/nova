@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Test stability · Browser profiles really go; three tests stop failing at random**
+- What changed: Nova's browser now fully shuts down before its throwaway profile is deleted. Before, Chromium's helper processes could recreate the folder a moment after Nova removed it, and a left-behind profile can hold sign-in cookies. Three tests that sometimes failed for no product reason now check the right thing: the topology design test in WebKit, the factory-reset test, and a mesh replay test.
+- What you can now do: nothing new in the app. Leftover browser profiles stop, and CI fails less often for no reason.
+- Still unfinished: two related WebKit topology failures ("internal error" on navigation) are probably fixed by the same change, but that isn't proven yet.
+
 **2026-11-04 · T2 (follow-up) · Looser privacy needs your passkey**
 - What changed: choosing a looser privacy setting in Settings › Privacy now counts as tier 3. That means going from "local only" to "local preferred", or to letting cloud models help. On Nova's own screen it asks for your passkey, every time. Before, it saved on one click, and any program on this computer could make that change. Choosing a stricter setting still saves straight away.
 - What you can now do: rely on Nova never letting more of your work leave your devices without you confirming it.
