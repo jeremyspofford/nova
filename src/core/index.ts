@@ -408,6 +408,7 @@ export function createCore(o: CoreOptions) {
   models = new Models({
     db, log, profile, ledger, verifier, receipts, devices, now,
     hubName: () => devices.find(meshIdentity.id)?.name ?? 'This hub',
+    hubId: () => meshIdentity.id,
     ...(o.models?.ollamaUrl ? { ollamaUrl: o.models.ollamaUrl } : {}),
     ...(o.models?.hardware ? { hardware: o.models.hardware } : {}),
     ...(o.models?.watchMs ? { watchMs: o.models.watchMs } : {}),
@@ -670,6 +671,12 @@ export function createCore(o: CoreOptions) {
   // forgot or swept is cleaned from this node's backups too.
   memory.onForget((records) => capture.memoryForgotten(records));
   sync.forgetting.set('capture_event', (rows) => capture.forgottenElsewhere(rows));
+  // Changes the hub sent to a table this node didn't have yet (it was a release behind) are applied
+  // now that an update added it (mesh/sync.ts, HELD), before anything newer is copied or served.
+  try {
+    const n = sync.replayHeld((rows) => memory.forgottenElsewhere(rows));
+    if (n) log.info('sync', 'Nova applied the hub’s changes it had kept until it was updated.', { applied: n });
+  } catch (e) { log.problem('sync', 'Nova couldn’t apply the hub’s changes it kept until it was updated; it tries again with the next copy.', { detail: (e as Error)?.stack ?? String(e) }); }
   // Computers' device agents (M4b): heartbeats, the inbox their queues flush into, the runtime.
   const configRow = (section: string, key: string) => db.get<{ value: string; updated_at: string }>('SELECT value, updated_at FROM profile WHERE section = ? AND key = ?', section, key);
   // A setting's version: its time and value together, so two changes in one millisecond differ.

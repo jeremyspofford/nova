@@ -18,8 +18,9 @@ import { stricter } from '../workers.ts';
 import { chatMessages } from '../providers/openai.ts';
 import { str, type Usage } from '../providers/types.ts';
 import { checkHardware, detectHardware, gb, hardwareWords, privateAddress, type Hardware } from './hardware.ts';
-import { Ollama, RuntimeDown, runsRemotely, type InstalledModel, type Message } from './ollama.ts';
-import { CATALOG, HEADROOM, ROLES, ROLE_WORDS, capacityWords, recommend, type DeviceModels, type Pick, type Role, type RoleAdvice } from './recommend.ts';
+import { Ollama, RuntimeDown, runsRemotely, type InstalledModel, type LoadedModel, type Message, type ModelShape } from './ollama.ts';
+import { CATALOG, HEADROOM, ROLES, ROLE_WORDS, capacityWords, recommend, roleContext, type DeviceModels, type Pick, type Role, type RoleAdvice } from './recommend.ts';
+import { learnOverhead, overheadWords, priorOverhead, type LearnedOverhead } from './fit.ts';
 import { sendMagic } from './wake.ts';
 import type { Db } from '../db.ts';
 import type { Ledger, LanedWorker, Task } from '../ledger.ts';
@@ -44,7 +45,12 @@ type Period = (typeof PERIODS)[number];
 
 // Where a role runs: a device (the hub, or a paired computer), its runtime's address, and the
 // model. A role on a GPU spoke may name a hub model that small jobs use instead of waking it.
-export interface Placement { device: string; runtime: 'ollama'; url: string; model: string; hub_model?: string }
+// `context` is the context the role runs with (Ollama's num_ctx), when the person set one; otherwise
+// the role's planned context (recommend.ts roleContext), the one the fit verdict assumed.
+export interface Placement { device: string; runtime: 'ollama'; url: string; model: string; hub_model?: string; context?: number }
+export const CONTEXT_MIN = 512;
+export const CONTEXT_MAX = 1_048_576;
+const okContext = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= CONTEXT_MIN && (v as number) <= CONTEXT_MAX;
 
 export interface Cloud { name: string; base_url: string; model: string; api_key?: string; usd_per_mtok_in?: number; usd_per_mtok_out?: number; max_tokens?: number }
 // The longest reply a cloud call may give, unless the person set one: it bounds what a call costs.
@@ -110,6 +116,9 @@ export interface ModelsOptions {
   devices: Devices;
   // The hub's own name, for the device map.
   hubName: () => string;
+  // The hub's own device id: what its learned overhead is kept under (device_overhead), so a standby
+  // that takes over doesn't take the old hub's figure for its own.
+  hubId?: () => string;
   // Where the hub's Ollama answers, unless the profile says otherwise.
   ollamaUrl?: string;
   // How the hub's hardware is read (tests hand in a fixed answer).
@@ -180,7 +189,9 @@ export class Models extends EventEmitter {
 
   #stored(role: Role): Placement | null {
     const p = this.#get<Placement>(`role.${role}`);
-    return isObj(p) && typeof p.model === 'string' && typeof p.device === 'string' ? { ...p, runtime: 'ollama', url: p.device === HUB ? this.hubUrl() : p.url } : null;
+    if (!(isObj(p) && typeof p.model === 'string' && typeof p.device === 'string')) return null;
+    const { context, ...rest } = p;
+    return { ...rest, runtime: 'ollama', url: p.device === HUB ? this.hubUrl() : p.url, ...(okContext(context) ? { context } : {}) };
   }
 
   // The hub, or a paired computer the person still trusts. Checked on every call, not only when a
@@ -406,14 +417,94 @@ export class Models extends EventEmitter {
 
   async #deviceModels(): Promise<DeviceModels[]> {
     const hub = await this.inventory(HUB);
-    const out: DeviceModels[] = [{ id: HUB, name: this.#o.hubName(), hub: true, hardware: await this.hubHardware(), models: hub.ok || hub.models.length ? hub.models : null, url: this.hubUrl() }];
+    const hubUrl = this.hubUrl();
+    const out: DeviceModels[] = [{ id: HUB, name: this.#o.hubName(), hub: true, hardware: await this.hubHardware(), models: hub.ok || hub.models.length ? await this.#withShapes(hubUrl, hub) : null, url: hubUrl, overhead: this.overhead(HUB) }];
     // Only computers that may run model work are recommended for it.
     for (const d of this.#spokes().filter((x) => this.#computes(x.id))) {
       const url = this.#urlFor(d.id);
       const inv = url ? await this.inventory(d.id, { timeoutMs: 1200 }) : null;
-      out.push({ id: d.id, name: d.name, hub: false, hardware: this.#spokeHardware(d.id), models: inv && (inv.ok || inv.models.length) ? inv.models : null, url });
+      out.push({ id: d.id, name: d.name, hub: false, hardware: this.#spokeHardware(d.id), models: url && inv && (inv.ok || inv.models.length) ? await this.#withShapes(url, inv) : null, url, overhead: this.overhead(d.id) });
     }
     return out;
+  }
+
+  // ---- model shapes and the learned overhead (model fit) ---------------------------------------
+
+  // Each installed model's shape (/api/show model_info), read once per model version and kept; a
+  // runtime that is asleep gets what was read before, or none (the verdict is then an estimate).
+  #shapes = new Map<string, { arch: ModelShape | null; max_context: number | null }>();
+
+  async #shape(url: string, m: { name: string; digest: string }, ask = true): Promise<{ arch: ModelShape | null; max_context: number | null } | null> {
+    const key = `${url}\0${m.name}\0${m.digest}`;
+    const had = this.#shapes.get(key);
+    if (had || !ask) return had ?? null;
+    const shown = await new Ollama(url).show(m.name).catch(() => null);
+    if (!shown) return null;
+    const v = { arch: shown.arch, max_context: shown.max_context };
+    this.#shapes.set(key, v);
+    return v;
+  }
+
+  async #withShapes(url: string, inv: Inventory): Promise<InstalledModel[]> {
+    const out: InstalledModel[] = [];
+    for (const m of inv.models) out.push({ ...m, ...((await this.#shape(url, m, inv.ok)) ?? {}) });
+    return out;
+  }
+
+  // The key a device's overhead is kept under: its own device id, the hub's too.
+  #overheadId(device: string): string { return device === HUB ? (this.#o.hubId?.() ?? HUB) : device; }
+
+  // What Nova learned of a device's runtime overhead from real loads, or the prior.
+  overhead(device: string): LearnedOverhead {
+    const r = this.#o.db.get<{ learned_bytes: number; samples: number; last_observed_bytes: number | null; updated_at: string }>(
+      `SELECT learned_bytes, samples, last_observed_bytes, updated_at FROM device_overhead WHERE device_id = ? AND backend = 'ollama'`, this.#overheadId(device));
+    return r ? { bytes: r.learned_bytes, n: r.samples, last_observed: r.last_observed_bytes, updated_at: r.updated_at } : priorOverhead();
+  }
+
+  // Loads already learned from, per device: one load counts once, however many calls it serves. A
+  // model that leaves /api/ps leaves this too, so its next load counts again. (One that unloads and
+  // reloads the same way between two of Nova's reads counts once: an undercount, never a double one.)
+  #loads = new Map<string, Set<string>>();
+  #learning = new Map<string, Promise<void>>();
+
+  // After a call Nova asked for: what the runtime reports for that load, against the engine's
+  // estimate, corrects the device's overhead (fit.ts learnOverhead: fully-on-GPU loads only, 30%
+  // toward the reading, 0.25–4 GB, wild readings logged and dropped). Never fails the call; one
+  // device's readings are taken in turn, so two replies can't both count the same load.
+  async #learnLoad(device: string, url: string, model: string, sent: number): Promise<void> {
+    const next = (this.#learning.get(device) ?? Promise.resolve()).then(() => this.#learnOnce(device, url, model, sent)).catch((e) => {
+      this.#o.log.warn('models', `Nova couldn’t read what ${this.#deviceName(device)}’s runtime loaded, so nothing was learned from this load.`, { error: (e as Error)?.message ?? String(e) });
+    });
+    this.#learning.set(device, next);
+    await next;
+  }
+
+  async #learnOnce(device: string, url: string, model: string, sent: number): Promise<void> {
+    const loaded = await new Ollama(url).loaded(AbortSignal.timeout(1500));
+    const keyOf = (l: LoadedModel) => [l.name, l.digest, l.size_bytes, l.vram_bytes, l.context].join('\0');
+    const seen = this.#loads.get(device) ?? new Set<string>();
+    this.#loads.set(device, seen);
+    const now = new Set(loaded.map(keyOf));
+    for (const k of seen) if (!now.has(k)) seen.delete(k);
+    const l = loaded.find((x) => x.name === model || x.name === `${model}:latest`);
+    if (!l || l.size_bytes === null || l.vram_bytes === null || seen.has(keyOf(l))) return;
+    seen.add(keyOf(l));
+    const inst = (this.#inventory.get(device) ?? this.#remembered(device))?.models.find((m) => m.name === model);
+    if (!inst || !(inst.size > 0)) return;
+    // Without the model's shape the KV estimate is a guess, and a guess would teach the overhead
+    // the wrong thing: nothing is learned.
+    const arch = (await this.#shape(url, inst))?.arch;
+    if (!arch) return;
+    const at = this.#now().toISOString();
+    const r = learnOverhead(this.overhead(device), { size_bytes: l.size_bytes, size_vram_bytes: l.vram_bytes, weights_bytes: inst.size, context: l.context ?? sent, arch, kv_type: 'f16' }, at,
+      (line) => this.#o.log.warn('models', `${this.#deviceName(device)}, ${model}: ${line}`));
+    if (r.outcome !== 'learned') return;
+    this.#o.db.run(
+      `INSERT INTO device_overhead (device_id, backend, learned_bytes, samples, last_observed_bytes, updated_at) VALUES (?, 'ollama', ?, ?, ?, ?)
+       ON CONFLICT (device_id, backend) DO UPDATE SET learned_bytes = excluded.learned_bytes, samples = excluded.samples, last_observed_bytes = excluded.last_observed_bytes, updated_at = excluded.updated_at`,
+      this.#overheadId(device), r.state.bytes, r.state.n, r.state.last_observed, at,
+    );
+    this.emit('change', { action: 'overhead', device });
   }
 
   async recommendation(): Promise<RoleAdvice[]> {
@@ -429,6 +520,13 @@ export class Models extends EventEmitter {
     const device = str(body.device) || HUB;
     const model = str(body.model);
     if (!model) throw new CoreError('validation', 'model is the installed model to use.');
+    // The context the role runs with, when the person sets one: what chat calls send as num_ctx.
+    let context: number | undefined;
+    if (body.context !== undefined && body.context !== null) {
+      if (r === 'embedder') throw new CoreError('validation', 'context is for the chat roles (sorting, thinking and writing); embeddings use the model’s own.');
+      if (!okContext(body.context)) throw new CoreError('validation', `context is how many tokens the role runs with (Ollama’s num_ctx): a whole number from ${CONTEXT_MIN} to ${CONTEXT_MAX.toLocaleString('en-US')}.`);
+      context = body.context;
+    }
     let url = this.hubUrl();
     if (device !== HUB) {
       const d = this.#o.devices.find(device);
@@ -445,7 +543,7 @@ export class Models extends EventEmitter {
     if (!inv.models.some((m) => m.name === model)) {
       throw new CoreError('conflict', inv.ok ? `${this.#deviceName(device)} doesn’t have ${model}. Download it first.` : `Nova can’t check ${this.#deviceName(device)}’s models right now (${inv.problem}), and hasn’t seen ${model} there before.`);
     }
-    const p: Placement = { device, runtime: 'ollama', url: device === HUB ? '' : url, model };
+    const p: Placement = { device, runtime: 'ollama', url: device === HUB ? '' : url, model, ...(context ? { context } : {}) };
     const hubModel = str(body.hub_model);
     if (hubModel && device !== HUB) {
       const hub = await this.inventory(HUB);
@@ -592,7 +690,10 @@ export class Models extends EventEmitter {
         return { embeddings: e.embeddings, served_by: 'local', device, model, provider: 'ollama', egress: 'local', receipt_id: receipt, usage: { model, ...(e.tokens_in ? { tokens_in: e.tokens_in } : {}) } };
       }
       const thinks = req.format ? await this.#thinks(device, url, model) : false;
-      const out = await rt.chat({ model, messages: req.messages!, ...(req.format ? { format: req.format } : {}), ...(thinks ? { think: false } : {}), ...(req.signal ? { signal: req.signal } : {}), ...(req.onText ? { onText: req.onText } : {}), keepAlive: '5m' });
+      // The context the fit verdict assumed is the one asked for, so the verdict describes what runs.
+      const numCtx = p.context ?? roleContext(req.role as 'triage-text' | 'reasoner');
+      const out = await rt.chat({ model, messages: req.messages!, ...(req.format ? { format: req.format } : {}), ...(thinks ? { think: false } : {}), numCtx, ...(req.signal ? { signal: req.signal } : {}), ...(req.onText ? { onText: req.onText } : {}), keepAlive: '5m' });
+      if (!out.aborted) await this.#learnLoad(device, url, model, numCtx);
       return { text: out.text, aborted: out.aborted, served_by: 'local', device, model, provider: 'ollama', egress: 'local', receipt_id: receipt, usage: { model, ...out.usage } };
     } catch (e) {
       if (e instanceof RuntimeDown) throw new LocalDown(e.message);
@@ -1150,7 +1251,8 @@ export class Models extends EventEmitter {
       const online = hub || (d?.last_seen ? this.#now().getTime() - Date.parse(d.last_seen) < 2 * 60_000 : false);
       const latency = hub ? null : this.wakeLatency(id);
       return {
-        id, name, hub, online, hardware: hw, words: hw ? hardwareWords(hw) : 'It hasn’t reported its hardware yet.', capacity: hw ? capacityWords(hw) : '',
+        id, name, hub, online, hardware: hw, words: hw ? hardwareWords(hw) : 'It hasn’t reported its hardware yet.', capacity: hw ? capacityWords(hw, this.overhead(id)) : '',
+        overhead: overheadWords(this.overhead(id)),
         ...(hub ? { decision_model: this.#o.decisionModel?.() ?? null } : {}),
         runtime: inv ? { url: this.#urlFor(id), ok: inv.ok, version: inv.version, models: inv.models.length, problem: inv.problem, words: inv.ok ? `Ollama ${inv.version} · ${inv.models.length} model${inv.models.length === 1 ? '' : 's'}` : `Ollama isn’t answering${inv.problem ? `: ${inv.problem}` : ''}` } : null,
         wake: hub ? null : { mac: nic?.mac ?? null, latency_ms: latency, words: !nic ? 'Can’t be woken: no network card reported.' : latency !== null ? `Wakes in about ${secs(latency)} (measured).` : 'Can be woken; how long it takes isn’t measured yet.' },
