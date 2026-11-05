@@ -153,7 +153,11 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
     ...(o.sandbox === false ? ['--no-sandbox'] : []),
     'about:blank',
   ];
-  const proc = trackChild(spawn(o.path, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] }));
+  // A process group of its own: Chromium's helpers outlive the browser process for a moment and
+  // write into its profile, so close() ends the whole group before the profile is touched.
+  const proc = trackChild(spawn(o.path, args, { detached: true, stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] }), { group: true });
+  // 'close' comes once every process holding its stderr (the helpers inherit it) has exited.
+  const ended = new Promise<void>((r) => proc.once('close', () => r()));
   let err = '';
   (proc.stderr as Readable).on('data', (d: Buffer) => { err = (err + String(d)).slice(-4000); });
   const failed = new Promise<never>((_, fail) => {
@@ -172,6 +176,10 @@ export async function launch(o: LaunchOptions): Promise<Launched> {
       proc.kill('SIGTERM');
       await Promise.race([new Promise((r) => proc.once('exit', r)), new Promise((r) => setTimeout(r, 3000))]);
       if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+    }
+    if (proc.pid) {
+      try { process.kill(-proc.pid, 'SIGKILL'); } catch { /* the group is gone already */ }
+      await ended;
     }
     // Nova's own profile stays, without its session-restore files. A throwaway one goes; Chromium's
     // helper processes may still be writing as it goes, so removing retries a few times.

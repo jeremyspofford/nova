@@ -8,7 +8,7 @@ import { Log } from '../../src/core/log.ts';
 import { Ledger } from '../../src/core/ledger.ts';
 import { Verifier } from '../../src/core/verify.ts';
 import { Workspace, workspaceWorker } from '../../src/core/workspace.ts';
-import { Decisions, JevProvider, RulesProvider, Templates, noulCertainty, validateTemplate, type DecisionProvider, type DryRunCase, type TemplateDef } from '../../src/core/decide.ts';
+import { Decisions, QUESTION_TYPES, RulesProvider, Templates, noulCertainty, validateTemplate, type DecisionProvider, type DryRunCase, type TemplateDef } from '../../src/core/decide.ts';
 import type { PrivacyMode } from '../../src/core/envelope.ts';
 
 function setup(opts: { privacy?: PrivacyMode; providers?: (rules: RulesProvider) => DecisionProvider[] } = {}) {
@@ -175,7 +175,7 @@ test('a template with no local rule answers unknown and escalates instead of gue
 
 test('local-only never calls a remote decision provider, even when it is registered first', async () => {
   let calls = 0;
-  const jev = new JevProvider();
+  const jev: DecisionProvider = { id: 'jev', egress: 'remote', questionTypes: QUESTION_TYPES, decide: async () => { throw new Error('The Jev decision provider is not configured.'); } };
   const spy: DecisionProvider = { id: jev.id, egress: jev.egress, questionTypes: jev.questionTypes, decide: (t, i) => { calls += 1; return jev.decide(t, i); } };
   const { decisions, templates, ledger, setPrivacy } = setup({ providers: (rules) => [spy, rules] });
   await author(templates, ledger, sorter(), [{ inputs: { subject: 'a', size: 1 } }]);
@@ -187,14 +187,6 @@ test('local-only never calls a remote decision provider, even when it is registe
   const e = await decisions.decide('example.sort', { subject: 'a', size: 1 });
   assert.equal(calls, 1, 'with cloud allowed it is tried');
   assert.equal(e?.provider, 'rules', 'and when it is not configured, the local provider answers');
-});
-
-test('the remote provider is a stub until it is configured', async () => {
-  const jev = new JevProvider();
-  assert.equal(jev.egress, 'remote');
-  const { templates } = setup();
-  templates.propose(sorter(), 'person');
-  await assert.rejects(jev.decide(templates.version('example.sort', 1)!, {}), /not configured/);
 });
 
 // Noul: Jev's yes/no type, one calibrated probability that the answer is yes. No separate confidence.
@@ -243,8 +235,7 @@ test('with Noul and other questions, the decision is only as certain as its weak
   assert.equal(d?.confidence, 0.7, 'min(certainty 0.9, stated 0.7)');
 });
 
-test('a provider is only asked questions it can answer; the Jev stub declares Noul', async () => {
-  assert.ok(new JevProvider().questionTypes.includes('noul'));
+test('a provider is only asked questions it can answer', async () => {
   let asked = 0;
   const choicesOnly: DecisionProvider = { id: 'choices-only', egress: 'none', questionTypes: ['choice', 'score'], decide: async () => { asked += 1; throw new Error('should not be asked'); } };
   const { rules, templates, ledger, decisions } = setup({ providers: (r) => [choicesOnly, r] });

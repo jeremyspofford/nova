@@ -66,9 +66,8 @@ export interface Connector {
 }
 
 export interface ConnectorContext {
-  id: string;
   // This connector's secrets, by name (HA_TOKEN); stored as connector/<id>/<name> in the vault.
-  secrets: { get(name: string): string | null; put(name: string, value: string): string; delete(name: string): boolean; has(name: string): boolean };
+  secrets: { get(name: string): string | null; put(name: string, value: string): void; delete(name: string): boolean; has(name: string): boolean };
   // Its settings, in its extension data folder (journalled, so a standby has them).
   config: { get(): Record<string, unknown>; set(patch: Record<string, unknown>): Record<string, unknown>; clear(): void };
   // Something happened: a trigger record if a rule listens for the topic, else nothing.
@@ -77,7 +76,6 @@ export interface ConnectorContext {
   topics(): string[];
   // Whether the person's privacy setting lets Nova contact something with this egress.
   permits(egress: Egress): boolean;
-  privacy(): PrivacyMode;
   // Hosts of devices in the mesh, which count as local.
   meshHosts(): string[];
   // Work that needs the ledger's gates (approval tiers): a task for this connector's worker.
@@ -341,7 +339,6 @@ export class Connectors extends EventEmitter {
     const configFile = () => join(o.extensions.dataDir(id()), 'config.json');
     const read = (): Record<string, unknown> => { try { return JSON.parse(readFileSync(configFile(), 'utf8')) as Record<string, unknown>; } catch { return {}; } };
     const ctx: ConnectorContext = {
-      get id() { return id(); },
       secrets: {
         get: (n) => o.vault.get(name(n)),
         put: (n, v) => o.vault.put(name(n), v),
@@ -361,7 +358,6 @@ export class Connectors extends EventEmitter {
       emit: (topic, payload, dedupKey) => o.triggers.connectorEvent(id(), topic, payload, dedupKey),
       topics: () => o.triggers.connectorTopics(id()),
       permits: (egress) => permits(o.privacy(), egress),
-      privacy: () => o.privacy(),
       meshHosts: () => o.meshHosts(),
       delegate: (input) => o.delegate(id(), input),
       problem: (message, detail) => { o.log.problem('connectors', message, detail ? { detail } : {}); },

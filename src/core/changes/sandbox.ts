@@ -36,7 +36,7 @@ export class Sandbox {
   }
 
   // Builds the scratch home and starts Nova on it. `files`: home-relative paths to copy as well.
-  async start(o: { db: Db; liveHome: string; files?: string[]; timezone?: string; server?: string; signal?: AbortSignal }): Promise<SandboxInfo> {
+  async start(o: { db: Db; liveHome: string; files?: string[]; timezone?: string; signal?: AbortSignal }): Promise<SandboxInfo> {
     const began = performance.now();
     rmSync(this.dir, { recursive: true, force: true });
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
@@ -67,7 +67,7 @@ export class Sandbox {
       if (a === '--import' || a === '--require') { const v = process.execArgv[i + 1]; if (v) preload.push(a, v); }
       else if (a.startsWith('--import=') || a.startsWith('--require=')) preload.push(a);
     });
-    const proc = trackChild(spawn(process.execPath, [...preload, o.server ?? SERVER], { cwd: join(SERVER, '..', '..'), env, stdio: ['ignore', 'pipe', 'pipe'] }));
+    const proc = trackChild(spawn(process.execPath, [...preload, SERVER], { cwd: join(SERVER, '..', '..'), env, stdio: ['ignore', 'pipe', 'pipe'] }));
     this.#proc = proc;
     proc.stdout!.on('data', (d) => this.#out.push(String(d)));
     proc.stderr!.on('data', (d) => this.#out.push(String(d)));

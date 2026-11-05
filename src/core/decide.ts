@@ -220,19 +220,6 @@ export class RulesProvider implements DecisionProvider {
   }
 }
 
-// Jev (ADR-7) is a hosted typed-decision API. Its wire format needs the owner's account and docs,
-// so until then this refuses instead of guessing.
-// Jev, the hosted typed-decision API. A stub until the owner decides on an account: it declares
-// what Jev answers (including Noul, Jev's yes/no probability) and refuses to run.
-export class JevProvider implements DecisionProvider {
-  readonly id = 'jev';
-  readonly egress: Egress = 'remote';
-  readonly questionTypes = QUESTION_TYPES;
-  async decide(_t: Template, _inputs: Record<string, unknown>): Promise<Decision> {
-    throw new Error('The Jev decision provider is not configured.');
-  }
-}
-
 export interface DryRunResult { ok: boolean; results: { case: DryRunCase; decision: Decision | null; ok: boolean; why: string }[] }
 
 type Row = Record<string, string | number | null>;
@@ -363,10 +350,6 @@ export class Templates {
       this.#event(t.template_id, t.version, 'proposed', { by });
     });
     return this.version(t.template_id, t.version)!;
-  }
-
-  validate(id: string, version: number): TemplateDef {
-    return validateTemplate(this.#need(id, version));
   }
 
   // Runs the cases against the local provider and keeps them; activation and the verifier re-run them.
@@ -517,10 +500,6 @@ export class Decisions {
   register(p: DecisionProvider, o: { first?: boolean } = {}): void {
     if (this.#providers.some((x) => x.id === p.id)) throw new Error(`A decision provider called ${p.id} is already registered.`);
     if (o.first) this.#providers.unshift(p); else this.#providers.push(p);
-  }
-
-  providers(): { id: string; egress: Egress }[] {
-    return this.#providers.map(({ id, egress }) => ({ id, egress }));
   }
 
   // null on a cache miss: the caller falls back to System 1.5 rules, never to a made-up schema.

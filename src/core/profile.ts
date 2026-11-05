@@ -36,6 +36,15 @@ export class Profile extends EventEmitter {
     this.emit('change', { section, key });
   }
 
+  // "Use the default" (config design: reset deletes the overlay key): the record goes, so whatever
+  // reads it falls back to Nova's default again. False when there was nothing to delete.
+  delete(section: Section, key: string): boolean {
+    if (this.get(section, key) === undefined) return false;
+    this.#db.run('DELETE FROM profile WHERE section = ? AND key = ?', section, key);
+    this.emit('change', { section, key });
+    return true;
+  }
+
   section(section: Section): Record<string, unknown> {
     const rows = this.#db.all<{ key: string; value: string }>('SELECT key, value FROM profile WHERE section = ? ORDER BY key', section);
     return Object.fromEntries(rows.map((r) => [r.key, JSON.parse(r.value)]));
@@ -50,9 +59,5 @@ export class Profile extends EventEmitter {
   privacyDefault(): PrivacyMode {
     const v = this.get<string>('privacy', 'default');
     return PRIVACY_MODES.includes(v as PrivacyMode) ? (v as PrivacyMode) : 'local-only';
-  }
-
-  isEmpty(): boolean {
-    return !this.#db.get('SELECT 1 FROM profile LIMIT 1');
   }
 }

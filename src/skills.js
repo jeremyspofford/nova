@@ -3,8 +3,9 @@
 // copies its folder into the home's skills/, where the person can read and
 // change it. The person can also add their own folder or .zip, in Nova's
 // format or Claude's (name + description). Removing one deletes that folder.
-// Nothing else refers to it, and skills/ is kept out of the home's history,
-// so nothing is left behind.
+// Nothing else refers to it, and skills/ is kept out of the home's history;
+// server.js carries the removal into backups and checkpoints as a forget
+// (backups.ts), so nothing is left behind.
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -134,8 +135,6 @@ export class Skills {
     return files;
   }
 
-  restore(id, files) { return this.commit(this.prepareRestore(id, files)); }
-
   // What restoring would write, checked, without writing it (the ingest gate screens it first).
   prepareRestore(id, files) {
     if (!ID.test(String(id))) throw new SkillError(400, 'Not a skill name.');
@@ -179,12 +178,9 @@ export class Skills {
     return this.get(id);
   }
 
-  // A skill the person brings: a folder's files or a .zip's, as
-  // { path: Buffer | string | { base64 } }. SKILL.md may sit at the top or in
-  // one folder; its name (or that folder's) becomes the skill's id.
-  add(given) { return this.commit(this.prepare(given)); }
-
-  // What adding would write, checked, without writing anything.
+  // What adding a skill the person brings would write, checked, without writing anything: a folder's
+  // files or a .zip's, as { path: Buffer | string | { base64 } }. SKILL.md may sit at the top or in
+  // one folder; its name (or that folder's) becomes the skill's id. The server screens it, then commits.
   prepare(given) {
     let entries = Object.entries(given ?? {})
       .map(([p, v]) => [String(p).replace(/\\/g, '/').replace(/^\/+/, ''), Buffer.isBuffer(v) ? v : decodeFile(v)])

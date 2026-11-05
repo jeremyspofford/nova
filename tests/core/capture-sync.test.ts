@@ -139,7 +139,7 @@ test('local-only with a cloud hub: the plan says it waits, and a batch is refuse
     assert.match(lag.said, /Test Mac capture: nothing synced yet · 7 queued \(paused: Nova is in local-only mode/);
     // A raw fetch to a cloud hub: refused (the per-device opt-in isn't built).
     // Local-preferred (the design's "local-first"): the cloud hub's policy applies, and it is taken.
-    assert.equal((await r.h.c('PUT', '/profile/privacy/default', { value: 'local-preferred' })).status, 200);
+    assert.equal((await r.h.c('PUT', '/profile/privacy/default', { value: 'local-preferred', confirm: true })).status, 200);
     assert.equal((await r.plan(r.mac.token)).body.sync.allowed, true);
     const ok = await r.send(r.mac.token, r.signed([r.item({ text: 'CLOUD-LOCAL-FIRST', s: 7 })], r.mac.keys, r.mac));
     assert.equal(ok.body.results[0].status, 'kept');

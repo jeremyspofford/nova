@@ -368,6 +368,16 @@ export class SyncLog {
     return removed;
   }
 
+  // Files were removed for good (a skill): the journal drops their copies now, not at the next
+  // scan, and the old pages leave the write-ahead log, as a forget does (secure_delete is on).
+  removed(): void {
+    try {
+      this.scan();
+    } finally {
+      if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    }
+  }
+
   #purge(needles: Set<string>, count: (n: number) => void): void {
     for (const n of needles) {
       const hit = this.#db.all<{ seq: number; tbl: string; pk: string }>(

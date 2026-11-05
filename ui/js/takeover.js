@@ -179,5 +179,3 @@ document.addEventListener('submit', (e) => {
   send({ type: 'text', text: field.value });
   field.value = '';
 });
-
-export const takeoverOpen = (id) => live?.id === id;

@@ -333,23 +333,22 @@ test('a triage decision may only propose: nothing is memory until the person acc
   });
 });
 
-test('capture feeds event rules, and capture.stream(device, kind) hands readers normalized events', async () => {
+test('capture feeds event rules, and readers get normalized events', async () => {
   await withScreenpipe(async (h, sp, id) => {
     const rule = await h.c('POST', '/triggers/rules', { name: 'Something to sort', class: 'event', connector: 'capture', topic: 'unclassified', action: { kind: 'message', text: 'Something captured needs a space.' }, dedup_window_s: 0 });
     assert.equal(rule.status, 201, JSON.stringify(rule.body));
     assert.equal((await h.c('POST', '/triggers/rules', { name: 'x', class: 'event', connector: 'capture', topic: 'folder:/tmp', action: { kind: 'message', text: 'x' } })).status, 400);
     await h.c('POST', `/capture/sources/${encodeURIComponent(id)}/enable`);
     const seen: any[] = [];
-    const stream = h.core.capture.stream(h.core.mesh.identity.id, 'audio');
-    const off = stream.subscribe((e) => seen.push(e));
-    const it = h.core.capture.stream(null, null)[Symbol.asyncIterator]();
+    const listen = (e: any) => seen.push(e);
+    h.core.capture.on('event', listen);
     sp.add({ at: min(h, 1), app: 'Editor', text: 'unsorted' }, { type: 'audio', at: min(h, 2), text: 'a call' });
     await pull(h, id);
-    off();
-    assert.deepEqual(seen.map((e) => e.kind), ['audio'], 'only the device and kind asked for');
-    assert.equal(stream.recent().length, 1);
-    assert.equal((await it.next()).value.text, 'unsorted');
-    await it.return?.();
+    h.core.capture.off('event', listen);
+    assert.equal(seen[0]?.text, 'unsorted');
+    const audio = seen.filter((e) => e.kind === 'audio');
+    assert.deepEqual(audio.map((e) => [e.device.id, e.text]), [[h.core.mesh.identity.id, 'a call']]);
+    assert.equal(h.core.capture.events({ device: h.core.mesh.identity.id, kind: 'audio' }).length, 1);
     const fired = await (async () => { for (let i = 0; i < 40; i++) { const l = (await h.c('GET', `/triggers?rule=${rule.body.rule.id}`)).body; if (l.length >= 2) return l; await new Promise((r) => setTimeout(r, 25)); } return []; })();
     assert.equal(fired.length, 2, 'both events are unclassified');
     assert.equal(fired[0].source, 'connector:capture/unclassified');

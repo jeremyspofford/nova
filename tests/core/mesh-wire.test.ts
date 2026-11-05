@@ -4,9 +4,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  HLC_MAX_COUNTER, HybridClock, PAIRING_CODE_ALPHABET, SlidingWindowLimiter, canonicalJson, compareHlc, displayPairingCode,
-  exportDeviceKeys, formatHlc, generateDeviceKeys, hlcProblem, importDeviceKeys, keyFingerprint, maxHlc, newPairingCode,
-  normalizeConfirmation, normalizePairingCode, open, pairingCodeHash, pairingCommitment, pairingConfirmation, pairingConfirmationV2,
+  HLC_MAX_COUNTER, HybridClock, PAIRING_CODE_ALPHABET, SlidingWindowLimiter, canonicalJson, displayPairingCode,
+  exportDeviceKeys, formatHlc, generateDeviceKeys, importDeviceKeys, keyFingerprint, newPairingCode,
+  normalizePairingCode, open, pairingCodeHash, pairingCommitment, pairingConfirmationV2,
   parseHlc, revealMessage, seal, sessionMessage, signMessage, signRoster, statusMessage, verifyDeviceSignature, verifyRoster,
   x25519Statement, freshTime,
 } from '../../src/core/index.ts';
@@ -28,15 +28,11 @@ test('codes: Crockford base32, display form, normalizing what a person types', (
   assert.equal(normalizePairingCode('ABCD-EFGU'), null);
   assert.equal(normalizePairingCode('ABCD-EFG'), null);
   assert.equal(normalizePairingCode('ABCD-EFGHJ'), null);
-  assert.equal(normalizeConfirmation('123 456'), '123456');
-  assert.equal(normalizeConfirmation('12345'), null);
 });
 
-test('Era 1 vectors: code hash, commitment and both confirmations', () => {
+test('Era 1 vectors: code hash, commitment and the V2 confirmation', () => {
   const base = { pairingId: '01920000-0000-7000-8000-00000000aaaa', publicKey: 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ', code: 'abcd-efgh' };
   const fp = 'yAs9pQmQ0Kq6tU1t7mNfLwVd9a4m8Wq3b5r2s1x0z7c';
-  assert.equal(pairingConfirmation({ ...base, hubFingerprint: '' }), '894633');
-  assert.equal(pairingConfirmation({ ...base, hubFingerprint: fp }), '159184');
   assert.equal(pairingCodeHash(base.pairingId, 'ABCD-EFGH'), 'b9cf464b464cbc25c935ca9b478d4bec7f57d005fc5bf346139c494f0eb1b229');
   assert.equal(pairingCodeHash(base.pairingId, base.code), pairingCodeHash(base.pairingId, 'ABCDEFGH'));
   assert.equal(pairingCommitment(base.publicKey, 'n'.repeat(43)), 'oGgjvQosYMHcFu38ZkxXFuaQSn8Z9bQQeOn1AmdB6zo');
@@ -147,11 +143,9 @@ test('HLC values: fixed widths, parse back, order by time, counter, node', () =>
   const b = formatHlc({ pt: T, c: 1, node: 'aaa' });
   const c = formatHlc({ pt: T + 1, c: 0, node: 'aaa' });
   const d = formatHlc({ pt: T + 1, c: 0, node: 'bbb' });
-  assert.deepEqual([d, c, b, a].sort(compareHlc), [a, b, c, d]);
-  assert.equal(compareHlc(a, a), 0);
-  assert.ok(compareHlc('', a) < 0);
-  assert.equal(maxHlc(a, d), d);
-  assert.equal(maxHlc(d, a), d);
+  // HLC strings order as plain strings (fixed widths), and an empty one is older than every clock.
+  assert.deepEqual([d, c, b, a].sort(), [a, b, c, d]);
+  assert.ok('' < a);
 });
 
 test('HybridClock never goes back, carries on after a restart, and follows remote clocks', () => {
@@ -164,14 +158,10 @@ test('HybridClock never goes back, carries on after a restart, and follows remot
   const persisted = clock.last();
   const again = new HybridClock({ node: 'hub', now: () => T - 3_600_000, initial: persisted });
   assert.equal(again.last(), persisted);
-  assert.ok(compareHlc(again.tick(), persisted) > 0);
+  assert.ok(again.tick() > persisted);
   const remote = formatHlc({ pt: T + 5000, c: 7, node: 'dev' });
   assert.deepEqual(parseHlc(clock.receive(remote)), { pt: T + 5000, c: 8, node: 'hub' });
   assert.equal(clock.receive('junk'), clock.last());
   const full = new HybridClock({ node: 'n', now: () => T, initial: formatHlc({ pt: T, c: HLC_MAX_COUNTER, node: 'n' }) });
   assert.deepEqual(parseHlc(full.tick()), { pt: T + 1, c: 0, node: 'n' }, 'the counter overflows into the next millisecond');
-  assert.equal(hlcProblem('junk', { node: 'dev', nowMs: T, maxSkewMs: 1000 }), 'invalid_hlc');
-  assert.equal(hlcProblem(remote, { node: 'other', nowMs: T + 5000, maxSkewMs: 1000 }), 'hlc_device_mismatch');
-  assert.equal(hlcProblem(remote, { node: 'dev', nowMs: T, maxSkewMs: 1000 }), 'clock_skew');
-  assert.equal(hlcProblem(remote, { node: 'dev', nowMs: T + 5000, maxSkewMs: 1000 }), null);
 });

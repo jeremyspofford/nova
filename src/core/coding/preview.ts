@@ -100,7 +100,7 @@ export function wideListeners(pgid: number, port: number): string | null {
 
 export const loopbackAddress = (a: string) => a === '::1' || /^127\./.test(a) || /^::ffff:127\./.test(a);
 
-export interface Started { child: ChildProcess; url: string; port: number; status: number; loopback: 'yes' | 'unchecked'; start: string | null; output: () => string }
+export interface Started { child: ChildProcess; url: string; port: number; status: number; loopback: 'yes' | 'unchecked'; start: string | null }
 
 const tail = (s: string) => s.trimEnd().split('\n').slice(-12).join('\n').slice(-2000);
 
@@ -138,7 +138,7 @@ export async function startPreview(o: { command: string; cwd: string; env: Recor
       if (wide) throw new CoreError('forbidden', `The preview listened on ${wide}, not only on this computer, so Nova stopped it: what the agent wrote isn’t shown to your network before you’ve reviewed it. Make it listen on HOST (127.0.0.1), which Nova sets.`);
     }
     const heard = listeners(o.port);
-    return { child, url, port: o.port, status, loopback: heard && heard.length ? 'yes' : 'unchecked', start: procStart(child.pid!), output: () => output };
+    return { child, url, port: o.port, status, loopback: heard && heard.length ? 'yes' : 'unchecked', start: procStart(child.pid!) };
   } catch (e) {
     stopPreview(child);
     throw e;

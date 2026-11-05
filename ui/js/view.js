@@ -2,7 +2,7 @@
 // permissions): state in, HTML out. Used by the app and by the living style reference, so the
 // reference always shows the real components. The PWA's own components are in components.js.
 import { escapeHtml as esc, renderMarkdown } from './markdown.js';
-import { ICONS, settingsRow, status } from './components.js';
+import { ICONS, configDiff, settingsRow, status } from './components.js';
 import { activityStatus, toolTier } from './status.js';
 import { since, waitState, waitingLine } from './wait.js';
 
@@ -163,6 +163,7 @@ function approvalWhat(tool) {
   }
   if (tool.name === 'schedule_remove') return `Nova wants to remove the schedule ${esc(p.name ?? tool.args?.id ?? '')}${p.when ? ` (${esc(p.when.replace(/^\w/, (c) => c.toLowerCase()))})` : ''}. It won't run again.`;
   if (tool.name === 'memory_import') return `Nova wants to offer you ${p.fresh ?? 'the'} ${p.fresh === 1 ? 'memory' : 'memories'} from <code>${esc(p.path ?? a.path ?? '')}</code>${p.already ? ` (${p.already} ${p.already === 1 ? 'is' : 'are'} kept or waiting already)` : ''}. Nova checks the file first, and each one waits for your OK in Memory.`;
+  if (tool.name === 'settings_change') { const n = (p.changes ?? []).filter((c) => !c.refused).length; return `Nova wants to change ${n === 1 ? 'one of your settings' : `${n} of your settings`}. ${p.tier === 3 ? 'This changes what stays private or what asks first (tier 3): confirm it every time.' : 'Nothing changes until you say so.'}`; }
   if (tool.name === 'web_fetch') return `Nova wants to open <code>${esc(host(a.url))}</code>.`;
   if (tool.name === 'web_search') return `Nova wants to search the web for “${esc(a.query)}”.`;
   if (tool.name === 'write_file') return `Nova wants to change <code>${esc(a.path)}</code>, one of your standing files.`;
@@ -184,6 +185,12 @@ function approvalDetail(tool) {
     const to = p.deliver === 'main' ? 'The main conversation' : p.deliver === 'here' ? 'This conversation' : 'Another conversation';
     return `<div class="approval-mail"><dl class="approval-fields"><dt>Name</dt><dd>${esc(p.name)}</dd><dt>When</dt><dd>${esc(p.when)}${p.once ? '' : `<span class="approval-next">Next: <time>${esc(p.next)}</time></span>`}</dd><dt>Reports</dt><dd>${to}</dd></dl>
 <div class="approval-letter">${esc(p.prompt)}</div></div>`;
+  }
+  // The same diff as Settings › Configuration shows (config doors, approved in #303).
+  if (tool.name === 'settings_change') {
+    const words = (s) => String(s).replace(/[_-]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+    const shown = (v) => (v === undefined ? undefined : typeof v === 'string' ? v : JSON.stringify(v));
+    return configDiff((p.changes ?? []).map((c) => ({ key: c.key, label: `${words(c.section)} › ${words(c.name)}`, from: shown(c.from), to: shown(c.to), layer: c.layer, refused: c.refused })));
   }
   if (tool.name === 'gmail_organize') {
     return `<ul class="approval-list">${(p.messages ?? []).map((m) => `<li><span class="approval-subject">${esc(m.subject)}</span> <span class="approval-from">${esc(m.from)}</span></li>`).join('')}</ul>`;

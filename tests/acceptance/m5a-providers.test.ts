@@ -27,7 +27,7 @@ test('M5a: providers over the API — a verified coding task, privacy in plain w
   };
   try {
     writeCalc(join(m.home, 'workspace'));
-    await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed' });
+    await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed', confirm: true });
     const list = await m.get(api('/providers'));
     assert.deepEqual(list.providers.map((p: { id: string }) => p.id).sort(), ['claude-code', 'codex', 'custom-cli', 'n8n', 'openai-compatible', 'relay']);
     assert.equal(list.chat.current, 'custom-cli');

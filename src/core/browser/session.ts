@@ -256,9 +256,7 @@ export class Session extends EventEmitter {
     try {
       if (['page', 'iframe', 'worker', 'shared_worker', 'service_worker'].includes(type)) {
         await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] }, sid).catch(() => {});
-      }
-      // Every kind of target attaches what it starts (a worker's own workers included).
-      if (['page', 'iframe', 'worker', 'shared_worker', 'service_worker'].includes(type)) {
+        // Every kind of target attaches what it starts (a worker's own workers included).
         await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid).catch(() => {});
       }
       // WebSockets, WebTransport and WebRTC go around Fetch, and a declared host's traffic around the
@@ -695,9 +693,6 @@ export class Session extends EventEmitter {
     if (this.mode === 'closed') throw new Error(`The browser closed: ${this.#closedWhy ?? 'stopped'}.`);
     return this.mode === 'taken_over' || this.mode === 'needs_person' || this.mode === 'paused';
   }
-
-  // Gives the page a moment and returns what is pending; for tests and the worker's own waits.
-  get dialogsPending(): number { return this.#dialogs.length; }
 
   async #world(): Promise<number> {
     const tree = await this.#send<{ frameTree: { frame: { id: string } } }>('Page.getFrameTree');

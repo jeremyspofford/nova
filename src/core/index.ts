@@ -12,6 +12,7 @@ import { Workspace, workspaceWorker } from './workspace.ts';
 import { Verifier, type Checker } from './verify.ts';
 import { Ledger, STATES, TASK_CONTEXT, type LanedWorker, type State, type TaskInput } from './ledger.ts';
 import type { PrivacyMode as PrivacyModeOf } from './envelope.ts';
+import { PRIVACY_MODES } from './envelope.ts';
 import { Setup, type Onboarding } from './setup.ts';
 import { detectOs, type OsFamily } from './onboard/detect.ts';
 import { discover, realTransport, type DiscoveryTransport } from './onboard/discover.ts';
@@ -78,14 +79,13 @@ import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
 import { Checkpoints, dropPartials, finishStaged, stagedPending, takeCheckpoint } from './resilience/checkpoints.ts';
-import { ConsolePasskeys } from './passkeys.ts';
+import { ConsolePasskeys, NO_PASSKEY, PASSKEY_NEEDED } from './passkeys.ts';
+export { ConsolePasskeys, NO_PASSKEY, PASSKEY_NEEDED } from './passkeys.ts';
 import { configRoutes } from './config-doors.ts';
 
-const PASSKEY_NEEDED = 'Tier-3 actions on Nova’s own screen are confirmed with a passkey, and this request had none, so nothing was approved.';
 // The one route that takes {confirm: true} at tier 2 (rolling a change back by hand): asked once,
 // no passkey. ui/js/core.js skips the step for the same path.
 const TIER2_CONFIRM = /^\/changes\/[^/]+\/rollback$/;
-const NO_PASSKEY = 'No passkey yet: tier-3 actions on Nova’s own screen wait until you add one in Settings › Security. Nothing was approved.';
 import { Restarter } from './resilience/restart.ts';
 import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
@@ -106,63 +106,50 @@ export { ENVELOPE_VERSION } from './envelope.ts';
 export { TERMINAL } from './ledger.ts';
 export type { Brief, Evidence, Report } from './envelope.ts';
 export type { Worker, Egress } from './workers.ts';
-export type { Checker } from './verify.ts';
-export type { Lane, LanedWorker, Task } from './ledger.ts';
-// The design-system schema and its checks, for the token lint and the package check (scripts/).
+export type { LanedWorker, Task } from './ledger.ts';
 // The mesh's wire format and the limiter, shared with the device agent (src/device) and sync.
 export * from './mesh/wire.ts';
 export { SlidingWindowLimiter } from './mesh/limiter.ts';
-export { KINDS as DEVICE_KINDS, ROLE_OF, SESSION_TTL_MS } from './mesh/devices.ts';
-export { JOIN_REVEAL_TTL_MS, JOIN_APPROVE_TTL_MS, rateKey } from './mesh/enroll.ts';
-export { PURPOSES, PURPOSE_WORDS, WORKLOAD_PURPOSES, allowedPurposes, checkPurposes, defaultPurposes, fixedPurposes, mayRunWork, purposeChange } from './mesh/purposes.ts';
-export type { Purpose, PurposeChange } from './mesh/purposes.ts';
-export { BROWSER_TASK_HEADER, PUBLIC_PATHS, SESSION_COOKIE, allows, fromBrowserTask, isConsole, loopbackAddress, loopbackHost } from './mesh/access.ts';
-export { DEVICE_CONFIG_SECTIONS, INBOX_KINDS, MAX_BATCH as INBOX_MAX_BATCH } from './mesh/spokes.ts';
-export { RUNTIME_FILES, agentFiles, agentTar, joinScript, tar } from './mesh/agent.ts';
-export type { Device, Kind as DeviceKind, Role as DeviceRole, MeshState } from './mesh/devices.ts';
-export type { JoinRequest, Pairing } from './mesh/enroll.ts';
-export type { Listener, MeshListenerInfo, Principal, Scope } from './mesh/access.ts';
-export type { MeshIdentity } from './mesh/identity.ts';
+export { rateKey } from './mesh/enroll.ts';
+export { PURPOSE_WORDS, WORKLOAD_PURPOSES, checkPurposes, purposeChange } from './mesh/purposes.ts';
+export { BROWSER_TASK_HEADER, SESSION_COOKIE, allows, fromBrowserTask, loopbackAddress } from './mesh/access.ts';
+export { RUNTIME_FILES, joinScript, tar } from './mesh/agent.ts';
+export type { Device } from './mesh/devices.ts';
+export type { Pairing } from './mesh/enroll.ts';
+export type { Listener, Scope } from './mesh/access.ts';
 // Hub, standby and sync (M4c): the role file a standby is enrolled with, and this node's keys.
 export { loadIdentity } from './mesh/identity.ts';
-export { ROLE_FILE, readRole, writeRole } from './mesh/replica.ts';
+export { readRole, writeRole } from './mesh/replica.ts';
 export type { RoleFile } from './mesh/replica.ts';
-export { REPLICATED, NOT_JOURNALLED } from './mesh/sync.ts';
+export { REPLICATED } from './mesh/sync.ts';
 // Hub promotion (M10g): the pre-checks, the signed hand-over, the sheets' words, the drill's tap.
-export { PROMOTION_FILE, PROMOTION_WORKER, WINDOW_MIN_S, FAILS_TO_ROLL_BACK, CONNECTOR_WORDS, DEVICE_WORDS, LOST_WORDS, prechecks, coldSheet, plannedSheet, signCall, verifyCall, handoverMessage, verifyHandover, latestBackup, backupState } from './mesh/handover.ts';
-export type { Check as PromotionCheck, CandidateFacts, HubFacts, Handover, SignedHandover, PromotionRecord, ColdFacts, Fact as SheetFact } from './mesh/handover.ts';
+export { CONNECTOR_WORDS, DEVICE_WORDS, LOST_WORDS, prechecks, coldSheet, signCall, verifyCall, handoverMessage, verifyHandover, backupState } from './mesh/handover.ts';
+export type { CandidateFacts, HubFacts, Handover } from './mesh/handover.ts';
 export type { Who } from './api.ts';
-// Providers (M5a): the registry's chat handle for Era 2's runner, and the stand-ins' signing helpers.
-export type { ChatHandle } from './providers/registry.ts';
-export { signatureHeader as n8nSignature, SIGNATURE_HEADER as N8N_SIGNATURE_HEADER } from './providers/n8n.ts';
 export { originHost } from './api.ts';
-export { TOKENS, TOKEN_NAMES, ORB_STATES, ORB_MEANINGS, ORB_STATE_VARS, checkOrbStates, cssVar, contrast, validatePackage, generateCss, iosStatusBar, IOS_STATUS_BARS, IOS_STATUS_BAR_META, IOS_STATUS_BAR_UNDECLARED, STATUS_BAR_TAG, statusBarTag, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM, STARTERS, LIVE_CHECKS, liveCheck, looks, contrastNudge, applyNudge, MOTION_MIN_MS, MOTION_MAX_MS, TRANSITION_TOKENS, overshoots, LEAD_DESIGN_SYSTEM, AT_THE_BAR, atTheBar, SPACE_SCALE, TYPE_STEPS, TYPE_RATIO, TYPE_MIN_PX, RADIUS_CLASSES, ICON_STROKE, scaleFindings, packageScaleFindings } from './design.ts';
+// The design-system schema and its checks, for the token lint and the package check (scripts/).
+export { TOKENS, TOKEN_NAMES, ORB_STATES, ORB_STATE_VARS, cssVar, contrast, validatePackage, generateCss, iosStatusBar, IOS_STATUS_BAR_UNDECLARED, STATUS_BAR_TAG, statusBarTag, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM, STARTERS, LIVE_CHECKS, liveCheck, looks, contrastNudge, applyNudge, MOTION_MIN_MS, MOTION_MAX_MS, overshoots, LEAD_DESIGN_SYSTEM, AT_THE_BAR, SPACE_SCALE, ICON_STROKE, scaleFindings, packageScaleFindings } from './design.ts';
 // The vault and connectors (M5b): Era 2's Gmail keeps its secrets in the vault and registers as a connector.
-export { Vault, FILE_KEY_NOTICE, SECRET_SCHEME, secretRef, keyMode, fileKeyStore, secretToolKeyStore, macKeyStore, windowsKeyStore, platformKeyStore } from './vault.ts';
-export type { KeyMode, KeyStore, Run as KeyCommandRunner, VaultStatus } from './vault.ts';
-export { addressEgress, secretPrefix } from './connectors/index.ts';
-export type { Connector, ConnectorContext, ConnectorFactory, ConnectorStatus, ConnectorView } from './connectors/index.ts';
-export { HA_ID, HA_MANIFEST, DEFAULT_TIER3, tokenIssuer } from './connectors/home-assistant.ts';
-export { redactText } from './log.ts';
+export { Vault, FILE_KEY_NOTICE, keyMode, fileKeyStore, secretToolKeyStore, macKeyStore, windowsKeyStore } from './vault.ts';
+export type { KeyStore, Run as KeyCommandRunner } from './vault.ts';
+export { addressEgress } from './connectors/index.ts';
+export type { ConnectorContext } from './connectors/index.ts';
+export { tokenIssuer } from './connectors/home-assistant.ts';
 // Resilience (M7b): the supervisor's link and shared pieces (src/supervisor imports only this file).
 export { BrokerClient } from './broker/client.ts';
 export { ipcLink, ipcBroker, consoleStatus } from './resilience/link.ts';
-export type { SupervisorLink, SupervisorState, SupervisorProblem, ReleaseSlot, Stage as DeployStage, ProbeLine, ServerMode } from './resilience/link.ts';
-export { PLAYBOOKS } from './resilience/playbooks.ts';
-export { CODE_ROOT, copyHome, smoke, startSandbox, sandboxEnv } from './resilience/sandbox.ts';
-export type { Sandbox, ProbeResult } from './resilience/sandbox.ts';
+export type { SupervisorState, SupervisorProblem, ReleaseSlot, Stage as DeployStage, ProbeLine } from './resilience/link.ts';
+export { CODE_ROOT, copyHome, smoke, startSandbox } from './resilience/sandbox.ts';
+export type { Sandbox } from './resilience/sandbox.ts';
 export { restoreInto, backupFiles, sha256File, openEncrypted } from './resilience/backup.ts';
 // Factory reset (M7 amendment §2): finished at start, before the database opens (server.js too).
 export { RESET_MARKER, RESET_REPORT, finishReset, homeEntries, supervisorResetPending } from './resilience/reset.ts';
 export { HOME_MARK, ensureMark, unsafeHome } from './resilience/home-mark.ts';
-export type { ResetReport } from './resilience/reset.ts';
 export { makeScratch, dropScratch } from './resilience/scratch.ts';
-export type { Manifest as BackupManifest } from './resilience/backup.ts';
 export { restoreBackup, loadMigrations } from './db.ts';
 // Checkpoints (M7 amendment §1): the supervisor takes one before a release switch on the stopped
 // home; the server applies a staged restore before anything opens the home.
-export { takeCheckpoint, listCheckpoints, finishStaged, stagedPending, KEEP_AUTO, RETENTION as CHECKPOINT_RETENTION } from './resilience/checkpoints.ts';
-export type { CheckpointView, CheckpointManifest } from './resilience/checkpoints.ts';
+export { takeCheckpoint, listCheckpoints, finishStaged, stagedPending, KEEP_AUTO } from './resilience/checkpoints.ts';
 // Nova's own entries in a home, by name: what checkpoints, restore and factory reset may touch.
 export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.ts';
 // Every process Nova starts, so none outlives an in-place restart (Era 2's commands register too).
@@ -171,33 +158,28 @@ export { inheritedChildEnv } from './child-env.ts';
 // Services (M10e): the definition, the driver interface, the Service Manager.
 export * from './services/index.ts';
 // Onboarding (M10f): device detection, the backend words, discovery and import sources.
-export { OS_FAMILIES, OS_WORDS, detectOs, factsWords, recommendedHubPurposes, standInOs } from './onboard/detect.ts';
-export type { DeviceFacts, OsFamily } from './onboard/detect.ts';
+export { detectOs, recommendedHubPurposes, standInOs } from './onboard/detect.ts';
+export type { DeviceFacts } from './onboard/detect.ts';
 export { backendFor } from './onboard/backend.ts';
-export type { BackendSummary } from './onboard/backend.ts';
-export { LOCAL_PORTS as DISCOVERY_PORTS, SERVICES as DISCOVERY_SERVICES, discover, loopbackTransport, realTransport, transportFromEnv } from './onboard/discover.ts';
-export type { Discovery, DiscoveryTransport, Found } from './onboard/discover.ts';
+export { discover, loopbackTransport, transportFromEnv } from './onboard/discover.ts';
+export type { Found } from './onboard/discover.ts';
 export { decodeMessage as decodeMdns, encodeQuery as encodeMdnsQuery, encodeResponse as encodeMdnsResponse } from './onboard/mdns.ts';
 export type { Answer as MdnsAnswer } from './onboard/mdns.ts';
 export { findSources, importSources } from './onboard/sources.ts';
-export type { Imported, Source as ImportSource } from './onboard/sources.ts';
-export { FIRST_ACTIONS, firstAction } from './onboard/first.ts';
-export type { FirstAction, FirstView } from './onboard/first.ts';
+export type { Imported } from './onboard/sources.ts';
+export { FIRST_ACTIONS } from './onboard/first.ts';
 // The ingest gate (Amendment 2026-10-30-C Part 3): what Era 2's agent loop screens with, escapes
 // with, and says when something is blocked.
-export { Ingest, BLOCK_LINE, DEFAULT_LINK_CAPS, PROTOCOL_NAMES, KIND_WORDS, cleanOrigin, escapeProtocol, fold, wrapData } from './ingest/index.ts';
+export { Ingest, BLOCK_LINE, DEFAULT_LINK_CAPS, KIND_WORDS, cleanOrigin, escapeProtocol, fold, wrapData } from './ingest/index.ts';
 export { decodeEntities } from './ingest/checks.ts';
-export type { Screened, Source as IngestSource, SourceKind, Taint, Verdict, Candidate as MemoryCandidate, Hold } from './ingest/index.ts';
-// Grounding: what this Nova is, from its own registries, for the chat agent's briefing and tools.
-export { IMPORT_DIR } from './self.ts';
-export type { Self, Era2State } from './self.ts';
+export type { Screened, Taint, Verdict, Hold } from './ingest/index.ts';
 // The eval harness (Amendment 2026-10-31-B Part 4): graders, suites, the model-swap scorecard.
 export * as evals from './evals/index.ts';
 // Hard caps on autonomy cost (Amendment 2026-10-31-B Part 5): ceilings, the meter, the loop detector.
-export { Caps, Meter, DEFAULT_LIMITS, LOOP, CHARS_PER_TOKEN, SPEND_DIR, signature, weightOf, capsRoutes } from './caps/index.ts';
-export type { Limits, Ceilings, Spend, Stop } from './caps/index.ts';
+export { Caps, DEFAULT_LIMITS, LOOP, SPEND_DIR, signature, weightOf, capsRoutes } from './caps/index.ts';
+export type { Limits, Spend, Stop } from './caps/index.ts';
 // One-click diagnostics, redacted by construction (Amendment 2026-10-31-B Part 6).
-export { buildDiagnostics, diagnosticsRoutes, knownSecrets, Scrubber, formsOf, MARKER as DIAGNOSTICS_MARKER, RULE as DIAGNOSTICS_RULE } from './diagnostics/index.ts';
+export { buildDiagnostics, diagnosticsRoutes, knownSecrets, Scrubber, formsOf, MARKER as DIAGNOSTICS_MARKER } from './diagnostics/index.ts';
 
 export interface CoreOptions {
   home: string;
@@ -210,8 +192,6 @@ export interface CoreOptions {
   workers?: LanedWorker[];
   // Confirmation checkers by system, for systems Nova can read itself ("nova-sessions").
   confirmations?: Record<string, Checker>;
-  // Where the built-in design systems live; defaults to design-systems/ in the repo.
-  designSystems?: string;
   // The mesh listener, when there is one: where devices reach Nova, and what carries it.
   mesh?: MeshListenerInfo | null;
   // Where this hub runs (M10h, the capture data path's privacy rule): one of the person's own
@@ -345,7 +325,7 @@ export function createCore(o: CoreOptions) {
   const ledger = new Ledger({ db, log, verifier, workers: [workspaceWorker(workspace, join(o.home, 'workers', 'workspace')), templates.worker, browser.worker, ...(o.workers ?? [])], defaultPrivacy: () => profile.privacyDefault(), now });
   templates.bind(ledger);
   browser.bind(ledger);
-  // Remote decision providers (JevProvider) are registered only once configured; local-only skips them anyway.
+  // Decisions here run on the local rules; Jev is a Decision Service seat (decision-service/seats/jev.ts).
   const decisions = new Decisions({ templates, providers: [rules], privacy: () => profile.privacyDefault(), log });
   const triggers = new Triggers({
     db, log, ledger, templates, rules, decisions, now, sandbox: o.sandbox === true,
@@ -371,7 +351,7 @@ export function createCore(o: CoreOptions) {
   };
   const setup = new Setup({ profile, ledger, now, onboarding, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
-  const design = new Design({ extensions, profile, ...(o.designSystems ? { dir: o.designSystems } : {}) });
+  const design = new Design({ extensions, profile });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
   const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)) });
   // A decision model's receipt is checked against the person's settings as they are at the send.
@@ -1133,6 +1113,13 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
         const section = params.section as Section;
         if (!SECTIONS.includes(section) || section === 'setup') throw new CoreError('validation', `There is no profile section called "${params.section}".`);
         if (section === 'mesh') meshSetting(params.key!, body.value, body.confirm === true, who);
+        // Letting more leave your devices loosens a gate: tier 3, confirmed every time (with the
+        // passkey on Nova's own screen). Stricter is never asked about.
+        if (section === 'privacy' && params.key === 'default') {
+          const to = PRIVACY_MODES.indexOf(body.value as PrivacyModeOf);
+          if (to < 0) throw new CoreError('validation', 'Privacy is local-only, local-preferred or cloud-allowed.');
+          if (to > PRIVACY_MODES.indexOf(profile.privacyDefault()) && body.confirm !== true) throw new CoreError('validation', 'Letting more of your work leave your devices loosens a gate (tier 3): confirm it every time (confirm: true).');
+        }
         if (section === 'providers' || (section === 'policy' && params.key === 'task_tests')) throw new CoreError('validation', 'Providers are set through /api/v1/providers, so their settings are checked.');
         if (section === 'capture') throw new CoreError('validation', 'Capture settings are set through PUT /api/v1/capture/settings, so they are checked.');
         if (section === 'models') throw new CoreError('validation', 'Models are set through /api/v1/models, so their settings are checked.');
@@ -1577,7 +1564,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     // ---- passkeys for tier 3 on the hub's own screen (Insertion #3 T2) ----
     ...passkeys.routes(),
     // ---- configuration in and out as a file (config onboarding, door 1) ----
-    ...configRoutes({ profile, log: (said, keys) => log.info('config', said, { keys }) }),
+    ...configRoutes({ profile, timezone: () => o.detectedTimezone ?? 'UTC', log: (said, keys) => log.info('config', said, { keys }) }),
     // ---- checkpoints (M7 amendment §1) ----
     ...checkpoints.routes(),
     // ---- factory reset (M7 amendment §2) ----

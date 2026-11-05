@@ -58,7 +58,7 @@ export interface BrowserOptions {
 export interface Screened { id: string; verdict: string; flags: { kind: string; level: string }[]; extract: string }
 export interface Wired {
   db: Db;
-  vault: { get(name: string): string | null; list(prefix?: string): string[]; put(name: string, value: string): string; delete(name: string): boolean };
+  vault: { get(name: string): string | null; list(prefix?: string): string[]; put(name: string, value: string): void; delete(name: string): boolean };
   templates: Templates;
   rules: RulesProvider;
   decisions: Decisions;

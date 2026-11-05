@@ -361,15 +361,6 @@ export class Tunnel {
     child.on('error', (e) => end(e));
   }
 
-  get live(): boolean { return !this.#closed && this.#child.exitCode === null; }
-
-  // What the proxy holds for its connections right now, both ways (the bound is per connection).
-  get buffered(): number {
-    let n = this.#child.stdin?.writableLength ?? 0;
-    for (const c of this.#conns.values()) n += c.d.readableLength + c.d.writableLength + (c.pending?.chunk.length ?? 0);
-    return n;
-  }
-
   #send(t: number, id: number, body?: Buffer): void {
     if (this.#closed || !this.#child.stdin?.writable) return;
     const h = Buffer.alloc(9);
