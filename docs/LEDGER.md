@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Ponytail Step 2 · 33 MB of unused files removed**
+- What changed: about 33 MB of leftover files are gone from the repository: duplicate test-run reports, empty evidence files, copies of old pages, old review notes, and 43 screenshots nothing pointed to. Every one was checked as unused first. The records that listed them now say what was removed and how to get any of it back from history.
+- What you can now do: nothing new in the app. The repository is smaller and easier to find things in.
+- Still unfinished: nine more screenshots are cited by an old handoff note, and 61 more lost their last reference with this sweep. Both are your call to remove.
+
 **2026-11-04 · Test stability · Browser profiles really go; three tests stop failing at random**
 - What changed: Nova's browser now fully shuts down before its throwaway profile is deleted. Before, Chromium's helper processes could recreate the folder a moment after Nova removed it, and a left-behind profile can hold sign-in cookies. Three tests that sometimes failed for no product reason now check the right thing: the topology design test in WebKit, the factory-reset test, and a mesh replay test.
 - What you can now do: nothing new in the app. Leftover browser profiles stop, and CI fails less often for no reason.
