@@ -131,7 +131,7 @@ test('the boot agent requires the hub promotion before switching an installed wo
     // A minimal test runtime asks for ordinary verbs. Installing signed bytes is separate from
     // authorizing them to serve: the boot agent must enforce the latter itself.
     const runtime = `
-import { writeFileSync } from 'node:fs';
+import { renameSync, writeFileSync } from 'node:fs';
 const home = process.argv[2];
 let round = 0;
 process.on('message', (m) => {
@@ -143,7 +143,9 @@ process.on('message', (m) => {
   } else if (m.type === 'verb_answer' && m.id === 2) {
     process.send({ type: 'verb', id: 3, verb: 'switch', service: 'stand-in', version: '1.0.0' });
   } else if (m.type === 'verb_answer' && m.id === 3) {
-    writeFileSync(home + '/state/promotion-result.json', JSON.stringify(m));
+    // Written whole, then renamed: the test reads it as soon as it exists.
+    writeFileSync(home + '/state/promotion-result.json.tmp', JSON.stringify(m));
+    renameSync(home + '/state/promotion-result.json.tmp', home + '/state/promotion-result.json');
   }
 });
 process.send({ type: 'ready' });
