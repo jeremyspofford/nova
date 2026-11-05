@@ -26,6 +26,7 @@ import { summarize } from './prompt.ts';
 import { safePath, walk } from './taskspace.ts';
 import { NO_REDIRECT, num, reachProblem, str, type Config, type Impl, type Usage, type Where, type WorkInput, type WorkOutcome } from './types.ts';
 import { isObj } from '../envelope.ts';
+import { sha256 } from '../workspace.ts';
 
 const run = promisify(execFile);
 
@@ -55,13 +56,11 @@ const EGRESS = /^(local|remote:[a-z0-9][a-z0-9._-]{0,63})$/;
 const DIFF_KEPT = 64 * 1024;
 export const BUSY = 'Relay is busy with another run';
 
-const sha = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
-
 // A UUID made from the task, its idempotency key, the attempt and the commit Relay starts from. The
 // same attempt from the same files always asks Relay with the same requestId, so a repeat of it never
 // starts a second run (Relay returns the first); another task with a reused key gets its own.
 export function requestId(taskId: string, key: string, attempt: number, base: string): string {
-  const h = sha(`nova-relay:${taskId}:${key}:${attempt}:${base}`);
+  const h = sha256(`nova-relay:${taskId}:${key}:${attempt}:${base}`);
   const variant = ((parseInt(h[16]!, 16) & 0x3) | 0x8).toString(16);
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
@@ -176,7 +175,7 @@ const gitPart = (p: string) => p.split('/').some((x) => x === '.git');
 function snapshot(cwd: string): { files: Map<string, Buffer>; key: string } {
   const files = new Map<string, Buffer>();
   for (const rel of walk(cwd, (p) => gitPart(p))) files.set(rel, readFileSync(join(cwd, rel)));
-  const key = sha([...files.entries()].map(([p, b]) => `${p}\0${sha(b)}`).join('\n'));
+  const key = sha256([...files.entries()].map(([p, b]) => `${p}\0${sha256(b)}`).join('\n'));
   return { files, key };
 }
 

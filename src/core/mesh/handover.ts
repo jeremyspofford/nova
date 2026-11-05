@@ -19,7 +19,7 @@
 // higher epoch with its own key, which devices pinned as a candidate's) and the stable mesh name
 // (NOVA_MESH_PUBLIC_URL), which the node that becomes hub points at itself through a driver, when one
 // is configured (NOVA_MESH_NAME_CONTROL; in this build only a loopback stand-in is ever used).
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import { tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
@@ -41,6 +41,7 @@ export { tap };
 import { sealed, type Manifest } from '../resilience/backup.ts';
 import { canonicalJson, freshTime, linkMessage, seenMessage, sessionMessage, verifyDeviceSignature, verifyLink, verifyRoster, type SignedLink, type SignedRoster, type SuccessionLink } from './wire.ts';
 import { EPOCH_CEILING } from './promote.ts';
+import { sha256 } from '../workspace.ts';
 
 export const PROMOTION_WORKER = 'mesh-promotion';
 export const PROMOTION_SYSTEM = 'nova-promotion';
@@ -62,8 +63,6 @@ export const BACKUP_FRESH_MS = 24 * 3600_000;
 // Probes failing in a row before the old hub takes the role back.
 export const FAILS_TO_ROLL_BACK = 3;
 const TIER3 = 'It changes which computer runs Nova and holds your data, so it needs your explicit confirmation every time (tier 3).';
-
-const sha = (s: string | Buffer) => createHash('sha256').update(s).digest('hex');
 
 // ---- pre-checks (step 1), pure -------------------------------------------------------------------
 
@@ -119,7 +118,7 @@ export function prechecks(o: { device: Device | null; standbyId: string | null; 
 // ---- signed calls and the handover ---------------------------------------------------------------
 
 interface CallAuth { from: string; to: string; epoch: number; time: number; nonce: string; signature: string }
-const callMessage = (step: string, a: Omit<CallAuth, 'signature'>, payload: unknown) => Buffer.from(`nova-promotion-v1|${step}|${a.from}|${a.to}|${a.epoch}|${a.time}|${a.nonce}|${sha(canonicalJson(payload ?? null))}`, 'utf8');
+const callMessage = (step: string, a: Omit<CallAuth, 'signature'>, payload: unknown) => Buffer.from(`nova-promotion-v1|${step}|${a.from}|${a.to}|${a.epoch}|${a.time}|${a.nonce}|${sha256(canonicalJson(payload ?? null))}`, 'utf8');
 
 export function signCall(identity: MeshIdentity, step: string, to: string, epoch: number, payload: unknown, nowS: number): { auth: CallAuth; payload: unknown } {
   const a = { from: identity.id, to, epoch, time: nowS, nonce: randomBytes(12).toString('base64url') };

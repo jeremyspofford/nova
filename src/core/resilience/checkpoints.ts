@@ -19,7 +19,7 @@
 //
 // Restoring (tier 3, the hub's own screen) is staged, then applied when Nova next starts, before
 // the database opens, by swapping folders (finishStaged): see `stageRestore` and `finishStaged`.
-import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { chmodSync, closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -38,6 +38,7 @@ import { carryOver, droppedDevices } from './restore.ts';
 import { isNovaEntry } from './entries.ts';
 import type { Restarter } from './restart.ts';
 import { RESET_MARKER, finishReset, type FinishOptions as ResetFinishOptions } from './reset.ts';
+import { sha256 } from '../workspace.ts';
 
 export const CHECKPOINTS_DIR = 'checkpoints';
 export const KEEP_AUTO = 10;
@@ -783,7 +784,6 @@ export function unrecordedRestores(home: string, recorded: (id: string) => boole
 }
 
 export const newRestoreId = () => randomUUID();
-export const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
 
 // ---- the service: what the core and its routes use -------------------------------------------------
 

@@ -7,14 +7,14 @@
 // The core turns it on (`setTap`) only in a test or the drill, on a temp home (handover.ts `testing`);
 // anywhere else it is refused. Nothing it writes holds key material in clear: the vault's key, which a
 // sync batch carries to a standby sealed, is replaced by its digest.
-import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { sha256 } from '../workspace.ts';
 
 let dir: string | null = null;
 export function setTap(to: string | null): void { dir = to; }
 
-const digest = (v: string) => `[vault key, sha256 ${createHash('sha256').update(v).digest('hex').slice(0, 16)}]`;
+const digest = (v: string) => `[vault key, sha256 ${sha256(v).slice(0, 16)}]`;
 function clean(kind: string, data: unknown): unknown {
   if (kind !== 'sync' || !data || typeof data !== 'object') return data;
   const p = data as { rows?: { tbl?: string; row?: string | null }[] };

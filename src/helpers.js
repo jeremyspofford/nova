@@ -12,12 +12,12 @@
 // run after a restart). If Nova stops while one is working, the conversation
 // hears so when Nova starts again.
 import { EventEmitter } from 'node:events';
-import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { inHome, inSecretDir } from './home.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 import { WORKER, begun, openTasks } from './chat-run.js';
+import { sha256 } from './core/index.ts';
 
 const MAX_TASK = 8000;
 const MAX_FILES = 5;
@@ -59,7 +59,7 @@ export class Helpers extends EventEmitter {
         origin: up ? up.origin : { kind: 'user', ref: `session:${parent}${turn ? `/${turn}` : ''}` },
         ...(up ? { parent_id: up.id } : {}),
         evidence_required: [{ kind: 'confirmation', note: 'The report is in the conversation that asked.' }],
-        context_refs: passed.map((f) => ({ kind: 'file', ref: `~/${f.path}`, sha256: createHash('sha256').update(f.text).digest('hex') })),
+        context_refs: passed.map((f) => ({ kind: 'file', ref: `~/${f.path}`, sha256: sha256(f.text) })),
         inputs: { kind: 'helper', run, title: name, parent, ...(turn ? { turn } : {}), files: passed, ...(taint?.length ? { taint } : {}) },
       });
     } catch (e) {

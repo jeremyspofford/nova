@@ -25,7 +25,7 @@ import { Git, OID, checkBranch } from './git.ts';
 import { applyChanges, changes as changesOf, copyWalk, digest, refusals, walk, type Change } from './tree.ts';
 import { alive, freePort, procStart, startPreview, stopPreview, stopRecorded } from './preview.ts';
 import type { ChildProcess } from 'node:child_process';
-import type { Db } from '../db.ts';
+import { jsonOrNull as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
@@ -84,7 +84,6 @@ export interface CodingOptions {
 const short = (oid: string | null | undefined) => (oid ? oid.slice(0, 7) : '');
 const clip = (s: string, n = 80) => { const t = s.trim().replace(/\s+/g, ' '); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-const parse = <T>(s: string | null): T | null => (s ? JSON.parse(s) as T : null);
 
 export class Coding {
   readonly worker: LanedWorker;

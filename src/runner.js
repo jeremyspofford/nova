@@ -7,11 +7,11 @@
 // (streaming text, a pending approval) is held in memory and broadcast; if the
 // process dies mid-turn, the log still shows exactly how far it got.
 import { EventEmitter } from 'node:events';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { runAgent, AgentError } from './agent.js';
-import { DEFAULT_LINK_CAPS, Ingest, cleanOrigin, escapeProtocol, permits } from './core/index.ts';
+import { DEFAULT_LINK_CAPS, Ingest, cleanOrigin, escapeProtocol, permits, sha256 } from './core/index.ts';
 import { buildPrompt, buildSystem, helperSection, runSection, schedulesSection, skillsSection } from './context.js';
 import { Memory } from './memory.js';
 import { Skills } from './skills.js';
@@ -24,7 +24,6 @@ import { reduce, titleFrom } from '../ui/js/reduce.js';
 import { stricter } from './chat-run.js';
 
 const shortId = () => randomUUID().slice(0, 8);
-const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 const hostOf = (u) => { try { return new URL(String(u)).hostname; } catch { return String(u ?? '').slice(0, 100); } };
 
 // The ingest gate (Amendment 2026-10-30-C Part 3). While a run has read outside content (its
@@ -273,7 +272,7 @@ export class Runner extends EventEmitter {
   }
 
   receipt(sessionId, run, mode, { system, prompt, recall }) {
-    const hash = (s) => createHash('sha256').update(String(s)).digest('hex');
+    const hash = (s) => sha256(String(s));
     const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'model';
     // "/usr/local/bin/Claude" → "claude": the receipt names a provider, not a path.
     const name = program.split('/').pop().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, 64) || 'model';

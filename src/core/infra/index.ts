@@ -10,7 +10,7 @@
 // Built on what exists: the ledger's tiers, privacy gate, commit points and recovery; checkpoints;
 // the vault (provider secrets, handed to the tool's process only); log problems and the trigger
 // engine's messages for alerts; runLines and children.ts for every process.
-import { createCipheriv, createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -22,12 +22,13 @@ import { tail } from '../providers/cli.ts';
 import { Redactor } from '../browser/logins.ts';
 import { openTofu, toolEnv, type PlanApplyTool, type PlanData, type ToolContext } from './tool.ts';
 import { priceChanges, priceState, usd, validateBudget, validatePrices, verdict, type Level, type PriceSheet, type PricedChange, type Verdict } from './budget.ts';
-import type { Db } from '../db.ts';
+import { jsonOrNull as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
 import type { Vault } from '../vault.ts';
 import type { Egress } from '../workers.ts';
+import { sha256 } from '../workspace.ts';
 
 export const INFRA_WORKER = 'infra';
 export const CONFIRMATION_SYSTEM = 'nova-infra';
@@ -76,8 +77,7 @@ export interface InfraOptions {
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const clip = (s: string, n = 80) => { const t = s.trim().replace(/\s+/g, ' '); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
-const parse = <T>(s: string | null): T | null => (s ? JSON.parse(s) as T : null);
-const sha256File = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex');
+const sha256File = (p: string) => sha256(readFileSync(p));
 const signed = (c: number) => `${c < 0 ? '−' : '+'}${usd(Math.abs(c))}`;
 
 export class Infra {
@@ -490,7 +490,7 @@ export class Infra {
     let stateSha = 'none: the state isn’t in the project’s folder';
     if (existsSync(before)) {
       const data = readFileSync(before);
-      stateSha = createHash('sha256').update(data).digest('hex');
+      stateSha = sha256(data);
       this.#seal(p, r, data, join(this.#runDir(r.id), 'state-before.sealed'));
     }
     this.#set(r.id, { checkpoint: cp.id, state_before: stateSha });

@@ -7,7 +7,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { CoreError } from './errors.ts';
 import { sha256 } from './workspace.ts';
 import { CronError, describeCron, lastRun, nextRun, parseCron, wallOf } from '../cron.js';
-import type { Db } from './db.ts';
+import { fromJson as parse, type Db } from './db.ts';
 import type { Log } from './log.ts';
 import type { Ledger, Task, TaskInput } from './ledger.ts';
 import type { Decisions, Inputs, RulesProvider, TemplateDef, Templates } from './decide.ts';
@@ -101,7 +101,6 @@ const UNSURE = 'Not sure this should happen on its own, so it waits for you.';
 const DEFAULT_DEDUP_S = 600;
 
 type Row = Record<string, string | number | null>;
-const parse = <T>(s: unknown): T => (typeof s === 'string' ? JSON.parse(s) : null) as T;
 const minutes = (hhmm: string): number | null => {
   const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(hhmm);
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;

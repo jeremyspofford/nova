@@ -20,7 +20,7 @@ import { CoreError } from '../errors.ts';
 import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
 import { unifiedDiff } from '../providers/taskspace.ts';
 import { ADAPTERS, KINDS, changedPaths, checkUrl, digest, httpConfig, inexactNumbers, leafPaths, mask, mergePatch, pretty, secretChanges, shape, showPath, urlEgress, validatePatch, valueAt, without, type Config, type Json, type NetworkTarget } from './targets.ts';
-import type { Db } from '../db.ts';
+import { jsonOrNull as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
@@ -80,7 +80,6 @@ export interface NetworkOptions {
   now?: () => Date;
 }
 
-const parse = <T>(s: string | null): T | null => (s ? JSON.parse(s) as T : null);
 const clip = (s: string, n = 80) => { const t = s.trim().replace(/\s+/g, ' '); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const minutes = (s: number) => (s % 60 === 0 ? `${s / 60} minute${s === 60 ? '' : 's'}` : `${s} seconds`);
 

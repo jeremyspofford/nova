@@ -3,11 +3,11 @@
 // template's own schema. The model is asked for exactly that shape (Ollama's structured output),
 // and anything that doesn't fit is not repaired or guessed: the decision escalates. It is always
 // local: it asks the inference API as local-only, so it can never reach the cloud.
-import { createHash } from 'node:crypto';
 import { QUESTION_TYPES, UNKNOWN, checkInputs, type Answer, type Decision, type DecisionProvider, type Question, type Template } from '../decide.ts';
 import type { Egress } from '../workers.ts';
 import { isObj } from '../envelope.ts';
 import type { InferRequest, InferResult } from './index.ts';
+import { sha256 } from '../workspace.ts';
 
 export const PROVIDER_ID = 'local-model';
 export type Guard = (t: Template, inputs: Record<string, unknown>, answers: Record<string, Answer>) => string | null;
@@ -94,8 +94,8 @@ export class LocalModelProvider implements DecisionProvider {
       role: 'triage-text', privacy_mode: 'local-only', format: answerSchema(t), purpose: `decision: ${t.template_id}@${t.version}`,
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       context_items: [
-        { kind: 'file', ref: `template:${t.template_id}@${t.version}`, sha256: createHash('sha256').update(JSON.stringify(t.questions)).digest('hex') },
-        { kind: 'file', ref: 'decision inputs', sha256: createHash('sha256').update(JSON.stringify(checked)).digest('hex') },
+        { kind: 'file', ref: `template:${t.template_id}@${t.version}`, sha256: sha256(JSON.stringify(t.questions)) },
+        { kind: 'file', ref: 'decision inputs', sha256: sha256(JSON.stringify(checked)) },
       ],
     });
     // The model's own `why` is never kept: System 1 doesn't write what the person reads (ADR-7).

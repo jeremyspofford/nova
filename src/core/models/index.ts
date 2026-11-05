@@ -11,7 +11,6 @@
 //   - cloud-allowed: the cloud model first (within budget); when it can't be reached, or the
 //     budget is used, the local model serves and Nova says the answer may be less thorough.
 import { EventEmitter } from 'node:events';
-import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { CoreError } from '../errors.ts';
 import { isObj, reporter, type Brief, type PrivacyMode, type Report } from '../envelope.ts';
@@ -30,6 +29,7 @@ import type { ContextItem, Receipts } from '../receipts.ts';
 import type { Verifier } from '../verify.ts';
 import type { Devices, Device } from '../mesh/devices.ts';
 import type { Route } from '../api.ts';
+import { sha256 } from '../workspace.ts';
 
 export { ROLES, ROLE_WORDS, type Role } from './recommend.ts';
 export type { Hardware } from './hardware.ts';
@@ -41,7 +41,6 @@ const MODEL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/;
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/;
 const PERIODS = ['day', 'week', 'month'] as const;
 type Period = (typeof PERIODS)[number];
-const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
 // Where a role runs: a device (the hub, or a paired computer), its runtime's address, and the
 // model. A role on a GPU spoke may name a hub model that small jobs use instead of waking it.
@@ -652,7 +651,7 @@ export class Models extends EventEmitter {
   }
 
   #receipt(req: InferRequest, mode: PrivacyMode, provider: string, model: string, egress: string): string {
-    const items = req.context_items?.length ? req.context_items : [{ kind: 'file' as const, ref: `${req.role} request`, sha256: sha(JSON.stringify(req.messages ?? req.input ?? '')) }];
+    const items = req.context_items?.length ? req.context_items : [{ kind: 'file' as const, ref: `${req.role} request`, sha256: sha256(JSON.stringify(req.messages ?? req.input ?? '')) }];
     return this.#o.receipts.record({
       ...(req.task_id ? { task_id: req.task_id } : {}), ...(req.session_id ? { session_id: req.session_id } : {}),
       provider, model, purpose: req.purpose ?? `${req.role}`, privacy_mode: mode, egress, context_items: items,

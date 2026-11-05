@@ -7,9 +7,9 @@
 // in a battery that isn't all Nouls; a truth table with a row that has no outcome.
 // Flagged (warnings, kept with the template): conditions joined by "or" in one question; the same
 // opening sentence on every question (a preamble).
-import { createHash } from 'node:crypto';
 import { checkTable } from './policy.ts';
 import type { ServiceTemplate } from './types.ts';
+import { sha256 } from '../workspace.ts';
 
 export interface Registered { template: ServiceTemplate; warnings: string[] }
 
@@ -70,7 +70,7 @@ export function validate(t: ServiceTemplate): { errors: string[]; warnings: stri
 // state's shape. An eval verdict pins it (VerdictRecord.wording_sha256), so an edit that keeps the
 // version number drops the verdict's trust.
 export function wordingOf(t: ServiceTemplate): string {
-  return createHash('sha256').update(JSON.stringify({ id: t.template_id, v: t.version, purpose: t.purpose, feature: t.feature, fields: t.fields, questions: t.questions, bands: t.policy.bands ?? null, state: t.state ? String(t.state) : null })).digest('hex');
+  return sha256(JSON.stringify({ id: t.template_id, v: t.version, purpose: t.purpose, feature: t.feature, fields: t.fields, questions: t.questions, bands: t.policy.bands ?? null, state: t.state ? String(t.state) : null }));
 }
 
 export class Registry {

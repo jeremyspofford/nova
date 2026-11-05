@@ -18,7 +18,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, rmSync 
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import type { Db } from '../db.ts';
+import { jsonOr as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Route } from '../api.ts';
 import type { Ledger, Task } from '../ledger.ts';
@@ -60,8 +60,6 @@ export interface CaptureSyncOptions {
 interface TombRow { id: string; device_id: string; items: string; events: string; issued_at: string; acked_at: string | null; removed: string | null }
 interface RawRow { id: string; task_id: string | null; device_id: string; event_id: string; item: string; reason: string; state: 'asked' | 'arrived' | 'failed'; sha256: string | null; size: number | null; signature: string | null; asked_at: string; done_at: string | null }
 interface SyncRow { device_id: string; acked_seq: number; synced_to: string | null; queued: number; paused: string | null; at: string }
-
-const parse = <T>(s: string | null, f: T): T => { if (!s) return f; try { return JSON.parse(s) as T; } catch { return f; } };
 
 export class CaptureSync {
   #o: CaptureSyncOptions;

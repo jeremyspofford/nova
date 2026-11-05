@@ -17,6 +17,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { sha256 } from './core/index.ts';
 
 const STOP = new Set(('a an and are as at be but by can could did do does for from had has have how i if in into is it its ' +
   'just me my no not of on or our so that the their them then there these they this to was we were what when where ' +
@@ -41,7 +42,6 @@ const TIME = /^(\d{1,2}:\d{2})\s+·\s+/;
 
 const newId = (prefix) => prefix + randomBytes(4).toString('hex');
 const handId = (text) => `h${createHash('sha1').update(text).digest('hex').slice(0, 8)}`;
-const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').replace(/<!--|-->/g, '').trim();
 
 function parseMeta(s) {
