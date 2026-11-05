@@ -5,30 +5,19 @@
 import { api } from './core.js';
 import { settingsRow } from './components.js';
 import { escapeHtml as esc } from './markdown.js';
-import { over, waitingLine } from './wait.js';
+import { makePart, waitingLine } from './wait.js';
 
 let data = null;
-let failed = '';
-let rerender = () => {};
+const part = makePart('services', async () => { data = await api('GET', '/services/backend'); });
+export const loadServices = part.load;
 
-export function bindServices(render) { rerender = render; }
-
-export async function loadServices() {
-  try {
-    data = await api('GET', '/services/backend');
-    failed = '';
-    over('services');
-  } catch (e) {
-    failed = e.message || 'Nova’s server didn’t answer.';
-  }
-  rerender();
-}
+export function bindServices(render) { part.rerender = render; }
 
 export function renderServices() {
   const head = '<h2 class="memory-heading" id="set-services">Services</h2><p class="memory-lede"><a class="link" href="/topology">View machines and services</a></p>';
   if (!data) {
-    return `<section class="memory-section" id="services" aria-labelledby="set-services">${head}${failed
-      ? `<p class="memory-lede">${esc(failed)}</p>`
+    return `<section class="memory-section" id="services" aria-labelledby="set-services">${head}${part.failed
+      ? `<p class="memory-lede">${esc(part.failed)}</p>`
       : waitingLine('Reading how Nova runs its services', { key: 'services' })}</section>`;
   }
   const other = data.options.filter((o) => o.id !== 'supervisor');
