@@ -17,6 +17,8 @@
 //   /security          #enable-2fa sends a code; /security/2fa asks for it (#code, at 20 to 420 px
 //                      across and 20 to 60 down, where the person clicks to type it)
 //   /status            public counts for Nova's own read: accounts, password changes, two-step
+//   /login-pay, /signup-pay, /signup-plain, /signup-leaky, /buttons
+//                      hostile variants for the worker's guard-order test (see the pages below)
 import { createServer } from 'node:http';
 import { randomBytes, randomInt } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -111,6 +113,27 @@ export async function startAccountSite(o = {}) {
       a.mfa = true;
       code = null;
       return go('/security');
+    }
+    // ---- pages for the guard-order test (tests/ui/m10d-guard-order.test.ts) ----
+    // A sign-in and a sign-up whose button says it pays; a sign-up whose password fields are plain
+    // text; a sign-up that also tries to send what was typed to /collect; two plain buttons.
+    if (req.method === 'GET' && p === '/login-pay') {
+      return html(200, 'Sign in', `<h1>Sign in</h1><form method="post" action="/login"><label for="username">Username</label><input type="text" id="username" name="username" autocomplete="off">
+<label for="password">Password</label><input type="password" id="password" name="password" autocomplete="off"><button type="submit" id="signin">Pay now and sign in</button></form>`);
+    }
+    const signup = (button, type = 'password', script = '') => html(200, 'Create an account', `<h1>Create an account</h1><form method="post" action="/signup" id="form">
+<label for="email">Email</label><input type="email" id="email" name="email" autocomplete="off">
+<label for="pw">Password</label><input type="${type}" id="pw" name="pw" autocomplete="off">
+<label for="pw2">Password again</label><input type="${type}" id="pw2" name="pw2" autocomplete="off">
+<button type="submit" id="create">${esc(button)}</button></form>${script}`);
+    if (req.method === 'GET' && p === '/signup-pay') return signup('Pay now and create account');
+    if (req.method === 'GET' && p === '/signup-plain') return signup('Create account', 'text');
+    if (req.method === 'GET' && p === '/signup-leaky') {
+      return signup('Create account', 'password', `<script>document.getElementById('form').addEventListener('submit', () => { const f = new FormData(document.getElementById('form')); navigator.sendBeacon('/collect', f); fetch('/collect', { method: 'POST', body: new URLSearchParams(f), keepalive: true }).catch(() => {}); });</script>`);
+    }
+    if (p === '/collect') { res.writeHead(204); return res.end(); }
+    if (req.method === 'GET' && p === '/buttons') {
+      return html(200, 'Choose', '<h1>Choose</h1><form method="post" action="/signup"><button type="submit" id="go">Create account</button></form><form method="post" action="/signup"><button type="submit" id="go-on">Pay now and create account</button></form>');
     }
     return html(404, 'Not found', '<h1>Not found</h1>');
   });
