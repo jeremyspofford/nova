@@ -1045,22 +1045,35 @@ export function taskPicks(view) {
 <p class="settings-note dm-privacy">${PRIVACY_PICKS[view.privacy] ?? ''}</p><ul class="settings-list">${rows}</ul>${cloudList}</section>`;
 }
 
+// Install and assign, asked before anything downloads: what goes where, and what it serves. The
+// downloads are tier-2 tasks that wait for this OK, as every model download does.
+function installConfirm(view) {
+  const c = view.confirm;
+  return `<div class="dm-confirm" role="group" aria-labelledby="${view.id}-confirm-title" data-models-confirm><p class="settings-label" id="${view.id}-confirm-title">${esc(c.title)}</p>${c.lines.map((l) => `<p class="settings-note">${esc(l)}</p>`).join('')}
+<div class="connection-actions"><button type="button" class="btn primary" data-action="models-confirm">${esc(c.ok)}</button><button type="button" class="btn quiet" data-action="models-not-now">Not now</button></div></div>`;
+}
+
 // The whole screen. `view`: { id, device: {name, path, hardware, memory, budget_bytes, ram_bytes,
-// overhead_source, overhead_loads}, plan: [{name, quant, quants, context, contexts, installed, loaded,
-// estimate, result}], total (the plan's own fit result), catalog: [names], advice, privacy }.
+// overhead_source, overhead_loads, seen?}, plan: [{name, quant, quants, context, contexts, installed,
+// loaded, estimate, result}], total (the plan's own fit result), catalog: [names], advice, privacy,
+// crumb?, confirm?: {title, lines, ok}, status?, busy? }. `device.seen` is said for a device that is
+// asleep: how old what it shows is. `confirm` replaces the install button while it asks.
 export function deviceModels(view) {
   const planned = view.plan.some((m) => !m.installed);
   const wont = view.total && view.total.verdict === 'wont-fit';
-  const action = view.plan.length
-    ? `<div class="connection-actions"><button type="button" class="btn primary" data-action="models-install"${wont ? ' disabled aria-describedby="' + view.id + '-why"' : ''}>${planned ? 'Install and assign' : 'Assign'}</button></div>${wont ? `<p class="settings-note" id="${view.id}-why">The plan doesn’t fit yet. Lower a quant or a context, or remove a model.</p>` : ''}`
+  const action = view.confirm ? installConfirm(view) : view.plan.length
+    ? `<div class="connection-actions"><button type="button" class="btn primary" data-action="models-install"${wont || view.busy ? ' disabled' : ''}${wont ? ' aria-describedby="' + view.id + '-why"' : ''}>${planned ? 'Install and assign' : 'Assign'}</button></div>${wont ? `<p class="settings-note" id="${view.id}-why">The plan doesn’t fit yet. Lower a quant or a context, or remove a model.</p>` : ''}`
     : '';
+  const status = view.status ? `<p class="settings-note dm-status" role="status">${esc(view.status)}</p>` : '';
   const add = `<div class="dm-add"><label class="dm-field" for="${view.id}-add"><span class="dm-field-label">Add a model</span><select class="input" id="${view.id}-add">${view.catalog.map((n) => `<option>${esc(n)}</option>`).join('')}</select></label><button type="button" class="btn" data-action="models-add">Add to the plan</button></div>`;
+  const crumb = view.crumb === undefined ? `Settings › Devices › ${view.device.name}` : view.crumb;
+  const seen = view.device.seen ? `<p class="dm-seen" data-asleep><span class="pill">Asleep</span> ${esc(view.device.seen)}</p>` : '';
   return `<section class="panel device-models" aria-labelledby="${view.id}-title" data-device-models="${esc(view.id)}">
-<header class="dm-head"><p class="dm-crumb">Settings › Devices › ${esc(view.device.name)}</p><h3 class="dm-title" id="${view.id}-title">Models</h3><p class="dm-device">${esc(view.device.hardware)}</p></header>
+<header class="dm-head">${crumb ? `<p class="dm-crumb">${esc(crumb)}</p>` : ''}<h3 class="dm-title" id="${view.id}-title">Models</h3><p class="dm-device">${esc(view.device.hardware)}</p>${seen}</header>
 ${view.total ? memoryBudget(view) : ''}
 <section class="dm-plan" aria-labelledby="${view.id}-plan-title"><h4 class="section-title" id="${view.id}-plan-title">Planned on this device</h4>
 ${view.plan.length ? `<ul class="dm-models">${view.plan.map((m, i) => modelPlanRow(view, m, i)).join('')}</ul>` : '<p class="settings-note">Nothing is planned here yet. Plan a pick below, or add a model.</p>'}
-${view.plan.length > 1 ? together(view) : ''}${add}${action}</section>
+${view.plan.length > 1 ? together(view) : ''}${add}${action}${status}</section>
 ${taskPicks(view)}</section>`;
 }
 

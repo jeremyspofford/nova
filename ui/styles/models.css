@@ -109,3 +109,18 @@
 .dm-privacy strong { color: var(--text-primary); font-weight: var(--type-weight-strong); }
 .dm-pick .settings-control { flex: none; }
 .dm-sub-title { margin: var(--space-4) 0 var(--space-2); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); }
+
+/* The app's Models screen (model-fit step 3, built from the approved composition): a device that is
+   asleep says how old what it shows is; Install and assign asks before anything downloads, in place
+   of its button; what happened since is said under it. */
+.dm-seen { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-1); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.dm-confirm { display: grid; gap: var(--space-2); margin-top: var(--space-4); padding: var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius-input); background: var(--bg-base); }
+.dm-confirm .settings-note, .dm-confirm .settings-label { margin: 0; }
+.dm-confirm .connection-actions { margin-top: var(--space-2); }
+.dm-status { margin: var(--space-3) 0 0; }
+.dm-back { margin-bottom: var(--space-3); }
+.dm-routes { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+.dm-route { display: grid; gap: var(--space-1); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+.dm-route .settings-note, .dm-route .settings-label { margin: 0; }
+.model-device .sheet-actions { margin-top: var(--space-2); }
+.setup-models { display: grid; gap: var(--space-3); }

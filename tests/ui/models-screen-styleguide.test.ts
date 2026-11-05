@@ -15,7 +15,7 @@ import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
 import { GiB, PRIOR_OVERHEAD_BYTES, fit } from '../../src/core/models/fit.ts';
 
-const STATES = ['3090-one-model', '3090-two-models', '8gb-nothing-at-16k', 'mac-16gb-unified', 'unknown-shape', 'no-gpu'];
+const STATES = ['3090-one-model', '3090-two-models', '8gb-nothing-at-16k', 'mac-16gb-unified', 'unknown-shape', 'no-gpu', 'asleep', 'install-confirm'];
 // The owner's matrix: desktop bands, iPad-class, phones, and the foldables' postures.
 const MATRIX = {
   'desktop-1920': { width: 1920, height: 1080 }, 'desktop-1440': { width: 1440, height: 900 }, 'desktop-1280': { width: 1280, height: 800 },
@@ -135,6 +135,16 @@ async function stateChecks(page: Page, s: string, label: string) {
     assert.match(text, /No GPU found\./);
     assert.match(text, /It runs on the CPU, slow\./);
     assert.match(await root.locator('[data-task="screening"]').innerText(), /qwen3/, `${label}: the hub screens`);
+  }
+  if (s === 'asleep') {
+    assert.equal(await root.locator('[data-asleep]').count(), 1, `${label}: an asleep device says so`);
+    assert.match(await root.locator('[data-asleep]').innerText(), /Asleep\s+Last seen 3 h ago\. What shows here is what it last reported/, `${label}: stamped with its age`);
+  }
+  if (s === 'install-confirm') {
+    assert.equal(await root.locator('[data-models-confirm]').count(), 1, `${label}: Install and assign asks first`);
+    assert.equal(await root.locator('[data-action="models-install"]').count(), 0, `${label}: the ask takes the button's place`);
+    assert.match(await root.locator('[data-models-confirm]').innerText(), /about 14\.6 GB, downloads to Study desktop, then serves thinking and writing/);
+    assert.equal(await root.locator('.btn.primary').count(), 1, `${label}: one standout`);
   }
 }
 

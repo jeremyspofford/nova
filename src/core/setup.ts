@@ -436,7 +436,7 @@ export class Setup extends EventEmitter {
     const waiting = imported.reduce((n, r) => n + r.waiting, 0);
     return {
       found: on.discovery?.found ?? [], looked: !!on.discovery, imported, waiting,
-      device: { words: factsWords(facts), roles, roles_words: purposeWords(roles.filter((p) => p !== 'hub-candidate')), backend: on.backend ?? 'supervisor', backend_words: SUPERVISOR_WORDS },
+      device: { words: factsWords(facts), roles, roles_words: purposeWords(roles.filter((p) => p !== 'hub-candidate')), backend: on.backend ?? 'supervisor', backend_words: SUPERVISOR_WORDS, gpu: facts.gpus.length > 0 },
       action: firstAction(waiting),
     };
   }

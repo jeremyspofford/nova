@@ -9,6 +9,7 @@ import { liveOrb, openSheet, toast } from './shell.js';
 import { escapeHtml as esc } from './markdown.js';
 import { forgetHere } from './forget-here.js';
 import { waitingLine } from './wait.js';
+import { bindDeviceModels, deviceModelsFrame, loadDeviceModels } from './device-models.js';
 
 const el = document.getElementById('setup');
 let view = null;
@@ -64,6 +65,17 @@ function choices() {
 <button type="button" class="btn primary" data-action="setup-many">Continue</button></fieldset>`;
 }
 
+// The Models step (model-fit step 3): a computer with the compute role, or a GPU Nova found, gets the
+// same Models screen Settings › Devices has, so the person can plan and install models now or later.
+let modelsAsked = false;
+function modelsStep(f) {
+  if (!f.device.gpu && !f.device.roles.includes('compute')) return '';
+  if (!modelsAsked) { modelsAsked = true; loadDeviceModels(); }
+  return `<section class="setup-models" aria-labelledby="setup-models-title"><h3 class="sheet-heading" id="setup-models-title">Models on this computer</h3>
+  <p class="setup-sub">${f.device.gpu ? 'Nova found a GPU here.' : 'This computer has the compute role.'} What fits, at which quant and context, and what Nova recommends for each task. Nothing downloads until you say so; this is also in Settings › Devices.</p>
+  ${deviceModelsFrame('hub', 'setup')}</section>`;
+}
+
 // The first view (Amendment 2026-10-31-B Part 2): never a blank chat alone.
 function firstView() {
   const f = view.first;
@@ -79,6 +91,7 @@ function firstView() {
   <h2 class="setup-first-title" id="setup-first-title">Ready</h2>
   <h3 class="sheet-heading">This computer</h3>
   <p class="setup-sub">${esc(f.device.words.replace(/^a /, 'A '))}. It is your hub, for ${esc(f.device.roles_words.toLowerCase())}. Its services run as ${esc(f.device.backend_words.toLowerCase())}; Settings › Services says what that means here.</p>
+  ${modelsStep(f)}
   <h3 class="sheet-heading">Found</h3>${found}
   <h3 class="sheet-heading">Brought in</h3>${brought}
   <div class="setup-next"><button type="button" class="btn primary" data-action="setup-first" data-go="${esc(f.action.go)}">${esc(f.action.label)}</button><p class="setup-sub">${esc(f.action.why)}</p></div>
@@ -184,6 +197,8 @@ el.addEventListener('click', (e) => {
   }
   if (b.dataset.action === 'evidence' && task) openSheet(evidenceViewer(task), { label: task.title });
 });
+
+bindDeviceModels(el);
 
 // The welcome task moves through the ledger while the person reads; follow it.
 on('task', (t) => { if (view?.first_task && t?.id === view.first_task && !el.hidden) loadTask(); });
