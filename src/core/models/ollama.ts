@@ -94,13 +94,10 @@ export function toInstalled(m: Record<string, any>): InstalledModel {
 export class Ollama {
   readonly url: string;
   readonly host: string;
-  #who: string;
 
-  // `who` names the runtime when it can't be reached (default "Ollama at <host>").
-  constructor(url: string, o: { who?: string } = {}) {
+  constructor(url: string) {
     this.url = url.replace(/\/+$/, '');
     this.host = new URL(this.url).host;
-    this.#who = o.who ?? `Ollama at ${this.host}`;
   }
 
   async #fetch(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<Response> {
@@ -110,22 +107,20 @@ export class Ollama {
       return await fetch(`${this.url}${path}`, { ...init, ...NO_REDIRECT, signal, headers: { 'content-type': 'application/json', ...(init.headers ?? {}) } });
     } catch (e) {
       if (init.signal?.aborted) throw e;
-      if (timeout.aborted) throw new RuntimeDown(`${this.#who} didn’t answer in time.`);
-      throw new RuntimeDown(`Nova couldn’t reach ${this.#who}: ${reachProblem(e)}.`);
+      if (timeout.aborted) throw new RuntimeDown(`Ollama at ${this.host} didn’t answer in time.`);
+      throw new RuntimeDown(`Nova couldn’t reach Ollama at ${this.host}: ${reachProblem(e)}.`);
     }
   }
 
   async #json<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
     const res = await this.#fetch(path, init);
     const body = await res.text().catch(() => '');
-    if (!res.ok) throw Object.assign(new Error(errorText(res.status, body, this.host)), { status: res.status });
+    if (!res.ok) throw new Error(errorText(res.status, body, this.host));
     try { return JSON.parse(body) as T; } catch { throw new Error(`Ollama at ${this.host} sent something Nova couldn’t read.`); }
   }
 
-  // `strict` (Tev1's version gate): a missing or non-string version throws instead of reading 'unknown'.
-  async version(signal?: AbortSignal, strict = false): Promise<string> {
-    const v = await this.#json<{ version?: unknown }>('/api/version', { ...(signal ? { signal } : {}), timeoutMs: 3000 });
-    if (strict && typeof v.version !== 'string') throw new Error(`Ollama at ${this.host} didn’t say which version it is.`);
+  async version(signal?: AbortSignal): Promise<string> {
+    const v = await this.#json<{ version?: string }>('/api/version', { ...(signal ? { signal } : {}), timeoutMs: 3000 });
     return String(v.version ?? 'unknown');
   }
 

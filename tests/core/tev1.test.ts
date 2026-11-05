@@ -212,7 +212,8 @@ test('no version string is "didn’t say", never read as unknown; odd model list
       assert.equal(s.requests.length, 0);
     } finally { await s.close(); }
   }
-  // The shared client still reads a missing version as 'unknown' for Settings › Models.
+  // Why the seat keeps its own version call: the shared client reads a missing version as
+  // 'unknown' (right for Settings › Models), which the seat must refuse instead.
   const s = await startTev1StandIn({ answer: { '/api/version': [200, '{}'] } });
   try { assert.equal(await new Ollama(s.url).version(), 'unknown'); } finally { await s.close(); }
 });

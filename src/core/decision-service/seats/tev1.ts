@@ -6,7 +6,6 @@
 // Ollama 0.40.4 (what the published models require), when unreachable, or when not downloaded.
 import { modelMemory, privateAddress, gb, type Hardware } from '../../models/hardware.ts';
 import { HEADROOM } from '../../models/recommend.ts';
-import { Ollama, RuntimeDown, type InstalledModel } from '../../models/ollama.ts';
 import { askChunked, estimateTokens, PLAN_LIMITS, type PlanLimits } from '../chunk.ts';
 import { body, ENDPOINT_SINCE, MAX_BODY_BYTES, MAX_QUESTIONS, older, SystemOne, TEV1_REQUIRES, SeatFailure, Unavailable, utf8, wireQuestions } from '../wire.ts';
 import type { BuiltState, Seat, SeatAnswer, SeatLimits, SeatStatus, ServiceTemplate } from '../types.ts';
@@ -50,17 +49,6 @@ export function localUrl(url: string): boolean {
 // The exact model a verdict is tied to: tag and registry digest.
 export const modelId = (tag: string, digest: string) => `${tag}@${digest.replace(/^sha256:/, '')}`;
 
-// Ollama's model list in the seat's own words: a refusal names its status, and a list it can't
-// read counts as empty (so "isn't downloaded": closed).
-async function builds(o: Ollama): Promise<InstalledModel[]> {
-  try { return await o.tags(); } catch (e) {
-    const status = (e as { status?: number }).status;
-    if (e instanceof RuntimeDown) throw e;
-    if (status) throw new Unavailable(`Ollama at ${o.host} didn’t list its models (${status}).`);
-    return [];
-  }
-}
-
 export interface Tev1Detail {
   available: boolean;
   model: Size | null;
@@ -88,32 +76,29 @@ export class Tev1Seat implements Seat {
   readonly egress: Egress = 'local';
   readonly tev1Limits: Tev1Limits;
   #o: Tev1Options;
-  #c: { s1: SystemOne; ollama: Ollama };
+  #client: SystemOne;
   #detail: Tev1Detail = { available: false, model: null, digest: null, ollama: null, size_why: '', why: 'Nova hasn’t checked for Tev1 yet.', checked_at: null };
   #checking: Promise<Tev1Detail> | null = null;
   #now: () => Date;
 
   constructor(o: Tev1Options) {
     this.#o = o;
-    this.#c = this.#make(this.#url());
+    this.#client = this.#make(this.#url());
     this.tev1Limits = Object.freeze({ ...LIMITS, ...(o.limits ?? {}) });
     this.#now = o.now ?? (() => new Date());
   }
 
   #url(): string { return typeof this.#o.url === 'function' ? this.#o.url() : this.#o.url; }
 
-  // The decision endpoint through SystemOne; version and models through the shared Ollama client,
-  // which names only the host when it can't be reached (the seat's words since Part 1).
-  #make(url: string): { s1: SystemOne; ollama: Ollama } {
+  #make(url: string): SystemOne {
     if (!localUrl(url)) throw new Error(`Tev1 runs in Ollama on this device or the person’s own network; ${new URL(url).host} could be anywhere.`);
-    const s1 = new SystemOne(url, { maxQuestions: MAX_QUESTIONS, maxBodyBytes: MAX_BODY_BYTES, ...(this.#o.timeoutMs ? { timeoutMs: this.#o.timeoutMs } : {}) });
-    return { s1, ollama: new Ollama(url, { who: s1.host }) };
+    return new SystemOne(url, { maxQuestions: MAX_QUESTIONS, maxBodyBytes: MAX_BODY_BYTES, ...(this.#o.timeoutMs ? { timeoutMs: this.#o.timeoutMs } : {}) });
   }
 
-  #clients(): { s1: SystemOne; ollama: Ollama } {
+  get client(): SystemOne {
     const url = this.#url().replace(/\/+$/, '');
-    if (url !== this.#c.s1.url) this.#c = this.#make(url);
-    return this.#c;
+    if (url !== this.#client.url) this.#client = this.#make(url);
+    return this.#client;
   }
 
   limits(): SeatLimits {
@@ -141,17 +126,16 @@ export class Tev1Seat implements Seat {
     const chosen = typeof this.#o.model === 'function' ? this.#o.model() : this.#o.model;
     const size: SizeChoice = chosen && chosen !== 'auto' ? { model: chosen, why: `Tev1 ${chosen.slice(5).toUpperCase()}, chosen in Settings › Models.` } : chooseSize(hw);
     const down = (why: string, ollama: string | null = null): Tev1Detail => (this.#detail = { available: false, model: size.model, digest: null, ollama, size_why: size.why, why, checked_at: at });
-    let ollama: Ollama;
-    try { ollama = this.#clients().ollama; } catch (e) { return down((e as Error).message); }
-    // Strict: no version string is "didn't say", never 'unknown' (which older() would read as too old).
+    let client: SystemOne;
+    try { client = this.client; } catch (e) { return down((e as Error).message); }
     let version: string;
-    try { version = await ollama.version(undefined, true); } catch (e) { return down(e instanceof RuntimeDown ? e.message : `Ollama at ${ollama.host} didn’t say which version it is.`); }
+    try { version = await client.version(); } catch (e) { return down((e as Error).message); }
     if (older(version, ENDPOINT_SINCE)) return down(`This Ollama is version ${version}. Decision models need Ollama ${ENDPOINT_SINCE.replace(/\.0$/, '')} or later, and Tev1’s published models need ${TEV1_REQUIRES} or later; update Ollama to use Tev1.`, version);
     if (older(version, TEV1_REQUIRES)) return down(`This Ollama is version ${version}. Tev1’s published models need Ollama ${TEV1_REQUIRES} or later; update Ollama to use Tev1.`, version);
     if (!size.model) return down(size.why, version);
     let have;
-    try { have = (await builds(ollama)).find((m) => m.name === size.model); } catch (e) { return down((e as Error).message, version); }
-    if (!have) return down(`Tev1 (${size.model}) isn’t downloaded in Ollama at ${ollama.host}.`, version);
+    try { have = (await client.installed()).find((m) => m.name === size.model); } catch (e) { return down((e as Error).message, version); }
+    if (!have) return down(`Tev1 (${size.model}) isn’t downloaded in Ollama at ${client.host}.`, version);
     return (this.#detail = { available: true, model: size.model, digest: have.digest.replace(/^sha256:/, ''), ollama: version, size_why: size.why, why: size.why, checked_at: at });
   }
 
@@ -163,17 +147,17 @@ export class Tev1Seat implements Seat {
     if (Object.keys(built.images).length || Object.values(t.questions).some((q) => q.type === 'box')) throw new SeatFailure('Tev1 reads no images.');
     const model = d.model;
     const wq = wireQuestions(t.questions);
-    const { s1, ollama } = this.#clients();
+    const client = this.client;
     const a = await askChunked({
       t, built, limits: this.tev1Limits,
       fits: (state) => fits(model, state, wq, this.tev1Limits),
-      ask: (state) => { o.beforeSend?.(); return s1.ask(model, state, t.questions); },
+      ask: (state) => { o.beforeSend?.(); return client.ask(model, state, t.questions); },
     });
     // Which build answered: Ollama names only the tag, so the digest is read again AFTER the answer.
     // A build swapped since the last check answers as tag@new-digest, which the service's pin
     // (tag@digest asked) refuses; the seat's own record moves to the new build at once.
     let now: string | null = null;
-    try { now = (await ollama.tags()).find((m) => m.name === model)?.digest.replace(/^sha256:/, '') ?? null; } catch { now = null; }
+    try { now = (await client.installed()).find((m) => m.name === model)?.digest.replace(/^sha256:/, '') ?? null; } catch { now = null; }
     if (now && now !== this.#detail.digest && this.#detail.model === model) this.#detail = { ...this.#detail, digest: now, checked_at: this.#now().toISOString() };
     return { ...a, model_answered: now ? modelId(model, now) : `${model}@unconfirmed` };
   }
