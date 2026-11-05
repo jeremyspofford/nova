@@ -8,7 +8,7 @@ import { escapeHtml, renderMarkdown } from './markdown.js';
 import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderPermissions, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
 import { apply as applyTheme } from './theme.js';
 import { api, fromCache, on as onCore, stream as coreStream } from './core.js';
-import { loadSecurity, renderSecurity, setupPasskey } from './passkey.js';
+import { approvalFor, loadSecurity, renderSecurity, setupPasskey } from './passkey.js';
 import { bindConfig, renderConfig } from './config.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
@@ -780,7 +780,12 @@ async function decide(tool, decision, button) {
   // Tier 3: allowed only with the confirm box ticked, this time.
   if (decision === 'allow' && card?.dataset.tier === '3' && !card.querySelector('[data-confirm]')?.checked) return;
   card?.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-  try { await post(`/api/sessions/${state.id}/approvals/${tool}`, { decision }); }
+  // Tier 3 on Nova's own screen is confirmed with a passkey (T2; null on a paired device).
+  let body = { decision };
+  if (decision === 'allow' && card?.dataset.tier === '3') {
+    try { const signed = await approvalFor(api, 'POST', `/sessions/${state.id}/approvals/${tool}`, body); if (signed) body = { ...body, passkey_approval: signed }; } catch (e) { card?.querySelectorAll('button').forEach((b) => { b.disabled = false; }); toast(e.message); return; }
+  }
+  try { await post(`/api/sessions/${state.id}/approvals/${tool}`, body); }
   catch (e) { card?.querySelectorAll('button').forEach((b) => { b.disabled = false; }); say(e.message); }
 }
 

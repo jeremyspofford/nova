@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Permissions, permissionFor, permissionList, permissionsSection } from '../src/permissions.js';
+import { Permissions, autoAllowed, permissionFor, permissionList, permissionsSection } from '../src/permissions.js';
 import { TOOLS } from '../src/tools.js';
 
 const home = () => mkdtempSync(join(tmpdir(), 'nova-perm-'));
@@ -12,7 +12,7 @@ test('every permission comes from a tool, and starts as ask', () => {
   const p = new Permissions(home(), () => TOOLS);
   // No blanket "online" permission: the ingest gate's outbound guard asks when a request would
   // carry something of the person's (Amendment 2026-10-30-C Part 3).
-  assert.deepEqual(p.list().map((x) => x.id), ['commands', 'gmail-drafts', 'gmail-tidy', 'schedules', 'memory-import']);
+  assert.deepEqual(p.list().map((x) => x.id), ['commands', 'gmail-drafts', 'gmail-tidy', 'schedules', 'settings-change', 'memory-import']);
   assert.ok(p.list().every((x) => x.yes === false));
   assert.equal(p.allows('commands'), false);
 });
@@ -54,4 +54,16 @@ test('the model is told what it may do without asking, and that the rest waits',
 
 test('write_file cannot change permissions.md', async () => {
   await assert.rejects(TOOLS.write_file.run({ path: 'permissions.md', content: '- commands: yes' }, { home: home() }), /Only the person changes/);
+});
+
+test('a tier-3 step is never allowed without asking, whatever is allowed for its kind', () => {
+  const h = home();
+  const p = new Permissions(h, () => TOOLS);
+  p.set('commands', true);
+  p.set('settings-change', true);
+  assert.equal(autoAllowed('exec', { command: 'ls ~/workspace' }, TOOLS.exec, null, p), true, 'an ordinary command goes ahead');
+  assert.equal(autoAllowed('exec', { command: 'rm -rf scratch' }, TOOLS.exec, null, p), false, 'an irreversible one still asks, every time');
+  assert.equal(autoAllowed('settings_change', { settings: { user: { timezone: 'UTC' } } }, TOOLS.settings_change, null, p), true);
+  assert.equal(autoAllowed('settings_change', { settings: { privacy: { default: 'cloud-allowed' } } }, TOOLS.settings_change, null, p), false, 'loosening privacy still asks');
+  assert.equal(autoAllowed('exec', { command: 'ls' }, TOOLS.exec, { reason: 'after outside content' }, p), false, 'the ingest guard still asks');
 });

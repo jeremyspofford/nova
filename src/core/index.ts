@@ -79,14 +79,13 @@ import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
 import { Checkpoints, dropPartials, finishStaged, stagedPending, takeCheckpoint } from './resilience/checkpoints.ts';
-import { ConsolePasskeys } from './passkeys.ts';
+import { ConsolePasskeys, NO_PASSKEY, PASSKEY_NEEDED } from './passkeys.ts';
+export { ConsolePasskeys, NO_PASSKEY, PASSKEY_NEEDED } from './passkeys.ts';
 import { configRoutes } from './config-doors.ts';
 
-const PASSKEY_NEEDED = 'Tier-3 actions on Nova’s own screen are confirmed with a passkey, and this request had none, so nothing was approved.';
 // The one route that takes {confirm: true} at tier 2 (rolling a change back by hand): asked once,
 // no passkey. ui/js/core.js skips the step for the same path.
 const TIER2_CONFIRM = /^\/changes\/[^/]+\/rollback$/;
-const NO_PASSKEY = 'No passkey yet: tier-3 actions on Nova’s own screen wait until you add one in Settings › Security. Nothing was approved.';
 import { Restarter } from './resilience/restart.ts';
 import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
