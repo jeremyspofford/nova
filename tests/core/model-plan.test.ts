@@ -209,6 +209,32 @@ test('POST /models/install: within the disk budget, a mixed plan assigns the ins
   } finally { await api.close(); await core.close(); await ollama.close(); }
 });
 
+// A 49 GB budget leaves about 6.8e9: qwen3:4b (2.6e9) fits alone, qwen3:8b (5.2e9) fits alone, not both.
+test('POST /models/install: two downloads that each fit the disk budget but not together refuse the whole plan, naming the total', async () => {
+  const ollama = await startFakeOllama({ models: INSTALLED });
+  const { core } = modelsCore(ollama.url, { privacy: 'local-only' });
+  const api = await served(core);
+  try {
+    await core.models.assign('reasoner', { model: 'example-small:3b' });
+    core.models.setDiskBudget(49);
+    const before = core.ledger.list({ limit: 50 }).length;
+    const r = await api.call('POST', '/models/install', { plan: [...MIXED, { model: 'qwen3:8b', quant: 'Q4_K_M', context: 4096 }] });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /^Refused: qwen3:4b and qwen3:8b take about 7\.3 GB together\. With the 43 GB your models already use that is past the disk budget of 49 GB\..*Nothing was installed or assigned\.$/);
+    assert.equal(core.models.placement('reasoner')?.model, 'example-small:3b', 'no role changed');
+    assert.equal(core.models.placement('triage-text'), null);
+    assert.equal(core.ledger.list({ limit: 50 }).length, before, 'no task made');
+    // POST /models/pull still checks one download at a time: each alone is asked for.
+    assert.equal((await api.call('POST', '/models/pull', { model: 'qwen3:8b' })).status, 201);
+    // And a plan counts what is already waiting: qwen3:4b no longer fits beside it.
+    const again = await api.call('POST', '/models/install', { plan: MIXED });
+    assert.equal(again.status, 409, JSON.stringify(again.body));
+    assert.match(again.body.error, /^Refused: qwen3:4b takes about 2\.4 GB, and a download already waiting or under way about 4\.8 GB, 7\.3 GB in all\. .*past the disk budget of 49 GB/);
+    assert.equal(core.models.placement('reasoner')?.model, 'example-small:3b');
+    assert.equal(core.ledger.list({ limit: 50 }).length, before + 1, 'only the one download asked for alone');
+  } finally { await api.close(); await core.close(); await ollama.close(); }
+});
+
 test('POST /models/install: a step that fails after the plan began to change says what had already changed', async () => {
   const ollama = await startFakeOllama({ models: INSTALLED });
   const { core } = modelsCore(ollama.url, { privacy: 'local-only' });
