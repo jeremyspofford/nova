@@ -21,12 +21,26 @@ export interface InstalledModel {
   capabilities: string[];
   // Listed by this Ollama but run somewhere else (its tags name a remote host or model).
   remote: boolean;
+  // Its shape and longest context, from /api/show (the model manager adds them); absent when unread.
+  arch?: ModelShape | null;
+  max_context?: number | null;
 }
 
 // A model Ollama lists but doesn't run on this machine: one of its cloud models (by the registry's
 // rule for their names), or a tag that names a remote host or model. Whatever it is sent leaves
 // the person's devices, so it never serves a role.
 export const runsRemotely = (name: string, m?: { remote?: boolean } | null): boolean => OLLAMA_CLOUD.test(name) || m?.remote === true;
+
+// One model Ollama has loaded, as /api/ps reports it: outside data, so each figure is checked and a
+// figure that isn't a sane one is null rather than guessed. `size_bytes` is all the memory the load
+// takes; `vram_bytes` how much of it is on the GPU (less means part runs on the CPU); `context` the
+// context it was loaded with (newer Ollamas say; null otherwise).
+export interface LoadedModel { name: string; digest: string; size_bytes: number | null; vram_bytes: number | null; context: number | null; expires_at: string | null }
+
+// A model's shape from /api/show's model_info, for the KV cache: layers, KV heads and the size of
+// each head. Null when Ollama doesn't say, or says something that isn't a shape.
+export interface ModelShape { layers: number; kv_heads: number; head_dim: number }
+export interface ShownModel { capabilities: string[]; details: Record<string, unknown>; arch: ModelShape | null; max_context: number | null }
 
 export interface PullProgress { status: string; digest?: string; total?: number; completed?: number }
 export interface Message { role: 'system' | 'user' | 'assistant'; content: string }
@@ -40,6 +54,32 @@ export function paramsB(s: unknown): number | null {
 }
 
 const isObj = (v: unknown): v is Record<string, any> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const count = (v: unknown, max: number): number | null => (typeof v === 'number' && Number.isInteger(v) && v > 0 && v <= max ? v : null);
+const byteCount = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v < 2 ** 53 ? Math.floor(v) : null);
+const MAX_CONTEXT = 16_777_216;
+
+export function toLoaded(m: Record<string, any>): LoadedModel {
+  const at = typeof m.expires_at === 'string' && m.expires_at.length <= 64 ? Date.parse(m.expires_at) : NaN;
+  return {
+    name: String(m.name ?? m.model ?? '').slice(0, 200), digest: typeof m.digest === 'string' ? m.digest.slice(0, 80) : '',
+    size_bytes: byteCount(m.size), vram_bytes: byteCount(m.size_vram), context: count(m.context_length, MAX_CONTEXT),
+    expires_at: Number.isFinite(at) ? new Date(at).toISOString() : null,
+  };
+}
+
+// <arch>.block_count, .attention.head_count_kv, and .attention.key_length (or embedding_length ÷
+// head_count). Some models list KV heads per layer; the largest is what the cache must hold.
+export function shapeOf(info: unknown): { arch: ModelShape | null; max_context: number | null } {
+  if (!isObj(info) || typeof info['general.architecture'] !== 'string') return { arch: null, max_context: null };
+  const a = info['general.architecture'];
+  const kv = info[`${a}.attention.head_count_kv`];
+  const kvHeads = Array.isArray(kv) ? (kv.every((x) => count(x, 4096) !== null) && kv.length ? Math.max(...kv) : null) : count(kv, 4096);
+  const heads = count(info[`${a}.attention.head_count`], 4096);
+  const embed = count(info[`${a}.embedding_length`], 1_048_576);
+  const keyLen = count(info[`${a}.attention.key_length`], 65_536) ?? (heads && embed && embed % heads === 0 ? embed / heads : null);
+  const layers = count(info[`${a}.block_count`], 4096);
+  return { arch: layers && kvHeads && keyLen ? { layers, kv_heads: kvHeads, head_dim: keyLen } : null, max_context: count(info[`${a}.context_length`], MAX_CONTEXT) };
+}
 
 export function toInstalled(m: Record<string, any>): InstalledModel {
   const d = isObj(m.details) ? m.details : {};
@@ -89,13 +129,21 @@ export class Ollama {
     return (Array.isArray(v.models) ? v.models : []).filter(isObj).map(toInstalled).filter((m) => m.name);
   }
 
-  async show(name: string): Promise<{ capabilities: string[]; details: Record<string, unknown> } | null> {
+  // What Ollama has loaded now, with the memory each load takes and its context (/api/ps).
+  async loaded(signal?: AbortSignal): Promise<LoadedModel[]> {
+    const v = await this.#json<{ models?: unknown }>('/api/ps', { ...(signal ? { signal } : {}), timeoutMs: 3000 });
+    return (isObj(v) && Array.isArray(v.models) ? v.models : []).slice(0, 64).filter(isObj).map(toLoaded).filter((m) => m.name);
+  }
+
+  async show(name: string): Promise<ShownModel | null> {
     const res = await this.#fetch('/api/show', { method: 'POST', body: JSON.stringify({ model: name }) });
     if (res.status === 404) return null;
     const body = await res.text().catch(() => '');
     if (!res.ok) throw new Error(errorText(res.status, body, this.host));
-    const j = JSON.parse(body) as Record<string, unknown>;
-    return { capabilities: Array.isArray(j.capabilities) ? j.capabilities.map(String) : [], details: isObj(j.details) ? j.details : {} };
+    let j: unknown;
+    try { j = JSON.parse(body); } catch { throw new Error(`Ollama at ${this.host} sent something Nova couldn’t read.`); }
+    if (!isObj(j)) throw new Error(`Ollama at ${this.host} sent something Nova couldn’t read.`);
+    return { capabilities: Array.isArray(j.capabilities) ? j.capabilities.map(String) : [], details: isObj(j.details) ? j.details : {}, ...shapeOf(j.model_info) };
   }
 
   // Streams Ollama's progress lines to onProgress; resolves once it says success. An error line,
@@ -126,9 +174,11 @@ export class Ollama {
   // A streamed chat. `format` is a JSON schema the reply must follow (Ollama's structured output).
   // `think: false` turns a thinking model's reasoning off: with a schema to follow, a thinking model
   // otherwise spends its answer reasoning and the reply can miss the schema. Sent only to a model
-  // that says it thinks (Ollama refuses the field elsewhere).
-  async chat(o: { model: string; messages: Message[]; format?: Record<string, unknown> | 'json'; think?: boolean; signal?: AbortSignal; onText?: (t: string) => void; keepAlive?: string }): Promise<ChatOut> {
-    const body = { model: o.model, messages: o.messages, stream: true, ...(o.format ? { format: o.format, options: { temperature: 0 } } : {}), ...(o.think !== undefined ? { think: o.think } : {}), ...(o.keepAlive ? { keep_alive: o.keepAlive } : {}) };
+  // that says it thinks (Ollama refuses the field elsewhere). `numCtx` is the context the fit verdict
+  // assumed (options.num_ctx), so Ollama loads the model with that context, not its own default.
+  async chat(o: { model: string; messages: Message[]; format?: Record<string, unknown> | 'json'; think?: boolean; numCtx?: number; signal?: AbortSignal; onText?: (t: string) => void; keepAlive?: string }): Promise<ChatOut> {
+    const options = { ...(o.format ? { temperature: 0 } : {}), ...(o.numCtx !== undefined && count(o.numCtx, MAX_CONTEXT) ? { num_ctx: o.numCtx } : {}) };
+    const body = { model: o.model, messages: o.messages, stream: true, ...(o.format ? { format: o.format } : {}), ...(Object.keys(options).length ? { options } : {}), ...(o.think !== undefined ? { think: o.think } : {}), ...(o.keepAlive ? { keep_alive: o.keepAlive } : {}) };
     let res: Response;
     try {
       res = await this.#fetch('/api/chat', { method: 'POST', body: JSON.stringify(body), timeoutMs: 600_000, ...(o.signal ? { signal: o.signal } : {}) });

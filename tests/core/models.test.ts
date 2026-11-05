@@ -398,7 +398,8 @@ test('local decision provider: typed answers from the sorting model, receipts na
     // A thinking model asked for a schema has its reasoning turned off, so its answer is the JSON.
     await core.models.assign('triage-text', { model: 'example-deep:32b' });
     assert.equal((await core.decisions.decide('triage', inputs))!.provider, 'local-model');
-    assert.equal((ollama.requests.at(-1)!.body as { think?: boolean }).think, false);
+    // The last chat (Nova reads /api/ps after it, for the learned overhead, so it isn't the last request).
+    assert.equal((ollama.requests.filter((q: { path: string }) => q.path === '/api/chat').at(-1)!.body as { think?: boolean }).think, false);
     await core.models.assign('triage-text', { model: 'example-small:3b' });
 
     // Noul, Choice and Score together.

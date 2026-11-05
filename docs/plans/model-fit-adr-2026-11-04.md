@@ -208,7 +208,7 @@ reports, and corrects the device's overhead.
 | Discard | an observation outside 0.25–4 GB. It means the weights or KV estimate is wrong (for example a quantized KV cache Nova didn't know of). It is logged, not learned |
 | Update | `learned = learned + 0.3 × (observed − learned)`, starting from the prior of 1.0 GB |
 | Bound | the learned value stays within 0.25–4 GB |
-| Kept | per device and backend kind, in `device_overhead`, with the count, the last observation and the time. It is local to the hub and does not replicate, like `device_hardware` |
+| Kept | per device and backend kind, in `device_overhead` (migration 0025), with the count, the last observation and the time. **Changed in step 2b, by the owner's direction:** it replicates to the standby, so a hub that takes over plans with what was measured. The hub's own row is keyed by its device id, not "hub", so a new hub doesn't take the old hub's figure for its own GPU |
 | Shown | "Overhead: 1.1 GB, measured from 3 loads" or "Overhead: 1.0 GB, Nova's estimate" |
 
 ## Recommendations per task class
@@ -406,8 +406,8 @@ its own PR with its own gate, design-first as always.
   if the 2/3 figure holds, correct.
 - The assumed architecture figures and bits per weight are assumptions until the model cards and a
   real load confirm them. The golden tests pin the arithmetic, not the model cards.
-- New storage is small and local to the hub: `device_overhead`, plus more fields in the existing
-  `device_hardware` JSON.
+- New storage is small: `device_overhead` (replicated to the standby, step 2b), plus more fields in
+  the existing `device_hardware` JSON, which stays local to the hub.
 
 ## Open questions for the owner
 
