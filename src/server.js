@@ -346,7 +346,6 @@ export function createNova(config = loadConfig(), deps = {}) {
     }
 
     if (resource === 'health') return json(res, 200, { ok: true, agent: config.agentCmd.trim().split(/\s+/)[0] });
-    if (resource === 'config') return json(res, 200, { theme: config.theme, timezone: config.timezone });
 
     if (resource === 'events' && req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
@@ -428,7 +427,13 @@ export function createNova(config = loadConfig(), deps = {}) {
         let skill = null;
         let files;
         if (action === 'install') { skill = skills.install(id); runner.trustSkill(id); }
-        else if (action === 'remove') { files = skills.remove(id); core.ingest.release('skill', id); }
+        else if (action === 'remove') {
+          files = skills.remove(id);
+          core.ingest.release('skill', id);
+          core.mesh.sync.removed();
+          // Out of every backup and checkpoint too, the way a forget goes.
+          core.backups.forget('skill', [id]);
+        }
         else if (action === 'restore') {
           // Put back from Undo: screened again, exactly as when it came in.
           const prepared = skills.prepareRestore(id, (await readBody(req)).files);

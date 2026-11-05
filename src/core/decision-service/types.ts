@@ -112,9 +112,6 @@ export interface ServiceTemplate {
 export type SeatId = 'jev' | 'tev1' | 'legacy' | 'stub';
 export interface SeatLimits {
   maxQuestions: number | null;
-  contextTokens: number | null;
-  perQuestionTokens: number | null;
-  maxBodyBytes: number | null;
   images: boolean;
   types: readonly QType[];
 }

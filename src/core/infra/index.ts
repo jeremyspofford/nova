@@ -10,24 +10,25 @@
 // Built on what exists: the ledger's tiers, privacy gate, commit points and recovery; checkpoints;
 // the vault (provider secrets, handed to the tool's process only); log problems and the trigger
 // engine's messages for alerts; runLines and children.ts for every process.
-import { createCipheriv, createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createCipheriv, randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, PRIVACY_MODES, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
+import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
 import { checkFolder } from '../computer/policy.ts';
 import { addSecretValue } from '../log.ts';
 import { tail } from '../providers/cli.ts';
 import { Redactor } from '../browser/logins.ts';
-import { openTofu, toolEnv, type PlanApplyTool, type PlanData, type ToolContext } from './tool.ts';
+import { openTofu, toolEnv, type OpenTofu, type PlanData, type ToolContext } from './tool.ts';
 import { priceChanges, priceState, usd, validateBudget, validatePrices, verdict, type Level, type PriceSheet, type PricedChange, type Verdict } from './budget.ts';
-import type { Db } from '../db.ts';
+import { jsonOrNull as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
 import type { Vault } from '../vault.ts';
 import type { Egress } from '../workers.ts';
+import { sha256, writeAtomic, plural } from '../workspace.ts';
 
 export const INFRA_WORKER = 'infra';
 export const CONFIRMATION_SYSTEM = 'nova-infra';
@@ -56,7 +57,6 @@ interface TaskRef { step: Step; id: string }
 // resource's values (review of PR #241, S6). `now`/`after`: the month before and after, priced from
 // the plan's whole before and after (B2).
 interface Changes { priced: PricedChange[]; unpriced: string[]; now_cents: number; after_cents: number; increases: boolean; too_large?: boolean; prior_unpriced?: string[] }
-type Reporter = (status: Report['status'], summary: string, more?: Partial<Report>) => Report;
 
 export interface InfraOptions {
   db: Db; log: Log; home: string; ledger: Ledger; verifier: Verifier; vault: Vault;
@@ -68,23 +68,20 @@ export interface InfraOptions {
   notify?: (key: string, text: string) => void;
   // The PATH the tool is looked up on and runs with (tests put the stand-in on one of their own).
   path?: () => string;
-  tool?: PlanApplyTool;
   // Whose home folder a project may never be (os.homedir() unless a test says).
   userHome?: string;
   timeoutS?: number;
   now?: () => Date;
 }
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const clip = (s: string, n = 80) => { const t = s.trim().replace(/\s+/g, ' '); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
-const parse = <T>(s: string | null): T | null => (s ? JSON.parse(s) as T : null);
-const sha256File = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex');
+const sha256File = (p: string) => sha256(readFileSync(p));
 const signed = (c: number) => `${c < 0 ? '−' : '+'}${usd(Math.abs(c))}`;
 
 export class Infra {
   readonly worker: LanedWorker;
   readonly dir: string;
-  readonly tool: PlanApplyTool;
+  readonly tool: OpenTofu;
   #o: InfraOptions;
   #now: () => Date;
   #key = Symbol('infra');
@@ -93,7 +90,7 @@ export class Infra {
     this.#o = o;
     this.#now = o.now ?? (() => new Date());
     this.dir = join(o.home, 'workers', 'infra');
-    this.tool = o.tool ?? openTofu({ path: () => this.#path() });
+    this.tool = openTofu({ path: () => this.#path() });
     const self = this;
     this.worker = {
       id: INFRA_WORKER,
@@ -399,13 +396,10 @@ export class Infra {
   }
 
   async #run(brief: Brief, signal: AbortSignal): Promise<Report> {
-    const started = performance.now();
+    const base = reporter(brief);
     let red: Redactor | null = null;
     const report: Reporter = (status, summary, more = {}) => {
-      const out: Report = {
-        envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
-        ...more, usage: { duration_ms: Math.round(performance.now() - started) },
-      };
+      const out = base(status, summary, more);
       return red ? red.value(out) : out;
     };
     const step = brief.inputs?.step as Step;
@@ -494,7 +488,7 @@ export class Infra {
     let stateSha = 'none: the state isn’t in the project’s folder';
     if (existsSync(before)) {
       const data = readFileSync(before);
-      stateSha = createHash('sha256').update(data).digest('hex');
+      stateSha = sha256(data);
       this.#seal(p, r, data, join(this.#runDir(r.id), 'state-before.sealed'));
     }
     this.#set(r.id, { checkpoint: cp.id, state_before: stateSha });
@@ -516,8 +510,7 @@ export class Infra {
     // Nova's own record of what it read back, for the verifier (which reads it, never the tool).
     const rec = { run: r.id, task_id: brief.task_id, addresses: state.map((x) => x.address).sort(), at };
     const recFile = join(this.#runDir(r.id), `readback-${brief.task_id}.json`);
-    writeFileSync(`${recFile}.tmp`, JSON.stringify(rec), { mode: 0o600 });
-    renameSync(`${recFile}.tmp`, recFile);
+    writeAtomic(recFile, JSON.stringify(rec));
     this.#set(r.id, { changes: JSON.stringify(ch) });
     return report('done', `${this.tool.name} applied the reviewed plan for “${p.name}”: ${this.#counts(ch.priced)}. A checkpoint was taken first (${cp.id}).`, {
       evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `apply:${r.id}:${brief.task_id}` }],
@@ -604,12 +597,6 @@ export class Infra {
       planning: `Planning changes no infrastructure, but ${this.tool.name} runs the project’s providers and data sources: they reach their services, and a data source can run a program the configuration names.`,
       apply: r.plan_sha ? `Applying runs ${this.tool.name}’s apply of exactly this saved plan (sha256 ${r.plan_sha.slice(0, 12)}…) in ${p.folder}, after a checkpoint. It may spend money, or destroy what it lists; it can’t be undone by Nova.` : null,
     };
-  }
-
-  runOf(taskId: string): string | null {
-    let t: Task;
-    try { t = this.#o.ledger.get(taskId); } catch { return null; }
-    return t.owner === INFRA_WORKER ? String(t.brief.inputs?.run_id ?? '') || null : null;
   }
 
   // The person says no to the apply: its task is cancelled (the run then ends, declined).

@@ -129,6 +129,105 @@ test('the receipt’s triggers carry opt_in always now: the sender adapts, not t
   assert.equal(row.opt_in, null);
 });
 
+// A table a release added (0023, 0024 and the coming 0025 each add one). A standby a release behind
+// doesn't have it: it must keep copying everything else, hold that table's entries without losing
+// any, and apply them once it is updated. 0024's console_passkey stands for a table this code knows
+// but the standby's schema lacks; `future_table` for one this code doesn't know at all (0025's).
+function hubWithNewTables() {
+  const { hub, sync } = hubBatch();
+  const key = (id: string, name: string) => hub.run(`INSERT INTO console_passkey (id, name, public_key, rp_id, origins, sign_count, created_at) VALUES (?, ?, 'pk', 'nova.local', '[]', 0, ?)`, id, name, at);
+  key('k1', 'Laptop');
+  key('k2', 'Old phone');
+  // A forget of a row in the new table: the delete must win when the standby catches up.
+  hub.run(`DELETE FROM console_passkey WHERE id = 'k2'`);
+  hub.run(`INSERT INTO sync_log (tbl, pk, op, row, hlc) VALUES ('future_table', 'f1', 'put', '{"id":"f1","what":"from 0025"}', 'placeholder')`);
+  hub.run(`INSERT INTO profile (section, key, value, source, updated_at) VALUES ('user', 'timezone', '"UTC"', 'setup', ?)`, at);
+  return { hub, sync, key };
+}
+
+test('a 0023 standby against a hub with new tables: it applies the rest, keeps its position, and holds the new tables’ entries', () => {
+  const { hub, sync: hubSync, key } = hubWithNewTables();
+  const s = standby(23);
+  try {
+    const first = hubSync.batch(0, { peerSchema: 23 });
+    assert.ok(first.rows.some((r) => r.tbl === 'console_passkey'), 'the batch mixes in entries for a table the standby lacks');
+    assert.ok(first.rows.some((r) => r.tbl === 'future_table'));
+    s.sync.apply(first, () => {});
+    // Everything it understands landed, and its cursor is where the hub said it may be.
+    assert.equal(s.db.get<{ value: string }>(`SELECT value FROM profile WHERE section = 'user' AND key = 'name'`)?.value, '"Sam"');
+    assert.equal(s.db.get<{ value: string }>(`SELECT value FROM profile WHERE section = 'user' AND key = 'timezone'`)?.value, '"UTC"', 'entries after the unknown ones land too');
+    assert.equal(s.db.get<{ name: string }>(`SELECT name FROM device WHERE id = 'c'`)?.name, 'Desk');
+    assert.equal(s.sync.cursor(), first.upto);
+    // It keeps copying: the next batch lands as well.
+    hub.run(`UPDATE profile SET value = '"Alex"' WHERE section = 'user' AND key = 'name'`);
+    key('k3', 'Desk key');
+    const second = hubSync.batch(s.sync.cursor(), { peerSchema: 23 });
+    s.sync.apply(second, () => {});
+    assert.equal(s.db.get<{ value: string }>(`SELECT value FROM profile WHERE section = 'user' AND key = 'name'`)?.value, '"Alex"');
+    assert.equal(s.sync.cursor(), hubSync.head());
+    // The person is told once that this standby is behind.
+    const said = s.db.all<{ message: string }>(`SELECT message FROM problem WHERE message LIKE '%console_passkey%'`);
+    assert.equal(said.length, 1, JSON.stringify(said));
+    assert.match(said[0]!.message, /release behind/);
+    // Promoted while still behind, it serves the held entries on under their own names, so nothing
+    // the old hub had is lost to the next standby.
+    const served = s.sync.batch(0, { peerSchema: 24 });
+    assert.deepEqual(served.rows.filter((r) => r.tbl === 'console_passkey').map((r) => [r.pk, r.op]).sort(), [['k1', 'put'], ['k2', 'delete'], ['k3', 'put']]);
+    assert.ok(served.rows.some((r) => r.tbl === 'future_table'));
+  } finally { rmSync(s.home, { recursive: true, force: true }); }
+});
+
+test('once the standby is updated, the entries it held are applied in order, forgets included, without the hub sending them again', () => {
+  const { hub, sync: hubSync } = hubWithNewTables();
+  const s = standby(23);
+  try {
+    s.sync.apply(hubSync.batch(0, { peerSchema: 23 }), () => {});
+    const cursor = s.sync.cursor();
+    // The update: the migration adds the table, and Nova starts again.
+    s.db.migrate({ migrations: all });
+    const restarted = new SyncLog({ db: s.db, log: s.log, home: s.home, node: 'standby', now: () => new Date(at) });
+    restarted.replayHeld();
+    assert.deepEqual(s.db.all<{ id: string }>(`SELECT id FROM console_passkey ORDER BY id`).map((r) => r.id), ['k1'], 'k1 is there; the forgotten k2 is not');
+    assert.equal(restarted.cursor(), cursor, 'its position is unchanged');
+    // Applied once: the entries are kept as ordinary ones now, with the hub's seq.
+    assert.equal(s.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM sync_log WHERE tbl = 'console_passkey'`)!.n, 2);
+    // A table this release still doesn't know stays held.
+    assert.ok(restarted.batch(0, { peerSchema: 24 }).rows.some((r) => r.tbl === 'future_table'));
+    // A newer change from the hub after the update replaces the replayed one, as any entry would.
+    hub.run(`UPDATE console_passkey SET name = 'Work laptop' WHERE id = 'k1'`);
+    restarted.apply(hubSync.batch(cursor, { peerSchema: 24 }), () => {});
+    assert.equal(s.db.get<{ name: string }>(`SELECT name FROM console_passkey WHERE id = 'k1'`)?.name, 'Work laptop');
+  } finally { rmSync(s.home, { recursive: true, force: true }); }
+});
+
+test('a standby promoted while behind, then updated: the held changes land and its own log carries them on, the forget included', () => {
+  const { sync: hubSync } = hubWithNewTables();
+  const s = standby(23);
+  try {
+    s.sync.apply(hubSync.batch(0, { peerSchema: 23 }), () => {});
+    s.sync.setLogging(true);
+    s.db.migrate({ migrations: all });
+    const restarted = new SyncLog({ db: s.db, log: s.log, home: s.home, node: 'standby', now: () => new Date(at) });
+    restarted.replayHeld();
+    assert.deepEqual(s.db.all<{ id: string }>(`SELECT id FROM console_passkey`).map((r) => r.id), ['k1']);
+    const served = restarted.batch(0, { peerSchema: 24 }).rows.filter((r) => r.tbl === 'console_passkey').map((r) => [r.pk, r.op]).sort();
+    assert.deepEqual(served, [['k1', 'put'], ['k2', 'delete']]);
+    assert.equal(s.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM sync_log WHERE tbl = 'held:console_passkey'`)!.n, 0);
+  } finally { rmSync(s.home, { recursive: true, force: true }); }
+});
+
+test('a held entry is still checked: a malformed one, or one naming a table that isn’t a name, refuses the batch as before', () => {
+  const s = standby(23);
+  try {
+    const row = { seq: 1, tbl: 'console_passkey', pk: 'k1', op: 'put' as const, row: '{"id":"k1"}', hlc: 'h' };
+    assert.throws(() => s.sync.apply({ rows: [{ ...row, tbl: 'x"; DROP TABLE profile; --' }], upto: 1 }, () => {}), /can’t apply/);
+    assert.throws(() => s.sync.apply({ rows: [{ ...row, op: 'file_put' }], upto: 1 }, () => {}), /can’t apply/);
+    assert.throws(() => s.sync.apply({ rows: [{ ...row, row: '{"id":{"nested":1}}' }], upto: 1 }, () => {}), /can’t apply/);
+    assert.throws(() => s.sync.apply({ rows: [{ ...row, row: '[1]' }], upto: 1 }, () => {}), /can’t apply/);
+    assert.equal(s.sync.cursor(), 0, 'a refused batch moves nothing');
+  } finally { rmSync(s.home, { recursive: true, force: true }); }
+});
+
 // The orb's red (owner decision 2026-10-31): problem.stops, added by 0021. A 0020 standby has no such
 // column; it takes the problem without it, and shows it amber, as every problem was before.
 function hubWithProblem() {

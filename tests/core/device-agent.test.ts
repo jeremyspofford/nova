@@ -27,7 +27,6 @@ test('the queue keeps items in order, takes a key once, survives reopening, and 
   const b = q.add('memory_note', { content: 'A test note.' }, 'note-0000001');
   assert.equal(q.add('memory_note', { content: 'A test note.' }, 'note-0000001').added, false, 'the same key is one item');
   q.add('task_request', { title: 'Test task' });
-  q.close();
   q = new Queue(file);
   assert.deepEqual(q.pending().map((i) => i.kind), ['event', 'memory_note', 'task_request'], 'in the order made, after a restart');
   q.settle([{ key: a.key, status: 'accepted' }, { key: b.key, status: 'refused', reason: 'Test reason.' }]);
@@ -37,7 +36,6 @@ test('the queue keeps items in order, takes a key once, survives reopening, and 
   q.settle([{ key: a.key, status: 'refused' }]);
   assert.equal(q.settled().find((s) => s.key === a.key)!.status, 'accepted', 'a settled item stays as answered first');
   assert.equal(q.add('memory_note', { content: 'A test note.' }, 'note-0000001').added, false, 'an answered key is still one item');
-  q.close();
   // On disk: every file the queue keeps, and an answered item's words are in none of them.
   const files = readdirSync(file, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name));
   assert.ok(!files.some((f) => readFileSync(f, 'utf8').includes('A test note.')), 'an answered item keeps no body');
@@ -224,7 +222,6 @@ test('boot hands the runtime a session over IPC; the runtime heartbeats and flus
     assert.deepEqual(m.hub.received.map((r) => r.key), ['early-0000001', 'later-0000001']);
     // The answer reaches the runtime through the boot agent, a moment after the hub has it.
     assert.equal((await until(() => q.counts().pending, (n) => n === 0)), 0, readFileSync(m.dev.p.runtimeStatus, 'utf8'));
-    q.close();
     // What the runtime was started with: its own folder, the device home, nothing else.
     assert.deepEqual(child.spawnargs.slice(1), runtimeCommand(m.dev.p));
     // It makes no hub call itself: the boot agent made them, with a token the runtime never had.
@@ -299,7 +296,6 @@ test('a big item can’t jam the queue: too big to queue is refused at once, too
     assert.equal(refused.status, 'refused');
     assert.match(refused.reason!, /too big to send/);
     assert.ok(!m.hub.received.some((r) => r.key === big.key));
-    q.close();
   } finally {
     await m.stop();
   }
@@ -434,7 +430,6 @@ test('failover: queued while the hub is down, waits for the standby to be promot
     assert.equal(m.hub.received.length, 1, 'nothing went to the demoted hub');
     assert.equal(q.counts().pending, 1);
     assert.equal(status(m.dev.home).epoch, 2);
-    q.close();
   } finally {
     await m.stop();
   }

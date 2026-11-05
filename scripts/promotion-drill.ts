@@ -16,11 +16,10 @@ const out = i > 0 ? process.argv[i + 1] : null;
 const tmp = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'nova-promotion-drill-'));
 process.env.TMPDIR = tmp;
 const { runDrill } = await import('../tests/acceptance/m10g-drill.ts');
-const lines: string[] = [];
 const started = new Date();
 let code = 0;
 try {
-  const r = await runDrill({ say: (l) => { lines.push(l); console.log(l); } });
+  const r = await runDrill({ say: (l) => console.log(l) });
   const md = [
     `# Promotion drill run`,
     '',

@@ -37,7 +37,6 @@ export function loadConfig(env = process.env, root = ROOT) {
     timezone: env.NOVA_TZ ?? file.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     // Set explicitly (env or file) wins; otherwise the profile's timezone, once setup has one.
     timezonePinned: Boolean(env.NOVA_TZ ?? file.timezone),
-    theme: file.theme ?? 'nova',
     dev: env.NOVA_DEV === '1',
     // What this instance is for, said to the agent in its briefing: preview (scripts/preview.sh),
     // development (npm run dev), or production.

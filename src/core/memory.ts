@@ -56,7 +56,7 @@ export interface Filter { kind?: Kind; scope?: string; state?: UserState }
 
 type Row = Omit<MemoryRecord, 'low_confidence' | 'active'>;
 
-// Words worth matching on, as Era 2's notes search has them (src/memory.js).
+// Words worth matching on; src/memory.js's notes search uses these too.
 const STOP = new Set(('a an and are as at be but by can could did do does for from had has have how i if in into is it its ' +
   'just me my no not of on or our so that the their them then there these they this to was we were what when where ' +
   'which who why will with would you your about after again all also am any because been before being both each few ' +

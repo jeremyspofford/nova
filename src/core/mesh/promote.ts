@@ -11,7 +11,7 @@
 //    hub follows it as a live copy (`follow`). A roll-back is the same swap in reverse, at a higher
 //    epoch still. Fencing covers every hub candidate the roster pins, and asks the stable mesh name.
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { fixedPurposes, sortPurposes } from './purposes.ts';
@@ -20,7 +20,7 @@ import type { Log } from '../log.ts';
 import type { Route } from '../api.ts';
 import { TERMINAL, type LanedWorker, type Ledger, type Task } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
-import type { Brief } from '../envelope.ts';
+import { reportOf, type Brief } from '../envelope.ts';
 import type { Access } from './access.ts';
 import type { Device, Devices } from './devices.ts';
 import type { MeshIdentity } from './identity.ts';
@@ -28,6 +28,7 @@ import { ask, readRole, Replica, SYNC_AAD, writeRole, type ResetNotice, type Rol
 import type { SyncLog } from './sync.ts';
 import { sessionMessage, verifyRoster, type SignedRoster } from './wire.ts';
 import { tap } from './tap.ts';
+import { writeJson } from '../workspace.ts';
 
 export type NodeRole = 'hub' | 'standby';
 // Which of two hubs wins (M10g review, finding 2): the higher epoch; at an equal epoch, the smaller
@@ -447,9 +448,7 @@ export class MeshRole extends EventEmitter {
   #saveOwed(o: Owed | null): void {
     const file = join(this.#o.home, OWED_FORGETS);
     if (!o) { rmSync(file, { force: true }); return; }
-    const tmp = `${file}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(o, null, 2)}\n`, { mode: 0o600 });
-    renameSync(tmp, file);
+    writeJson(file, o);
   }
 
   #keepRepaying(): void {
@@ -585,12 +584,9 @@ export class MeshRole extends EventEmitter {
     run: async (brief: Brief) => {
       const epoch = Number(brief.inputs?.epoch);
       const s = this.#o.devices.state();
-      return {
-        envelope: '1', task_id: brief.task_id, status: s.role === 'hub' && s.epoch === epoch ? 'done' : 'failed',
-        summary: s.role === 'hub' && s.epoch === epoch ? `This node is the hub now, at epoch ${epoch}, with a roster signed by its own key.` : `This node isn’t hub at epoch ${epoch}.`,
-        evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `epoch-${epoch}` }],
-        artifacts: [], blockers: [], usage: { duration_ms: 0 }, follow_up_suggestions: [],
-      };
+      return reportOf(brief.task_id, s.role === 'hub' && s.epoch === epoch ? 'done' : 'failed',
+        s.role === 'hub' && s.epoch === epoch ? `This node is the hub now, at epoch ${epoch}, with a roster signed by its own key.` : `This node isn’t hub at epoch ${epoch}.`,
+        { evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `epoch-${epoch}` }] });
     },
   };
 

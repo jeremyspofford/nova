@@ -60,8 +60,4 @@ export class Profile extends EventEmitter {
     const v = this.get<string>('privacy', 'default');
     return PRIVACY_MODES.includes(v as PrivacyMode) ? (v as PrivacyMode) : 'local-only';
   }
-
-  isEmpty(): boolean {
-    return !this.#db.get('SELECT 1 FROM profile LIMIT 1');
-  }
 }

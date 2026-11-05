@@ -4,10 +4,10 @@
 // links (their target as written), and anything that isn't a plain file, a folder or a link is
 // refused, never opened.
 import { closeSync, constants, copyFileSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, rmdirSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, chmodSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, normalize, posix } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { safePath } from '../providers/taskspace.ts';
+import { sha256 } from '../workspace.ts';
 
 // `big`: a file over MAX_FILE_BYTES, never read: its hash stands for its size and modification time
 // only. Nova never takes one from an agent (refusals), so an unchanged one only has to stay as it was.
@@ -27,7 +27,6 @@ export const MAX_WALK_BYTES = 1024 * 1024 * 1024;
 const MAX_ENTRIES = 100_000;
 const MAX_DEPTH = 64;
 
-const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
 const isGit = (rel: string) => rel.split('/').some((p) => p === '.git');
 
 // Reads a regular file without following a link, and only if it is still the file that was listed.
@@ -63,19 +62,19 @@ export function walk(root: string, o: { skipTopGit?: boolean } = {}): Walk {
       if (st.isDirectory()) { go(abs, r, depth + 1); continue; }
       if (st.isSymbolicLink()) {
         const target = readlinkSync(abs);
-        entries.set(r, { kind: 'link', exec: false, size: target.length, hash: sha(`link:${target}`), target });
+        entries.set(r, { kind: 'link', exec: false, size: target.length, hash: sha256(`link:${target}`), target });
         continue;
       }
       if (!st.isFile()) { refused.push({ path: r, why: 'it is not a plain file (a FIFO, socket or device)' }); continue; }
       if (st.nlink > 1) { refused.push({ path: r, why: 'it is a hard link to a file somewhere else' }); continue; }
       if (st.size > MAX_FILE_BYTES) {
-        entries.set(r, { kind: 'file', exec: (st.mode & 0o111) !== 0, size: st.size, hash: sha(`big:${st.size}:${Math.trunc(st.mtimeMs)}`), big: true, mtimeMs: Math.trunc(st.mtimeMs) });
+        entries.set(r, { kind: 'file', exec: (st.mode & 0o111) !== 0, size: st.size, hash: sha256(`big:${st.size}:${Math.trunc(st.mtimeMs)}`), big: true, mtimeMs: Math.trunc(st.mtimeMs) });
         continue;
       }
       if (bytes + st.size > MAX_WALK_BYTES) throw new CoreError('validation', `The folder holds more than ${MAX_WALK_BYTES / 1024 ** 3} GB of files; Nova stopped reading at ${r}.`);
       const data = readPlain(abs, st);
       bytes += data.length;
-      entries.set(r, { kind: 'file', exec: (st.mode & 0o111) !== 0, size: data.length, hash: sha(data) });
+      entries.set(r, { kind: 'file', exec: (st.mode & 0o111) !== 0, size: data.length, hash: sha256(data) });
     }
   };
   go(root, '', 0);
@@ -84,7 +83,7 @@ export function walk(root: string, o: { skipTopGit?: boolean } = {}): Walk {
 
 // One hash for a whole walk: each path, kind, mode and content.
 export function digest(s: Snapshot): string {
-  return sha([...s.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([p, e]) => `${p}\0${e.kind}\0${e.exec ? 'x' : '-'}\0${e.hash}`).join('\n'));
+  return sha256([...s.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([p, e]) => `${p}\0${e.kind}\0${e.exec ? 'x' : '-'}\0${e.hash}`).join('\n'));
 }
 
 // What differs between two walks.
@@ -168,7 +167,7 @@ export function copyWalk(from: string, s: Snapshot, to: string): void {
       continue;
     }
     const data = readPlain(src, lstatSync(src));
-    if (sha(data) !== e.hash) throw new CoreError('conflict', `${rel} changed while Nova copied it.`);
+    if (sha256(data) !== e.hash) throw new CoreError('conflict', `${rel} changed while Nova copied it.`);
     writeFileSync(dest, data, { mode: e.exec ? 0o755 : 0o644, flag: 'wx' });
   }
 }
@@ -182,7 +181,7 @@ export function applyChanges(work: string, tree: string, cs: Change[]): void {
     if (c.entry?.kind === 'file') {
       const src = join(work, ...c.path.split('/'));
       data = readPlain(src, lstatSync(src));
-      if (sha(data) !== c.entry.hash) throw new CoreError('conflict', `${c.path} changed in the agent’s folder after Nova read it. Nothing was committed.`);
+      if (sha256(data) !== c.entry.hash) throw new CoreError('conflict', `${c.path} changed in the agent’s folder after Nova read it. Nothing was committed.`);
     }
     return { c, abs: at.abs, data };
   });

@@ -249,16 +249,17 @@ test('review 8: decision records go with their event (forget and retention), and
   } finally { await r.close(); }
 });
 
-test('minor: stream readers and event rules get an event once it is checked, never before', async () => {
+test('minor: event listeners and event rules get an event once it is checked, never before', async () => {
   const r = await rig();
   try {
     const got: string[] = [];
-    const off = r.h.core.capture.stream(null, null).subscribe((e) => got.push(e.sensitivity.state));
+    const listen = (e: { sensitivity: { state: string } }) => got.push(e.sensitivity.state);
+    r.h.core.capture.on('event', listen);
     r.sp.add({ at: r.min(1), app: 'Chat', window: 'w', text: 'the wifi word is CANARY-GREY-PASSWORD maple' }, { at: r.min(2), app: 'Editor', window: 'e', text: 'ordinary' });
     await r.pull();
     assert.deepEqual(got, [], 'nothing before the check');
     await r.screen();
-    off();
+    r.h.core.capture.off('event', listen);
     assert.deepEqual(got.sort(), ['exclude', 'index']);
   } finally { await r.close(); }
 });

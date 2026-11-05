@@ -6,13 +6,13 @@
 // The log holds one entry per row or file, the newest: the triggers drop the older entry when they
 // add one. A standby that is behind therefore never misses a change (the newer entry has a higher
 // seq), and one that starts from nothing reads the whole state once.
-import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, watch, writeFileSync, type FSWatcher } from 'node:fs';
 import { dirname, join, normalize, sep } from 'node:path';
 import { CoreError } from '../errors.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import { HybridClock } from './wire.ts';
+import { sha256 } from '../workspace.ts';
 
 // Replicated tables and their keys, as in migrations 0006 and 0007. Everything else stays on its own node.
 export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
@@ -57,6 +57,19 @@ export const ADDED_COLUMNS: Readonly<Record<number, Readonly<Record<string, read
 });
 export const UNSTATED_SCHEMA = 19;
 
+// A TABLE a release added (0023, 0024, 0025 …) is the receiver's to set aside, not the sender's to
+// skip. A standby a release behind keeps such an entry in its own sync log under `held:<table>`,
+// unapplied, and moves its cursor past it like any other: the rest of the batch lands and it keeps
+// copying. Once it is updated, `replayHeld` applies those entries in seq order, before anything newer.
+// Why the receiver: the log keeps one entry per row, so the cursor can't stop before an entry and
+// still move on past later ones; a sender that skipped would have to either stall the standby there
+// or acknowledge past entries it never sent, losing them. Held on the standby, the backlog is durable
+// in the same transaction as the cursor, survives the old hub being gone (a standby promoted while
+// behind serves them on under their own names), and a newer entry for the same row, a delete
+// included, replaces the held one, so a forget is never undone by a replay.
+export const HELD = 'held:';
+const NAME = /^[a-z_][a-z0-9_]{0,63}$/;
+
 // The columns a peer on `schema` doesn't have, by table.
 export function columnsAfter(schema: number): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
@@ -93,9 +106,10 @@ export type Op = 'put' | 'delete' | 'file_put' | 'file_delete';
 export interface LogRow { seq: number; tbl: string; pk: string; op: Op; row: string | null; hlc: string }
 export interface FileRow { path: string; sha256: string; size: number; text?: string; b64?: string }
 export interface Batch { rows: LogRow[]; upto: number; more: boolean; head: number }
+// What one apply collects for after its commit (SyncLog#applying).
+interface Run { gone: Record<string, unknown>[]; others: Map<string, Record<string, unknown>[]>; scrub: boolean }
 export interface Lag { head: number; acked_seq: number; acked_at: string | null; rows: number; seconds: number; behind: boolean }
 
-const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 const OPS: readonly Op[] = ['put', 'delete', 'file_put', 'file_delete'];
 
 // A relative home path that a file entry may name: inside the home, not in a place that stays local.
@@ -175,6 +189,9 @@ export class SyncLog {
     let bytes = 0;
     for (const r of this.#db.raw.prepare('SELECT seq, tbl, pk, op, row, hlc FROM sync_log WHERE seq > ? ORDER BY seq LIMIT ?').iterate(after, limit + 1) as Iterable<LogRow>) {
       if (rows.length >= limit || (rows.length && bytes + (r.row?.length ?? 0) > maxBytes)) return { rows, upto: rows.at(-1)!.seq, more: true, head };
+      // Held here for a table this node doesn't have (a standby promoted while behind): served on
+      // under the table's own name.
+      if (r.tbl.startsWith(HELD)) r.tbl = r.tbl.slice(HELD.length);
       rows.push(r.tbl === VAULT && r.op === 'put' ? { ...r, row: this.#withKey(r.row!) } : fit({ ...r }));
       bytes += r.row?.length ?? 0;
     }
@@ -368,6 +385,16 @@ export class SyncLog {
     return removed;
   }
 
+  // Files were removed for good (a skill): the journal drops their copies now, not at the next
+  // scan, and the old pages leave the write-ahead log, as a forget does (secure_delete is on).
+  removed(): void {
+    try {
+      this.scan();
+    } finally {
+      if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    }
+  }
+
   #purge(needles: Set<string>, count: (n: number) => void): void {
     for (const n of needles) {
       const hit = this.#db.all<{ seq: number; tbl: string; pk: string }>(
@@ -402,6 +429,7 @@ export class SyncLog {
     try {
       this.#db.tx(() => {
         for (const t of Object.keys(REPLICATED)) {
+          if (!this.#has(t)) continue;
           rows += this.#db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM "${t}"`)?.n ?? 0;
           this.#db.run(`DELETE FROM "${t}"`);
         }
@@ -426,49 +454,139 @@ export class SyncLog {
   apply(batch: { rows: LogRow[]; upto: number }, forgotten: (records: Record<string, unknown>[]) => void): { applied: number; files: number } {
     const rows = batch.rows;
     for (const r of rows) this.#check(r);
-    const gone: Record<string, unknown>[] = [];
-    const others = new Map<string, Record<string, unknown>[]>();
+    const run = this.#applying();
     let files = 0;
-    // Entries that may have carried a forgotten memory's words: once replaced, the old pages are
-    // folded out of the write-ahead log at once, not whenever SQLite would.
-    let scrub = false;
+    let held = 0;
     // The hub's order already satisfies its own foreign keys; entries arrive newest-per-row, so a
     // child can come before the row it points at. Checks are off only while applying.
     this.#db.raw.exec('PRAGMA foreign_keys = OFF');
     try {
       this.#db.tx(() => {
+        // Held entries this node can apply now come first: their seqs are older than this batch's.
+        this.#replay(run);
         for (const r of rows) {
-          if (r.tbl === 'memory' || this.forgetting.has(r.tbl) || (r.tbl === FILE && (r.pk === 'MEMORY.md' || r.pk.startsWith('memory/')))) scrub = true;
-          let stored = r.row;
-          if (r.tbl === VAULT) stored = this.#applyVault(r);
-          else if (r.op === 'put') this.#put(r.tbl, JSON.parse(r.row!) as Record<string, unknown>);
-          else if (r.op === 'delete') {
-            if (r.tbl === 'memory') {
-              const rec = this.#db.get<Record<string, unknown>>('SELECT * FROM memory WHERE id = ?', r.pk);
-              if (rec) gone.push(rec);
-            } else if (this.forgetting.has(r.tbl)) {
-              const keys = REPLICATED[r.tbl]!;
-              const values = keys.length === 1 ? [r.pk] : (JSON.parse(r.pk) as (string | number)[]);
-              const rec = this.#db.get<Record<string, unknown>>(`SELECT * FROM "${r.tbl}" WHERE ${keys.map((k) => `"${k}" = ?`).join(' AND ')}`, ...values);
-              if (rec) others.set(r.tbl, [...(others.get(r.tbl) ?? []), rec]);
-            }
-            this.#delete(r.tbl, r.pk);
-          } else if (r.op === 'file_put') { this.#writeFile(JSON.parse(r.row!) as FileRow); files++; }
-          else { this.#removeFile(r.pk); files++; }
-          this.#db.run('DELETE FROM sync_log WHERE tbl = ? AND pk = ?', r.tbl, r.pk);
-          this.#db.run('INSERT INTO sync_log (seq, tbl, pk, op, row, hlc) VALUES (?, ?, ?, ?, ?, ?)', r.seq, r.tbl, r.pk, r.op, stored, r.hlc);
+          if (this.#unknown(r.tbl)) { this.#hold(r); held++; continue; }
+          const stored = this.#applyOne(r, run);
+          if (r.op === 'file_put' || r.op === 'file_delete') files++;
+          this.#store(r, stored);
         }
+        // Past held entries too (see HELD): they are kept here, so the backlog isn't lost.
         this.#db.run('UPDATE sync_state SET cursor = MAX(cursor, ?) WHERE id = 1', batch.upto);
       });
     } finally {
       this.#db.raw.exec('PRAGMA foreign_keys = ON');
     }
-    if (scrub && this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    if (gone.length) forgotten(gone);
-    for (const [tbl, recs] of others) {
+    this.#applied(run, forgotten);
+    return { applied: rows.length - held, files };
+  }
+
+  // After an update (Nova starting on a newer schema): applies the entries held for tables this node
+  // has now, oldest first, without moving the cursor. Returns how many it applied.
+  replayHeld(forgotten: (records: Record<string, unknown>[]) => void = () => {}): number {
+    const run = this.#applying();
+    let n = 0;
+    this.#db.raw.exec('PRAGMA foreign_keys = OFF');
+    try {
+      this.#db.tx(() => { n = this.#replay(run); });
+    } finally {
+      this.#db.raw.exec('PRAGMA foreign_keys = ON');
+    }
+    this.#applied(run, forgotten);
+    return n;
+  }
+
+  // What one apply collects for after its commit: forgotten records, and whether the write-ahead log
+  // needs folding (entries that may have carried a forgotten memory's words: once replaced, the old
+  // pages are folded out at once, not whenever SQLite would).
+  #applying(): Run {
+    return { gone: [] as Record<string, unknown>[], others: new Map<string, Record<string, unknown>[]>(), scrub: false };
+  }
+
+  #applied(run: Run, forgotten: (records: Record<string, unknown>[]) => void): void {
+    if (run.scrub && this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    if (run.gone.length) forgotten(run.gone);
+    for (const [tbl, recs] of run.others) {
       try { this.forgetting.get(tbl)!(recs); } catch (e) { this.#log.problem('sync', `Nova couldn’t finish forgetting what the hub deleted from ${tbl} here.`, { detail: (e as Error)?.stack ?? String(e) }); }
     }
-    return { applied: rows.length, files };
+  }
+
+  // Applies one checked entry; returns what this node's log keeps for it.
+  #applyOne(r: LogRow, run: Run): string | null {
+    if (r.tbl === 'memory' || this.forgetting.has(r.tbl) || (r.tbl === FILE && (r.pk === 'MEMORY.md' || r.pk.startsWith('memory/')))) run.scrub = true;
+    if (r.tbl === VAULT) return this.#applyVault(r);
+    if (r.op === 'put') this.#put(r.tbl, JSON.parse(r.row!) as Record<string, unknown>);
+    else if (r.op === 'delete') {
+      if (r.tbl === 'memory') {
+        const rec = this.#db.get<Record<string, unknown>>('SELECT * FROM memory WHERE id = ?', r.pk);
+        if (rec) run.gone.push(rec);
+      } else if (this.forgetting.has(r.tbl)) {
+        const keys = REPLICATED[r.tbl]!;
+        const values = keys.length === 1 ? [r.pk] : (JSON.parse(r.pk) as (string | number)[]);
+        const rec = this.#db.get<Record<string, unknown>>(`SELECT * FROM "${r.tbl}" WHERE ${keys.map((k) => `"${k}" = ?`).join(' AND ')}`, ...values);
+        if (rec) run.others.set(r.tbl, [...(run.others.get(r.tbl) ?? []), rec]);
+      }
+      this.#delete(r.tbl, r.pk);
+    } else if (r.op === 'file_put') this.#writeFile(JSON.parse(r.row!) as FileRow);
+    else this.#removeFile(r.pk);
+    return r.row;
+  }
+
+  // Keeps the hub's entry, with the hub's seq, as the newest for its row: it replaces an older one,
+  // held or not.
+  #store(r: LogRow, row: string | null, tbl = r.tbl): void {
+    this.#db.run('DELETE FROM sync_log WHERE tbl IN (?, ?) AND pk = ?', r.tbl, HELD + r.tbl, r.pk);
+    this.#db.run('INSERT INTO sync_log (seq, tbl, pk, op, row, hlc) VALUES (?, ?, ?, ?, ?, ?)', r.seq, tbl, r.pk, r.op, row, r.hlc);
+  }
+
+  // A table this node doesn't have yet: one this release doesn't replicate, or one its schema lacks.
+  #unknown(tbl: string): boolean {
+    return tbl !== FILE && tbl !== VAULT && (!Object.hasOwn(REPLICATED, tbl) || !this.#has(tbl));
+  }
+
+  #has(tbl: string): boolean {
+    return this.#cols(tbl).size > 0;
+  }
+
+  // Sets an entry aside, unapplied (see HELD), and says once per table that this node is behind.
+  #hold(r: LogRow): void {
+    this.#store(r, r.row, HELD + r.tbl);
+    if (this.#skipped.has(`table:${r.tbl}`)) return;
+    this.#skipped.add(`table:${r.tbl}`);
+    this.#log.problem('sync', `The hub sent changes to ${r.tbl}, which this standby doesn’t have yet: it is a release behind. They are kept here and applied once it is updated; everything else is copied as usual.`);
+  }
+
+  // Applies, in seq order, the held entries whose table this node has now. One that no longer passes
+  // the checks stays held, and is said.
+  #replay(run: Run): number {
+    // Only the tables this node has now are read (one index range each), so a standby still behind
+    // doesn't read its whole held backlog at every pull.
+    const ready = this.#db.all<{ tbl: string }>(`SELECT DISTINCT tbl FROM sync_log WHERE tbl >= ? AND tbl < ?`, HELD, 'held;')
+      .map((x) => x.tbl).filter((t) => !this.#unknown(t.slice(HELD.length)));
+    if (!ready.length) return 0;
+    const held = this.#db.all<LogRow>(`SELECT seq, tbl, pk, op, row, hlc FROM sync_log WHERE tbl IN (${ready.map(() => '?').join(', ')}) ORDER BY seq`, ...ready);
+    let n = 0;
+    const logging = this.logging();
+    for (const h of held) {
+      const r = { ...h, tbl: h.tbl.slice(HELD.length) };
+      if (this.#unknown(r.tbl)) continue;
+      try { this.#check(r); } catch (e) {
+        if (!this.#skipped.has(`replay:${r.tbl}`)) {
+          this.#skipped.add(`replay:${r.tbl}`);
+          this.#log.problem('sync', `A change to ${r.tbl} the hub sent before this node was updated can’t be applied now; it is kept.`, { detail: (e as Error).message });
+        }
+        continue;
+      }
+      const stored = this.#applyOne(r, run);
+      // A standby keeps the hub's entry as it came. A hub (one promoted while behind, then updated)
+      // logged a change to the row itself through the table's triggers, under a new seq; where none
+      // fired (a delete of a row it never had), the entry stays under the table's own name, so the
+      // tombstone still reaches its standby (which got it at this seq already, see `batch`).
+      if (!logging) this.#store(r, stored);
+      else if (this.#db.get('SELECT 1 FROM sync_log WHERE tbl = ? AND pk = ?', r.tbl, r.pk)) this.#db.run('DELETE FROM sync_log WHERE seq = ?', h.seq);
+      else this.#db.run('UPDATE sync_log SET tbl = ? WHERE seq = ?', r.tbl, h.seq);
+      n++;
+    }
+    return n;
   }
 
   // Refuses an entry that names a table, column, op or path this node doesn't replicate.
@@ -492,9 +610,20 @@ export class SyncLog {
       }
       return;
     }
-    if (!Object.hasOwn(REPLICATED, r.tbl)) bad(`table ${r.tbl}`);
+    // A table this node doesn't have (a newer release's) is held, not refused (see HELD); its name
+    // must still be a name and its row a flat row, the same as a known table's.
+    if (typeof r.tbl !== 'string' || !NAME.test(r.tbl) || r.tbl === FILE) bad(`table ${String(r.tbl)}`);
+    const unknown = this.#unknown(r.tbl);
     if (r.op === 'put') {
       const row = JSON.parse(String(r.row)) as Record<string, unknown>;
+      if (!row || typeof row !== 'object' || Array.isArray(row)) bad(`row of ${r.tbl}`);
+      if (unknown) {
+        for (const [k, v] of Object.entries(row)) {
+          if (!NAME.test(k)) bad(`column ${r.tbl}.${k}`);
+          if (v !== null && typeof v !== 'string' && typeof v !== 'number') bad(`value of ${r.tbl}.${k}`);
+        }
+        return;
+      }
       const cols = this.#cols(r.tbl);
       for (const [k, v] of Object.entries(row)) {
         // A column this node doesn't have yet (the hub is a release ahead) is left out when the row
@@ -523,7 +652,8 @@ export class SyncLog {
     let c = this.#columns.get(tbl);
     if (!c) {
       c = new Set(this.#db.all<{ name: string }>(`PRAGMA table_info("${tbl}")`).map((x) => x.name));
-      this.#columns.set(tbl, c);
+      // A table that isn't there yet isn't remembered as such: an update may add it.
+      if (c.size) this.#columns.set(tbl, c);
     }
     return c;
   }

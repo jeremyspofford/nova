@@ -256,9 +256,7 @@ export class Session extends EventEmitter {
     try {
       if (['page', 'iframe', 'worker', 'shared_worker', 'service_worker'].includes(type)) {
         await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] }, sid).catch(() => {});
-      }
-      // Every kind of target attaches what it starts (a worker's own workers included).
-      if (['page', 'iframe', 'worker', 'shared_worker', 'service_worker'].includes(type)) {
+        // Every kind of target attaches what it starts (a worker's own workers included).
         await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid).catch(() => {});
       }
       // WebSockets, WebTransport and WebRTC go around Fetch, and a declared host's traffic around the
@@ -696,9 +694,6 @@ export class Session extends EventEmitter {
     return this.mode === 'taken_over' || this.mode === 'needs_person' || this.mode === 'paused';
   }
 
-  // Gives the page a moment and returns what is pending; for tests and the worker's own waits.
-  get dialogsPending(): number { return this.#dialogs.length; }
-
   async #world(): Promise<number> {
     const tree = await this.#send<{ frameTree: { frame: { id: string } } }>('Page.getFrameTree');
     const world = await this.#send<{ executionContextId: number }>('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'nova' });
@@ -792,19 +787,6 @@ export class Session extends EventEmitter {
       const state = await this.evaluate<string>('document.readyState').catch(() => 'loading');
       if (state === 'complete') return;
       await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-
-  // A click at a point of the page (the vision fallback), never while someone holds the browser.
-  async clickAt(x: number, y: number): Promise<void> {
-    for (;;) {
-      await this.gate();
-      if (this.#mustWait()) continue;
-      const p = { x: Math.round(x), y: Math.round(y) };
-      void this.#send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...p });
-      void this.#send('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'left', buttons: 1, clickCount: 1 });
-      await this.#send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button: 'left', buttons: 0, clickCount: 1 });
-      return;
     }
   }
 

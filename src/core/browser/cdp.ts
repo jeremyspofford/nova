@@ -26,8 +26,7 @@ export class CdpError extends Error {
 
 interface Pending { method: string; ok: (v: unknown) => void; fail: (e: Error) => void; timer: ReturnType<typeof setTimeout> | null }
 
-// Events are emitted twice: as `<method>` with (params, sessionId), and as `event` with
-// ({method, params, sessionId}), so a listener can follow one target or all of them.
+// Events are emitted as `<method>` with (params, sessionId).
 export class Cdp extends EventEmitter {
   #t: Transport;
   #next = 1;
@@ -98,7 +97,6 @@ export class Cdp extends EventEmitter {
     if (typeof msg.method === 'string') {
       const params = msg.params ?? {};
       this.emit(msg.method, params, msg.sessionId);
-      this.emit('event', { method: msg.method, params, sessionId: msg.sessionId });
     }
   }
 

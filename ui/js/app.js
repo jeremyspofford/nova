@@ -2075,9 +2075,11 @@ function boot() {
   watch();
   refreshCore();
   loadCapture();
-  route();
   // The page shows once its layout and first view are set: nothing moves into place (M9, CLS).
+  // Shown before route() in the same task, so no frame paints in between, but the composer can
+  // take route()'s focus: a visibility:hidden shell can't be focused.
   document.body.dataset.shown = '';
+  route();
 }
 // A blank profile opens the setup conversation, full screen, before anything else.
 if (!(await startSetup({ done: (path = '/') => { boot(); navigate(path); } }))) boot();

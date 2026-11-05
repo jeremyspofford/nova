@@ -14,6 +14,7 @@
 // no redirects, one call is one request, answers read strictly, every failure in words.
 import { NO_REDIRECT, reachProblem } from '../providers/types.ts';
 import type { Answer, Question } from './types.ts';
+import { isObj } from '../envelope.ts';
 
 export const SYSTEMONE_PATH = '/v1/systemone';
 export const IMAGES_HEADER = 'TypeSafe-Danger-Zone-Images';
@@ -75,7 +76,6 @@ export function older(a: string, b: string): boolean {
   return false;
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const prob = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
 const probs = (v: unknown, keys: string[]): v is Record<string, number> => isObj(v) && keys.every((k) => prob(v[k]));
 

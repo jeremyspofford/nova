@@ -1411,5 +1411,3 @@ export async function saveProvider(form) {
   } catch (e) { toast(e.message); }
   await loadProviders();
 }
-
-export { ICONS };

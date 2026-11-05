@@ -33,6 +33,7 @@
 // Ports below 1024 are refused (they need privileges and belong to the system); the ports Nova uses
 // itself (the console's, the device door's) are refused by the driver, from Nova's configuration.
 import { WORKLOAD_PURPOSES } from '../mesh/purposes.ts';
+import { isObj } from '../envelope.ts';
 
 export const ALONGSIDE = Object.freeze(['full', 'shadow', 'copy', 'none'] as const);
 export type Alongside = (typeof ALONGSIDE)[number];
@@ -83,7 +84,6 @@ const CONTRACT = /^http:\/[A-Za-z0-9._~!$&'()*+,;=:@\/?%-]*$/;
 const CONSOLE_TESTS = new Set(['release-tests', 'smoke']);
 const RESERVED = new Set(['current', 'base']);
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isStrs = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
 const isInt = (v: unknown, min: number, max: number) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
 const isCommand = (v: unknown) => isStrs(v) && v.length > 0 && v.every((x) => x.length > 0 && x.length < 4096 && !x.includes('\0'));
