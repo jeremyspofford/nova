@@ -5,22 +5,11 @@
 import { api } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, openSheet, toast } from './shell.js';
-import { over, waitingLine } from './wait.js';
+import { makePart, waitingLine } from './wait.js';
 
 let data = null;   // { sites, kept }
-let failed = '';
-let rerender = () => {};
-
-export async function loadSites() {
-  try {
-    data = await api('GET', '/browser/sites');
-    over('browser-sites');
-    failed = '';
-  } catch (e) {
-    failed = e.message || 'Nova’s server didn’t answer.';
-  }
-  rerender();
-}
+const part = makePart('browser-sites', async () => { data = await api('GET', '/browser/sites'); });
+export const loadSites = part.load;
 
 const when = (iso) => { try { return new Date(iso).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }); } catch { return ''; } };
 
@@ -35,7 +24,7 @@ function row(s) {
 
 export function renderSites() {
   const head = '<section class="memory-section" id="browser-sites" aria-labelledby="set-browser-sites"><h2 class="memory-heading" id="set-browser-sites">Site sign-ins</h2>';
-  if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="retry-sites">Try again</button>` : waitingLine('Loading sites', { key: 'browser-sites' })}</section>`;
+  if (!data) return `${head}${part.failed ? `<p class="memory-lede">${esc(part.failed)}</p><button type="button" class="btn set-retry" data-action="retry-sites">Try again</button>` : waitingLine('Loading sites', { key: 'browser-sites' })}</section>`;
   const sites = data.sites ?? [];
   return `${head}
 <p class="memory-lede">${esc(sites.length ? 'Nova’s own browser remembers these sites between tasks, so it stays signed in where you let it. Sign-ins are kept in Nova’s vault, each saved for the site it belongs to.' : 'Nova’s own browser hasn’t kept anything for a site yet. Save a sign-in here and Nova can sign in for you; it is saved for the site it belongs to.')}</p>
@@ -64,7 +53,7 @@ function forgetSheet(s) {
 }
 
 export function bindSites(root, render) {
-  rerender = render;
+  part.rerender = render;
   root.addEventListener('click', (e) => {
     const b = e.target.closest('[data-action]');
     if (b?.dataset.action === 'retry-sites') loadSites();

@@ -100,6 +100,26 @@ export function over(key) {
   if (t !== undefined) remember(key, Date.now() - t);
 }
 
+// The load every Settings part shares: `fetch` reads the part's data into its own variables; then
+// its wait (`key`) is over, or `failed` says why it isn't, and the part redraws either way.
+export function makePart(key, fetch) {
+  const part = {
+    failed: '',
+    rerender: () => {},
+    async load() {
+      try {
+        await fetch();
+        part.failed = '';
+        over(key);
+      } catch (e) {
+        part.failed = e.message || 'Nova’s server didn’t answer.';
+      }
+      part.rerender();
+    },
+  };
+  return part;
+}
+
 // What a wait's indicator shows now, from when it began: whether it is past 1 s (seen), past 10 s,
 // and its long-wait words. The same at a redraw as the clock below makes it, so redrawing a wait
 // never hides or changes it.

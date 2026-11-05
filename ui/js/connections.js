@@ -5,25 +5,14 @@
 import { api } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, openSheet, toast } from './shell.js';
-import { over, waitingLine } from './wait.js';
+import { makePart, waitingLine } from './wait.js';
 
 let data = null;    // { connectors, vault }
 let rules = [];     // the automation rules, to say which listen to a connection
-let failed = '';
-let rerender = () => {};
-
-export async function loadConnections() {
-  try {
-    const [c, r] = await Promise.all([api('GET', '/connectors'), api('GET', '/triggers/rules').catch(() => [])]);
-    data = c;
-    over('connections');
-    rules = r;
-    failed = '';
-  } catch (e) {
-    failed = e.message || 'Nova’s server didn’t answer.';
-  }
-  rerender();
-}
+const part = makePart('connections', async () => {
+  [data, rules] = await Promise.all([api('GET', '/connectors'), api('GET', '/triggers/rules').catch(() => [])]);
+});
+export const loadConnections = part.load;
 
 const listening = (id) => rules.filter((r) => String(r.source ?? '').startsWith(`connector:${id}/`));
 const since = (iso) => { try { return new Date(iso).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }); } catch { return ''; } };
@@ -66,7 +55,7 @@ function offer(c, { primary }) {
 
 export function renderConnections() {
   const head = '<section class="memory-section" id="connections" aria-labelledby="set-connections"><h2 class="memory-heading" id="set-connections">Connections</h2>';
-  if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="retry-connections">Try again</button>` : waitingLine('Loading connections', { key: 'connections' })}</section>`;
+  if (!data) return `${head}${part.failed ? `<p class="memory-lede">${esc(part.failed)}</p><button type="button" class="btn set-retry" data-action="retry-connections">Try again</button>` : waitingLine('Loading connections', { key: 'connections' })}</section>`;
   const all = data.connectors;
   const on = all.filter((c) => c.connected || c.broken);
   const pick = all.find((c) => c.recommended);
@@ -100,7 +89,7 @@ function disconnectSheet(c) {
 
 // Wires the part into Settings: `render` redraws it when the data changes.
 export function bindConnections(root, render) {
-  rerender = render;
+  part.rerender = render;
   root.addEventListener('click', (e) => {
     const b = e.target.closest('[data-action]');
     if (b?.dataset.action === 'retry-connections') loadConnections();
