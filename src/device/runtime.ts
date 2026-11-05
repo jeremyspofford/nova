@@ -158,7 +158,6 @@ export class Runtime {
     this.#timers = [];
     for (const [id, done] of [...this.#calls]) done({ type: 'answer', id, error: 'The runtime is stopping.' });
     for (const [id, done] of [...this.#verbs]) done({ type: 'verb_answer', id, ok: false, said: 'The runtime is stopping.', state: this.#workloads });
-    this.queue.close();
   }
 
   #trouble(e: unknown): void {

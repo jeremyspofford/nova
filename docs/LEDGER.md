@@ -57,6 +57,11 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: rely on irreversible commands in chat being allowed only by you.
 - Still unfinished: nothing for this fix. This closes the last tier-3 path on Nova's own screen that was outside the passkey check.
 
+**2026-11-04 · Ponytail Step 4 · Dead code and unused options removed**
+- What changed: code that nothing in Nova ever ran is gone: about 290 lines of code, net, plus about 40 lines of tests that only covered it. That includes a seat and a log file format the decision service stopped using, a placeholder for the hosted Jev provider, old pairing and clock helpers in the file every device carries, settings options nobody set, and about a hundred names the core offered that nothing outside it used. One removal is a safety gain: there was a way to install a skill that skipped Nova's screening. Only tests used it, but it is gone now. Every skill you add still goes through the screen first. Nothing you can see or do in Nova changes.
+- What you can now do: nothing new. Nova works the same, with less unused code to read, review or ship to devices.
+- Still unfinished: two kinds of cleanup from the same audit wait for later steps: merging the many copied helpers (Step 5), and the app.js tidy-up (Step 6). The Gmail connector's unused test options stay for now, because they sit inside the plaintext-secret migration code that stays until you confirm the old Gmail folder is gone. That folder still exists on this machine's Nova home.
+
 **2026-11-04 · Config onboarding (door 1) · Bring settings in from a file, or take them out**
 - What changed: Settings has a new Configuration section. You can bring in a settings file, and Nova checks it first and shows every change before anything is applied. A key or password in the file is left out, with a note on where it belongs. The hub's own settings (devices, models, backups, capture) are also left out, because those are changed on their own screens. A change to privacy or to what asks first counts as tier 3, so it needs your passkey. You can also export your settings as a file with no secrets in it. Every import is recorded in the activity log.
 - What you can now do: move your personal settings between Nova installs, or keep a copy, with Export and "Choose a file" in Settings › Configuration.

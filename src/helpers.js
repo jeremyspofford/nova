@@ -127,14 +127,6 @@ export class Helpers extends EventEmitter {
     return this.spawn({ title: meta.title, task, files: (meta.files ?? []).filter((p) => existsSync(join(this.runner.config.home, p))), parent: meta.parent, turn: meta.turn, taint: this.runner.taintOf(reduce(events)) });
   }
 
-  // What's working and waiting, for the Activity view.
-  now() {
-    return {
-      running: [...this.running.values()],
-      queued: this.queue.map(({ run, title, parent, queued }) => ({ run, title, parent, queued })),
-    };
-  }
-
   // ---- the chat-run kind ----------------------------------------------------------
 
   title(inputs) { return inputs.title; }

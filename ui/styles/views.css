@@ -267,8 +267,6 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 
 /* ---- activity ----------------------------------------------------------------- */
 
-.place-pulse { align-self: center; margin-left: auto; }
-.place-count.is-waiting { color: var(--accent-primary); }
 .act-summary { margin-top: calc(-1 * var(--space-2)); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-display); color: var(--text-secondary); }
 .act-list { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
 .act-entry {

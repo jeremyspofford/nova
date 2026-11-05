@@ -264,8 +264,6 @@ export interface CaptureOptions {
   secrets?: { get(name: string): string | null; put(name: string, value: string): unknown; delete(name: string): unknown; has(name: string): boolean };
   fetch?: typeof fetch;
   pollMs?: number;
-  // How far back a Screenpipe pull asks again by default, for items reported late (5 minutes).
-  lookbackMs?: number;
   // Why retention must not delete anything now (the clock jumped, M7b), or null.
   retentionHold?: () => string | null;
   // Screening, job 1: capture-sensitive asked of the Decision Service, which routes it (never a
@@ -623,43 +621,7 @@ export class Capture extends EventEmitter {
 
   // ---- reading -------------------------------------------------------------------------------------
 
-  // capture.stream(device, kind): the normalized events for one device and kind (null: any), as
-  // they arrive, plus what is already stored. Readers never see which source produced them.
-  stream(device: string | null, kind: Kind | null) {
-    if (kind !== null && !KINDS.includes(kind)) throw new CoreError('validation', `kind is one of ${KINDS.join(', ')}.`);
-    const match = (e: CaptureEvent) => (!device || e.device.id === device) && (!kind || e.kind === kind);
-    const self = this;
-    return {
-      recent: (limit = 50) => this.events({ ...(device ? { device } : {}), ...(kind ? { kind } : {}), limit }),
-      subscribe: (fn: (e: CaptureEvent) => void) => {
-        const f = (e: CaptureEvent) => { if (match(e)) fn(e); };
-        this.on('event', f);
-        return () => { this.off('event', f); };
-      },
-      // Listening starts when the iterator is made, not at its first next(), so nothing that
-      // arrives in between is missed. return() (a for-await loop's break) stops it.
-      [Symbol.asyncIterator](): AsyncIterator<CaptureEvent> {
-        const queue: CaptureEvent[] = [];
-        let wake: ((r: IteratorResult<CaptureEvent>) => void) | null = null;
-        let done = false;
-        const f = (e: CaptureEvent) => {
-          if (!match(e)) return;
-          if (wake) { const w = wake; wake = null; w({ value: e, done: false }); } else queue.push(e);
-        };
-        self.on('event', f);
-        const end = (): IteratorResult<CaptureEvent> => { done = true; self.off('event', f); wake?.({ value: undefined, done: true }); wake = null; return { value: undefined, done: true }; };
-        return {
-          next: () => {
-            if (queue.length) return Promise.resolve({ value: queue.shift()!, done: false });
-            if (done) return Promise.resolve({ value: undefined, done: true });
-            return new Promise((r) => { wake = r; });
-          },
-          return: () => Promise.resolve(end()),
-        };
-      },
-    };
-  }
-
+  // Readers listen for 'event' (normalized, never naming the source) and read stored ones here.
   events(f: { device?: string; kind?: Kind; space?: string; unclassified?: boolean; before?: string; limit?: number } = {}): CaptureEvent[] {
     const limit = f.limit ?? 50;
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new CoreError('validation', 'limit is a whole number from 1 to 500.');
@@ -1378,7 +1340,7 @@ export class Capture extends EventEmitter {
 
   #lookback(r: SourceRow): number {
     const m = parse<{ lookback_minutes?: unknown }>(r.config, {}).lookback_minutes;
-    return typeof m === 'number' && m >= 1 ? m : (this.#o.lookbackMs ?? DEFAULT_LOOKBACK_MS) / 60_000;
+    return typeof m === 'number' && m >= 1 ? m : DEFAULT_LOOKBACK_MS / 60_000;
   }
 
   #egress(url: string): 'local' | 'remote' {

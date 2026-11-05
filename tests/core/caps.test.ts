@@ -133,17 +133,17 @@ test('the day’s ceiling holds across tasks (in the person’s timezone), and a
   assert.equal(c.meter({ task_id: 'd', session_id: 'sd', capped: true }).check(), null);
 });
 
-test('the month per provider and model, conversations and reported usage included; the view and the routes', async () => {
+test('the month per provider and model, conversations included; the view and the routes', async () => {
   const { c, p } = caps();
   p.set('models', 'prices', { 'example-cloud': { usd_per_mtok_in: 1, usd_per_mtok_out: 1 } });
   c.meter({ task_id: null, session_id: 'chat', capped: false }).model({ provider: 'openai-compatible', model: 'example-chat:8b', where: 'local', usage: null, sent: 400, received: 40 });
   c.meter({ task_id: 't', session_id: 's', capped: true }).model({ provider: 'openai-compatible', model: 'example-chat:8b', where: 'local', usage: { tokens_in: 1000, tokens_out: 100 }, sent: 0, received: 0 });
-  c.report({ task_id: 'p1', provider: 'claude-code', model: 'example-cloud', where: 'remote', tokens_in: 500_000, tokens_out: 500_000 });
+  c.meter({ task_id: 'p1', session_id: 'p1', capped: true }).model({ provider: 'claude-code', model: 'example-cloud', where: 'remote', usage: { tokens_in: 500_000, tokens_out: 500_000 }, sent: 0, received: 0 });
   const mo = c.month();
   assert.deepEqual(mo.providers.map((x) => [x.provider, x.model, x.calls, x.tokens_in + x.tokens_out, x.usd]), [['claude-code', 'example-cloud', 1, 1_000_000, 1], ['openai-compatible', 'example-chat:8b', 2, 100 + 10 + 1100, 0]]);
   assert.equal(mo.total.estimated_tokens, 110);
   assert.equal(mo.words, 'This month: 1,001,210 tokens (110 estimated), $1.00.');
-  assert.equal(c.day().usd, 1, 'reported usage counts toward the day');
+  assert.equal(c.day().usd, 1, 'a task’s priced usage counts toward the day');
   const [get, put] = capsRoutes(c);
   assert.equal(`${get!.method} ${get!.path} ${put!.method} ${put!.path}`, 'GET /caps PUT /caps/limits');
   const v = await get!.handle({ params: {}, query: new URLSearchParams(), body: {}, headers: {}, who: {} as never }) as ReturnType<Caps['view']>;
