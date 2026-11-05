@@ -19,6 +19,7 @@ import { Ollama } from './models/ollama.ts';
 import { ROLES, ROLE_WORDS } from './models/recommend.ts';
 import { KINDS as MEMORY_KINDS, type Kind as MemoryKind, type Memory } from './memory.ts';
 import { SECTIONS, type Profile, type Section } from './profile.ts';
+import { FORMAT, plan as planConfig, type Plan } from './config-doors.ts';
 import type { Providers } from './providers/registry.ts';
 import type { Models } from './models/index.ts';
 import type { Connectors } from './connectors/index.ts';
@@ -412,6 +413,18 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     };
     walk(root, 0);
     return { packs: packs.slice(0, 5), files: files.slice(0, 20) };
+  }
+
+  // settings_change (config onboarding, door 3): the same checked plan as a file's (config-doors.ts),
+  // shown to the person as a diff before anything applies; the chat approval is their OK.
+  planSettings(settings: unknown): Plan { return planConfig(this.#o.profile, { format: FORMAT, settings }); }
+  applySettings(settings: unknown): Plan & { applied: number } {
+    const p = this.planSettings(settings);
+    if (p.problems.length) throw new CoreError('validation', `Nothing changed: ${p.problems.join(' ')}`);
+    const applied = p.changes.filter((c) => !c.refused);
+    for (const c of applied) this.#o.profile.set(c.section as Section, c.name, c.to, 'conversation');
+    if (applied.length) this.#o.log.info('config', `Changed ${applied.length} setting${applied.length === 1 ? '' : 's'} in a conversation.`, { keys: applied.map((c) => c.key) });
+    return { ...p, applied: applied.length };
   }
 
   // A Nova memory export in ~/workspace/import/, checked: what loading it would add.

@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Config onboarding (door 3) · Change settings by asking Nova**
+- What changed: you can ask Nova in a conversation to change one of your settings, for example "set my timezone to Asia/Tokyo". Nova shows exactly what would change, in the same list as Settings › Configuration, and nothing changes until you allow it. A change to privacy or to what asks first counts as tier 3 and needs your passkey. Secrets and the hub's own settings are left out, saying why. Every change is recorded in the activity log.
+- What you can now do: change your personal settings by talking to Nova.
+- Still unfinished: the third way in, a guided setup form (with Settings generated from the schema), comes next.
+
 **2026-11-04 · T2 (follow-up) · Irreversible steps in chat need your passkey**
 - What changed: tier-3 steps in a conversation, like deleting a schedule or running a command that looks irreversible, now need your passkey when you allow them from Nova's own screen. Before this, the confirm box only lived in the page: any program on this computer could allow such a step without a person. Nova's server now refuses an allow that carries no passkey approval for that exact step. Denying a step never needs one.
 - What you can now do: rely on irreversible commands in chat being allowed only by you.
