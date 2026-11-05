@@ -18,7 +18,11 @@ const $ = (id) => document.getElementById(id);
 const postureHook = new URLSearchParams(location.search).get('posture');
 export const layout = { layout: null, posture: null, aside: null, room: null };
 
-const asideClosed = () => { try { return localStorage.getItem('nova.aside') === 'closed'; } catch { return false; } };
+// A conversation is one reading column (Stage 2, approved 2026-11-04): there the glance column
+// starts closed and opens only when the person opens it; elsewhere it starts open. Each is kept.
+const chatView = () => document.body.dataset.view === 'chat';
+const asideKey = () => (chatView() ? 'nova.aside.chat' : 'nova.aside');
+const asideClosed = () => { try { const v = localStorage.getItem(asideKey()); return chatView() ? v !== 'open' : v === 'closed'; } catch { return chatView(); } };
 
 // The bands' widths, as layout.css derives them from the regions' minimums in the applied design
 // system (F8/F9): measured off three never-seen probes, so a design system swapped live, or a
@@ -78,7 +82,7 @@ export function readLayout() {
 }
 
 export function toggleAside() {
-  try { localStorage.setItem('nova.aside', layout.aside === 'on' ? 'closed' : 'open'); } catch {}
+  try { localStorage.setItem(asideKey(), layout.aside === 'on' ? 'closed' : 'open'); } catch {}
   readLayout();
   window.dispatchEvent(new CustomEvent('nova:layout', { detail: { ...layout } }));
 }

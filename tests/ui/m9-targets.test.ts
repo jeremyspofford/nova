@@ -160,6 +160,8 @@ test('M9 gate, hit areas: at a desktop’s width every control, the rail and the
     for (const [view, path] of Object.entries(VIEWS)) {
       await page.goto(`${m.base}${path}`);
       await settled(page, view);
+      // A conversation's glance column starts closed (Stage 2); open it as the person would, to check it too.
+      if (view === 'chat' && await page.evaluate(() => document.body.dataset.aside === 'off')) { await page.locator('#aside-toggle').click(); await page.waitForFunction(() => document.body.dataset.aside === 'on'); }
       assert.ok(await page.locator(view === 'settings' ? '#settings-nav' : '#aside').isVisible(), `${view}: its second pane is on screen to be checked`);
       await check(view);
     }
