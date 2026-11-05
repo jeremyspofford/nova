@@ -41,7 +41,7 @@ test('M8 gate (CI): the calc brief, done by Relay’s worker in a worktree, veri
   };
   try {
     writeCalc(join(m.home, 'workspace'));
-    await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed' });
+    await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed', confirm: true });
 
     // Relay, set up like any provider: its address on this computer and a profile, then on (tier 2).
     assert.equal((await m.send('PUT', api('/providers/relay/config'), { config: { base_url: relay.url, profile: 'Builder', poll_ms: 50, busy_retry_s: 1 } })).status, 200);

@@ -1,5 +1,6 @@
 // Chat honors the privacy mode (LOCAL-FIRST-AND-DEVICE-MESH §2): with a local-only profile, a
 // model command that sends conversations to the cloud is never started.
+import { signed } from '../acceptance/passkey-support.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
@@ -35,7 +36,7 @@ test('a cloud model is never called while the profile is local-only; allowing cl
     assert.match(refused.items[0]!.message ?? '', /privacy setting is local-only.*runs in the cloud, so I haven't sent this anywhere/);
     assert.equal(existsSync(called), false, 'the model command never ran');
 
-    await send('PUT', '/api/v1/profile/privacy/default', { value: 'local-preferred' });
+    await send('PUT', '/api/v1/profile/privacy/default', await signed(base, 'PUT', '/api/v1/profile/privacy/default', { value: 'local-preferred', confirm: true }));
     assert.equal((await send('POST', `/api/sessions/${id}/regenerate`)).status, 202);
     const answered = (await settle(id, (s) => s.live === null && s.session.turns[0]!.attempt === 1)).session.turns[0]!;
     assert.equal(answered.state, 'done');

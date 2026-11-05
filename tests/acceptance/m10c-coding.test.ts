@@ -64,7 +64,7 @@ test('M10c gate: a coding request in chat ends as a reviewed diff with green tes
     assert.deepEqual((await get('/coding')).runs, [], 'nothing was started');
     evidence.push(`- Local-only: the request in chat was refused, and chat said why: “${/No coding agent is on[^"]*/.exec(refused.text)?.[0]}” No run was made.`);
 
-    assert.equal((await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed' })).status, 200);
+    assert.equal((await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed', confirm: true })).status, 200);
     const personBefore = treeHash(repos.person);
     const remoteBefore = treeHash(repos.remote);
     const base = git(repos.person, 'rev-parse', 'main');

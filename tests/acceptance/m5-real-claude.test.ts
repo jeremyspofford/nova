@@ -21,7 +21,7 @@ test('M5 evidence: the calc/ brief done by real Claude Code through the envelope
   const started = Date.now();
   try {
     writeCalc(join(m.home, 'workspace'));
-    await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed' });
+    await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed', confirm: true });
     assert.equal((await m.send('PUT', api('/providers/claude-code/config'), { config: { command: 'claude' } })).status, 200);
     assert.equal((await m.send('POST', api('/providers/claude-code/enable'), { approved: true })).body.enabled, true);
     const created = await m.send('POST', api('/tasks'), calcTask('claude-code'));
