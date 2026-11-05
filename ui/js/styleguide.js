@@ -12,7 +12,8 @@ import { waitingLine } from './wait.js';
 import { ORB_STATES } from './status.js';
 import { renderTopology } from './topology-view.js';
 import { escapeHtml as esc } from './markdown.js';
-import { workCosts, diagnosticsDownload, configImport, configSetup, configProposal, passkeySetup, PASSKEY_STATES, PASSKEY_SETUP_STATES } from './components.js';
+import { workCosts, diagnosticsDownload, configImport, configSetup, configProposal, passkeySetup, PASSKEY_STATES, PASSKEY_SETUP_STATES, deviceModels } from './components.js';
+import * as fitEngine from './fit-engine.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -473,6 +474,112 @@ function clearInvalid(entry) {
 
 // ---- how an entry is drawn -----------------------------------------------------------------------
 
+// The per-device Models screen (proposed, 2026-11-04): the real fit engine (ui/js/fit-engine.js is
+// src/core/models/fit.ts with its types erased) computes every verdict and number here, and again
+// on every change to a quant, a context or the plan. Demo only: nothing is installed or assigned,
+// and nothing is sent anywhere. The hardware is sample hardware. The catalog is the ADR's golden set
+// (its 8B, 14B and 32B shapes), plus an embedder and a vision model; the hub also has a 4B.
+const GiB = fitEngine.GiB;
+const MODEL_CONTEXTS = [2048, 4096, 8192, 16384, 32768];
+const shape = (layers, kv_heads, head_dim) => ({ layers, kv_heads, head_dim });
+const MODEL_CATALOG = {
+  'qwen3:8b': { params: 8_200_000_000, capabilities: ['completion'], arch: shape(36, 8, 128) },
+  'qwen3:14b': { params: 14_800_000_000, capabilities: ['completion'], arch: shape(40, 8, 128) },
+  'qwen3:32b': { params: 32_800_000_000, capabilities: ['completion'], arch: shape(64, 8, 128) },
+  'qwen2.5vl:7b': { params: 8_300_000_000, capabilities: ['vision'], arch: shape(28, 4, 128) },
+  'nomic-embed-text': { params: 137_000_000, capabilities: ['embedding'], arch: shape(12, 12, 64), max_context: 2048, quants: ['Q8_0', 'F16'], contexts: [2048] },
+};
+const gpu = (name, vram, used = 0) => ({ vendor: 'nvidia', name, vram_bytes: vram * GiB, vram_free_bytes: Math.round((vram - used) * GiB), unified: false });
+const hardware = (gpus, ram) => ({ at: t0.toISOString(), platform: 'linux', arch: 'x64', hostname: 'sample', cpu: { model: 'sample', threads: 8 }, ram_bytes: ram * GiB, ram_free_bytes: ram * GiB, gpus, disk: null, network: [], whisper: null, sources: [] });
+const embedderFile = { quant: 'F16', weights_bytes: 274_302_450 };
+const tunedFile = { quant: 'Q4_K_M', weights_bytes: 7_480_000_000 };
+const MODEL_DEVICES = {
+  study: { name: 'Study desktop', words: 'NVIDIA GeForce RTX 3090 · 24.0 GB video memory', hw: hardware([gpu('NVIDIA GeForce RTX 3090', 24, 0.45)], 64), learned: { bytes: Math.round(1.12 * GiB), n: 3, last_observed: null, updated_at: null }, installed: { 'nomic-embed-text': embedderFile } },
+  tower: { name: 'Small tower', words: 'NVIDIA GeForce RTX 3060 Ti · 8.0 GB video memory', hw: hardware([gpu('NVIDIA GeForce RTX 3060 Ti', 8)], 32) },
+  laptop: { name: 'Laptop', words: 'Apple M2 · 16.0 GB unified memory', hw: { ...hardware([{ vendor: 'apple', name: 'Apple M2', vram_bytes: 12 * GiB, vram_free_bytes: null, unified: true }], 16), platform: 'darwin', arch: 'arm64' } },
+  workshop: { name: 'Workshop PC', words: 'NVIDIA GeForce RTX 4070 · 12.0 GB video memory', hw: hardware([gpu('NVIDIA GeForce RTX 4070', 12, 0.3)], 32), installed: { 'tuned-assistant:12b': tunedFile }, extra: { 'tuned-assistant:12b': { params: 12_200_000_000, capabilities: ['completion'], arch: null } } },
+  mini: { name: 'Mini PC (the hub)', words: 'No GPU · 32.0 GB memory · this is the hub', hw: hardware([], 32), hub: true, extra: { 'qwen3:4b': { params: 4_000_000_000, capabilities: ['completion'], arch: shape(36, 8, 128) } } },
+};
+// Each state: the device, its privacy mode, and the plan as [model, quant, context, loaded?].
+const MODEL_STATES = {
+  '3090-one-model': { label: '24 GB RTX 3090, one model', device: 'study', privacy: 'local-only', plan: [['qwen3:14b', 'Q8_0', 16384]] },
+  '3090-two-models': { label: '24 GB RTX 3090, two models (one tight)', device: 'study', privacy: 'local-only', plan: [['qwen3:32b', 'Q4_K_M', 4096], ['nomic-embed-text', 'F16', 2048, true]] },
+  '8gb-nothing-at-16k': { label: '8 GB card: nothing fits at 16k', device: 'tower', privacy: 'local-only', plan: [['qwen3:8b', 'Q4_K_M', 16384]] },
+  'mac-16gb-unified': { label: '16 GB Mac, unified memory (local first)', device: 'laptop', privacy: 'local-preferred', plan: [['qwen3:8b', 'Q4_K_M', 16384]] },
+  'unknown-shape': { label: 'A model of unknown shape: an estimate', device: 'workshop', privacy: 'local-only', plan: [['tuned-assistant:12b', 'Q4_K_M', 8192, true]] },
+  'no-gpu': { label: 'No GPU found', device: 'mini', privacy: 'local-only', plan: [['qwen3:4b', 'Q4_K_M', 4096]] },
+};
+const MODEL_SPECIMENS = Object.keys(MODEL_STATES);
+let modelsState = '3090-two-models';
+let modelsPlan = null;
+const modelInfo = (d, name) => d.extra?.[name] ?? MODEL_CATALOG[name];
+function modelsDevice(d) { return fitEngine.deviceBudget(d.hw, { overhead: d.learned ?? null }); }
+function planEntry(d, [name, quant, context, loaded = false]) {
+  const info = modelInfo(d, name);
+  return { name, quant, context, loaded, installed: Boolean(d.installed?.[name]) && d.installed[name].quant === quant, quants: info.quants ?? [...fitEngine.QUANTS], contexts: info.contexts ?? MODEL_CONTEXTS, estimate: info.arch === null };
+}
+function fitModel(d, m) {
+  const info = modelInfo(d, m.name);
+  const file = d.installed?.[m.name];
+  return { name: m.name, params: info.params, weights_bytes: file && file.quant === m.quant ? file.weights_bytes : null, quant: m.quant, context: m.context, arch: info.arch, arch_source: info.arch ? (file ? 'backend' : 'catalog') : null, kv_type: 'f16' };
+}
+function modelsView() {
+  const s = MODEL_STATES[modelsState];
+  const d = MODEL_DEVICES[s.device];
+  const device = modelsDevice(d);
+  modelsPlan ??= s.plan.map((p) => planEntry(d, p));
+  const plan = modelsPlan.map((m) => ({ ...m, installed: Boolean(d.installed?.[m.name]) && d.installed[m.name].quant === m.quant, result: fitEngine.fit({ device, models: [fitModel(d, m)] }) }));
+  const total = plan.length ? fitEngine.fit({ device, models: plan.map((m) => fitModel(d, m)) }) : null;
+  const candidates = [...Object.entries(MODEL_CATALOG), ...Object.entries(d.extra ?? {})].map(([name, info]) => ({ name, params: info.params, capabilities: info.capabilities, where: 'local', installed: d.installed?.[name] ?? null, arch: info.arch, arch_source: info.arch ? 'catalog' : null, max_context: info.max_context ?? null }));
+  candidates.push({ name: 'A cloud model, through your provider', params: 0, capabilities: ['completion'], where: 'cloud', installed: null, arch: null, arch_source: null });
+  const advice = fitEngine.TASK_CLASSES.map((task) => fitEngine.recommendFit({ device, privacy: s.privacy, task, hub: Boolean(d.hub), candidates }));
+  return {
+    id: `dm-${s.device}`, privacy: s.privacy, plan, total, advice,
+    catalog: [...Object.keys(MODEL_CATALOG), ...Object.keys(d.extra ?? {})],
+    device: { name: d.name, hardware: d.words, memory: device.memory, budget_bytes: device.budget_bytes, ram_bytes: d.hw.ram_bytes, overhead_source: device.overhead_source, overhead_loads: d.learned?.n ?? 0 },
+  };
+}
+function modelsSpecimen() {
+  return `<div data-models-specimen="${esc(modelsState)}">${deviceModels(modelsView())}</div>`;
+}
+function modelsEntry() {
+  return `<label class="sg-pick" for="models-state">State <select class="input" id="models-state">${MODEL_SPECIMENS.map((s) => `<option value="${s}"${s === modelsState ? ' selected' : ''}>${esc(MODEL_STATES[s].label)}</option>`).join('')}</select></label>
+<p class="sg-about">Settings › Devices › a device › Models, and the same component in device setup. Every verdict and number comes from the real fit engine, and recomputes as you change a quant, a context or the plan. Demo only: nothing is installed or assigned.</p><div class="dm-specimen" data-models-content>${modelsSpecimen()}</div><p class="settings-note" role="status" data-models-demo-notice></p>`;
+}
+function bindModels() {
+  const entry = sg.querySelector('#sg-models-screen');
+  if (!entry) return;
+  const content = entry.querySelector('[data-models-content]');
+  const note = (text) => { entry.querySelector('[data-models-demo-notice]').textContent = text; };
+  const redraw = (focusId = null, said = null) => {
+    content.innerHTML = modelsSpecimen();
+    if (focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
+    const v = modelsView();
+    note(said ?? (v.total ? `Recomputed by the fit engine: ${v.total.words}` : 'Nothing is planned on this device.'));
+  };
+  entry.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.id === 'models-state') { modelsState = t.value; modelsPlan = null; content.innerHTML = modelsSpecimen(); note(''); return; }
+    if (t.dataset.modelsQuant !== undefined) { modelsPlan[Number(t.dataset.modelsQuant)].quant = t.value; redraw(t.id); }
+    if (t.dataset.modelsContext !== undefined) { const m = modelsPlan[Number(t.dataset.modelsContext)]; m.context = m.contexts[Number(t.value)] ?? m.context; redraw(t.id); }
+  });
+  entry.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-action^="models-"]');
+    if (!b || !entry.contains(b) || b.disabled) return;
+    e.preventDefault();
+    const d = MODEL_DEVICES[MODEL_STATES[modelsState].device];
+    const act = b.dataset.action;
+    if (act === 'models-install') return note('Demo only. Nothing was installed or assigned.');
+    if (act === 'models-remove') { modelsPlan.splice(Number(b.dataset.index), 1); return redraw(entry.querySelector('[data-device-models] select[id$="-add"]')?.id); }
+    const name = act === 'models-add' ? b.closest('.dm-add').querySelector('select').value : b.dataset.name;
+    const info = modelInfo(d, name);
+    const quant = b.dataset.quant ?? (info.quants ? info.quants.at(-1) : 'Q4_K_M');
+    const context = Number(b.dataset.context) || (info.contexts ? info.contexts[0] : 4096);
+    modelsPlan.push(planEntry(d, [name, quant, context]));
+    redraw(`dm-${MODEL_STATES[modelsState].device}-m${modelsPlan.length - 1}-quant`);
+  });
+}
+
 const state = (label, html, cls = '') => `<figure class="sg-state${cls ? ` ${cls}` : ''}"><figcaption class="sg-label">${label}</figcaption><div class="sg-specimen">${html}</div></figure>`;
 const sheet = (html) => `<div class="sheet-inner panel">${html}</div>`;
 const tokenList = (names) => names.map((n) => `<code>${n}</code>`).join(' ');
@@ -531,6 +638,7 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
       ['memory-card', 'MemoryHighlightCard', 'One thing Nova kept, or that nothing is kept yet.',
         () => `<div class="sg-cards">${state('Kept', memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] }))}${state('Nothing yet', memoryHighlightCard())}</div>`],
       ['config-doors', 'Configuration: three doors (proposed)', 'A file, the form or a chat with Nova: one layered store, the same diff before anything applies, a layer on every setting. Demo only.', () => configEntry()],
+      ['models-screen', 'Models on a device (proposed)', 'A device’s memory budget as one labelled bar, each planned model with its quant, context and verdict, whether several stay loaded together, and picks per task with privacy first. Real fit-engine numbers; demo only.', () => modelsEntry()],
       ['passkey-approval', 'Passkey confirmation', 'Tier 3 on Nova’s own screen, confirmed with a passkey so a program on this computer can’t approve itself. Tiers 0–2 are unchanged. Demo only: no passkey is requested.', () => passkeyEntry()],
       ['approval-sheet', 'ApprovalSheet', 'Tiered: tier 2 asks; tier 3 needs an explicit confirmation every time.',
         () => `<div class="sg-cards">${state('Tier 2', sheet(approvalSheet(task('a2', 'Send the draft reply', 'waiting', { approval_tier: 2 }))))}${state('Tier 3', sheet(approvalSheet(task('a3', 'Delete the old backups', 'waiting', { approval_tier: 3 }))))}</div>`],
@@ -613,6 +721,7 @@ function render() {
   bindBackups();
   bindConfig();
   bindPasskey();
+  bindModels();
   bindHealthSpecimens();
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
