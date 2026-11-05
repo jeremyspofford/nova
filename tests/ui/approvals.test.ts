@@ -31,6 +31,12 @@ test('M3: an irreversible command needs the confirm box; an ordinary one asks on
     await page.waitForTimeout(500);
     assert.equal(await card.count(), 1, 'Enter alone did nothing: the step is still waiting');
     if (shots) await shoot(page, join(shots, 'tier3-command.png'));
+    // T2: the box alone never allowed it on the server. A plain allow (only X-Nova, as any program
+    // here could send) is refused; the page's own Allow goes through the passkey step.
+    const tool = await card.getAttribute('data-tool');
+    const plain = await page.evaluate(async (t) => { const id = 'main'; const r = await fetch(`/api/sessions/${id}/approvals/${t}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: '{"decision":"allow"}' }); return { status: r.status, error: (await r.json()).error }; }, tool);
+    assert.equal(plain.status, 403, 'a tier-3 allow without a passkey is refused');
+    assert.match(plain.error, /confirmed with a passkey/);
     await card.locator('[data-confirm]').check();
     assert.equal(await allow.isDisabled(), false, 'ticking the box unlocks Allow');
     await allow.click();
@@ -45,7 +51,8 @@ test('M3: an irreversible command needs the confirm box; an ordinary one asks on
     assert.equal(await two.locator('[data-action="allow"]').isDisabled(), false);
     await two.locator('[data-action="allow"]').click();
     await page.waitForFunction(() => /nothing to commit before standup/.test(document.getElementById('thread')?.textContent ?? ''), null, { timeout: 10000 });
-    assert.deepEqual(errors, [], 'no errors in the page');
+    // (The one 403 is the test's own plain allow above, refused as it must be.)
+    assert.deepEqual(errors.filter((e) => !/status of 403/.test(e)), [], 'no errors in the page');
   } finally {
     await b.close();
     await stop(nova);

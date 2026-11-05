@@ -195,7 +195,7 @@ test('egress: local for this network or the mesh, remote otherwise; local-only n
   const nova = await bootCore({ homeAssistant: { fetch: via as typeof fetch, reconnectMs: { first: 30, max: 200 } } });
   try {
     assert.match((await nova.call('POST', `${HA}/connect`, { url: 'https://home.example.com', token: ha.token })).body.error, /local-only, so Nova doesn’t contact it/);
-    await nova.call('PUT', '/profile/privacy/default', { value: 'cloud-allowed' });
+    await nova.call('PUT', '/profile/privacy/default', { value: 'cloud-allowed', confirm: true });
     const ok = await nova.call('POST', `${HA}/connect`, { url: 'https://home.example.com', token: ha.token });
     assert.deepEqual([ok.body.connected, ok.body.egress], [true, 'remote']);
     assert.equal((await nova.get('/workers')).find((w: { id: string }) => w.id === 'home-assistant').egress, 'remote');

@@ -50,7 +50,7 @@ test('M5 gate: one brief, two providers (a coding agent and a chat model), evide
   };
   try {
     writeCalc(join(m.home, 'workspace'));
-    await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed' });
+    await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed', confirm: true });
 
     // Two providers of different classes, set up and turned on (tier 2).
     assert.equal((await m.send('PUT', api('/providers/claude-code/config'), { config: { command: `node ${FAKE_CLAUDE} --script ${script('honest')}` } })).status, 200);
