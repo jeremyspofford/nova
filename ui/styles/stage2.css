@@ -1,9 +1,9 @@
 /*
- * Stage 2 composition (PROPOSED 2026-11-04, for the owner's reaction; the app does not load it).
- * One design layer over the real shell, applied only by tests/ui/compositions.test.ts, so what the
- * owner approves is exactly what the rebuild moves into the app's stylesheets. Tokens only. Built
- * from DESIGN-SYSTEM §0.2 (chat restraint; Linear/Raycast lists; macOS-like Settings) against the
- * Stage-2 priorities: desktop card hierarchy, rail-orb depth, background-gradient discipline.
+ * Stage 2 (owner-approved composition, 2026-11-04; PR #306): the shell's surfaces, loaded last so it
+ * decides. Tokens only. From DESIGN-SYSTEM §0.2 (chat restraint; Linear/Raycast lists; macOS-like
+ * Settings) and the Stage-2 priorities: desktop card hierarchy, rail-orb depth, background discipline.
+ * shortcut: a layer over the older rules, not folded into each file; fold it in surface by surface as
+ * each one is rebuilt (tests/ui/compositions.test.ts keeps the app identical to it meanwhile).
  */
 
 /* Background discipline: one quiet light from above (the orb's), on one tone; no second glow, no
@@ -24,11 +24,14 @@ body { background: radial-gradient(70% 35% at 50% 0%, color-mix(in srgb, var(--o
 .aside .card { border-radius: 0; border-width: 0 0 1px; background: transparent; padding: var(--space-4) 0; }
 .aside .card-title { font-size: var(--type-body); }
 .aside .card-title .icon { color: var(--text-secondary); }
+/* Colour carries status, nothing else: a row's link reads as text, underlined (and passes AA on the page tone in every package). */
+.home-cards .card .link, .aside .card .link { color: var(--text-primary); text-decoration: underline; text-underline-offset: 0.2em; }
 
-/* Chat restraint: a conversation is one reading column; the glance column steps back. */
-/* (As the shell's own aside-off layout; the person can still open the column with its toggle.) */
-body[data-view="chat"][data-layout="desktop"][data-aside="on"] .shell { grid-template: "rail main" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr); }
-body[data-view="chat"][data-layout="desktop"][data-aside="on"] .aside { display: none; }
+/* Chat restraint: a conversation is one reading column; the glance column starts closed there
+   (shell.js), and its toggle opens it. */
+/* Memory and skill notes stay in the column: with the glance column closed by default the margin
+   isn't spare room any more (it overflowed at the band's edge). */
+body[data-view="chat"][data-layout="desktop"][data-room="yes"][data-aside="off"] .thread .margins { position: static; top: auto; left: auto; width: auto; }
 
 /* Rail-orb depth at small sizes: a flat, quiet orb; the glossy sheen and swirl are for Home only. */
 .orb-rail { --orb-size: var(--space-6); }

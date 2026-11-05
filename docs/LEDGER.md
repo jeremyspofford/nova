@@ -12,6 +12,24 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: nothing new. Nova works the same, with less unused code to read, review or ship to devices.
 - Still unfinished: two kinds of cleanup from the same audit wait for later steps: merging the many copied helpers (Step 5), and the app.js tidy-up (Step 6). The Gmail connector's unused test options stay for now, because they sit inside the plaintext-secret migration code that stays until you confirm the old Gmail folder is gone. That folder still exists on this machine's Nova home.
 
+**2026-11-04 · Config onboarding (door 1) · Bring settings in from a file, or take them out**
+- What changed: Settings has a new Configuration section. You can bring in a settings file, and Nova checks it first and shows every change before anything is applied. A key or password in the file is left out, with a note on where it belongs. The hub's own settings (devices, models, backups, capture) are also left out, because those are changed on their own screens. A change to privacy or to what asks first counts as tier 3, so it needs your passkey. You can also export your settings as a file with no secrets in it. Every import is recorded in the activity log.
+- What you can now do: move your personal settings between Nova installs, or keep a copy, with Export and "Choose a file" in Settings › Configuration.
+- Still unfinished: the other two ways in, a guided setup form (with Settings generated from the schema) and asking Nova in chat, come next. Where and how Nova starts (its folder, port and mesh address) stays in `nova.config.json`, because Nova needs those before it can read anything else.
+
+**2026-11-04 · UI rebuild (Stage 2) · Nova takes the calmer look**
+- What changed: Nova now has the calmer look you approved:
+  - one quiet light from above instead of layered glows;
+  - solid surfaces instead of frosted glass;
+  - on Home, one leading card and the rest as a list;
+  - the right column as one simple list;
+  - a flatter orb in the side rail, with a small bar marking where you are;
+  - Health as plain sections.
+
+  A conversation is one reading column: the side column starts closed there. Its toggle opens it, and Nova remembers that choice for conversations separately. Links in lists read as underlined text, so they stay readable in the light design too.
+- What you can now do: use the app with the new look on every screen size.
+- Still unfinished: the look is one stylesheet laid over the older rules. It gets folded into each surface's own rules as each surface is rebuilt in turn. The Nova/Aurora indigo decision is still open.
+
 **2026-11-04 · UI rebuild (design) · A proposed calmer look, shown on the real app**
 - What changed: a proposed redesign of Nova's look, shown on the real app, for your reaction. Nothing in the app changes yet. It keeps the layout and changes the surfaces:
   - one quiet light from above instead of layered glows;
