@@ -1,11 +1,10 @@
 // The adversarial review of #229, the parts that live in the core: folding before the checks,
-// more ways to hide text, a linear tokenizer with a cap, the screen template's protection, and the
-// browser worker failing closed. Neutral placeholders only.
+// more ways to hide text, a linear tokenizer with a cap, and the screen template's protection (the
+// browser worker failing closed is in tests/core/browser-act.test.ts). Neutral placeholders only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { check } from '../../src/core/ingest/checks.ts';
 import { Ingest } from '../../src/core/ingest/screen.ts';
-import { screenRead } from '../../src/core/browser/worker.ts';
 import { weakens } from '../../src/core/changes/gates.ts';
 import { KIND_OPS } from '../../src/core/changes/kinds.ts';
 import { SCREEN } from '../../src/core/ingest/screen.ts';
@@ -77,15 +76,4 @@ test('the screen template is protected: any change to it is tier 3, and one that
   assert.ok(weakens('template', { kind: 'template', artifact: choice }, choice));
   const floor = { template: { ...SCREEN, version: 2, escalation: { confidence_floor: 0.9 } }, dry_runs: [] };
   assert.equal(weakens('template', { kind: 'template', artifact: floor }, floor), null, 'a stricter one is a tier-3 change, not refused');
-});
-
-test('the browser worker fails closed: a screen that throws leaves the read marked blocked, never with no verdict', async () => {
-  const r = await screenRead(async () => { throw new Error('the model fell over'); }, 'page text', 'https://www.example.org/a');
-  assert.equal(r.verdict, 'block');
-  assert.equal(r.id, null);
-  assert.match(r.error ?? '', /fell over/);
-  const ok = await screenRead(async () => ({ id: 'scr-1', verdict: 'pass' }), 'page text', 'https://www.example.org/a');
-  assert.deepEqual(ok, { id: 'scr-1', verdict: 'pass' });
-  const none = await screenRead(undefined, 'page text', 'https://www.example.org/a');
-  assert.equal(none.verdict, 'block');
 });
