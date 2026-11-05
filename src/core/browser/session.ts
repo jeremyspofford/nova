@@ -790,19 +790,6 @@ export class Session extends EventEmitter {
     }
   }
 
-  // A click at a point of the page (the vision fallback), never while someone holds the browser.
-  async clickAt(x: number, y: number): Promise<void> {
-    for (;;) {
-      await this.gate();
-      if (this.#mustWait()) continue;
-      const p = { x: Math.round(x), y: Math.round(y) };
-      void this.#send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...p });
-      void this.#send('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'left', buttons: 1, clickCount: 1 });
-      await this.#send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button: 'left', buttons: 0, clickCount: 1 });
-      return;
-    }
-  }
-
   // Forget a site in this profile (M10b): its cookies (the host name's, and its parent domains'),
   // and every kind of storage for its origins. Returns how many cookies went.
   async clearSite(host: string, tops: string[] = []): Promise<number> {
