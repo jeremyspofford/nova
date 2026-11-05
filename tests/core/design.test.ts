@@ -196,7 +196,7 @@ test('CSS is never generated from an invalid package', () => {
 // ---- the built-ins, selection, apply, rollback ---------------------------------------------
 
 test('the six built-ins are present on a blank install, all valid, and Orb Teal is the default', () => {
-  const { design, profile } = host();
+  const { db, design } = host();
   const list = design.list();
   assert.deepEqual(list.map((d) => d.id).sort(), ['aurora', 'companion-light', 'nova', 'obsidian', 'orb-teal', 'paper']);
   for (const d of list) assert.deepEqual(d.problems, [], d.id);
@@ -204,7 +204,7 @@ test('the six built-ins are present on a blank install, all valid, and Orb Teal 
   assert.equal(DEFAULT_DESIGN_SYSTEM, 'orb-teal');
   assert.equal(design.active().id, 'orb-teal');
   assert.equal(design.active().scope, 'default');
-  assert.equal(profile.isEmpty(), true, 'the default needs no profile record, so setup still sees a blank profile');
+  assert.equal(db.get('SELECT 1 FROM profile LIMIT 1'), undefined, 'the default needs no profile record, so setup still sees a blank profile');
   assert.match(design.css(), /Orb Teal/);
   assert.ok(BUILTIN_DIR.endsWith('design-systems'));
 });

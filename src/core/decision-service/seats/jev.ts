@@ -57,7 +57,7 @@ export class JevSeat implements Seat {
 
   limits(): SeatLimits {
     const c = this.#config();
-    return { maxQuestions: null, contextTokens: PER_REQUEST_TOKENS, perQuestionTokens: PER_QUESTION_TOKENS, maxBodyBytes: JEV_MAX_BODY_BYTES, images: true, types: c && boxCapable(c.model) ? ['noul', 'choice', 'score', 'box'] : ['noul', 'choice', 'score'] };
+    return { maxQuestions: null, images: true, types: c && boxCapable(c.model) ? ['noul', 'choice', 'score', 'box'] : ['noul', 'choice', 'score'] };
   }
 
   status(): SeatStatus {

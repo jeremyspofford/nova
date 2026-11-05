@@ -748,11 +748,14 @@ export function renderPrivacy() {
 }
 
 export async function saveProfile(section, key, value) {
+  // Looser privacy is tier 3: confirmed (with the passkey on Nova's own screen), every time.
+  const order = PRIVACY.map(([v]) => v);
+  const looser = section === 'privacy' && key === 'default' && order.indexOf(value) > order.indexOf(privacy());
   try {
-    await api('PUT', `/profile/${section}/${key}`, { value });
+    await api('PUT', `/profile/${section}/${key}`, { value, ...(looser ? { confirm: true } : {}) });
     await load(['profile']);
     toast('Saved.');
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(e.message); await load(['profile']).catch(() => {}); }
 }
 
 // ---- Settings › Appearance (Amendment 2026-10-30-C Part 1 §5) ---------------------------------
@@ -1408,5 +1411,3 @@ export async function saveProvider(form) {
   } catch (e) { toast(e.message); }
   await loadProviders();
 }
-
-export { ICONS };

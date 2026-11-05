@@ -169,11 +169,6 @@ export class Setup extends EventEmitter {
     return s?.onboarding?.facts ?? this.#facts ?? factsFrom(this.#on.os(), null);
   }
 
-  // Whether setup is finished, without building the view.
-  done(): boolean {
-    return this.#state().step === 'done';
-  }
-
   // Reading never writes: before the first answer, the opening question is shown, not stored.
   view(): SetupView {
     const s = this.#state();

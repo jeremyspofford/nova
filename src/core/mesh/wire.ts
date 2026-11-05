@@ -63,12 +63,6 @@ const sixDigits = (digest: Buffer) => {
   return String(r).padStart(6, '0');
 };
 
-// Era 1's first confirmation, kept for its fixed vectors; enrollment uses V2.
-export function pairingConfirmation(input: { hubFingerprint: string; pairingId: string; publicKey: string; code: string }): string {
-  const canonical = normalizePairingCode(input.code) ?? input.code;
-  return sixDigits(createHash('sha256').update(['nova-add-device-v1', input.hubFingerprint, input.pairingId, input.publicKey, canonical].join('|'), 'utf8').digest());
-}
-
 // 32 random bytes, base64url: a nonce for either side.
 export function newPairingNonce(): string {
   return randomBytes(32).toString('base64url');
@@ -86,12 +80,6 @@ export function pairingCommitment(publicKey: string, nonce: string): string {
 export function pairingConfirmationV2(input: { hubFingerprint: string; pairingId: string; publicKey: string; code: string; deviceNonce: string; hubNonce: string }): string {
   const canonical = normalizePairingCode(input.code) ?? input.code;
   return sixDigits(createHash('sha256').update(['nova-add-device-v2', input.hubFingerprint, input.pairingId, input.publicKey, canonical, input.deviceNonce, input.hubNonce].join('|'), 'utf8').digest());
-}
-
-// `123456` or `123 456` → `123456`; null otherwise.
-export function normalizeConfirmation(input: string): string | null {
-  const s = String(input).replace(/\s/g, '');
-  return /^\d{6}$/.test(s) ? s : null;
 }
 
 // ---- what a device signs -----------------------------------------------------------------------
@@ -479,16 +467,6 @@ export function parseHlc(value: string): Hlc | null {
   return { pt: Number(m[1]), c: parseInt(m[2] ?? '0', 16), node: m[3] ?? '' };
 }
 
-// Negative when `a` is older than `b`; an empty string is older than every clock.
-export function compareHlc(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
-}
-
-export function maxHlc(a: string, b: string): string {
-  return compareHlc(a, b) >= 0 ? a : b;
-}
-
 export interface HybridClockOptions { node: string; now?: () => number; initial?: string | null }
 
 export class HybridClock {
@@ -550,15 +528,4 @@ export class HybridClock {
       this.#c = 0;
     } else this.#c = c;
   }
-}
-
-// Why a pushed clock is refused, or null when it is usable: it must parse, name the pushing node
-// (no device can tie-break as another), and be at most `maxSkewMs` ahead of the receiver's wall
-// clock, so a node whose clock runs far ahead can't win every merge.
-export function hlcProblem(value: string, opts: { node: string; nowMs: number; maxSkewMs: number }): 'invalid_hlc' | 'hlc_device_mismatch' | 'clock_skew' | null {
-  const h = parseHlc(value);
-  if (!h) return 'invalid_hlc';
-  if (h.node !== opts.node) return 'hlc_device_mismatch';
-  if (h.pt > opts.nowMs + opts.maxSkewMs) return 'clock_skew';
-  return null;
 }

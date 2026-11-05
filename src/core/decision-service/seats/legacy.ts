@@ -24,7 +24,7 @@ export class LegacySeat implements Seat {
     this.#old = o.old;
   }
 
-  limits(): SeatLimits { return { maxQuestions: null, contextTokens: null, perQuestionTokens: null, maxBodyBytes: null, images: false, types: ['noul', 'choice', 'score'] }; }
+  limits(): SeatLimits { return { maxQuestions: null, images: false, types: ['noul', 'choice', 'score'] }; }
 
   status(): SeatStatus { return { available: true, model: 'sorting-model', why: 'The sorting model assigned in Settings › Models (no eval behind it).' }; }
 

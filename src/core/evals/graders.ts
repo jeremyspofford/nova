@@ -56,13 +56,6 @@ export function replyNames<C>(name: string, values: (ctx: C) => string[] | Promi
   });
 }
 
-export function toolUsed<C>(name: string, pred: (s: ToolStep) => boolean, words: string, o: { which?: Which } = {}): CodeGrader<C> {
-  return code(name, (t) => {
-    const used = toolsOf(t, o.which).map((s) => s.name);
-    return toolsOf(t, o.which).some(pred) ? ok(`used ${words}`) : no(`didn't use ${words}${used.length ? ` (used: ${used.join(', ')})` : ' (no tool used)'}`);
-  });
-}
-
 // If the reply claims a check, a checking tool ran in that turn (the charter: say what you
 // checked and how; if you didn't check, say that instead).
 export function noClaimWithoutCheck<C>(name: string, claim: RegExp, checked: (s: ToolStep) => boolean, o: { which?: Which } = {}): CodeGrader<C> {

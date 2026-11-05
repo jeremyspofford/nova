@@ -411,6 +411,22 @@ export const TOOLS = {
     available: (ctx) => ctx.self,
     run({ part }, { self }) { return { output: self.settings(part), summary: typeof part === 'string' && part ? part : 'settings' }; },
   },
+  settings_change: {
+    signature: '{"settings": {"user": {"timezone": "Europe/Berlin"}}}',
+    doc: 'Change the person’s own settings: sections identity, user, tuning, privacy, policy, and appearance (mode only). Read the current values with nova_settings first. The person sees exactly what changes and approves it; a change to privacy or to what asks first is tier 3 and confirmed every time. Never put a secret here (keys and passwords go in Settings › Connections), and the hub’s own settings (devices, models, capture, backups) are changed on their screens, not here.',
+    needsApproval: true,
+    permission: { id: 'settings-change', label: 'Change your settings in a conversation', note: 'You see the change first' },
+    available: (ctx) => ctx.self,
+    preview({ settings }, { self }) { return self.planSettings(settings); },
+    run({ settings }, { self }) {
+      const r = self.applySettings(settings);
+      const left = r.changes.filter((c) => c.refused);
+      return {
+        output: `${r.applied ? `Changed ${r.changes.filter((c) => !c.refused).map((c) => c.key).join(', ')}.` : 'Nothing changed.'}${left.length ? ` Left out: ${left.map((c) => `${c.key} (${c.refused})`).join(' ')}` : ''}`,
+        summary: `${r.applied} setting${r.applied === 1 ? '' : 's'} changed`,
+      };
+    },
+  },
   import_files: {
     signature: '{}',
     doc: 'List the files waiting in ~/workspace/import/. Their names come from outside, so they arrive screened, as data.',

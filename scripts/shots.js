@@ -3,18 +3,23 @@
 // captures the golden screens in every theme, walks the keyboard path,
 // exercises each state, and measures the performance budgets.
 // Usage: node scripts/shots.js [outDir]   (CHROMIUM=/path/to/chrome to override)
+// outDir defaults to $RUNNER_TEMP/shots in CI, else a temp folder: the shots are artifacts and
+// never go into git (docs/screenshots held them until Ponytail D5 deleted them).
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright-core';
+import { Vault } from '../src/core/index.ts';
 import { sampleMail, startFakeGoogle, startFakeImap } from './fake-google.js';
 import { makeZip } from './make-zip.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
-const out = resolve(process.argv[2] ?? join(root, 'docs/screenshots'));
+const out = resolve(process.argv[2] ?? (process.env.RUNNER_TEMP ? join(process.env.RUNNER_TEMP, 'shots') : join(tmpdir(), 'nova-shots')));
 mkdirSync(out, { recursive: true });
+console.log(`shots → ${out}`);
 const home = mkdtempSync(join(tmpdir(), 'nova-shots-'));
+const appPassword = () => new Vault({ home, mode: 'file' }).get('connector/gmail/GMAIL_APP_PASSWORD');
 const port = 4400 + Math.floor(Math.random() * 400);
 const base = `http://localhost:${port}`;
 const results = { budgets: {}, checks: [] };
@@ -34,7 +39,7 @@ function startServer() {
 }
 
 let current = null;
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || chromium.executablePath() });
 
 const v1 = (method, path, body) => fetch(`${base}/api/v1${path}`, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body ? { body: JSON.stringify(body) } : {}) }).then((r) => r.json());
 let devices = 0;
@@ -55,7 +60,7 @@ async function page({ theme = 'paper', mode = 'light', width = 1280, height = 82
   return p;
 }
 const shot = (p, name) => p.screenshot({ path: join(out, `${name}.png`) });
-const settle = (p) => p.waitForFunction(() => !document.querySelector('.thinking, [data-live], .record.is-running') && !document.querySelector('.send.is-stop'), null, { timeout: 15000 });
+const settle = (p) => p.waitForFunction(() => !document.querySelector('[data-live], .record.is-running') && !document.querySelector('.send.is-stop'), null, { timeout: 15000 });
 
 // ---- cold start --------------------------------------------------------------
 const { child: server, ms: serverMs } = await startServer();
@@ -82,7 +87,8 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   check('cold start ≤ 2 s (server + page)', serverMs + results.budgets.pageInteractiveMs <= 2000, `${Math.round(serverMs)} ms server + ${results.budgets.pageInteractiveMs} ms page`);
 
   // ---- the keyboard path: send, read, approve, never touching the mouse --------
-  check('the composer is focused on arrival', await p.evaluate(() => document.activeElement.id === 'input'));
+  const arrival = await p.evaluate(() => `${document.activeElement.tagName}#${document.activeElement.id}`);
+  check('the composer is focused on arrival', arrival.endsWith('#input'), arrival);
   await p.evaluate(() => document.activeElement.blur());
   await p.keyboard.press('/');
   check('"/" focuses the composer', await p.evaluate(() => document.activeElement.id === 'input'));
@@ -91,16 +97,17 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForSelector('.empty');
   await p.keyboard.type('What should I focus on today?');
   // Measured in the page: from the Enter keydown to the first frame painted
-  // with the message on the page and Nova visibly working.
+  // with the message on the page and Nova visibly working (Send has become Stop).
+  // Not a Thinking line: by the waiting bands (DESIGN-SYSTEM, ui/js/wait.js) it stays unseen for 1 s.
   await p.evaluate(() => {
     window.__t = {};
     document.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.__t.key = performance.now(); }, { capture: true, once: true });
     new MutationObserver((_, o) => {
-      if (document.querySelector('.msg-user .bubble') && document.querySelector('.thinking, [data-live]')) {
+      if (document.querySelector('.msg-user .bubble') && document.querySelector('.send.is-stop')) {
         o.disconnect();
         requestAnimationFrame(() => { window.__t.seen = performance.now(); });
       }
-    }).observe(document.getElementById('thread'), { childList: true, subtree: true });
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   });
   await p.keyboard.press('Enter');
   await p.waitForFunction(() => window.__t.seen);
@@ -180,12 +187,8 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForFunction((b) => location.pathname !== b, before);
   check('Alt ↑/↓ moves between conversations', true);
 
-  // Offline (the browser) and unreachable (the server)
-  await p.context().setOffline(true);
-  await p.waitForSelector('.banner:not([hidden])');
-  await shot(p, 'paper-offline');
-  check('offline banner', /offline/.test(await p.textContent('.banner')));
-  await p.context().setOffline(false);
+  // No browser-offline banner any more: the page trusts Core's answers over the browser's network
+  // hint (ui/js/app.js, the 'offline' listener). The real outage is "server unreachable" below.
   check('page has no script errors', p.errors.length === 0, p.errors.join(' | '));
 }
 
@@ -318,8 +321,10 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForSelector('.connection[data-state="connected"]');
   await p.waitForFunction(() => /Gmail is connected as/.test(document.querySelector('#toast').textContent));
   check('an app password connects Gmail, with a confirmation', true);
-  const mode = (f) => (statSync(join(home, 'connectors', 'gmail', f)).mode & 0o777).toString(8);
-  check('the app password is readable only by you', mode('password.json') === '600', mode('password.json'));
+  // Since Era 2's plaintext files moved into the vault (src/connectors/gmail.js), the app password
+  // is kept encrypted there, and its text is in no file in the Nova home.
+  const plain = (() => { try { return execFileSync('grep', ['-rlF', 'abcd efgh', home], { encoding: 'utf8' }).trim(); } catch { return ''; } })();
+  check('the app password is kept only in the vault, encrypted', appPassword() !== null && plain === '', plain);
   await p.waitForTimeout(3400);
   await p.click('#s-email-summary .skill-playbook summary');
   await p.waitForTimeout(300);
@@ -343,7 +348,9 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForSelector('.approval');
   await p.waitForTimeout(400);
   await shot(p, 'paper-skill-approval');
-  check('after reading mail, opening a web page asks first', /read your email in this conversation/.test(await p.textContent('.approval')));
+  // The ingest gate names what was read (ui/js/view.js guardLine): here, the Gmail search.
+  const why = await p.textContent('.approval');
+  check('after reading mail, opening a web page asks first', /It comes after reading Gmail search/.test(why) && /After reading something from outside, Nova asks first for this/.test(why));
   await p.keyboard.press('Escape');
   await settle(p);
   const emailChat = p.url();
@@ -395,9 +402,11 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForSelector('.toast-btn');
   await p.waitForTimeout(300);
   await shot(p, 'paper-skills-removed');
+  // Conversations keep the skill's name ("followed …, since removed"), and the standby journal in
+  // nova.db carries them, so the database files are searched for the playbook's text instead.
   const leftovers = () => {
     const hits = [];
-    const walk = (d) => { for (const f of readdirSync(d, { withFileTypes: true })) { if (['.git', 'sessions'].includes(f.name)) continue; const q = join(d, f.name); if (f.isDirectory()) walk(q); else if (/Shopping research/.test(readFileSync(q, 'utf8'))) hits.push(q); } };
+    const walk = (d) => { for (const f of readdirSync(d, { withFileTypes: true })) { if (['.git', 'sessions'].includes(f.name)) continue; const q = join(d, f.name); if (f.isDirectory()) walk(q); else if ((/^nova\.db/.test(f.name) ? /Nova researches; the person buys/ : /Shopping research/).test(readFileSync(q, 'utf8'))) hits.push(q); } };
     walk(home);
     return hits;
   };
@@ -605,13 +614,13 @@ let helperRun;
   await p.fill('#input', 'Ask a helper to take it slow reading the lease');
   await p.keyboard.press('Enter');
   await settle(p);
-  // Settings: every permission asks first until you switch it on.
-  await p.goto(`${base}/settings`);
+  // Settings: every permission asks first until you switch it on (under Privacy and permissions, ui/js/settings-ia.js).
+  await p.goto(`${base}/settings#privacy`);
   await p.waitForSelector('.perm');
   await p.waitForTimeout(500);
   await shot(p, 'paper-settings');
   const perms = await p.$$eval('.switch', (b) => b.map((x) => [x.dataset.id, x.getAttribute('aria-checked')]));
-  check('Settings lists a switch per permission, each set to ask first', perms.length === 5 && perms.every(([, on]) => on === 'false'), perms.map(([id]) => id).join(', '));
+  check('Settings lists a switch per permission, each set to ask first', perms.length === 6 && perms.every(([, on]) => on === 'false'), perms.map(([id]) => id).join(', '));
   await p.focus('[data-id="commands"]');
   await p.keyboard.press('Space');
   await p.waitForSelector('[data-id="commands"][aria-checked="true"]');
@@ -787,7 +796,7 @@ const golden = async (opts, prefix) => {
   await p.waitForSelector('.act-entry');
   await p.waitForTimeout(1400);
   await shot(p, `${prefix}-activity`);
-  await p.goto(`${base}/settings`);
+  await p.goto(`${base}/settings#privacy`);
   await p.waitForSelector('.perm');
   await p.waitForTimeout(500);
   await shot(p, `${prefix}-settings`);
@@ -843,23 +852,28 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   const chat = list.find((s) => s.title.startsWith('What should I focus'));
   await p.goto(`${base}/c/${chat.id}`);
   await p.waitForSelector('.prose');
-  check('desktop: Calm Control, with the right column of quiet cards', await p.evaluate(() => document.body.dataset.layout === 'desktop' && document.body.dataset.aside === 'on' && document.querySelectorAll('#aside .card').length === 3));
-  await shot(p, 'nova-desktop-chat');
+  // Stage 2 (approved 2026-11-04): a conversation is one reading column; its glance column starts
+  // closed there, opens when the person opens it, and that choice is kept for conversations.
+  check('desktop: a conversation is one reading column', await p.evaluate(() => document.body.dataset.layout === 'desktop' && document.body.dataset.aside === 'off'));
   await p.click('#aside-toggle');
-  await p.waitForTimeout(300);
-  check('desktop: the right column closes', await p.evaluate(() => document.body.dataset.aside === 'off'));
+  await p.waitForFunction(() => document.body.dataset.aside === 'on');
+  check('desktop: the right column opens, with its quiet cards', await p.evaluate(() => document.querySelectorAll('#aside .card').length === 3));
+  await shot(p, 'nova-desktop-chat');
   await p.reload();
   await p.waitForSelector('.prose');
-  check('desktop: and stays closed across a reload', await p.evaluate(() => document.body.dataset.aside === 'off'));
+  check('desktop: and stays open across a reload', await p.evaluate(() => document.body.dataset.aside === 'on'));
   await p.keyboard.press('Control+Backslash');
-  await p.waitForTimeout(300);
-  check('desktop: Ctrl/⌘+\\ brings it back', await p.evaluate(() => document.body.dataset.aside === 'on'));
+  await p.waitForFunction(() => document.body.dataset.aside === 'off');
+  check('desktop: Ctrl/⌘+\\ closes it again', await p.evaluate(() => document.body.dataset.aside === 'off'));
   await p.click('#menu');
   await p.waitForTimeout(450);
   check('the conversations drawer opens from the top bar', await p.evaluate(() => document.getElementById('app').classList.contains('drawer-open') && !document.getElementById('sidebar').inert));
   await shot(p, 'nova-drawer');
   check('layouts: no script errors', p.errors.length === 0, p.errors.join(' | '));
-  for (const [w, h, layout] of [[390, 844, 'phone'], [820, 1180, 'tablet'], [960, 900, 'tablet'], [1280, 820, 'desktop']]) {
+  // The bands are derived from each design system's region minimums (F8/F9, docs/LEDGER.md
+  // 2026-10-31): Nova's three columns start near 752–793 px, so 820 and 960 are desktop there.
+  const seen = new Set();
+  for (const [w, h] of [[390, 844], [700, 1000], [820, 1180], [960, 900], [1280, 820]]) {
     const q = await page({ theme: 'nova', mode: 'dark', width: w, height: h });
     await q.goto(`${base}/c/${chat.id}`);
     await q.waitForSelector('.prose');
@@ -868,14 +882,18 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
       const sc = document.querySelector('.scroller');
       const edge = sc.getBoundingClientRect().left + sc.clientWidth;
       const past = [...document.querySelectorAll('.thread *, .dock *')].filter((e) => !e.closest('.table-wrap, pre') && e.getBoundingClientRect().right > edge + 0.5);
-      return { layout: document.body.dataset.layout, past: past.length, scroll: sc.scrollWidth - sc.clientWidth, page: document.documentElement.scrollWidth - innerWidth };
+      const band = (b) => document.querySelector(`.band-probe[data-band="${b}"]`).getBoundingClientRect().width;
+      return { layout: document.body.dataset.layout, two: band('two'), three: band('three'), past: past.length, scroll: sc.scrollWidth - sc.clientWidth, page: document.documentElement.scrollWidth - innerWidth };
     });
+    const layout = w < fit.two ? 'phone' : w < fit.three ? 'tablet' : 'desktop';
+    seen.add(fit.layout);
     check(`${w} px: the ${layout} layout, nothing cut off on the right`, fit.layout === layout && fit.past === 0 && fit.scroll === 0 && fit.page <= 0, JSON.stringify(fit));
     await q.goto(base);
     await q.waitForSelector('.home-hero');
     await q.waitForTimeout(500);
     await shot(q, `nova-home-${w}`);
   }
+  check('the widths cover the phone, tablet and desktop layouts', seen.size === 3, [...seen].join(', '));
 }
 
 // ---- mobile -------------------------------------------------------------------------
@@ -911,7 +929,7 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.waitForTimeout(1400);
   await shot(p, 'mobile-activity');
   overflow ||= await p.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.querySelector('.scroller').scrollWidth > document.querySelector('.scroller').clientWidth);
-  await p.goto(`${base}/settings`);
+  await p.goto(`${base}/settings#privacy`);
   await p.waitForSelector('.perm');
   await p.waitForTimeout(500);
   await shot(p, 'mobile-settings');
@@ -929,7 +947,7 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   // Disconnecting deletes the app password, and says how to remove it at Google too.
   await p.click('[data-action="disconnect-gmail"]');
   await p.waitForSelector('.connection[data-state="setup"]');
-  check('disconnecting deletes the app password', !existsSync(join(home, 'connectors', 'gmail', 'password.json')) && /app password is gone/.test(await p.textContent('#toast')));
+  check('disconnecting deletes the app password', appPassword() === null && /app password is gone/.test(await p.textContent('#toast')));
 }
 
 // ---- reduced motion ------------------------------------------------------------------

@@ -3,14 +3,20 @@
 // and "rolling back" means restoring that backup, never running down-SQL. Ported from Era 1's
 // storage package (6e2cf142, packages/storage/src/migrations.ts) without its ORM.
 import { DatabaseSync } from 'node:sqlite';
-import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CoreError } from './errors.ts';
+import { sha256 } from './workspace.ts';
 
 export interface Migration { version: number; name: string; sql: string; checksum: string }
 export interface MigrateResult { from: number; to: number; applied: number[]; backup: string | null }
+
+// JSON columns, read three ways: null for a non-string; the fallback for an empty or unreadable
+// value; null for an empty one (unreadable JSON throws).
+export const fromJson = <T>(s: unknown): T => (typeof s === 'string' ? JSON.parse(s) : null) as T;
+export const jsonOr = <T>(s: string | null, fallback: T): T => { if (!s) return fallback; try { return JSON.parse(s) as T; } catch { return fallback; } };
+export const jsonOrNull = <T>(s: string | null): T | null => (s ? JSON.parse(s) as T : null);
 
 const FILE = /^(\d{4})_([a-z0-9_]+)\.sql$/;
 export const MIGRATIONS_DIR = fileURLToPath(new URL('./migrations/', import.meta.url));
@@ -21,7 +27,7 @@ export function loadMigrations(dir = MIGRATIONS_DIR): Migration[] {
     const m = FILE.exec(file);
     if (!m) continue;
     const sql = readFileSync(join(dir, file), 'utf8');
-    out.push({ version: Number(m[1]), name: m[2] ?? file, sql, checksum: createHash('sha256').update(sql).digest('hex') });
+    out.push({ version: Number(m[1]), name: m[2] ?? file, sql, checksum: sha256(sql) });
   }
   out.forEach((m, i) => {
     if (m.version !== i + 1) throw new CoreError('conflict', `Migrations must be numbered 0001 upward without gaps (gap at ${i + 1}).`);
