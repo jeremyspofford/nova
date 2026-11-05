@@ -74,7 +74,8 @@ test('F8/F9 gate: ten postures × every main view, in Chromium and WebKit', { ti
       // F9: the fold on its side, short enough that the right column holds more than it shows.
       // It must scroll inside the viewport, never run off its bottom edge.
       const d = await folded(b, { width: 1100, height: 560, touch: true });
-      for (const view of ['/chat', '/tasks']) {
+      // (A conversation's column starts closed since Stage 2, so Home and Tasks hold it here.)
+      for (const view of ['/', '/tasks']) {
         await open(d.page, `${m.base}${view}`);
         const a = await audit(d.page);
         n++;
@@ -164,7 +165,8 @@ test('F8/F9 gate: the bands are derived from the regions, in every design system
 // changes a large part of the picture; text rendering and antialiasing change a little, which the
 // tolerance allows. What moves with the clock (times, the greeting, "last seen") is masked.
 // NOVA_UPDATE_BASELINES=1 writes them (scripts/ui-test.sh tests/ui/fold-postures.test.ts).
-const BASELINES = join(ROOT, 'tests/ui/baselines/fold');
+// NOVA_BASELINES_DIR writes them elsewhere (a read-only checkout in the isolated runner), to copy in.
+const BASELINES = process.env.NOVA_BASELINES_DIR ?? join(ROOT, 'tests/ui/baselines/fold');
 const SHOTS: [string, { width: number; height: number }, string[]][] = [
   ['duo-cover', { width: 380, height: 900 }, ['/', '/chat', '/settings']],
   ['duo-inner', { width: 900, height: 1100 }, ['/', '/chat', '/settings']],
