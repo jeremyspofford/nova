@@ -30,7 +30,6 @@ export const TEV1_REQUIRES = '0.40.4';
 export type State = string | Record<string, unknown> | unknown[];
 export interface WireImage { format: 'png' | 'jpg'; data: Uint8Array }
 export interface Asked { answers: Record<string, Answer>; model: string; usage: { input_tokens: number | null; output_tokens: number | null }; ms: number; bytes: number }
-export interface InstalledTev1 { name: string; digest: string; size: number }
 
 // Can't be reached, too old, busy, or refuses the key or the model: the seat is missing for now.
 export class Unavailable extends Error {
@@ -125,23 +124,6 @@ export class SystemOne {
       if ((e as Error)?.name === 'TimeoutError') throw new Unavailable(`${this.host} didn’t answer in time.`);
       throw new Unavailable(`Nova couldn’t reach ${this.host}: ${reachProblem(e)}.`);
     }
-  }
-
-  // Ollama only: its version and the Tev1 builds it has.
-  async version(): Promise<string> {
-    const res = await this.#fetch('/api/version', { method: 'GET' }, 3000);
-    const j = await res.json().catch(() => ({})) as { version?: unknown };
-    if (!res.ok || typeof j.version !== 'string') throw new Unavailable(`Ollama at ${this.host} didn’t say which version it is.`);
-    return j.version;
-  }
-
-  async installed(): Promise<InstalledTev1[]> {
-    const res = await this.#fetch('/api/tags', { method: 'GET' }, 5000);
-    const j = await res.json().catch(() => ({})) as { models?: unknown };
-    if (!res.ok) throw new Unavailable(`Ollama at ${this.host} didn’t list its models (${res.status}).`);
-    return (Array.isArray(j.models) ? j.models : []).filter(isObj)
-      .map((m) => ({ name: String(m.name ?? m.model ?? ''), digest: String(m.digest ?? ''), size: Number(m.size) || 0 }))
-      .filter((m) => /^tev1:/.test(m.name));
   }
 
   // One request carrying every question about one state. Refused before sending when it couldn't

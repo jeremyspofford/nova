@@ -13,6 +13,7 @@ import { INGEST_SCREEN_V1, unfence } from '../../src/core/decision-service/templ
 import { readVerdicts, relianceFor, type VerdictFile } from '../../src/core/decision-service/verdicts.ts';
 import { BOUNDS } from '../../src/core/decision-service/eval.ts';
 import { HEADROOM } from '../../src/core/models/recommend.ts';
+import { Ollama } from '../../src/core/models/ollama.ts';
 import { MARK, startTev1StandIn } from '../support/tev1-stand-in.ts';
 import { hubHardware } from '../support/models.ts';
 import type { Answer, ServiceTemplate } from '../../src/core/decision-service/types.ts';
@@ -190,6 +191,30 @@ test('version: below 0.35 and below 0.40.4 are unavailable in plain words; 0.40.
   assert.equal(older('0.40.0', '0.40.4'), true);
   assert.equal(older('0.41.0', '0.40.4'), false);
   assert.equal(older('v0.40.4-rc1', '0.40.4'), false);
+});
+
+test('no version string is "didn’t say", never read as unknown; odd model lists keep the seat’s words', async () => {
+  for (const [path, status, raw, words] of [
+    ['/api/version', 200, '{}', /^Ollama at 127\.0\.0\.1:\d+ didn’t say which version it is\.$/],
+    ['/api/version', 200, '{"version":0.41}', /^Ollama at 127\.0\.0\.1:\d+ didn’t say which version it is\.$/],
+    ['/api/version', 200, 'not json', /^Ollama at 127\.0\.0\.1:\d+ didn’t say which version it is\.$/],
+    ['/api/version', 500, '{"error":"boom"}', /^Ollama at 127\.0\.0\.1:\d+ didn’t say which version it is\.$/],
+    ['/api/version', 200, '{"version":"unknown"}', /^This Ollama is version unknown\. Decision models need Ollama 0\.35 or later/],
+    ['/api/tags', 500, '{"error":"boom"}', /^Ollama at 127\.0\.0\.1:\d+ didn’t list its models \(500\)\.$/],
+    ['/api/tags', 200, 'not json', /^Tev1 \(tev1:4b\) isn’t downloaded in Ollama at 127\.0\.0\.1:\d+\.$/],
+  ] as const) {
+    const { s, tev1 } = await seat({ answer: { [path]: [status, raw] } });
+    try {
+      assert.equal(tev1.status().available, false, `${path} ${raw}`);
+      assert.match(tev1.status().why, words);
+      assert.equal(tev1.detail().ollama, path === '/api/tags' ? '0.40.4' : raw.includes('"unknown"') ? 'unknown' : null);
+      await assert.rejects(tev1.ask(T, built('x')), Unavailable);
+      assert.equal(s.requests.length, 0);
+    } finally { await s.close(); }
+  }
+  // The shared client still reads a missing version as 'unknown' for Settings › Models.
+  const s = await startTev1StandIn({ answer: { '/api/version': [200, '{}'] } });
+  try { assert.equal(await new Ollama(s.url).version(), 'unknown'); } finally { await s.close(); }
 });
 
 test('unreachable, or the size not downloaded: unavailable in words, never a quiet switch to the small model', async () => {
