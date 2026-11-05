@@ -591,8 +591,11 @@ function syncBackupsPermissions() {
   if (!p.canEdit || (backupsLastPermissions?.console && !p.console)) hideBackupsKey();
   backupsLastPermissions = p;
 }
-export function loadBackups() {
-  if (backupsLoading) return backupsLoading;
+// Reads that overlap share one. Try again never does: a read already on its way began before the
+// person asked, and its answers (a failed mesh check) may be the very ones they are retrying, so
+// Try again asks once more after it.
+export function loadBackups({ again = false } = {}) {
+  if (backupsLoading) return again ? backupsLoading.then(() => loadBackups()) : backupsLoading;
   backups.loadingSince = Date.now();
   backupsChanged();
   backupsLoading = Promise.all([request('GET', '/backups'), load(['mesh'])]).then(([r]) => {
@@ -711,7 +714,7 @@ export function bindBackups(root, changed) {
     if (action === 'backups-hide' || action === 'backups-cancel') hideBackupsKey();
     else if (action === 'backups-reveal' && backupsPermissions().canEdit && backupsPermissions().console) { hideBackupsKey(); backups.recovery = { state: 'confirm', confirmed: false }; backupsChanged(); }
     else if (action === 'backups-confirm') revealBackupsKey();
-    else if (action === 'backups-retry') loadBackups();
+    else if (action === 'backups-retry') loadBackups({ again: true });
     else if (action === 'backups-clear-target') saveBackups('target');
     else if (action === 'backups-clear-encrypted') saveBackups('encrypted_target');
     else if (action === 'backups-copy' && e.isTrusted && backupsActive && backupsPermissions().canEdit && ['first-shown', 'shown'].includes(backups.recovery.state) && backups.recovery.key) {
