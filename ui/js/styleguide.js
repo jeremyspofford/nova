@@ -508,6 +508,13 @@ const MODEL_STATES = {
   'mac-16gb-unified': { label: '16 GB Mac, unified memory (local first)', device: 'laptop', privacy: 'local-preferred', plan: [['qwen3:8b', 'Q4_K_M', 16384]] },
   'unknown-shape': { label: 'A model of unknown shape: an estimate', device: 'workshop', privacy: 'local-only', plan: [['tuned-assistant:12b', 'Q4_K_M', 8192, true]] },
   'no-gpu': { label: 'No GPU found', device: 'mini', privacy: 'local-only', plan: [['qwen3:4b', 'Q4_K_M', 4096]] },
+  // Added with the app build (2026-11-05): a device asleep shows what it last reported, with its age;
+  // Install and assign asks before anything downloads.
+  'asleep': { label: 'Asleep: what it last reported, with its age', device: 'tower', privacy: 'local-only', plan: [['qwen3:8b', 'Q4_K_M', 4096]], seen: 'Last seen 3 h ago. What shows here is what it last reported: its hardware 3 h ago, its models 3 h ago.' },
+  'install-confirm': { label: 'Install and assign, asking first', device: 'study', privacy: 'local-only', plan: [['qwen3:14b', 'Q8_0', 16384]], confirm: {
+    title: 'Download this model and assign?', ok: 'Download and assign',
+    lines: ['qwen3:14b at Q8_0, about 14.6 GB, downloads to Study desktop, then serves thinking and writing.', 'Ollama downloads from its library on the internet; nothing of yours is sent. A role is given only once Nova has checked the download arrived.'],
+  } },
 };
 const MODEL_SPECIMENS = Object.keys(MODEL_STATES);
 let modelsState = '3090-two-models';
@@ -534,9 +541,9 @@ function modelsView() {
   candidates.push({ name: 'A cloud model, through your provider', params: 0, capabilities: ['completion'], where: 'cloud', installed: null, arch: null, arch_source: null });
   const advice = fitEngine.TASK_CLASSES.map((task) => fitEngine.recommendFit({ device, privacy: s.privacy, task, hub: Boolean(d.hub), candidates }));
   return {
-    id: `dm-${s.device}`, privacy: s.privacy, plan, total, advice,
+    id: `dm-${s.device}`, privacy: s.privacy, plan, total, advice, confirm: s.confirm ?? null,
     catalog: [...Object.keys(MODEL_CATALOG), ...Object.keys(d.extra ?? {})],
-    device: { name: d.name, hardware: d.words, memory: device.memory, budget_bytes: device.budget_bytes, ram_bytes: d.hw.ram_bytes, overhead_source: device.overhead_source, overhead_loads: d.learned?.n ?? 0 },
+    device: { name: d.name, hardware: d.words, memory: device.memory, budget_bytes: device.budget_bytes, ram_bytes: d.hw.ram_bytes, overhead_source: device.overhead_source, overhead_loads: d.learned?.n ?? 0, seen: s.seen ?? null },
   };
 }
 function modelsSpecimen() {
@@ -569,7 +576,7 @@ function bindModels() {
     e.preventDefault();
     const d = MODEL_DEVICES[MODEL_STATES[modelsState].device];
     const act = b.dataset.action;
-    if (act === 'models-install') return note('Demo only. Nothing was installed or assigned.');
+    if (act === 'models-install' || act === 'models-confirm' || act === 'models-not-now') return note('Demo only. Nothing was installed or assigned.');
     if (act === 'models-remove') { modelsPlan.splice(Number(b.dataset.index), 1); return redraw(entry.querySelector('[data-device-models] select[id$="-add"]')?.id); }
     const name = act === 'models-add' ? b.closest('.dm-add').querySelector('select').value : b.dataset.name;
     const info = modelInfo(d, name);

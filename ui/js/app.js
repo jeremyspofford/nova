@@ -20,6 +20,7 @@ import { bindConnections, loadConnections, renderConnections } from './connectio
 import { bindSites, loadSites, renderSites } from './sites.js';
 import { bindCapture, captureChanged, loadCapture, loadCaptureView, renderCaptureSettings, renderCaptureView } from './capture.js';
 import { bindModels, loadModels, renderModels } from './models.js';
+import { bindDeviceModels, deviceModelsFrame, screenDevice, setScreenDevice } from './device-models.js';
 import { bindChanges, loadChanges, renderChanges } from './changes.js';
 import { bindCheckpoints, loadCheckpoints, renderCheckpoints } from './checkpoints.js';
 import { bindTopology, showTopology, topologyVisible, submitTopology } from './topology.js';
@@ -1503,6 +1504,7 @@ const settingsList = () => {
 function settingsTarget(hash) {
   const id = decodeURIComponent(hash.replace(/^#/, ''));
   if (!id) return { cat: null, target: null };
+  if (id.startsWith('models-on-')) return { cat: 'devices', target: null };
   if (categoryOf(id)) return { cat: id, target: null };
   const target = el.settings.querySelector(`#${CSS.escape(id)}`);
   const pane = target?.closest('.settings-pane');
@@ -1529,7 +1531,22 @@ function selectSettings(cat) {
 }
 
 // From the list or the sidebar to a category, as its own step in the history.
+// A device's Models screen, in the Devices pane: opened from a device's Models button (Settings ›
+// Devices, or Settings › Models' overview) or its address, /settings#models-on-<device>.
+function openDeviceModels(id, { push = true } = {}) {
+  if (push) history.pushState(null, '', `/settings#models-on-${encodeURIComponent(id)}`);
+  setScreenDevice(id);
+  renderSettingsView({ only: 'devices' });
+  selectSettings('devices');
+  el.scroller.scrollTop = 0;
+  $('settings-devices').querySelector('[data-action="dm-back"]')?.focus({ preventScroll: true });
+}
+function leaveDeviceModels() {
+  if (setScreenDevice(null)) renderSettingsView({ only: 'devices' });
+}
+
 function openSettingsCat(cat, { push = true } = {}) {
+  if (push) leaveDeviceModels();
   if (push) { core.hideBackupsKey(); history.pushState(null, '', `/settings#${cat}`); }
   selectSettings(cat);
   el.scroller.scrollTop = 0;
@@ -1583,6 +1600,7 @@ function moveSettingsResult(dir) {
 
 function chooseSettingsResult(option) {
   core.hideBackupsKey();
+  leaveDeviceModels();
   const target = $(option.dataset.target) ?? el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(option.dataset.cat)}"]`);
   $('settings-search').value = '';
   renderSettingsResults('');
@@ -1594,6 +1612,8 @@ function showSettings() {
   core.hideBackupsKey();
   core.enterBackups();
   leaveChat('settings');
+  const dm = /^#models-on-(.+)$/.exec(location.hash);
+  setScreenDevice(dm ? decodeURIComponent(dm[1]) : null);
   renderSettingsView({ enter: true });
   settingsUi.touched = false;
   selectSettings(settingsTarget(location.hash).cat);
@@ -1627,7 +1647,8 @@ const PARTS = {
   checkpoints: () => renderCheckpoints(),
   // Drawn in place, so its live regions stay the same elements (surfaces.js drawAppearance).
   look: { draw: (box) => core.drawAppearance(box) },
-  devices: () => core.renderDevices(),
+  // Settings › Devices › [device] › Models (model-fit step 3) takes the Devices pane while it is open.
+  devices: () => (screenDevice() ? deviceModelsFrame(screenDevice()) : core.renderDevices()),
   services: () => renderServices(),
   security: () => renderSecurity(),
   form: () => renderConfigForm(),
@@ -1685,7 +1706,8 @@ function renderSettingsView({ enter: entering = false, only = null } = {}) {
     const active = document.activeElement;
     // Don't redraw a part under the person's typing.
     if (k !== 'backups' && box.contains(active) && active.matches('input[type="text"], input[type="number"], input[type="password"], input[type="url"], input[type="search"], input:not([type]), textarea')) continue;
-    const focus = box.contains(active) ? (active.dataset.id ? `[data-id="${CSS.escape(active.dataset.id)}"]` : active.name ? `input[name="${CSS.escape(active.name)}"]:checked` : active.dataset.action ? `[data-action="${CSS.escape(active.dataset.action)}"]${active.dataset.ds ? `[data-ds="${CSS.escape(active.dataset.ds)}"]` : ''}${active.dataset.scope ? `[data-scope="${CSS.escape(active.dataset.scope)}"]` : ''}` : null) : null;
+    // A device's Models screen keeps focus on its control by id (its selects and slider have no other name).
+    const focus = box.contains(active) ? (active.closest('[data-device-models]') && active.id ? `#${CSS.escape(active.id)}` : active.dataset.id ? `[data-id="${CSS.escape(active.dataset.id)}"]` : active.name ? `input[name="${CSS.escape(active.name)}"]:checked` : active.dataset.action ? `[data-action="${CSS.escape(active.dataset.action)}"]${active.dataset.ds ? `[data-ds="${CSS.escape(active.dataset.ds)}"]` : ''}${active.dataset.scope ? `[data-scope="${CSS.escape(active.dataset.scope)}"]` : ''}` : null) : null;
     // Capture's forms sit under a status that changes by itself; what is typed there is kept.
     const restore = k === 'capture' ? keepEdits(box) : () => {};
     const part = PARTS[k];
@@ -1711,13 +1733,21 @@ async function togglePermission(button) {
 el.settings.addEventListener('click', (e) => {
   const cat = e.target.closest('a.settings-cat');
   if (cat && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); settingsUi.touched = true; openSettingsCat(cat.dataset.cat); return; }
-  if (e.target.closest('#settings-back')) { settingsUi.touched = true; history.pushState(null, '', '/settings'); selectSettings(null); el.scroller.scrollTop = 0; el.settings.querySelector('.settings-cat')?.focus({ preventScroll: true }); return; }
+  if (e.target.closest('#settings-back')) { settingsUi.touched = true; leaveDeviceModels(); history.pushState(null, '', '/settings'); selectSettings(null); el.scroller.scrollTop = 0; el.settings.querySelector('.settings-cat')?.focus({ preventScroll: true }); return; }
   const found = e.target.closest('.settings-result');
   if (found) { settingsUi.touched = true; chooseSettingsResult(found); return; }
   if (followLink(e)) return;
   const b = e.target.closest('[data-action]');
   const action = b?.dataset.action;
-  if (action === 'toggle-permission') togglePermission(b);
+  if (action === 'device-models') { settingsUi.touched = true; openDeviceModels(b.dataset.device); }
+  else if (action === 'dm-back') {
+    settingsUi.touched = true;
+    history.pushState(null, '', '/settings#devices');
+    leaveDeviceModels();
+    selectSettings('devices');
+    $('settings-devices').querySelector(`[data-action="device-models"][data-device="${CSS.escape(b.dataset.device)}"]`)?.focus({ preventScroll: true });
+  }
+  else if (action === 'toggle-permission') togglePermission(b);
   else if (action === 'retry-settings') loadPermissions();
   else if (action === 'save-profile') core.saveProfile(b.dataset.section, b.dataset.key, $(b.dataset.field).value.trim());
   else if (['pick-ds', 'save-ds', 'cancel-ds', 'undo-ds', 'fix-contrast', 'undo-fix'].includes(action)) lookAction(action, b);
@@ -1861,6 +1891,7 @@ bindConnections(el.settings, bindPart('connections'));
 bindSites(el.settings, bindPart('sites'));
 // Settings › Models (M6b): hardware, roles, downloads with live progress, budgets.
 bindModels(el.settings, bindPart('models'));
+bindDeviceModels(el.settings);
 // Settings › Changes (M7a): the change pipeline, the one waiting for you, canaries, roll back.
 bindChanges(el.settings, bindPart('changes'));
 core.bindBackups(el.settings, () => { if ($('settings-backups')) renderSettingsView({ only: 'backups' }); });
