@@ -21,7 +21,7 @@ import { createServer as createNet, type Server as NetServer, type Socket } from
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ensureMark, unsafeHome, supervisorResetPending, finishReset, homeEntries, sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState, writeJson } from '../core/index.ts';
+import { alive, ensureMark, unsafeHome, supervisorResetPending, finishReset, homeEntries, sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState, writeJson } from '../core/index.ts';
 import { runningPid } from '../home.js';
 import { startBroker, stopBroker, type Started } from '../broker/spawn.ts';
 import { ServerProcess } from './server.ts';
@@ -1033,8 +1033,4 @@ ${s?.output ? `<details><summary>What Nova said last</summary><pre>${esc(s.outpu
 
 function readOr(path: string, fallback: string): string {
   try { return readFileSync(path, 'utf8'); } catch { return fallback; }
-}
-
-function alive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
 }

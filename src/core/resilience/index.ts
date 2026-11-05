@@ -3,7 +3,7 @@
 // backup.ts (and archive.ts for the encrypted copy), drill.ts, sandbox.ts, playbooks.ts, clock.ts,
 // link.ts (the supervisor's side is src/supervisor).
 import { existsSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { Db, Migration } from '../db.ts';
@@ -17,7 +17,7 @@ import type { Backups } from '../backups.ts';
 import { reporter, type Brief } from '../envelope.ts';
 import type { Route, Who } from '../api.ts';
 import { CoreError } from '../errors.ts';
-import { BackupError, DEFAULT_KEEP, KEY_NAME, NightlyBackups, SEAL_NAME, folderProblem, formatRecoveryKey, keyFingerprint, newKey, parseRecoveryKey, sha256File, type BackupSettings, type FailureKind, type FolderKind } from './backup.ts';
+import { BackupError, DEFAULT_KEEP, KEY_NAME, NightlyBackups, SEAL_NAME, folderProblem, inside, formatRecoveryKey, keyFingerprint, newKey, parseRecoveryKey, sha256File, type BackupSettings, type FailureKind, type FolderKind } from './backup.ts';
 import { drill, forgottenIn, type DrillCheck, type DrillResult } from './drill.ts';
 import { dropScratch, freeScratch, makeScratch } from './scratch.ts';
 import { ClockWatch, duration, type Jump } from './clock.ts';
@@ -48,11 +48,6 @@ export interface ResilienceOptions {
   // The restore drill's sandbox: which code it runs and test hooks for its start.
   drill?: { root?: string; env?: Record<string, string>; timeoutMs?: number };
 }
-
-const inside = (path: string, root: string) => {
-  const r = relative(resolve(root), resolve(path));
-  return r === '' || (!r.startsWith(`..${sep}`) && r !== '..' && !isAbsolute(r));
-};
 
 // Problems the supervisor tells a server it started again: a running server closes them.
 const UP_AGAIN: ReadonlySet<string> = new Set(['server-crashed', 'server-unresponsive']);

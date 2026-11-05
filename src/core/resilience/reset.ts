@@ -25,7 +25,7 @@
 // that couldn't be told, the export, and the supervisor's code releases (code, not data).
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -41,7 +41,7 @@ import { ONLINE_WINDOW_MS } from '../mesh/devices.ts';
 import { CoreError } from '../errors.ts';
 import { Vault, type KeyMode, type KeyStore } from '../vault.ts';
 import { encryptDir, readHeader } from './archive.ts';
-import { EXCLUDED, backupFiles, folderProblem, formatRecoveryKey, keyFingerprint, sha256File, type FolderKind, type Manifest, type ManifestFile, type NightlyBackups } from './backup.ts';
+import { EXCLUDED, backupFiles, folderProblem, inside, formatRecoveryKey, keyFingerprint, sha256File, type FolderKind, type Manifest, type ManifestFile, type NightlyBackups } from './backup.ts';
 import { dropScratch, freeScratch, makeScratch } from './scratch.ts';
 import { foreignEntries, isNovaEntry } from './entries.ts';
 import type { Restarter } from './restart.ts';
@@ -151,11 +151,6 @@ export function homeEntries(home: string): { own: string[]; foreign: string[]; b
     before: names.filter((n) => isNovaEntry(n) && first.has(n)),
   };
 }
-
-const inside = (path: string, root: string) => {
-  const r = relative(resolve(root), resolve(path));
-  return r === '' || (!r.startsWith(`..${sep}`) && r !== '..' && !isAbsolute(r));
-};
 
 export function readReport(home: string): ResetReport | null {
   try { return JSON.parse(readFileSync(join(home, RESET_REPORT), 'utf8')) as ResetReport; } catch { return null; }

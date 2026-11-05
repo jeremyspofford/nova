@@ -550,8 +550,7 @@ export class NightlyBackups {
   }
 }
 
-// Whether `path` is `root` or inside it, as resilience/index.ts answers it (B6): a folder on another
-// Windows drive is outside. `p` is the path module (a test passes path.win32).
+// Whether `path` is `root` or inside it (B6): a folder on another Windows drive is outside. `p` is the path module (a test passes path.win32).
 export const inside = (path: string, root: string, p: Pick<typeof import('node:path'), 'relative' | 'resolve' | 'sep' | 'isAbsolute'> = { relative, resolve, sep, isAbsolute }) => {
   const r = p.relative(p.resolve(root), p.resolve(path));
   return r === '' || (!r.startsWith(`..${p.sep}`) && r !== '..' && !p.isAbsolute(r));
