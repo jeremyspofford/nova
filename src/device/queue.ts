@@ -111,9 +111,6 @@ export class Queue {
     return { pending: this.#names(this.#pending).length, delivered: done.length, refused: done.filter((d) => d.status === 'refused' || d.status === 'rejected').length };
   }
 
-  // Nothing is held open; kept so callers can say they are finished with it.
-  close(): void {}
-
   #names(dir: string): string[] {
     try { return readdirSync(dir).filter((n) => n.endsWith('.json')); } catch { return []; }
   }

@@ -25,7 +25,7 @@
 // that couldn't be told, the export, and the supervisor's code releases (code, not data).
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -41,11 +41,12 @@ import { ONLINE_WINDOW_MS } from '../mesh/devices.ts';
 import { CoreError } from '../errors.ts';
 import { Vault, type KeyMode, type KeyStore } from '../vault.ts';
 import { encryptDir, readHeader } from './archive.ts';
-import { EXCLUDED, backupFiles, folderProblem, formatRecoveryKey, keyFingerprint, sha256File, type FolderKind, type Manifest, type ManifestFile, type NightlyBackups } from './backup.ts';
+import { EXCLUDED, backupFiles, folderProblem, inside, formatRecoveryKey, keyFingerprint, sha256File, type FolderKind, type Manifest, type ManifestFile, type NightlyBackups } from './backup.ts';
 import { dropScratch, freeScratch, makeScratch } from './scratch.ts';
 import { foreignEntries, isNovaEntry } from './entries.ts';
 import type { Restarter } from './restart.ts';
 import { readMark, rekeyMark, sealOk, sealWith, unsafeHome } from './home-mark.ts';
+import { writeJson, plural } from '../workspace.ts';
 
 export const RESET_MARKER = 'factory-reset.json';
 export const RESET_REPORT = 'reset-report.json';
@@ -149,16 +150,6 @@ export function homeEntries(home: string): { own: string[]; foreign: string[]; b
     foreign: foreignEntries(home),
     before: names.filter((n) => isNovaEntry(n) && first.has(n)),
   };
-}
-
-const inside = (path: string, root: string) => {
-  const r = relative(resolve(root), resolve(path));
-  return r === '' || (!r.startsWith(`..${sep}`) && r !== '..' && !isAbsolute(r));
-};
-
-function writeJson(path: string, data: unknown): void {
-  writeFileSync(`${path}.tmp`, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-  renameSync(`${path}.tmp`, path);
 }
 
 export function readReport(home: string): ResetReport | null {
@@ -279,8 +270,6 @@ function backupState(b: BackupItem): 'same' | 'gone' | 'changed' {
     return 'changed';
   }
 }
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 function summary(r: ResetReport): string {
   const parts = [r.kind === 'standby'

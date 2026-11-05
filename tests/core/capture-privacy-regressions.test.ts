@@ -40,7 +40,7 @@ for (const transition of ['cloud-local-only', 'cloud-local-preferred', 'paused',
     try {
       if (transition.startsWith('cloud')) {
         r.cloud();
-        if (transition === 'cloud-local-preferred') await r.h.c('PUT', '/profile/privacy/default', { value: 'local-preferred' });
+        if (transition === 'cloud-local-preferred') await r.h.c('PUT', '/profile/privacy/default', { value: 'local-preferred', confirm: true });
       } else {
         assert.equal((await r.h.c('POST', `/capture/sources/${r.source}/${transition === 'paused' ? 'pause' : 'disable'}`)).status, 200);
       }

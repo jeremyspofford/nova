@@ -90,10 +90,6 @@ export class Verifier {
     }
   }
 
-  kinds(): string[] {
-    return [...this.#checkers.keys()];
-  }
-
   verify(brief: Brief, report: Report): Verification {
     const checks = brief.evidence_required.map((req): Check => {
       const candidates = report.evidence.filter((e) => e.kind === req.kind && (!req.target || ('target' in e && this.#same(e.target, req.target))));

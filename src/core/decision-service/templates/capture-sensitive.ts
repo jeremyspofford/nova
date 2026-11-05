@@ -27,6 +27,7 @@
 // hold after the deterministic checks (the policy's default; the owner's option B, ADR §2.1: with
 // no trusted model, captured text is held, not indexed on the rules alone).
 import type { Band, FieldValue, Finding, Precheck, ServiceTemplate } from '../types.ts';
+import { looksLikeCard } from '../../browser/copilot.ts';
 
 // ---- deterministic: known sensitive apps ---------------------------------------------------------
 
@@ -112,15 +113,6 @@ export function sensitiveApp(app: string, url: string, title = ''): string | nul
 
 // ---- deterministic: patterns ---------------------------------------------------------------------
 
-function luhn(digits: string): boolean {
-  let sum = 0;
-  for (let i = 0; i < digits.length; i++) {
-    let d = Number(digits[digits.length - 1 - i]);
-    if (i % 2 === 1) { d *= 2; if (d > 9) d -= 9; }
-    sum += d;
-  }
-  return sum % 10 === 0;
-}
 function ibanOk(raw: string): boolean {
   const s = raw.replace(/\s+/g, '').toUpperCase();
   if (s.length < 15 || s.length > 34) return false;
@@ -148,7 +140,7 @@ export const PATTERNS: Pattern[] = [
   { kind: 'signed token', re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g },
   { kind: 'password in a connection string', re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:[^\s@/]+@[^\s]+/gi },
   { kind: 'password', re: /\b(?:password|passwd|pwd|passcode|passphrase)\s*(?:is|[:=])\s*["']?(?![•*·.]{3,})[^\s"',;]{4,}|\bpin\s*[:=]\s*\d{4,8}\b/gi },
-  { kind: 'card number', re: /\b(?:\d[ -]?){12,18}\d\b/g, ok: (m) => { const d = m.replace(/\D/g, ''); return d.length >= 13 && d.length <= 19 && luhn(d); } },
+  { kind: 'card number', re: /\b(?:\d[ -]?){12,18}\d\b/g, ok: looksLikeCard },
   { kind: 'bank account (IBAN)', re: /\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?\b/g, ok: ibanOk },
   { kind: 'social security number', re: /\b(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b/g },
   // A long random-looking string next to a word that names a secret.

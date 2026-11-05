@@ -3,10 +3,7 @@
 // and field names (never its content), the full answers and every shadow answer, the bands,
 // outcome, action, tier and autonomy, the trust and verdict, and why. It goes to the Work Ledger:
 // with the task's id when the decision was made inside a task. The core writes it to the
-// decision_record table (DbLog, migration 0019); FileLog (JSON lines) and MemoryLog remain for
-// tools and tests.
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+// decision_record table (DbLog, migration 0019); MemoryLog remains for tests.
 import type { DecisionRecord } from './types.ts';
 
 export interface DecisionLog { write(r: DecisionRecord): void }
@@ -14,20 +11,6 @@ export interface DecisionLog { write(r: DecisionRecord): void }
 export class MemoryLog implements DecisionLog {
   readonly records: DecisionRecord[] = [];
   write(r: DecisionRecord): void { this.records.push(r); }
-}
-
-// <home>/logs/decisions.jsonl. A log that can't be written never stops the decision.
-export class FileLog implements DecisionLog {
-  readonly file: string;
-  #onError: ((e: Error) => void) | undefined;
-  constructor(file: string, o: { onError?: (e: Error) => void } = {}) {
-    this.file = file;
-    this.#onError = o.onError;
-    mkdirSync(dirname(file), { recursive: true });
-  }
-  write(r: DecisionRecord): void {
-    try { appendFileSync(this.file, `${JSON.stringify(r)}\n`); } catch (e) { this.#onError?.(e as Error); }
-  }
 }
 
 // The decision_record table (migration 0019, DS1 NOTE 5): one INSERT per record. JSON columns for

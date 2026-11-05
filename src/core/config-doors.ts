@@ -5,7 +5,8 @@
 // secret:// references). Personal sections are "your pack"; the hub's own sections are set through
 // their checked screens, so an imported file can't change them.
 import { CoreError } from './errors.ts';
-import { SECTIONS, type Profile, type Section } from './profile.ts';
+import { SECTIONS, type Profile, type Section, type Source } from './profile.ts';
+import { FIELDS, invalid } from './config-schema.ts';
 import type { Route } from './api.ts';
 
 export const FORMAT = 'nova-config/1';
@@ -57,11 +58,14 @@ export function plan(profile: Profile, file: unknown): Plan {
       const key = `${section}.${name}`;
       const from = profile.get(section as Section, name);
       const base = { key, section, name, from, to, layer: (section in HUB ? 'hub' : 'pack') as Change['layer'] };
+      const wrong = invalid(key, to);
       if (SECRET_NAME.test(name) || hasSecret(to)) changes.push({ key, section, name, layer: base.layer, refused: 'This line had a key or password in it. Secrets never go in a configuration file, so it was left out. Add it in Settings › Connections, where it goes to the vault.' });
       else if (section in HUB) changes.push({ ...base, refused: `The hub’s own settings are changed in ${HUB[section]}, where they are checked; this line was left out.` });
       else if (section === 'appearance' && name !== 'mode') changes.push({ ...base, refused: 'Designs are chosen in Settings › Appearance, so they are checked and can be rolled back; this line was left out.' });
       else if (section === 'policy' && name === 'task_tests') changes.push({ ...base, refused: 'Whether test commands ask first is set in Settings › Models and providers; this line was left out.' });
       else if (to === undefined || to === null) changes.push({ ...base, refused: 'An empty value changes nothing; to go back to a default, use “Use the default” in Settings.' });
+      // A value the schema says doesn't fit: the whole thing applies nothing (design #303).
+      else if (wrong) problems.push(wrong);
       else if (!same(from, to)) changes.push(base);
     }
   }
@@ -74,20 +78,59 @@ export function exportFile(profile: Profile) {
   return { format: FORMAT, exported_at: new Date().toISOString(), settings };
 }
 
-export function configRoutes(o: { profile: Profile; log: (said: string, keys: string[]) => void }): Route[] {
+interface Opts { profile: Profile; log: (said: string, keys: string[]) => void; timezone?: () => string }
+const many = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+const TIER3 = 'This changes what stays private or what asks first (tier 3): confirm it every time (confirm: true).';
+
+// Every door applies through here: nothing at all if anything is wrong, tier 3 only when confirmed.
+function applyChecked(o: Opts, file: unknown, confirm: unknown, source: Source, what: string, said: (n: number) => string) {
+  const p = plan(o.profile, file);
+  if (p.problems.length) throw new CoreError('validation', `${what} can’t be used, so nothing changed.`, p.problems);
+  if (p.tier === 3 && confirm !== true) throw new CoreError('validation', TIER3);
+  const applied = p.changes.filter((c) => !c.refused);
+  for (const c of applied) o.profile.set(c.section as Section, c.name, c.to, source);
+  if (applied.length) o.log(said(applied.length), applied.map((c) => c.key));
+  return { ...p, applied: applied.length };
+}
+
+// Your settings as Settings draws them: each schema key with its value now, the default under it,
+// and the layer that set it. Only one overlay exists today (the profile: your pack); "This hub"
+// comes with the hub's own layer.
+export function fieldsNow(profile: Profile, zone: string) {
+  return FIELDS.map((f) => {
+    const set = profile.get(f.section, f.name);
+    const fallback = f.key === 'user.timezone' ? zone : f.default;
+    // The value in force is always offered, even spelt another way (a chat may say "asia/tokyo").
+    const options = f.type === 'timezone'
+      ? [...new Set([set, fallback, 'UTC', ...Intl.supportedValuesOf('timeZone')])].filter((z): z is string => typeof z === 'string').map((z): [string, string] => [z, z])
+      : f.options;
+    return { ...f, options, default: fallback, value: set ?? fallback, layer: set === undefined ? 'default' : 'pack', tier: GATES.includes(f.section) ? 3 : 2 };
+  });
+}
+
+export function configRoutes(o: Opts): Route[] {
   return [
     { method: 'GET', path: '/config/export', summary: 'Your settings as a configuration file (your pack): no secrets, only what you changed from the defaults.', handle: () => exportFile(o.profile) },
     { method: 'POST', path: '/config/import', summary: 'Check a configuration file and show what it would change, line by line; nothing is applied.', body: '{file}', handle: ({ body }) => plan(o.profile, body.file) },
     {
       method: 'POST', path: '/config/apply', summary: 'Apply a checked configuration file. Tier 2; tier 3 ({confirm: true}) when it changes privacy or what asks first.', body: '{file, confirm?}',
+      handle: ({ body }) => applyChecked(o, body.file, body.confirm, 'import', 'This file', (n) => `Imported ${many(n, 'setting')} from a configuration file.`),
+    },
+    // ---- door 2: Settings drawn from the schema, and the guided questions ----
+    { method: 'GET', path: '/config/schema', summary: 'Your own settings as Settings draws them: each with its words, what it allows, its value now, its default and the layer that set it.', handle: () => ({ fields: fieldsNow(o.profile, o.timezone?.() ?? 'UTC') }) },
+    {
+      method: 'POST', path: '/config/settings', summary: 'Save settings from Settings or the guided questions, through the same check as a file. Tier 2; tier 3 ({confirm: true}) when it changes privacy or what asks first.', body: '{settings, confirm?}',
+      handle: ({ body }) => applyChecked(o, { format: FORMAT, settings: body.settings }, body.confirm, 'settings', 'These settings', (n) => `Changed ${many(n, 'setting')} in Settings.`),
+    },
+    {
+      method: 'POST', path: '/config/reset', summary: 'Put one of your settings back to Nova’s default: its record is deleted, so the default shows through. Tier 3 ({confirm: true}) for privacy or what asks first.', body: '{key, confirm?}',
       handle: ({ body }) => {
-        const p = plan(o.profile, body.file);
-        if (p.problems.length) throw new CoreError('validation', 'This file can’t be used, so nothing changed.', p.problems);
-        if (p.tier === 3 && body.confirm !== true) throw new CoreError('validation', 'This changes what stays private or what asks first (tier 3): confirm it every time (confirm: true).');
-        const applied = p.changes.filter((c) => !c.refused);
-        for (const c of applied) o.profile.set(c.section as Section, c.name, c.to, 'import');
-        if (applied.length) o.log(`Imported ${applied.length} setting${applied.length === 1 ? '' : 's'} from a configuration file.`, applied.map((c) => c.key));
-        return { ...p, applied: applied.length };
+        const f = FIELDS.find((x) => x.key === body.key);
+        if (!f) throw new CoreError('validation', `“${String(body.key)}” isn’t one of your settings that can go back to a default.`);
+        if (GATES.includes(f.section) && body.confirm !== true) throw new CoreError('validation', TIER3);
+        const removed = o.profile.delete(f.section, f.name);
+        if (removed) o.log(`Put “${f.label}” back to Nova’s default.`, [f.key]);
+        return { key: f.key, removed };
       },
     },
   ];

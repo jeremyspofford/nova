@@ -70,7 +70,11 @@ export function wilson(k: number, n: number, z = 1.96): [number, number] {
   return [round(Math.max(0, (c - r) / d)), round(Math.min(1, (c + r) / d))];
 }
 
-const rate = (k: number, n: number): Rate => ({ k, n, rate: n ? round(k / n) : 0, wilson95: wilson(k, n) });
+export const rate = (k: number, n: number): Rate => ({ k, n, rate: n ? round(k / n) : 0, wilson95: wilson(k, n) });
+
+// Every (case, question) as a probability and a label, unanswered at p = 0.5.
+export const pairsOf = (cases: { scores: Record<string, number> | null; labels: Record<string, boolean> }[], questions: readonly string[]) =>
+  cases.flatMap((c) => questions.map((q) => ({ p: c.scores ? Number(c.scores[q] ?? 0.5) : 0.5, y: c.labels[q] === true })));
 
 // The bin a probability falls in: [i/bins, (i+1)/bins), with 1.0 in the last.
 export const binOf = (p: number, bins: number = BOUNDS.bins): number => Math.min(bins - 1, Math.max(0, Math.floor(p * bins)));

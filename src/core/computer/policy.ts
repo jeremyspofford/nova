@@ -1,13 +1,13 @@
 // Nova Computer's rules (M10a, docs/plans/M10a.md), pure so they are tested without Docker: how a
 // workspace's container is started and a command run in it, which folders may be a project, what an
 // egress declaration may say, and the tier each action takes.
-import { createHash } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { HOST, normalizeHost } from '../browser/plan.ts';
 import type { Tier } from '../envelope.ts';
 import type { Egress } from '../workers.ts';
+import { sha256 } from '../workspace.ts';
 
 // The one image, pinned by digest (Docker's official node image: Node 26.13.0, git 2.47.3 and a
 // shell, on Debian 13). The slim and Alpine variants have no git, and installing it on top would be
@@ -95,7 +95,7 @@ export const egressOf = (e: EgressDecl): Egress => (e.mode === 'none' ? 'none' :
 export function homeTag(home: string): string {
   let real = resolve(home);
   try { real = realpathSync(home); } catch { /* not made yet */ }
-  return createHash('sha256').update(real).digest('hex').slice(0, 12);
+  return sha256(real).slice(0, 12);
 }
 
 const ID = /^[a-z0-9][a-z0-9-]{0,40}$/;

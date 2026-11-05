@@ -42,6 +42,7 @@ const MIN_SPAN_MS = 1000;
 export const DEFAULT_LOOKBACK_MS = 5 * 60_000;
 // One answer bigger than this is refused rather than read into memory (a page is 100 items).
 const MAX_BYTES = 16 * 1024 * 1024;
+const TIMEOUT_MS = 5000;
 
 // `seen`: [id, time] taken within the lookback. `ids` is the older shape (all at `after`).
 export interface TypeCursor { after: string; seen?: [string, string][]; ids?: string[] }
@@ -71,12 +72,10 @@ const UI_NAME = new Map<string, string>();
 const UI_NAMES = ['accessibility', 'ui'] as const;
 // Screenpipe answered but refused Nova: it wants an API key, or not the one Nova sent.
 export class KeyRefused extends Error {
-  readonly hadKey: boolean;
   constructor(hadKey: boolean) {
     super(hadKey
       ? 'Screenpipe answered but refused the API key Nova has; check it against the one in Screenpipe’s Settings > Privacy.'
       : 'Screenpipe answered but refused Nova; it needs the API key from Screenpipe’s Settings > Privacy.');
-    this.hadKey = hadKey;
   }
 }
 
@@ -116,17 +115,13 @@ const plus = (t: string, ms: number) => new Date(Date.parse(t) + ms).toISOString
 export class Screenpipe {
   readonly url: string;
   #fetch: Fetch;
-  #timeoutMs: number;
   #lookbackMs: number;
-  #maxBytes: number;
   #apiKey: string | null;
 
-  constructor(o: { url: string; apiKey?: string | null; fetch?: Fetch; timeoutMs?: number; lookbackMs?: number; maxBytes?: number }) {
+  constructor(o: { url: string; apiKey?: string | null; fetch?: Fetch; lookbackMs?: number }) {
     this.url = o.url.replace(/\/+$/, '');
     this.#fetch = o.fetch ?? fetch;
-    this.#timeoutMs = o.timeoutMs ?? 5000;
     this.#lookbackMs = o.lookbackMs ?? DEFAULT_LOOKBACK_MS;
-    this.#maxBytes = o.maxBytes ?? MAX_BYTES;
     this.#apiKey = o.apiKey || null;
   }
 
@@ -135,22 +130,22 @@ export class Screenpipe {
     try {
       // A redirect could take the pull somewhere the address didn't say: refused.
       const headers: Record<string, string> = { accept: 'application/json', ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}) };
-      res = await this.#fetch(`${this.url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(this.#timeoutMs), headers });
+      res = await this.#fetch(`${this.url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS), headers });
     } catch (e) {
       throw new Unreachable(`Screenpipe at ${this.url} isn’t answering (${(e as Error)?.cause instanceof Error ? ((e as Error).cause as Error).message : (e as Error).message}).`);
     }
     if (res.status === 401 || res.status === 403) { await res.body?.cancel().catch(() => {}); throw new KeyRefused(this.#apiKey !== null); }
     if (res.status === 400) { await res.body?.cancel().catch(() => {}); throw new BadRequest(`Screenpipe at ${this.url} answered 400.`); }
     if (!res.ok) throw new Unreachable(`Screenpipe at ${this.url} answered ${res.status}.`);
-    const tooMuch = () => new Unreachable(`Screenpipe at ${this.url} answered with too much at once (over ${Math.round(this.#maxBytes / 1024 / 1024)} MB), so Nova didn’t read it.`);
-    if (Number(res.headers.get('content-length')) > this.#maxBytes) { await res.body?.cancel().catch(() => {}); throw tooMuch(); }
+    const tooMuch = () => new Unreachable(`Screenpipe at ${this.url} answered with too much at once (over ${Math.round(MAX_BYTES / 1024 / 1024)} MB), so Nova didn’t read it.`);
+    if (Number(res.headers.get('content-length')) > MAX_BYTES) { await res.body?.cancel().catch(() => {}); throw tooMuch(); }
     const chunks: Uint8Array[] = [];
     let size = 0;
     try {
       const reader = res.body?.getReader();
       for (let r = await reader?.read(); r && !r.done; r = await reader!.read()) {
         size += r.value.byteLength;
-        if (size > this.#maxBytes) { await reader!.cancel().catch(() => {}); throw tooMuch(); }
+        if (size > MAX_BYTES) { await reader!.cancel().catch(() => {}); throw tooMuch(); }
         chunks.push(r.value);
       }
     } catch (e) {

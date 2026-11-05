@@ -14,7 +14,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 const ROOT = resolve(import.meta.dirname, '..', '..');
 const SRC = join(ROOT, 'src');
 const SERVICE = join(SRC, 'core', 'decision-service');
-const SEAT_NAMES = ['Tev1Seat', 'JevSeat', 'StubSeat', 'LegacySeat', 'SystemOne', 'askChunked', 'readAnswer', 'wireQuestions'];
+const SEAT_NAMES = ['Tev1Seat', 'JevSeat', 'LegacySeat', 'SystemOne', 'askChunked', 'readAnswer', 'wireQuestions'];
 
 export interface SourceFile { path: string; text: string }
 

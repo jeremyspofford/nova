@@ -118,13 +118,36 @@ jobs:
           path: ${{ runner.temp }}/ui-shots
           if-no-files-found: ignore
 
+  # The Era-2 walkthrough (scripts/shots.js, Ponytail D4): the only browser run of the install-skill,
+  # schedule, helper, zip-add, memory and Gmail flows, plus the golden screens in every theme. The
+  # shots go to $RUNNER_TEMP and up as an artifact, never into git (decision N2; D5 deleted the
+  # committed copies). It gates, like the UI gate.
+  shots:
+    name: shots (Era-2 walkthrough)
+    needs: changes
+    if: needs.changes.outputs.heavy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: mcr.microsoft.com/playwright:v1.56.1-noble
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: npm ci
+      - run: sh scripts/tripwire.sh node scripts/shots.js "$RUNNER_TEMP/shots"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: shots
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore
+
   # The one required check. It always runs. It passes when the heavy jobs passed, or were skipped
   # because the change is docs only, and fails on anything else, so a skipped job never blocks a
   # merge and a failed or cancelled one always does.
   gate:
     name: gate
     if: always()
-    needs: [changes, checks, ui-gate]
+    needs: [changes, checks, ui-gate, shots]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -133,12 +156,13 @@ jobs:
           HEAVY: ${{ needs.changes.outputs.heavy }}
           CHECKS: ${{ needs.checks.result }}
           UI: ${{ needs.ui-gate.result }}
+          SHOTS: ${{ needs.shots.result }}
         run: |
-          echo "changes: $CHANGES · heavy: $HEAVY · checks: $CHECKS · UI gate: $UI"
+          echo "changes: $CHANGES · heavy: $HEAVY · checks: $CHECKS · UI gate: $UI · shots: $SHOTS"
           [ "$CHANGES" = success ] || { echo "The change couldn't be sorted."; exit 1; }
           if [ "$HEAVY" = true ]; then
-            [ "$CHECKS" = success ] && [ "$UI" = success ] || { echo "A required job didn't pass."; exit 1; }
+            [ "$CHECKS" = success ] && [ "$UI" = success ] && [ "$SHOTS" = success ] || { echo "A required job didn't pass."; exit 1; }
           else
-            [ "$CHECKS" = skipped ] && [ "$UI" = skipped ] || { echo "Docs only, but the heavy jobs weren't skipped."; exit 1; }
+            [ "$CHECKS" = skipped ] && [ "$UI" = skipped ] && [ "$SHOTS" = skipped ] || { echo "Docs only, but the heavy jobs weren't skipped."; exit 1; }
             echo "Docs only: the heavy jobs were skipped."
           fi

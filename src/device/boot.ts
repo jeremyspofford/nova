@@ -985,7 +985,7 @@ export function status(home: string): Record<string, unknown> {
   const pid = Number(readJson<number>(p.pid));
   const inst = d.kind === 'computer' ? runtimeIntact(p) : null;
   let queue = null;
-  if (existsSync(p.queue)) { const q = new Queue(p.queue); queue = q.counts(); q.close(); }
+  if (existsSync(p.queue)) { queue = new Queue(p.queue).counts(); }
   return {
     joined: true, home, device_id: d.device_id, name: d.name, kind: d.kind, hub_url: d.hub_url, epoch: d.epoch,
     running: !!pid && alive(pid), pid: pid || null, safe_mode: !!st.safe_mode, revoked: !!st.revoked, revoked_reason: st.revoked_reason ?? null,
@@ -1079,7 +1079,6 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       mkdirSync(paths(home).state, { recursive: true, mode: 0o700 });
       const q = new Queue(paths(home).queue);
       const r = q.add(kind, JSON.parse(args[1]) as Record<string, unknown>, ...(str('key') ? [str('key')!] : []));
-      q.close();
       say(r.added ? `Queued ${kind} ${r.key}.` : `Already queued: ${r.key}.`);
       return 0;
     }

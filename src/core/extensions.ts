@@ -7,6 +7,7 @@ import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { CoreError } from './errors.ts';
 import type { Db } from './db.ts';
+import { isObj } from './envelope.ts';
 
 export const KINDS = ['connector', 'mcp-server', 'plugin', 'skill-pack', 'agent-adapter', 'automation-adapter', 'design-system'] as const;
 export type Kind = (typeof KINDS)[number];
@@ -73,7 +74,6 @@ export function satisfies(version: string, range: string): boolean {
   });
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const strings = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === 'string');
 const relPath = (p: string) => !p.startsWith('/') && !p.split(/[\\/]/).includes('..');
 

@@ -26,7 +26,8 @@ export function dropScratch(dir: string): void {
   try { rmSync(dir, { recursive: true, force: true }); } finally { inUse.delete(dir); }
 }
 
-const alive = (pid: number) => {
+// A process that exists counts as running even when this one may not signal it (EPERM).
+export const alive = (pid: number) => {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
 };
 

@@ -4,12 +4,12 @@
 //    inside the declared hosts, or the final DOM read through CDP.
 // The worker leaves its reads in the task's folder (home/workers/browser/<task>/), outside every
 // workspace a provider can write to; the checkers read them there and compare them with the brief.
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import type { Brief, Evidence } from '../envelope.ts';
 import type { Checker } from '../verify.ts';
 import { allowed, hasEffects, type Step } from './plan.ts';
+import { sha256 } from '../workspace.ts';
 
 export const SCREENSHOT = 'final.png';
 export const FINAL_READ = 'final-read.json';
@@ -89,7 +89,7 @@ export function checkers(home: string): { screenshot: Checker; url: Checker } {
     const data = readFileSync(file);
     const size = pngSize(data);
     if (!size) return { ok: false, why: `${e.ref} isn’t a PNG picture.` };
-    return { ok: true, why: `Nova took this screenshot itself at the end of the task: ${size.width}×${size.height}, ${Math.max(1, Math.round(statSync(file).size / 1024))} kB, sha256 ${createHash('sha256').update(data).digest('hex').slice(0, 12)}….` };
+    return { ok: true, why: `Nova took this screenshot itself at the end of the task: ${size.width}×${size.height}, ${Math.max(1, Math.round(statSync(file).size / 1024))} kB, sha256 ${sha256(data).slice(0, 12)}….` };
   };
 
   const url: Checker = (e: Evidence, brief: Brief) => {

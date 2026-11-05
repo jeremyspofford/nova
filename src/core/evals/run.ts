@@ -1,8 +1,10 @@
 // Running a suite: each task through the driver (which boots whatever it needs and hands back the
 // trace and the world after it), every grader on it, k trials. A task passes only when every trial
 // passes. The suite's fingerprint (its tasks by id@version) says which suite a score is for.
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { GradeResult, Judge, SuiteName, SuiteRun, TaskBase, TaskResult, Trace, TrialResult } from './types.ts';
+import { sha256 } from '../workspace.ts';
+import { pct } from './scorecards.ts';
 
 export interface Driven<C> {
   trace: Trace;
@@ -22,7 +24,7 @@ export interface RunOptions<T extends TaskBase<C>, C> {
 }
 
 export function fingerprintOf(entries: readonly string[]): string {
-  return `sha256:${createHash('sha256').update([...entries].sort().join('\n')).digest('hex').slice(0, 16)}`;
+  return `sha256:${sha256([...entries].sort().join('\n')).slice(0, 16)}`;
 }
 
 // A suite's manifest: its tasks as id@version, sorted.
@@ -85,7 +87,6 @@ export function regressionVerdict(run: Pick<SuiteRun, 'passed' | 'total' | 'pass
   const failed = run.results.filter((r) => !r.passed).map((r) => r.id);
   const newly = previous ? failed.filter((id) => !(previous.failed ?? []).some((f) => f.id === id)) : failed;
   const drop = previous ? run.pass_rate < previous.pass_rate || newly.length > 0 : false;
-  const pct = (x: number) => `${Math.round(x * 100)}%`;
   const words = !previous
     ? `${run.passed} of ${run.total} regression tasks pass (${pct(run.pass_rate)}); no earlier scorecard to compare with.`
     : drop

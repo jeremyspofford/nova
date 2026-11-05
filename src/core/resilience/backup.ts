@@ -32,10 +32,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { DatabaseSync } from 'node:sqlite';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
-import { cleanDbFile } from '../backups.ts';
+import { SKILL, cleanDbFile, skillDir } from '../backups.ts';
 import { CoreError } from '../errors.ts';
 import { decryptTo, encryptDir, keyFingerprint, readHeader, safeRel, verifyFile } from './archive.ts';
 import { dropScratch, makeScratch } from './scratch.ts';
+import { writeJson } from '../workspace.ts';
 
 export interface BackupSettings { target: string | null; keep: number; encrypted_target: string | null }
 export const DEFAULT_KEEP = 7;
@@ -143,7 +144,7 @@ export function backupFiles(home: string): string[] {
   return out;
 }
 
-const isFull = (e: unknown) => {
+export const isFull = (e: unknown) => {
   const m = (e as Error)?.message ?? '';
   return (e as NodeJS.ErrnoException)?.code === 'ENOSPC' || /disk is full|SQLITE_FULL|ENOSPC/i.test(m);
 };
@@ -518,8 +519,7 @@ export class NightlyBackups {
     const file = this.#owedFile();
     if (!list.length && !existsSync(file)) return;
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    writeFileSync(`${file}.tmp`, `${JSON.stringify({ v: 1, owed: list }, null, 2)}\n`, { mode: 0o600 });
-    renameSync(`${file}.tmp`, file);
+    writeJson(file, { v: 1, owed: list });
   }
 
   #owedKey(): Buffer | null {
@@ -550,8 +550,7 @@ export class NightlyBackups {
   }
 }
 
-// Whether `path` is `root` or inside it, as resilience/index.ts answers it (B6): a folder on another
-// Windows drive is outside. `p` is the path module (a test passes path.win32).
+// Whether `path` is `root` or inside it (B6): a folder on another Windows drive is outside. `p` is the path module (a test passes path.win32).
 export const inside = (path: string, root: string, p: Pick<typeof import('node:path'), 'relative' | 'resolve' | 'sep' | 'isAbsolute'> = { relative, resolve, sep, isAbsolute }) => {
   const r = p.relative(p.resolve(root), p.resolve(path));
   return r === '' || (!r.startsWith(`..${p.sep}`) && r !== '..' && !p.isAbsolute(r));
@@ -584,8 +583,7 @@ export const sealed = (m: Manifest, key: Buffer) => {
 export function writeManifest(dir: string, m: Manifest, key: Buffer): void {
   const path = join(dir, 'manifest.json');
   m.seal = sealOf(m, key);
-  writeFileSync(`${path}.tmp`, `${JSON.stringify(m, null, 2)}\n`, { mode: 0o600 });
-  renameSync(`${path}.tmp`, path);
+  writeJson(path, m);
 }
 
 const sealWords = (words: string[], key: Buffer): string => {
@@ -610,13 +608,15 @@ export function cleanBackup(dir: string, table: string, ids: string[], words: st
   m.files.forEach((f) => safeRel(f.path));
   const db = join(dir, 'nova.db');
   const originals = new Set(cleanDbFile(db, table, ids, words).map((id) => `capture/raw/${id}`));
+  const skills = table === SKILL ? ids.map(skillDir) : [];
   m.files = m.files.filter((f) => {
-    if (!originals.has(f.path)) return true;
+    if (!originals.has(f.path) && !skills.some((d) => f.path.startsWith(d))) return true;
     rmSync(join(dir, 'files', safeRel(f.path)), { force: true });
     return false;
   });
+  for (const d of skills) rmSync(join(dir, 'files', safeRel(d)), { recursive: true, force: true });
   m.db = { path: 'nova.db', sha256: sha256File(db), bytes: statSync(db).size };
-  const ws = words.map((w) => w.trim()).filter((w) => w.length >= 3);
+  const ws =words.map((w) => w.trim()).filter((w) => w.length >= 3);
   if (ws.length) {
     m.files.forEach((f) => {
       const p = join(dir, 'files', safeRel(f.path));

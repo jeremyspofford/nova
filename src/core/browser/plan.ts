@@ -5,6 +5,7 @@
 import { CoreError } from '../errors.ts';
 import { CARD_FIELD, PAY_PATH, PAY_TOKENS, PAY_WORDS, looksLikeCard, parseMoney } from './copilot.ts';
 import type { Egress } from '../workers.ts';
+import { isObj } from '../envelope.ts';
 
 // `commits`: this is the step that makes the task's outside effect happen (sends the form, places
 // the order). Nova writes it down before the step runs, so after a failure it knows whether that
@@ -224,7 +225,6 @@ export function planEgress(p: Plan): Egress {
 
 export const PAY_REFUSAL = 'Paying is tier 3 and always yours: Nova fills the cart, shows the itemised total and stops. It never presses pay.';
 export const FLOW_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 function payPath(url: string): boolean {
   try { return PAY_PATH.test(new URL(url).pathname); } catch { return false; }

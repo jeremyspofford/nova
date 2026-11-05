@@ -12,22 +12,23 @@
 // (gates.ts) are core and can't be changed by a change.
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
+import { isObj, reporter, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
 import { canonicalJson } from '../mesh/wire.ts';
 import { validatePackage } from '../design.ts';
 import { CANARY_PROBES, GATES, KINDS, MIN_CANARY_S, MIN_PROBE_RUNS, SANDBOX_PROBES, STAGES, weakens, type ChangeKind, type Stage } from './gates.ts';
 import { KIND_OPS, type Check, type Live, type Snapshot } from './kinds.ts';
 import { localGet, runProbe, type Get, type ProbeResult, type RouteLike } from './probes.ts';
 import { Sandbox } from './sandbox.ts';
-import type { Db } from '../db.ts';
+import { fromJson as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
 import type { Route } from '../api.ts';
+import { sha256 } from '../workspace.ts';
 
 export const CONFIRMATION_SYSTEM = 'nova-changes';
 export const STATES = ['checking', 'stopped', 'waiting', 'canary', 'live', 'rolled_back', 'refused', 'declined', 'replaced', 'broken'] as const;
@@ -57,9 +58,6 @@ export interface ChangeRecord {
 export interface Proposal { kind: unknown; artifact: unknown; canary?: unknown; [k: string]: unknown }
 
 type Row = Record<string, string | number | null>;
-const parse = <T>(s: unknown): T => (typeof s === 'string' ? JSON.parse(s) : null) as T;
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const sha256 = (s: string | Buffer) => createHash('sha256').update(s).digest('hex');
 const slug = (s: string) => s.replace(/[^a-z0-9.-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'change';
 
 function toRecord(r: Row): ChangeRecord {
@@ -86,8 +84,6 @@ export interface ChangesOptions {
   sandbox?: boolean;
   // Canary windows on the test clock (NOVA_TEST_CLOCK): only POST /changes/tick moves them.
   testClock?: boolean;
-  // The server a sandbox runs (tests may point elsewhere).
-  server?: string;
   // An automatic checkpoint of the whole home (M7 amendment §1), taken before a change is applied
   // live; it throws when none can be taken, and the change then doesn't ship.
   checkpoint?: (reason: string) => void;
@@ -407,11 +403,8 @@ export class Changes extends EventEmitter {
   // ---- the work -----------------------------------------------------------------------------------
 
   async #run(brief: Brief, signal: AbortSignal): Promise<Report> {
-    const started = performance.now();
-    const report = (status: Report['status'], summary: string, evidence: Evidence[] = []): Report => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence, artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
-      usage: { duration_ms: Math.round(performance.now() - started) },
-    });
+    const base = reporter(brief);
+    const report = (status: Report['status'], summary: string, evidence: Evidence[] = []): Report => base(status, summary, { evidence });
     const id = String(brief.inputs?.change_id ?? '');
     let c: ChangeRecord;
     try { c = this.get(id); } catch (e) { return report('failed', (e as Error).message); }
@@ -444,7 +437,7 @@ export class Changes extends EventEmitter {
       // 1. Sandbox.
       let info;
       try {
-        info = await sandbox.start({ db: this.#db, liveHome: this.#o.home, files: this.#neededFiles(c), timezone: this.#o.live.timezone(), signal, ...(this.#o.server ? { server: this.#o.server } : {}) });
+        info = await sandbox.start({ db: this.#db, liveHome: this.#o.home, files: this.#neededFiles(c), timezone: this.#o.live.timezone(), signal });
       } catch (e) { return stop('sandbox', `Nova couldn’t start a sandbox copy: ${(e as Error).message}`, { output: sandbox.output().slice(-2000) }); }
       const applied = await sandbox.call('POST', '/changes/sandbox/apply', { kind: c.kind, artifact: c.artifact, change_id: c.id });
       const sandboxEvidence = { home: `workers/changes/${c.id}/home`, pid: info.pid, port: info.port, snapshot_bytes: info.snapshot_bytes, started_ms: info.started_ms, copied: info.copied, applied: applied.status === 200 };

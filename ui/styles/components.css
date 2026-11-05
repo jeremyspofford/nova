@@ -28,7 +28,6 @@
   overflow-wrap: anywhere;
   text-wrap: balance;
 }
-.topbar-sub { display: block; font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); }
 .topbar-orb { align-items: center; }
 .scroller {
   flex: 1;
@@ -173,8 +172,6 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--l
   padding: var(--space-5) var(--space-5) var(--space-6);
   overflow-y: auto;
 }
-.aside-head { display: flex; align-items: center; justify-content: space-between; }
-.aside-title { font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
 
 .scrim {
   position: fixed;

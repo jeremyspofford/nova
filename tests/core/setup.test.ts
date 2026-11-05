@@ -27,8 +27,8 @@ async function pastDevice(s: Setup) {
 }
 
 test('a blank profile starts with Nova asking a question, and nothing about any person', () => {
-  const { setup: s, profile } = setup();
-  assert.equal(profile.isEmpty(), true);
+  const { setup: s, db, profile } = setup();
+  assert.equal(db.get('SELECT 1 FROM profile LIMIT 1'), undefined);
   const v = s.view();
   assert.equal(v.step, 'device', 'onboarding starts with this device (the ADR’s order)');
   assert.equal(v.done, false);
@@ -151,10 +151,10 @@ test('saying no to the cloud keeps it local (review finding: these used to turn 
 });
 
 test('reading the setup state writes nothing', async () => {
-  const { setup: s, profile } = setup();
+  const { setup: s, db } = setup();
   s.view();
   s.view();
-  assert.equal(profile.isEmpty(), true);
+  assert.equal(db.get('SELECT 1 FROM profile LIMIT 1'), undefined);
   await s.answer('new');
   assert.equal(s.view().transcript.length, 3, 'question, answer, reply');
 });

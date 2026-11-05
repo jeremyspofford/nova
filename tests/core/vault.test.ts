@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import {
-  FILE_KEY_NOTICE, Vault, createCore, keyMode, macKeyStore, secretRef, secretToolKeyStore, windowsKeyStore, type KeyCommandRunner, type KeyStore,
+  FILE_KEY_NOTICE, Vault, createCore, keyMode, macKeyStore, secretToolKeyStore, windowsKeyStore, type KeyCommandRunner, type KeyStore,
 } from '../../src/core/index.ts';
 import { Db } from '../../src/core/db.ts';
 import { Log } from '../../src/core/log.ts';
@@ -35,16 +35,13 @@ function fakeKeychain() {
   return { k, make };
 }
 
-test('secrets round-trip, encrypted at rest with AES-256-GCM, 0600, by secret:// reference', () => {
+test('secrets round-trip, encrypted at rest with AES-256-GCM, 0600', () => {
   const h = home();
   const v = new Vault({ home: h, mode: 'file' });
   assert.equal(v.status().secrets, 0);
   assert.equal(existsSync(v.file), false, 'nothing is written before there is a secret');
-  const ref = v.put('connector/example/API_TOKEN', SECRET);
-  assert.equal(ref, 'secret://connector/example/API_TOKEN');
-  assert.equal(ref, secretRef('connector/example/API_TOKEN'));
+  v.put('connector/example/API_TOKEN', SECRET);
   assert.equal(v.get('connector/example/API_TOKEN'), SECRET);
-  assert.equal(v.resolve(ref), SECRET);
   const disk = readFileSync(v.file, 'utf8');
   assert.doesNotMatch(disk, new RegExp(SECRET));
   const f = JSON.parse(disk);
@@ -55,7 +52,6 @@ test('secrets round-trip, encrypted at rest with AES-256-GCM, 0600, by secret://
   // A fresh vault on the same home reads the same secret back.
   assert.equal(new Vault({ home: h, mode: 'file' }).get('connector/example/API_TOKEN'), SECRET);
   assert.throws(() => v.put('../escape', 'x'), /isn’t a secret name/);
-  assert.throws(() => v.resolve('https://example.test'), /secret:\/\//);
   assert.throws(() => v.put('connector/example/EMPTY', ''), /can’t be empty/);
   // Revoking by prefix takes every secret of one extension, and nothing else.
   v.put('connector/example/OTHER', 'another-placeholder-value');

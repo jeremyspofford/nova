@@ -3,7 +3,6 @@
 // a whole Nova) runs a task and hands back what happened; graders judge that, outcome first.
 
 export type SuiteName = 'regression' | 'capability' | 'injection';
-export const SUITES: readonly SuiteName[] = ['regression', 'capability', 'injection'];
 
 // Where a task comes from. `failure`: this very failure is on record. `class`: the same failure
 // class on record, applied to another part of Nova (said plainly, never passed off as the case).

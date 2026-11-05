@@ -23,18 +23,12 @@ import { addSecretValue } from './log.ts';
 export const VAULT_DIR = 'vault';
 export const VAULT_FILE = 'secrets.json';
 export const KEY_FILE = 'key';
-export const SECRET_SCHEME = 'secret://';
 // connector/home-assistant/HA_TOKEN: lowercase path segments, then a name.
 const NAME = /^[a-z0-9][a-z0-9._-]*(\/[A-Za-z0-9._-]+)*$/;
 const AAD = (id: string) => Buffer.from(`nova-vault-v1|${id}`, 'utf8');
 const SERVICE = 'nova-vault';
 
 export const isSecretName = (name: string) => typeof name === 'string' && name.length <= 200 && NAME.test(name);
-export const secretRef = (name: string) => `${SECRET_SCHEME}${checkName(name)}`;
-export function nameOf(ref: string): string {
-  if (typeof ref !== 'string' || !ref.startsWith(SECRET_SCHEME)) throw new CoreError('validation', 'That isn’t a secret:// reference.');
-  return checkName(ref.slice(SECRET_SCHEME.length));
-}
 function checkName(name: string): string {
   if (!isSecretName(name)) throw new CoreError('validation', `“${String(name)}” isn’t a secret name Nova uses (letters, digits, dots, dashes, slashes).`);
   return name;
@@ -91,10 +85,10 @@ export function fileKeyStore(home: string): KeyStore {
 }
 
 // Linux: the Secret Service, through libsecret's CLI. Exit 1 with nothing on stderr is “no such item”.
-export function secretToolKeyStore(account: string, o: { run?: Run; env?: NodeJS.ProcessEnv; command?: string } = {}): KeyStore {
+export function secretToolKeyStore(account: string, o: { run?: Run; env?: NodeJS.ProcessEnv } = {}): KeyStore {
   const run = o.run ?? runCommand;
   const env = o.env ?? process.env;
-  const cmd = o.command ?? 'secret-tool';
+  const cmd = 'secret-tool';
   const attrs = ['service', SERVICE, 'account', account];
   const lookup = (acct: string) => run(cmd, ['lookup', 'service', SERVICE, 'account', acct]);
   return {
@@ -122,9 +116,9 @@ export function secretToolKeyStore(account: string, o: { run?: Run; env?: NodeJS
 
 // macOS: the login keychain. Interactive mode reads the command from stdin, so the key stays off
 // the argument list. Exit 44 is “no such item”.
-export function macKeyStore(account: string, o: { run?: Run; command?: string } = {}): KeyStore {
+export function macKeyStore(account: string, o: { run?: Run } = {}): KeyStore {
   const run = o.run ?? runCommand;
-  const cmd = o.command ?? 'security';
+  const cmd = 'security';
   return {
     kind: 'keychain',
     name: 'the macOS keychain',
@@ -148,9 +142,9 @@ export function macKeyStore(account: string, o: { run?: Run; command?: string } 
 
 // Windows: the Credential Locker (it shows in Credential Manager), through PowerShell's WinRT
 // binding. The key comes in on stdin. Not exercised on a real Windows machine yet (docs/LEDGER.md).
-export function windowsKeyStore(account: string, o: { run?: Run; command?: string } = {}): KeyStore {
+export function windowsKeyStore(account: string, o: { run?: Run } = {}): KeyStore {
   const run = o.run ?? runCommand;
-  const cmd = o.command ?? 'powershell.exe';
+  const cmd = 'powershell.exe';
   const vault = `[void][Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime]; $v = New-Object Windows.Security.Credentials.PasswordVault;`;
   const find = `try { $c = $v.Retrieve('${SERVICE}', '${account}') } catch { exit 44 };`;
   const ps = (script: string, input?: string) => run(cmd, ['-NoProfile', '-NonInteractive', '-Command', `& { ${vault} ${script} }`], input);
@@ -261,12 +255,8 @@ export class Vault extends EventEmitter {
     return this.#open().get(checkName(name)) ?? null;
   }
 
-  resolve(ref: string): string | null {
-    return this.get(nameOf(ref));
-  }
-
-  put(name: string, value: string): string { return this.#withWrite(() => this.#put(name, value), true); }
-  #put(name: string, value: string): string {
+  put(name: string, value: string): void { this.#withWrite(() => this.#put(name, value), true); }
+  #put(name: string, value: string): void {
     checkName(name);
     if (typeof value !== 'string' || !value.length) throw new CoreError('validation', 'A secret can’t be empty.');
     // A vault that can never open again would refuse every save forever. Saving starts a new one
@@ -288,7 +278,6 @@ export class Vault extends EventEmitter {
       const full = (e as NodeJS.ErrnoException).code === 'ENOSPC';
       throw new CoreError('conflict', full ? 'Nova couldn’t save the secret: the disk is full. Nothing was changed; free some space and save it again.' : `Nova couldn’t save the secret: ${(e as Error).message}. Nothing was changed.`, [`${(e as NodeJS.ErrnoException).code ?? 'error'}: ${(e as Error).message}`]);
     }
-    return secretRef(name);
   }
 
   // A new key each time something is deleted, so a copy of the file from before (a backup, an old

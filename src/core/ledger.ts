@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { CoreError } from './errors.ts';
 import { ENVELOPE_VERSION, validateBrief, validateReport, type Brief, type ContextRef, type EvidenceRequirement, type PrivacyMode, type Report, type Tier } from './envelope.ts';
 import { effectsOf, egressOf, permits, type Worker } from './workers.ts';
-import type { Db } from './db.ts';
+import { fromJson as parse, type Db } from './db.ts';
 import type { Log } from './log.ts';
 import type { Verification, Verifier } from './verify.ts';
 
@@ -80,7 +80,6 @@ export interface Task {
 export interface TaskEvent { seq: number; task_id: string; at: string; kind: string; from_state: State | null; to_state: State | null; detail: unknown }
 
 type Row = Record<string, string | number | null>;
-const parse = <T>(s: unknown): T => (typeof s === 'string' ? JSON.parse(s) : null) as T;
 
 function toTask(r: Row): Task {
   return {

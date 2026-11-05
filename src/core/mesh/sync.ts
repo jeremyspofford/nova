@@ -6,13 +6,13 @@
 // The log holds one entry per row or file, the newest: the triggers drop the older entry when they
 // add one. A standby that is behind therefore never misses a change (the newer entry has a higher
 // seq), and one that starts from nothing reads the whole state once.
-import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, watch, writeFileSync, type FSWatcher } from 'node:fs';
 import { dirname, join, normalize, sep } from 'node:path';
 import { CoreError } from '../errors.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import { HybridClock } from './wire.ts';
+import { sha256 } from '../workspace.ts';
 
 // Replicated tables and their keys, as in migrations 0006 and 0007. Everything else stays on its own node.
 export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
@@ -110,7 +110,6 @@ export interface Batch { rows: LogRow[]; upto: number; more: boolean; head: numb
 interface Run { gone: Record<string, unknown>[]; others: Map<string, Record<string, unknown>[]>; scrub: boolean }
 export interface Lag { head: number; acked_seq: number; acked_at: string | null; rows: number; seconds: number; behind: boolean }
 
-const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 const OPS: readonly Op[] = ['put', 'delete', 'file_put', 'file_delete'];
 
 // A relative home path that a file entry may name: inside the home, not in a place that stays local.
@@ -384,6 +383,16 @@ export class SyncLog {
       if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     }
     return removed;
+  }
+
+  // Files were removed for good (a skill): the journal drops their copies now, not at the next
+  // scan, and the old pages leave the write-ahead log, as a forget does (secure_delete is on).
+  removed(): void {
+    try {
+      this.scan();
+    } finally {
+      if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    }
   }
 
   #purge(needles: Set<string>, count: (n: number) => void): void {

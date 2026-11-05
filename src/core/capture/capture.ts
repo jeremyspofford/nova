@@ -29,11 +29,11 @@
 //      notice, until a trusted model can check it, or retention deletes it.
 // Every outcome but index is visible in the timeline with its reason; nothing is deleted silently.
 import { EventEmitter } from 'node:events';
-import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { CoreError } from '../errors.ts';
 import { permits } from '../workers.ts';
 import { addressEgress } from '../connectors/index.ts';
-import type { Db } from '../db.ts';
+import { jsonOr as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Profile } from '../profile.ts';
 import type { PrivacyMode } from '../envelope.ts';
@@ -46,6 +46,7 @@ import {
   type Allow, type Exclusion, type Facts, type Kind, type Signal, type Switch,
 } from './rules.ts';
 import { DEFAULT_LOOKBACK_MS, DEFAULT_URL, KeyRefused, Screenpipe, Unreachable, type Cursor, type RawEvent } from './screenpipe.ts';
+import { sha256 } from '../workspace.ts';
 
 export { KINDS, type Kind } from './rules.ts';
 export type { RawEvent } from './screenpipe.ts';
@@ -264,8 +265,6 @@ export interface CaptureOptions {
   secrets?: { get(name: string): string | null; put(name: string, value: string): unknown; delete(name: string): unknown; has(name: string): boolean };
   fetch?: typeof fetch;
   pollMs?: number;
-  // How far back a Screenpipe pull asks again by default, for items reported late (5 minutes).
-  lookbackMs?: number;
   // Why retention must not delete anything now (the clock jumped, M7b), or null.
   retentionHold?: () => string | null;
   // Screening, job 1: capture-sensitive asked of the Decision Service, which routes it (never a
@@ -289,11 +288,9 @@ export interface CaptureOptions {
   removed?: (ids: string[]) => void;
 }
 
-const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 // The vault name a source's API key is kept under.
 const keyName = (sourceId: string) => `capture/${sourceId.replace(/[^A-Za-z0-9._-]/g, '-')}`;
 const clip = (v: unknown, n: number): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : null);
-const parse = <T>(s: string | null, fallback: T): T => { if (!s) return fallback; try { return JSON.parse(s) as T; } catch { return fallback; } };
 
 export class Capture extends EventEmitter {
   #o: CaptureOptions;
@@ -560,7 +557,7 @@ export class Capture extends EventEmitter {
           text: typeof raw.text === 'string' ? raw.text : null,
         };
         const external = clip(raw.external_id, 200);
-        if (external && this.#db.get('SELECT 1 FROM capture_tombstone WHERE source_id = ? AND key = ?', s.id, sha(`${s.id}\0${external}`))) { drop('forgotten', 'You had Nova forget it.'); continue; }
+        if (external && this.#db.get('SELECT 1 FROM capture_tombstone WHERE source_id = ? AND key = ?', s.id, sha256(`${s.id}\0${external}`))) { drop('forgotten', 'You had Nova forget it.'); continue; }
         if (external && this.#db.get('SELECT 1 FROM capture_event WHERE source_id = ? AND external_id = ?', s.id, external)) { drop('duplicate'); continue; }
         const c = classify(f, settings.signals, settings.switch, tz);
         const ex = excludedBy({ ...f, space: c?.space ?? null }, settings.exclusions, tz);
@@ -623,43 +620,7 @@ export class Capture extends EventEmitter {
 
   // ---- reading -------------------------------------------------------------------------------------
 
-  // capture.stream(device, kind): the normalized events for one device and kind (null: any), as
-  // they arrive, plus what is already stored. Readers never see which source produced them.
-  stream(device: string | null, kind: Kind | null) {
-    if (kind !== null && !KINDS.includes(kind)) throw new CoreError('validation', `kind is one of ${KINDS.join(', ')}.`);
-    const match = (e: CaptureEvent) => (!device || e.device.id === device) && (!kind || e.kind === kind);
-    const self = this;
-    return {
-      recent: (limit = 50) => this.events({ ...(device ? { device } : {}), ...(kind ? { kind } : {}), limit }),
-      subscribe: (fn: (e: CaptureEvent) => void) => {
-        const f = (e: CaptureEvent) => { if (match(e)) fn(e); };
-        this.on('event', f);
-        return () => { this.off('event', f); };
-      },
-      // Listening starts when the iterator is made, not at its first next(), so nothing that
-      // arrives in between is missed. return() (a for-await loop's break) stops it.
-      [Symbol.asyncIterator](): AsyncIterator<CaptureEvent> {
-        const queue: CaptureEvent[] = [];
-        let wake: ((r: IteratorResult<CaptureEvent>) => void) | null = null;
-        let done = false;
-        const f = (e: CaptureEvent) => {
-          if (!match(e)) return;
-          if (wake) { const w = wake; wake = null; w({ value: e, done: false }); } else queue.push(e);
-        };
-        self.on('event', f);
-        const end = (): IteratorResult<CaptureEvent> => { done = true; self.off('event', f); wake?.({ value: undefined, done: true }); wake = null; return { value: undefined, done: true }; };
-        return {
-          next: () => {
-            if (queue.length) return Promise.resolve({ value: queue.shift()!, done: false });
-            if (done) return Promise.resolve({ value: undefined, done: true });
-            return new Promise((r) => { wake = r; });
-          },
-          return: () => Promise.resolve(end()),
-        };
-      },
-    };
-  }
-
+  // Readers listen for 'event' (normalized, never naming the source) and read stored ones here.
   events(f: { device?: string; kind?: Kind; space?: string; unclassified?: boolean; before?: string; limit?: number } = {}): CaptureEvent[] {
     const limit = f.limit ?? 50;
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new CoreError('validation', 'limit is a whole number from 1 to 500.');
@@ -806,7 +767,7 @@ export class Capture extends EventEmitter {
       for (const r of rows) {
         this.#db.run('DELETE FROM capture_event WHERE id = ?', r.id);
         this.#db.run('DELETE FROM capture_proposal WHERE event_id = ?', r.id);
-        if (o.tombstone && r.external_id) this.#db.run('INSERT OR IGNORE INTO capture_tombstone (source_id, key, at) VALUES (?, ?, ?)', r.source_id, sha(`${r.source_id}\0${r.external_id}`), at);
+        if (o.tombstone && r.external_id) this.#db.run('INSERT OR IGNORE INTO capture_tombstone (source_id, key, at) VALUES (?, ?, ?)', r.source_id, sha256(`${r.source_id}\0${r.external_id}`), at);
       }
     });
     // The decision records about them go too, and any cached decision they made (review finding 8).
@@ -1378,7 +1339,7 @@ export class Capture extends EventEmitter {
 
   #lookback(r: SourceRow): number {
     const m = parse<{ lookback_minutes?: unknown }>(r.config, {}).lookback_minutes;
-    return typeof m === 'number' && m >= 1 ? m : (this.#o.lookbackMs ?? DEFAULT_LOOKBACK_MS) / 60_000;
+    return typeof m === 'number' && m >= 1 ? m : DEFAULT_LOOKBACK_MS / 60_000;
   }
 
   #egress(url: string): 'local' | 'remote' {
