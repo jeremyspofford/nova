@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Failover · The old hub checks the new one at one steady pace**
+- What changed: after handing the hub over, the old hub keeps checking the new one. If the new hub said it was failing but never confirmed it had stopped taking changes, the old hub rightly kept the role where it was and went on checking. Each time that happened, though, it started an extra round of checks beside the one already running. So the checks came twice as often, then three times, then four. Now there is only ever one round of checks, at the pace set for it. Once a hand-over is verified or rolled back, the checks also stop instead of quietly going on.
+- What you can now do: rely on the new hub being checked once per interval during the window, however often it fails to answer a stand-down, without the old hub flooding it with checks.
+- Still unfinished: nothing for this fix. As before, when the new hub can't confirm it stopped, Nova won't take the hub back by itself; you can, from Settings › Devices (tier 3).
+
 **2026-11-04 · Config onboarding (door 2) · All your settings in one list, and a few questions**
 - What changed: Settings › Configuration now lists each of your own settings: timezone, quiet hours, your name, what Nova calls you, Nova's name, directness, warmth, speaking up and privacy. Each one shows where it came from, Nova's default or your pack. "Answer a few questions" goes through them in three steps (where and when, how Nova talks, privacy) and ends with the same list of changes as a file import. Nothing is saved until you say so. A change to privacy or quiet hours counts as tier 3, so it needs your passkey. "Use the default" puts one setting back, and that's recorded in the activity log. Nova now checks values at every door: a value that doesn't fit, in a file, a chat or this list, is named in plain words and nothing changes.
 - What you can now do: see and change every personal setting in one place, and put any one of them back to its default.
