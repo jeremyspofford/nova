@@ -55,9 +55,24 @@ export interface Report {
   follow_up_suggestions: string[];
 }
 
+// A report with the envelope's fixed fields, every list empty unless `more` gives it.
+export const reportOf = (task_id: string, status: ReportStatus, summary: string, more: Partial<Report> = {}): Report => ({
+  envelope: ENVELOPE_VERSION, task_id, status, summary, evidence: [], artifacts: [], blockers: [], usage: { duration_ms: 0 }, follow_up_suggestions: [], ...more,
+});
+
+// A worker's report function: a blocked report lists its summary as the blocker, and the
+// duration is the whole milliseconds since `reporter` was called.
+export type Reporter = (status: ReportStatus, summary: string, more?: Omit<Partial<Report>, 'usage'> & { usage?: Partial<Report['usage']> }) => Report;
+export function reporter(brief: Pick<Brief, 'task_id'>): Reporter {
+  const started = performance.now();
+  return (status, summary, more = {}) => reportOf(brief.task_id, status, summary, {
+    blockers: status === 'blocked' ? [summary] : [], ...more, usage: { ...more.usage, duration_ms: Math.round(performance.now() - started) },
+  });
+}
+
 type Obj = Record<string, unknown>;
-const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isStr = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
+export const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
+export const isStr = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 
 class Check {
   errors: string[] = [];

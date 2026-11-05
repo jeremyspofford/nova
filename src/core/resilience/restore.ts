@@ -15,7 +15,6 @@
 //    and what; one resolved since stays resolved.
 //  - Nova's records of what exists outside the home (backup runs and drills, the recovery key it
 //    showed, its own vault keys), so backups made since stay Nova's and forgets still reach them.
-import { createHash } from 'node:crypto';
 import { cpSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -23,6 +22,7 @@ import type { Db } from '../db.ts';
 import { cleanDbFile } from '../backups.ts';
 import type { Vault } from '../vault.ts';
 import type { Carried } from './checkpoints.ts';
+import { sha256 } from '../workspace.ts';
 
 type Row = Record<string, string | number | null>;
 
@@ -135,7 +135,7 @@ export function carryOver(o: CarryOptions): Carried {
       if (tombs.length && has(d, 'capture_event')) {
         const keys = new Set(tombs.map((t) => `${t.source_id}\0${t.key}`));
         for (const r of d.prepare('SELECT id, source_id, external_id FROM capture_event WHERE external_id IS NOT NULL').all() as { id: string; source_id: string; external_id: string }[]) {
-          if (keys.has(`${r.source_id}\0${sha(`${r.source_id}\0${r.external_id}`)}`)) forgottenCapture.push(String(r.id));
+          if (keys.has(`${r.source_id}\0${sha256(`${r.source_id}\0${r.external_id}`)}`)) forgottenCapture.push(String(r.id));
         }
       }
     }
@@ -203,4 +203,3 @@ export function carryOver(o: CarryOptions): Carried {
   return out;
 }
 
-const sha = (s: string) => createHash('sha256').update(s).digest('hex');

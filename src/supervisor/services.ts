@@ -32,12 +32,12 @@
 // group (setsid) is outside all of this.
 import { createHash } from 'node:crypto';
 import { createServer, connect, type Server, type Socket } from 'node:net';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { chmod, lstat, readFile, realpath, writeFile } from 'node:fs/promises';
 import { totalmem } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sameServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, commandProblem, platformKey, programName, promotionTier, type ProgramArtifact, type ServiceDefinition, type ServiceDriver, type ServiceOutcome, type ServicePlan, type ServicePlanStep, type ServiceSay, type ServiceStatus, type ServiceVersionStatus, type ServiceVersionView, type SupervisorProblem } from '../core/index.ts';
+import { sameServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, commandProblem, platformKey, programName, promotionTier, type ProgramArtifact, type ServiceDefinition, type ServiceDriver, type ServiceOutcome, type ServicePlan, type ServicePlanStep, type ServiceSay, type ServiceStatus, type ServiceVersionStatus, type ServiceVersionView, type SupervisorProblem, freePort, writeJson } from '../core/index.ts';
 import { CrashWindow } from './crashes.ts';
 import { bootId, hasProc, same, stat, type ProcId } from './procs.ts';
 import { ServerProcess } from './server.ts';
@@ -988,9 +988,7 @@ export class SupervisorDriver implements ServiceDriver {
       rec.procs = [...this.#running].filter((i) => i.service === rec.service && i.proc.pid && i.proc.alive)
         .map((i) => ({ version: i.version, pgid: i.proc.pid!, start: i.proc.identity?.start ?? null, members: i.members }));
     }
-    const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify({ v: 1, services: [...this.#recs.values()] }, null, 2)}\n`, { mode: 0o600 });
-    renameSync(tmp, this.file);
+    writeJson(this.file, { v: 1, services: [...this.#recs.values()] });
     this.o.changed?.();
   }
 
@@ -1030,17 +1028,6 @@ async function get(port: number, path: string): Promise<Outcome> {
   } catch (e) {
     return { ok: false, said: `${path} didn’t answer: ${(e as Error).message}` };
   }
-}
-
-export function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once('error', reject);
-    s.listen(0, '127.0.0.1', () => {
-      const port = (s.address() as { port: number }).port;
-      s.close(() => resolve(port));
-    });
-  });
 }
 
 function readOr(path: string): string | null {

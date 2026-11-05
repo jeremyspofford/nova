@@ -116,6 +116,8 @@ export function greeting(date = new Date(), name = '') {
 const IRREVERSIBLE = /(^|[\s;&|(])(rm|rmdir|shred|unlink|dd|mkfs(\.\w+)?|truncate|wipefs)\s|\bgit\s+(push\b[^\n]*(--force|-f\b|--delete|\s:)|reset\s+--hard|clean\s+-\w*f|branch\s+-D|checkout\s+--\s|restore\b)|\bfind\b[^\n]*\s-delete\b|>\s*\/dev\/sd|\bdrop\s+(table|database)\b|\bchmod\s+-R\b|\bchown\s+-R\b/i;
 export function toolTier(name, args = {}) {
   if (name === 'schedule_remove') return 3;
+  // A settings change that touches privacy or what asks first loosens a gate (config doors).
+  if (name === 'settings_change' && args?.settings && typeof args.settings === 'object' && ('privacy' in args.settings || 'policy' in args.settings)) return 3;
   if (name === 'exec' && IRREVERSIBLE.test(` ${String(args?.command ?? '')}`)) return 3;
   return 2;
 }

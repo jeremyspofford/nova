@@ -11,15 +11,15 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
+import { reportOf, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
 import { stricter, type Egress } from '../workers.ts';
-import { sha256 } from '../workspace.ts';
+import { sha256, plural } from '../workspace.ts';
 import { allowed } from '../browser/plan.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Checker, Verifier } from '../verify.ts';
-import { FOLDER_COPY, checkFolderId, copyTree, findNamed, folderIdentity, removeTree, treeDigest, treeSize, type Computer, type ExecResult, type FolderId, type Machine } from './computer.ts';
+import { FOLDER_COPY, checkFolderId, copyTree, findNamed, folderIdentity, removeTree, treeDigest, treeSize, type ExecResult, type FolderId, type Machine } from './computer.ts';
 import { DockerComputer } from './docker.ts';
 import { CODE_WORDS, RELAY_ARGV, RELAY_USER, Tunnel, proxyConnection, type Attempt, type Code } from './egress.ts';
 import { DEFAULT_TIMEOUT_S, DISK, HOST_RUN, IMAGE, IMAGE_ABOUT, MAX_TIMEOUT_S, OPS, checkFolder, declaredHosts, egressOf, sizeWords, tierFor, validateArgv, validateEgress, type DiskLimits, type EgressDecl, type Op } from './policy.ts';
@@ -47,8 +47,6 @@ export interface ComputerOptions {
   privacy: () => PrivacyMode;
   // The ingest gate, for a command's output (tool output).
   screen?: (r: { text: string; origin: string; ref: string }) => Promise<{ id: string; verdict: string; extract?: string }>;
-  // The adapter; Docker on this machine unless a test gives another.
-  computer?: Computer & { sweep?(keep: Set<string>): Promise<string[]> };
   // Whose home folder a project may never be (os.homedir() unless a test says).
   userHome?: string;
   // Tests only: which addresses the egress proxy counts as public (safe-fetch's rule otherwise).
@@ -70,7 +68,6 @@ const WS_ID = /^w[0-9a-f]{10}$/;
 const CP_ID = /^c[0-9a-f]{10}$/;
 const words = (argv: string[]) => argv.map((a) => (/^[\w./:=@+-]+$/.test(a) ? a : JSON.stringify(a))).join(' ');
 const clip = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // One command's egress: the attempts as asked (capped), and a count of every attempt by its code
 // and, for those let through, by the declaration that let it.
@@ -78,7 +75,7 @@ interface Reach { attempts: Attempt[]; dropped: number; codes: Map<Code, number>
 
 export class NovaComputer {
   readonly worker: LanedWorker;
-  readonly computer: Computer & { sweep?(keep: Set<string>): Promise<string[]> };
+  readonly computer: DockerComputer;
   readonly limits: DiskLimits;
   #o: ComputerOptions;
   #now: () => Date;
@@ -92,7 +89,7 @@ export class NovaComputer {
     this.#now = o.now ?? (() => new Date());
     this.#dir = join(o.home, 'workers', 'computer');
     this.limits = { ...DISK, ...(o.limits ?? {}) };
-    this.computer = o.computer ?? new DockerComputer({ home: o.home, ...(o.labels ? { labels: o.labels } : {}), layerBytes: this.limits.layerBytes });
+    this.computer = new DockerComputer({ home: o.home, ...(o.labels ? { labels: o.labels } : {}), layerBytes: this.limits.layerBytes });
     const self = this;
     this.worker = {
       id: COMPUTER_WORKER,
@@ -319,10 +316,8 @@ export class NovaComputer {
 
   async #run(brief: Brief, signal: AbortSignal): Promise<Report> {
     const started = Date.now();
-    const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary,
-      evidence: status === 'done' ? [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: brief.task_id }] : [],
-      artifacts: [], blockers: [], follow_up_suggestions: [], usage: { duration_ms: Date.now() - started }, ...extra,
+    const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => reportOf(brief.task_id, status, summary, {
+      evidence: status === 'done' ? [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: brief.task_id }] : [], usage: { duration_ms: Date.now() - started }, ...extra,
     });
     let i: Inputs;
     try { i = this.#inputs(brief.inputs); } catch (e) {
@@ -376,7 +371,7 @@ export class NovaComputer {
   async #create(i: Inputs, brief: Brief, report: (s: Report['status'], m: string, x?: Partial<Report>) => Report): Promise<Report> {
     // Anything this Nova left behind for a workspace it no longer has (a factory reset, a crash)
     // goes first, once.
-    if (!this.#swept && this.computer.sweep) {
+    if (!this.#swept) {
       this.#swept = true;
       const keep = new Set(this.#o.db.all<{ id: string }>(`SELECT id FROM computer_workspace WHERE state != 'destroyed'`).map((r) => r.id));
       const gone = await this.computer.sweep(keep);
@@ -526,7 +521,7 @@ export class NovaComputer {
   // While a command runs: the folder and the machine's own disk within their caps. Each is checked
   // on its own, and a check that can't be made is a reason to stop, never taken as "within".
   #watch(m: Machine): { everyMs: number; check: () => Promise<string | null> } {
-    const enforced = this.computer.layerQuota ? this.computer.layerQuota() : Promise.resolve(false);
+    const enforced = this.computer.layerQuota();
     const words = (e: unknown) => String((e as Error)?.message ?? e).replace(/\.$/, '');
     return {
       everyMs: this.limits.watchMs,
@@ -559,7 +554,7 @@ export class NovaComputer {
     }
     checkFolderId(m.folder, m.folderId);
     // A machine whose own disk is already past its cap runs nothing more until it is reset.
-    if (!(await (this.computer.layerQuota?.() ?? Promise.resolve(false)))) {
+    if (!(await this.computer.layerQuota())) {
       const n = await this.computer.layerBytes(m);
       if (n !== null && n > this.limits.layerBytes) return report('failed', `The workspace’s machine holds ${sizeWords(n)}, past the ${sizeWords(this.limits.layerBytes)} it may, so the command didn’t run. Reset it to free that.`);
     }

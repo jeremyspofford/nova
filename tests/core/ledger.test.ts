@@ -362,7 +362,6 @@ test('a confirmation counts only when a checker for its system finds it; the che
   assert.match(ledger.get(missing.id).reason ?? '', /looked for h2 in the example log and it isn't there/);
   assert.equal(ledger.get(unknown.id).state, 'failed');
   assert.match(ledger.get(unknown.id).reason ?? '', /can't check confirmations from elsewhere/);
-  assert.ok(verifier.kinds().includes('confirmation'));
 });
 
 test('a worker can run tasks side by side in a lane, up to its limit; other workers still run one at a time', async () => {

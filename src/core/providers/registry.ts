@@ -7,7 +7,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
+import { isObj, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
 import { permits, stricter } from '../workers.ts';
 import { review, type Extensions, type Installed, type Manifest } from '../extensions.ts';
 import { canonicalJson } from '../mesh/wire.ts';
@@ -44,7 +44,6 @@ const CHOICES = ['chat', ...CLASSES] as const;
 // How a person writes the companies the built-in agents send to.
 const COMPANY: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI' };
 type Choice = (typeof CHOICES)[number];
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\])$/;
 // Settings that decide what a provider runs or where its data goes.
 const WHERE_KEYS = ['command', 'base_url', 'webhook_url', 'callback_url'] as const;
@@ -737,11 +736,8 @@ export class Providers extends EventEmitter {
   }
 
   async #run(id: string, brief: Brief, signal: AbortSignal): Promise<Report> {
-    const started = performance.now();
-    const report: Reporter = (status, summary, more = {}, usage = {}) => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
-      ...more, usage: { ...usage, duration_ms: Math.round(performance.now() - started) },
-    });
+    const base = reporter(brief);
+    const report: Reporter = (status, summary, more = {}, usage = {}) => base(status, summary, { ...more, usage });
     const pre = await this.#prelude(id, brief, signal);
     if ('blocked' in pre) return report('blocked', pre.blocked);
     const { x, impl, config, name, mode, where, role } = pre;

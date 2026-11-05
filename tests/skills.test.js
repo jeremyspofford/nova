@@ -50,9 +50,9 @@ test('install, then remove: nothing left behind; undo puts it back exactly', () 
   assert.deepEqual(skills.installed(), []);
   assert.equal(skillsSection(skills.installed()), '');
 
-  skills.restore('shopping', files);
+  skills.commit(skills.prepareRestore('shopping', files));
   assert.match(readFileSync(path, 'utf8'), /researches carefully/);
-  assert.throws(() => skills.restore('x', { '../../evil.md': 'x', 'SKILL.md': 'x' }), /can't put back/);
+  assert.throws(() => skills.prepareRestore('x', { '../../evil.md': 'x', 'SKILL.md': 'x' }), /can't put back/);
 });
 
 test('matching: a skill whose words appear is loaded; others are only listed', () => {
@@ -125,7 +125,7 @@ license: MIT
 
 test("Claude's skill format works as-is: description, folded lines, extra files", () => {
   const { home, skills } = fresh();
-  const s = skills.add({ 'meeting-notes/SKILL.md': CLAUDE_SKILL, 'meeting-notes/template.md': '## Decisions\n', 'meeting-notes/logo.png': { base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]).toString('base64') }, '__MACOSX/meeting-notes/._SKILL.md': 'junk', 'meeting-notes/.DS_Store': 'junk' });
+  const s = skills.commit(skills.prepare({ 'meeting-notes/SKILL.md': CLAUDE_SKILL, 'meeting-notes/template.md': '## Decisions\n', 'meeting-notes/logo.png': { base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]).toString('base64') }, '__MACOSX/meeting-notes/._SKILL.md': 'junk', 'meeting-notes/.DS_Store': 'junk' }));
   assert.equal(s.id, 'meeting-notes');
   assert.equal(s.name, 'Meeting notes');
   assert.equal(s.about, 'Turns rough meeting notes into a summary with decisions and action items. Use when the person pastes notes from a meeting.');
@@ -143,23 +143,23 @@ test("Claude's skill format works as-is: description, folded lines, extra files"
   // Removing and Undo keep binary files exact.
   const files = skills.remove('meeting-notes');
   assert.deepEqual(files['logo.png'], { base64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]).toString('base64') });
-  skills.restore('meeting-notes', JSON.parse(JSON.stringify(files)));
+  skills.commit(skills.prepareRestore('meeting-notes', JSON.parse(JSON.stringify(files))));
   assert.deepEqual(readFileSync(join(home, 'skills', 'meeting-notes', 'logo.png')), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]));
 });
 
 test('adding a skill: plain words for everything that can be wrong', () => {
   const { skills } = fresh();
-  assert.throws(() => skills.add({ 'notes.md': 'x' }), /no SKILL\.md/);
-  assert.throws(() => skills.add({ 'SKILL.md': '# Steps\nDo it.' }), /needs a description/);
-  assert.throws(() => skills.add({ 'SKILL.md': '---\ndescription: Does things.\n---\n' }), /no instructions/);
-  assert.throws(() => skills.add({ 'SKILL.md': '---\ndescription: Does things.\n---\nDo it.' }), /needs a name/);
-  assert.throws(() => skills.add({ 'SKILL.md': '---\nname: email-summary\ndescription: Mine.\n---\nDo it.' }), /comes with a skill called email-summary/);
-  assert.throws(() => skills.add({ 'SKILL.md': '---\nname: x\ndescription: d\n---\nDo it.', '../../escape.md': 'x' }), /outside the skill's folder/);
+  assert.throws(() => skills.prepare({ 'notes.md': 'x' }), /no SKILL\.md/);
+  assert.throws(() => skills.prepare({ 'SKILL.md': '# Steps\nDo it.' }), /needs a description/);
+  assert.throws(() => skills.prepare({ 'SKILL.md': '---\ndescription: Does things.\n---\n' }), /no instructions/);
+  assert.throws(() => skills.prepare({ 'SKILL.md': '---\ndescription: Does things.\n---\nDo it.' }), /needs a name/);
+  assert.throws(() => skills.prepare({ 'SKILL.md': '---\nname: email-summary\ndescription: Mine.\n---\nDo it.' }), /comes with a skill called email-summary/);
+  assert.throws(() => skills.prepare({ 'SKILL.md': '---\nname: x\ndescription: d\n---\nDo it.', '../../escape.md': 'x' }), /outside the skill's folder/);
   const many = Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`f${i}.md`, 'x']));
-  assert.throws(() => skills.add({ ...many, 'SKILL.md': '---\nname: x\ndescription: d\n---\nDo it.' }), /more than 200 files/);
-  skills.add({ 'SKILL.md': '---\nname: Weekly review\ndescription: d\n---\nDo it.' });
+  assert.throws(() => skills.prepare({ ...many, 'SKILL.md': '---\nname: x\ndescription: d\n---\nDo it.' }), /more than 200 files/);
+  skills.commit(skills.prepare({ 'SKILL.md': '---\nname: Weekly review\ndescription: d\n---\nDo it.' }));
   assert.ok(skills.get('weekly-review'));
-  assert.throws(() => skills.add({ 'SKILL.md': '---\nname: Weekly Review\ndescription: d\n---\nDo it.' }), /already have a skill called Weekly Review/);
+  assert.throws(() => skills.prepare({ 'SKILL.md': '---\nname: Weekly Review\ndescription: d\n---\nDo it.' }), /already have a skill called Weekly Review/);
 });
 
 test('a .zip of a skill unpacks; a broken or oversized one is refused', async () => {
@@ -171,5 +171,5 @@ test('a .zip of a skill unpacks; a broken or oversized one is refused', async ()
   assert.throws(() => unzip(Buffer.from('not a zip at all, no really')), /isn't a \.zip/);
   assert.throws(() => unzip(makeZip({ 'big.txt': 'x'.repeat(2000) }), { maxBytes: 1000 }), /unpacks to more than/);
   const { skills } = fresh();
-  assert.equal(skills.add(files).id, 'meeting-notes');
+  assert.equal(skills.commit(skills.prepare(files)).id, 'meeting-notes');
 });

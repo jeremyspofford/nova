@@ -19,13 +19,13 @@
 // higher epoch with its own key, which devices pinned as a candidate's) and the stable mesh name
 // (NOVA_MESH_PUBLIC_URL), which the node that becomes hub points at itself through a driver, when one
 // is configured (NOVA_MESH_NAME_CONTROL; in this build only a loopback stand-in is ever used).
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, statfsSync } from 'node:fs';
 import { tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Report } from '../envelope.ts';
+import { reportOf, type Brief, type Report } from '../envelope.ts';
 import { TERMINAL, type LanedWorker, type Ledger, type Task } from '../ledger.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -41,6 +41,7 @@ export { tap };
 import { sealed, type Manifest } from '../resilience/backup.ts';
 import { canonicalJson, freshTime, linkMessage, seenMessage, sessionMessage, verifyDeviceSignature, verifyLink, verifyRoster, type SignedLink, type SignedRoster, type SuccessionLink } from './wire.ts';
 import { EPOCH_CEILING } from './promote.ts';
+import { sha256, writeAtomic, writeJson } from '../workspace.ts';
 
 export const PROMOTION_WORKER = 'mesh-promotion';
 export const PROMOTION_SYSTEM = 'nova-promotion';
@@ -62,8 +63,6 @@ export const BACKUP_FRESH_MS = 24 * 3600_000;
 // Probes failing in a row before the old hub takes the role back.
 export const FAILS_TO_ROLL_BACK = 3;
 const TIER3 = 'It changes which computer runs Nova and holds your data, so it needs your explicit confirmation every time (tier 3).';
-
-const sha = (s: string | Buffer) => createHash('sha256').update(s).digest('hex');
 
 // ---- pre-checks (step 1), pure -------------------------------------------------------------------
 
@@ -119,7 +118,7 @@ export function prechecks(o: { device: Device | null; standbyId: string | null; 
 // ---- signed calls and the handover ---------------------------------------------------------------
 
 interface CallAuth { from: string; to: string; epoch: number; time: number; nonce: string; signature: string }
-const callMessage = (step: string, a: Omit<CallAuth, 'signature'>, payload: unknown) => Buffer.from(`nova-promotion-v1|${step}|${a.from}|${a.to}|${a.epoch}|${a.time}|${a.nonce}|${sha(canonicalJson(payload ?? null))}`, 'utf8');
+const callMessage = (step: string, a: Omit<CallAuth, 'signature'>, payload: unknown) => Buffer.from(`nova-promotion-v1|${step}|${a.from}|${a.to}|${a.epoch}|${a.time}|${a.nonce}|${sha256(canonicalJson(payload ?? null))}`, 'utf8');
 
 export function signCall(identity: MeshIdentity, step: string, to: string, epoch: number, payload: unknown, nowS: number): { auth: CallAuth; payload: unknown } {
   const a = { from: identity.id, to, epoch, time: nowS, nonce: randomBytes(12).toString('base64url') };
@@ -322,6 +321,8 @@ export class Promotions {
   #o: PromotionOptions;
   #running: Promise<void> | null = null;
   #watching: ReturnType<typeof setTimeout> | null = null;
+  // The live probe loop, apart from its timer: the timer is null while a probe runs.
+  #loop: object | null = null;
   #seen = new Map<string, number>();
   #closed = false;
   #lastFence = 0;
@@ -408,8 +409,7 @@ export class Promotions {
     const file = join(this.#o.home, PROMOTION_FILE);
     mkdirSync(join(this.#o.home, 'mesh'), { recursive: true, mode: 0o700 });
     const next = { ...r, updated_at: this.#o.now().toISOString() };
-    writeFileSync(`${file}.tmp`, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-    renameSync(`${file}.tmp`, file);
+    writeJson(file, next);
     this.#o.role.emit('change', this.#o.role.status());
     return next;
   }
@@ -428,8 +428,7 @@ export class Promotions {
     try {
       const file = join(this.#o.home, rel);
       mkdirSync(join(this.#o.home, 'mesh'), { recursive: true, mode: 0o700 });
-      writeFileSync(`${file}.tmp`, `${JSON.stringify(v, null, 2)}\n`, { mode: 0o600 });
-      renameSync(`${file}.tmp`, file);
+      writeJson(file, v);
     } catch { /* said by whoever needed it */ }
   }
 
@@ -455,8 +454,7 @@ export class Promotions {
     try {
       const file = join(this.#o.home, NONCE_FILE);
       mkdirSync(join(this.#o.home, 'mesh'), { recursive: true, mode: 0o700 });
-      writeFileSync(`${file}.tmp`, JSON.stringify(Object.fromEntries(this.#seen)), { mode: 0o600 });
-      renameSync(`${file}.tmp`, file);
+      writeAtomic(file, JSON.stringify(Object.fromEntries(this.#seen)));
     } catch { /* the in-memory set still holds until a restart */ }
   };
 
@@ -776,10 +774,18 @@ export class Promotions {
   // ---- step 6: verification (on the old hub, now the standby) ---------------------------------
 
   #watch(): void {
-    if (this.#watching || this.#closed) return;
-    const next = () => { if (this.#closed) return; this.#watching = setTimeout(() => { this.#watching = null; void this.probe().then(() => next(), () => next()); }, this.probeMs); this.#watching.unref?.(); };
+    if (this.#loop || this.#closed) return;
+    const loop = this.#loop = {};
+    const next = () => { if (this.#closed || this.#loop !== loop) return; this.#watching = setTimeout(() => { this.#watching = null; void this.probe().then(() => next(), () => next()); }, this.probeMs); this.#watching.unref?.(); };
     // Not after the end: probe() itself finishes the window.
     next();
+  }
+
+  // Ends the loop: a probe running now finishes, and its loop schedules no more.
+  #unwatch(): void {
+    if (this.#watching) clearTimeout(this.#watching);
+    this.#watching = null;
+    this.#loop = null;
   }
 
   // One probe of the new hub (finding 1). Asked over a request signed by this node's key, it answers
@@ -829,8 +835,7 @@ export class Promotions {
       const a = await this.#asDevice(r.to!.address!, '/api/v1/mesh/promotion/verified', body);
       if (a.status !== 200) said = `${said} “${to?.name ?? r.to!.name}” didn’t take the record (${a.body?.error ?? a.status}).`;
     } catch (e) { said = `${said} “${to?.name ?? r.to!.name}” couldn’t be told (${(e as Error).message}).`; }
-    if (this.#watching) clearTimeout(this.#watching);
-    this.#watching = null;
+    this.#unwatch();
     this.#save({ ...r, state: 'verified', said });
   }
 
@@ -840,8 +845,7 @@ export class Promotions {
   // took before it stopped is copied here first. Asked by the person, it goes on even when the new hub
   // can't be reached, as the sheet said.
   async #rollBack(r: PromotionRecord, how: 'auto' | 'person'): Promise<{ epoch: number } | null> {
-    if (this.#watching) clearTimeout(this.#watching);
-    this.#watching = null;
+    this.#unwatch();
     const to = r.to!;
     const failing = r.probes.slice(-FAILS_TO_ROLL_BACK).flatMap((p) => p.checks.filter((c) => !c.ok && c.name !== 'copy').map((c) => c.said));
     let stood: string;
@@ -1288,9 +1292,8 @@ export class Promotions {
     lane: () => ({ key: 'promotion', max: 1 }),
     run: async (brief: Brief): Promise<Report> => {
       const i = (brief.inputs ?? {}) as { ok?: boolean; said?: string; promotion?: string; step?: string };
-      const base = { envelope: ENVELOPE_VERSION as typeof ENVELOPE_VERSION, task_id: brief.task_id, artifacts: [] as Report['artifacts'], blockers: [] as string[], usage: { duration_ms: 0 }, follow_up_suggestions: [] as string[] };
-      if (i.ok !== true) return { ...base, status: 'failed', summary: String(i.said ?? 'This step didn’t pass.'), evidence: [] };
-      return { ...base, status: 'done', summary: String(i.said ?? 'Done.'), evidence: [{ kind: 'confirmation', system: PROMOTION_SYSTEM, id: `${i.promotion}:${i.step}` }] };
+      if (i.ok !== true) return reportOf(brief.task_id, 'failed', String(i.said ?? 'This step didn’t pass.'));
+      return reportOf(brief.task_id, 'done', String(i.said ?? 'Done.'), { evidence: [{ kind: 'confirmation', system: PROMOTION_SYSTEM, id: `${i.promotion}:${i.step}` }] });
     },
   };
 

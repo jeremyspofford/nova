@@ -16,7 +16,7 @@ export const CATEGORIES = Object.freeze([
   { id: 'services', label: 'Services', summary: 'How Nova runs its services here', parts: ['services'] },
   { id: 'security', label: 'Security', summary: 'Passkeys that confirm tier-3 actions here', parts: ['security'] },
   { id: 'backups', label: 'Backups and changes', summary: 'Backup folders, checkpoints, restores and changes', parts: ['backups', 'checkpoints', 'changes'] },
-  { id: 'config', label: 'Configuration', summary: 'Bring your settings in, or take them out, as a file', parts: ['config'] },
+  { id: 'config', label: 'Configuration', summary: 'Every setting of yours, a few questions, or a file', parts: ['form', 'config'] },
   { id: 'danger', label: 'Start over', summary: 'Export everything, or erase Nova here', parts: ['danger'] },
 ]);
 
@@ -28,7 +28,6 @@ export const GROUPS = Object.freeze([
 ]);
 
 export const categoryOf = (id) => CATEGORIES.find((c) => c.id === id) ?? null;
-export const categoryOfPart = (part) => CATEGORIES.find((c) => c.parts.includes(part)) ?? null;
 
 // What search can find: a label, the element it jumps to, and the words people use for it.
 export const ENTRIES = Object.freeze([
@@ -54,6 +53,7 @@ export const ENTRIES = Object.freeze([
   { cat: 'backups', label: 'Backups', target: 'settings-backups', words: ['folder', 'encrypted', 'recovery key', 'retention', 'restore', 'backup', 'backups', 'back up', 'checkpoint', 'checkpoints', 'restore', 'snapshot', 'roll back', 'undo everything'] },
   { cat: 'backups', label: 'Changes', target: 'changes', words: ['changes', 'updates', 'update', 'extensions', 'plugins', 'add-ons', 'upgrade', 'new features'] },
   { cat: 'config', label: 'Configuration file', target: 'config', words: ['configuration', 'config', 'nova.config.json', 'import', 'export', 'pack', 'user pack', 'settings file', 'bring in settings', 'json'] },
+  { cat: 'config', label: 'Your settings', target: 'config-form', words: ['all my settings', 'every setting', 'timezone', 'time zone', 'quiet hours', 'do not disturb', 'warmth', 'speaking up', 'proactive', 'use the default', 'back to default', 'defaults', 'guided setup', 'questions', 'layer', 'your pack'] },
   { cat: 'danger', label: 'Erase Nova', target: 'danger-zone', words: ['reset', 'erase', 'delete everything', 'start over', 'factory reset', 'wipe', 'export', 'remove nova', 'uninstall'] },
 ]);
 

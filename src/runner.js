@@ -7,24 +7,23 @@
 // (streaming text, a pending approval) is held in memory and broadcast; if the
 // process dies mid-turn, the log still shows exactly how far it got.
 import { EventEmitter } from 'node:events';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { runAgent, AgentError } from './agent.js';
-import { DEFAULT_LINK_CAPS, Ingest, cleanOrigin, escapeProtocol, permits } from './core/index.ts';
+import { DEFAULT_LINK_CAPS, Ingest, cleanOrigin, escapeProtocol, permits, sha256 } from './core/index.ts';
 import { buildPrompt, buildSystem, helperSection, runSection, schedulesSection, skillsSection } from './context.js';
 import { Memory } from './memory.js';
 import { Skills } from './skills.js';
 import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
-import { Permissions, permissionFor, permissionsSection } from './permissions.js';
+import { Permissions, autoAllowed, permissionFor, permissionsSection } from './permissions.js';
 import { commitHome, readStanding } from './home.js';
 import { TOOLS, ToolTagFilter, WRITABLE, availableTools, extractMemory, homeTarget, parseToolCall, withinPrivacy } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 import { stricter } from './chat-run.js';
 
 const shortId = () => randomUUID().slice(0, 8);
-const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 const hostOf = (u) => { try { return new URL(String(u)).hostname; } catch { return String(u ?? '').slice(0, 100); } };
 
 // The ingest gate (Amendment 2026-10-30-C Part 3). While a run has read outside content (its
@@ -218,6 +217,12 @@ export class Runner extends EventEmitter {
     return true;
   }
 
+  // The step waiting for the person, if any: its id, tool and arguments.
+  pendingOf(sessionId) {
+    const p = this.active.get(sessionId)?.pending;
+    return p ? { id: p.id, name: p.name, args: p.args } : null;
+  }
+
   decide(sessionId, toolId, decision) {
     const run = this.active.get(sessionId);
     if (!run?.pending || run.pending.id !== toolId) return false;
@@ -273,7 +278,7 @@ export class Runner extends EventEmitter {
   }
 
   receipt(sessionId, run, mode, { system, prompt, recall }) {
-    const hash = (s) => createHash('sha256').update(String(s)).digest('hex');
+    const hash = (s) => sha256(String(s));
     const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'model';
     // "/usr/local/bin/Claude" → "claude": the receipt names a provider, not a path.
     const name = program.split('/').pop().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, 64) || 'model';
@@ -430,12 +435,12 @@ export class Runner extends EventEmitter {
       // A step the person lets Nova take without asking (Settings) goes ahead.
       // Otherwise Nova asks and waits, even with no one watching: a scheduled
       // run or a helper waits for the answer, and Activity shows it waiting.
-      if (needsApproval && !guard && this.permissions.allows(permissionFor(call.name, tool))) {
+      if (needsApproval && autoAllowed(call.name, call.args, tool, guard, this.permissions)) {
         this.record(sessionId, { type: 'approval', ...tag, id, decision: 'allow', auto: true });
       } else if (needsApproval) {
         this.setLive(sessionId, { phase: 'approval', approval: id });
         const decision = await new Promise((resolve) => {
-          run.pending = { id, resolve };
+          run.pending = { id, resolve, name: call?.name ?? 'unknown', args: call?.args ?? {} };
           signal.addEventListener('abort', () => resolve('abort'), { once: true });
         });
         run.pending = null;

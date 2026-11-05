@@ -14,16 +14,16 @@
 //               signed and checksummed, checked by Nova itself
 // A refused manifest (an unknown or revoked device, another device's, a bad signature or checksum)
 // stores nothing and is logged.
-import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import type { Db } from '../db.ts';
+import { jsonOr as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Route } from '../api.ts';
 import type { Ledger, Task } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
-import type { Brief, PrivacyMode } from '../envelope.ts';
+import { isObj, reportOf, type Brief, type PrivacyMode } from '../envelope.ts';
 import type { Worker } from '../workers.ts';
 import type { Device, Devices } from '../mesh/devices.ts';
 import {
@@ -32,6 +32,7 @@ import {
 } from '../mesh/wire.ts';
 import type { Capture } from './capture.ts';
 import { KINDS, type Kind } from './rules.ts';
+import { writeAtomic } from '../workspace.ts';
 
 export const RAW_CONFIRMATION = 'nova-capture-raw';
 export const MAX_BATCH_ITEMS = 200;
@@ -60,9 +61,6 @@ export interface CaptureSyncOptions {
 interface TombRow { id: string; device_id: string; items: string; events: string; issued_at: string; acked_at: string | null; removed: string | null }
 interface RawRow { id: string; task_id: string | null; device_id: string; event_id: string; item: string; reason: string; state: 'asked' | 'arrived' | 'failed'; sha256: string | null; size: number | null; signature: string | null; asked_at: string; done_at: string | null }
 interface SyncRow { device_id: string; acked_seq: number; synced_to: string | null; queued: number; paused: string | null; at: string }
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const parse = <T>(s: string | null, f: T): T => { if (!s) return f; try { return JSON.parse(s) as T; } catch { return f; } };
 
 export class CaptureSync {
   #o: CaptureSyncOptions;
@@ -273,8 +271,7 @@ export class CaptureSync {
     const dir = join(this.#o.home, 'capture', 'raw');
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = join(dir, id);
-    writeFileSync(`${file}.tmp`, data, { mode: 0o600 });
-    renameSync(`${file}.tmp`, file);
+    writeAtomic(file, data);
     this.#o.db.run(`UPDATE capture_raw_fetch SET state = 'arrived', sha256 = ?, size = ?, signature = ?, done_at = ? WHERE id = ?`, m.sha256, m.size, body.signature, this.#o.now().toISOString(), id);
     this.#arrived.get(id)?.();
     return { ok: true };
@@ -320,12 +317,9 @@ export class CaptureSync {
         const name = r ? this.#o.devices.find(r.device_id)?.name ?? 'The device' : 'The device';
         if (!r || r.state !== 'arrived') {
           if (r) this.#o.db.run(`UPDATE capture_raw_fetch SET state = 'failed', done_at = ? WHERE id = ? AND state = 'asked'`, this.#o.now().toISOString(), id);
-          return { envelope: '1', task_id: brief.task_id, status: 'blocked', summary: `${name} didn’t send it in time: it may be offline. The derived record is in the capture timeline.`, evidence: [], artifacts: [], blockers: [`${name} didn’t answer.`], usage: { duration_ms: wait }, follow_up_suggestions: [] };
+          return reportOf(brief.task_id, 'blocked', `${name} didn’t send it in time: it may be offline. The derived record is in the capture timeline.`, { blockers: [`${name} didn’t answer.`], usage: { duration_ms: wait } });
         }
-        return {
-          envelope: '1', task_id: brief.task_id, status: 'done', summary: `${name} sent the original (${r.size} bytes), signed with its key; Nova checked it against the checksum it signed.`,
-          evidence: [{ kind: 'confirmation', system: RAW_CONFIRMATION, id }], artifacts: [], blockers: [], usage: { duration_ms: 0 }, follow_up_suggestions: [],
-        };
+        return reportOf(brief.task_id, 'done', `${name} sent the original (${r.size} bytes), signed with its key; Nova checked it against the checksum it signed.`, { evidence: [{ kind: 'confirmation', system: RAW_CONFIRMATION, id }] });
       },
     };
   }

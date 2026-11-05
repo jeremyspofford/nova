@@ -12,6 +12,10 @@ import type { Log } from './log.ts';
 export interface Backup { path: string; bytes: number; at: string }
 
 const TABLE = /^[a-z_]+$/;
+// A removed skill (skills.js) is forgotten like a table's rows, by its id: it has no table, but its
+// folder (in every folder backup and checkpoint) and the journal's copies of its files go.
+export const SKILL = 'skill';
+export const skillDir = (id: string) => `skills/${id}/`;
 
 type Also = (table: string, ids: string[], words: string[]) => { cleaned: string[]; destroyed: string[] };
 
@@ -79,7 +83,7 @@ export function cleanDbFile(path: string, table: string, ids: string[], words: s
   const db = new DatabaseSync(path);
   try {
     db.exec('PRAGMA secure_delete = ON');
-    const has = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
+    const has = table === SKILL || db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
     if (!has) return [];
     // The whole chain goes at once, so records that point at each other (a correction and
     // what it corrected) can't block one another.
@@ -96,12 +100,18 @@ export function cleanDbFile(path: string, table: string, ids: string[], words: s
         remove.run(id);
       }
     }
-    const del = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
-    for (const id of ids) del.run(id);
+    if (table !== SKILL) {
+      const del = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
+      for (const id of ids) del.run(id);
+    }
     if (db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_log'`).get()) {
       const entry = db.prepare('DELETE FROM sync_log WHERE tbl = ? AND pk = ?');
       for (const id of ids) entry.run(table, id);
       for (const id of originals) entry.run('file', `capture/raw/${id}`);
+      if (table === SKILL) {
+        const under = db.prepare(`DELETE FROM sync_log WHERE tbl = 'file' AND substr(pk, 1, length(?)) = ?`);
+        for (const id of ids) under.run(skillDir(id), skillDir(id));
+      }
       if (table === 'memory') {
         const carrying = db.prepare(`DELETE FROM sync_log WHERE (tbl = 'memory' OR (tbl = 'file' AND (pk = 'MEMORY.md' OR pk LIKE 'memory/%'))) AND instr(row, ?) > 0`);
         for (const w of words) for (const v of new Set([w.trim(), w.trim().replace(/\s+/g, ' ')])) if (v) carrying.run(JSON.stringify(v).slice(1, -1));

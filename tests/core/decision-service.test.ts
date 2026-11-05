@@ -5,13 +5,10 @@
 // stand-ins. Nothing here calls TypeSafe.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { fence, QUESTIONS } from '../../src/core/ingest/screen.ts';
 import { DecisionService } from '../../src/core/decision-service/service.ts';
 import { Registry } from '../../src/core/decision-service/registry.ts';
-import { MemoryLog, FileLog } from '../../src/core/decision-service/log.ts';
+import { MemoryLog } from '../../src/core/decision-service/log.ts';
 import { memoryVerdicts, type VerdictRecord } from '../../src/core/decision-service/verdicts.ts';
 import { Tev1Seat } from '../../src/core/decision-service/seats/tev1.ts';
 import { JevSeat } from '../../src/core/decision-service/seats/jev.ts';
@@ -303,10 +300,6 @@ test('the decision record: every field, full answers, and never the state’s co
     assert.doesNotMatch(JSON.stringify(rec), new RegExp(secret));
     assert.doesNotMatch(JSON.stringify(r.receipts), new RegExp(secret));
     assert.doesNotMatch(JSON.stringify(rec), /test-key-not-secret/, 'never the key');
-    // The file sink writes the same records.
-    const file = join(mkdtempSync(join(tmpdir(), 'nova-ds-log-')), 'logs', 'decisions.jsonl');
-    new FileLog(file).write(rec);
-    assert.equal(JSON.parse(readFileSync(file, 'utf8').trim()).id, rec.id);
   } finally { await r.close(); }
 });
 

@@ -14,13 +14,14 @@
 //   - recover: a held service's live version started again on the person's word (tier 1: the same
 //     approved version, nothing new runs).
 // The supervisor driver is the default; nothing here knows how a driver runs anything.
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promotionTier, validate, type DeviceView, type ServiceDefinition } from './definition.ts';
 import { sameServiceExpected, SERVICE_CHANGED, type ServiceExpectedState } from './expected.ts';
 import type { ServicePolicy } from './topology.ts';
 import type { Outcome, Plan, Say, ServiceDriver, ServiceStatus } from './driver.ts';
 import { resolvePlacement, type PlacementDevice, type Resolution } from './placement.ts';
+import { writeJson } from '../workspace.ts';
 
 export interface ManagerOptions {
   // The registry's folder: <dir>/<service>/<version>.json.
@@ -203,9 +204,7 @@ export class ServiceManager {
     const d = join(this.dir, def.service);
     mkdirSync(d, { recursive: true, mode: 0o700 });
     const file = join(d, `${def.version}.json`);
-    const tmp = `${file}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(def, null, 2)}\n`, { mode: 0o600 });
-    renameSync(tmp, file);
+    writeJson(file, def);
   }
 
   #find(service: string): { driver: ServiceDriver; status: ServiceStatus } | null {

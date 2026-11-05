@@ -21,8 +21,9 @@ import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { CoreError } from '../errors.ts';
 import { isNovaEntry } from './entries.ts';
+import { inside } from './backup.ts';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 export const HOME_MARK = '.nova-home';
@@ -30,10 +31,6 @@ export const HOME_MARK = '.nova-home';
 export interface HomeMark { v: 1; id: string; created_at: string; seal: string; before?: string[] }
 
 const realOf = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
-const within = (path: string, root: string) => {
-  const r = relative(root, path);
-  return r === '' || (!r.startsWith(`..${sep}`) && r !== '..' && !isAbsolute(r));
-};
 
 // Why this folder can never be erased as Nova's home, or null.
 export function unsafeHome(home: string, o: { userHome?: string } = {}): string | null {
@@ -41,7 +38,7 @@ export function unsafeHome(home: string, o: { userHome?: string } = {}): string 
   const mine = realOf(o.userHome ?? homedir());
   if (real === resolve('/')) return `${real} is the computer’s root folder, not a folder only Nova uses`;
   if (real === mine) return `${real} is your own home folder, not a folder only Nova uses`;
-  if (within(mine, real)) return `${real} contains your own home folder, so it isn’t a folder only Nova uses`;
+  if (inside(mine, real)) return `${real} contains your own home folder, so it isn’t a folder only Nova uses`;
   return null;
 }
 

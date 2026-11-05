@@ -16,7 +16,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { trackChild } from '../children.ts';
 import { CoreError } from '../errors.ts';
-import { FOLDER_COPY, checkFolderId, copyTree, findPaths, removeTree, replaceContents, treeDigest, type Computer, type ExecRequest, type ExecResult, type Machine, type Saved, type Tunnelled } from './computer.ts';
+import { FOLDER_COPY, checkFolderId, copyTree, findPaths, removeTree, replaceContents, treeDigest, type ExecRequest, type ExecResult, type Machine, type Saved, type Tunnelled } from './computer.ts';
 import { IMAGE, containerName, createArgs, execArgs, homeTag, imageRef, runUser } from './policy.ts';
 import { RELAY_USER } from './egress.ts';
 
@@ -72,8 +72,7 @@ process.stdin.on('data', (d) => { s += d; }).on('end', () => {
 });
 `;
 
-export class DockerComputer implements Computer {
-  readonly kind = 'docker';
+export class DockerComputer {
   readonly tag: string;
   readonly user: string;
   #o: DockerOptions;
@@ -144,6 +143,7 @@ export class DockerComputer implements Computer {
     return r.stdout.trim();
   }
 
+  // Whether Docker can run workspaces here, and why not, in plain words.
   async available(): Promise<{ ok: boolean; detail: string }> {
     let v: Run;
     try { v = await this.run(['version', '--format', '{{.Server.Version}}'], { timeoutMs: 15_000 }); } catch (e) { return { ok: false, detail: (e as Error).message }; }
@@ -309,6 +309,7 @@ export class DockerComputer implements Computer {
     return { exit: res.code, stdout: res.stdout, stderr: res.stderr, timed_out, truncated: res.truncated, duration_ms, stray, stopped };
   }
 
+  // `dir`: where the folder copy goes (made by the call).
   async checkpoint(m: Machine, cp: { id: string; dir: string }): Promise<Saved> {
     const container = await this.#ensure(m);
     const image = imageRef(this.tag, m.id, cp.id);
@@ -338,6 +339,7 @@ export class DockerComputer implements Computer {
     }
   }
 
+  // Back to a checkpoint: the machine made again from its image, the folder replaced by its copy.
   async reset(m: Machine, to: { image: string; dir: string }): Promise<{ container: string }> {
     // The machine goes first, so nothing writes into the folder while it is put back.
     await this.run(['rm', '-f', m.container ?? this.#name(m)], { timeoutMs: 60_000 });
@@ -351,6 +353,7 @@ export class DockerComputer implements Computer {
     return { container };
   }
 
+  // `images`: the workspace's checkpoint images, removed with it.
   async destroy(m: Machine, images: string[]): Promise<void> {
     await this.run(['rm', '-f', m.container ?? this.#name(m)], { timeoutMs: 60_000 });
     await this.run(['rm', '-f', this.#name(m)], { timeoutMs: 60_000 });
@@ -366,7 +369,8 @@ export class DockerComputer implements Computer {
   }
 
   // `docker diff`, and what each changed path is now, read inside as the workspace's user (paths
-  // in the list since the image are compared by what they are, not only by being listed).
+  // in the list since the image are compared by what they are, not only by being listed): one line
+  // per path, `<A|C|D> <path>	<signature>`.
   async changes(m: Machine): Promise<string[]> {
     const container = await this.#ensure(m);
     const r = await this.run(['diff', container], { timeoutMs: 60_000, maxBytes: 20_000_000 });
@@ -380,6 +384,7 @@ export class DockerComputer implements Computer {
     return lines.map((l, i) => `${l}\t${sigs[i]}`);
   }
 
+  // How many bytes the machine's own filesystem holds beyond its image, or null if unknown.
   async layerBytes(m: Machine): Promise<number | null> {
     if (!m.container) return null;
     const r = await this.run(['container', 'inspect', '--size', '--format', '{{.SizeRw}}', m.container], { timeoutMs: 60_000 });
@@ -387,6 +392,7 @@ export class DockerComputer implements Computer {
     return r.code === 0 && Number.isFinite(n) ? n : null;
   }
 
+  // A long-running process inside, for the egress relay (egress.ts), as `user`.
   attach(m: Machine, argv: string[], user: string): ChildProcess {
     if (!m.container) throw new CoreError('conflict', 'The workspace isn’t running.');
     const child = this.#spawn(['exec', '-i', '--user', user, m.container, ...argv]);

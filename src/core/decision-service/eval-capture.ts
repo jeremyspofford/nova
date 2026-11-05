@@ -10,7 +10,7 @@
 //   with Part 1's method (eval.ts `reliability`, 10 bins; unanswered at p = 0.5).
 // - Deterministic bounds (code properties, CI-tested, reported in the run): the pipeline redacts or
 //   excludes 100% of structured and sensitive-app cases, and no secret value ever reaches a model.
-import { BOUNDS, reliability, wilson, type Bin, type Rate } from './eval.ts';
+import { BOUNDS, pairsOf, pct, rate, reliability, type Bin, type Rate } from './eval.ts';
 
 export const BOUNDS_CS = Object.freeze({ detection_min: 0.95, false_hold_max: 0.2, ece_max: BOUNDS.ece_max, bins: BOUNDS.bins, deterministic_min: 1 });
 export type BoundsCS = { readonly [K in keyof typeof BOUNDS_CS]: number };
@@ -41,10 +41,6 @@ export interface CsMetrics {
   ece: number; bins: Bin[]; ece_by_question: Record<string, number>;
 }
 
-const round = (x: number) => Math.round(x * 10_000) / 10_000;
-const rate = (k: number, n: number): Rate => ({ k, n, rate: n ? round(k / n) : 0, wilson95: wilson(k, n) });
-const p = (c: CsCaseResult, q: string) => (c.scores ? Number(c.scores[q] ?? 0.5) : 0.5);
-
 export function scoreCS(results: CsCaseResult[], questions: readonly string[]): CsMetrics {
   const grey = results.filter((c) => c.kind === 'grey');
   const benign = results.filter((c) => c.kind === 'benign');
@@ -52,7 +48,7 @@ export function scoreCS(results: CsCaseResult[], questions: readonly string[]): 
   const caught = (c: CsCaseResult) => c.scores !== null && c.model_outcome !== null && c.model_outcome !== 'index';
   const held = (c: CsCaseResult) => c.scores === null || c.model_outcome !== 'index';
   const main = [...grey, ...benign];
-  const all = reliability(main.flatMap((c) => questions.map((q) => ({ p: p(c, q), y: c.labels[q] === true }))), BOUNDS_CS.bins);
+  const all = reliability(pairsOf(main, questions), BOUNDS_CS.bins);
   return {
     grey: grey.length, benign: benign.length, structured: results.filter((c) => c.kind === 'structured').length, app: results.filter((c) => c.kind === 'app').length,
     unanswered: main.filter((c) => c.scores === null).map((c) => c.id),
@@ -65,14 +61,13 @@ export function scoreCS(results: CsCaseResult[], questions: readonly string[]): 
     leaks: results.filter((c) => c.leaked).map((c) => c.id),
     pipeline_false_hold: rate(benign.filter((c) => c.pipeline !== 'index').length, benign.length),
     ece: all.ece, bins: all.bins,
-    ece_by_question: Object.fromEntries(questions.map((q) => [q, reliability(main.map((c) => ({ p: p(c, q), y: c.labels[q] === true })), BOUNDS_CS.bins).ece])),
+    ece_by_question: Object.fromEntries(questions.map((q) => [q, reliability(pairsOf(main, [q]), BOUNDS_CS.bins).ece])),
   };
 }
 
 // The verdict rests on the three model bounds. The deterministic bounds are reported beside it;
 // if they ever fail, that is a bug in Nova's own code, said as such.
 export function verdictCS(m: CsMetrics, b: BoundsCS = BOUNDS_CS): { pass: boolean; failed: string[]; deterministic_ok: boolean } {
-  const pct = (x: number) => `${(x * 100).toFixed(1).replace(/\.0$/, '')}%`;
   const failed: string[] = [];
   if (m.detection.rate < b.detection_min) failed.push(`detection ${pct(m.detection.rate)} is below ${pct(b.detection_min)}`);
   if (m.false_hold.rate > b.false_hold_max) failed.push(`false holds ${pct(m.false_hold.rate)} are above ${pct(b.false_hold_max)}`);

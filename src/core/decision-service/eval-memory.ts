@@ -12,7 +12,7 @@
 // - ECE ≤ 0.10 over every (case, question) pair of the cases the model was asked, with Part 1's
 //   method (10 bins; an unanswered case at p = 0.5).
 // - Exact duplicates merge with no model call: a code property, CI-tested, reported beside it.
-import { BOUNDS, reliability, wilson, type Bin, type Rate } from './eval.ts';
+import { BOUNDS, pairsOf, pct, rate, reliability, type Bin, type Rate } from './eval.ts';
 
 export const BOUNDS_MG = Object.freeze({ false_save_max: 0.05, save_recall_min: 0.75, ece_max: BOUNDS.ece_max, bins: BOUNDS.bins });
 export type BoundsMG = { readonly [K in keyof typeof BOUNDS_MG]: number };
@@ -40,17 +40,13 @@ export interface MgMetrics {
   ece: number; bins: Bin[]; ece_by_question: Record<string, number>;
 }
 
-const round = (x: number) => Math.round(x * 10_000) / 10_000;
-const rate = (k: number, n: number): Rate => ({ k, n, rate: n ? round(k / n) : 0, wilson95: wilson(k, n) });
-const p = (c: MgCaseResult, q: string) => (c.scores ? Number(c.scores[q] ?? 0.5) : 0.5);
-
 export function scoreMG(results: MgCaseResult[], questions: readonly string[]): MgMetrics {
   const unanswered = (c: MgCaseResult) => c.asked && c.outcome === null;
   const saved = (c: MgCaseResult) => unanswered(c) || c.outcome === 'save';
   const notSave = results.filter((c) => c.expected !== 'save');
   const save = results.filter((c) => c.expected === 'save');
   const asked = results.filter((c) => c.asked);
-  const all = reliability(asked.flatMap((c) => questions.map((q) => ({ p: p(c, q), y: c.labels[q] === true }))), BOUNDS_MG.bins);
+  const all = reliability(pairsOf(asked, questions), BOUNDS_MG.bins);
   const by = (o: MgOutcome) => results.filter((c) => c.expected === o);
   const det = results.filter((c) => !c.asked);
   return {
@@ -65,12 +61,11 @@ export function scoreMG(results: MgCaseResult[], questions: readonly string[]): 
     accuracy: rate(results.filter((c) => c.outcome === c.expected).length, results.length),
     deterministic: rate(det.filter((c) => c.outcome === c.expected).length, det.length),
     ece: all.ece, bins: all.bins,
-    ece_by_question: Object.fromEntries(questions.map((q) => [q, reliability(asked.map((c) => ({ p: p(c, q), y: c.labels[q] === true })), BOUNDS_MG.bins).ece])),
+    ece_by_question: Object.fromEntries(questions.map((q) => [q, reliability(pairsOf(asked, [q]), BOUNDS_MG.bins).ece])),
   };
 }
 
 export function verdictMG(m: MgMetrics, b: BoundsMG = BOUNDS_MG): { pass: boolean; failed: string[] } {
-  const pct = (x: number) => `${(x * 100).toFixed(1).replace(/\.0$/, '')}%`;
   const failed: string[] = [];
   if (m.false_save.rate > b.false_save_max) failed.push(`false saves ${pct(m.false_save.rate)} are above ${pct(b.false_save_max)}`);
   if (m.save_recall.rate < b.save_recall_min) failed.push(`save recall ${pct(m.save_recall.rate)} is below ${pct(b.save_recall_min)}`);

@@ -6,10 +6,10 @@
 //
 // Also here, pure: the JSON merge patch a change is (RFC 7386), the masking of every value under a
 // key that looks secret, and the canonical text the snapshot's hash and the diff are taken over.
-import { createHash } from 'node:crypto';
 import { CoreError } from '../errors.ts';
 import { hostEgress, loopbackName } from '../browser/plan.ts';
 import type { Egress } from '../workers.ts';
+import { sha256 } from '../workspace.ts';
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 export type Config = { [k: string]: Json };
@@ -43,7 +43,7 @@ const isObj = (v: unknown): v is Config => typeof v === 'object' && v !== null &
 
 // Canonical text: two-space JSON, keys in the target's own order, a newline at the end.
 export const pretty = (c: Json) => `${JSON.stringify(c, null, 2)}\n`;
-export const digest = (c: Json) => createHash('sha256').update(pretty(c)).digest('hex');
+export const digest = (c: Json) => sha256(pretty(c));
 
 // RFC 7386: an object patch merges, null deletes, anything else replaces.
 export function mergePatch(target: Json, patch: Json): Json {

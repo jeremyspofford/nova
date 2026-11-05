@@ -6,11 +6,11 @@
 // restores and a factory reset treat these like the rest of Nova's state; the agent's write_file
 // can't reach it (workspace/ and the standing files only), so no model can forge its own card.
 // No migration: the files are the store.
-import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Route } from '../api.ts';
 import type { SuiteName, SuiteRun } from './types.ts';
+import { sha256, writeJson } from '../workspace.ts';
 
 export const SCORECARD_DIR = join('workers', 'evals');
 export const SCORECARD_SCHEMA = 1;
@@ -57,12 +57,12 @@ export interface CardStatus {
   why?: string;
 }
 
-const pct = (x: number) => `${Math.round(x * 100)}%`;
+export const pct = (x: number) => `${Math.round(x * 100)}%`;
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
 export function cardFile(provider: string, model: string): string {
   const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9._-]+/g, '_').slice(0, 60);
-  const h = createHash('sha256').update(`${provider}\0${model}`).digest('hex').slice(0, 8);
+  const h = sha256(`${provider}\0${model}`).slice(0, 8);
   return `${slug(provider)}--${slug(model)}-${h}.json`;
 }
 
@@ -114,8 +114,7 @@ export class Scorecards {
     };
     const card: Scorecard = { schema: SCORECARD_SCHEMA, target: { ...prev?.target, ...target }, suites: { ...prev?.suites, [run.suite]: entry } };
     const file = join(this.#cards(), cardFile(target.provider, target.model));
-    writeFileSync(`${file}.tmp`, `${JSON.stringify(card, null, 2)}\n`, { mode: 0o644 });
-    renameSync(`${file}.tmp`, file);
+    writeJson(file, card, 0o644);
     appendFileSync(join(this.dir, 'runs.jsonl'), `${JSON.stringify({ target, suite: run.suite, ...entry, results: run.results.map((r) => ({ id: r.id, version: r.version, passed: r.passed, ungraded: r.ungraded, why: r.why })) })}\n`);
     return card;
   }
