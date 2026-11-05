@@ -33,6 +33,9 @@ export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
   // Migration 0024 (T2): the console's passkeys, public keys only, so a hub that takes over asks for
   // the same ones instead of taking a first passkey on trust again.
   console_passkey: ['id'],
+  // Migration 0025 (model fit): each device's runtime overhead learned from real loads, so a hub
+  // that takes over plans models with what was measured, not the prior again.
+  device_overhead: ['device_id', 'backend'],
 };
 // Columns a release added to a replicated table, by the schema version that added them (M10f review,
 // finding 3: one mechanism for every such column). A standby a release behind doesn't have them:

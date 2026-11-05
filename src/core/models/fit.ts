@@ -8,7 +8,9 @@
 // labelled fallback tier table (derived from the same formula), and per-task recommendations
 // (privacy first, then the task class, then fit and ranking).
 //
-// Not wired into recommend.ts, the chat calls or the screen yet; see the LEDGER entry.
+// Wired in (step 2b): recommend.ts decides fit with this engine, chat calls send the context it
+// assumed (num_ctx), and the model manager learns the overhead after real loads (device_overhead).
+// recommendFit (the per-task-class ranking) waits for the Models screen; see the LEDGER entry.
 import type { PrivacyMode } from '../envelope.ts';
 import type { Hardware } from './hardware.ts';
 

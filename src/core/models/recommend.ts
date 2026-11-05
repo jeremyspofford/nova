@@ -2,8 +2,17 @@
 // first, with the trade-off in plain words (speed, depth, size). Nova recommends one model per
 // role; it doesn't list everything that would run. A role with no runtime here says so and stays
 // unassigned: transcription without a whisper runtime is off, not faked.
+//
+// Whether a model fits a device is the fit engine's answer (fit.ts, docs/plans/model-fit-adr-2026-11-04.md):
+// weights, the KV cache for the context the role runs at, the device's overhead (learned or the
+// prior) and the reserve, against the device's budget. Tight counts as fitting here: one model is
+// planned per role, as the ADR's step 2 allows.
 import { gb, modelMemory, type Hardware } from './hardware.ts';
 import { runsRemotely, type InstalledModel } from './ollama.ts';
+import {
+  BITS_PER_WEIGHT, QUANTS, REFERENCE_SHAPES, TASK_CONTEXT, deviceBudget, fit, weightsBytes,
+  type Arch, type FitDevice, type FitModel, type FitResult, type LearnedOverhead, type Quant, type TaskClass,
+} from './fit.ts';
 
 export const ROLES = ['triage-text', 'reasoner', 'embedder', 'transcriber'] as const;
 export type Role = (typeof ROLES)[number];
@@ -16,10 +25,16 @@ export const ROLE_WORDS: Record<Role, { name: string; does: string }> = {
   transcriber: { name: 'Transcription', does: 'turning speech into text' },
 };
 
-// Room a model needs beyond its file: the context and the runtime's own use.
+// The old rule, file size × 1.15. The role recommendations no longer use it (the fit engine does);
+// the Decision Service's Tev1 sizing still does (decision-service/seats/tev1.ts) until it moves too.
 export const HEADROOM = 1.15;
-// Roughly what one billion parameters takes at the 4-bit quantization Ollama pulls by default.
-const BYTES_PER_B = 0.62 * 1024 ** 3;
+
+// The task class each role is planned as (the ADR's table), and the context it runs at: what the
+// verdict assumes is what a chat call asks for (num_ctx).
+export const ROLE_TASK: Record<Exclude<Role, 'transcriber'>, TaskClass> = { 'triage-text': 'screening', reasoner: 'general-chat', embedder: 'embeddings' };
+export const CHAT_ROLES = ['triage-text', 'reasoner'] as const;
+export const roleContext = (role: (typeof CHAT_ROLES)[number]): number => TASK_CONTEXT[ROLE_TASK[role]]!;
+const EMBED_CONTEXT = 2048;
 
 export interface DeviceModels {
   id: string;
@@ -29,7 +44,12 @@ export interface DeviceModels {
   // What its runtime has installed (as last read), or null when Nova has never reached it.
   models: InstalledModel[] | null;
   url: string | null;
+  // What Nova learned of this device's runtime overhead from real loads; the prior when absent.
+  overhead?: LearnedOverhead | null;
 }
+
+// The engine's verdict behind a pick: what it assumed and what it found.
+export interface PickFit { verdict: FitResult['verdict']; quant: Quant; context: number; basis: FitResult['basis']; need_bytes: number; budget_bytes: number; words: string }
 
 export interface Pick {
   device: string;
@@ -44,6 +64,8 @@ export interface Pick {
   hub_model?: string;
   why: string;
   tradeoff: string;
+  // Null when Nova doesn't know the device's hardware.
+  fit?: PickFit | null;
 }
 
 export interface RoleAdvice { role: Role; pick: Pick | null; words: string }
@@ -64,59 +86,128 @@ const isEmbedder = (m: InstalledModel) => m.capabilities.includes('embedding') |
 const isText = (m: InstalledModel) => !isEmbedder(m) && (m.capabilities.includes('completion') || !m.capabilities.length);
 const isCoder = (m: InstalledModel) => /coder|code/i.test(m.name);
 const isCloud = (m: InstalledModel) => runsRemotely(m.name, m);
-const fits = (size: number, h: Hardware | null) => !h || size * HEADROOM <= modelMemory(h).bytes;
 
-// What a device can hold, in words: the biggest model and roughly how many parameters.
-export function capacityWords(h: Hardware): string {
-  const mem = modelMemory(h);
-  const usable = mem.bytes / HEADROOM;
-  const params = Math.max(1, Math.floor(usable / BYTES_PER_B));
-  return `${mem.on === 'gpu' ? 'Runs' : 'Can run, slowly,'} models up to about ${gb(usable)} (around ${params}B parameters at 4-bit) on ${mem.words}.`;
+// ---- fit, from the engine --------------------------------------------------------------------------
+
+// The device as the engine sees it. What else holds the GPU is not counted for a role
+// recommendation: the hardware reading it comes from (a heartbeat, up to an hour old; the hub's,
+// up to ten minutes) and what the runtime has loaded are read at different times, so Nova's own
+// model, loaded then and gone now, would count as someone else's. The verdict says it isn't counted.
+export function fitDevice(h: Hardware, overhead?: LearnedOverhead | null): FitDevice {
+  const d = deviceBudget(h, { overhead: overhead ?? null });
+  return d.memory === 'cpu' ? d : { ...d, other_use_bytes: 0, other_use_known: false };
+}
+
+// Ollama's quantization label, as the nearest of the engine's. The file's own size is what counts
+// for an installed model; the label only names the verdict.
+export function quantOf(label: string): Quant {
+  const q = label.toUpperCase();
+  if ((QUANTS as readonly string[]).includes(q)) return q as Quant;
+  if (/^(F16|BF16|F32)$/.test(q)) return 'F16';
+  if (q.startsWith('Q8')) return 'Q8_0';
+  if (q.startsWith('Q6')) return 'Q6_K';
+  if (q.startsWith('Q5')) return 'Q5_K_M';
+  return 'Q4_K_M';
+}
+
+const contextFor = (role: Exclude<Role, 'transcriber'>, own: number | null | undefined) => (role === 'embedder' ? own ?? EMBED_CONTEXT : TASK_CONTEXT[ROLE_TASK[role]]!);
+
+// An installed model as the engine plans it: its own file size, its shape when the runtime said it.
+function installedModel(m: InstalledModel, role: Exclude<Role, 'transcriber'>): FitModel {
+  const quant = quantOf(m.quantization);
+  const params = m.params_b ? Math.round(m.params_b * 1e9) : Math.round((m.size * 8) / BITS_PER_WEIGHT[quant]);
+  const arch = m.arch ?? null;
+  return { name: m.name, params, weights_bytes: m.size, quant, context: contextFor(role, m.max_context), arch, arch_source: arch ? 'backend' : null, kv_type: 'f16' };
+}
+
+// A catalog model, not installed: Ollama's default pull (Q4_K_M), with the shape Nova assumes for it.
+function plannedModel(c: CatalogEntry, role: Exclude<Role, 'transcriber'>): FitModel {
+  const arch: Arch | null = REFERENCE_SHAPES.find((r) => r.name === c.name)?.arch ?? null;
+  return { name: c.name, params: Math.round(c.params_b * 1e9), weights_bytes: null, quant: 'Q4_K_M', context: contextFor(role, null), arch, arch_source: arch ? 'catalog' : null, kv_type: 'f16' };
+}
+
+const fitOf = (d: DeviceModels, models: FitModel[]): FitResult | null => (d.hardware ? fit({ device: fitDevice(d.hardware, d.overhead), models }) : null);
+// Without hardware Nova can't tell, and doesn't rule a model out.
+const fits = (r: FitResult | null) => !r || r.verdict !== 'wont-fit';
+const pickFit = (r: FitResult | null, m: FitModel): PickFit | null =>
+  r ? { verdict: r.verdict, quant: m.quant, context: m.context, basis: r.basis, need_bytes: r.need_bytes, budget_bytes: r.budget_bytes, words: r.words } : null;
+
+// The memory models sit in, in words. A unified-memory device is named with the engine's budget
+// (UNIFIED_BUDGET_FRACTION_BELOW_36GB in fit.ts), not hardware.ts's 0.75 × RAM.
+function memoryWords(h: Hardware, dev: FitDevice): string {
+  const unified = h.gpus.find((g) => g.unified);
+  return dev.memory === 'unified' && unified ? `${unified.name}, sharing ${gb(dev.budget_bytes)} of memory` : modelMemory(h).words;
+}
+
+// What a device can hold, in words: the largest model the engine would not call Won't fit, at
+// Q4_K_M with 4k context and the shapes Nova assumes, in steps of 0.1B parameters.
+export function capacityWords(h: Hardware, overhead?: LearnedOverhead | null): string {
+  const dev = fitDevice(h, overhead);
+  const on = memoryWords(h, dev);
+  const context = TASK_CONTEXT['general-chat']!;
+  const most = Math.floor((dev.budget_bytes * 8) / BITS_PER_WEIGHT.Q4_K_M / 1e8);
+  let best = 0;
+  for (let n = 1; n <= most; n++) {
+    const params = n * 1e8;
+    const r = fit({ device: dev, models: [{ name: 'capacity', params, weights_bytes: null, quant: 'Q4_K_M', context, arch: null, arch_source: null, kv_type: 'f16' }] });
+    if (r.verdict !== 'wont-fit') best = params;
+  }
+  if (!best) return `Too little memory for a model Nova can plan at Q4_K_M with 4k context, on ${on}.`;
+  return `${dev.memory === 'cpu' ? 'Can run, slowly,' : 'Runs'} models up to about ${gb(weightsBytes(best, 'Q4_K_M'))} (around ${Math.max(1, Math.floor(best / 1e9))}B parameters at Q4_K_M with 4k context) on ${on}.`;
 }
 
 function size(m: InstalledModel) { return `${m.parameter_size || '?'} parameters, ${gb(m.size)}`; }
 
+const installedFits = (d: DeviceModels, m: InstalledModel, role: Exclude<Role, 'transcriber'>) => fits(fitOf(d, [installedModel(m, role)]));
+
 function triagePick(d: DeviceModels): InstalledModel | null {
-  const ok = (d.models ?? []).filter((m) => isText(m) && !isCloud(m) && fits(m.size, d.hardware) && (m.params_b === null ? m.size <= 6e9 : m.params_b <= 9));
+  const ok = (d.models ?? []).filter((m) => isText(m) && !isCloud(m) && installedFits(d, m, 'triage-text') && (m.params_b === null ? m.size <= 6e9 : m.params_b <= 9));
   ok.sort((a, b) => Number((b.params_b ?? 3) >= 3) - Number((a.params_b ?? 3) >= 3) || a.size - b.size);
   return ok[0] ?? null;
 }
 
 function reasonerPick(d: DeviceModels): InstalledModel | null {
-  const ok = (d.models ?? []).filter((m) => isText(m) && !isCloud(m) && fits(m.size, d.hardware));
+  const ok = (d.models ?? []).filter((m) => isText(m) && !isCloud(m) && installedFits(d, m, 'reasoner'));
   ok.sort((a, b) => Number(isCoder(a)) - Number(isCoder(b)) || (b.params_b ?? 0) - (a.params_b ?? 0) || a.size - b.size);
   return ok[0] ?? null;
 }
 
 function embedderPick(d: DeviceModels): InstalledModel | null {
-  const ok = (d.models ?? []).filter((m) => isEmbedder(m) && !isCloud(m) && fits(m.size, d.hardware));
+  const ok = (d.models ?? []).filter((m) => isEmbedder(m) && !isCloud(m) && installedFits(d, m, 'embedder'));
   ok.sort((a, b) => a.size - b.size);
   return ok[0] ?? null;
 }
 
-function pickOf(d: DeviceModels, m: InstalledModel, why: string, tradeoff: string): Pick {
-  return { device: d.id, device_name: d.name, model: m.name, installed: true, size: m.size, params_b: m.params_b, url: d.url, why, tradeoff };
+function pickOf(d: DeviceModels, m: InstalledModel, role: Exclude<Role, 'transcriber'>, why: string, tradeoff: string): Pick {
+  const planned = installedModel(m, role);
+  return { device: d.id, device_name: d.name, model: m.name, installed: true, size: m.size, params_b: m.params_b, url: d.url, why, tradeoff, fit: pickFit(fitOf(d, [planned]), planned) };
 }
 
 function download(hub: DeviceModels, role: Exclude<Role, 'transcriber'>): Pick | null {
-  const c = CATALOG.filter((e) => e.role === role && fits(e.size, hub.hardware)).sort((a, b) => (role === 'reasoner' ? b.params_b - a.params_b : a.size - b.size))[0];
+  const c = CATALOG.filter((e) => e.role === role && fits(fitOf(hub, [plannedModel(e, role)]))).sort((a, b) => (role === 'reasoner' ? b.params_b - a.params_b : a.size - b.size))[0];
   if (!c) return null;
+  const planned = plannedModel(c, role);
   return {
     device: hub.id, device_name: hub.name, model: c.name, installed: false, size: c.size, params_b: c.params_b, url: hub.url,
-    why: `Nothing installed here fits this role. ${c.name} is ${c.words}, and fits ${hub.hardware ? modelMemory(hub.hardware).words : 'this hub'}.`,
+    why: `Nothing installed here fits this role. ${c.name} is ${c.words}, and fits ${hub.hardware ? memoryWords(hub.hardware, fitDevice(hub.hardware, hub.overhead)) : 'this hub'}.`,
     tradeoff: `A ${gb(c.size)} download; Nova asks before it starts.`,
+    fit: pickFit(fitOf(hub, [planned]), planned),
   };
 }
 
 export function recommend(devices: DeviceModels[]): RoleAdvice[] {
   const hub = devices.find((d) => d.hub)!;
   const out: RoleAdvice[] = [];
-  const mem = (d: DeviceModels) => (d.hardware ? modelMemory(d.hardware) : null);
+  const mem = (d: DeviceModels) => {
+    if (!d.hardware) return null;
+    const dev = fitDevice(d.hardware, d.overhead);
+    return { on: dev.memory, words: memoryWords(d.hardware, dev) };
+  };
 
   // Sorting stays on the hub: it runs often, on small inputs, and waking a computer for it would
   // cost more time than it saves.
   const t = triagePick(hub);
-  out.push({ role: 'triage-text', pick: t ? pickOf(hub, t, `${t.name} (${size(t)}) is the smallest capable model installed here, so sorting stays quick.`, 'Fast and light; not meant for long answers.') : download(hub, 'triage-text'), words: t ? '' : 'No small text model is installed on the hub.' });
+  out.push({ role: 'triage-text', pick: t ? pickOf(hub, t, 'triage-text', `${t.name} (${size(t)}) is the smallest capable model installed here, so sorting stays quick.`, 'Fast and light; not meant for long answers.') : download(hub, 'triage-text'), words: t ? '' : 'No small text model is installed on the hub.' });
 
   // Thinking and writing: the deepest model that fits, wherever it is; a GPU spoke serves it
   // only when it is clearly deeper than what the hub can run, and small jobs then stay on the hub.
@@ -127,10 +218,12 @@ export function recommend(devices: DeviceModels[]): RoleAdvice[] {
   if (best && !best.d.hub && hubBest && (best.m.params_b ?? 0) < (hubBest.m.params_b ?? 0) * 1.5) best = hubBest;
   if (best) {
     const m = mem(best.d);
-    const p = pickOf(best.d, best.m, `${best.m.name} (${size(best.m)}) is the deepest model that fits ${m ? m.words : best.d.name}.`, '');
-    const triage = t && best.d.hub ? t.size : 0;
+    const p = pickOf(best.d, best.m, 'reasoner', `${best.m.name} (${size(best.m)}) is the deepest model that fits ${m ? m.words : best.d.name}.`, '');
+    // Whether the sorting model can stay loaded beside it: the two together, overhead and reserve
+    // counted once (the engine's combination rule).
+    const both = t && best.d.hub ? fitOf(best.d, [installedModel(best.m, 'reasoner'), installedModel(t, 'triage-text')]) : null;
     p.tradeoff = m && m.on === 'cpu' ? 'It runs on the CPU here, so long answers are slow.'
-      : triage && m && (best.m.size + triage) * HEADROOM > m.bytes ? 'Slower to answer than a small model, and it and the sorting model can’t both stay loaded, so switching between them takes a few seconds.'
+      : both && both.verdict === 'wont-fit' ? 'Slower to answer than a small model, and it and the sorting model can’t both stay loaded, so switching between them takes a few seconds.'
       : 'Slower to answer than a small model, in exchange for depth.';
     if (!best.d.hub) {
       p.why += ` It runs on ${best.d.name}, which Nova wakes when needed.`;
@@ -142,7 +235,7 @@ export function recommend(devices: DeviceModels[]): RoleAdvice[] {
   }
 
   const e = embedderPick(hub);
-  out.push({ role: 'embedder', pick: e ? pickOf(hub, e, `${e.name} (${gb(e.size)}) is the smallest embedding model installed here.`, 'Small and fast; good enough for finding things by meaning.') : download(hub, 'embedder'), words: e ? '' : 'No embedding model is installed on the hub.' });
+  out.push({ role: 'embedder', pick: e ? pickOf(hub, e, 'embedder', `${e.name} (${gb(e.size)}) is the smallest embedding model installed here.`, 'Small and fast; good enough for finding things by meaning.') : download(hub, 'embedder'), words: e ? '' : 'No embedding model is installed on the hub.' });
 
   // Ollama can't transcribe; that needs a whisper runtime, which Nova has no adapter for yet.
   const whisper = devices.map((d) => d.hardware?.whisper).find(Boolean);
