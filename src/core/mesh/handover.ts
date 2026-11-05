@@ -321,6 +321,8 @@ export class Promotions {
   #o: PromotionOptions;
   #running: Promise<void> | null = null;
   #watching: ReturnType<typeof setTimeout> | null = null;
+  // The live probe loop, apart from its timer: the timer is null while a probe runs.
+  #loop: object | null = null;
   #seen = new Map<string, number>();
   #closed = false;
   #lastFence = 0;
@@ -772,10 +774,18 @@ export class Promotions {
   // ---- step 6: verification (on the old hub, now the standby) ---------------------------------
 
   #watch(): void {
-    if (this.#watching || this.#closed) return;
-    const next = () => { if (this.#closed) return; this.#watching = setTimeout(() => { this.#watching = null; void this.probe().then(() => next(), () => next()); }, this.probeMs); this.#watching.unref?.(); };
+    if (this.#loop || this.#closed) return;
+    const loop = this.#loop = {};
+    const next = () => { if (this.#closed || this.#loop !== loop) return; this.#watching = setTimeout(() => { this.#watching = null; void this.probe().then(() => next(), () => next()); }, this.probeMs); this.#watching.unref?.(); };
     // Not after the end: probe() itself finishes the window.
     next();
+  }
+
+  // Ends the loop: a probe running now finishes, and its loop schedules no more.
+  #unwatch(): void {
+    if (this.#watching) clearTimeout(this.#watching);
+    this.#watching = null;
+    this.#loop = null;
   }
 
   // One probe of the new hub (finding 1). Asked over a request signed by this node's key, it answers
@@ -825,8 +835,7 @@ export class Promotions {
       const a = await this.#asDevice(r.to!.address!, '/api/v1/mesh/promotion/verified', body);
       if (a.status !== 200) said = `${said} “${to?.name ?? r.to!.name}” didn’t take the record (${a.body?.error ?? a.status}).`;
     } catch (e) { said = `${said} “${to?.name ?? r.to!.name}” couldn’t be told (${(e as Error).message}).`; }
-    if (this.#watching) clearTimeout(this.#watching);
-    this.#watching = null;
+    this.#unwatch();
     this.#save({ ...r, state: 'verified', said });
   }
 
@@ -836,8 +845,7 @@ export class Promotions {
   // took before it stopped is copied here first. Asked by the person, it goes on even when the new hub
   // can't be reached, as the sheet said.
   async #rollBack(r: PromotionRecord, how: 'auto' | 'person'): Promise<{ epoch: number } | null> {
-    if (this.#watching) clearTimeout(this.#watching);
-    this.#watching = null;
+    this.#unwatch();
     const to = r.to!;
     const failing = r.probes.slice(-FAILS_TO_ROLL_BACK).flatMap((p) => p.checks.filter((c) => !c.ok && c.name !== 'copy').map((c) => c.said));
     let stood: string;

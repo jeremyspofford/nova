@@ -4,6 +4,7 @@
 // (tests/gmail*.test.js are unchanged in behaviour); new mail becomes an event trigger record
 // while a rule listens for it; disconnecting revokes at Google and deletes every Gmail secret
 // and rule. Neutral placeholders only.
+import { signed } from './acceptance/passkey-support.ts';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -34,7 +35,9 @@ async function boot(home = mkdtempSync(join(tmpdir(), 'nova-gc-'))) {
   nova.core.start();
   await new Promise((r) => nova.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${nova.server.address().port}`;
+  // As Nova's own screen sends it: an explicit confirmation carries its passkey approval (T2).
   const call = async (method, path, body) => {
+    body = await signed(base, method, path, body);
     const res = await fetch(base + path, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const text = await res.text();
     return { status: res.status, body: text ? JSON.parse(text) : null };
@@ -94,7 +97,7 @@ test('the same Gmail: reads, drafts and organizes; it can neither send nor delet
 test('new mail becomes an event trigger record while a rule listens for it, once per message', async () => {
   const { nova, call, stop } = await boot();
   try {
-    await call('PUT', '/api/v1/profile/privacy/default', { value: 'cloud-allowed' });
+    await call('PUT', '/api/v1/profile/privacy/default', { value: 'cloud-allowed', confirm: true });
     await signIn(nova.runner.gmail);
     const conn = nova.core.connectors.get('gmail');
     assert.match((await call('POST', '/api/v1/triggers/rules', { name: 'Mail', class: 'event', connector: 'gmail', topic: 'outbox', action: { kind: 'message', text: 'x' } })).body.error, /topic is inbox/);

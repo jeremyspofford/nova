@@ -128,7 +128,9 @@ test('R12 (p12): a cancel during a split; once the links heal and it settles, th
 
 test('R13 (p13): a replayed “unhealthy” answer is refused: every signed answer is bound to the request it answers, and a used request stays used across a restart', { timeout: 90_000 }, async () => {
   const p = await pair({ links: true, promotion: { windowS: 3600, probeMs: 150 } });
-  const m = { unhealthy: null as string | null, replay: 0 };
+  // `at`: how many probes A had recorded when the honest unhealthy answer was captured; that
+  // answer's own probe is still in flight on A then, and lands at that index (probes are serial).
+  const m = { unhealthy: null as string | null, replay: 0, at: -1 };
   const proxy = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
@@ -140,7 +142,7 @@ test('R13 (p13): a replayed “unhealthy” answer is refused: every signed answ
       const r = await fetch(`${p.b.mesh}${req.url}`, { method: req.method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: chunks.length ? Buffer.concat(chunks) : undefined });
       const text = await r.text();
       // Only one honest "unhealthy" gets through (more in a row would be a real roll-back).
-      if (req.url!.endsWith('/promotion/health')) { try { if (JSON.parse(text).body?.ok === false) { if (m.unhealthy) { res.writeHead(502); res.end(); return; } m.unhealthy = text; } } catch { /* not json */ } }
+      if (req.url!.endsWith('/promotion/health')) { try { if (JSON.parse(text).body?.ok === false) { if (m.unhealthy) { res.writeHead(502); res.end(); return; } m.unhealthy = text; m.at = p.a.core.mesh.promotions.record()!.probes.length; } } catch { /* not json */ } }
       res.writeHead(r.status, { 'content-type': 'application/json' }); res.end(text);
     } catch { res.writeHead(502); res.end(); }
   });
@@ -158,7 +160,8 @@ test('R13 (p13): a replayed “unhealthy” answer is refused: every signed answ
     p.name.point(p.b.mesh);
     p.name.stuck(false);
     assert.ok(m.unhealthy, 'an unhealthy answer was captured');
-    await until(() => p.a.core.mesh.promotions.record()!.probes.at(-1)?.result, (x) => x === 'ok', 10_000);
+    // An ok after the captured answer's own probe: that probe is counted before the replays start.
+    await until(() => p.a.core.mesh.promotions.record()!.probes, (ps) => ps.length > m.at + 1 && ps.at(-1)?.result === 'ok', 10_000);
     const before = p.a.core.mesh.promotions.record()!.probes.length;
     m.replay = 5;
     await until(() => m.replay, (x) => x === 0, 10_000);

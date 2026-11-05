@@ -3,8 +3,9 @@
 // copies its folder into the home's skills/, where the person can read and
 // change it. The person can also add their own folder or .zip, in Nova's
 // format or Claude's (name + description). Removing one deletes that folder.
-// Nothing else refers to it, and skills/ is kept out of the home's history,
-// so nothing is left behind.
+// Nothing else refers to it, and skills/ is kept out of the home's history;
+// server.js carries the removal into backups and checkpoints as a forget
+// (backups.ts), so nothing is left behind.
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, join, relative, resolve, sep } from 'node:path';

@@ -98,7 +98,7 @@ test('M6b: models by role over the API — recommend and assign, chat with recei
     assert.deepEqual(await m.get(api('/receipts?egress=remote')), []);
 
     // 6. Local-preferred, local down: the cloud steps in, the receipt discloses it, a problem is opened.
-    await m.send('PUT', api('/profile/privacy/default'), { value: 'local-preferred' });
+    await m.send('PUT', api('/profile/privacy/default'), { value: 'local-preferred', confirm: true });
     await ollama.close();
     const fallback = await m.send('POST', api('/models/infer'), { role: 'reasoner', messages: [{ role: 'user', content: 'hi' }] });
     assert.equal(fallback.status, 200, JSON.stringify(fallback.body));

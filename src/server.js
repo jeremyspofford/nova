@@ -22,7 +22,8 @@ import { HelperError, Helpers } from './helpers.js';
 import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
-import { BrokerClient, KIND_WORDS, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, ipcBroker, ipcLink, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
+import { toolTier } from '../ui/js/status.js';
+import { BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, ipcBroker, ipcLink, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
@@ -334,7 +335,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     serveFile(res, file);
   }
 
-  async function api(req, res, parts) {
+  async function api(req, res, parts, principal) {
     const [, , resource, id, action, sub] = parts; // ['', 'api', ...]
     if (req.method === 'POST') {
       if (req.headers['x-nova'] !== '1') return json(res, 403, { error: 'Missing X-Nova header' });
@@ -426,7 +427,13 @@ export function createNova(config = loadConfig(), deps = {}) {
         let skill = null;
         let files;
         if (action === 'install') { skill = skills.install(id); runner.trustSkill(id); }
-        else if (action === 'remove') { files = skills.remove(id); core.ingest.release('skill', id); }
+        else if (action === 'remove') {
+          files = skills.remove(id);
+          core.ingest.release('skill', id);
+          core.mesh.sync.removed();
+          // Out of every backup and checkpoint too, the way a forget goes.
+          core.backups.forget('skill', [id]);
+        }
         else if (action === 'restore') {
           // Put back from Undo: screened again, exactly as when it came in.
           const prepared = skills.prepareRestore(id, (await readBody(req)).files);
@@ -572,8 +579,18 @@ export function createNova(config = loadConfig(), deps = {}) {
       }
       if (action === 'stop') return json(res, 200, { stopped: runner.stop(id) });
       if (action === 'approvals' && sub) {
-        const { decision } = await readBody(req);
+        const body = await readBody(req);
+        const { decision } = body;
         if (!['allow', 'deny'].includes(decision)) return json(res, 400, { error: 'decision must be allow or deny' });
+        // Tier 3 in a conversation (deleting something, a command that looks irreversible) is a
+        // person on Nova's own screen too: allowing it needs a passkey approval of exactly this
+        // request (T2), checked here as the core checks its own routes. Denying never does.
+        const step = runner.pendingOf(id);
+        if (decision === 'allow' && step?.id === sub && toolTier(step.name, step.args) === 3 && principal?.kind === 'console') {
+          if (!('passkey_approval' in body)) return json(res, 403, { error: core.passkeys.state().count ? PASSKEY_NEEDED : NO_PASSKEY });
+          const why = core.passkeys.verify(ConsolePasskeys.action('POST', `/sessions/${id}/approvals/${sub}`, { decision }), body.passkey_approval);
+          if (why) return json(res, 403, { error: `That passkey didn’t confirm this request (${why}), so nothing was approved.` });
+        }
         return runner.decide(id, sub, decision) ? json(res, 200, { ok: true }) : json(res, 409, { error: 'That request is no longer waiting.' });
       }
     } catch (e) {
@@ -605,7 +622,7 @@ export function createNova(config = loadConfig(), deps = {}) {
         res.writeHead(200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
         return res.end(core.design.css(url.searchParams.get('device')));
       }
-      if (parts[1] === 'api') return await api(req, res, parts);
+      if (parts[1] === 'api') return await api(req, res, parts, principal);
       if (url.pathname === '/oauth/gmail' && req.method === 'GET') {
         const q = Object.fromEntries(url.searchParams);
         await runner.gmail.finish({ code: q.code, state: q.state, error: q.error });

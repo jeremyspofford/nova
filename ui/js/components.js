@@ -885,13 +885,13 @@ export function configImport({ state = 'choose', file = 'nova.config.json', chan
   const head = `<h3 class="section-title" id="config-import-title">Bring in a configuration</h3>`;
   const body = {
     choose: `<p class="settings-note">A Nova configuration file or a personal pack. Nova checks it and shows every change before applying any; nothing is overwritten that you don’t see first.</p>
-<div class="connection-actions"><button type="button" class="btn primary" data-action="config-choose">Choose a file</button><input type="file" class="sr-only" accept=".json,application/json" data-config-file tabindex="-1" aria-hidden="true"></div>`,
+<div class="connection-actions"><button type="button" class="btn primary" data-action="config-choose">Choose a file</button><button type="button" class="btn" data-action="config-export">Export your configuration</button><input type="file" hidden accept=".json,application/json" data-config-file></div>`,
     review: `<p class="settings-note" role="status">${esc(file)}: ${kept} change${kept === 1 ? '' : 's'} to apply${kept < changes.length ? `, ${changes.length - kept} left out` : ''}.</p>${configDiff(changes)}
 <div class="connection-actions"><button type="button" class="btn primary" data-action="config-apply">Apply ${kept} change${kept === 1 ? '' : 's'}</button><button type="button" class="btn quiet" data-action="config-cancel">Not now</button></div>`,
     refused: `<p class="settings-note" role="alert">${esc(file)} can’t be used, so nothing changed:</p><ul class="steps">${problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
-<div class="connection-actions"><button type="button" class="btn" data-action="config-choose">Choose another file</button><input type="file" class="sr-only" accept=".json,application/json" data-config-file tabindex="-1" aria-hidden="true"></div>`,
+<div class="connection-actions"><button type="button" class="btn" data-action="config-choose">Choose another file</button><input type="file" hidden accept=".json,application/json" data-config-file></div>`,
     applied: `<p class="settings-note" role="status">Applied ${kept} change${kept === 1 ? '' : 's'} from ${esc(file)}. Each one is in the activity log, and each can go back to its default.</p>
-<div class="connection-actions"><button type="button" class="btn" data-action="config-export">Export your configuration</button></div>`,
+<div class="connection-actions"><button type="button" class="btn" data-action="config-cancel">Bring in another file</button><button type="button" class="btn" data-action="config-export">Export your configuration</button></div>`,
   }[state];
   return `<section class="panel config-import" aria-labelledby="config-import-title" data-config-import="${esc(state)}">${head}${body}</section>`;
 }
@@ -901,7 +901,7 @@ export function configImport({ state = 'choose', file = 'nova.config.json', chan
 export function configField(f) {
   const id = `cfg-${f.key.replace(/[^a-z0-9]+/gi, '-')}`;
   const control = f.options
-    ? `<select class="input" id="${id}">${f.options.map((o) => `<option${o === f.value ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`
+    ? `<select class="input" id="${id}">${f.options.map((o) => { const [v, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(v)}"${v === f.value ? ' selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`
     : `<input class="input" id="${id}" value="${esc(f.value)}" spellcheck="false">`;
   return `<li class="settings-row" data-config-key="${esc(f.key)}"><div class="settings-text"><label class="settings-label" for="${id}">${esc(f.label)}</label>
   <p class="settings-note">${esc(f.help)} ${f.layer === 'default' ? 'Nova’s default.' : `Set by ${f.layer === 'pack' ? 'your pack' : 'this hub'}.`}</p></div>

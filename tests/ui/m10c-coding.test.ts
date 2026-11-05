@@ -28,7 +28,7 @@ test('M10c: the check and merge sheets show the diff, the tests and the preview 
   const request = `In the repository at ${repos.person}, make greet() say “Hello, <name>!” as its test expects. Test with \`node --test\`, preview with \`node server.mjs\`.`;
   try {
     await finishSetup(m);
-    await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed' });
+    await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed', confirm: true });
     await m.send('PUT', api('/providers/claude-code/config'), { config: { command: `node ${FAKE_CLAUDE} --script ${agentScript('fix', join(repos.dir, 'scripts'))}` } });
     await m.send('POST', api('/providers/claude-code/enable'), { approved: true });
     const { page, errors } = await device(b, { width: 1280, height: 1000 });
