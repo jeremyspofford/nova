@@ -6,6 +6,10 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-04 · Failover · A standby keeps copying across an upgrade**
+- What changed: when the hub runs a newer release that adds a table (as 0023, 0024 and the coming 0025 do), a standby one release behind used to refuse the hub's whole batch of changes as soon as one for the new table came along. From then on it copied nothing until someone updated it. Now it copies everything it understands as usual. It keeps the changes for the table it doesn't have yet, without applying them, and tells you once that it is a release behind. When you update it, it applies those kept changes in order, deletes included, without asking the hub for them again. A standby that takes over while still behind passes the kept changes on, so they aren't lost even if the old hub is gone.
+- What you can now do: update the hub first and the standby later, without the standby falling behind on everything else in between.
+- Still unfinished: this protects a standby running this release or later. A standby still on an older release (one without this fix) still stops at the first change for a new table, so update it before, or together with, the hub one more time.
 
 **2026-11-04 · Config onboarding (door 3) · Change settings by asking Nova**
 - What changed: you can ask Nova in a conversation to change one of your settings, for example "set my timezone to Asia/Tokyo". Nova shows exactly what would change, in the same list as Settings › Configuration, and nothing changes until you allow it. A change to privacy or to what asks first counts as tier 3 and needs your passkey. Secrets and the hub's own settings are left out, saying why. Every change is recorded in the activity log.
