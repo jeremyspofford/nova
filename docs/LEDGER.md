@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · Config onboarding (door 2) · All your settings in one list, and a few questions**
+- What changed: Settings › Configuration now lists each of your own settings: timezone, quiet hours, your name, what Nova calls you, Nova's name, directness, warmth, speaking up and privacy. Each one shows where it came from, Nova's default or your pack. "Answer a few questions" goes through them in three steps (where and when, how Nova talks, privacy) and ends with the same list of changes as a file import. Nothing is saved until you say so. A change to privacy or quiet hours counts as tier 3, so it needs your passkey. "Use the default" puts one setting back, and that's recorded in the activity log. Nova now checks values at every door: a value that doesn't fit, in a file, a chat or this list, is named in plain words and nothing changes.
+- What you can now do: see and change every personal setting in one place, and put any one of them back to its default.
+- Still unfinished: the first-run setup conversation doesn't offer the questions yet. "This hub" settings don't have a layer of their own yet. You and Nova and Privacy still have their own controls beside this list.
+
 **2026-11-04 · Ponytail Step 2 · 33 MB of unused files removed**
 - What changed: about 33 MB of leftover files are gone from the repository: duplicate test-run reports, empty evidence files, copies of old pages, old review notes, and 43 screenshots nothing pointed to. Every one was checked as unused first. The records that listed them now say what was removed and how to get any of it back from history.
 - What you can now do: nothing new in the app. The repository is smaller and easier to find things in.
@@ -37,6 +42,7 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: move your personal settings between Nova installs, or keep a copy, with Export and "Choose a file" in Settings › Configuration.
 - Still unfinished: the other two ways in, a guided setup form (with Settings generated from the schema) and asking Nova in chat, come next. Where and how Nova starts (its folder, port and mesh address) stays in `nova.config.json`, because Nova needs those before it can read anything else.
 
+=======
 **2026-11-04 · UI rebuild (Stage 2) · Nova takes the calmer look**
 - What changed: Nova now has the calmer look you approved:
   - one quiet light from above instead of layered glows;

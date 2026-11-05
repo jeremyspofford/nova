@@ -901,7 +901,7 @@ export function configImport({ state = 'choose', file = 'nova.config.json', chan
 export function configField(f) {
   const id = `cfg-${f.key.replace(/[^a-z0-9]+/gi, '-')}`;
   const control = f.options
-    ? `<select class="input" id="${id}">${f.options.map((o) => `<option${o === f.value ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`
+    ? `<select class="input" id="${id}">${f.options.map((o) => { const [v, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(v)}"${v === f.value ? ' selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`
     : `<input class="input" id="${id}" value="${esc(f.value)}" spellcheck="false">`;
   return `<li class="settings-row" data-config-key="${esc(f.key)}"><div class="settings-text"><label class="settings-label" for="${id}">${esc(f.label)}</label>
   <p class="settings-note">${esc(f.help)} ${f.layer === 'default' ? 'Nova’s default.' : `Set by ${f.layer === 'pack' ? 'your pack' : 'this hub'}.`}</p></div>
