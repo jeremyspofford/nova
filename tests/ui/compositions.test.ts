@@ -1,5 +1,5 @@
 // UI rebuild, design-first (owner direction 2026-11-04): the Stage-2 composition
-// (ui/styles/compositions/stage2.css) over the real shell with real data, on every core surface
+// (ui/styles/stage2.css) over the real shell with real data, on every core surface
 // (Home, a conversation, Tasks, Health, Settings, Topology), across the owner's responsive matrix.
 // The app does not load the composition; this test applies it, checks it holds at every size (no
 // sideways scroll, nothing crushed), and with NOVA_COMPOSITION_SHOTS set writes before/after
@@ -19,7 +19,7 @@ const MATRIX = {
   'fold-cover': { width: 344, height: 882 }, 'fold-open': { width: 884, height: 1104 }, 'fold-half-open': { width: 884, height: 540 },
   'pixel-fold-open': { width: 840, height: 701 }, 'duo-open': { width: 720, height: 540 },
 };
-const COMPOSITION = readFileSync(join(ROOT, 'ui/styles/compositions/stage2.css'), 'utf8');
+const COMPOSITION = readFileSync(join(ROOT, 'ui/styles/stage2.css'), 'utf8');
 
 test('Stage-2 composition over the real shell: every core surface across the responsive matrix', { timeout: 900_000 }, async (t) => {
   const b = await browser();
@@ -48,7 +48,9 @@ test('Stage-2 composition over the real shell: every core surface across the res
           mkdirSync(join(shots, 'before'), { recursive: true });
           await d.page.screenshot({ path: join(shots, 'before', `${name}-${size}.png`) });
         }
-        await visit(d.page, path, true);
+        // The app loads the approved composition itself, last, so it decides (ui/index.html).
+        await visit(d.page, path, false);
+        assert.ok(await d.page.evaluate(() => [...document.styleSheets].some((x) => x.href?.endsWith('/styles/stage2.css'))), `${name}/${size}: the approved Stage-2 stylesheet is loaded`);
         const width = await d.page.evaluate(() => document.documentElement.scrollWidth);
         assert.ok(width <= dimensions.width, `${name}/${size}: no sideways scroll (${width} > ${dimensions.width})`);
         if (shots) {
