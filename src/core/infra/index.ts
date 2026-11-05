@@ -11,7 +11,7 @@
 // the vault (provider secrets, handed to the tool's process only); log problems and the trigger
 // engine's messages for alerts; runLines and children.ts for every process.
 import { createCipheriv, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
@@ -28,7 +28,7 @@ import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
 import type { Vault } from '../vault.ts';
 import type { Egress } from '../workers.ts';
-import { sha256 } from '../workspace.ts';
+import { sha256, writeAtomic } from '../workspace.ts';
 
 export const INFRA_WORKER = 'infra';
 export const CONFIRMATION_SYSTEM = 'nova-infra';
@@ -512,8 +512,7 @@ export class Infra {
     // Nova's own record of what it read back, for the verifier (which reads it, never the tool).
     const rec = { run: r.id, task_id: brief.task_id, addresses: state.map((x) => x.address).sort(), at };
     const recFile = join(this.#runDir(r.id), `readback-${brief.task_id}.json`);
-    writeFileSync(`${recFile}.tmp`, JSON.stringify(rec), { mode: 0o600 });
-    renameSync(`${recFile}.tmp`, recFile);
+    writeAtomic(recFile, JSON.stringify(rec));
     this.#set(r.id, { changes: JSON.stringify(ch) });
     return report('done', `${this.tool.name} applied the reviewed plan for “${p.name}”: ${this.#counts(ch.priced)}. A checkpoint was taken first (${cp.id}).`, {
       evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `apply:${r.id}:${brief.task_id}` }],

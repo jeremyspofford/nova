@@ -1,13 +1,22 @@
 // The workspace: the folder in Nova's home where work products land. The local workspace
 // worker writes here; the verifier reads here on its own to check what the worker claimed.
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { CoreError } from './errors.ts';
 import { reportOf, type Brief, type Report } from './envelope.ts';
 import type { Worker } from './workers.ts';
 
 export const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
+
+// Written whole beside the file, then moved into place, so a crash never leaves half of it; the pid
+// in the temporary name keeps two processes writing the same file apart.
+export function writeAtomic(path: string, data: string | Buffer, mode = 0o600): void {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, data, { mode });
+  renameSync(tmp, path);
+}
+export const writeJson = (path: string, v: unknown, mode = 0o600): void => writeAtomic(path, `${JSON.stringify(v, null, 2)}\n`, mode);
 
 export class Workspace {
   readonly root: string;

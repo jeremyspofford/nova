@@ -46,6 +46,7 @@ import { dropScratch, freeScratch, makeScratch } from './scratch.ts';
 import { foreignEntries, isNovaEntry } from './entries.ts';
 import type { Restarter } from './restart.ts';
 import { readMark, rekeyMark, sealOk, sealWith, unsafeHome } from './home-mark.ts';
+import { writeJson } from '../workspace.ts';
 
 export const RESET_MARKER = 'factory-reset.json';
 export const RESET_REPORT = 'reset-report.json';
@@ -155,11 +156,6 @@ const inside = (path: string, root: string) => {
   const r = relative(resolve(root), resolve(path));
   return r === '' || (!r.startsWith(`..${sep}`) && r !== '..' && !isAbsolute(r));
 };
-
-function writeJson(path: string, data: unknown): void {
-  writeFileSync(`${path}.tmp`, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-  renameSync(`${path}.tmp`, path);
-}
 
 export function readReport(home: string): ResetReport | null {
   try { return JSON.parse(readFileSync(join(home, RESET_REPORT), 'utf8')) as ResetReport; } catch { return null; }

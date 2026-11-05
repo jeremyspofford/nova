@@ -14,7 +14,7 @@
 // trusted at the apply and isn't on the hub's own machine (review of PR #241, S5). core/index.ts
 // calls `contact()` once such a request's answer has gone out.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
@@ -27,6 +27,7 @@ import type { Verifier } from '../verify.ts';
 import type { Vault } from '../vault.ts';
 import type { Devices, Device } from '../mesh/devices.ts';
 import type { Egress } from '../workers.ts';
+import { writeAtomic } from '../workspace.ts';
 
 export const NETWORK_WORKER = 'network';
 export const CONFIRMATION_SYSTEM = 'nova-network';
@@ -464,8 +465,7 @@ export class Network {
 
   #writeJson(file: string, v: unknown): void {
     mkdirSync(join(file, '..'), { recursive: true, mode: 0o700 });
-    writeFileSync(`${file}.tmp`, JSON.stringify(v), { mode: 0o600 });
-    renameSync(`${file}.tmp`, file);
+    writeAtomic(file, JSON.stringify(v));
   }
 
   #readJson<T>(file: string): T | null {

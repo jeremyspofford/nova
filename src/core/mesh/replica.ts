@@ -4,7 +4,7 @@
 // its own: no scheduler, triggers, workers or chat. It pulls the hub's sync log, sealed to its own
 // key, applies each batch in one transaction, and tells the hub how far it got.
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { join } from 'node:path';
@@ -13,6 +13,7 @@ import type { MeshIdentity } from './identity.ts';
 import { sessionMessage, type SignedRoster } from './wire.ts';
 import type { LogRow, SyncLog } from './sync.ts';
 import { tap } from './tap.ts';
+import { writeJson } from '../workspace.ts';
 
 // ---- role.json ---------------------------------------------------------------------------------
 
@@ -85,10 +86,8 @@ export function readRole(home: string): RoleFile | null {
 export function writeRole(home: string, role: RoleFile): void {
   const file = join(home, ROLE_FILE);
   mkdirSync(join(home, 'mesh'), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.${process.pid}.tmp`;
   const { raw, ...known } = role;
-  writeFileSync(tmp, `${JSON.stringify({ ...raw, ...known }, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tmp, file);
+  writeJson(file, { ...raw, ...known });
 }
 
 // ---- talking to another node -------------------------------------------------------------------

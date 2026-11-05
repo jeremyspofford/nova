@@ -20,7 +20,7 @@
 // (NOVA_MESH_PUBLIC_URL), which the node that becomes hub points at itself through a driver, when one
 // is configured (NOVA_MESH_NAME_CONTROL; in this build only a loopback stand-in is ever used).
 import { randomBytes, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, statfsSync } from 'node:fs';
 import { tmpdir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -41,7 +41,7 @@ export { tap };
 import { sealed, type Manifest } from '../resilience/backup.ts';
 import { canonicalJson, freshTime, linkMessage, seenMessage, sessionMessage, verifyDeviceSignature, verifyLink, verifyRoster, type SignedLink, type SignedRoster, type SuccessionLink } from './wire.ts';
 import { EPOCH_CEILING } from './promote.ts';
-import { sha256 } from '../workspace.ts';
+import { sha256, writeAtomic, writeJson } from '../workspace.ts';
 
 export const PROMOTION_WORKER = 'mesh-promotion';
 export const PROMOTION_SYSTEM = 'nova-promotion';
@@ -407,8 +407,7 @@ export class Promotions {
     const file = join(this.#o.home, PROMOTION_FILE);
     mkdirSync(join(this.#o.home, 'mesh'), { recursive: true, mode: 0o700 });
     const next = { ...r, updated_at: this.#o.now().toISOString() };
-    writeFileSync(`${file}.tmp`, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-    renameSync(`${file}.tmp`, file);
+    writeJson(file, next);
     this.#o.role.emit('change', this.#o.role.status());
     return next;
   }
@@ -427,8 +426,7 @@ export class Promotions {
     try {
       const file = join(this.#o.home, rel);
       mkdirSync(join(this.#o.home, 'mesh'), { recursive: true, mode: 0o700 });
-      writeFileSync(`${file}.tmp`, `${JSON.stringify(v, null, 2)}\n`, { mode: 0o600 });
-      renameSync(`${file}.tmp`, file);
+      writeJson(file, v);
     } catch { /* said by whoever needed it */ }
   }
 
@@ -454,8 +452,7 @@ export class Promotions {
     try {
       const file = join(this.#o.home, NONCE_FILE);
       mkdirSync(join(this.#o.home, 'mesh'), { recursive: true, mode: 0o700 });
-      writeFileSync(`${file}.tmp`, JSON.stringify(Object.fromEntries(this.#seen)), { mode: 0o600 });
-      renameSync(`${file}.tmp`, file);
+      writeAtomic(file, JSON.stringify(Object.fromEntries(this.#seen)));
     } catch { /* the in-memory set still holds until a restart */ }
   };
 

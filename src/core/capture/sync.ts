@@ -14,7 +14,7 @@
 //               signed and checksummed, checked by Nova itself
 // A refused manifest (an unknown or revoked device, another device's, a bad signature or checksum)
 // stores nothing and is logged.
-import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
@@ -32,6 +32,7 @@ import {
 } from '../mesh/wire.ts';
 import type { Capture } from './capture.ts';
 import { KINDS, type Kind } from './rules.ts';
+import { writeAtomic } from '../workspace.ts';
 
 export const RAW_CONFIRMATION = 'nova-capture-raw';
 export const MAX_BATCH_ITEMS = 200;
@@ -270,8 +271,7 @@ export class CaptureSync {
     const dir = join(this.#o.home, 'capture', 'raw');
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = join(dir, id);
-    writeFileSync(`${file}.tmp`, data, { mode: 0o600 });
-    renameSync(`${file}.tmp`, file);
+    writeAtomic(file, data);
     this.#o.db.run(`UPDATE capture_raw_fetch SET state = 'arrived', sha256 = ?, size = ?, signature = ?, done_at = ? WHERE id = ?`, m.sha256, m.size, body.signature, this.#o.now().toISOString(), id);
     this.#arrived.get(id)?.();
     return { ok: true };

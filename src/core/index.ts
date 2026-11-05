@@ -102,7 +102,7 @@ const DEVICE_CONFIG_KEY = /^[a-z][a-z0-9_.-]{0,63}$/;
 export { render as renderIdentity } from './identity.ts';
 export { permits } from './workers.ts';
 export { ENVELOPE_VERSION, reportOf } from './envelope.ts';
-export { sha256 } from './workspace.ts';
+export { sha256, writeAtomic, writeJson } from './workspace.ts';
 export { TERMINAL } from './ledger.ts';
 export type { Brief, Evidence, Report } from './envelope.ts';
 export type { Worker, Egress } from './workers.ts';

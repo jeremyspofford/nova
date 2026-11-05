@@ -38,7 +38,7 @@ import { carryOver, droppedDevices } from './restore.ts';
 import { isNovaEntry } from './entries.ts';
 import type { Restarter } from './restart.ts';
 import { RESET_MARKER, finishReset, type FinishOptions as ResetFinishOptions } from './reset.ts';
-import { sha256 } from '../workspace.ts';
+import { sha256, writeJson } from '../workspace.ts';
 
 export const CHECKPOINTS_DIR = 'checkpoints';
 export const KEEP_AUTO = 10;
@@ -487,8 +487,7 @@ export function readMarker(home: string): RestoreMarker | null {
 
 function writeMarker(home: string, m: RestoreMarker): void {
   const file = join(root(home), RESTORE_DIR, MARKER);
-  writeFileSync(`${file}.tmp`, `${JSON.stringify(m, null, 2)}\n`, { mode: 0o600 });
-  renameSync(`${file}.tmp`, file);
+  writeJson(file, m);
 }
 
 // Every file under `dir` (a staged home), with its hash.
@@ -755,8 +754,7 @@ function applyCold(home: string, staged: string, c: ColdStage, carried: Carried,
   if (existsSync(roleFile)) {
     try {
       const r = JSON.parse(readFileSync(roleFile, 'utf8')) as Record<string, unknown>;
-      writeFileSync(`${roleFile}.tmp`, `${JSON.stringify({ ...r, role: 'hub', epoch, promoted_at: at }, null, 2)}\n`, { mode: 0o600 });
-      renameSync(`${roleFile}.tmp`, roleFile);
+      writeJson(roleFile, { ...r, role: 'hub', epoch, promoted_at: at });
     } catch { /* a role file Nova can't read: mesh_state decides */ }
   }
   const vaultAt = o.vaultAt ?? ((h: string) => new Vault({ home: h }));

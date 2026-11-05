@@ -6,11 +6,11 @@
 // restores and a factory reset treat these like the rest of Nova's state; the agent's write_file
 // can't reach it (workspace/ and the standing files only), so no model can forge its own card.
 // No migration: the files are the store.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Route } from '../api.ts';
 import type { SuiteName, SuiteRun } from './types.ts';
-import { sha256 } from '../workspace.ts';
+import { sha256, writeJson } from '../workspace.ts';
 
 export const SCORECARD_DIR = join('workers', 'evals');
 export const SCORECARD_SCHEMA = 1;
@@ -114,8 +114,7 @@ export class Scorecards {
     };
     const card: Scorecard = { schema: SCORECARD_SCHEMA, target: { ...prev?.target, ...target }, suites: { ...prev?.suites, [run.suite]: entry } };
     const file = join(this.#cards(), cardFile(target.provider, target.model));
-    writeFileSync(`${file}.tmp`, `${JSON.stringify(card, null, 2)}\n`, { mode: 0o644 });
-    renameSync(`${file}.tmp`, file);
+    writeJson(file, card, 0o644);
     appendFileSync(join(this.dir, 'runs.jsonl'), `${JSON.stringify({ target, suite: run.suite, ...entry, results: run.results.map((r) => ({ id: r.id, version: r.version, passed: r.passed, ungraded: r.ungraded, why: r.why })) })}\n`);
     return card;
   }

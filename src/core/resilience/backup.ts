@@ -36,6 +36,7 @@ import { cleanDbFile } from '../backups.ts';
 import { CoreError } from '../errors.ts';
 import { decryptTo, encryptDir, keyFingerprint, readHeader, safeRel, verifyFile } from './archive.ts';
 import { dropScratch, makeScratch } from './scratch.ts';
+import { writeJson } from '../workspace.ts';
 
 export interface BackupSettings { target: string | null; keep: number; encrypted_target: string | null }
 export const DEFAULT_KEEP = 7;
@@ -518,8 +519,7 @@ export class NightlyBackups {
     const file = this.#owedFile();
     if (!list.length && !existsSync(file)) return;
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-    writeFileSync(`${file}.tmp`, `${JSON.stringify({ v: 1, owed: list }, null, 2)}\n`, { mode: 0o600 });
-    renameSync(`${file}.tmp`, file);
+    writeJson(file, { v: 1, owed: list });
   }
 
   #owedKey(): Buffer | null {
@@ -584,8 +584,7 @@ export const sealed = (m: Manifest, key: Buffer) => {
 export function writeManifest(dir: string, m: Manifest, key: Buffer): void {
   const path = join(dir, 'manifest.json');
   m.seal = sealOf(m, key);
-  writeFileSync(`${path}.tmp`, `${JSON.stringify(m, null, 2)}\n`, { mode: 0o600 });
-  renameSync(`${path}.tmp`, path);
+  writeJson(path, m);
 }
 
 const sealWords = (words: string[], key: Buffer): string => {
