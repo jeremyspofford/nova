@@ -964,15 +964,18 @@ export function renderDevices() {
   const revoked = all.filter((d) => d.trust === 'revoked');
   // What it is for (M10f): an approver can change it, the hub's own included.
   const rolesButton = (d) => (approver && !copy && d.id && d.trust !== 'revoked' && allowedRoles(d).length > 1 ? `<button type="button" class="btn small quiet" data-action="edit-roles" data-device="${esc(d.id)}">Roles</button>` : '');
+  // Its models (model-fit step 3): the hub, and a computer that holds the compute role.
+  const modelsButton = (d) => (!copy && d.id && d.trust !== 'revoked' && (d.role === 'hub' || (d.kind === 'computer' && (d.purposes ?? []).includes('compute')))
+    ? `<button type="button" class="btn small quiet" data-action="device-models" data-device="${esc(d.role === 'hub' ? 'hub' : d.id)}" aria-label="Models on ${esc(d.name)}">Models</button>` : '');
   const actions = (d) => {
     if (copy || !d.id || d.trust === 'revoked') return '';
-    if (d.role === 'hub') return rolesButton(d);
+    if (d.role === 'hub') return `${modelsButton(d)}${rolesButton(d)}`;
     const allow = approver && (d.kind === 'phone' || d.kind === 'browser') && !d.this
       ? `<button type="button" class="btn small quiet" data-action="allow-approve" data-device="${esc(d.id)}" data-value="${d.can_approve ? 'false' : 'true'}">${d.can_approve ? 'Stop it approving' : 'Let it approve'}</button>` : '';
     // A hub candidate can be made the hub (M10g): the pre-checks say whether it is ready.
     const promote = approver && (d.purposes ?? []).includes('hub-candidate') && (d.kind === 'standby' || d.kind === 'computer')
       ? `<button type="button" class="btn small quiet" data-action="promote-device" data-device="${esc(d.id)}">Promote to hub</button>` : '';
-    return `${rolesButton(d)}${allow}${promote}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
+    return `${modelsButton(d)}${rolesButton(d)}${allow}${promote}<button type="button" class="btn small" data-action="revoke-device" data-device="${esc(d.id)}">Revoke</button>`;
   };
   // A promotion under way, or how the last one ended, in its own words (GET /mesh/status).
   const p = m?.promotion;
@@ -1075,7 +1078,11 @@ async function approveJoin(form) {
   try {
     const { device } = await api('POST', `/mesh/requests/${encodeURIComponent(form.dataset.request)}/approve`, { confirm: true, ...(purposes ? { purposes } : {}), confirm_candidate: !!candidate?.checked });
     closeSheet();
-    toast(`${device.name} is paired.`);
+    // Device setup's Models step (model-fit step 3): a computer declared for compute is offered its
+    // Models screen, which fills in once it has reported its hardware.
+    const plan = (device.purposes ?? []).includes('compute') && device.kind === 'computer'
+      ? { action: { label: 'Plan its models', run: () => { history.pushState(null, '', `/settings#models-on-${encodeURIComponent(device.id)}`); window.dispatchEvent(new PopStateEvent('popstate')); } } } : {};
+    toast(`${device.name} is paired.`, plan);
   } catch (e) { toast(e.message); }
   await load(['devices', 'requests']);
 }

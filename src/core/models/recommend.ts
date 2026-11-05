@@ -11,8 +11,9 @@ import { gb, modelMemory, type Hardware } from './hardware.ts';
 import { runsRemotely, type InstalledModel } from './ollama.ts';
 import {
   BITS_PER_WEIGHT, QUANTS, REFERENCE_SHAPES, TASK_CONTEXT, deviceBudget, fit, weightsBytes,
-  type Arch, type FitDevice, type FitModel, type FitResult, type LearnedOverhead, type Quant, type TaskClass,
+  type Arch, type FitCandidate, type FitDevice, type FitModel, type FitResult, type LearnedOverhead, type Quant, type TaskClass,
 } from './fit.ts';
+import type { PrivacyMode } from '../envelope.ts';
 
 export const ROLES = ['triage-text', 'reasoner', 'embedder', 'transcriber'] as const;
 export type Role = (typeof ROLES)[number];
@@ -246,6 +247,74 @@ export function recommend(devices: DeviceModels[]): RoleAdvice[] {
       : 'There is no transcription runtime on your devices (Nova looks for whisper.cpp or faster-whisper), so transcription stays off. Nothing is sent elsewhere to transcribe instead.',
   });
   return out;
+}
+
+// ---- what the Models screen plans with, per task class (model-fit step 3) -----------------------
+
+// Models Nova can suggest for a task class no role covers yet (vision), with the shape the screen
+// plans them with. Model-card figures: Qwen2.5-VL-7B's language model (28 layers, 4 KV heads, head
+// size 128); nomic-embed-text v1.5 (12 layers, 12 heads, 768 wide). A vision model's projector isn't
+// in here, so its verdict stays an estimate (fit.ts recommendFit).
+export interface PlanExtra { name: string; params_b: number; size: number; capabilities: string[] }
+export const PLAN_EXTRA: PlanExtra[] = [
+  { name: 'qwen2.5vl:7b', params_b: 8.3, size: 6.0e9, capabilities: ['vision'] },
+];
+const PLAN_SHAPES: Record<string, Arch> = {
+  ...Object.fromEntries(REFERENCE_SHAPES.map((r) => [r.name, r.arch])),
+  'nomic-embed-text': { layers: 12, kv_heads: 12, head_dim: 64 },
+  'qwen2.5vl:7b': { layers: 28, kv_heads: 4, head_dim: 128 },
+};
+
+// One model the screen can plan on a device: the fit engine's candidate, plus the quants offered,
+// the one Ollama's plain name downloads, and its size when Nova knows it.
+export interface PlanCandidate extends FitCandidate { quants: Quant[]; default_quant: Quant; size: number | null }
+
+const EMBED_QUANTS: Quant[] = ['Q8_0', 'F16'];
+
+// The candidates for one device, privacy first: under local-only nothing that runs off the person's
+// devices is listed at all (not a cloud model, not an Ollama model that runs remotely), so nothing
+// downstream can rank or mention one. Otherwise the cloud model the person set is listed, without a
+// verdict. What the runtime has installed comes first, with its own file and shape; then the catalog.
+export function planCandidates(d: DeviceModels, o: { privacy: PrivacyMode; cloud: string | null }): PlanCandidate[] {
+  const out: PlanCandidate[] = [];
+  for (const m of d.models ?? []) {
+    const remote = isCloud(m);
+    if (remote && o.privacy === 'local-only') continue;
+    const quant = quantOf(m.quantization);
+    const embed = isEmbedder(m);
+    out.push({
+      name: m.name, params: m.params_b ? Math.round(m.params_b * 1e9) : Math.round((m.size * 8) / BITS_PER_WEIGHT[quant]),
+      capabilities: embed && !m.capabilities.includes('embedding') ? ['embedding', ...m.capabilities] : m.capabilities,
+      where: remote ? 'remote' : 'local', installed: remote ? null : { quant, weights_bytes: m.size },
+      arch: m.arch ?? null, arch_source: m.arch ? 'backend' : null, max_context: m.max_context ?? null,
+      quants: embed ? [...new Set([...EMBED_QUANTS, quant])] : [...QUANTS], default_quant: quant, size: m.size,
+    });
+  }
+  const have = new Set(out.map((c) => c.name));
+  const plain = [
+    ...CATALOG.map((c) => ({ name: c.name, params_b: c.params_b, size: c.size, capabilities: c.role === 'embedder' ? ['embedding'] : ['completion'] })),
+    ...PLAN_EXTRA,
+  ];
+  for (const c of plain) {
+    if (have.has(c.name)) continue;
+    const embed = c.capabilities.includes('embedding');
+    const arch = PLAN_SHAPES[c.name] ?? null;
+    out.push({
+      name: c.name, params: Math.round(c.params_b * 1e9), capabilities: c.capabilities, where: 'local', installed: null,
+      arch, arch_source: arch ? 'catalog' : null, max_context: embed ? EMBED_CONTEXT : null,
+      quants: embed ? EMBED_QUANTS : [...QUANTS], default_quant: embed ? 'F16' : 'Q4_K_M', size: c.size,
+    });
+  }
+  if (o.privacy !== 'local-only' && o.cloud) out.push({ name: o.cloud, params: 0, capabilities: ['completion'], where: 'cloud', installed: null, arch: null, arch_source: null, quants: [], default_quant: 'Q4_K_M', size: null });
+  return out;
+}
+
+// What a device's runtime should download for a model at a quant: the plain name for the quant it
+// downloads by default, otherwise Ollama's tag for that quant (qwen3:8b at Q8_0 is qwen3:8b-q8_0).
+const QUANT_TAG: Record<Quant, string> = { Q4_K_M: 'q4_K_M', Q5_K_M: 'q5_K_M', Q6_K: 'q6_K', Q8_0: 'q8_0', F16: 'fp16' };
+export function quantTag(name: string, quant: Quant, defaultQuant: Quant): string {
+  if (quant === defaultQuant) return name;
+  return `${name}${name.includes(':') ? '-' : ':'}${QUANT_TAG[quant]}`;
 }
 
 export { isEmbedder, isText };

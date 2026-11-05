@@ -12,7 +12,7 @@ let google;
 before(async () => { google = await startFakeGoogle(); });
 after(() => google.close());
 
-const CLIENT = JSON.stringify({ installed: { client_id: '123-abc.apps.googleusercontent.com', client_secret: 'shh', redirect_uris: ['http://localhost'] } });
+const CLIENT = JSON.stringify({ installed: { client_id: '123-abc.apps.googleusercontent.com', client_secret: 'shh-test-client-secret', redirect_uris: ['http://localhost'] } });
 const fresh = () => new Gmail(mkdtempSync(join(tmpdir(), 'nova-g-')), { endpoints: googleEndpoints(google.base), timezone: 'America/Los_Angeles' });
 
 async function connect(gmail) {
@@ -49,7 +49,8 @@ test('connecting: PKCE, the modify scope (never send or delete), token kept priv
   assert.equal(statSync(g.vault.file).mode & 0o777, 0o600);
   assert.equal(existsSync(join(g.dir, 'token.json')), false);
   assert.deepEqual(g.vault.list(), ['connector/gmail/GOOGLE_OAUTH_CLIENT', 'connector/gmail/GOOGLE_REFRESH_TOKEN']);
-  assert.doesNotMatch(readFileSync(g.vault.file, 'utf8'), /rt-|shh/);
+  // '-' is never in base64, so neither secret can appear in the ciphertext by chance.
+  assert.doesNotMatch(readFileSync(g.vault.file, 'utf8'), /rt-|shh-test-client-secret/);
   assert.doesNotMatch(g.vault.get('connector/gmail/GOOGLE_REFRESH_TOKEN'), /at-\d/); // access tokens stay in memory
 });
 

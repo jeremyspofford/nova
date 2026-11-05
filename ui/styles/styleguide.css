@@ -68,6 +68,6 @@
 .sg-cards > .sg-state { margin: 0; }
 
 /* The Backups state selector must fit the entry even with longer role labels. */
-#sg-backups-settings .sg-pick { flex-wrap: wrap; }
-#sg-backups-settings .sg-pick select { min-width: 0; max-width: 100%; }
+#sg-backups-settings .sg-pick, #sg-models-screen .sg-pick { flex-wrap: wrap; }
+#sg-backups-settings .sg-pick select, #sg-models-screen .sg-pick select { min-width: 0; max-width: 100%; }
 .health-specimen { max-width: var(--layout-content-max); padding: var(--space-5); }
