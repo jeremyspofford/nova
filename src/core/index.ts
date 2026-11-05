@@ -204,10 +204,9 @@ export interface CoreOptions {
   captureRawWaitMs?: number;
   // Where the vault's key lives (vault.ts): NOVA_VAULT_KEY by default; tests inject a keychain.
   vault?: { mode?: KeyMode; keychain?: ((account: string) => KeyStore | null) | null };
-  // Nova Computer (M10a), for tests: another adapter than Docker, whose home folder a project may
-  // never be, which addresses the egress proxy counts as public, smaller disk caps, and a label
-  // for the containers.
-  computer?: Pick<ComputerOptions, 'computer' | 'userHome' | 'egressAllow' | 'limits' | 'labels'>;
+  // Nova Computer (M10a), for tests: whose home folder a project may never be, which addresses the
+  // egress proxy counts as public, smaller disk caps, and a label for the containers.
+  computer?: Pick<ComputerOptions, 'userHome' | 'egressAllow' | 'limits' | 'labels'>;
   // Coding through chat (M10c), for tests: whose home folder a repository may never be, and shorter
   // timeouts for the test run and the preview.
   coding?: Pick<CodingOptions, 'userHome' | 'testTimeoutS' | 'previewTimeoutS'>;

@@ -45,12 +45,9 @@ export const ACCOUNT_PRESENT_MS = 10 * 60_000;
 // `launch`: how a browser is started; a stand-in in tests.
 // screen: the ingest gate (Amendment 2026-10-30-C Part 3). Each page read is screened as it is
 // taken, so its verdict is kept with it before any model step could ever read it.
-// `locate`: a vision fallback (M10b): finds a click target in a screenshot when neither the DOM nor
-// the accessibility tree could. None ships; a step done that way is marked as a fallback.
 export interface BrowserOptions {
   home: string; log: Log; now?: () => Date; env?: NodeJS.ProcessEnv; hub?: () => Hub; launch?: SessionOptions['launch'];
   screen?: (r: { text: string; origin: string; ref: string }) => Promise<{ id: string; verdict: string }>;
-  locate?: (png: Buffer, what: string) => Promise<{ x: number; y: number } | null>;
 }
 
 // What the rest of the core gives Nova Browser once it exists (index.ts): the vault (sign-ins), the
@@ -89,7 +86,7 @@ const INSTRUCTING = new Set(['instructions', 'protocol_tags', 'hidden_instructio
 class Stop extends Error {}
 
 interface ReadRec { selector: string; text: string; screen?: { id: string | null; verdict: string; error?: string } }
-interface StepRec { n: number; do: Step['do']; what: string; via?: 'dom' | 'a11y' | 'vision'; fallback?: boolean; url?: string }
+interface StepRec { n: number; do: Step['do']; what: string; via?: 'dom' | 'a11y'; url?: string }
 interface Run {
   id: string; s: Session; plan: Plan; red: Redactor;
   reads: ReadRec[]; records: StepRec[]; learnt: LearntStep[];
@@ -472,14 +469,12 @@ export class Browser extends EventEmitter {
       // task's record but not worth a line here.
       const blocked = [...s.blocked.values()].filter((b) => b.via !== 'proxy');
       const host = (() => { try { return new URL(finalUrl).host; } catch { return finalUrl; } })();
-      const vision = run.records.filter((r) => r.via === 'vision').length;
       const summary = [
         `Went through ${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'} on ${host}${personSteps ? `; you did ${personSteps === 1 ? 'one' : personSteps} of them` : ''}.`,
         run.checkout ? `Stopped at the checkout: ${run.checkout.lines.length} line${run.checkout.lines.length === 1 ? '' : 's'}, total ${showMoney(run.checkout.total, run.checkout.currency)}${run.checkout.quoted !== null ? ', as quoted' : ''}. Paying is yours: Nova never presses pay.` : '',
         run.flow ? `Followed the flow “${plan.flow!.name}” v${plan.flow!.version}, checking each step.` : '',
         run.blocked ? `Blocked ${run.blocked === 1 ? 'a dialog' : `${run.blocked} dialogs`} that tried to give instructions; nothing in ${run.blocked === 1 ? 'it' : 'them'} was followed.` : '',
         [...run.upsells.values()].length ? `Flagged ${run.upsells.size === 1 ? 'an extra' : `${run.upsells.size} extras`} already ticked for you.` : '',
-        vision ? `${vision === 1 ? 'One step' : `${vision} steps`} found ${vision === 1 ? 'its' : 'their'} element by picture, as a fallback.` : '',
         blocked.length ? `Refused ${blocked.length} host${blocked.length === 1 ? '' : 's'} the task didn’t declare: ${blocked.map((b) => b.host).join(', ')}.` : '',
       ].filter(Boolean).join(' ');
       return report('done', summary, {
@@ -536,8 +531,7 @@ export class Browser extends EventEmitter {
       case 'click': {
         const loc = locOf(step);
         rec.via = loc.selector ? 'dom' : 'a11y';
-        const at = await this.#find(s, loc, step.timeout_ms, step.do === 'click' ? step : null);
-        if (at) { rec.via = 'vision'; rec.fallback = true; await this.#visionClick(run, i, step, at); return; }
+        await this.#find(s, loc, step.timeout_ms);
         const el = await this.#element(s, loc);
         await this.#before(run, i, step, el);
         if (step.do === 'click') {
@@ -563,10 +557,10 @@ export class Browser extends EventEmitter {
         return;
       }
       case 'wait':
-        await this.#find(s, { selector: step.selector }, step.timeout_ms, null);
+        await this.#find(s, { selector: step.selector }, step.timeout_ms);
         return;
       case 'read': {
-        await this.#find(s, { selector: step.selector }, step.timeout_ms, null);
+        await this.#find(s, { selector: step.selector }, step.timeout_ms);
         await s.gate();
         // Page text is data: it is kept and compared, never followed.
         const raw = await s.evaluate<string>(`(() => { const el = document.querySelector(${sel(step.selector)}); return el ? (el.innerText ?? el.textContent ?? '') : ''; })()`);
@@ -621,7 +615,7 @@ export class Browser extends EventEmitter {
     if (!user || !pass) throw new Stop(`There is no sign-in saved for ${site}. Save one in Settings › Connections › Site sign-ins (never in chat), then try again.`);
     red.add(user);
     red.add(pass);
-    for (const f of [step.username, step.password, step.submit]) await this.#find(s, { selector: f }, step.timeout_ms, null);
+    for (const f of [step.username, step.password, step.submit]) await this.#find(s, { selector: f }, step.timeout_ms);
     await this.#before(run, i, step, await this.#element(s, { selector: step.submit }));
     for (const [field, value, part] of [[step.username, user, 'username'], [step.password, pass, 'password']] as const) {
       const r = await s.actOn<string>({ selector: field }, SECRET, [value, url.host, part, field]);
@@ -643,7 +637,7 @@ export class Browser extends EventEmitter {
     } finally {
       s.allowSends(null);
     }
-    if (step.done_when) await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000, null).catch(() => { throw new Stop(`The sign-in didn’t go through: ${step.done_when} isn’t on the page.`); });
+    if (step.done_when) await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000).catch(() => { throw new Stop(`The sign-in didn’t go through: ${step.done_when} isn’t on the page.`); });
   }
 
   // An account change (M10d): a new password Nova makes itself, typed with the saved sign-in where the
@@ -673,8 +667,8 @@ export class Browser extends EventEmitter {
     if (step.do === 'new_password' && step.current) fields.push([step.current, old!, 'password']);
     fields.push([step.password, fresh, 'password']);
     if (step.confirm) fields.push([step.confirm, fresh, 'password']);
-    for (const [f] of fields) await this.#find(s, { selector: f }, step.timeout_ms, null);
-    await this.#find(s, { selector: step.submit }, step.timeout_ms, null);
+    for (const [f] of fields) await this.#find(s, { selector: f }, step.timeout_ms);
+    await this.#find(s, { selector: step.submit }, step.timeout_ms);
     await this.#before(run, i, step, await this.#element(s, { selector: step.submit }));
     for (const [field, value, part] of fields) {
       const r = await s.actOn<string>({ selector: field }, SECRET, [value, url.host, part, field]);
@@ -697,7 +691,7 @@ export class Browser extends EventEmitter {
     } finally {
       s.allowSends(null);
     }
-    await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000, null).catch(() => {
+    await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000).catch(() => {
       throw new Stop(`The page didn’t show that the ${create ? 'account was created' : 'password changed'} (${step.done_when} isn’t there). Nova kept the new password aside, unused, and still uses the old one. If the site did take it, keep it with POST /browser/logins/${site}/pending {keep: true, confirm: true}.`);
     });
     if (create) w.vault.put(loginName(site, 'username'), step.name);
@@ -711,8 +705,8 @@ export class Browser extends EventEmitter {
   // browser refuses whatever its form would send, and never clicked.
   async #checkout(run: Run, i: number, step: Extract<Step, { do: 'checkout' }>): Promise<void> {
     const { s, red } = run;
-    await this.#find(s, { selector: step.total }, step.timeout_ms, null);
-    await this.#find(s, { selector: step.lines }, step.timeout_ms, null);
+    await this.#find(s, { selector: step.total }, step.timeout_ms);
+    await this.#find(s, { selector: step.lines }, step.timeout_ms);
     const pay = await this.#element(s, { selector: step.pay });
     if (!pay) throw new Stop(`Nova can’t find the pay control (${step.pay}) on the checkout page, so it can’t be sure what pays: it stopped.`);
     if (pay.formAction) s.addPayTarget(pay.formAction);
@@ -973,9 +967,7 @@ export class Browser extends EventEmitter {
   // ---- elements ---------------------------------------------------------------------------------
 
   // Waits for an element. The time the person holds the browser doesn't count against the step.
-  // A click whose element neither the DOM nor the accessibility tree finds may fall back to vision,
-  // when a locator is configured: the point it found is returned.
-  async #find(s: Session, loc: Locator, timeoutMs = STEP_TIMEOUT_MS, click: Step | null): Promise<{ x: number; y: number } | null> {
+  async #find(s: Session, loc: Locator, timeoutMs = STEP_TIMEOUT_MS): Promise<void> {
     let deadline = Date.now() + timeoutMs;
     for (;;) {
       deadline += await s.gate();
@@ -985,12 +977,8 @@ export class Browser extends EventEmitter {
           return false;
         })
         : await s.exists(loc).catch(() => false);
-      if (found) return null;
+      if (found) return;
       if (Date.now() > deadline) {
-        if (click && this.#o.locate) {
-          const at = await this.#o.locate(await this.#picture(s), describe(click)).catch(() => null);
-          if (at) return at;
-        }
         throw new Error(`Nothing on ${hostOf(s.url)} matches ${loc.selector ?? (loc.target ? `the ${loc.target.role} “${loc.target.name}”` : '')}, after ${Math.round(timeoutMs / 1000)} s.`);
       }
       await new Promise((r) => setTimeout(r, 150));
@@ -1002,24 +990,6 @@ export class Browser extends EventEmitter {
   #act(s: Session, loc: Locator, fn: string, args: unknown[]): Promise<string> {
     if (loc.selector) return s.act<string>(`(${fn}).apply(document.querySelector(${sel(loc.selector)}), ${JSON.stringify(args)})`);
     return s.actOn<string>(loc, fn, args);
-  }
-
-  // The vision fallback: the point is checked like any click (the element there must not pay), and
-  // the step is marked as found by picture.
-  async #visionClick(run: Run, i: number, step: Step, at: { x: number; y: number }): Promise<void> {
-    const { s } = run;
-    const el = await s.evaluate<ElementFacts | null>(`(${ELEMENT_FACTS}).call(document.elementFromPoint(${Number(at.x)}, ${Number(at.y)}))`).catch(() => null);
-    await this.#before(run, i, step, el && typeof el === 'object' ? el : null);
-    const why = el && typeof el === 'object' ? isPayControl(el) : null;
-    if (why) throw new Stop(`Nova stopped: what the picture pointed at is a pay control (${why}). ${PAY_REFUSAL}`);
-    this.#note(run.id, 'vision_fallback', { step: i + 1, why: 'Neither the page’s structure nor its accessibility tree had the element; it was found by picture.' });
-    s.allowSends(i + 1, this.#sendsOf(s, step, null));
-    try {
-      await s.clickAt(at.x, at.y);
-      await s.settle();
-    } finally {
-      s.allowSends(null);
-    }
   }
 
   // ---- learning a flow --------------------------------------------------------------------------
