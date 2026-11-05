@@ -120,7 +120,7 @@ test('a fresh Nova says it is fresh, names its home, and offers the import path;
     const b = await h.core.self.briefing();
     assert.match(b, /First run: this Nova is fresh/);
     assert.ok(b.includes(`it runs from ${h.home}`));
-    assert.match(b, /put a file \(notes, an export from another assistant, or a Nova memory export\) in ~\/workspace\/import\//);
+    assert.ok(b.includes(`put a file (notes, an export from another assistant, or a Nova memory export) in ${join(h.home, 'workspace', 'import')}/`));
     h.core.memory.remember({ kind: 'preference', content: 'Example preference', recorded_by: 'person' });
     assert.doesNotMatch(await h.core.self.briefing(), /First run/);
   });
@@ -135,7 +135,7 @@ test('a Nova memory export in ~/workspace/import/ is offered, screened, and its 
     writeFileSync(join(h.home, 'workspace', 'import', 'notes.md'), '# Example notes\n');
     const b = await core.self.briefing();
     // By their counts only: a file's name is outside content (review N4); import_files lists them.
-    assert.match(b, /2 files wait in ~\/workspace\/import\/ \(1 looks like a Nova memory export\)\. Their names come from outside: list them with import_files\. Offer to load an export with memory_import; the person approves, and the memories wait for their OK in Memory/);
+    assert.ok(b.includes(`2 files wait in ${join(h.home, 'workspace', 'import')}/ (1 looks like a Nova memory export). Their names come from outside: list them with import_files. Offer to load an export with memory_import; the person approves, and the memories wait for their OK in Memory`));
     assert.doesNotMatch(b, /memory-2026-10-01|notes\.md/);
     core.memory.remember({ kind: 'preference', content: 'Prefers short replies', recorded_by: 'person' });
     const plan = core.self.planImport('workspace/import/memory-2026-10-01/memory.json');

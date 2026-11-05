@@ -1,3 +1,4 @@
+import { checkState, checkAction } from './health-state.js';
 // The PWA's own surfaces, drawn from the core (/api/v1): Home, the right column, Tasks, Health,
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
@@ -444,8 +445,7 @@ export function renderHealth(el) {
   ${p.detail ? `<details class="raw"><summary>Technical detail</summary><pre tabindex="0">${esc(p.detail)}</pre></details>` : ''}</div>
   ${open ? `<div class="settings-control"><button type="button" class="btn small" data-action="resolve-problem" data-problem="${esc(String(p.id))}">Mark as dealt with</button></div>` : ''}
 </li>`;
-  const fine = (k, c) => c.ok && !(k === 'passkeys' && !c.complete) && !(k === 'mesh' && (c.standby?.lag?.behind || c.replica?.sync?.unreachable_since || c.replica?.sync?.refused));
-  const checks = h ? Object.entries(h.checks).map(([k, c]) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(CHECK_NAMES[k] ?? k)}</p><p class="settings-note">${esc(checkLine(k, c))}${k === 'mesh' ? ' <a class="link" href="/topology">View machines and services</a>' : ''}</p></div>${fine(k, c) ? '<span class="pill is-on">Fine</span>' : '<span class="pill is-warn">Needs a look</span>'}</li>`).join('') : '';
+  const checks = h ? Object.entries(h.checks).map(([k, c]) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(CHECK_NAMES[k] ?? k)}</p><p class="settings-note">${esc(checkLine(k, c))}${k === 'mesh' ? ' <a class="link" href="/topology">View machines and services</a>' : ''}</p></div><span class="pill ${checkState(k, c) === 'Fine' ? 'is-on' : 'is-warn'}">${esc(checkState(k, c))}</span>${checkState(k, c) !== 'Fine' && checkAction(k) ? `<a class="link" href="${checkAction(k).href}">${checkAction(k).label}</a>` : ''}</li>`).join('') : '';
   const next = document.createElement('div');
   next.innerHTML = `<header class="view-head"><h2 class="view-title">Health</h2>
 <p class="view-lede">${!store.reachable ? 'Nova isn’t answering. This page reconnects when it’s back.' : store.problems.length ? 'Something went wrong. Each problem says what happened; the detail is one tap away.' : 'Everything Nova runs on, and anything that went wrong.'}</p></header>

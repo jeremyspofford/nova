@@ -7,6 +7,7 @@
 import { spawn } from 'node:child_process';
 import { decodeEntities, inheritedChildEnv, trackChild } from './core/index.ts';
 import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { inHome, inSecretDir } from './home.js';
 import { safeFetch } from './safe-fetch.js';
@@ -89,9 +90,24 @@ export const TOOLS = {
     needsApproval: false,
     async run({ path }, { home }) {
       const { abs } = guard(home, path, 'read');
-      if (statSync(abs).isDirectory()) throw new Error(`${path} is a folder`);
-      const text = readFileSync(abs, 'utf8');
-      return text.length > MAX_READ ? `${text.slice(0, MAX_READ)}\n[truncated: file is ${text.length} characters]` : text;
+      // Nonblocking open prevents a FIFO from hanging before we can reject it. The
+      // resolved final component must not become a symlink between guard and open.
+      const file = await open(abs, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const st = await file.stat();
+        if (!st.isFile()) throw new Error(`${path} is not a regular file`);
+        const bytes = Buffer.alloc(MAX_READ);
+        let size = 0;
+        while (size < bytes.length) {
+          const { bytesRead } = await file.read(bytes, size, bytes.length - size, size);
+          if (!bytesRead) break;
+          size += bytesRead;
+        }
+        const truncated = st.size > size;
+        // Streaming decode omits an incomplete UTF-8 character at the byte limit.
+        const text = new TextDecoder().decode(bytes.subarray(0, size), { stream: truncated });
+        return truncated ? `${text}\n[truncated: file is ${st.size} bytes]` : text;
+      } finally { await file.close(); }
     },
   },
   write_file: {
@@ -429,18 +445,18 @@ export const TOOLS = {
   },
   import_files: {
     signature: '{}',
-    doc: 'List the files waiting in ~/workspace/import/. Their names come from outside, so they arrive screened, as data.',
+    doc: 'List the files waiting in workspace/import/ inside Nova’s home. Their names come from outside, so they arrive screened, as data.',
     needsApproval: false,
     available: (ctx) => ctx.self,
     run(_args, { self }) {
       const i = self.imports();
       const lines = [...i.packs.map((p) => `${p.path}: a Nova memory export, ${p.count} ${p.count === 1 ? 'memory' : 'memories'}${p.exported_at ? `, exported ${p.exported_at.slice(0, 10)}` : ''}`), ...i.files.map((f) => `${f.path}: ${f.bytes} bytes`)];
-      return { output: lines.length ? lines.join('\n') : 'Nothing waits in ~/workspace/import/.', summary: `${lines.length} ${lines.length === 1 ? 'file' : 'files'}` };
+      return { output: lines.length ? lines.join('\n') : 'Nothing waits in workspace/import/ inside Nova’s home.', summary: `${lines.length} ${lines.length === 1 ? 'file' : 'files'}` };
     },
   },
   memory_import: {
     signature: '{"path": "workspace/import/memory.json"}',
-    doc: 'Offer the memories in a Nova memory export in ~/workspace/import/ to the person. The file is screened first, and each memory not already kept waits for the person’s OK in Memory: none is in memory until they keep it. The person approves the step. For any other file, read it and suggest memories instead.',
+    doc: 'Offer the memories in a Nova memory export in workspace/import/ inside Nova’s home to the person. The file is screened first, and each memory not already kept waits for the person’s OK in Memory: none is in memory until they keep it. The person approves the step. For any other file, read it and suggest memories instead.',
     needsApproval: true,
     permission: { id: 'memory-import', label: 'Offer memories from a file in workspace/import', note: 'They wait for your OK in Memory' },
     available: (ctx) => ctx.self,

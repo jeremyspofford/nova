@@ -43,6 +43,8 @@ const el = {
 
 const state = {
   list: [],
+  listNext: null,
+  listLoading: false,
   id: null,
   session: emptySession(),
   live: null,
@@ -87,13 +89,18 @@ async function post(path, body = {}) {
   return data;
 }
 
-async function loadList() {
+async function loadList(more = false) {
+  if (state.listLoading) return;
+  state.listLoading = true;
   try {
-    const res = await fetch('/api/sessions');
+    const res = await fetch(`/api/sessions?limit=100${more && state.listNext ? `&after=${encodeURIComponent(state.listNext)}` : ''}`);
     if (!res.ok) throw new Error();
-    state.list = await res.json();
+    const page = await res.json();
+    state.list = more ? [...state.list, ...page.items.filter(s => !state.list.some(old => old.id === s.id))] : page.items;
+    state.listNext = page.next;
     setReachable(!fromCache(res));
   } catch { setReachable(false); }
+  state.listLoading = false;
   renderToc_();
 }
 
@@ -648,7 +655,7 @@ function renderChrome() {
 }
 
 function renderToc_() {
-  el.toc.innerHTML = renderToc(state.list, state.view === 'chat' ? state.id : null);
+  el.toc.innerHTML = renderToc(state.list, state.view === 'chat' ? state.id : null, new Date(), !!state.listNext);
 }
 
 // ---- scrolling -----------------------------------------------------------
@@ -1956,6 +1963,7 @@ $('sheet').addEventListener('change', (e) => {
 // ---- navigation ------------------------------------------------------------
 
 el.toc.addEventListener('click', (e) => {
+  if (e.target.closest('[data-more-conversations]')) { loadList(true); return; }
   const a = e.target.closest('a[data-id]');
   if (!a || e.metaKey || e.ctrlKey || e.shiftKey) return;
   e.preventDefault();

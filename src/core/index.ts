@@ -351,7 +351,7 @@ export function createCore(o: CoreOptions) {
       kept: () => new Set([...memory.active().map((r) => r.content.toLowerCase()), ...ingest.candidates().filter((c) => c.op === 'remember' && c.content).map((c) => c.content!.toLowerCase())]),
     }, { userHome, now: now() }),
   };
-  const setup = new Setup({ profile, ledger, now, onboarding, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
+  const setup = new Setup({ home: o.home, profile, ledger, now, onboarding, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
   const design = new Design({ extensions, profile });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });

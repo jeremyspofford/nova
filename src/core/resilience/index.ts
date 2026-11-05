@@ -480,9 +480,9 @@ export class Resilience {
     };
   }
 
-  health(): { ok: boolean; detail: string } {
+  health(): { ok: boolean; detail: string; configured?: boolean } {
     const s = this.settings();
-    if (!s.target) return { ok: true, detail: 'No backup folder set yet.' };
+    if (!s.target) return { ok: true, configured: false, detail: 'No backup folder set yet.' };
     if (!existsSync(s.target)) return { ok: false, detail: `The backup folder ${s.target} isn’t there.` };
     const last = this.nightly.runs(1)[0];
     if (last && !last.ok) return { ok: false, detail: `The last backup didn’t finish: ${last.error}` };

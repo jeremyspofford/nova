@@ -1,3 +1,4 @@
+import { checkState } from './health-state.js';
 // Nova's component inventory (DESIGN-SYSTEM §7): pure functions, data in, HTML out, so the app,
 // the style reference and the appearance preview all draw the same components. Every visual
 // value is a token (components.css); nothing here carries a colour, size or font.
@@ -452,7 +453,7 @@ export function addDeviceSheet(p, { now = new Date() } = {}) {
 // Health: everything fine, or what isn't, in human terms; detail is on the Health page
 // (DESIGN-SYSTEM §6). The card never quotes a problem's own message, which can name a file, a path
 // or an error: it says how many and what they are about, and Health has the rest (UX review 1, F1).
-export const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices', browser: 'Browser work', backups: 'Backups', changes: 'Changes', capture: 'Capture', vault: 'Vault', connectors: 'Connections', ingest: 'Outside content', passkeys: 'Passkeys' };
+export const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices', browser: 'Browser work', backups: 'Backups', changes: 'Changes', capture: 'Capture', vault: 'Vault', connectors: 'Connections', ingest: 'Outside content', computer: 'Nova Computer', passkeys: 'Passkeys' };
 // What a problem is about, by where it came from.
 const PROBLEM_AREAS = {
   sync: 'the standby’s copy of your files', mesh: 'your devices', connectors: 'a connection', providers: 'a model provider',
@@ -474,12 +475,13 @@ export function healthCard({ health = null, problems = [], reachable = true } = 
   else if (!health) body = waitingLine('Checking Nova’s health', { key: 'health' });
   else {
     const bad = Object.entries(health.checks ?? {}).filter(([, c]) => c && c.ok === false);
-    const lead = problems.length ? `${problems.length} problem${problems.length === 1 ? '' : 's'} to look at` : bad.length ? 'Something isn’t right' : 'All systems normal';
+    const pending = Object.entries(health.checks ?? {}).filter(([k, c]) => c?.ok !== false && checkState(k, c) !== 'Fine');
+    const lead = problems.length ? `${problems.length} problem${problems.length === 1 ? '' : 's'} to look at` : bad.length ? 'Something isn’t right' : pending.length ? 'Some capabilities need setup or checking' : 'All systems normal';
     const lines = problems.length ? [problemsSummary(problems), 'What happened, and what you can do, is in Health.']
       : bad.length ? [`Needs a look: ${listWords(bad.map(([k]) => CHECK_NAMES[k] ?? 'another check'))}.`, 'The detail is in Health.']
-        : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
+        : pending.length ? [`${listWords(pending.map(([k]) => CHECK_NAMES[k] ?? k))}.`, 'Readiness and next steps are in Health.'] : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
     // Failed (red) only when a problem stops Nova; any other open problem needs you (amber).
-    const tone = problems.some((p) => p?.stops) || (!problems.length && bad.length) ? 'failed' : problems.length ? 'needs-you' : 'verified';
+    const tone = problems.some((p) => p?.stops) || (!problems.length && bad.length) ? 'failed' : problems.length || pending.length ? 'needs-you' : 'verified';
     body = `<p class="card-lead" data-status="${tone}">${esc(lead)}</p>${lines.map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}`;
   }
   return card({ kind: 'health-card', title: 'System health', icon: 'health', body, action: '<a class="link" href="/health" data-nav="health">Health</a>' });

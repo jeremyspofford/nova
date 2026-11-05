@@ -62,7 +62,7 @@ export function msgTime(iso, lead) {
 
 // ---- sidebar -------------------------------------------------------------
 
-export function renderToc(list, currentId, now = new Date()) {
+export function renderToc(list, currentId, now = new Date(), more = false) {
   if (!list.length) return '<p class="toc-empty">Your conversations will gather here, a chapter for each day.</p>';
   let out = '';
   let day = null;
@@ -77,7 +77,7 @@ export function renderToc(list, currentId, now = new Date()) {
     const cur = s.id === currentId ? ' aria-current="page"' : '';
     out += `<li><a class="toc-item" href="/c/${esc(s.id)}" data-id="${esc(s.id)}"${cur}>${esc(s.title)}</a></li>`;
   }
-  return `${out}</ul></section>`;
+  return `${out}</ul></section>${more ? '<button type="button" class="btn quiet" data-more-conversations>Older conversations</button>' : ''}`;
 }
 
 // ---- conversation --------------------------------------------------------

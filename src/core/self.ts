@@ -281,12 +281,12 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     const waiting = this.#o.ingest.candidates().length;
     if (waiting) out.push(`- ${waiting} ${waiting === 1 ? 'memory waits' : 'memories wait'} for the person’s OK in Memory. They aren’t memory until the person keeps them; if it comes up, point them there.`);
     if (this.#o.memory.counts().active === 0 && !waiting) {
-      out.push(`- First run: this Nova is fresh. Its memory is empty, so beyond the profile above you know nothing about the person yet. When you greet them or they ask what you know about them, say so plainly, say it runs from ${this.#o.home}, and offer the import path up front: they can paste notes here, or put a file (notes, an export from another assistant, or a Nova memory export) in ~/${IMPORT_DIR}/, and you read it and suggest memories they review in Memory.`);
+      out.push(`- First run: this Nova is fresh. Its memory is empty, so beyond the profile above you know nothing about the person yet. When you greet them or they ask what you know about them, say so plainly, say it runs from ${this.#o.home}, and offer the import path up front: they can paste notes here, or put a file (notes, an export from another assistant, or a Nova memory export) in ${join(this.#o.home, IMPORT_DIR)}/, and you read it and suggest memories they review in Memory.`);
     }
     // Only how many: a file's name is outside content (anything can put a file there), so the
     // agent sees names only through import_files, screened.
     const files = imports.packs.length + imports.files.length;
-    if (files) out.push(`- ${files} ${files === 1 ? 'file waits' : 'files wait'} in ~/${IMPORT_DIR}/${imports.packs.length ? ` (${imports.packs.length} ${imports.packs.length === 1 ? 'looks' : 'look'} like a Nova memory export)` : ''}. Their names come from outside: list them with import_files. Offer to load an export with memory_import; the person approves, and the memories wait for their OK in Memory: none is in memory until they keep it. Read any other file with read_file to suggest memories.`);
+    if (files) out.push(`- ${files} ${files === 1 ? 'file waits' : 'files wait'} in ${join(this.#o.home, IMPORT_DIR)}/${imports.packs.length ? ` (${imports.packs.length} ${imports.packs.length === 1 ? 'looks' : 'look'} like a Nova memory export)` : ''}. Their names come from outside: list them with import_files. Offer to load an export with memory_import; the person approves, and the memories wait for their OK in Memory: none is in memory until they keep it. Read any other file with read_file to suggest memories.`);
     return out;
   }
 
@@ -485,12 +485,12 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
   // Only a file inside ~/workspace/import/, reached without links.
   #importPath(path: unknown): { abs: string; rel: string } {
     const p = typeof path === 'string' ? path.trim().replace(/^~\//, '') : '';
-    if (!p) throw new CoreError('validation', `path is the file in ~/${IMPORT_DIR}/, like ${IMPORT_DIR}/memory.json.`);
+    if (!p) throw new CoreError('validation', `path is the file in ${join(this.#o.home, IMPORT_DIR)}/, like ${IMPORT_DIR}/memory.json.`);
     const root = join(this.#o.home, IMPORT_DIR);
     const abs = resolve(this.#o.home, p);
-    if (!abs.startsWith(root + sep) || !existsSync(abs)) throw new CoreError('validation', `Only a file in ~/${IMPORT_DIR}/ can be loaded, and ${p} isn’t one.`);
+    if (!abs.startsWith(root + sep) || !existsSync(abs)) throw new CoreError('validation', `Only a file in ${join(this.#o.home, IMPORT_DIR)}/ can be loaded, and ${p} isn’t one.`);
     const real = realpathSync(abs);
-    if (real !== abs || !statSync(real).isFile()) throw new CoreError('validation', `${p} isn’t a plain file in ~/${IMPORT_DIR}/.`);
+    if (real !== abs || !statSync(real).isFile()) throw new CoreError('validation', `${p} isn’t a plain file in ${join(this.#o.home, IMPORT_DIR)}/.`);
     return { abs, rel: relative(this.#o.home, abs).split(sep).join('/') };
   }
 }

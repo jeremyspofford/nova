@@ -211,3 +211,22 @@ test('memory: at start, an Era 2 MEMORY.md is imported into the core once', asyn
   assert.match(readFileSync(join(home, 'MEMORY.md'), 'utf8'), /## Preferences\n\n- Likes sample tea\. <!-- id=m00aa11bb from=s1\/t1 at=2026-09-01T10:00:00\.000Z -->\n- Written by hand\. <!-- id=h[0-9a-f]{8} at=\S+ by=you -->\n/);
   await again.core.close();
 });
+
+test('HTML cannot be framed by another origin', async () => {
+  for (const path of ['/', '/settings', '/pair', '/styleguide']) {
+    const res = await fetch(base + path);
+    assert.equal(res.headers.get('content-security-policy'), "frame-ancestors 'none'");
+    assert.equal(res.headers.get('x-frame-options'), 'DENY');
+  }
+});
+
+test('conversation lists support bounded pages without changing the legacy array response', async () => {
+  const all = await (await fetch(base + '/api/sessions')).json();
+  assert.ok(all.length > 1);
+  const first = await (await fetch(base + '/api/sessions?limit=1')).json();
+  assert.deepEqual(first.items, all.slice(0, 1));
+  assert.equal(first.next, all[0].id);
+  const second = await (await fetch(base + '/api/sessions?limit=1&after=' + first.next)).json();
+  assert.deepEqual(second.items, all.slice(1, 2));
+  assert.equal((await fetch(base + '/api/sessions?limit=100000')).status, 400);
+});

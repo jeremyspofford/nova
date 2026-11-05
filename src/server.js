@@ -540,7 +540,18 @@ export function createNova(config = loadConfig(), deps = {}) {
 
     if (resource !== 'sessions') return json(res, 404, { error: 'Not found' });
     if (!id) {
-      if (req.method === 'GET') return json(res, 200, store.list());
+      if (req.method === 'GET') {
+        const query = new URL(req.url, 'http://nova.local').searchParams;
+        const list = await store.listAsync();
+        if (!query.has('limit')) return json(res, 200, list);
+        const limit = Number(query.get('limit'));
+        if (!Number.isInteger(limit) || limit < 1 || limit > 200) return json(res, 400, { error: 'limit must be between 1 and 200' });
+        const after = query.get('after');
+        const offset = after ? list.findIndex(s => s.id === after) + 1 : 0;
+        if (after && !offset) return json(res, 400, { error: 'Conversation cursor no longer exists; reload the list.' });
+        const items = list.slice(offset, offset + limit);
+        return json(res, 200, { items, next: offset + limit < list.length ? items.at(-1).id : null });
+      }
       if (req.method === 'POST') {
         const { text } = await readBody(req);
         if (!String(text ?? '').trim()) return json(res, 400, { error: 'Write a message first.' });
@@ -603,6 +614,8 @@ export function createNova(config = loadConfig(), deps = {}) {
   // One handler for both listeners; the listener is part of who is asking.
   const handler = (listener) => async (req, res) => {
     try {
+      res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+      res.setHeader('X-Frame-Options', 'DENY');
       if (!allowedHost(req.headers.host)) { res.writeHead(421); return res.end('Misdirected request'); }
       const url = new URL(req.url, 'http://nova.local');
       const parts = url.pathname.split('/');
@@ -639,6 +652,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     }
   };
   const server = createServer(handler('console'));
+  server.on('close', () => store.close());
   const m = config.mesh;
   const mesh = !m ? null : m.tls
     ? createTlsServer({ cert: readFileSync(m.tls.cert), key: readFileSync(m.tls.key) }, handler('mesh'))

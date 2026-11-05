@@ -12,6 +12,7 @@ import { lookup as dnsLookup } from 'node:dns';
 import http from 'node:http';
 import https from 'node:https';
 import zlib from 'node:zlib';
+import { pipeline } from 'node:stream/promises';
 
 const PRIVATE = new BlockList();
 for (const [net, bits] of [
@@ -132,17 +133,22 @@ function request(url, { signal, headers, lookup }) {
 
 async function body(res, type, signal) {
   const enc = String(res.headers['content-encoding'] ?? '').toLowerCase();
-  const stream = enc === 'gzip' ? res.pipe(zlib.createGunzip()) : enc === 'deflate' ? res.pipe(zlib.createInflate()) : enc === 'br' ? res.pipe(zlib.createBrotliDecompress()) : res;
+  const decoder = enc === 'gzip' ? zlib.createGunzip() : enc === 'deflate' ? zlib.createInflate() : enc === 'br' ? zlib.createBrotliDecompress() : null;
   const chunks = [];
   let size = 0;
-  for await (const c of stream) {
-    if (signal.aborted) throw signal.reason;
-    size += c.length;
-    if (size > MAX_BODY) { res.destroy(); break; }
-    chunks.push(c);
-  }
+  // Pipeline propagates timeout, cancellation and premature close through the decoder too.
+  // Checking the signal only inside a chunk loop cannot stop a stalled compressed member.
+  const collect = async (source) => {
+    for await (const c of source) {
+      size += c.length;
+      if (size > MAX_BODY) throw new Error('The page is too large.');
+      chunks.push(c);
+    }
+  };
+  if (decoder) await pipeline(res, decoder, collect, { signal });
+  else await pipeline(res, collect, { signal });
   const charset = /charset=([\w-]+)/i.exec(type)?.[1] ?? 'utf-8';
-  let decoder;
-  try { decoder = new TextDecoder(charset); } catch { decoder = new TextDecoder('utf-8'); }
-  return decoder.decode(Buffer.concat(chunks));
+  let textDecoder;
+  try { textDecoder = new TextDecoder(charset); } catch { textDecoder = new TextDecoder('utf-8'); }
+  return textDecoder.decode(Buffer.concat(chunks));
 }

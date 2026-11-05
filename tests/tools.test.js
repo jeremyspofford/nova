@@ -198,3 +198,23 @@ test('the file tools compare names whatever their case or Unicode form', async (
   }
   assert.match(await TOOLS.write_file.run({ path: 'USER.md', content: 'ok' }, { home: h }), /Wrote 2 bytes/);
 });
+
+test('file reads are bounded by bytes and never split a UTF-8 character', async () => {
+  const h = home();
+  const path = join(h, 'workspace', 'large.txt');
+  writeFileSync(path, 'a'.repeat(199999) + '界' + 'z'.repeat(1_000_000));
+  const text = await TOOLS.read_file.run({ path: 'workspace/large.txt' }, { home: h });
+  assert.equal(text.split('\n')[0], 'a'.repeat(199999));
+  assert.match(text, /truncated: file is 1200002 bytes/);
+  assert.ok(!text.includes('\ufffd'));
+  writeFileSync(path, 'A small 世界');
+  assert.equal(await TOOLS.read_file.run({ path: 'workspace/large.txt' }, { home: h }), 'A small 世界');
+  await assert.rejects(TOOLS.read_file.run({ path: 'workspace' }, { home: h }), /regular file/);
+});
+
+test('read_file refuses a FIFO without waiting for a writer', { skip: process.platform === 'win32', timeout: 3000 }, async () => {
+  const { execFileSync } = await import('node:child_process');
+  const h = home();
+  execFileSync('mkfifo', [join(h, 'workspace', 'pipe')]);
+  await assert.rejects(TOOLS.read_file.run({ path: 'workspace/pipe' }, { home: h }), /regular file/);
+});

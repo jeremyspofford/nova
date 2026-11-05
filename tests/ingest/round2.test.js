@@ -141,7 +141,7 @@ test('N4: an import file’s name never reaches the briefing; the agent sees nam
     await h.run('Hello.');
     const system = m.calls.at(-1).system;
     assert.doesNotMatch(system, /pre-approved|A placeholder fact/);
-    assert.match(system, /2 files wait in ~\/workspace\/import\/ \(1 looks like a Nova memory export\)/);
+    assert.ok(system.includes(`2 files wait in ${join(h.home, 'workspace', 'import')}/ (1 looks like a Nova memory export)`));
     const { s, asked } = await h.run('List the import files.', () => 'deny');
     const [list] = toolsOf(s);
     assert.ok(list.result.screen, 'the list is screened as outside content');

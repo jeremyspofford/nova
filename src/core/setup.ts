@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 // First-run setup as a conversation (PROFILES-AND-CUSTOMIZATION): Nova asks, proposes a default,
 // and writes each answer to the profile as it goes, the same records a settings screen would.
 // It is a scripted interview, not a model: setup has to work before any model is configured,
@@ -134,10 +136,11 @@ const PRIVACY_WORDS: Record<PrivacyMode, string> = {
   'cloud-allowed': 'I may use cloud models when they’re the better tool, within your budget',
 };
 
-const IMPORT_FOLDER = 'You can put notes or exports in ~/workspace/import/ any time, and tell me.';
+
 
 export class Setup extends EventEmitter {
   #profile: Profile;
+  #importPath: string;
   #ledger: Ledger;
   #now: () => Date;
   #detectedTz: string;
@@ -147,8 +150,9 @@ export class Setup extends EventEmitter {
   // One answer at a time: discovery and import take a moment, and answers wait their turn.
   #turns: Promise<unknown> = Promise.resolve();
 
-  constructor(o: { profile: Profile; ledger: Ledger; now?: () => Date; detectedTimezone?: string; chat?: { program: string; egress: Egress }; onboarding?: Onboarding }) {
+  constructor(o: { home?: string; profile: Profile; ledger: Ledger; now?: () => Date; detectedTimezone?: string; chat?: { program: string; egress: Egress }; onboarding?: Onboarding }) {
     super();
+    this.#importPath = join(o.home ?? join(homedir(), 'Nova'), 'workspace', 'import');
     this.#profile = o.profile;
     this.#ledger = o.ledger;
     this.#now = o.now ?? (() => new Date());
@@ -300,14 +304,14 @@ export class Setup extends EventEmitter {
         on.network_pending = false;
         if (scope === 'none') {
           on.discovery = null;
-          return then(`No looking, then. ${IMPORT_FOLDER}`, 'first_task');
+          return then(`No looking, then. ${this.#importWords()}`, 'first_task');
         }
         const network = scope === 'network';
         const d = await this.#on.discover(network ? 'network' : 'device');
         on.discovery = d;
         on.sources = this.#on.sources();
         const lead = this.#foundWords(d);
-        return on.sources.length ? then(lead, 'import') : then(`${lead} I didn’t find notes, calendar files or browser bookmarks I could bring in. ${IMPORT_FOLDER}`, 'first_task');
+        return on.sources.length ? then(lead, 'import') : then(`${lead} I didn’t find notes, calendar files or browser bookmarks I could bring in. ${this.#importWords()}`, 'first_task');
       }
       case 'import': {
         const sources = on.sources ?? [];
@@ -315,7 +319,7 @@ export class Setup extends EventEmitter {
         const read = readPicks(text, sources);
         if (read.kind === 'unclear') return { reply: `Which of these, if any: ${sources.map((x) => x.label).join('; ')}? (Say which, “all”, or “none”.)`, next: step };
         const picked: Source[] = read.kind === 'none' ? [] : sources.filter((x) => read.ids.includes(x.id));
-        if (!picked.length) { on.imported = []; return then(`Nothing brought in, then. ${IMPORT_FOLDER}`, 'first_task'); }
+        if (!picked.length) { on.imported = []; return then(`Nothing brought in, then. ${this.#importWords()}`, 'first_task'); }
         const done = await this.#on.import(picked);
         on.imported = done;
         const waiting = done.reduce((n, r) => n + r.waiting, 0);
@@ -437,9 +441,11 @@ export class Setup extends EventEmitter {
     return {
       found: on.discovery?.found ?? [], looked: !!on.discovery, imported, waiting,
       device: { words: factsWords(facts), roles, roles_words: purposeWords(roles.filter((p) => p !== 'hub-candidate')), backend: on.backend ?? 'supervisor', backend_words: SUPERVISOR_WORDS },
-      action: firstAction(waiting),
+      action: firstAction(waiting, this.#importPath),
     };
   }
+
+  #importWords(): string { return `You can put notes or exports in ${this.#importPath} on the computer running Nova, then tell me.`; }
 
   #summary(): string {
     const me = identityOf(this.#profile);

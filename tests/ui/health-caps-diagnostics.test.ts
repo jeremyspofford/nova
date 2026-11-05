@@ -366,7 +366,10 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         // the failure, so the test checks the transition happened rather than racing to see it.
         await p.evaluate(() => {
           const seen: string[] = ((window as unknown as { __costStates: string[] }).__costStates = []);
-          const note = () => { const s = document.querySelector('.work-costs')?.getAttribute('data-work-costs-state') ?? ''; const save = document.querySelector('[data-save-work-limits]') as HTMLButtonElement | null; const v = `${s}:${save?.disabled ? 'disabled' : 'enabled'}`; if (seen.at(-1) !== v) seen.push(v); };
+          // Scrolling/click preparation can mutate the page while it still displays
+          // the previous successful save. Observe this attempt from its saving transition.
+          let started = false;
+          const note = () => { const s = document.querySelector('.work-costs')?.getAttribute('data-work-costs-state') ?? ''; if (s === 'saving') started = true; if (!started) return; const save = document.querySelector('[data-save-work-limits]') as HTMLButtonElement | null; const v = `${s}:${save?.disabled ? 'disabled' : 'enabled'}`; if (seen.at(-1) !== v) seen.push(v); };
           new MutationObserver(note).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-work-costs-state', 'disabled'] });
         });
         await form.locator('[data-save-work-limits]').click();

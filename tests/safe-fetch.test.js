@@ -73,3 +73,36 @@ test('a redirect to a refused address is refused, however the first page looked'
     await assert.rejects(safeFetch(`http://127.0.0.1:${port}/start`, { allow: (a) => a === '127.0.0.1' }), Refused);
   } finally { server.close(); }
 });
+
+for (const encoding of ['gzip', 'deflate', 'br']) {
+  test(`a stalled ${encoding} body stops at its deadline and on user cancellation`, { timeout: 5000 }, async () => {
+    const { server, port } = await serve((req, res) => {
+      res.writeHead(200, { 'content-encoding': encoding });
+      res.flushHeaders();
+    });
+    try {
+      await assert.rejects(safeFetch(`http://127.0.0.1:${port}`, { allow: () => true, timeoutMs: 50 }), /abort|timeout/i);
+      const controller = new AbortController();
+      const result = safeFetch(`http://127.0.0.1:${port}`, { allow: () => true, signal: controller.signal });
+      setTimeout(() => controller.abort(), 50);
+      await assert.rejects(result, /abort/i);
+    } finally { server.closeAllConnections(); server.close(); }
+  });
+}
+
+test('compressed fetches decode valid UTF-8 and reject incomplete and oversized bodies', async () => {
+  const { gzipSync, deflateSync, brotliCompressSync } = await import('node:zlib');
+  for (const [encoding, compress] of [['gzip', gzipSync], ['deflate', deflateSync], ['br', brotliCompressSync]]) {
+    const { server, port } = await serve((req, res) => {
+      const bytes = compress(Buffer.from(req.url === '/large' ? 'a'.repeat(5_000_001) : 'Hello, 世界'));
+      res.writeHead(200, { 'content-encoding': encoding });
+      res.end(req.url === '/broken' ? bytes.subarray(0, 2) : bytes);
+    });
+    try {
+      const base = `http://127.0.0.1:${port}`;
+      assert.equal((await safeFetch(base, { allow: () => true })).text, 'Hello, 世界');
+      await assert.rejects(safeFetch(`${base}/broken`, { allow: () => true }));
+      await assert.rejects(safeFetch(`${base}/large`, { allow: () => true }), /too large/);
+    } finally { server.closeAllConnections(); server.close(); }
+  }
+});

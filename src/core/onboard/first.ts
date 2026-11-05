@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 // The first view at the end of setup (Amendment 2026-10-31-B Part 2; docs/plans/M10f.md §3): what was
 // found, what was imported, this device's roles and backend, and ONE suggested first action, never a
 // blank chat alone.
@@ -19,7 +21,7 @@ export const FIRST_ACTIONS: readonly (FirstAction & { when: (s: { waiting: numbe
   },
   {
     id: 'bring-notes', label: 'Bring in your notes', go: 'memory', needs: ['first-run', 'import'],
-    why: 'Put notes, a profile you wrote or an export from another assistant in ~/workspace/import/, then tell Nova. They wait in Memory for your OK.',
+    why: 'Put notes, a profile you wrote or an export from another assistant in Nova’s import folder on the computer running Nova, then tell Nova. They wait in Memory for your OK.',
     when: () => true,
   },
 ]);
@@ -33,8 +35,8 @@ export interface FirstView {
   action: FirstAction;
 }
 
-export function firstAction(waiting: number): FirstAction {
+export function firstAction(waiting: number, importPath = join(homedir(), 'Nova', 'workspace', 'import')): FirstAction {
   const a = FIRST_ACTIONS.find((x) => x.when({ waiting }))!;
   const { when: _w, ...action } = a;
-  return action;
+  return action.id === 'bring-notes' ? { ...action, why: `Put notes, a profile you wrote or an export from another assistant in ${importPath} on the computer running Nova, then tell Nova. They wait in Memory for your OK.` } : action;
 }

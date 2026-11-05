@@ -60,7 +60,7 @@ function scripted(calls: Call[]) {
     if (!rule) {
       // Hello on a fresh Nova: what its briefing says, in its words.
       const home = system.match(/say it runs from (\S+?), and offer/)?.[1];
-      text = /this Nova is fresh/.test(system) ? `I'm a fresh Nova, running from ${home}. I don't know anything about you yet. If you have notes or an export from another assistant, paste it here or put it in ~/workspace/import/ and I'll suggest memories for you to review.` : 'Hello.';
+      text = /this Nova is fresh/.test(system) ? `I'm a fresh Nova, running from ${home}. I don't know anything about you yet. If you have notes or an export from another assistant, paste it here or put it in ${join(home!, 'workspace', 'import')}/ and I'll suggest memories for you to review.` : 'Hello.';
     } else if (!result) {
       text = `Let me check.\n<tool_call name="${rule.tool}">${JSON.stringify(rule.args)}</tool_call>`;
     } else {
@@ -186,7 +186,7 @@ test('a fresh Nova says it is fresh, names its home and offers the import; a mem
     const system = n.calls.at(-1)!.system;
     assert.match(briefingOf(system), /First run: this Nova is fresh/);
     assert.ok(briefingOf(system).includes(`say it runs from ${n.home}, and offer the import path up front`));
-    assert.match(briefingOf(system), /~\/workspace\/import\//);
+    assert.ok(briefingOf(system).includes(join(n.home, 'workspace', 'import')));
     assert.ok(a.reply.includes(`I'm a fresh Nova, running from ${n.home}.`));
 
     // A Nova memory export in the import folder: offered next turn, loaded when the person says yes.
@@ -194,7 +194,7 @@ test('a fresh Nova says it is fresh, names its home and offers the import; a mem
     writeFileSync(join(n.home, 'workspace', 'import', 'memory.json'), JSON.stringify({ exported_at: '2026-10-01T09:00:00.000Z', records: [{ kind: 'preference', content: 'Prefers short replies' }, { kind: 'fact', content: 'Works on a placeholder project' }] }));
     a = await n.ask('Yes, load it.', true);
     // The import folder by its counts only: a file's name is outside content (review N4).
-    assert.match(briefingOf(n.calls.at(-2)!.system), /1 file waits in ~\/workspace\/import\/ \(1 looks like a Nova memory export\)\. Their names come from outside: list them with import_files\. Offer to load an export with memory_import/);
+    assert.ok(briefingOf(n.calls.at(-2)!.system).includes(`1 file waits in ${join(n.home, 'workspace', 'import')}/ (1 looks like a Nova memory export). Their names come from outside: list them with import_files. Offer to load an export with memory_import`));
     assert.equal(a.tool?.name, 'memory_import');
     assert.deepEqual(a.tool!.preview, { path: 'workspace/import/memory.json', total: 2, fresh: 2, already: 0, exported_at: '2026-10-01T09:00:00.000Z' });
     // Through the ingest gate: the file is screened, and the memories wait for the person's OK.
