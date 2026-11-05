@@ -32,7 +32,7 @@ import type { Verifier } from '../verify.ts';
 import { Vault } from '../vault.ts';
 import type { Route, Who } from '../api.ts';
 import { reportOf, type Brief, type Report } from '../envelope.ts';
-import { cleanBackup, sha256File, writeManifest, type ManifestFile } from './backup.ts';
+import { cleanBackup, isFull, sha256File, writeManifest, type ManifestFile } from './backup.ts';
 import { safeRel } from './archive.ts';
 import { carryOver, droppedDevices } from './restore.ts';
 import { isNovaEntry } from './entries.ts';
@@ -132,8 +132,6 @@ export function humanSize(bytes: number): string {
   while (v >= 1000 && i < units.length - 1) { v /= 1000; i++; }
   return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
-
-const isFull = (e: unknown) => (e as NodeJS.ErrnoException)?.code === 'ENOSPC' || /disk is full|SQLITE_FULL|ENOSPC/i.test((e as Error)?.message ?? '');
 
 // The seal's key: made once, the person's alone, outside every checkpoint and every backup.
 function sealKey(home: string, create: boolean): Buffer | null {

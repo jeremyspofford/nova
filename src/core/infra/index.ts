@@ -28,7 +28,7 @@ import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
 import type { Vault } from '../vault.ts';
 import type { Egress } from '../workers.ts';
-import { sha256, writeAtomic } from '../workspace.ts';
+import { sha256, writeAtomic, plural } from '../workspace.ts';
 
 export const INFRA_WORKER = 'infra';
 export const CONFIRMATION_SYSTEM = 'nova-infra';
@@ -75,7 +75,6 @@ export interface InfraOptions {
   now?: () => Date;
 }
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const clip = (s: string, n = 80) => { const t = s.trim().replace(/\s+/g, ' '); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const sha256File = (p: string) => sha256(readFileSync(p));
 const signed = (c: number) => `${c < 0 ? '−' : '+'}${usd(Math.abs(c))}`;

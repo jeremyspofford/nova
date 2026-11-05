@@ -9,6 +9,8 @@ import type { Worker } from './workers.ts';
 
 export const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
 
+export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
 // Written whole beside the file, then moved into place, so a crash never leaves half of it; the pid
 // in the temporary name keeps two processes writing the same file apart.
 export function writeAtomic(path: string, data: string | Buffer, mode = 0o600): void {

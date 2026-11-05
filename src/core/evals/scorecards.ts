@@ -57,7 +57,7 @@ export interface CardStatus {
   why?: string;
 }
 
-const pct = (x: number) => `${Math.round(x * 100)}%`;
+export const pct = (x: number) => `${Math.round(x * 100)}%`;
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
 export function cardFile(provider: string, model: string): string {

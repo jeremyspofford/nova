@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { reportOf, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
 import { stricter, type Egress } from '../workers.ts';
-import { sha256 } from '../workspace.ts';
+import { sha256, plural } from '../workspace.ts';
 import { allowed } from '../browser/plan.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -70,7 +70,6 @@ const WS_ID = /^w[0-9a-f]{10}$/;
 const CP_ID = /^c[0-9a-f]{10}$/;
 const words = (argv: string[]) => argv.map((a) => (/^[\w./:=@+-]+$/.test(a) ? a : JSON.stringify(a))).join(' ');
 const clip = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // One command's egress: the attempts as asked (capped), and a count of every attempt by its code
 // and, for those let through, by the declaration that let it.

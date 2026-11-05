@@ -16,7 +16,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
-import { sha256 } from '../workspace.ts';
+import { sha256, plural } from '../workspace.ts';
 import { checkFolder } from '../computer/policy.ts';
 import { runLines, tail } from '../providers/cli.ts';
 import { testEnv } from '../providers/checks.ts';
@@ -83,7 +83,6 @@ export interface CodingOptions {
 
 const short = (oid: string | null | undefined) => (oid ? oid.slice(0, 7) : '');
 const clip = (s: string, n = 80) => { const t = s.trim().replace(/\s+/g, ' '); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export class Coding {
   readonly worker: LanedWorker;

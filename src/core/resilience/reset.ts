@@ -46,7 +46,7 @@ import { dropScratch, freeScratch, makeScratch } from './scratch.ts';
 import { foreignEntries, isNovaEntry } from './entries.ts';
 import type { Restarter } from './restart.ts';
 import { readMark, rekeyMark, sealOk, sealWith, unsafeHome } from './home-mark.ts';
-import { writeJson } from '../workspace.ts';
+import { writeJson, plural } from '../workspace.ts';
 
 export const RESET_MARKER = 'factory-reset.json';
 export const RESET_REPORT = 'reset-report.json';
@@ -270,8 +270,6 @@ function backupState(b: BackupItem): 'same' | 'gone' | 'changed' {
     return 'changed';
   }
 }
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 function summary(r: ResetReport): string {
   const parts = [r.kind === 'standby'

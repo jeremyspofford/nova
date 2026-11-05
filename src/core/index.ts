@@ -103,6 +103,7 @@ export { render as renderIdentity } from './identity.ts';
 export { permits } from './workers.ts';
 export { ENVELOPE_VERSION, reportOf } from './envelope.ts';
 export { sha256, writeAtomic, writeJson } from './workspace.ts';
+export { terms } from './memory.ts';
 export { TERMINAL } from './ledger.ts';
 export type { Brief, Evidence, Report } from './envelope.ts';
 export type { Worker, Egress } from './workers.ts';

@@ -144,7 +144,7 @@ export function backupFiles(home: string): string[] {
   return out;
 }
 
-const isFull = (e: unknown) => {
+export const isFull = (e: unknown) => {
   const m = (e as Error)?.message ?? '';
   return (e as NodeJS.ErrnoException)?.code === 'ENOSPC' || /disk is full|SQLITE_FULL|ENOSPC/i.test(m);
 };

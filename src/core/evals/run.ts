@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import type { GradeResult, Judge, SuiteName, SuiteRun, TaskBase, TaskResult, Trace, TrialResult } from './types.ts';
 import { sha256 } from '../workspace.ts';
+import { pct } from './scorecards.ts';
 
 export interface Driven<C> {
   trace: Trace;
@@ -86,7 +87,6 @@ export function regressionVerdict(run: Pick<SuiteRun, 'passed' | 'total' | 'pass
   const failed = run.results.filter((r) => !r.passed).map((r) => r.id);
   const newly = previous ? failed.filter((id) => !(previous.failed ?? []).some((f) => f.id === id)) : failed;
   const drop = previous ? run.pass_rate < previous.pass_rate || newly.length > 0 : false;
-  const pct = (x: number) => `${Math.round(x * 100)}%`;
   const words = !previous
     ? `${run.passed} of ${run.total} regression tasks pass (${pct(run.pass_rate)}); no earlier scorecard to compare with.`
     : drop
