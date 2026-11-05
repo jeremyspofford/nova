@@ -534,6 +534,8 @@ export class Browser extends EventEmitter {
         await this.#find(s, loc, step.timeout_ms);
         const el = await this.#element(s, loc);
         await this.#before(run, i, step, el);
+        // Not #submit, on purpose: the pay check is on the element the intent check saw (no re-read),
+        // only for a click, and noted; the send scope drops the form on a checkout plan.
         if (step.do === 'click') {
           const why = el ? isPayControl(el) : null;
           if (why) {
@@ -604,12 +606,7 @@ export class Browser extends EventEmitter {
   async #login(run: Run, i: number, step: Extract<Step, { do: 'login' }>): Promise<void> {
     const { s, red } = run;
     const w = this.#wired();
-    let url: URL;
-    const refusal = loginRefusal(s.url);
-    if (refusal) throw new Stop(refusal);
-    try { url = new URL(s.url); } catch { throw new Stop('The browser isn’t on a page to sign in to.'); }
-    let site: string;
-    try { site = siteHost(url.host); } catch { throw new Stop('Nova can’t tell which site this page is.'); }
+    const { host, site } = this.#pageSite(s, 'The browser isn’t on a page to sign in to.');
     const user = w.vault.get(loginName(site, 'username'));
     const pass = w.vault.get(loginName(site, 'password'));
     if (!user || !pass) throw new Stop(`There is no sign-in saved for ${site}. Save one in Settings › Connections › Site sign-ins (never in chat), then try again.`);
@@ -617,26 +614,10 @@ export class Browser extends EventEmitter {
     red.add(pass);
     for (const f of [step.username, step.password, step.submit]) await this.#find(s, { selector: f }, step.timeout_ms);
     await this.#before(run, i, step, await this.#element(s, { selector: step.submit }));
-    for (const [field, value, part] of [[step.username, user, 'username'], [step.password, pass, 'password']] as const) {
-      const r = await s.actOn<string>({ selector: field }, SECRET, [value, url.host, part, field]);
-      if (r === 'wrong-host') throw new Stop('The page moved to another site before Nova signed in; it typed nothing.');
-      if (r === 'swapped') throw new Stop(`The page swapped ${field} as Nova was about to type into it, so Nova typed nothing more and sent nothing.`);
-      if (r !== 'ok') throw new Stop(`${field} isn’t a ${part} field Nova will type a saved sign-in into (${r}).`);
-    }
+    await this.#typeSecrets(s, host, [[step.username, user, 'username'], [step.password, pass, 'password']], 'The page moved to another site before Nova signed in; it typed nothing.', () => 'a saved sign-in');
     this.#note(run.id, 'signed_in_with', { step: i + 1, site, fields: 2 });
-    const submit = await this.#element(s, { selector: step.submit });
-    const why = submit ? isPayControl(submit) : null;
-    if (why) throw new Stop(`The sign-in button is a pay control (${why}). ${PAY_REFUSAL}`);
     // A sign-in sends to its own form, and where the step says.
-    s.allowSends(i + 1, this.#sendsOf(s, step, submit));
-    try {
-      const r = await this.#act(s, { selector: step.submit }, CLICK, []);
-      if (r === 'covered') throw new Stop(`Something on the page covers ${step.submit}; Nova won’t click through it.`);
-      if (r !== 'ok') throw new Error(stepProblem({ do: 'click', selector: step.submit }, r));
-      await s.settle();
-    } finally {
-      s.allowSends(null);
-    }
+    await this.#submit(s, i, step, 'The sign-in button');
     if (step.done_when) await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000).catch(() => { throw new Stop(`The sign-in didn’t go through: ${step.done_when} isn’t on the page.`); });
   }
 
@@ -646,12 +627,7 @@ export class Browser extends EventEmitter {
   async #accountChange(run: Run, i: number, step: Extract<Step, { do: 'new_password' } | { do: 'create_account' }>): Promise<void> {
     const { s, red, plan } = run;
     const w = this.#wired();
-    const refusal = loginRefusal(s.url);
-    if (refusal) throw new Stop(refusal);
-    let url: URL;
-    try { url = new URL(s.url); } catch { throw new Stop('The browser isn’t on a page Nova can change an account on.'); }
-    let site: string;
-    try { site = siteHost(url.host); } catch { throw new Stop('Nova can’t tell which site this page is.'); }
+    const { host, site } = this.#pageSite(s, 'The browser isn’t on a page Nova can change an account on.');
     if (!plan.account || plan.account.site !== site) throw new Stop(`The page is on ${site}, not ${plan.account?.site ?? 'the site'} this account step is for; Nova typed nothing.`);
     const create = step.do === 'create_account';
     const user = w.vault.get(loginName(site, 'username'));
@@ -670,18 +646,55 @@ export class Browser extends EventEmitter {
     for (const [f] of fields) await this.#find(s, { selector: f }, step.timeout_ms);
     await this.#find(s, { selector: step.submit }, step.timeout_ms);
     await this.#before(run, i, step, await this.#element(s, { selector: step.submit }));
+    await this.#typeSecrets(s, host, fields, 'The page moved to another site before Nova typed; it typed nothing more and sent nothing.', (part) => (part === 'password' ? 'a password' : 'an account name'));
+    await this.#submit(s, i, step, 'The button', () => {
+      // Kept aside before it is sent: if the site takes it and anything after fails, it isn't lost.
+      w.vault.put(loginName(site, 'pending'), fresh);
+      this.#committing(run.id, create ? `create the account on ${site}` : `send the new password to ${site}`);
+    });
+    await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000).catch(() => {
+      throw new Stop(`The page didn’t show that the ${create ? 'account was created' : 'password changed'} (${step.done_when} isn’t there). Nova kept the new password aside, unused, and still uses the old one. If the site did take it, keep it with POST /browser/logins/${site}/pending {keep: true, confirm: true}.`);
+    });
+    if (create) w.vault.put(loginName(site, 'username'), step.name);
+    w.vault.put(loginName(site, 'password'), fresh);
+    w.vault.delete(loginName(site, 'pending'));
+    this.#touch(site, true);
+    this.#note(run.id, create ? 'account_created' : 'password_changed', { step: i + 1, site, kept_in: 'the vault' });
+  }
+
+  // The site of the page a sign-in or account step types on, refused in this order: a page Nova never
+  // types a sign-in on, an address it can't read (`notAPage`, each step's own words), a host that
+  // isn't a site.
+  #pageSite(s: Session, notAPage: string): { host: string; site: string } {
+    const refusal = loginRefusal(s.url);
+    if (refusal) throw new Stop(refusal);
+    let url: URL;
+    try { url = new URL(s.url); } catch { throw new Stop(notAPage); }
+    try { return { host: url.host, site: siteHost(url.host) }; } catch { throw new Stop('Nova can’t tell which site this page is.'); }
+  }
+
+  // Saved and new values, typed one field at a time, only while the page is on `host` (facts.ts
+  // SECRET). What Nova says it did or didn't type stays each step's own: `moved` when the page left
+  // the host, `into` for the kind of value a field refused.
+  async #typeSecrets(s: Session, host: string, fields: readonly (readonly [string, string, 'username' | 'password'])[], moved: string, into: (part: 'username' | 'password') => string): Promise<void> {
     for (const [field, value, part] of fields) {
-      const r = await s.actOn<string>({ selector: field }, SECRET, [value, url.host, part, field]);
-      if (r === 'wrong-host') throw new Stop('The page moved to another site before Nova typed; it typed nothing more and sent nothing.');
+      const r = await s.actOn<string>({ selector: field }, SECRET, [value, host, part, field]);
+      if (r === 'wrong-host') throw new Stop(moved);
       if (r === 'swapped') throw new Stop(`The page swapped ${field} as Nova was about to type into it, so Nova typed nothing more and sent nothing.`);
-      if (r !== 'ok') throw new Stop(`${field} isn’t a ${part} field Nova will type ${part === 'password' ? 'a password' : 'an account name'} into (${r}).`);
+      if (r !== 'ok') throw new Stop(`${field} isn’t a ${part} field Nova will type ${into(part)} into (${r}).`);
     }
+  }
+
+  // A sign-in or account step's submit, in this order (the pay guard; area-1 audit note 12): the
+  // button, read again after the typing, is not a pay control; then `before` (an account step keeps
+  // its new password aside and records the commit point); then the step may send only to the
+  // button's own form and where it says; then the click; nothing covers it and it worked; the page
+  // settles; and the send window always shuts. `button` names it in the pay refusal.
+  async #submit(s: Session, i: number, step: Extract<Step, { do: 'login' | 'new_password' | 'create_account' }>, button: string, before?: () => void): Promise<void> {
     const submit = await this.#element(s, { selector: step.submit });
     const why = submit ? isPayControl(submit) : null;
-    if (why) throw new Stop(`The button is a pay control (${why}). ${PAY_REFUSAL}`);
-    // Kept aside before it is sent: if the site takes it and anything after fails, it isn't lost.
-    w.vault.put(loginName(site, 'pending'), fresh);
-    this.#committing(run.id, create ? `create the account on ${site}` : `send the new password to ${site}`);
+    if (why) throw new Stop(`${button} is a pay control (${why}). ${PAY_REFUSAL}`);
+    before?.();
     s.allowSends(i + 1, this.#sendsOf(s, step, submit));
     try {
       const r = await this.#act(s, { selector: step.submit }, CLICK, []);
@@ -691,14 +704,6 @@ export class Browser extends EventEmitter {
     } finally {
       s.allowSends(null);
     }
-    await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000).catch(() => {
-      throw new Stop(`The page didn’t show that the ${create ? 'account was created' : 'password changed'} (${step.done_when} isn’t there). Nova kept the new password aside, unused, and still uses the old one. If the site did take it, keep it with POST /browser/logins/${site}/pending {keep: true, confirm: true}.`);
-    });
-    if (create) w.vault.put(loginName(site, 'username'), step.name);
-    w.vault.put(loginName(site, 'password'), fresh);
-    w.vault.delete(loginName(site, 'pending'));
-    this.#touch(site, true);
-    this.#note(run.id, create ? 'account_created' : 'password_changed', { step: i + 1, site, kept_in: 'the vault' });
   }
 
   // The itemised lines and the total, checked; then Nova stops. The pay control is found, so that the
