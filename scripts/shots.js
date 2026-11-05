@@ -620,7 +620,7 @@ let helperRun;
   await p.waitForTimeout(500);
   await shot(p, 'paper-settings');
   const perms = await p.$$eval('.switch', (b) => b.map((x) => [x.dataset.id, x.getAttribute('aria-checked')]));
-  check('Settings lists a switch per permission, each set to ask first', perms.length === 5 && perms.every(([, on]) => on === 'false'), perms.map(([id]) => id).join(', '));
+  check('Settings lists a switch per permission, each set to ask first', perms.length === 6 && perms.every(([, on]) => on === 'false'), perms.map(([id]) => id).join(', '));
   await p.focus('[data-id="commands"]');
   await p.keyboard.press('Space');
   await p.waitForSelector('[data-id="commands"][aria-checked="true"]');
