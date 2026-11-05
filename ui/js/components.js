@@ -885,13 +885,13 @@ export function configImport({ state = 'choose', file = 'nova.config.json', chan
   const head = `<h3 class="section-title" id="config-import-title">Bring in a configuration</h3>`;
   const body = {
     choose: `<p class="settings-note">A Nova configuration file or a personal pack. Nova checks it and shows every change before applying any; nothing is overwritten that you don’t see first.</p>
-<div class="connection-actions"><button type="button" class="btn primary" data-action="config-choose">Choose a file</button><input type="file" class="sr-only" accept=".json,application/json" data-config-file tabindex="-1" aria-hidden="true"></div>`,
+<div class="connection-actions"><button type="button" class="btn primary" data-action="config-choose">Choose a file</button><button type="button" class="btn" data-action="config-export">Export your configuration</button><input type="file" hidden accept=".json,application/json" data-config-file></div>`,
     review: `<p class="settings-note" role="status">${esc(file)}: ${kept} change${kept === 1 ? '' : 's'} to apply${kept < changes.length ? `, ${changes.length - kept} left out` : ''}.</p>${configDiff(changes)}
 <div class="connection-actions"><button type="button" class="btn primary" data-action="config-apply">Apply ${kept} change${kept === 1 ? '' : 's'}</button><button type="button" class="btn quiet" data-action="config-cancel">Not now</button></div>`,
     refused: `<p class="settings-note" role="alert">${esc(file)} can’t be used, so nothing changed:</p><ul class="steps">${problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
-<div class="connection-actions"><button type="button" class="btn" data-action="config-choose">Choose another file</button><input type="file" class="sr-only" accept=".json,application/json" data-config-file tabindex="-1" aria-hidden="true"></div>`,
+<div class="connection-actions"><button type="button" class="btn" data-action="config-choose">Choose another file</button><input type="file" hidden accept=".json,application/json" data-config-file></div>`,
     applied: `<p class="settings-note" role="status">Applied ${kept} change${kept === 1 ? '' : 's'} from ${esc(file)}. Each one is in the activity log, and each can go back to its default.</p>
-<div class="connection-actions"><button type="button" class="btn" data-action="config-export">Export your configuration</button></div>`,
+<div class="connection-actions"><button type="button" class="btn" data-action="config-cancel">Bring in another file</button><button type="button" class="btn" data-action="config-export">Export your configuration</button></div>`,
   }[state];
   return `<section class="panel config-import" aria-labelledby="config-import-title" data-config-import="${esc(state)}">${head}${body}</section>`;
 }
