@@ -8,8 +8,8 @@ import { escapeHtml, renderMarkdown } from './markdown.js';
 import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderPermissions, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
 import { apply as applyTheme } from './theme.js';
 import { api, fromCache, on as onCore, stream as coreStream } from './core.js';
-import { loadSecurity, renderSecurity, setupPasskey } from './passkey.js';
-import { bindConfig, renderConfig } from './config.js';
+import { approvalFor, loadSecurity, renderSecurity, setupPasskey } from './passkey.js';
+import { bindConfig, bindConfigForm, loadConfigForm, renderConfig, renderConfigForm } from './config.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
 import { problemTone, stoppingProblems } from './status.js';
@@ -780,7 +780,12 @@ async function decide(tool, decision, button) {
   // Tier 3: allowed only with the confirm box ticked, this time.
   if (decision === 'allow' && card?.dataset.tier === '3' && !card.querySelector('[data-confirm]')?.checked) return;
   card?.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-  try { await post(`/api/sessions/${state.id}/approvals/${tool}`, { decision }); }
+  // Tier 3 on Nova's own screen is confirmed with a passkey (T2; null on a paired device).
+  let body = { decision };
+  if (decision === 'allow' && card?.dataset.tier === '3') {
+    try { const signed = await approvalFor(api, 'POST', `/sessions/${state.id}/approvals/${tool}`, body); if (signed) body = { ...body, passkey_approval: signed }; } catch (e) { card?.querySelectorAll('button').forEach((b) => { b.disabled = false; }); toast(e.message); return; }
+  }
+  try { await post(`/api/sessions/${state.id}/approvals/${tool}`, body); }
   catch (e) { card?.querySelectorAll('button').forEach((b) => { b.disabled = false; }); say(e.message); }
 }
 
@@ -1662,10 +1667,11 @@ function showSettings() {
   settingsUi.touched = false;
   selectSettings(settingsTarget(location.hash).cat);
   const opened = location.hash;
-  Promise.all([core.loadBackups(), loadPermissions(), refreshCore(['profile']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset(), loadSecurity(api)]).then(() => {
+  Promise.all([core.loadBackups(), loadPermissions(), refreshCore(['profile']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset(), loadSecurity(api), loadConfigForm()]).then(() => {
     renderSettingsView({ only: 'security' });
     renderSettingsView({ only: 'you' });
     renderSettingsView({ only: 'privacy' });
+    renderSettingsView({ only: 'form' });
     // The person has moved on since (typed in search, opened something): leave them be.
     if (settingsUi.touched || state.view !== 'settings' || location.hash !== opened) return;
     const { cat, target } = settingsTarget(location.hash);
@@ -1693,6 +1699,7 @@ const PARTS = {
   devices: () => core.renderDevices(),
   services: () => renderServices(),
   security: () => renderSecurity(),
+  form: () => renderConfigForm(),
   config: () => renderConfig(),
   // The Danger zone (M7 amendment §2) stays last, set apart.
   danger: () => renderReset(),
@@ -1937,6 +1944,9 @@ bindModels(el.settings, () => { if (state.view === 'settings' && $('settings-mod
 bindChanges(el.settings, () => { if (state.view === 'settings' && $('settings-changes')) renderSettingsView({ only: 'changes' }); });
 core.bindBackups(el.settings, () => { if ($('settings-backups')) renderSettingsView({ only: 'backups' }); });
 bindConfig(el.settings, () => renderSettingsView({ only: 'config' }));
+bindConfigForm(el.settings, () => renderSettingsView({ only: 'form' }));
+// A setting changed elsewhere (a file, a chat, another screen): the list shows it, and its layer.
+onCore('profile', () => { if (state.view === 'settings') loadConfigForm().then(() => renderSettingsView({ only: 'form' })); });
 onCore('profile', () => { if (state.view === 'settings') core.loadBackups(); });
 // Settings › Backups › Checkpoints (M7 amendment): take one, restore (the hub's screen only), delete.
 bindCheckpoints(el.settings, () => { if (state.view === 'settings' && $('settings-checkpoints')) renderSettingsView({ only: 'checkpoints' }); });

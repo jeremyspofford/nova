@@ -18,6 +18,8 @@ import type { Db } from './db.ts';
 import { CoreError } from './errors.ts';
 
 export const PASSKEYS_COMPLETE = 2;
+export const PASSKEY_NEEDED = 'Tier-3 actions on Nova’s own screen are confirmed with a passkey, and this request had none, so nothing was approved.';
+export const NO_PASSKEY = 'No passkey yet: tier-3 actions on Nova’s own screen wait until you add one in Settings › Security. Nothing was approved.';
 const REGISTRATION_MS = 5 * 60_000;
 const MAX_PASSKEYS = 10;
 // As the broker's: five minutes, single use, three open at once, thirty an hour.

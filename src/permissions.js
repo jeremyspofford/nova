@@ -20,6 +20,16 @@ import { join } from 'node:path';
 // An "online" line left in permissions.md is kept as it is and means nothing now.
 
 // The permissions the given tools declare, in the order the tools are listed.
+import { toolTier } from '../ui/js/status.js';
+
+// Whether a step that asks first may go ahead without asking: its permission is on, nothing about
+// this conversation calls for asking anyway (the ingest gate's guard), and it isn't tier 3. A
+// tier-3 step (a command that looks irreversible, a removal, loosening privacy) is confirmed every
+// time, whatever the person allowed for its kind (NOVA-SPEC §6).
+export function autoAllowed(name, args, tool, guard, permissions) {
+  return !guard && toolTier(name, args) !== 3 && permissions.allows(permissionFor(name, tool));
+}
+
 export function permissionList(tools) {
   const out = new Map();
   for (const [name, tool] of Object.entries(tools)) {

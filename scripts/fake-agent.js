@@ -176,6 +176,12 @@ Prices are as the pages showed them today and can change. I haven't bought anyth
   const fact = sentence(third(original.replace(/^remember( that)?\s*/i, '')));
   const kind = /^(i prefer|i take|i like)/.test(msg) ? 'preference' : 'fact';
   await stream(`Got it. I'll remember that.\n\n<remember kind="${kind}">${fact}</remember>\n<note>Mentioned: ${fact}</note>`);
+} else if (msg.startsWith('set my timezone to')) {
+  // Config onboarding, door 3: a settings change, shown as a diff and approved in the conversation.
+  const zone = msg.slice('set my timezone to'.length).trim().replace(/[.!]$/, '') || 'Europe/Berlin';
+  if (!result) await stream(`I'll change your timezone.\n\n<tool_call name="settings_change">${JSON.stringify({ settings: { user: { timezone: zone } } })}</tool_call>`);
+  else if (result.includes('ok="false"')) await stream('Left your settings as they were.');
+  else await stream(`Done: your timezone is ${zone} now.`);
 } else if (msg.startsWith('clear out')) {
   // An irreversible command: the approval asks for an explicit confirm (tier 3).
   if (!result) await stream("I'll clear out the scratch folder.\n\n<tool_call name=\"exec\">{\"command\": \"rm -rf scratch\"}</tool_call>");
