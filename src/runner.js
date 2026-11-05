@@ -17,7 +17,7 @@ import { Memory } from './memory.js';
 import { Skills } from './skills.js';
 import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
-import { Permissions, permissionFor, permissionsSection } from './permissions.js';
+import { Permissions, autoAllowed, permissionFor, permissionsSection } from './permissions.js';
 import { commitHome, readStanding } from './home.js';
 import { TOOLS, ToolTagFilter, WRITABLE, availableTools, extractMemory, homeTarget, parseToolCall, withinPrivacy } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
@@ -215,6 +215,12 @@ export class Runner extends EventEmitter {
     if (!run) return false;
     run.controller.abort();
     return true;
+  }
+
+  // The step waiting for the person, if any: its id, tool and arguments.
+  pendingOf(sessionId) {
+    const p = this.active.get(sessionId)?.pending;
+    return p ? { id: p.id, name: p.name, args: p.args } : null;
   }
 
   decide(sessionId, toolId, decision) {
@@ -429,12 +435,12 @@ export class Runner extends EventEmitter {
       // A step the person lets Nova take without asking (Settings) goes ahead.
       // Otherwise Nova asks and waits, even with no one watching: a scheduled
       // run or a helper waits for the answer, and Activity shows it waiting.
-      if (needsApproval && !guard && this.permissions.allows(permissionFor(call.name, tool))) {
+      if (needsApproval && autoAllowed(call.name, call.args, tool, guard, this.permissions)) {
         this.record(sessionId, { type: 'approval', ...tag, id, decision: 'allow', auto: true });
       } else if (needsApproval) {
         this.setLive(sessionId, { phase: 'approval', approval: id });
         const decision = await new Promise((resolve) => {
-          run.pending = { id, resolve };
+          run.pending = { id, resolve, name: call?.name ?? 'unknown', args: call?.args ?? {} };
           signal.addEventListener('abort', () => resolve('abort'), { once: true });
         });
         run.pending = null;

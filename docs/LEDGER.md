@@ -6,6 +6,56 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-04 · Privacy · A removed skill leaves no copy in backups**
+- What changed: removing a skill now reaches every copy Nova keeps, the same way forgetting a memory already does. Nova cleans the skill's instructions out of each nightly backup, each encrypted backup copy, each checkpoint, a restore that is waiting to happen, and the database copies taken before upgrades. Each cleaned backup and checkpoint is sealed again and still passes its integrity checks. If Nova can't clean one, it deletes it rather than keep the skill in it, and tells you. If the backup drive is unplugged when you remove the skill, Nova writes down that the drive is owed the cleaning, and does it as soon as the drive is back, before it backs up there again.
+- What you can now do: remove a skill knowing it can't come back from a backup or a checkpoint. Restoring one, or opening an encrypted copy with your recovery key, brings back no trace of it. Undo straight after removing still works, because Undo uses the copy your screen keeps, not a backup.
+- Still unfinished: conversations still name a removed skill on purpose ("followed Shopping research, since removed"), and so do their copies in backups. Anything a conversation quoted from the skill stays in that conversation. Anything in a backup or checkpoint folder that Nova didn't make (a "stray") is never restored, but Nova doesn't clean the skill's files out of it either. That is the same as for a forgotten memory.
+
+**2026-11-04 · Walkthrough fixes · The full walkthrough passes, and now blocks merges**
+- What changed: two real problems in Nova are fixed. First, opening a conversation now puts the cursor in the message box again. The page stays hidden until its first view is set up (so nothing jumps), and the message box was asked to take the cursor while the page was still hidden, so the browser ignored it. Second, removing a skill now leaves no copy of its instructions in Nova's database files. The copy kept for a standby device is replaced at once, and the database's write-ahead file is cleared, the same way forgetting a memory works. The walkthrough's other failing checks were out of date, and now match how Nova deliberately works today. "Send shows feedback within 100 ms" now measures your message appearing and Send turning into Stop (about 10 ms), because the "Thinking" line is deliberately hidden for its first second. The approval after reading mail is checked for its current wording, which names what was read ("It comes after reading Gmail search…"). Settings' permissions are found under Privacy and permissions. And the screen-width checks follow each design's own layout widths, so the Nova design switches to the desktop layout somewhere between about 750 and 790 px.
+- What you can now do: open a conversation and start typing straight away. Remove a skill knowing its instructions are gone from the database too. Every PR now has to pass the whole walkthrough (the `shots` job) before it can merge.
+- Still unfinished: Nova's backups were not checked for copies of a removed skill. Conversations still name a removed skill on purpose ("followed Shopping research, since removed"), and so does the standby's copy of those conversations.
+
+
+**2026-11-04 · Ponytail Step 3 · The old full walkthrough runs on every change again**
+- What changed: `scripts/shots.js`, the long browser walkthrough of the older screens (memory, skills, Gmail, schedules, helpers, and the golden screens in every theme), now runs in CI on every code change. Its screenshots are saved with the run as a download called "shots", and never go into git again: it writes to a temporary folder, not `docs/screenshots`. It also finds its browser the normal Playwright way, so it starts on any machine that has one. Some of its checks were out of date, and now match how Nova works today: Gmail's app password is checked in the encrypted vault (and proven absent as plain text), and the browser's "offline" hint no longer counts as Nova being offline (the real outage check stays).
+- What you can now do: open any PR's CI run, see the walkthrough pass or fail, and download its screenshots to look at.
+- Still unfinished: it fails on main today, so it does not block merges yet. It stops about halfway (65 checks passed), and four checks fail first: the message box isn't focused when a conversation opens (that also stops the walkthrough), "send shows feedback within 100 ms" measures about 110 to 125 ms, the approval to open a web page after reading mail still appears but no longer says it is because Nova read your email, and a removed skill's text is still in the database's write-ahead file. Each needs a decision (fix Nova or update the check). Once the walkthrough passes, it joins the required gate.
+
+**2026-11-04 · Failover · The old hub checks the new one at one steady pace**
+- What changed: after handing the hub over, the old hub keeps checking the new one. If the new hub said it was failing but never confirmed it had stopped taking changes, the old hub rightly kept the role where it was and went on checking. Each time that happened, though, it started an extra round of checks beside the one already running. So the checks came twice as often, then three times, then four. Now there is only ever one round of checks, at the pace set for it. Once a hand-over is verified or rolled back, the checks also stop instead of quietly going on.
+- What you can now do: rely on the new hub being checked once per interval during the window, however often it fails to answer a stand-down, without the old hub flooding it with checks.
+- Still unfinished: nothing for this fix. As before, when the new hub can't confirm it stopped, Nova won't take the hub back by itself; you can, from Settings › Devices (tier 3).
+
+**2026-11-04 · Config onboarding (door 2) · All your settings in one list, and a few questions**
+- What changed: Settings › Configuration now lists each of your own settings: timezone, quiet hours, your name, what Nova calls you, Nova's name, directness, warmth, speaking up and privacy. Each one shows where it came from, Nova's default or your pack. "Answer a few questions" goes through them in three steps (where and when, how Nova talks, privacy) and ends with the same list of changes as a file import. Nothing is saved until you say so. A change to privacy or quiet hours counts as tier 3, so it needs your passkey. "Use the default" puts one setting back, and that's recorded in the activity log. Nova now checks values at every door: a value that doesn't fit, in a file, a chat or this list, is named in plain words and nothing changes.
+- What you can now do: see and change every personal setting in one place, and put any one of them back to its default.
+- Still unfinished: the first-run setup conversation doesn't offer the questions yet. "This hub" settings don't have a layer of their own yet. You and Nova and Privacy still have their own controls beside this list.
+
+**2026-11-04 · Ponytail Step 2 · 33 MB of unused files removed**
+- What changed: about 33 MB of leftover files are gone from the repository: duplicate test-run reports, empty evidence files, copies of old pages, old review notes, and 43 screenshots nothing pointed to. Every one was checked as unused first. The records that listed them now say what was removed and how to get any of it back from history.
+- What you can now do: nothing new in the app. The repository is smaller and easier to find things in.
+- Still unfinished: nine more screenshots are cited by an old handoff note, and 61 more lost their last reference with this sweep. Both are your call to remove.
+
+**2026-11-04 · Test stability · Browser profiles really go; three tests stop failing at random**
+- What changed: Nova's browser now fully shuts down before its throwaway profile is deleted. Before, Chromium's helper processes could recreate the folder a moment after Nova removed it, and a left-behind profile can hold sign-in cookies. Three tests that sometimes failed for no product reason now check the right thing: the topology design test in WebKit, the factory-reset test, and a mesh replay test.
+- What you can now do: nothing new in the app. Leftover browser profiles stop, and CI fails less often for no reason.
+- Still unfinished: two related WebKit topology failures ("internal error" on navigation) are probably fixed by the same change, but that isn't proven yet.
+
+**2026-11-04 · T2 (follow-up) · Looser privacy needs your passkey**
+- What changed: choosing a looser privacy setting in Settings › Privacy now counts as tier 3. That means going from "local only" to "local preferred", or to letting cloud models help. On Nova's own screen it asks for your passkey, every time. Before, it saved on one click, and any program on this computer could make that change. Choosing a stricter setting still saves straight away.
+- What you can now do: rely on Nova never letting more of your work leave your devices without you confirming it.
+- Still unfinished: nothing for this fix.
+
+**2026-11-04 · Config onboarding (door 3) · Change settings by asking Nova**
+- What changed: you can ask Nova in a conversation to change one of your settings, for example "set my timezone to Asia/Tokyo". Nova shows exactly what would change, in the same list as Settings › Configuration, and nothing changes until you allow it. A change to privacy or to what asks first counts as tier 3 and needs your passkey. Secrets and the hub's own settings are left out, saying why. Every change is recorded in the activity log.
+- What you can now do: change your personal settings by talking to Nova.
+- Still unfinished: the third way in, a guided setup form (with Settings generated from the schema), comes next.
+
+**2026-11-04 · T2 (follow-up) · Irreversible steps in chat need your passkey**
+- What changed: tier-3 steps in a conversation, like deleting a schedule or running a command that looks irreversible, now need your passkey when you allow them from Nova's own screen. Before this, the confirm box only lived in the page: any program on this computer could allow such a step without a person. Nova's server now refuses an allow that carries no passkey approval for that exact step. Denying a step never needs one.
+- What you can now do: rely on irreversible commands in chat being allowed only by you.
+- Still unfinished: nothing for this fix. This closes the last tier-3 path on Nova's own screen that was outside the passkey check.
 
 **2026-11-04 · Ponytail Step 7 · The browser's picture-click removed, two one-of-a-kind layers folded in**
 - What changed: Nova Browser no longer has a way to click a spot on a screenshot when it can't find the button on the page. Nothing in Nova ever used it, and that way of clicking skipped some of the checks every other click goes through (that it is the right element, that it matches what the step meant, and which form it may send). Every click now goes through the page's own structure or its accessibility tree, with all of those checks; a step whose button neither can find stops and says so, as before. Two pieces of in-between code are also gone. Nova Computer had a general "computer" layer in front of its Docker workspaces, and infrastructure had a general "plan/apply tool" layer in front of OpenTofu. Each layer had only one thing behind it, so Nova now talks to Docker and OpenTofu directly. The architecture notes say so (ADR-8), and the M10b plan records the reversal. About 170 fewer lines of code and tests, net. Every confirmation stays as it was: changing infrastructure still asks you at tier 3, with its budget checked again; a workspace that reaches the internet still asks at tier 3 and reaches only the hosts you declared.
@@ -21,6 +71,30 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What changed: code that nothing in Nova ever ran is gone: about 290 lines of code, net, plus about 40 lines of tests that only covered it. That includes a seat and a log file format the decision service stopped using, a placeholder for the hosted Jev provider, old pairing and clock helpers in the file every device carries, settings options nobody set, and about a hundred names the core offered that nothing outside it used. One removal is a safety gain: there was a way to install a skill that skipped Nova's screening. Only tests used it, but it is gone now. Every skill you add still goes through the screen first. Nothing you can see or do in Nova changes.
 - What you can now do: nothing new. Nova works the same, with less unused code to read, review or ship to devices.
 - Still unfinished: two kinds of cleanup from the same audit wait for later steps: merging the many copied helpers (Step 5), and the app.js tidy-up (Step 6). The Gmail connector's unused test options stay for now, because they sit inside the plaintext-secret migration code that stays until you confirm the old Gmail folder is gone. That folder still exists on this machine's Nova home.
+
+**2026-11-04 · Model fit (ADR) · How Nova will decide which models fit each device**
+- What changed: a design, with nothing built yet, for how Nova will recommend local models from a device's real hardware (`docs/plans/model-fit-adr-2026-11-04.md`). Nova will work out whether a model fits with plain arithmetic, not a model's guess: the model's weights, plus the memory its context needs, plus the runtime's own use, plus a safety margin, against the device's memory. Every answer says which quant and context it assumed. After a real load, Nova corrects its estimate for that device from what the runtime reports. Under local-only, cloud options are removed before anything is ranked. The design includes worked examples for a 24 GB RTX 3090, an 8 GB card, and 16 GB and 32 GB Macs, each written to become a test. Your spec is filed alongside it.
+- What you can now do: check the worked numbers and the expected picks for those four devices, and answer the two open questions at the end: how much of a Mac's memory to count, and whether a "tight" fit may be the main pick.
+- Still unfinished: everything is built later, after the Config Onboarding track. First the hardware reporting and the fit calculation, with tests. Then the per-device Models screen, designed and approved in the styleguide before any app code. Wake-on-demand for computers that sleep comes last, with the services track.
+
+**2026-11-04 · Config onboarding (door 1) · Bring settings in from a file, or take them out**
+- What changed: Settings has a new Configuration section. You can bring in a settings file, and Nova checks it first and shows every change before anything is applied. A key or password in the file is left out, with a note on where it belongs. The hub's own settings (devices, models, backups, capture) are also left out, because those are changed on their own screens. A change to privacy or to what asks first counts as tier 3, so it needs your passkey. You can also export your settings as a file with no secrets in it. Every import is recorded in the activity log.
+- What you can now do: move your personal settings between Nova installs, or keep a copy, with Export and "Choose a file" in Settings › Configuration.
+- Still unfinished: the other two ways in, a guided setup form (with Settings generated from the schema) and asking Nova in chat, come next. Where and how Nova starts (its folder, port and mesh address) stays in `nova.config.json`, because Nova needs those before it can read anything else.
+
+=======
+**2026-11-04 · UI rebuild (Stage 2) · Nova takes the calmer look**
+- What changed: Nova now has the calmer look you approved:
+  - one quiet light from above instead of layered glows;
+  - solid surfaces instead of frosted glass;
+  - on Home, one leading card and the rest as a list;
+  - the right column as one simple list;
+  - a flatter orb in the side rail, with a small bar marking where you are;
+  - Health as plain sections.
+
+  A conversation is one reading column: the side column starts closed there. Its toggle opens it, and Nova remembers that choice for conversations separately. Links in lists read as underlined text, so they stay readable in the light design too.
+- What you can now do: use the app with the new look on every screen size.
+- Still unfinished: the look is one stylesheet laid over the older rules. It gets folded into each surface's own rules as each surface is rebuilt in turn. The Nova/Aurora indigo decision is still open.
 
 **2026-11-04 · UI rebuild (design) · A proposed calmer look, shown on the real app**
 - What changed: a proposed redesign of Nova's look, shown on the real app, for your reaction. Nothing in the app changes yet. It keeps the layout and changes the surfaces:

@@ -25,7 +25,7 @@ test('the screen stays on this machine whatever the privacy setting: the egress 
   const api = (p: string) => `/api/v1${p}`;
   try {
     // The person allows the cloud, and a cloud model is set: the screen must not use it.
-    assert.equal((await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed' })).status, 200);
+    assert.equal((await m.send('PUT', api('/profile/privacy/default'), { value: 'cloud-allowed', confirm: true })).status, 200);
     const cloud = await m.send('PUT', api('/models/cloud'), { cloud: { name: 'Example cloud', base_url: 'https://cloud.example.net/v1', model: 'example-cloud' }, confirm: true });
     assert.equal(cloud.status, 200, JSON.stringify(cloud.body));
     assert.equal((await m.send('PUT', api('/models/roles/triage-text'), { model: 'example-small:3b' })).status, 200);

@@ -49,3 +49,19 @@ test('T2: tier 3 from the console needs a passkey; X-Nova alone is refused; tier
     await stop(nova);
   }
 });
+
+test('looser privacy from Settings is tier 3: refused without a confirmation, stricter never asks', { timeout: 60_000 }, async () => {
+  const m = blank('nova-privacy-gate-');
+  const nova = await m.start();
+  try {
+    const looser = await m.plain('PUT', '/api/v1/profile/privacy/default', { value: 'cloud-allowed' });
+    assert.equal(looser.status, 400);
+    assert.match(looser.body.error, /loosens a gate \(tier 3\)/);
+    assert.equal((await m.get('/api/v1/profile')).privacy?.default ?? 'local-only', 'local-only', 'nothing changed');
+    assert.equal((await m.plain('PUT', '/api/v1/profile/privacy/default', { value: 'cloud-allowed', confirm: true })).status, 403, 'and its confirmation needs the passkey');
+    assert.equal((await m.send('PUT', '/api/v1/profile/privacy/default', { value: 'cloud-allowed', confirm: true })).status, 200, 'with it, as the screen sends it');
+    assert.equal((await m.plain('PUT', '/api/v1/profile/privacy/default', { value: 'local-only' })).status, 200, 'stricter never asks');
+  } finally {
+    await stop(nova);
+  }
+});
