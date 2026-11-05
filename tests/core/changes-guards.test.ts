@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCore, type Core, type CoreOptions } from '../../src/core/index.ts';
 import { KIND_OPS } from '../../src/core/changes/kinds.ts';
-import { inert } from '../../src/core/changes/sandbox.ts';
+import { inert } from '../../src/core/resilience/sandbox.ts';
 import { allows } from '../../src/core/mesh/access.ts';
 import { notesSkill, variant, windDown } from '../support/changes.ts';
 import { world, open as openResilience } from './resilience-support.ts';

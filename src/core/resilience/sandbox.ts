@@ -3,10 +3,9 @@
 // is M7a's sandbox mode (changes/sandbox.ts): NOVA_SANDBOX=1, so no heartbeat, schedules,
 // connectors, capture or model watch start, no mesh address, a model command that does nothing, a
 // vault key file of its own; and its database is made inert first (`inert`: queued work cancelled,
-// rules paused, providers and connectors off, no device addresses). M7a's Sandbox class snapshots
-// the live database in process and runs this Nova's own code; these two uses need a release's
-// code from another process (the supervisor) and a restored backup (the drill), so they start the
-// process here and share the rest.
+// rules paused, providers and connectors off, no device addresses). All three start the process
+// here: M7a's Sandbox class (a live snapshot, this Nova's own code, its own env on top), the
+// supervisor (a release's code) and the drill (a restored backup).
 import { spawn, type ChildProcess } from 'node:child_process';
 import { trackChild } from '../children.ts';
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
@@ -14,9 +13,6 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { backupFiles } from './backup.ts';
-import { inert } from '../changes/sandbox.ts';
-
-export { inert };
 
 // This Nova's own code: the folder that holds src/server.js.
 export const CODE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -26,8 +22,9 @@ export interface Sandbox { proc: ChildProcess; port: number; base: string; outpu
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // The environment a sandbox gets: only what it needs to run, never the caller's secrets or mesh.
-export function sandboxEnv(home: string, extra: Record<string, string> = {}): Record<string, string> {
-  return {
+// A key in `extra` given as undefined is left out (the change sandbox's TZ when this process has none).
+export function sandboxEnv(home: string, extra: Record<string, string | undefined> = {}): Record<string, string> {
+  const env: Record<string, string | undefined> = {
     PATH: process.env.PATH ?? '',
     HOME: join(home, '..', 'user'),
     TZ: process.env.TZ ?? 'UTC',
@@ -43,10 +40,14 @@ export function sandboxEnv(home: string, extra: Record<string, string> = {}): Re
     // Loopback only, whatever else is passed: a sandbox is never reachable from another machine.
     NOVA_HOST: '127.0.0.1',
   };
+  for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
+  return env as Record<string, string>;
 }
 
-// Starts `node <root>/src/server.js` on `home` and waits until it says it is ready (or gives up).
-export async function startSandbox(o: { root?: string; home: string; env?: Record<string, string>; timeoutMs?: number; execArgv?: string[] }): Promise<Sandbox> {
+// Starts `node <root>/src/server.js` on `home` and waits until it says it is ready (or gives up, or
+// `signal` aborts). A failed start stops the process and throws with everything it said (`output`)
+// and its exit code, if it exited.
+export async function startSandbox(o: { root?: string; home: string; env?: Record<string, string | undefined>; timeoutMs?: number; execArgv?: string[]; signal?: AbortSignal }): Promise<Sandbox> {
   const root = o.root ?? CODE_ROOT;
   const out: string[] = [];
   const proc = trackChild(spawn(process.execPath, [...(o.execArgv ?? []), join(root, 'src', 'server.js')], { cwd: root, env: sandboxEnv(o.home, o.env), stdio: ['ignore', 'pipe', 'pipe'] }));
@@ -60,12 +61,14 @@ export async function startSandbox(o: { root?: string; home: string; env?: Recor
     if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
   };
   const until = Date.now() + (o.timeoutMs ?? 30_000);
-  while (Date.now() < until && !/Nova is ready at/.test(said()) && proc.exitCode === null && proc.signalCode === null) await sleep(25);
+  while (Date.now() < until && !/Nova is ready at/.test(said()) && proc.exitCode === null && proc.signalCode === null && !o.signal?.aborted) await sleep(25);
   const port = Number(/Nova is ready at http:\/\/[^:]+:(\d+)/.exec(said())?.[1]);
   if (!(port > 0)) {
+    const exitCode = proc.exitCode;
     await stop();
     const tail = said().trim().split('\n').slice(-12).join('\n');
-    throw new Error(proc.exitCode !== null ? `The sandbox Nova stopped as it started (exit ${proc.exitCode}):\n${tail}` : `The sandbox Nova didn’t start in time:\n${tail}`);
+    const why = exitCode !== null ? `The sandbox Nova stopped as it started (exit ${exitCode}):\n${tail}` : o.signal?.aborted ? 'stopped' : `The sandbox Nova didn’t start in time:\n${tail}`;
+    throw Object.assign(new Error(why), { output: said(), exitCode });
   }
   return { proc, port, base: `http://127.0.0.1:${port}`, output: said, stop };
 }
@@ -136,4 +139,30 @@ export async function smoke(base: string, expect: { memories?: number; ignore?: 
     return { ok: r.status === 200 && Array.isArray(r.body), said: r.status === 200 ? 'Problems are listed.' : `Problems didn’t answer (${r.status}).` };
   });
   return out;
+}
+
+// The copy is a picture of the person's Nova, not a second one at work (the change sandbox, the
+// restore drill and the supervisor's release sandbox): what was waiting or
+// running is cancelled there, their rules are paused (the change's own are what is tested),
+// providers, automations and connectors are off, devices have no addresses to reach, and no
+// setting names a folder or address of the person's (backups, capture, providers, models).
+export function inert(file: string): void {
+  const db = new DatabaseSync(file);
+  try {
+    const at = new Date().toISOString();
+    db.exec('UPDATE sync_state SET logging = 0 WHERE id = 1');
+    db.prepare(`UPDATE task SET state = 'cancelled', reason = 'Not run in a sandbox copy.', completed_at = ?, updated_at = ? WHERE state NOT IN ('done', 'failed', 'cancelled')`).run(at, at);
+    db.exec('UPDATE trigger_rule SET paused = 1');
+    db.exec(`UPDATE extension SET state = 'disabled' WHERE kind IN ('agent-adapter', 'automation-adapter', 'connector')`);
+    db.exec('UPDATE device SET address = NULL');
+    db.exec('DELETE FROM device_session');
+    // Settings that point outside the copy: the person's backup folders (a backup there would
+    // write into, and prune, their real backups), capture's sources, and where providers and models
+    // are reached. The copy has none, so nothing it does lands anywhere of theirs.
+    db.exec(`DELETE FROM profile WHERE section IN ('backups', 'providers', 'models')`);
+    if (db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'capture_source'`).get()) db.exec(`UPDATE capture_source SET enabled = 0, config = '{}'`);
+    db.exec('DELETE FROM sync_log');
+  } finally {
+    db.close();
+  }
 }
