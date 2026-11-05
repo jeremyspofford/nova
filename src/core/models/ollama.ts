@@ -94,12 +94,10 @@ export function toInstalled(m: Record<string, any>): InstalledModel {
 export class Ollama {
   readonly url: string;
   readonly host: string;
-  #timeoutMs: number;
 
-  constructor(url: string, o: { timeoutMs?: number } = {}) {
+  constructor(url: string) {
     this.url = url.replace(/\/+$/, '');
     this.host = new URL(this.url).host;
-    this.#timeoutMs = o.timeoutMs ?? 600_000;
   }
 
   async #fetch(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<Response> {
@@ -135,11 +133,6 @@ export class Ollama {
   async loaded(signal?: AbortSignal): Promise<LoadedModel[]> {
     const v = await this.#json<{ models?: unknown }>('/api/ps', { ...(signal ? { signal } : {}), timeoutMs: 3000 });
     return (isObj(v) && Array.isArray(v.models) ? v.models : []).slice(0, 64).filter(isObj).map(toLoaded).filter((m) => m.name);
-  }
-
-  // The loaded models' names, as before.
-  async ps(): Promise<string[]> {
-    return (await this.loaded()).map((m) => m.name);
   }
 
   async show(name: string): Promise<ShownModel | null> {
@@ -188,7 +181,7 @@ export class Ollama {
     const body = { model: o.model, messages: o.messages, stream: true, ...(o.format ? { format: o.format } : {}), ...(Object.keys(options).length ? { options } : {}), ...(o.think !== undefined ? { think: o.think } : {}), ...(o.keepAlive ? { keep_alive: o.keepAlive } : {}) };
     let res: Response;
     try {
-      res = await this.#fetch('/api/chat', { method: 'POST', body: JSON.stringify(body), timeoutMs: this.#timeoutMs, ...(o.signal ? { signal: o.signal } : {}) });
+      res = await this.#fetch('/api/chat', { method: 'POST', body: JSON.stringify(body), timeoutMs: 600_000, ...(o.signal ? { signal: o.signal } : {}) });
     } catch (e) {
       if (o.signal?.aborted) return { text: '', aborted: true, usage: {} };
       throw e;

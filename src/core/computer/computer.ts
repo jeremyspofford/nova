@@ -1,7 +1,7 @@
-// Nova Computer (M10a): the interface every kind of workspace machine implements, so a VM or a
-// remote hub can be added later without changing callers (ADR-8: adapters behind Nova's own thin
-// contract). The first adapter is Docker on this machine (docker.ts). Also the folder's identity,
-// and the copy and digest that checkpoints and resets are checked with.
+// Nova Computer (M10a): the types a workspace machine is driven with (its one adapter is Docker on
+// this machine, docker.ts; ADR-8 amendment 2026-11-04: no separate interface until a second adapter
+// exists). Also the folder's identity, and the copy and digest that checkpoints and resets are
+// checked with.
 import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, futimesSync, lstatSync, lutimesSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, rmSync, symlinkSync, utimesSync, writeSync, fchmodSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -40,32 +40,6 @@ export interface ExecResult { exit: number | null; stdout: string; stderr: strin
 
 // A checkpoint's two halves: the machine's image, and a copy of the project folder with its digest.
 export interface Saved { image: string; digest: string; files: number; bytes: number; skipped: string[] }
-
-export interface Computer {
-  readonly kind: string;
-  // Whether this adapter can run workspaces here, and why not, in plain words.
-  available(): Promise<{ ok: boolean; detail: string }>;
-  create(m: Machine): Promise<{ container: string }>;
-  exec(m: Machine, r: ExecRequest, signal?: AbortSignal): Promise<ExecResult>;
-  // `dir`: where the folder copy goes (made by the call).
-  checkpoint(m: Machine, cp: { id: string; dir: string }): Promise<Saved>;
-  // Back to a checkpoint: the machine made again from its image, the folder replaced by its copy.
-  reset(m: Machine, to: { image: string; dir: string }): Promise<{ container: string }>;
-  // `images`: the workspace's checkpoint images, removed with it.
-  destroy(m: Machine, images: string[]): Promise<void>;
-  // Removes checkpoint images of this workspace's that are no longer kept (never the machine's own).
-  drop(m: Machine, images: string[]): Promise<void>;
-  // What changed in the machine's own filesystem since its image, each with what it is now (for
-  // checking a read): one line per path, `<A|C|D> <path>\t<signature>`.
-  changes(m: Machine): Promise<string[]>;
-  // How many bytes the machine's own filesystem holds beyond its image, or null if unknown.
-  layerBytes(m: Machine): Promise<number | null>;
-  // Whether the machine's own filesystem cap is enforced by the adapter itself (else Nova checks it
-  // while commands run).
-  layerQuota?(): Promise<boolean>;
-  // A long-running process inside, for the egress relay (egress.ts), as `user`.
-  attach(m: Machine, argv: string[], user: string): ChildProcess;
-}
 
 export const FOLDER_COPY = 'folder';
 

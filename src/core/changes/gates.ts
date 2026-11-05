@@ -3,6 +3,7 @@
 // load, no route or profile setting changes them, and a change that tries to (by naming a gate in
 // what it proposes, or by targeting the pipeline itself) is refused before anything runs. The gates
 // may never be weakened to make a change pass.
+import { isObj } from '../envelope.ts';
 
 export const KINDS = Object.freeze(['extension', 'design-system', 'config', 'template', 'trigger-rules'] as const);
 export type ChangeKind = (typeof KINDS)[number];
@@ -44,8 +45,6 @@ export const GATES = Object.freeze({
 });
 
 export const REFUSED_WORDS = 'The pipeline’s gates are part of Nova’s core: no change can turn them off, shorten them or skip a stage.';
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 // Why this proposal would weaken a gate, in plain words, or null. Checked before anything else
 // about it, so a change that tries never reaches the sandbox.

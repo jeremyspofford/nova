@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type PrivacyMode, type Report } from '../envelope.ts';
+import { isObj, reporter, type Brief, type PrivacyMode, type Report } from '../envelope.ts';
 import { CONTRACT_SYSTEM, parseContract } from '../providers/prompt.ts';
 import { applyFiles } from '../providers/taskspace.ts';
 import { permits, stricter } from '../workers.ts';
@@ -56,8 +56,6 @@ const FORMAT: Record<FoundryKind, string> = {
     'probe.json: {"name": "…", "path": "/design-systems", "expect": [{"at": "length", "op": "gte", "value": 1}]}',
   ].join('\n'),
 };
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export interface FoundryOptions {
   home: string;
@@ -122,11 +120,7 @@ export class Foundry {
   }
 
   async #run(brief: Brief, signal: AbortSignal): Promise<Report> {
-    const started = performance.now();
-    const report = (status: Report['status'], summary: string, more: Partial<Report> = {}): Report => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
-      ...more, usage: { ...(more.usage ?? {}), duration_ms: Math.round(performance.now() - started) },
-    });
+    const report = reporter(brief);
     const { need, kind, via } = (brief.inputs ?? {}) as { need: string; kind: FoundryKind; via: Via };
     const mode = stricter(brief.privacy_mode, this.#o.privacy());
     const system = CONTRACT_SYSTEM;

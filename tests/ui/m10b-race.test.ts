@@ -1,8 +1,8 @@
 // Review of PR #238, must-fix 1: a pause that arrives while Nova's world is being made for an action
 // must stop that action. A real Chromium session on the stand-in shop; its CDP is wrapped so the
 // person's pause lands exactly during `Page.createIsolatedWorld` for the action (the await between
-// the gate and the call that acts). For a fill, a click, an element action (a11y target) and a click
-// at a point: the stand-in server sees nothing while paused, and the action happens once, after
+// the gate and the call that acts). For a fill, a click and an element action (a11y target):
+// the stand-in server sees nothing while paused, and the action happens once, after
 // resume. Stop during the same window: nothing at all. Runs where Chromium can start.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -59,17 +59,6 @@ test('review 1: a pause during the world read stops a pending fill, click, eleme
       assert.equal(seen(), before + 1, `${what}: it happened once, after resume`);
       s.allowSends(null);
     }
-    // A click at a point (the vision fallback's) has nothing to await between its check and the
-    // click; asked for while paused, it waits until resume.
-    await s.navigate(`${shop.url}/race`);
-    s.pause(H);
-    let clicked = false;
-    const point = s.clickAt(5, 5).then(() => { clicked = true; });
-    await sleep(800);
-    assert.equal(clicked, false, 'a point click waits while paused');
-    s.resume(H);
-    await point;
-    assert.equal(clicked, true);
     // Stop during the window: the action never runs, and nothing lands afterwards.
     await s.navigate(`${shop.url}/race`);
     const before = shop.hits('/saw-input').length;

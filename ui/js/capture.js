@@ -19,8 +19,6 @@ const when = (iso) => { try { return new Date(iso).toLocaleString(undefined, { w
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const excerpt = (t, n = 220) => { const s = String(t ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
 
-export const captureData = () => data;
-
 export async function loadCapture() {
   try {
     const d = await api('GET', '/capture');

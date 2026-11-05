@@ -3,7 +3,6 @@
 // on it and asked the smoke probes. Each check is recorded in words; any failed check fails the
 // drill, and a failed drill is a problem with its playbook. The live home is only read (for what
 // was forgotten), never written.
-import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -11,6 +10,7 @@ import type { Db, Migration } from '../db.ts';
 import { restoreInto, sha256File, type Manifest } from './backup.ts';
 import { inert, smoke, startSandbox } from './sandbox.ts';
 import { dropScratch, makeScratch } from './scratch.ts';
+import { sha256 } from '../workspace.ts';
 
 export interface DrillCheck { name: string; ok: boolean; said: string }
 export interface DrillResult { ok: boolean; backup: string | null; source: 'folder' | 'encrypted' | null; checks: DrillCheck[] }
@@ -28,8 +28,6 @@ export interface DrillInput {
   sandboxEnv?: Record<string, string>;
   timeoutMs?: number;
 }
-
-const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
 export async function drill(o: DrillInput): Promise<DrillResult> {
   const checks: DrillCheck[] = [];
@@ -132,7 +130,7 @@ export function forgottenIn(restored: DatabaseSync, live: Db): { memories: numbe
     const tombs = new Set(live.all<{ source_id: string; key: string }>('SELECT source_id, key FROM capture_tombstone').map((t) => `${t.source_id}\0${t.key}`));
     if (tombs.size) {
       for (const r of restored.prepare('SELECT source_id, external_id FROM capture_event WHERE external_id IS NOT NULL').all() as { source_id: string; external_id: string }[]) {
-        if (tombs.has(`${r.source_id}\0${sha(`${r.source_id}\0${r.external_id}`)}`)) capture++;
+        if (tombs.has(`${r.source_id}\0${sha256(`${r.source_id}\0${r.external_id}`)}`)) capture++;
       }
     }
   }

@@ -4,11 +4,10 @@
 // core) and live, so what was tested is what ships. Nothing here runs code a change carries: an
 // extension's tests and probe are declarative, read by Nova.
 import { GATE_TEMPLATES } from './gates.ts';
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { PRIVACY_MODES, type PrivacyMode } from '../envelope.ts';
+import { isObj, isStr, PRIVACY_MODES, type PrivacyMode } from '../envelope.ts';
 import { review, satisfies, validateManifest, type Manifest } from '../extensions.ts';
 import { validatePackage } from '../design.ts';
 import { validateTemplate, type DryRunCase, type TemplateDef } from '../decide.ts';
@@ -24,6 +23,7 @@ import type { Triggers, RuleInput } from '../triggers.ts';
 import type { Templates } from '../decide.ts';
 import type { Ledger } from '../ledger.ts';
 import type { Egress } from '../workers.ts';
+import { sha256 } from '../workspace.ts';
 
 // What a kind needs of the core it runs against (live, or the sandbox's).
 export interface Live {
@@ -73,8 +73,6 @@ export interface KindOps {
   area(a: Record<string, unknown>): string[];
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isStr = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 const ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const ok = (name: string, why: string): Check => ({ name, ok: true, why });
@@ -342,8 +340,6 @@ function inData(dir: string, rel: string): string {
   if (!abs.startsWith(dir + sep)) throw new CoreError('forbidden', `${rel} is outside the extension’s folder.`);
   return abs;
 }
-
-const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 
 // Before a change writes its files: each path it will write, as it is now — its bytes copied aside
 // and its hash kept (null when there is no such file). Only those paths: the rest of the folder is

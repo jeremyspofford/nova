@@ -2,9 +2,10 @@
 // home/mesh/identity.json, mode 0600, and nowhere else: never in the database, logs, receipts or
 // sync. The private halves stay inside this module; callers get sign, seal and open.
 import { randomUUID, type KeyObject } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { exportDeviceKeys, generateDeviceKeys, importDeviceKeys, keyFingerprint, open, seal, signMessage, type DeviceKeysJson } from './wire.ts';
+import { writeJson } from '../workspace.ts';
 
 interface IdentityFile extends DeviceKeysJson { version: 1; id: string; created_at: string; replaced_at?: string }
 
@@ -17,9 +18,7 @@ export function replaceIdentityKeys(home: string, o: { now?: () => Date } = {}):
   const old = JSON.parse(readFileSync(file, 'utf8')) as IdentityFile;
   if (old.version !== 1 || typeof old.id !== 'string') throw new Error(`${file} isn't an identity file Nova knows.`);
   const data: IdentityFile = { version: 1, id: old.id, created_at: old.created_at, replaced_at: (o.now?.() ?? new Date()).toISOString(), ...exportDeviceKeys(generateDeviceKeys()) };
-  const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tmp, file);
+  writeJson(file, data);
 }
 
 export interface MeshIdentity {
@@ -55,16 +54,12 @@ export function loadIdentity(home: string, o: { now?: () => Date; warn?: (msg: s
     if (data.version !== 1 || typeof data.id !== 'string') throw new Error(`${file} isn't an identity file Nova knows.`);
     if (o.adopt && o.adopt !== data.id) {
       data = { ...data, id: o.adopt };
-      const tmp = `${file}.${process.pid}.tmp`;
-      writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-      renameSync(tmp, file);
+      writeJson(file, data);
     }
   } else {
     data = { version: 1, id: o.adopt ?? randomUUID(), created_at: (o.now?.() ?? new Date()).toISOString(), ...exportDeviceKeys(generateDeviceKeys()) };
     // Written whole, then moved into place, so a crash never leaves half a key file.
-    const tmp = `${file}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-    renameSync(tmp, file);
+    writeJson(file, data);
   }
   const keys = importDeviceKeys(data);
   const id = data.id;

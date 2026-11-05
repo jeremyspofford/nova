@@ -13,7 +13,7 @@
 // - A run that was going when Nova stopped is not run again (its steps may have changed things);
 //   the conversation hears it didn't finish.
 import { randomUUID } from 'node:crypto';
-import { ENVELOPE_VERSION, TERMINAL, permits } from './core/index.ts';
+import { TERMINAL, permits, reportOf } from './core/index.ts';
 import { reduce } from '../ui/js/reduce.js';
 import { lastRunTurn } from './runner.js';
 
@@ -77,10 +77,7 @@ export class ChatRun {
     const kind = this.kinds[inputs.kind];
     if (!kind || !this.runner) throw new Error(`Nova doesn't know how to run "${inputs.kind}" work here.`);
     const title = kind.title(inputs);
-    const report = (status, summary, extra = {}) => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [],
-      artifacts: [{ kind: 'session', ref: inputs.run }], blockers: [], usage: { duration_ms: Date.now() - started }, follow_up_suggestions: [], ...extra,
-    });
+    const report = (status, summary, extra = {}) => reportOf(brief.task_id, status, summary, { artifacts: [{ kind: 'session', ref: inputs.run }], usage: { duration_ms: Date.now() - started }, ...extra });
     const finish = (h) => (h.ok
       ? report('done', headline(h.text) || `${title}: report delivered.`, { evidence: [{ kind: 'confirmation', system: SYSTEM, id: h.id }] })
       : report('failed', h.text));

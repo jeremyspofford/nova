@@ -98,7 +98,6 @@ test('Ollama.loaded keeps size, size_vram, context_length and expires_at per loa
       { name: 'partial:8b', digest: '', size_bytes: 9e9, vram_bytes: 4e9, context: null, expires_at: null },
       { name: 'odd', digest: '', size_bytes: null, vram_bytes: null, context: null, expires_at: null },
     ]);
-    assert.deepEqual(await rt.ps(), ['qwen3:14b', 'partial:8b', 'odd'], 'the existing callers still get names');
     s.state.ps = { models: 'none' };
     assert.deepEqual(await rt.loaded(), []);
     // The shape, from model_info.

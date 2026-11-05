@@ -8,11 +8,10 @@
 // beside Nova's own ground truth at every acting step, site templates learnt from a flow that
 // succeeded, and the checkout stop: Nova never presses pay.
 import { EventEmitter } from 'node:events';
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
+import { reportOf, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
 import { Sse } from '../api.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
@@ -34,6 +33,7 @@ import { cover } from './png.ts';
 import { FLOW_PREFIX, FLOW_RULE, dryRuns, flowDef, flowTemplateId, markerOf, stepsOf, type LearntStep } from './flows.ts';
 import { LOGIN_PREFIX, Redactor, generatePassword, loginHost, loginName, loginRefusal, siteHost } from './logins.ts';
 import { profileDir } from './profile.ts';
+import { sha256 } from '../workspace.ts';
 
 export const BROWSER_WORKER = 'browser';
 const STEP_TIMEOUT_MS = 15_000;
@@ -45,12 +45,9 @@ export const ACCOUNT_PRESENT_MS = 10 * 60_000;
 // `launch`: how a browser is started; a stand-in in tests.
 // screen: the ingest gate (Amendment 2026-10-30-C Part 3). Each page read is screened as it is
 // taken, so its verdict is kept with it before any model step could ever read it.
-// `locate`: a vision fallback (M10b): finds a click target in a screenshot when neither the DOM nor
-// the accessibility tree could. None ships; a step done that way is marked as a fallback.
 export interface BrowserOptions {
   home: string; log: Log; now?: () => Date; env?: NodeJS.ProcessEnv; hub?: () => Hub; launch?: SessionOptions['launch'];
   screen?: (r: { text: string; origin: string; ref: string }) => Promise<{ id: string; verdict: string }>;
-  locate?: (png: Buffer, what: string) => Promise<{ x: number; y: number } | null>;
 }
 
 // What the rest of the core gives Nova Browser once it exists (index.ts): the vault (sign-ins), the
@@ -58,7 +55,7 @@ export interface BrowserOptions {
 export interface Screened { id: string; verdict: string; flags: { kind: string; level: string }[]; extract: string }
 export interface Wired {
   db: Db;
-  vault: { get(name: string): string | null; list(prefix?: string): string[]; put(name: string, value: string): string; delete(name: string): boolean };
+  vault: { get(name: string): string | null; list(prefix?: string): string[]; put(name: string, value: string): void; delete(name: string): boolean };
   templates: Templates;
   rules: RulesProvider;
   decisions: Decisions;
@@ -89,7 +86,7 @@ const INSTRUCTING = new Set(['instructions', 'protocol_tags', 'hidden_instructio
 class Stop extends Error {}
 
 interface ReadRec { selector: string; text: string; screen?: { id: string | null; verdict: string; error?: string } }
-interface StepRec { n: number; do: Step['do']; what: string; via?: 'dom' | 'a11y' | 'vision'; fallback?: boolean; url?: string }
+interface StepRec { n: number; do: Step['do']; what: string; via?: 'dom' | 'a11y'; url?: string }
 interface Run {
   id: string; s: Session; plan: Plan; red: Redactor;
   reads: ReadRec[]; records: StepRec[]; learnt: LearntStep[];
@@ -384,10 +381,7 @@ export class Browser extends EventEmitter {
     const id = brief.task_id;
     const red = new Redactor();
     this.#reds.set(id, red);
-    const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => red.value({
-      envelope: ENVELOPE_VERSION, task_id: id, status, summary, evidence: [], artifacts: [], blockers: [], follow_up_suggestions: [],
-      usage: { duration_ms: Date.now() - started }, ...extra,
-    });
+    const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => red.value(reportOf(id, status, summary, { usage: { duration_ms: Date.now() - started }, ...extra }));
     let plan: Plan;
     try { plan = this.#plan(brief.inputs); } catch (e) {
       return report('failed', `The browser plan can’t run: ${e instanceof CoreError ? e.details.join('; ') || e.message : (e as Error).message}`);
@@ -475,20 +469,18 @@ export class Browser extends EventEmitter {
       // task's record but not worth a line here.
       const blocked = [...s.blocked.values()].filter((b) => b.via !== 'proxy');
       const host = (() => { try { return new URL(finalUrl).host; } catch { return finalUrl; } })();
-      const vision = run.records.filter((r) => r.via === 'vision').length;
       const summary = [
         `Went through ${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'} on ${host}${personSteps ? `; you did ${personSteps === 1 ? 'one' : personSteps} of them` : ''}.`,
         run.checkout ? `Stopped at the checkout: ${run.checkout.lines.length} line${run.checkout.lines.length === 1 ? '' : 's'}, total ${showMoney(run.checkout.total, run.checkout.currency)}${run.checkout.quoted !== null ? ', as quoted' : ''}. Paying is yours: Nova never presses pay.` : '',
         run.flow ? `Followed the flow “${plan.flow!.name}” v${plan.flow!.version}, checking each step.` : '',
         run.blocked ? `Blocked ${run.blocked === 1 ? 'a dialog' : `${run.blocked} dialogs`} that tried to give instructions; nothing in ${run.blocked === 1 ? 'it' : 'them'} was followed.` : '',
         [...run.upsells.values()].length ? `Flagged ${run.upsells.size === 1 ? 'an extra' : `${run.upsells.size} extras`} already ticked for you.` : '',
-        vision ? `${vision === 1 ? 'One step' : `${vision} steps`} found ${vision === 1 ? 'its' : 'their'} element by picture, as a fallback.` : '',
         blocked.length ? `Refused ${blocked.length} host${blocked.length === 1 ? '' : 's'} the task didn’t declare: ${blocked.map((b) => b.host).join(', ')}.` : '',
       ].filter(Boolean).join(' ');
       return report('done', summary, {
         evidence,
         artifacts: [
-          { kind: 'screenshot', ref: refOf(id, SCREENSHOT), sha256: createHash('sha256').update(png).digest('hex') },
+          { kind: 'screenshot', ref: refOf(id, SCREENSHOT), sha256: sha256(png) },
           { kind: 'final-read', ref: refOf(id, FINAL_READ) },
           { kind: 'steps', ref: refOf(id, 'steps.json') },
           ...(run.reads.length ? [{ kind: 'reads', ref: refOf(id, 'reads.json') }] : []),
@@ -539,10 +531,11 @@ export class Browser extends EventEmitter {
       case 'click': {
         const loc = locOf(step);
         rec.via = loc.selector ? 'dom' : 'a11y';
-        const at = await this.#find(s, loc, step.timeout_ms, step.do === 'click' ? step : null);
-        if (at) { rec.via = 'vision'; rec.fallback = true; await this.#visionClick(run, i, step, at); return; }
+        await this.#find(s, loc, step.timeout_ms);
         const el = await this.#element(s, loc);
         await this.#before(run, i, step, el);
+        // Not #submit, on purpose: the pay check is on the element the intent check saw (no re-read),
+        // only for a click, and noted; the send scope drops the form on a checkout plan.
         if (step.do === 'click') {
           const why = el ? isPayControl(el) : null;
           if (why) {
@@ -566,10 +559,10 @@ export class Browser extends EventEmitter {
         return;
       }
       case 'wait':
-        await this.#find(s, { selector: step.selector }, step.timeout_ms, null);
+        await this.#find(s, { selector: step.selector }, step.timeout_ms);
         return;
       case 'read': {
-        await this.#find(s, { selector: step.selector }, step.timeout_ms, null);
+        await this.#find(s, { selector: step.selector }, step.timeout_ms);
         await s.gate();
         // Page text is data: it is kept and compared, never followed.
         const raw = await s.evaluate<string>(`(() => { const el = document.querySelector(${sel(step.selector)}); return el ? (el.innerText ?? el.textContent ?? '') : ''; })()`);
@@ -613,40 +606,19 @@ export class Browser extends EventEmitter {
   async #login(run: Run, i: number, step: Extract<Step, { do: 'login' }>): Promise<void> {
     const { s, red } = run;
     const w = this.#wired();
-    let url: URL;
-    const refusal = loginRefusal(s.url);
-    if (refusal) throw new Stop(refusal);
-    try { url = new URL(s.url); } catch { throw new Stop('The browser isn’t on a page to sign in to.'); }
-    let site: string;
-    try { site = siteHost(url.host); } catch { throw new Stop('Nova can’t tell which site this page is.'); }
+    const { host, site } = this.#pageSite(s, 'The browser isn’t on a page to sign in to.');
     const user = w.vault.get(loginName(site, 'username'));
     const pass = w.vault.get(loginName(site, 'password'));
     if (!user || !pass) throw new Stop(`There is no sign-in saved for ${site}. Save one in Settings › Connections › Site sign-ins (never in chat), then try again.`);
     red.add(user);
     red.add(pass);
-    for (const f of [step.username, step.password, step.submit]) await this.#find(s, { selector: f }, step.timeout_ms, null);
+    for (const f of [step.username, step.password, step.submit]) await this.#find(s, { selector: f }, step.timeout_ms);
     await this.#before(run, i, step, await this.#element(s, { selector: step.submit }));
-    for (const [field, value, part] of [[step.username, user, 'username'], [step.password, pass, 'password']] as const) {
-      const r = await s.actOn<string>({ selector: field }, SECRET, [value, url.host, part, field]);
-      if (r === 'wrong-host') throw new Stop('The page moved to another site before Nova signed in; it typed nothing.');
-      if (r === 'swapped') throw new Stop(`The page swapped ${field} as Nova was about to type into it, so Nova typed nothing more and sent nothing.`);
-      if (r !== 'ok') throw new Stop(`${field} isn’t a ${part} field Nova will type a saved sign-in into (${r}).`);
-    }
+    await this.#typeSecrets(s, host, [[step.username, user, 'username'], [step.password, pass, 'password']], 'The page moved to another site before Nova signed in; it typed nothing.', () => 'a saved sign-in');
     this.#note(run.id, 'signed_in_with', { step: i + 1, site, fields: 2 });
-    const submit = await this.#element(s, { selector: step.submit });
-    const why = submit ? isPayControl(submit) : null;
-    if (why) throw new Stop(`The sign-in button is a pay control (${why}). ${PAY_REFUSAL}`);
     // A sign-in sends to its own form, and where the step says.
-    s.allowSends(i + 1, this.#sendsOf(s, step, submit));
-    try {
-      const r = await this.#act(s, { selector: step.submit }, CLICK, []);
-      if (r === 'covered') throw new Stop(`Something on the page covers ${step.submit}; Nova won’t click through it.`);
-      if (r !== 'ok') throw new Error(stepProblem({ do: 'click', selector: step.submit }, r));
-      await s.settle();
-    } finally {
-      s.allowSends(null);
-    }
-    if (step.done_when) await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000, null).catch(() => { throw new Stop(`The sign-in didn’t go through: ${step.done_when} isn’t on the page.`); });
+    await this.#submit(s, i, step, 'The sign-in button');
+    if (step.done_when) await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000).catch(() => { throw new Stop(`The sign-in didn’t go through: ${step.done_when} isn’t on the page.`); });
   }
 
   // An account change (M10d): a new password Nova makes itself, typed with the saved sign-in where the
@@ -655,12 +627,7 @@ export class Browser extends EventEmitter {
   async #accountChange(run: Run, i: number, step: Extract<Step, { do: 'new_password' } | { do: 'create_account' }>): Promise<void> {
     const { s, red, plan } = run;
     const w = this.#wired();
-    const refusal = loginRefusal(s.url);
-    if (refusal) throw new Stop(refusal);
-    let url: URL;
-    try { url = new URL(s.url); } catch { throw new Stop('The browser isn’t on a page Nova can change an account on.'); }
-    let site: string;
-    try { site = siteHost(url.host); } catch { throw new Stop('Nova can’t tell which site this page is.'); }
+    const { host, site } = this.#pageSite(s, 'The browser isn’t on a page Nova can change an account on.');
     if (!plan.account || plan.account.site !== site) throw new Stop(`The page is on ${site}, not ${plan.account?.site ?? 'the site'} this account step is for; Nova typed nothing.`);
     const create = step.do === 'create_account';
     const user = w.vault.get(loginName(site, 'username'));
@@ -676,31 +643,16 @@ export class Browser extends EventEmitter {
     if (step.do === 'new_password' && step.current) fields.push([step.current, old!, 'password']);
     fields.push([step.password, fresh, 'password']);
     if (step.confirm) fields.push([step.confirm, fresh, 'password']);
-    for (const [f] of fields) await this.#find(s, { selector: f }, step.timeout_ms, null);
-    await this.#find(s, { selector: step.submit }, step.timeout_ms, null);
+    for (const [f] of fields) await this.#find(s, { selector: f }, step.timeout_ms);
+    await this.#find(s, { selector: step.submit }, step.timeout_ms);
     await this.#before(run, i, step, await this.#element(s, { selector: step.submit }));
-    for (const [field, value, part] of fields) {
-      const r = await s.actOn<string>({ selector: field }, SECRET, [value, url.host, part, field]);
-      if (r === 'wrong-host') throw new Stop('The page moved to another site before Nova typed; it typed nothing more and sent nothing.');
-      if (r === 'swapped') throw new Stop(`The page swapped ${field} as Nova was about to type into it, so Nova typed nothing more and sent nothing.`);
-      if (r !== 'ok') throw new Stop(`${field} isn’t a ${part} field Nova will type ${part === 'password' ? 'a password' : 'an account name'} into (${r}).`);
-    }
-    const submit = await this.#element(s, { selector: step.submit });
-    const why = submit ? isPayControl(submit) : null;
-    if (why) throw new Stop(`The button is a pay control (${why}). ${PAY_REFUSAL}`);
-    // Kept aside before it is sent: if the site takes it and anything after fails, it isn't lost.
-    w.vault.put(loginName(site, 'pending'), fresh);
-    this.#committing(run.id, create ? `create the account on ${site}` : `send the new password to ${site}`);
-    s.allowSends(i + 1, this.#sendsOf(s, step, submit));
-    try {
-      const r = await this.#act(s, { selector: step.submit }, CLICK, []);
-      if (r === 'covered') throw new Stop(`Something on the page covers ${step.submit}; Nova won’t click through it.`);
-      if (r !== 'ok') throw new Error(stepProblem({ do: 'click', selector: step.submit }, r));
-      await s.settle();
-    } finally {
-      s.allowSends(null);
-    }
-    await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000, null).catch(() => {
+    await this.#typeSecrets(s, host, fields, 'The page moved to another site before Nova typed; it typed nothing more and sent nothing.', (part) => (part === 'password' ? 'a password' : 'an account name'));
+    await this.#submit(s, i, step, 'The button', () => {
+      // Kept aside before it is sent: if the site takes it and anything after fails, it isn't lost.
+      w.vault.put(loginName(site, 'pending'), fresh);
+      this.#committing(run.id, create ? `create the account on ${site}` : `send the new password to ${site}`);
+    });
+    await this.#find(s, { selector: step.done_when }, step.timeout_ms ?? 10_000).catch(() => {
       throw new Stop(`The page didn’t show that the ${create ? 'account was created' : 'password changed'} (${step.done_when} isn’t there). Nova kept the new password aside, unused, and still uses the old one. If the site did take it, keep it with POST /browser/logins/${site}/pending {keep: true, confirm: true}.`);
     });
     if (create) w.vault.put(loginName(site, 'username'), step.name);
@@ -710,12 +662,56 @@ export class Browser extends EventEmitter {
     this.#note(run.id, create ? 'account_created' : 'password_changed', { step: i + 1, site, kept_in: 'the vault' });
   }
 
+  // The site of the page a sign-in or account step types on, refused in this order: a page Nova never
+  // types a sign-in on, an address it can't read (`notAPage`, each step's own words), a host that
+  // isn't a site.
+  #pageSite(s: Session, notAPage: string): { host: string; site: string } {
+    const refusal = loginRefusal(s.url);
+    if (refusal) throw new Stop(refusal);
+    let url: URL;
+    try { url = new URL(s.url); } catch { throw new Stop(notAPage); }
+    try { return { host: url.host, site: siteHost(url.host) }; } catch { throw new Stop('Nova can’t tell which site this page is.'); }
+  }
+
+  // Saved and new values, typed one field at a time, only while the page is on `host` (facts.ts
+  // SECRET). What Nova says it did or didn't type stays each step's own: `moved` when the page left
+  // the host, `into` for the kind of value a field refused.
+  async #typeSecrets(s: Session, host: string, fields: readonly (readonly [string, string, 'username' | 'password'])[], moved: string, into: (part: 'username' | 'password') => string): Promise<void> {
+    for (const [field, value, part] of fields) {
+      const r = await s.actOn<string>({ selector: field }, SECRET, [value, host, part, field]);
+      if (r === 'wrong-host') throw new Stop(moved);
+      if (r === 'swapped') throw new Stop(`The page swapped ${field} as Nova was about to type into it, so Nova typed nothing more and sent nothing.`);
+      if (r !== 'ok') throw new Stop(`${field} isn’t a ${part} field Nova will type ${into(part)} into (${r}).`);
+    }
+  }
+
+  // A sign-in or account step's submit, in this order (the pay guard; area-1 audit note 12): the
+  // button, read again after the typing, is not a pay control; then `before` (an account step keeps
+  // its new password aside and records the commit point); then the step may send only to the
+  // button's own form and where it says; then the click; nothing covers it and it worked; the page
+  // settles; and the send window always shuts. `button` names it in the pay refusal.
+  async #submit(s: Session, i: number, step: Extract<Step, { do: 'login' | 'new_password' | 'create_account' }>, button: string, before?: () => void): Promise<void> {
+    const submit = await this.#element(s, { selector: step.submit });
+    const why = submit ? isPayControl(submit) : null;
+    if (why) throw new Stop(`${button} is a pay control (${why}). ${PAY_REFUSAL}`);
+    before?.();
+    s.allowSends(i + 1, this.#sendsOf(s, step, submit));
+    try {
+      const r = await this.#act(s, { selector: step.submit }, CLICK, []);
+      if (r === 'covered') throw new Stop(`Something on the page covers ${step.submit}; Nova won’t click through it.`);
+      if (r !== 'ok') throw new Error(stepProblem({ do: 'click', selector: step.submit }, r));
+      await s.settle();
+    } finally {
+      s.allowSends(null);
+    }
+  }
+
   // The itemised lines and the total, checked; then Nova stops. The pay control is found, so that the
   // browser refuses whatever its form would send, and never clicked.
   async #checkout(run: Run, i: number, step: Extract<Step, { do: 'checkout' }>): Promise<void> {
     const { s, red } = run;
-    await this.#find(s, { selector: step.total }, step.timeout_ms, null);
-    await this.#find(s, { selector: step.lines }, step.timeout_ms, null);
+    await this.#find(s, { selector: step.total }, step.timeout_ms);
+    await this.#find(s, { selector: step.lines }, step.timeout_ms);
     const pay = await this.#element(s, { selector: step.pay });
     if (!pay) throw new Stop(`Nova can’t find the pay control (${step.pay}) on the checkout page, so it can’t be sure what pays: it stopped.`);
     if (pay.formAction) s.addPayTarget(pay.formAction);
@@ -771,7 +767,7 @@ export class Browser extends EventEmitter {
     const extracts: string[] = [];
     for (const d of all) {
       const text = red.text(d.text);
-      const key = createHash('sha256').update(`${d.kind}\0${text}`).digest('hex');
+      const key = sha256(`${d.kind}\0${text}`);
       const r = await this.#screen(text, s.url);
       const bad = r === null || r.verdict === 'block' || r.flags.some((f) => INSTRUCTING.has(f.kind));
       if (bad) injection = true;
@@ -976,9 +972,7 @@ export class Browser extends EventEmitter {
   // ---- elements ---------------------------------------------------------------------------------
 
   // Waits for an element. The time the person holds the browser doesn't count against the step.
-  // A click whose element neither the DOM nor the accessibility tree finds may fall back to vision,
-  // when a locator is configured: the point it found is returned.
-  async #find(s: Session, loc: Locator, timeoutMs = STEP_TIMEOUT_MS, click: Step | null): Promise<{ x: number; y: number } | null> {
+  async #find(s: Session, loc: Locator, timeoutMs = STEP_TIMEOUT_MS): Promise<void> {
     let deadline = Date.now() + timeoutMs;
     for (;;) {
       deadline += await s.gate();
@@ -988,12 +982,8 @@ export class Browser extends EventEmitter {
           return false;
         })
         : await s.exists(loc).catch(() => false);
-      if (found) return null;
+      if (found) return;
       if (Date.now() > deadline) {
-        if (click && this.#o.locate) {
-          const at = await this.#o.locate(await this.#picture(s), describe(click)).catch(() => null);
-          if (at) return at;
-        }
         throw new Error(`Nothing on ${hostOf(s.url)} matches ${loc.selector ?? (loc.target ? `the ${loc.target.role} “${loc.target.name}”` : '')}, after ${Math.round(timeoutMs / 1000)} s.`);
       }
       await new Promise((r) => setTimeout(r, 150));
@@ -1005,24 +995,6 @@ export class Browser extends EventEmitter {
   #act(s: Session, loc: Locator, fn: string, args: unknown[]): Promise<string> {
     if (loc.selector) return s.act<string>(`(${fn}).apply(document.querySelector(${sel(loc.selector)}), ${JSON.stringify(args)})`);
     return s.actOn<string>(loc, fn, args);
-  }
-
-  // The vision fallback: the point is checked like any click (the element there must not pay), and
-  // the step is marked as found by picture.
-  async #visionClick(run: Run, i: number, step: Step, at: { x: number; y: number }): Promise<void> {
-    const { s } = run;
-    const el = await s.evaluate<ElementFacts | null>(`(${ELEMENT_FACTS}).call(document.elementFromPoint(${Number(at.x)}, ${Number(at.y)}))`).catch(() => null);
-    await this.#before(run, i, step, el && typeof el === 'object' ? el : null);
-    const why = el && typeof el === 'object' ? isPayControl(el) : null;
-    if (why) throw new Stop(`Nova stopped: what the picture pointed at is a pay control (${why}). ${PAY_REFUSAL}`);
-    this.#note(run.id, 'vision_fallback', { step: i + 1, why: 'Neither the page’s structure nor its accessibility tree had the element; it was found by picture.' });
-    s.allowSends(i + 1, this.#sendsOf(s, step, null));
-    try {
-      await s.clickAt(at.x, at.y);
-      await s.settle();
-    } finally {
-      s.allowSends(null);
-    }
   }
 
   // ---- learning a flow --------------------------------------------------------------------------

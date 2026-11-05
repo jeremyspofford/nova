@@ -55,7 +55,7 @@ export function usually(durations) {
   const d = (durations ?? []).filter((x) => x > 0).sort((a, b) => a - b);
   if (d.length < 2) return '';
   const mid = d[Math.floor(d.length / 2)];
-  return mid < 1000 ? 'under a second' : about(mid).replace(/^about /, 'about ');
+  return mid < 1000 ? 'under a second' : about(mid);
 }
 
 // What a kind of wait usually takes, in general words, before this device has any history of its own
@@ -98,6 +98,26 @@ export function over(key) {
   const t = begun.get(key);
   begun.delete(key);
   if (t !== undefined) remember(key, Date.now() - t);
+}
+
+// The load every Settings part shares: `fetch` reads the part's data into its own variables; then
+// its wait (`key`) is over, or `failed` says why it isn't, and the part redraws either way.
+export function makePart(key, fetch) {
+  const part = {
+    failed: '',
+    rerender: () => {},
+    async load() {
+      try {
+        await fetch();
+        part.failed = '';
+        over(key);
+      } catch (e) {
+        part.failed = e.message || 'Nova’s server didn’t answer.';
+      }
+      part.rerender();
+    },
+  };
+  return part;
 }
 
 // What a wait's indicator shows now, from when it began: whether it is past 1 s (seen), past 10 s,

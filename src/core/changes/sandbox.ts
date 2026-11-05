@@ -1,18 +1,15 @@
 // The sandbox (M7 plan §1, stage 1): an isolated copy of the person's Nova that a change is tried
 // on, never the live home. A scratch home is built from a consistent `VACUUM INTO` snapshot of the
 // database plus the files the change needs, and a Nova process of its own starts on it, bound to
-// loopback on a port it picks. The copy is made inert first: nothing that was queued runs, the
-// person's own rules are paused, providers and connectors are off, and no device addresses are
-// kept, so a sandbox never reaches anyone. It keeps no secrets: the vault isn't copied.
-import { spawn, type ChildProcess } from 'node:child_process';
-import { trackChild } from '../children.ts';
-import { DatabaseSync } from 'node:sqlite';
+// loopback on a port it picks (resilience's `startSandbox`, with this sandbox's env on top). The
+// copy is made inert first: nothing that was queued runs, the person's own rules are paused,
+// providers and connectors are off, and no device addresses are kept, so a sandbox never reaches
+// anyone. It keeps no secrets: the vault isn't copied.
 import { cpSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { Db } from '../db.ts';
+import { inert, startSandbox, type Sandbox as Started } from '../resilience/sandbox.ts';
 
-export const SERVER = fileURLToPath(new URL('../../server.js', import.meta.url));
 const STANDING = ['AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md'];
 const READY_MS = 30_000;
 
@@ -20,13 +17,34 @@ export interface SandboxInfo { home: string; port: number; pid: number; snapshot
 
 // Only what a Nova process needs to start, and the egress tripwire's settings when one is loaded
 // (tests): nothing else from this process's environment reaches the sandbox (no secrets, no mesh).
+// Each is passed only when set here (TZ too: not the UTC that `sandboxEnv` would otherwise give).
 const PASS_ENV = ['PATH', 'TZ', 'LANG', 'NOVA_EGRESS_LOG', 'NOVA_EGRESS_ALLOW', 'SYSTEMROOT'];
+
+// What this sandbox adds to `startSandbox`'s own env, and the Node flags it keeps.
+export function changesLaunch(timezone?: string, env: NodeJS.ProcessEnv = process.env, execArgv: string[] = process.execArgv): { env: Record<string, string | undefined>; execArgv: string[] } {
+  const extra: Record<string, string | undefined> = {};
+  for (const k of PASS_ENV) extra[k] = env[k];
+  Object.assign(extra, {
+    NOVA_TEST_CLOCK: '1',
+    // The sandbox's chat model is declared remote and never runs: it is what the privacy probe
+    // must refuse a local-only task to. Its Ollama address is a closed port (`sandboxEnv`).
+    NOVA_AGENT_EGRESS: 'remote',
+    ...(timezone ? { NOVA_TZ: timezone } : {}),
+  });
+  // The same Node and preloads as this process (the egress tripwire in tests), never its other flags.
+  const preload: string[] = [];
+  execArgv.forEach((a, i) => {
+    if (a === '--import' || a === '--require') { const v = execArgv[i + 1]; if (v) preload.push(a, v); }
+    else if (a.startsWith('--import=') || a.startsWith('--require=')) preload.push(a);
+  });
+  return { env: extra, execArgv: preload };
+}
 
 export class Sandbox {
   readonly dir: string;
   readonly home: string;
-  #proc: ChildProcess | null = null;
-  #out: string[] = [];
+  #sb: Started | null = null;
+  #said: () => string = () => '';
   port = 0;
   info: SandboxInfo | null = null;
 
@@ -36,7 +54,7 @@ export class Sandbox {
   }
 
   // Builds the scratch home and starts Nova on it. `files`: home-relative paths to copy as well.
-  async start(o: { db: Db; liveHome: string; files?: string[]; timezone?: string; server?: string; signal?: AbortSignal }): Promise<SandboxInfo> {
+  async start(o: { db: Db; liveHome: string; files?: string[]; timezone?: string; signal?: AbortSignal }): Promise<SandboxInfo> {
     const began = performance.now();
     rmSync(this.dir, { recursive: true, force: true });
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
@@ -50,41 +68,26 @@ export class Sandbox {
       cpSync(from, join(this.home, rel), { recursive: true });
       copied.push(rel);
     }
-    const env: Record<string, string> = {};
-    for (const k of PASS_ENV) if (process.env[k] !== undefined) env[k] = process.env[k]!;
-    Object.assign(env, {
-      HOME: join(this.dir, 'user'), NOVA_HOME: this.home, NOVA_HOST: '127.0.0.1', NOVA_PORT: '0',
-      NOVA_SANDBOX: '1', NOVA_TEST_CLOCK: '1', NOVA_VAULT_KEY: 'file',
-      // The sandbox's chat model is declared remote and never runs: it is what the privacy probe
-      // must refuse a local-only task to. Its Ollama address is a closed port.
-      NOVA_AGENT_CMD: 'false', NOVA_AGENT_EGRESS: 'remote', NOVA_OLLAMA_URL: 'http://127.0.0.1:9',
-      ...(o.timezone ? { NOVA_TZ: o.timezone } : {}),
-    });
-    mkdirSync(env.HOME!, { recursive: true });
-    // The same Node and preloads as this process (the egress tripwire in tests), never its other flags.
-    const preload: string[] = [];
-    process.execArgv.forEach((a, i) => {
-      if (a === '--import' || a === '--require') { const v = process.execArgv[i + 1]; if (v) preload.push(a, v); }
-      else if (a.startsWith('--import=') || a.startsWith('--require=')) preload.push(a);
-    });
-    const proc = trackChild(spawn(process.execPath, [...preload, o.server ?? SERVER], { cwd: join(SERVER, '..', '..'), env, stdio: ['ignore', 'pipe', 'pipe'] }));
-    this.#proc = proc;
-    proc.stdout!.on('data', (d) => this.#out.push(String(d)));
-    proc.stderr!.on('data', (d) => this.#out.push(String(d)));
-    const end = Date.now() + READY_MS;
-    while (!/Nova is ready at http:\/\/[^:]+:(\d+)/.test(this.#out.join(''))) {
-      if (proc.exitCode !== null) throw new Error(`the sandbox Nova stopped as it started: ${this.output().slice(-400)}`);
-      if (Date.now() > end) throw new Error(`the sandbox Nova didn’t start within ${READY_MS / 1000} s.`);
-      if (o.signal?.aborted) throw new Error('stopped');
-      await new Promise((r) => setTimeout(r, 25));
+    // Its HOME (`sandboxEnv`: beside the scratch home), made here.
+    mkdirSync(join(this.dir, 'user'), { recursive: true });
+    const launch = changesLaunch(o.timezone);
+    try {
+      this.#sb = await startSandbox({ home: this.home, env: launch.env, execArgv: launch.execArgv, timeoutMs: READY_MS, ...(o.signal ? { signal: o.signal } : {}) });
+    } catch (e) {
+      const f = e as Error & { output?: string; exitCode?: number | null };
+      const said = f.output ?? '';
+      this.#said = () => said;
+      if (f.message === 'stopped') throw f;
+      throw new Error(f.exitCode != null ? `the sandbox Nova stopped as it started: ${said.slice(-400)}` : `the sandbox Nova didn’t start within ${READY_MS / 1000} s.`);
     }
-    this.port = Number(/Nova is ready at http:\/\/[^:]+:(\d+)/.exec(this.#out.join(''))![1]);
-    this.info = { home: this.home, port: this.port, pid: proc.pid!, snapshot_bytes: statSync(dbFile).size, started_ms: Math.round(performance.now() - began), copied };
+    this.#said = this.#sb.output;
+    this.port = this.#sb.port;
+    this.info = { home: this.home, port: this.port, pid: this.#sb.proc.pid!, snapshot_bytes: statSync(dbFile).size, started_ms: Math.round(performance.now() - began), copied };
     return this.info;
   }
 
   output(): string {
-    return this.#out.join('');
+    return this.#said();
   }
 
   // One call to the sandbox's API, as its own console would make it.
@@ -102,40 +105,9 @@ export class Sandbox {
   // Stops the process this sandbox started (only that one) and deletes the scratch home, which held
   // a copy of the person's data.
   async stop(): Promise<void> {
-    const p = this.#proc;
-    this.#proc = null;
-    if (p && p.exitCode === null && p.signalCode === null) {
-      p.kill('SIGTERM');
-      const end = Date.now() + 5000;
-      while (p.exitCode === null && p.signalCode === null && Date.now() < end) await new Promise((r) => setTimeout(r, 25));
-      if (p.exitCode === null && p.signalCode === null) p.kill('SIGKILL');
-    }
+    const sb = this.#sb;
+    this.#sb = null;
+    await sb?.stop();
     rmSync(this.dir, { recursive: true, force: true });
-  }
-}
-
-// The copy is a picture of the person's Nova, not a second one at work (also used by the restore
-// drill and the supervisor's release sandbox, M7b): what was waiting or
-// running is cancelled there, their rules are paused (the change's own are what is tested),
-// providers, automations and connectors are off, devices have no addresses to reach, and no
-// setting names a folder or address of the person's (backups, capture, providers, models).
-export function inert(file: string): void {
-  const db = new DatabaseSync(file);
-  try {
-    const at = new Date().toISOString();
-    db.exec('UPDATE sync_state SET logging = 0 WHERE id = 1');
-    db.prepare(`UPDATE task SET state = 'cancelled', reason = 'Not run in a sandbox copy.', completed_at = ?, updated_at = ? WHERE state NOT IN ('done', 'failed', 'cancelled')`).run(at, at);
-    db.exec('UPDATE trigger_rule SET paused = 1');
-    db.exec(`UPDATE extension SET state = 'disabled' WHERE kind IN ('agent-adapter', 'automation-adapter', 'connector')`);
-    db.exec('UPDATE device SET address = NULL');
-    db.exec('DELETE FROM device_session');
-    // Settings that point outside the copy: the person's backup folders (a backup there would
-    // write into, and prune, their real backups), capture's sources, and where providers and models
-    // are reached. The copy has none, so nothing it does lands anywhere of theirs.
-    db.exec(`DELETE FROM profile WHERE section IN ('backups', 'providers', 'models')`);
-    if (db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'capture_source'`).get()) db.exec(`UPDATE capture_source SET enabled = 0, config = '{}'`);
-    db.exec('DELETE FROM sync_log');
-  } finally {
-    db.close();
   }
 }

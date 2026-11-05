@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { searchMemory, terms } from '../src/memory.js';
+import { Memory, terms } from '../src/memory.js';
 
 const home = mkdtempSync(join(tmpdir(), 'nova-m-'));
 ensureMark(home);
@@ -17,22 +17,21 @@ test('terms drop stopwords and short words', () => {
 });
 
 test('finds the matching bullet with its source', () => {
-  const hits = searchMemory(home, "What is Maverick's inhaler plan again?");
+  const hits = new Memory(home).search("What is Maverick's inhaler plan again?");
   assert.equal(hits.length, 1);
   assert.equal(hits[0].source, 'memory/2026-10-19.md');
   assert.match(hits[0].text, /inhaler plan/);
 });
 
 test('ignores README and unrelated questions', () => {
-  assert.deepEqual(searchMemory(home, 'Tell me a joke about penguins'), []);
+  assert.deepEqual(new Memory(home).search('Tell me a joke about penguins'), []);
 });
 
 test('no memory folder is not an error', () => {
-  assert.deepEqual(searchMemory(join(home, 'nope'), 'inhaler plan'), []);
+  assert.deepEqual(new Memory(join(home, 'nope')).search('inhaler plan'), []);
 });
 
 import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
-import { Memory } from '../src/memory.js';
 import { createCore, ensureMark } from '../src/core/index.ts';
 
 const now = new Date('2026-10-21T16:42:00Z');
