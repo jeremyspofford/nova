@@ -14,19 +14,20 @@
 // trusted at the apply and isn't on the hub's own machine (review of PR #241, S5). core/index.ts
 // calls `contact()` once such a request's answer has gone out.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, PRIVACY_MODES, type Brief, type Evidence, type PrivacyMode, type Report, type Tier } from '../envelope.ts';
+import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
 import { unifiedDiff } from '../providers/taskspace.ts';
 import { ADAPTERS, KINDS, changedPaths, checkUrl, digest, httpConfig, inexactNumbers, leafPaths, mask, mergePatch, pretty, secretChanges, shape, showPath, urlEgress, validatePatch, valueAt, without, type Config, type Json, type NetworkTarget } from './targets.ts';
-import type { Db } from '../db.ts';
+import { jsonOrNull as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
 import type { Vault } from '../vault.ts';
 import type { Devices, Device } from '../mesh/devices.ts';
 import type { Egress } from '../workers.ts';
+import { writeAtomic } from '../workspace.ts';
 
 export const NETWORK_WORKER = 'network';
 export const CONFIRMATION_SYSTEM = 'nova-network';
@@ -61,7 +62,6 @@ type Seg = string | number;
 interface Snap { version: string; sha: string; config: Config; text: string; at: string }
 interface TaskRef { step: Step; id: string }
 interface ReadBack { change: string; task_id: string; what: 'applied' | 'reverted'; sha: string; version: string; at: string }
-type Reporter = (status: Report['status'], summary: string, more?: Partial<Report>) => Report;
 
 export interface NetworkOptions {
   db: Db; log: Log; home: string; ledger: Ledger; verifier: Verifier; vault: Vault; devices: Devices;
@@ -81,7 +81,6 @@ export interface NetworkOptions {
   now?: () => Date;
 }
 
-const parse = <T>(s: string | null): T | null => (s ? JSON.parse(s) as T : null);
 const clip = (s: string, n = 80) => { const t = s.trim().replace(/\s+/g, ' '); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const minutes = (s: number) => (s % 60 === 0 ? `${s / 60} minute${s === 60 ? '' : 's'}` : `${s} seconds`);
 
@@ -466,8 +465,7 @@ export class Network {
 
   #writeJson(file: string, v: unknown): void {
     mkdirSync(join(file, '..'), { recursive: true, mode: 0o700 });
-    writeFileSync(`${file}.tmp`, JSON.stringify(v), { mode: 0o600 });
-    renameSync(`${file}.tmp`, file);
+    writeAtomic(file, JSON.stringify(v));
   }
 
   #readJson<T>(file: string): T | null {
@@ -517,11 +515,7 @@ export class Network {
   }
 
   async #run(brief: Brief, signal: AbortSignal): Promise<Report> {
-    const started = performance.now();
-    const report: Reporter = (status, summary, more = {}) => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status, summary, evidence: [], artifacts: [], blockers: status === 'blocked' ? [summary] : [], follow_up_suggestions: [],
-      ...more, usage: { duration_ms: Math.round(performance.now() - started) },
-    });
+    const report = reporter(brief);
     const step = brief.inputs?.step as Step;
     const c = this.#o.db.get<ChangeRow>('SELECT * FROM network_change WHERE id = ?', String(brief.inputs?.change_id ?? ''));
     if (!c) return report('failed', 'This network change isn’t in Nova’s record any more.');

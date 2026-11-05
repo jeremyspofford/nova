@@ -19,7 +19,7 @@
 //
 // Restoring (tier 3, the hub's own screen) is staged, then applied when Nova next starts, before
 // the database opens, by swapping folders (finishStaged): see `stageRestore` and `finishStaged`.
-import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { chmodSync, closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -31,13 +31,14 @@ import type { Ledger, LanedWorker, Task } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
 import { Vault } from '../vault.ts';
 import type { Route, Who } from '../api.ts';
-import { ENVELOPE_VERSION, type Brief, type Report } from '../envelope.ts';
-import { cleanBackup, sha256File, writeManifest, type ManifestFile } from './backup.ts';
+import { reportOf, type Brief, type Report } from '../envelope.ts';
+import { cleanBackup, isFull, sha256File, writeManifest, type ManifestFile } from './backup.ts';
 import { safeRel } from './archive.ts';
 import { carryOver, droppedDevices } from './restore.ts';
 import { isNovaEntry } from './entries.ts';
 import type { Restarter } from './restart.ts';
 import { RESET_MARKER, finishReset, type FinishOptions as ResetFinishOptions } from './reset.ts';
+import { sha256, writeJson } from '../workspace.ts';
 
 export const CHECKPOINTS_DIR = 'checkpoints';
 export const KEEP_AUTO = 10;
@@ -131,8 +132,6 @@ export function humanSize(bytes: number): string {
   while (v >= 1000 && i < units.length - 1) { v /= 1000; i++; }
   return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
-
-const isFull = (e: unknown) => (e as NodeJS.ErrnoException)?.code === 'ENOSPC' || /disk is full|SQLITE_FULL|ENOSPC/i.test((e as Error)?.message ?? '');
 
 // The seal's key: made once, the person's alone, outside every checkpoint and every backup.
 function sealKey(home: string, create: boolean): Buffer | null {
@@ -487,8 +486,7 @@ export function readMarker(home: string): RestoreMarker | null {
 
 function writeMarker(home: string, m: RestoreMarker): void {
   const file = join(root(home), RESTORE_DIR, MARKER);
-  writeFileSync(`${file}.tmp`, `${JSON.stringify(m, null, 2)}\n`, { mode: 0o600 });
-  renameSync(`${file}.tmp`, file);
+  writeJson(file, m);
 }
 
 // Every file under `dir` (a staged home), with its hash.
@@ -755,8 +753,7 @@ function applyCold(home: string, staged: string, c: ColdStage, carried: Carried,
   if (existsSync(roleFile)) {
     try {
       const r = JSON.parse(readFileSync(roleFile, 'utf8')) as Record<string, unknown>;
-      writeFileSync(`${roleFile}.tmp`, `${JSON.stringify({ ...r, role: 'hub', epoch, promoted_at: at }, null, 2)}\n`, { mode: 0o600 });
-      renameSync(`${roleFile}.tmp`, roleFile);
+      writeJson(roleFile, { ...r, role: 'hub', epoch, promoted_at: at });
     } catch { /* a role file Nova can't read: mesh_state decides */ }
   }
   const vaultAt = o.vaultAt ?? ((h: string) => new Vault({ home: h }));
@@ -784,7 +781,6 @@ export function unrecordedRestores(home: string, recorded: (id: string) => boole
 }
 
 export const newRestoreId = () => randomUUID();
-export const sha256 = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
 
 // ---- the service: what the core and its routes use -------------------------------------------------
 
@@ -993,8 +989,7 @@ export class Checkpoints {
       run: async (brief: Brief): Promise<Report> => {
         const id = String((brief.inputs as { restore_id?: string } | undefined)?.restore_id ?? '');
         const r = restoreRecord(this.#o.home, id);
-        const base = { envelope: ENVELOPE_VERSION as typeof ENVELOPE_VERSION, task_id: brief.task_id, artifacts: [] as Report['artifacts'], follow_up_suggestions: [] as string[], usage: { duration_ms: 0 } };
-        if (!r) return { ...base, status: 'failed', summary: 'Nova has no record of that restore.', evidence: [], blockers: [] };
+        if (!r) return reportOf(brief.task_id, 'failed', 'Nova has no record of that restore.');
         const c = r.carried!;
         const parts = [
           `Restored “${r.checkpoint.label}” (${r.checkpoint.at}) after checking its database and ${r.verified.files} files against their hashes.`,
@@ -1004,7 +999,7 @@ export class Checkpoints {
           `${c.problems.carried} problem${c.problems.carried === 1 ? '' : 's'} carried over.`,
           r.before ? `A checkpoint of how Nova was just before is kept (${r.before}).` : '',
         ];
-        return { ...base, status: 'done', summary: parts.filter(Boolean).join(' '), evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `restore:${r.id}` }], blockers: [] };
+        return reportOf(brief.task_id, 'done', parts.filter(Boolean).join(' '), { evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `restore:${r.id}` }] });
       },
     };
   }

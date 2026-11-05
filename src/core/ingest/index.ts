@@ -4,7 +4,7 @@
 // screen's record itself.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ENVELOPE_VERSION, type Brief, type Report } from '../envelope.ts';
+import { reportOf, type Brief, type Report } from '../envelope.ts';
 import { Ingest, READER_SYSTEM, type Blocked, type IngestOptions } from './screen.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -40,11 +40,8 @@ export function wireIngest(o: WiredOptions): { ingest: Ingest; worker: LanedWork
     health: () => ({ ok: true }),
     lane: () => ({ key: 'ingest', max: 1 }),
     internal: { key, why: 'Only Nova’s own screen records what it blocked.' },
-    run: async (brief: Brief): Promise<Report> => ({
-      envelope: ENVELOPE_VERSION, task_id: brief.task_id, status: 'done',
-      summary: String(brief.inputs?.why ?? 'Blocked.'),
+    run: async (brief: Brief): Promise<Report> => reportOf(brief.task_id, 'done', String(brief.inputs?.why ?? 'Blocked.'), {
       evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: String(brief.inputs?.screen ?? '') }],
-      artifacts: [], blockers: [], usage: { duration_ms: 0 }, follow_up_suggestions: [],
     }),
   };
   o.ledger.workers.set(worker.id, worker);

@@ -8,11 +8,10 @@
 // beside Nova's own ground truth at every acting step, site templates learnt from a flow that
 // succeeded, and the checkout stop: Nova never presses pay.
 import { EventEmitter } from 'node:events';
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
-import { ENVELOPE_VERSION, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
+import { reportOf, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
 import { Sse } from '../api.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
@@ -34,6 +33,7 @@ import { cover } from './png.ts';
 import { FLOW_PREFIX, FLOW_RULE, dryRuns, flowDef, flowTemplateId, markerOf, stepsOf, type LearntStep } from './flows.ts';
 import { LOGIN_PREFIX, Redactor, generatePassword, loginHost, loginName, loginRefusal, siteHost } from './logins.ts';
 import { profileDir } from './profile.ts';
+import { sha256 } from '../workspace.ts';
 
 export const BROWSER_WORKER = 'browser';
 const STEP_TIMEOUT_MS = 15_000;
@@ -384,10 +384,7 @@ export class Browser extends EventEmitter {
     const id = brief.task_id;
     const red = new Redactor();
     this.#reds.set(id, red);
-    const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => red.value({
-      envelope: ENVELOPE_VERSION, task_id: id, status, summary, evidence: [], artifacts: [], blockers: [], follow_up_suggestions: [],
-      usage: { duration_ms: Date.now() - started }, ...extra,
-    });
+    const report = (status: Report['status'], summary: string, extra: Partial<Report> = {}): Report => red.value(reportOf(id, status, summary, { usage: { duration_ms: Date.now() - started }, ...extra }));
     let plan: Plan;
     try { plan = this.#plan(brief.inputs); } catch (e) {
       return report('failed', `The browser plan can’t run: ${e instanceof CoreError ? e.details.join('; ') || e.message : (e as Error).message}`);
@@ -488,7 +485,7 @@ export class Browser extends EventEmitter {
       return report('done', summary, {
         evidence,
         artifacts: [
-          { kind: 'screenshot', ref: refOf(id, SCREENSHOT), sha256: createHash('sha256').update(png).digest('hex') },
+          { kind: 'screenshot', ref: refOf(id, SCREENSHOT), sha256: sha256(png) },
           { kind: 'final-read', ref: refOf(id, FINAL_READ) },
           { kind: 'steps', ref: refOf(id, 'steps.json') },
           ...(run.reads.length ? [{ kind: 'reads', ref: refOf(id, 'reads.json') }] : []),
@@ -771,7 +768,7 @@ export class Browser extends EventEmitter {
     const extracts: string[] = [];
     for (const d of all) {
       const text = red.text(d.text);
-      const key = createHash('sha256').update(`${d.kind}\0${text}`).digest('hex');
+      const key = sha256(`${d.kind}\0${text}`);
       const r = await this.#screen(text, s.url);
       const bad = r === null || r.verdict === 'block' || r.flags.some((f) => INSTRUCTING.has(f.kind));
       if (bad) injection = true;

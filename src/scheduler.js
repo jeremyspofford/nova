@@ -11,9 +11,10 @@
 // six hours runs late, once; anything older is recorded as missed. Runs still
 // queued when Nova stopped are in the ledger, and run when it starts again.
 import { EventEmitter } from 'node:events';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { lastRun, nextRun } from './cron.js';
 import { WORKER, begun, headline, openTasks } from './chat-run.js';
+import { sha256 } from './core/index.ts';
 
 const CATCH_UP = 6 * 3600_000;
 const LATE = 2 * 60_000;
@@ -108,7 +109,7 @@ export class Scheduler extends EventEmitter {
           title: s.name, owner: WORKER,
           goal: `Do the scheduled work "${s.name}" on its own, as its instructions say, and hand the report to ${s.deliver === 'main' ? 'the main conversation' : 'the conversation it was set up in'}.`,
           evidence_required: [{ kind: 'confirmation', note: 'The report is in the conversation it is for.' }],
-          context_refs: [{ kind: 'file', ref: `~/schedules/${s.id}.md`, sha256: createHash('sha256').update(s.prompt).digest('hex') }],
+          context_refs: [{ kind: 'file', ref: `~/schedules/${s.id}.md`, sha256: sha256(s.prompt) }],
           inputs,
         },
       },

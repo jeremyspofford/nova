@@ -11,7 +11,7 @@
 // contacts a remote Home Assistant. Disconnecting deletes the token from Home Assistant itself
 // (auth/delete_refresh_token, named by the token's own issuer) and then from the vault.
 import { CoreError } from '../errors.ts';
-import type { Brief, Evidence } from '../envelope.ts';
+import { reportOf, type Brief, type Evidence } from '../envelope.ts';
 import type { Egress } from '../workers.ts';
 import type { Route } from '../api.ts';
 import type { Connector, ConnectorContext, ConnectorStatus } from './index.ts';
@@ -261,9 +261,7 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
       async run(brief: Brief, signal: AbortSignal) {
         const started = Date.now();
         const i = (brief.inputs ?? {}) as { domain?: string; service?: string; data?: Record<string, unknown>; expect?: string };
-        const report = (status: 'done' | 'blocked' | 'failed', summary: string, evidence: Evidence[] = [], blockers: string[] = []) => ({
-          envelope: '1', task_id: brief.task_id, status, summary, evidence, artifacts: [], blockers, usage: { duration_ms: Date.now() - started }, follow_up_suggestions: [],
-        });
+        const report = (status: 'done' | 'blocked' | 'failed', summary: string, evidence: Evidence[] = [], blockers: string[] = []) => reportOf(brief.task_id, status, summary, { evidence, blockers, usage: { duration_ms: Date.now() - started } });
         if (!i.domain || !DOMAIN.test(i.domain) || !i.service || !DOMAIN.test(i.service)) return report('failed', 'The task doesn’t name a Home Assistant service.');
         // The tier comes from the domain, whatever the task asked for: a call can't lower its own gate.
         let entities: string[];

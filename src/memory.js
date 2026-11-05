@@ -17,17 +17,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { sha256, terms } from './core/index.ts';
 
-const STOP = new Set(('a an and are as at be but by can could did do does for from had has have how i if in into is it its ' +
-  'just me my no not of on or our so that the their them then there these they this to was we were what when where ' +
-  'which who why will with would you your about after again all also am any because been before being both each few ' +
-  'more most other over same should some such than too very nova please tell know want need like get got make').split(' '));
-
-export function terms(text) {
-  return [...new Set(String(text).toLowerCase().match(/[a-z0-9][a-z0-9'-]{2,}/g) ?? [])]
-    .map((w) => w.replace(/'s$/, ''))
-    .filter((w) => !STOP.has(w));
-}
+export { terms };
 
 export const KINDS = { fact: 'Facts', preference: 'Preferences', decision: 'Decisions', commitment: 'Commitments' };
 // Records of the core's entity kind get a section of their own when there are any; timeline
@@ -41,7 +33,6 @@ const TIME = /^(\d{1,2}:\d{2})\s+·\s+/;
 
 const newId = (prefix) => prefix + randomBytes(4).toString('hex');
 const handId = (text) => `h${createHash('sha1').update(text).digest('hex').slice(0, 8)}`;
-const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').replace(/<!--|-->/g, '').trim();
 
 function parseMeta(s) {

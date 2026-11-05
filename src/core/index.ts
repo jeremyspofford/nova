@@ -8,7 +8,7 @@ import { CoreError } from './errors.ts';
 import { Db, loadMigrations } from './db.ts';
 import { Log, addSecretValue } from './log.ts';
 import { Profile, SECTIONS, type Section } from './profile.ts';
-import { Workspace, workspaceWorker } from './workspace.ts';
+import { Workspace, workspaceWorker, sha256 } from './workspace.ts';
 import { Verifier, type Checker } from './verify.ts';
 import { Ledger, STATES, TASK_CONTEXT, type LanedWorker, type State, type TaskInput } from './ledger.ts';
 import type { PrivacyMode as PrivacyModeOf } from './envelope.ts';
@@ -93,7 +93,7 @@ import { Self } from './self.ts';
 import { Caps, capsRoutes } from './caps/index.ts';
 import { buildDiagnostics, diagnosticsRoutes } from './diagnostics/index.ts';
 import { CODE_ROOT } from './resilience/sandbox.ts';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 
@@ -102,7 +102,9 @@ const DEVICE_CONFIG_KEY = /^[a-z][a-z0-9_.-]{0,63}$/;
 
 export { render as renderIdentity } from './identity.ts';
 export { permits } from './workers.ts';
-export { ENVELOPE_VERSION } from './envelope.ts';
+export { ENVELOPE_VERSION, reportOf } from './envelope.ts';
+export { sha256, writeAtomic, writeJson } from './workspace.ts';
+export { terms } from './memory.ts';
 export { TERMINAL } from './ledger.ts';
 export type { Brief, Evidence, Report } from './envelope.ts';
 export type { Worker, Egress } from './workers.ts';
@@ -145,7 +147,8 @@ export { restoreInto, backupFiles, sha256File, openEncrypted } from './resilienc
 // Factory reset (M7 amendment §2): finished at start, before the database opens (server.js too).
 export { RESET_MARKER, RESET_REPORT, finishReset, homeEntries, supervisorResetPending } from './resilience/reset.ts';
 export { HOME_MARK, ensureMark, unsafeHome } from './resilience/home-mark.ts';
-export { makeScratch, dropScratch } from './resilience/scratch.ts';
+export { alive, makeScratch, dropScratch } from './resilience/scratch.ts';
+export { freePort } from './coding/preview.ts';
 export { restoreBackup, loadMigrations } from './db.ts';
 // Checkpoints (M7 amendment §1): the supervisor takes one before a release switch on the stopped
 // home; the server applies a staged restore before anything opens the home.
@@ -671,7 +674,7 @@ export function createCore(o: CoreOptions) {
   // Computers' device agents (M4b): heartbeats, the inbox their queues flush into, the runtime.
   const configRow = (section: string, key: string) => db.get<{ value: string; updated_at: string }>('SELECT value, updated_at FROM profile WHERE section = ? AND key = ?', section, key);
   // A setting's version: its time and value together, so two changes in one millisecond differ.
-  const configVersion = (r: { value: string; updated_at: string }) => createHash('sha256').update(`${r.updated_at}\0${r.value}`).digest('hex').slice(0, 16);
+  const configVersion = (r: { value: string; updated_at: string }) => sha256(`${r.updated_at}\0${r.value}`).slice(0, 16);
   // A device note's first screen, from the check before the inbox writes, reused when it is kept.
   const noteScreens = new WeakMap<object, ReturnType<typeof ingest.screenNow>>();
   // Native workloads on devices (M10h): the `device` driver signs each device's manifests with this
@@ -1672,7 +1675,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     const sh = url.pathname === '/join.sh';
     tarCache ??= agentTar(o.version);
     // The script names the archive's hash, and checks what it downloads against it.
-    const body = sh ? Buffer.from(joinScript(publicUrl(), createHash('sha256').update(tarCache).digest('hex'))) : tarCache;
+    const body = sh ? Buffer.from(joinScript(publicUrl(), sha256(tarCache))) : tarCache;
     res.writeHead(200, {
       'content-type': sh ? 'text/x-shellscript; charset=utf-8' : 'application/x-tar', 'content-length': body.length, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
       ...(sh ? {} : { 'content-disposition': 'attachment; filename="device-agent.tar"' }),
