@@ -12,6 +12,26 @@ What each merge to main changed, for the owner: newest first, one entry per merg
 - What you can now do: nothing new in the app. The repository is smaller and easier to find things in.
 - Still unfinished: nine more screenshots are cited by an old handoff note, and 61 more lost their last reference with this sweep. Both are your call to remove.
 
+**2026-11-04 · Test stability · Browser profiles really go; three tests stop failing at random**
+- What changed: Nova's browser now fully shuts down before its throwaway profile is deleted. Before, Chromium's helper processes could recreate the folder a moment after Nova removed it, and a left-behind profile can hold sign-in cookies. Three tests that sometimes failed for no product reason now check the right thing: the topology design test in WebKit, the factory-reset test, and a mesh replay test.
+- What you can now do: nothing new in the app. Leftover browser profiles stop, and CI fails less often for no reason.
+- Still unfinished: two related WebKit topology failures ("internal error" on navigation) are probably fixed by the same change, but that isn't proven yet.
+
+**2026-11-04 · T2 (follow-up) · Looser privacy needs your passkey**
+- What changed: choosing a looser privacy setting in Settings › Privacy now counts as tier 3. That means going from "local only" to "local preferred", or to letting cloud models help. On Nova's own screen it asks for your passkey, every time. Before, it saved on one click, and any program on this computer could make that change. Choosing a stricter setting still saves straight away.
+- What you can now do: rely on Nova never letting more of your work leave your devices without you confirming it.
+- Still unfinished: nothing for this fix.
+
+**2026-11-04 · Config onboarding (door 3) · Change settings by asking Nova**
+- What changed: you can ask Nova in a conversation to change one of your settings, for example "set my timezone to Asia/Tokyo". Nova shows exactly what would change, in the same list as Settings › Configuration, and nothing changes until you allow it. A change to privacy or to what asks first counts as tier 3 and needs your passkey. Secrets and the hub's own settings are left out, saying why. Every change is recorded in the activity log.
+- What you can now do: change your personal settings by talking to Nova.
+- Still unfinished: the third way in, a guided setup form (with Settings generated from the schema), comes next.
+
+**2026-11-04 · T2 (follow-up) · Irreversible steps in chat need your passkey**
+- What changed: tier-3 steps in a conversation, like deleting a schedule or running a command that looks irreversible, now need your passkey when you allow them from Nova's own screen. Before this, the confirm box only lived in the page: any program on this computer could allow such a step without a person. Nova's server now refuses an allow that carries no passkey approval for that exact step. Denying a step never needs one.
+- What you can now do: rely on irreversible commands in chat being allowed only by you.
+- Still unfinished: nothing for this fix. This closes the last tier-3 path on Nova's own screen that was outside the passkey check.
+
 **2026-11-04 · Config onboarding (door 1) · Bring settings in from a file, or take them out**
 - What changed: Settings has a new Configuration section. You can bring in a settings file, and Nova checks it first and shows every change before anything is applied. A key or password in the file is left out, with a note on where it belongs. The hub's own settings (devices, models, backups, capture) are also left out, because those are changed on their own screens. A change to privacy or to what asks first counts as tier 3, so it needs your passkey. You can also export your settings as a file with no secrets in it. Every import is recorded in the activity log.
 - What you can now do: move your personal settings between Nova installs, or keep a copy, with Export and "Choose a file" in Settings › Configuration.
