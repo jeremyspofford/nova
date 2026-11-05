@@ -49,7 +49,7 @@ test('a change to the privacy setting reaches every started connector', async ()
       summary: '', can: [], never: [], setup: { kind: 'form', fields: [] }, egress: () => 'local', status: () => ({ connected: false }),
       disconnect: async () => ({ revoked: false }), recheck: () => { rechecks++; },
     }));
-    await nova.call('PUT', '/profile/privacy/default', { value: 'cloud-allowed' });
+    await nova.call('PUT', '/profile/privacy/default', { value: 'cloud-allowed', confirm: true });
     assert.ok(rechecks >= 1, 'told of the change');
   } finally {
     await nova.stop();

@@ -51,6 +51,10 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
       for (const [size, vp] of [['phone', { width: 390, height: 844, touch: true }], ['desktop', { width: 1440, height: 900 }]] as const) {
         const d = await device(b, { ...vp, serviceWorkers: 'block' }); const p = d.page;
         for (const pkg of packages) {
+          // Off the app before applying: a live page follows the `profile` event with GET /profile,
+          // /identity and /caps, and navigating while they are in flight makes WebKit log each
+          // cancelled fetch as an "access control checks" error.
+          await p.goto('about:blank');
           const applied = await f.send('POST', `/api/v1/design-systems/${pkg.id}/apply`, { scope: 'user' }); assert.equal(applied.status, 200);
           await map(p, f.base);
           const bg = String((await f.send('GET', `/api/v1/design-systems/${pkg.id}`)).body.manifest.tokens['bg/base']).toLowerCase();

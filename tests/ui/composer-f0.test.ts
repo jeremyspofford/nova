@@ -21,6 +21,8 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     await d.page.clock.setFixedTime(new Date('2026-10-31T12:00:00.000Z'));
     await d.page.goto(`${m.base}/chat`);
     await ready(d.page);
+    // Opening a chat puts the caret in the composer (app.js route); the hidden-until-shown shell once swallowed it.
+    assert.equal(await d.page.evaluate(() => document.activeElement?.id), 'input', 'the composer is focused on arrival');
     const box = d.page.locator('#composer textarea').first();
     await box.fill(Array.from({ length: 20 }, (_, i) => `Line ${i + 1}: a note for the weekly plan.`).join('\n'));
     await d.page.waitForFunction(() => document.querySelector('#composer')?.classList.contains('is-grown'));
