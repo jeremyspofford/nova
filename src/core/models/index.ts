@@ -141,6 +141,8 @@ export interface ModelsOptions {
 }
 
 interface Inventory { ok: boolean; version: string | null; models: InstalledModel[]; problem: string | null; at: string }
+// A download that has passed every check it is refused on at once (#pullCheck).
+interface PullSpec { model: string; device: string; url: string; digest: string; known: number | undefined }
 interface Download { task_id: string; action: 'pull' | 'remove'; model: string; device: string; status: string; completed: number; total: number; digest: string | null }
 
 export class Models extends EventEmitter {
@@ -1029,28 +1031,39 @@ export class Models extends EventEmitter {
   // ---- downloads and removal: tier-2 ledger tasks ------------------------------------------------
 
   // Asks for a download. Refused at once when the disk budget can't take what Nova knows of its size.
-  // `then` is never read from a request: only installPlan (below) passes it, already checked.
-  async requestPull(body: Record<string, unknown>, then?: { assign: { role: Role; context: number | null } | null; size: number | null }): Promise<Task> {
+  async requestPull(body: Record<string, unknown>): Promise<Task> {
+    return this.#queuePull(await this.#pullCheck(body), null);
+  }
+
+  // Every check a download is refused on at once, with nothing changed: the name, the device, where
+  // its models answer, the digest, and the disk budget and free disk for what Nova knows of its size.
+  // `size` is never read from a request: only installPlan (below) passes it, from its own plan.
+  async #pullCheck(body: Record<string, unknown>, size?: number | null): Promise<PullSpec> {
     const model = str(body.model);
     if (!MODEL_NAME.test(model)) throw new CoreError('validation', 'model is the name to download, like nomic-embed-text or qwen3:8b.');
     const device = str(body.device) || HUB;
     if (!this.#computes(device)) throw new CoreError('conflict', `${this.#noCompute(device)}.`);
     const url = this.#urlFor(device);
     if (!url) throw new CoreError('conflict', `Nova doesn’t know where ${this.#deviceName(device)}’s models answer.`);
-    const known = CATALOG.find((c) => c.name === model)?.size ?? then?.size ?? undefined;
+    const known = CATALOG.find((c) => c.name === model)?.size ?? size ?? undefined;
     const digest = str(body.digest).replace(/^sha256:/, '');
     if (digest && !/^[0-9a-f]{64}$/.test(digest)) throw new CoreError('validation', 'digest is the sha256 Nova should expect, 64 hex characters.');
     if (known) {
       const refusal = await this.#diskRefusal(device, known, model);
       if (refusal) throw new CoreError('conflict', refusal);
     }
+    return { model, device, url, digest, known };
+  }
+
+  // Makes the download task for a request #pullCheck has passed. `assign` is installPlan's role.
+  #queuePull({ model, device, url, digest, known }: PullSpec, assign: { role: Role; context: number | null } | null): Task {
     const task = this.#o.ledger.create({
       title: `Download ${model}${device === HUB ? '' : ` on ${this.#deviceName(device)}`}`,
       owner: this.worker.id,
       goal: `${model} is installed on ${this.#deviceName(device)}, and Nova has read its digest from the runtime itself.`,
       origin: { kind: 'user' },
       evidence_required: [{ kind: 'confirmation', note: 'the model’s digest, read by Nova from the runtime' }],
-      inputs: { action: 'pull', model, device, url, ...(digest ? { digest } : {}), ...(known ? { size: known } : {}), ...(then?.assign ? { assign: then.assign } : {}) },
+      inputs: { action: 'pull', model, device, url, ...(digest ? { digest } : {}), ...(known ? { size: known } : {}), ...(assign ? { assign } : {}) },
       privacy_mode: 'local-only',
       // Downloading takes disk, bandwidth and time: Nova asks first.
       approval_tier: 2,
@@ -1067,6 +1080,9 @@ export class Models extends EventEmitter {
   // once). Nothing is loosened: an installed model is assigned now, exactly as PUT
   // /models/roles/{role} does; every download is the same tier-2 task POST /models/pull makes, which
   // waits for the person's OK, and its role is assigned only once Nova has verified the download.
+  // A plan refused on any of these, or on a check a download is refused on at once (the disk
+  // budget), changes nothing: they all run before the first role is assigned.
+  // A step that fails after that says what had already changed.
   async installPlan(body: Record<string, unknown>): Promise<{ device: string; assigned: { role: Role; model: string }[]; tasks: { id: string; title: string; model: string; role: Role | null; size: number | null; state: string }[]; words: string }> {
     const device = str(body.device) || HUB;
     if (device !== HUB && !this.#trusted(device)) throw new CoreError('validation', 'device is the hub, or one of your paired computers.');
@@ -1113,17 +1129,32 @@ export class Models extends EventEmitter {
       models: items.map((x) => ({ name: x.model, params: x.c.params, weights_bytes: x.installed ? x.c.installed!.weights_bytes : null, quant: x.quant, context: x.context, arch: x.c.arch, arch_source: x.c.arch_source, kv_type: 'f16' })),
     });
     if (r.verdict === 'wont-fit') throw new CoreError('conflict', `That plan doesn’t fit on ${name}: ${r.words} Nothing was installed or assigned.`);
-    const url = device === HUB ? undefined : this.#urlFor(device) ?? undefined;
-    const assigned: { role: Role; model: string }[] = [];
-    for (const x of items.filter((y) => y.installed && y.role)) {
-      await this.assign(x.role, { device, model: x.model, ...(url ? { url } : {}), ...(x.role === 'embedder' ? {} : { context: x.context }) });
-      assigned.push({ role: x.role!, model: x.model });
-    }
-    const tasks = [];
+    // Every download passes POST /models/pull's own checks (the disk budget among them) before
+    // anything changes, so a plan refused here assigns nothing and makes no task.
+    const pulls = [];
     for (const x of items.filter((y) => !y.installed)) {
       const size = x.c.default_quant === x.quant && x.c.size ? x.c.size : weightsBytes(x.c.params, x.quant);
-      const t = await this.requestPull({ model: x.model, device }, { assign: x.role ? { role: x.role, context: x.role === 'embedder' ? null : x.context } : null, size });
-      tasks.push({ id: t.id, title: t.title, model: x.model, role: x.role, size, state: t.state });
+      pulls.push({ x, size, spec: await this.#pullCheck({ model: x.model, device }, size) });
+    }
+    const url = device === HUB ? undefined : this.#urlFor(device) ?? undefined;
+    const assigned: { role: Role; model: string }[] = [];
+    const tasks: { id: string; title: string; model: string; role: Role | null; size: number | null; state: string }[] = [];
+    try {
+      for (const x of items.filter((y) => y.installed && y.role)) {
+        await this.assign(x.role, { device, model: x.model, ...(url ? { url } : {}), ...(x.role === 'embedder' ? {} : { context: x.context }) });
+        assigned.push({ role: x.role!, model: x.model });
+      }
+      for (const { x, size, spec } of pulls) {
+        const t = this.#queuePull(spec, x.role ? { role: x.role, context: x.role === 'embedder' ? null : x.context } : null);
+        tasks.push({ id: t.id, title: t.title, model: x.model, role: x.role, size, state: t.state });
+      }
+    } catch (e) {
+      if (!assigned.length && !tasks.length) throw e;
+      // Something failed after the plan began to change: say what already changed, never "nothing".
+      const done = [...assigned.map((a) => `${a.model} serves ${ROLE_WORDS[a.role].name.toLowerCase()}`), ...tasks.map((t) => `a download of ${t.model} waits for your OK`)].join('; ');
+      const why = e instanceof CoreError ? e.message : 'Something went wrong inside Nova.';
+      if (!(e instanceof CoreError)) this.#o.log.warn('models', 'Install and assign stopped part way.', { error: (e as Error).message });
+      throw new CoreError(e instanceof CoreError ? e.code : 'conflict', `${why} The plan was applied only in part: ${done}. The rest wasn’t.`);
     }
     const words = [
       assigned.length ? `${assigned.map((a) => `${a.model} serves ${ROLE_WORDS[a.role].name.toLowerCase()}`).join('; ')} now.` : '',
