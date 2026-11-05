@@ -852,17 +852,19 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   const chat = list.find((s) => s.title.startsWith('What should I focus'));
   await p.goto(`${base}/c/${chat.id}`);
   await p.waitForSelector('.prose');
-  check('desktop: Calm Control, with the right column of quiet cards', await p.evaluate(() => document.body.dataset.layout === 'desktop' && document.body.dataset.aside === 'on' && document.querySelectorAll('#aside .card').length === 3));
-  await shot(p, 'nova-desktop-chat');
+  // Stage 2 (approved 2026-11-04): a conversation is one reading column; its glance column starts
+  // closed there, opens when the person opens it, and that choice is kept for conversations.
+  check('desktop: a conversation is one reading column', await p.evaluate(() => document.body.dataset.layout === 'desktop' && document.body.dataset.aside === 'off'));
   await p.click('#aside-toggle');
-  await p.waitForTimeout(300);
-  check('desktop: the right column closes', await p.evaluate(() => document.body.dataset.aside === 'off'));
+  await p.waitForFunction(() => document.body.dataset.aside === 'on');
+  check('desktop: the right column opens, with its quiet cards', await p.evaluate(() => document.querySelectorAll('#aside .card').length === 3));
+  await shot(p, 'nova-desktop-chat');
   await p.reload();
   await p.waitForSelector('.prose');
-  check('desktop: and stays closed across a reload', await p.evaluate(() => document.body.dataset.aside === 'off'));
+  check('desktop: and stays open across a reload', await p.evaluate(() => document.body.dataset.aside === 'on'));
   await p.keyboard.press('Control+Backslash');
-  await p.waitForTimeout(300);
-  check('desktop: Ctrl/⌘+\\ brings it back', await p.evaluate(() => document.body.dataset.aside === 'on'));
+  await p.waitForFunction(() => document.body.dataset.aside === 'off');
+  check('desktop: Ctrl/⌘+\\ closes it again', await p.evaluate(() => document.body.dataset.aside === 'off'));
   await p.click('#menu');
   await p.waitForTimeout(450);
   check('the conversations drawer opens from the top bar', await p.evaluate(() => document.getElementById('app').classList.contains('drawer-open') && !document.getElementById('sidebar').inert));
