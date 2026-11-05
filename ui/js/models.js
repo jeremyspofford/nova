@@ -12,33 +12,26 @@
 import { api, on } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { toast } from './shell.js';
-import { left, over, since, waitingLine } from './wait.js';
+import { left, makePart, since, waitingLine } from './wait.js';
 
 let data = null;
-let failed = '';
 // The eval scorecards (null: the route didn't answer, so no line is shown), and the decision model.
 let cards = null;
 let decisions = null;
 // What a save waits on: the choices sent, and the notices Nova gave back before saving them.
 let pending = null;
-let rerender = () => {};
 // Live download progress by task, from the event stream (model_progress).
 const progress = new Map();
 
-export async function loadModels() {
-  try {
-    [data, cards, decisions] = await Promise.all([
-      api('GET', '/models'),
-      api('GET', '/evals/scorecards').catch(() => null),
-      api('GET', '/models/decisions').catch(() => null),
-    ]);
-    failed = '';
-    over('models');
-  } catch (e) {
-    failed = e.message || 'Nova’s server didn’t answer.';
-  }
-  rerender();
-}
+const part = makePart('models', async () => {
+  [data, cards, decisions] = await Promise.all([
+    api('GET', '/models'),
+    api('GET', '/evals/scorecards').catch(() => null),
+    api('GET', '/models/decisions').catch(() => null),
+  ]);
+});
+export const loadModels = part.load;
+const rerender = () => part.rerender();
 
 const GB = 1024 ** 3;
 const size = (b) => (b >= 10 * GB ? `${Math.round(b / GB)} GB` : b >= GB ? `${(b / GB).toFixed(1).replace(/\.0$/, '')} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`);
@@ -192,7 +185,7 @@ async function saveDecisions(body) {
 
 export function renderModels() {
   const head = '<section class="memory-section" id="models" aria-labelledby="set-models"><h2 class="memory-heading" id="set-models">Models</h2>';
-  if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="models-retry">Try again</button>` : waitingLine('Loading models', { key: 'models' })}</section>`;
+  if (!data) return `${head}${part.failed ? `<p class="memory-lede">${esc(part.failed)}</p><button type="button" class="btn set-retry" data-action="models-retry">Try again</button>` : waitingLine('Loading models', { key: 'models' })}</section>`;
   const hub = data.devices[0];
   // “what Nova recommends for each job” is backed by the eval claim.model-recommendation-fits-job (tests/evals/tasks/claims.ts).
   const lede = hub?.runtime?.ok
@@ -244,7 +237,7 @@ export function bindModels(root, render) {
   // they leave the field.
   let held = false;
   const typing = () => { const a = document.activeElement; return !!a?.closest?.('#models .model-form') && a.matches('input'); };
-  rerender = () => { if (typing()) { held = true; return; } held = false; render(); };
+  part.rerender = () => { if (typing()) { held = true; return; } held = false; render(); };
   root.addEventListener('focusout', () => { if (held) setTimeout(() => { if (held && !typing()) rerender(); }, 0); }); // wait: after the event: focus has settled
   on('models', () => { if (document.getElementById('models')) loadModels(); });
   on('model_progress', (p) => {
