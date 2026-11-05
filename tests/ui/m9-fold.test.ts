@@ -91,6 +91,13 @@ test('M9 gate, foldable 2: no stretched single column — prose at 45–75ch, th
       for (const [view, path] of Object.entries(VIEWS)) {
         await d.page.goto(`${m.base}${path}`);
         await settled(d.page, view);
+        // Stage 2 (approved 2026-11-04): a conversation is one reading column, the glance column
+        // closed until the person opens it. Where there is room, it opens and takes the extra width.
+        if (view === 'chat' && await d.page.evaluate(() => document.body.dataset.room === 'yes')) {
+          assert.equal(await d.page.evaluate(() => document.body.dataset.aside), 'off', `${width}px, chat: one reading column by default`);
+          await d.page.locator('#aside-toggle').click();
+          await d.page.waitForFunction(() => document.body.dataset.aside === 'on');
+        }
         await still(d.page);
         const r = await d.page.evaluate(() => {
           const shown = (e: Element | null) => !!e && (e as HTMLElement).checkVisibility() && e.getBoundingClientRect().width > 0;
