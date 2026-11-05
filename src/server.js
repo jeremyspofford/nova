@@ -23,8 +23,7 @@ import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
 import { toolTier } from '../ui/js/status.js';
-import { NO_PASSKEY, PASSKEY_NEEDED } from './core/passkeys.ts';
-import { BrokerClient, ConsolePasskeys, KIND_WORDS, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, ipcBroker, ipcLink, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
+import { BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, ipcBroker, ipcLink, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {

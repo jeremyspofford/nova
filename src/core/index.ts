@@ -79,7 +79,7 @@ import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
 import { Checkpoints, dropPartials, finishStaged, stagedPending, takeCheckpoint } from './resilience/checkpoints.ts';
 import { ConsolePasskeys, NO_PASSKEY, PASSKEY_NEEDED } from './passkeys.ts';
-export { ConsolePasskeys } from './passkeys.ts';
+export { ConsolePasskeys, NO_PASSKEY, PASSKEY_NEEDED } from './passkeys.ts';
 import { configRoutes } from './config-doors.ts';
 
 // The one route that takes {confirm: true} at tier 2 (rolling a change back by hand): asked once,
