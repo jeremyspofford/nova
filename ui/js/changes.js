@@ -9,24 +9,14 @@ import { api, on } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { status } from './components.js';
 import { toast } from './shell.js';
-import { over, waitingLine } from './wait.js';
+import { makePart, waitingLine } from './wait.js';
 
 let data = null;
-let failed = '';
-let rerender = () => {};
+const part = makePart('changes', async () => { data = await api('GET', '/changes'); });
+export const loadChanges = part.load;
+const rerender = () => part.rerender();
 // The row whose roll back the person asked about, waiting for their answer.
 let asking = null;
-
-export async function loadChanges() {
-  try {
-    data = await api('GET', '/changes');
-    failed = '';
-    over('changes');
-  } catch (e) {
-    failed = e.message || 'Nova’s server didn’t answer.';
-  }
-  rerender();
-}
 
 const KEY = { Working: 'working', 'Needs you': 'needs-you', Verified: 'verified', Failed: 'failed', Quiet: 'quiet' };
 const STAGE_WORDS = { sandbox: 'Sandbox', tests: 'Tests', health: 'Health gates', release: 'Release', approval: 'Approval', canary: 'Canary', promote: 'Promoted' };
@@ -93,7 +83,7 @@ function changeRow(c) {
 
 export function renderChanges() {
   const head = '<section class="memory-section" id="changes" aria-labelledby="set-changes"><h2 class="memory-heading" id="set-changes">Changes</h2>';
-  if (!data) return `${head}${failed ? `<p class="memory-lede">${esc(failed)}</p><button type="button" class="btn set-retry" data-action="changes-retry">Try again</button>` : waitingLine('Loading changes', { key: 'changes' })}</section>`;
+  if (!data) return `${head}${part.failed ? `<p class="memory-lede">${esc(part.failed)}</p><button type="button" class="btn set-retry" data-action="changes-retry">Try again</button>` : waitingLine('Loading changes', { key: 'changes' })}</section>`;
   const waiting = data.changes.find((c) => c.id === data.standout);
   const rest = data.changes.filter((c) => c.id !== data.standout);
   return `${head}
@@ -113,7 +103,7 @@ async function act(fn, done) {
 
 // Wires the part into Settings: `render` redraws it when the data changes.
 export function bindChanges(root, render) {
-  rerender = render;
+  part.rerender = render;
   on('change', () => { if (document.getElementById('changes')) loadChanges(); });
   root.addEventListener('change', (e) => {
     const box = e.target.closest('[data-action="changes-confirm"]');
