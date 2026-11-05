@@ -1,0 +1,50 @@
+/*
+ * Stage 2 (owner-approved composition, 2026-11-04; PR #306): the shell's surfaces, loaded last so it
+ * decides. Tokens only. From DESIGN-SYSTEM §0.2 (chat restraint; Linear/Raycast lists; macOS-like
+ * Settings) and the Stage-2 priorities: desktop card hierarchy, rail-orb depth, background discipline.
+ * shortcut: a layer over the older rules, not folded into each file; fold it in surface by surface as
+ * each one is rebuilt (tests/ui/compositions.test.ts keeps the app identical to it meanwhile).
+ */
+
+/* Background discipline: one quiet light from above (the orb's), on one tone; no second glow, no
+   vignette, nothing behind cards for them to blur. */
+body { background: radial-gradient(70% 35% at 50% 0%, color-mix(in srgb, var(--orb-glow) 25%, transparent), transparent 70%), var(--bg-base); }
+
+/* Surfaces are opaque and crisp: tone and a 1px line separate them, not glass and glow. */
+.card { background: var(--bg-raised); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+
+/* Desktop card hierarchy: one lead (the brief), then the rest as a list of rows, not equal boxes. */
+.home-cards { gap: 0; }
+.home-cards > .card, .home-cards > [data-asideable] > .card { border-radius: 0; border-width: 0 0 1px; background: transparent; padding-inline: 0; }
+.home-cards > .card:first-child { border-width: 1px; border-radius: var(--radius-card); background: var(--bg-raised); padding-inline: var(--space-5); margin-bottom: var(--space-4); }
+.home-cards .card .card-title { font-size: var(--type-body); }
+.home-cards > .card:first-child .card-title { font-size: var(--type-h2); }
+
+/* The right column is one quiet list "at a glance", rows with hairlines, never three boxes. */
+.aside .card { border-radius: 0; border-width: 0 0 1px; background: transparent; padding: var(--space-4) 0; }
+.aside .card-title { font-size: var(--type-body); }
+.aside .card-title .icon { color: var(--text-secondary); }
+/* Colour carries status, nothing else: a row's link reads as text, underlined (and passes AA on the page tone in every package). */
+.home-cards .card .link, .aside .card .link { color: var(--text-primary); text-decoration: underline; text-underline-offset: 0.2em; }
+
+/* Chat restraint: a conversation is one reading column; the glance column starts closed there
+   (shell.js), and its toggle opens it. */
+/* Memory and skill notes stay in the column: with the glance column closed by default the margin
+   isn't spare room any more (it overflowed at the band's edge). */
+body[data-view="chat"][data-layout="desktop"][data-room="yes"][data-aside="off"] .thread .margins { position: static; top: auto; left: auto; width: auto; }
+
+/* Rail-orb depth at small sizes: a flat, quiet orb; the glossy sheen and swirl are for Home only. */
+.orb-rail { --orb-size: var(--space-6); }
+.orb-rail .orb-sheen, .orb-rail .orb-swirl { display: none; }
+/* The current place is marked by a line and the primary text colour, not a filled tile. */
+.nav-item[aria-current="page"] { position: relative; background: transparent; color: var(--text-primary); }
+.nav-item[aria-current="page"]::before { content: ''; position: absolute; inset-block: var(--space-2); inset-inline-start: 0; width: calc(var(--space-1) / 2); border-radius: var(--radius-pill); background: var(--accent-primary); }
+.tabs .nav-item[aria-current="page"]::before { inset: 0 var(--space-4) auto; width: auto; height: calc(var(--space-1) / 2); }
+
+/* The composer: Send is the only filled control in the view; the microphone stays quiet. */
+.composer .mic { border-color: transparent; background: transparent; color: var(--text-secondary); }
+.voice-note { text-align: start; }
+
+/* Health is a control surface: sections under caption headings, rows on hairlines; no box in a box. */
+body[data-view="health"] .panel { border-width: 1px 0 0; border-radius: 0; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; padding-inline: 0; }
+body[data-view="health"] .panel .facts { background: transparent; padding-inline: 0; }

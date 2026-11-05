@@ -102,7 +102,7 @@ function timeClasses() {
 test('nothing that shows a time or a date is drawn in the faint grey', () => {
   const classes = timeClasses();
   for (const c of ['schedule-next', 'approval-next', 'record-time', 'act-time', 'gap-divider', 'when', 'task-meta', 'card-line']) assert.ok(classes.has(c), `${c} is found as time-bearing`);
-  const css = readdirSync('ui/styles').map((f) => readFileSync(`ui/styles/${f}`, 'utf8')).join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+  const css = readdirSync('ui/styles').filter((f) => f.endsWith('.css')).map((f) => readFileSync(`ui/styles/${f}`, 'utf8')).join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
   for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     if (!/color:\s*var\(--text-faint\)/.test(m[2].replace(/(background|border[\w-]*):[^;]+;?/g, ''))) continue;
     for (const sel of m[1].split(',')) {

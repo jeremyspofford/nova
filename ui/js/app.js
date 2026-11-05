@@ -282,6 +282,8 @@ function setView(view) {
   const was = state.view;
   state.view = view;
   document.body.dataset.view = view;
+  // The glance column's default differs in a conversation (shell.js): read the layout again.
+  if ((was === 'chat') !== (view === 'chat')) { readLayout(); window.dispatchEvent(new CustomEvent('nova:layout', { detail: { ...layout } })); }
   topologyVisible(view === 'topology');
   for (const [v, key] of Object.entries(VIEWS)) el[key].hidden = v !== view;
   el.dock.hidden = view !== 'chat';
