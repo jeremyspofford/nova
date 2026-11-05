@@ -408,6 +408,7 @@ export function createCore(o: CoreOptions) {
   models = new Models({
     db, log, profile, ledger, verifier, receipts, devices, now,
     hubName: () => devices.find(meshIdentity.id)?.name ?? 'This hub',
+    hubId: () => meshIdentity.id,
     ...(o.models?.ollamaUrl ? { ollamaUrl: o.models.ollamaUrl } : {}),
     ...(o.models?.hardware ? { hardware: o.models.hardware } : {}),
     ...(o.models?.watchMs ? { watchMs: o.models.watchMs } : {}),
