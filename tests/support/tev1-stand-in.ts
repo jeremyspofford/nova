@@ -19,6 +19,8 @@ export interface StandInOptions {
   contextBytes?: number;
   // Answer this many requests with a broken body first (to test strict reading).
   broken?: number;
+  // A fixed [status, raw body] for a GET path (an Ollama that answers oddly).
+  answer?: Record<string, [number, string]>;
 }
 
 export const MARK = 'CANARY-INSTRUCTION-7F3A';
@@ -31,6 +33,8 @@ export async function startTev1StandIn(o: StandInOptions = {}) {
   const read = (req: IncomingMessage) => new Promise<Buffer>((resolve) => { const parts: Buffer[] = []; req.on('data', (c: Buffer) => parts.push(c)); req.on('end', () => resolve(Buffer.concat(parts))); });
   const server: Server = createServer(async (req, res) => {
     const send = (status: number, body: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+    const fixed = o.answer?.[req.url ?? ''];
+    if (fixed) { res.writeHead(fixed[0], { 'content-type': 'application/json' }); return res.end(fixed[1]); }
     if (req.url === '/api/version') return send(200, { version: o.version ?? '0.40.4' });
     if (req.url === '/api/tags') return send(200, { models: models.map((m) => ({ name: m.name, model: m.name, digest: m.digest, size: m.size ?? 1, details: { family: 'qwen35' } })) });
     if (req.url !== '/v1/systemone') return send(404, { error: 'not found' });
