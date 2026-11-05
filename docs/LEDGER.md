@@ -7,6 +7,11 @@ Decisions, dependencies and deviations, newest first within each section.
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 
+**2026-11-04 · T2 (follow-up) · Irreversible steps in chat need your passkey**
+- What changed: tier-3 steps in a conversation, like deleting a schedule or running a command that looks irreversible, now need your passkey when you allow them from Nova's own screen. Before this, the confirm box only lived in the page: any program on this computer could allow such a step without a person. Nova's server now refuses an allow that carries no passkey approval for that exact step. Denying a step never needs one.
+- What you can now do: rely on irreversible commands in chat being allowed only by you.
+- Still unfinished: nothing for this fix. This closes the last tier-3 path on Nova's own screen that was outside the passkey check.
+
 **2026-11-04 · Config onboarding (door 1) · Bring settings in from a file, or take them out**
 - What changed: Settings has a new Configuration section. You can bring in a settings file, and Nova checks it first and shows every change before anything is applied. A key or password in the file is left out, with a note on where it belongs. The hub's own settings (devices, models, backups, capture) are also left out, because those are changed on their own screens. A change to privacy or to what asks first counts as tier 3, so it needs your passkey. You can also export your settings as a file with no secrets in it. Every import is recorded in the activity log.
 - What you can now do: move your personal settings between Nova installs, or keep a copy, with Export and "Choose a file" in Settings › Configuration.
