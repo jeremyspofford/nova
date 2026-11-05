@@ -18,6 +18,7 @@ Each ADR is binding. If an ADR proves unworkable, stop and propose an amendment 
 
 **ADR-8 — Vendor agent SDKs are adapters.** Claude Agent SDK, OpenAI/Codex, Google ADK, and CLIs are integrated behind Nova's own thin task contracts (CONTRACTS §1). Nova's contracts outlive any vendor SDK. Relay integrates the same way, as an external worker service.
 *Amendment 2026-11-04 (Ponytail D2):* an internal backend with one adapter is that class itself, with no interface in front: Nova Computer is `DockerComputer` (`computer/docker.ts`); extract an interface again only when a second adapter (a VM, a remote hub) is actually built.
+*Amendment 2026-11-04 (Ponytail N1):* the same for infrastructure: the plan/apply tool is `openTofu` (`infra/tool.ts`) with no `PlanApplyTool` interface in front; extract one only when a second tool is actually built.
 
 **ADR-9 — Governed self-modification.** Nova (and its builders) never edit the running system live. All changes — code, config, extensions, design systems — flow: isolated worktree/sandbox → automated tests → health gates → versioned release → canary/verification → automatic rollback on failure. Core, security, and permission changes require Tier 3 approval. Every change is a git commit; every deploy is a tagged, reversible version.
 

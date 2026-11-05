@@ -20,7 +20,7 @@ import { checkFolder } from '../computer/policy.ts';
 import { addSecretValue } from '../log.ts';
 import { tail } from '../providers/cli.ts';
 import { Redactor } from '../browser/logins.ts';
-import { openTofu, toolEnv, type PlanApplyTool, type PlanData, type ToolContext } from './tool.ts';
+import { openTofu, toolEnv, type OpenTofu, type PlanData, type ToolContext } from './tool.ts';
 import { priceChanges, priceState, usd, validateBudget, validatePrices, verdict, type Level, type PriceSheet, type PricedChange, type Verdict } from './budget.ts';
 import { jsonOrNull as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -68,7 +68,6 @@ export interface InfraOptions {
   notify?: (key: string, text: string) => void;
   // The PATH the tool is looked up on and runs with (tests put the stand-in on one of their own).
   path?: () => string;
-  tool?: PlanApplyTool;
   // Whose home folder a project may never be (os.homedir() unless a test says).
   userHome?: string;
   timeoutS?: number;
@@ -82,7 +81,7 @@ const signed = (c: number) => `${c < 0 ? '−' : '+'}${usd(Math.abs(c))}`;
 export class Infra {
   readonly worker: LanedWorker;
   readonly dir: string;
-  readonly tool: PlanApplyTool;
+  readonly tool: OpenTofu;
   #o: InfraOptions;
   #now: () => Date;
   #key = Symbol('infra');
@@ -91,7 +90,7 @@ export class Infra {
     this.#o = o;
     this.#now = o.now ?? (() => new Date());
     this.dir = join(o.home, 'workers', 'infra');
-    this.tool = o.tool ?? openTofu({ path: () => this.#path() });
+    this.tool = openTofu({ path: () => this.#path() });
     const self = this;
     this.worker = {
       id: INFRA_WORKER,
