@@ -32,7 +32,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { DatabaseSync } from 'node:sqlite';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
-import { SKILL, cleanDbFile, skillDir } from '../backups.ts';
+import { SKILL, cleanDbFile, skillDirs } from '../backups.ts';
 import { CoreError } from '../errors.ts';
 import { decryptTo, encryptDir, keyFingerprint, readHeader, safeRel, verifyFile } from './archive.ts';
 import { dropScratch, makeScratch } from './scratch.ts';
@@ -608,7 +608,7 @@ export function cleanBackup(dir: string, table: string, ids: string[], words: st
   m.files.forEach((f) => safeRel(f.path));
   const db = join(dir, 'nova.db');
   const originals = new Set(cleanDbFile(db, table, ids, words).map((id) => `capture/raw/${id}`));
-  const skills = table === SKILL ? ids.map(skillDir) : [];
+  const skills = table === SKILL ? ids.flatMap(skillDirs) : [];
   m.files = m.files.filter((f) => {
     if (!originals.has(f.path) && !skills.some((d) => f.path.startsWith(d))) return true;
     rmSync(join(dir, 'files', safeRel(f.path)), { force: true });

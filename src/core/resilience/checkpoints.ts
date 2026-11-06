@@ -24,7 +24,7 @@ import { chmodSync, closeSync, constants, copyFileSync, existsSync, lstatSync, m
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Db } from '../db.ts';
-import { SKILL, cleanDbFile, skillDir } from '../backups.ts';
+import { SKILL, cleanDbFile, skillDirs } from '../backups.ts';
 import { CoreError } from '../errors.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task } from '../ledger.ts';
@@ -389,7 +389,7 @@ export function forgetInCheckpoints(home: string, table: string, ids: string[], 
     try {
       cleanDbFile(join(staged, 'nova.db'), table, ids, words);
       cleanTextTree(staged, words);
-      if (table === SKILL) for (const id of ids) rmSync(join(staged, safeRel(skillDir(id))), { recursive: true, force: true });
+      if (table === SKILL) for (const d of ids.flatMap(skillDirs)) rmSync(join(staged, safeRel(d)), { recursive: true, force: true });
       cleaned.push(staged);
     } catch {
       // A staged restore that can't be cleaned doesn't happen: Nova starts on the home as it is.

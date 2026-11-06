@@ -22,6 +22,7 @@ import { commitHome, readStanding } from './home.js';
 import { TOOLS, ToolTagFilter, WRITABLE, availableTools, extractMemory, homeTarget, parseToolCall, withinPrivacy } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 import { stricter } from './chat-run.js';
+import { CORRECTION, Interstitial, SKILL_ID as IR_SKILL, readBlocks, verdictWords } from './interstitial.js';
 
 const shortId = () => randomUUID().slice(0, 8);
 const hostOf = (u) => { try { return new URL(String(u)).hostname; } catch { return String(u ?? '').slice(0, 100); } };
@@ -89,18 +90,22 @@ export class Runner extends EventEmitter {
   // ingest: the core's screen (core.ingest); without a core, Nova's own checks alone, which never
   // pass anything as plain data. fetchAllow: for tests alone (a stand-in page on this machine);
   // nothing the model says can set it.
-  constructor(config, store, { agent = runAgent, records = null, vault = null, ingest = null, fetchAllow = null, linkCaps = null } = {}) {
+  // decisions: the Decision Service's ask (core.decisionService.ask), for the Interstitial Research
+  // hook; only ever used while config.features.interstitial is on.
+  constructor(config, store, { agent = runAgent, records = null, vault = null, ingest = null, fetchAllow = null, linkCaps = null, decisions = null } = {}) {
     super();
     this.config = config;
     this.store = store;
     this.agent = agent;
     this.ingest = ingest ?? new Ingest({ db: null });
     this.fetchAllow = fetchAllow;
+    this.decisions = decisions;
+    this.ledger = null; // set by the server: where the Interstitial Research hook files a proposal
     // How many links a tainted run may follow on its own (the ingest gate); tests alone pass others.
     this.linkCaps = { ...DEFAULT_LINK_CAPS, ...(linkCaps ?? {}) };
     this.active = new Map(); // sessionId → live run
     this.memory = new Memory(config.home, config.timezone, { records });
-    this.skills = new Skills(config.root, config.home);
+    this.skills = new Skills(config.root, config.home, config.features ?? (config.features = {}));
     this.schedules = new Schedules(config.root, config.home, config.timezone);
     this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone, vault });
     this.permissions = new Permissions(config.home, () => TOOLS);
@@ -242,6 +247,7 @@ export class Runner extends EventEmitter {
         this.record(sessionId, { type: 'error', turn, attempt, message: e instanceof AgentError ? e.message : 'Something went wrong inside Nova.', detail: e.detail ?? e.message });
       })
       .finally(() => {
+        if (run.ir) this.irFinish(sessionId, run);
         this.active.delete(sessionId);
         this.emit('live', sessionId, null);
         if (this.config.commit !== false) return commitHome(this.config.home, `Nova: ${sessionId} turn ${turn}`);
@@ -310,6 +316,12 @@ export class Runner extends EventEmitter {
     // Outside content read anywhere in this conversation is still in its context, so the run
     // starts with that taint (and a helper's report brings its run's).
     run.taint = this.taintOf(before);
+    // Interstitial Research (flag on, in a conversation that followed the skill): the person's next
+    // message disputing its answer counts as a correction (a pattern; recorded as a heuristic).
+    if (this.irEnabled() && before.turns.some((t) => t.id !== turn && t.items.some((i) => i.kind === 'interstitial' && i.phase === 'record')) && CORRECTION.test(question)) {
+      const task = this.irHook().correction();
+      this.record(sessionId, { type: 'interstitial', ...tag, phase: 'correction', heuristic: 'pattern', ...(task ? { proposal: task.id } : {}) });
+    }
     // A helper's files: the person's own as they are; any other workspace file is screened.
     if (run.helper?.files?.length) await this.screenFiles(sessionId, tag, run);
 
@@ -318,12 +330,15 @@ export class Runner extends EventEmitter {
     // context is scoped to its brief, so it recalls nothing.
     const recall = run.helper ? [] : this.memory.search(question);
     if (recall.length) this.record(sessionId, { type: 'recall', ...tag, notes: recall.map(({ id, source }) => ({ id, source })) });
+    run.recall = recall;
+    run.question = question;
     for (const s of this.skills.match(question).filter((x) => !this.skillHeld(x.id))) this.follow(sessionId, tag, run, s, 'matched');
     // What this Nova is right now, from its own registries (core self.ts), fresh for every turn.
     const briefing = run.helper || !this.self ? '' : await this.self.briefing().catch((e) => `# This Nova, right now\n\nNova couldn't read its own state for this turn: ${e.message}`);
     // Cost caps: a ledger task's run is capped; anything else is only metered.
     const task = this.runTasks.get(sessionId) ?? null;
     const meter = this.caps?.meter({ task_id: task, session_id: sessionId, capped: !!task && run.alone }) ?? null;
+    run.meter = meter;
     const ceiling = (stop) => this.record(sessionId, { type: 'error', ...tag, message: stop.words, detail: `cost_ceiling:${stop.scope}:${stop.what}` });
 
     for (let step = 0; step <= this.config.maxSteps; step++) {
@@ -357,6 +372,7 @@ export class Runner extends EventEmitter {
       const stopAt = meter?.check(chat ? { model: chat.model, where: chat.egress } : { model: this.config.agentCmd, where: this.config.agentEgress === 'remote' ? 'remote' : 'local' });
       if (stopAt) { ceiling(stopAt); return; }
       const draft = this.receipt(sessionId, run, mode, { system, prompt, recall });
+      const spentBefore = meter ? meter.spent.tokens_in + meter.spent.tokens_out : 0;
       if (!chat?.ownReceipt) this.identity?.receipt?.(draft);
       const { text, aborted, usage } = await (chat ? (o) => chat.call(o) : this.agent)({
         ...(chat?.ownReceipt ? { receipt: draft, privacy: mode } : {}),
@@ -377,6 +393,7 @@ export class Runner extends EventEmitter {
       });
 
       meter?.model({ provider: draft.provider, model: draft.model, where: chat ? chat.egress : (this.config.agentEgress === 'remote' ? 'remote' : 'local'), usage, sent: system.length + prompt.length, received: String(text ?? streamed).length });
+      if (run.ir && meter) this.irHook().tokens(run.ir, meter.spent.tokens_in + meter.spent.tokens_out - spentBefore);
 
       if (aborted) {
         if (streamed.trim()) this.record(sessionId, { type: 'assistant', ...tag, id: shortId(), text: streamed.trim() });
@@ -385,10 +402,16 @@ export class Runner extends EventEmitter {
       }
 
       const { text: said, ops } = extractMemory(text);
-      const { visible, call, error } = parseToolCall(said, tools);
+      // Interstitial Research: its blocks come out of what the model wrote (before the tool call is
+      // read, which trims a fence left open before it), and are checked here.
+      const ir = run.ir ? await this.irBlocks(run, said, mode, task) : null;
+      const { visible, call, error } = parseToolCall(ir ? ir.rest : said, tools);
       if (visible) this.record(sessionId, { type: 'assistant', ...tag, id: shortId(), text: visible });
+      if (ir?.checked) this.record(sessionId, { type: 'interstitial', ...tag, phase: 'verify', words: ir.words, claims: ir.verdicts.map(({ claim, field, source, outcome, label }) => ({ claim, field, source, outcome, label })) });
       run.live.text = '';
       if (ops.length && !run.helper) this.keep(sessionId, tag, ops, run); // memory is kept in the conversation that asked
+      // Claims just checked: the model writes its answer with the verdicts in hand.
+      if (!call && !error && ir?.checked && step < this.config.maxSteps) continue;
       if (!call && !error) { this.record(sessionId, { type: 'done', ...tag }); return; }
 
       if (step === this.config.maxSteps) {
@@ -425,6 +448,12 @@ export class Runner extends EventEmitter {
       // The ingest gate: a guarded step in a tainted run, or anything that would carry something
       // of the person's out, asks, and never goes on its own.
       const guard = failed ? null : this.guardFor(call, tool, run, preview, session);
+      // Interstitial Research: after the deterministic outbound check, the outbound-check template;
+      // a search it doesn't clear never leaves (generalise it, or drop it).
+      if (!failed && run.ir && call.name === 'web_search') {
+        const oc = await this.irHook().outbound(run.ir, call.args?.query, mode, task);
+        if (!oc.send) failed = 'Not sent: this search could carry something of the person’s own (a name, a record, or something from memory or capture). Search for the abstract shape of the problem instead, with no names, records or remembered details, or leave it out.';
+      }
       const needsApproval = !failed && (!!tool?.needsApproval || !!guard);
       this.record(sessionId, { type: 'tool_call', ...tag, id, name: call?.name ?? 'unknown', args: call?.args ?? {}, needs_approval: needsApproval, ...(preview ? { preview } : {}), ...(guard ? { guard } : {}) });
       if (failed) {
@@ -487,6 +516,10 @@ export class Runner extends EventEmitter {
         taints = this.taints(call, screen);
         if (taints) run.taint.push(screen.taint);
       }
+      // Interstitial Research: a page fetched in this run is one a claim may cite.
+      if (run.ir && ok && screen && call.name === 'web_fetch') {
+        for (const url of new Set([call.args?.url, page?.ref].filter(Boolean))) this.irHook().source(run.ir, { url, origin: page?.origin || hostOf(url), screen });
+      }
       if (ok && call.name === 'write_file') this.provenance(call.args, taintedBefore);
       // The links a read from outside carries, so following one later counts as following a link.
       const links = ok && read ? this.readLinks(call, String(output ?? ''), page) : [];
@@ -495,11 +528,54 @@ export class Runner extends EventEmitter {
     }
   }
 
+  // ---- Interstitial Research (src/interstitial.js) --------------------------------------------
+
+  // The flag and the Decision Service; the skill being loaded is checked by run.ir existing (set
+  // only when it is followed with both on).
+  irEnabled() { return !!this.config.features?.interstitial && typeof this.decisions === 'function'; }
+
+  irHook() {
+    return new Interstitial({ home: this.config.home, ask: (...a) => this.decisions(...a), ledger: this.ledger, skillText: () => this.skills.get(IR_SKILL)?.body ?? '' });
+  }
+
+  // The model's field map and claims, out of its text; the claims are verified once each.
+  async irBlocks(run, text, mode, task) {
+    const b = readBlocks(text);
+    const hook = this.irHook();
+    if (b.fieldMap) hook.fieldMap(run.ir, b.fieldMap);
+    run.ir.text += `\n${b.rest}`;
+    if (!b.claims) return { rest: b.rest, checked: false };
+    if (!b.claims.value) {
+      run.ir.claim_errors = b.claims.errors;
+      return { rest: b.rest, checked: true, verdicts: [], words: `The claims block didn’t validate, so nothing was checked: ${b.claims.errors.slice(0, 5).join('; ')}. Write it again as a JSON list of {claim, field, source}.` };
+    }
+    const verdicts = await hook.verify(run.ir, b.claims.value, mode, task);
+    return { rest: b.rest, checked: true, verdicts, words: verdictWords(verdicts) };
+  }
+
+  // The run's record (SKILL.md §7), as a step in the log; its counters, and a proposal if one fires.
+  irFinish(sessionId, run) {
+    const { turn, attempt } = run.live;
+    try {
+      const hook = this.irHook();
+      const rec = hook.record(run.ir, { meter: run.meter });
+      const task = hook.counted(rec);
+      this.record(sessionId, { type: 'interstitial', turn, attempt, phase: 'record', ...rec, ...(task ? { proposal: task.id } : {}) });
+    } catch (e) {
+      this.record(sessionId, { type: 'interstitial', turn, attempt, phase: 'record', error: `Nova couldn’t keep this run’s record: ${e.message}` });
+    }
+  }
+
   // A skill this reply follows: its playbook goes into the instructions for
   // every model call that's left. The log keeps which skill, not its text.
   follow(sessionId, tag, run, skill, how) {
     if (run.skills.has(skill.id)) return false;
     run.skills.set(skill.id, skill);
+    if (skill.id === IR_SKILL && this.irEnabled()) {
+      run.ir = this.irHook().begin({ recall: run.recall ?? [], topic: run.question ?? '', model: this.chat()?.model ?? this.config.agentCmd });
+      // A cached field map (public topic, same key): the model is handed it, and writes none.
+      if (run.ir.cache === 'hit') this.record(sessionId, { type: 'interstitial', ...tag, phase: 'field-map', cached: true, words: `A field map for this topic is already cached (same skill, templates, model and privacy class). Use it as this run's field map; don't write a new one:\n${JSON.stringify(run.ir.field_map)}` });
+    }
     this.record(sessionId, { type: 'skill', ...tag, skill: skill.id, name: skill.name, how });
     return true;
   }
