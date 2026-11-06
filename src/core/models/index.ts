@@ -924,16 +924,16 @@ export class Models extends EventEmitter {
   // Waking became opt-in with this build (the owner's answer to the ADR's question 5). So that a
   // device Nova already wakes for work keeps working, the first run turns waking on for each trusted
   // computer that serves a role and that Nova has sent a wake before (the owner's Dell); every other
-  // device waits for the person's choice.
+  // device waits for the person's choice. It needs no marker: since this build every wake that is
+  // sent needs a choice the person made (a `power.<id>`), so a device with a sent wake and no choice
+  // can only be one from before it, and a choice once made (on or off) is never overwritten.
   #firstRunPower(): void {
-    if (this.#get('power.first_run') !== undefined) return;
     for (const d of this.#spokes()) {
       if (this.#get(`power.${d.id}`) !== undefined || !this.rolesOn(d.id).length) continue;
       if (!this.#o.db.get(`SELECT 1 FROM device_wake WHERE device_id = ? AND outcome != 'refused'`, d.id)) continue;
       this.#set(`power.${d.id}`, { on_demand: true, sleep_after_min: null });
       this.#o.log.info('models', `Waking is now your choice for each device. ${d.name} serves a model role and Nova has woken it before, so it stays on: Nova wakes it when work needs it (Settings › Models, “Sleep and wake”).`);
     }
-    this.#set('power.first_run', this.#now().toISOString());
   }
 
   // Paused: the last wake sent to it failed, and it hasn't been heard from since. Routing doesn't wake
