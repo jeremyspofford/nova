@@ -147,6 +147,20 @@ async function geometry(page: Page, label: string) {
   const root = '#settings-devices';
   assert.deepEqual(await page.evaluate((sel) => [...document.querySelector(sel)!.querySelectorAll<HTMLElement>('button, label, p, h3, h4, h5, .fit-verdict, .fit-what, .fit-gb, .dm-out, .settings-label')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent), root), [], `${label}: clipped text`);
   assert.deepEqual(await page.evaluate((sel) => { const r = document.querySelector(sel)!; const box = r.querySelector('[data-device-models]')!.getBoundingClientRect(); return [...r.querySelectorAll<HTMLElement>('[data-device-models] *')].filter((el) => { const b = el.getBoundingClientRect(); return b.width && (b.right > box.right + 1 || b.left < box.left - 1); }).map((el) => el.className || el.tagName); }, root), [], `${label}: nothing spills out of the panel`);
+  // DIAGNOSTICS ONLY (draft PR, never merged): a small visible control, now and two frames later.
+  { const snap = await page.evaluate(async () => {
+      const take = () => [...document.querySelectorAll<HTMLElement>('#settings-devices button, #settings-devices select, #settings-devices input')].filter((e) => !(e as HTMLInputElement).disabled && e.checkVisibility() && e.getBoundingClientRect().height < 44).map((e) => {
+        const r = e.getBoundingClientRect(); const cs = getComputedStyle(e);
+        const up: string[] = []; for (let n: Element | null = e; n && up.length < 8; n = n.parentElement) { const c = getComputedStyle(n); const an = n.getAnimations().map((x) => `${(x as any).animationName ?? (x as any).transitionProperty ?? '?'}@${Math.round(Number(x.currentTime ?? 0))}`).join('+'); up.push(`${n.tagName}.${String(n.className).split(' ')[0]} h=${Math.round(n.getBoundingClientRect().height)} tf=${c.transform} sc=${c.scale} tr=${c.translate} disp=${c.display} op=${c.opacity}${an ? ' anim=' + an : ''}`); }
+        return { id: e.id || e.className, h: r.height, oh: e.offsetHeight, ch: cs.height, minh: cs.minHeight, app: cs.appearance, font: cs.fontSize, lh: cs.lineHeight, pad: cs.padding, bs: cs.boxSizing, up };
+      });
+      const first = take();
+      if (!first.length) return null;
+      const anims = document.getAnimations().map((x) => `${(x as any).animationName ?? (x as any).transitionProperty ?? '?'}:${x.playState}:${String((x.effect as any)?.target?.className ?? '').split(' ')[0]}`);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      return { first, anims, later: take().map((x) => `${x.id} h=${x.h}`), now: Math.round(performance.now()) };
+    });
+    if (snap) console.log(`fk2 ADD ${label}: ${JSON.stringify(snap)}`); }
   assert.deepEqual(await page.evaluate((sel) => [...document.querySelectorAll<HTMLElement>(`${sel} button, ${sel} select, ${sel} input`)].filter((e) => !(e as HTMLInputElement).disabled && e.checkVisibility() && e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80)), root), [], `${label}: 44px targets`);
   assert.deepEqual(await page.evaluate((sel) => [...document.querySelectorAll<HTMLInputElement>(`${sel} select, ${sel} input`)].filter((e) => !e.labels?.length).map((e) => e.outerHTML.slice(0, 80)), root), [], `${label}: every control is labelled`);
 }
