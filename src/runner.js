@@ -331,6 +331,7 @@ export class Runner extends EventEmitter {
     const recall = run.helper ? [] : this.memory.search(question);
     if (recall.length) this.record(sessionId, { type: 'recall', ...tag, notes: recall.map(({ id, source }) => ({ id, source })) });
     run.recall = recall;
+    run.question = question;
     for (const s of this.skills.match(question).filter((x) => !this.skillHeld(x.id))) this.follow(sessionId, tag, run, s, 'matched');
     // What this Nova is right now, from its own registries (core self.ts), fresh for every turn.
     const briefing = run.helper || !this.self ? '' : await this.self.briefing().catch((e) => `# This Nova, right now\n\nNova couldn't read its own state for this turn: ${e.message}`);
@@ -570,7 +571,11 @@ export class Runner extends EventEmitter {
   follow(sessionId, tag, run, skill, how) {
     if (run.skills.has(skill.id)) return false;
     run.skills.set(skill.id, skill);
-    if (skill.id === IR_SKILL && this.irEnabled()) run.ir = this.irHook().begin({ recall: run.recall ?? [] });
+    if (skill.id === IR_SKILL && this.irEnabled()) {
+      run.ir = this.irHook().begin({ recall: run.recall ?? [], topic: run.question ?? '', model: this.chat()?.model ?? this.config.agentCmd });
+      // A cached field map (public topic, same key): the model is handed it, and writes none.
+      if (run.ir.cache === 'hit') this.record(sessionId, { type: 'interstitial', ...tag, phase: 'field-map', cached: true, words: `A field map for this topic is already cached (same skill, templates, model and privacy class). Use it as this run's field map; don't write a new one:\n${JSON.stringify(run.ir.field_map)}` });
+    }
     this.record(sessionId, { type: 'skill', ...tag, skill: skill.id, name: skill.name, how });
     return true;
   }

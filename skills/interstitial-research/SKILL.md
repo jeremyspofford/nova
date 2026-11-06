@@ -89,7 +89,10 @@ parallel one.
    (for example `core x queueing theory`, `other name`, `gap terms`,
    `no jargon`). Depth follows the number of adjacent fields (§3).
    A field map that doesn't validate means Quick depth, core only, and
-   the record says so.
+   the record says so. If Nova hands you a cached field map for this
+   topic, use it and write none: a field map is written only on a cache
+   miss. Nova caches only public-class maps; a personal-derived or
+   sensitive map is kept for this task alone.
 3. **Search** with web_search, then read the best results with
    web_fetch, using the queries in the matrix exactly as written. Every
    page passes Nova's ingest screen before you see it, and keeps its

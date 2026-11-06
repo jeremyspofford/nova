@@ -76,13 +76,17 @@ test('verify-transfer rule: any of a–c no discards, any unsettled quarantines,
   for (const r of rows(OUTBOUND_CHECK_V1)) assert.equal(outboundPolicy(r), OC_QUESTIONS.every((q) => r[q] === 'no') ? 'send' : 'withhold', JSON.stringify(r));
 });
 
-test('verify-transfer bands through the service: ≥0.7 use, 0.4–0.7 quarantine, <0.4 discard; (d) sets the label', async () => {
-  const at = async (gate: number, d = 0.9) => (await service({ mode: 'local-only', p: (q) => (q === 'established' ? d : gate) }).svc.ask(VERIFY_TRANSFER_V1.template_id, CLAIM, { subsystem: 'test' }))!;
+test('verify-transfer bands through the service (errata E2): exactly 0.7 passes, 0.4 ≤ p < 0.7 quarantines, < 0.4 discards; (d) sets the label', async () => {
+  const at = async (gate: number, d = 0.9, only: string | null = null) => (await service({ mode: 'local-only', p: (q) => (q === 'established' ? d : only && q !== only ? 0.95 : gate) }).svc.ask(VERIFY_TRANSFER_V1.template_id, CLAIM, { subsystem: 'test' }))!;
   assert.equal((await at(0.7)).outcome, 'use_established');
   assert.equal((await at(0.95, 0.2)).outcome, 'use_hypothesis');
-  assert.equal((await at(0.69)).outcome, 'quarantine');
+  assert.equal((await at(0.6999)).outcome, 'quarantine');
   assert.equal((await at(0.4)).outcome, 'quarantine');
-  assert.equal((await at(0.39)).outcome, 'discard');
+  assert.equal((await at(0.3999)).outcome, 'discard');
+  // Each of (a), (b) and (c) on its own, at every boundary.
+  for (const q of ['from_field', 'mechanism', 'supports']) {
+    assert.deepEqual(await Promise.all([0.7, 0.6999, 0.4, 0.3999].map(async (p) => (await at(p, 0.9, q)).outcome)), ['use_established', 'quarantine', 'quarantine', 'discard'], q);
+  }
   // One weak answer is enough.
   const mixed = (await service({ mode: 'local-only', p: (q) => (q === 'supports' ? 0.1 : 0.95) }).svc.ask(VERIFY_TRANSFER_V1.template_id, CLAIM, { subsystem: 'test' }))!;
   assert.equal(mixed.outcome, 'discard');

@@ -278,6 +278,66 @@ test('the improvement trigger files a task that waits for the OK, and approving 
   } finally { await h.close(); }
 });
 
+test('field-map cache (errata E1): same public topic and key hits; another model, template or skill version misses; private maps are never kept', () => {
+  const home = mkdtempSync(join(tmpdir(), 'nova-ir-'));
+  const mk = (o = {}) => new Interstitial({ home, ask: async () => null, skillText: () => 'playbook v1', ...o });
+  const hook = mk();
+  const topic = 'Research why our CI pipelines got slower';
+  const a = hook.begin({ topic, model: 'model-a' });
+  assert.equal(a.cache, 'miss');
+  hook.fieldMap(a, { value: FIELD_MAP, errors: [] });
+  assert.equal(a.cache, 'stored');
+  const b = hook.begin({ topic: 'research why our CI pipelines got slower?', model: 'model-a' });
+  assert.equal(b.cache, 'hit');
+  assert.deepEqual(b.field_map, FIELD_MAP);
+  hook.fieldMap(b, { value: { ...FIELD_MAP, core_fields: ['something else'] }, errors: [] });
+  assert.deepEqual(b.field_map, FIELD_MAP, 'written only on a miss');
+  assert.equal(hook.begin({ topic, model: 'model-b' }).cache, 'miss', 'another model version');
+  assert.equal(mk({ templates: [{ id: VERIFY, version: 2 }, { id: OUTBOUND, version: 1 }] }).begin({ topic, model: 'model-a' }).cache, 'miss', 'another template version');
+  assert.equal(mk({ skillText: () => 'playbook v2' }).begin({ topic, model: 'model-a' }).cache, 'miss', 'another skill version');
+  assert.equal(hook.begin({ topic: 'Research quiet bike tyres', model: 'model-a' }).cache, 'miss', 'another topic');
+  // A topic that recalled the person's memory is personal-derived: it never reads or writes the shared cache.
+  assert.equal(hook.begin({ topic, model: 'model-a', recall: [{ id: 'n1' }] }).cache, 'miss');
+  const secret = { ...FIELD_MAP, core_fields: ['sleep medicine marker-pd'] };
+  const p = hook.begin({ topic: 'Research sleep aids', model: 'model-a', recall: [{ id: 'n1' }] });
+  hook.fieldMap(p, { value: secret, errors: [] });
+  assert.equal(p.cache, 'per-task');
+  const q = hook.begin({ topic: 'Research sensitive thing', model: 'model-a' });
+  hook.fieldMap(q, { value: { ...secret, privacy_class: 'sensitive' }, errors: [] });
+  assert.equal(q.cache, 'per-task', 'a map that says sensitive is kept for the task only');
+  assert.equal(hook.begin({ topic: 'Research sensitive thing', model: 'model-a' }).cache, 'miss');
+  assert.doesNotMatch(readFileSync(join(home, 'workspace', 'interstitial', 'field-maps.json'), 'utf8'), /marker-pd/);
+  // A tampered cache entry that no longer validates is not used.
+  writeFileSync(join(home, 'workspace', 'interstitial', 'field-maps.json'), JSON.stringify({ [hook.cacheKey(a, 'public')]: { map: { core_fields: [] } } }));
+  assert.equal(hook.begin({ topic, model: 'model-a' }).cache, 'miss');
+});
+
+test('field-map cache end to end: a second conversation on the same public topic is handed the map; a personal-derived one is not', async () => {
+  const plan = (pd) => (step, { turn }) => (turn.includes('interstitial_field_map')
+    ? ['Using the cached map.\n\n## Core findings\n...'][step - 1]
+    : [`${fence('field-map', pd ? { ...FIELD_MAP, privacy_class: 'personal-derived' } : FIELD_MAP)}\n## Core findings\n...`][step]) ?? 'Done.';
+  for (const pd of [false, true]) {
+    const { h, m } = await start({ plan: plan(pd) });
+    try {
+      const first = (await h.run('Research why our CI pipelines got slower')).s;
+      const second = (await h.run('Research why our CI pipelines got slower')).s;
+      const [r1] = steps(first, 'record');
+      const [r2] = steps(second, 'record');
+      if (!pd) {
+        assert.equal(r1.field_map_cache, 'stored');
+        assert.equal(r2.field_map_cache, 'hit');
+        assert.deepEqual(r2.field_map, FIELD_MAP);
+        assert.equal(steps(second, 'field-map').length, 1);
+        assert.match(m.calls.at(-1).prompt, /<tool_result name="interstitial_field_map" ok="true">/);
+      } else {
+        assert.deepEqual([r1.field_map_cache, r2.field_map_cache], ['per-task', 'per-task'], 'never reused across conversations');
+        assert.equal(steps(second, 'field-map').length, 0);
+        assert.equal(existsSync(join(h.home, 'workspace', 'interstitial', 'field-maps.json')), false, 'never written to the shared cache');
+      }
+    } finally { await h.close(); }
+  }
+});
+
 test('a tampered state.json can only hold counts', () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-ir-'));
   mkdirSync(join(home, 'workspace', 'interstitial'), { recursive: true });

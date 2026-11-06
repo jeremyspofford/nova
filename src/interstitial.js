@@ -25,6 +25,7 @@ export const PRIVACY_CLASSES = ['public', 'personal-derived', 'sensitive'];
 export const CAPS = Object.freeze({ quick: 0.15, standard: 0.4, deep: 1 });
 // Improvement triggers (SKILL.md §8).
 export const TRIGGERS = Object.freeze({ runs: 10, breaches: 3, corrections: 2 });
+export const TEMPLATES = Object.freeze([{ id: VERIFY, version: 1 }, { id: OUTBOUND, version: 1 }]);
 export const LAYERS = ['Core findings', 'Adjacent findings', 'Interstitial insight', 'Gaps confirmed', 'Checked, nothing there'];
 const EXCERPT_MAX = 12_000;
 const BLOCK = /```interstitial-(field-map|claims)[ \t]*\r?\n([\s\S]*?)```/g;
@@ -99,23 +100,55 @@ const decisionOf = (d, id) => ({ template_id: d?.template_id ?? id, version: d?.
 
 export class Interstitial {
   // ask: the Decision Service's ask (core.decisionService.ask). ledger: for proposals.
-  constructor({ home, ask, ledger = null, skillText = () => '', now = () => new Date() }) {
+  // templates: the template versions this hook asks (part of the field-map cache key).
+  constructor({ home, ask, ledger = null, skillText = () => '', now = () => new Date(), templates = TEMPLATES }) {
     this.home = home;
     this.ask = ask;
     this.ledger = ledger;
     this.skillText = skillText;
     this.now = now;
+    this.templates = templates;
     this.dir = join(home, 'workspace', 'interstitial');
   }
 
   // A run that follows the skill: its working state. recall: the memory this turn recalled (a topic
-  // that brought the person's own notes with it is personal-derived).
-  begin({ recall = [] } = {}) {
-    return {
-      started: Date.now(), privacy_class: recall.length ? 'personal-derived' : 'public',
-      field_map: null, field_map_errors: null, searches: [], sources: [], claims: [], claim_errors: null, decisions: [],
+  // that brought the person's own notes with it is personal-derived). topic: the person's message.
+  // model: the chat model that writes the field map. A public topic whose map is cached under the
+  // same key (errata E1) starts with that map: none is written again.
+  begin({ recall = [], topic = '', model = '' } = {}) {
+    const ir = {
+      started: Date.now(), privacy_class: recall.length ? 'personal-derived' : 'public', topic: String(topic), model: String(model),
+      field_map: null, field_map_errors: null, cache: 'miss', searches: [], sources: [], claims: [], claim_errors: null, decisions: [],
       tokens: { core: 0, skill: 0 }, last: 'core', text: '',
     };
+    if (ir.privacy_class === 'public') {
+      const hit = this.#maps()[this.cacheKey(ir, 'public')];
+      if (hit && !validateFieldMap(hit.map).length && (hit.map.privacy_class ?? 'public') === 'public') { ir.field_map = hit.map; ir.cache = 'hit'; }
+    }
+    return ir;
+  }
+
+  // ---- the field-map cache (errata E1) -----------------------------------------------------------
+  // Keyed by the skill's version, the template versions, the chat model and the privacy class (and
+  // the topic). Only a public map is kept here, in ~/workspace/interstitial/ (removed with the
+  // skill); a personal-derived or sensitive map lives in the run's state alone and dies with it.
+
+  cacheKey(ir, privacyClass = ir.privacy_class) {
+    const body = this.skillText();
+    const topic = (String(ir.topic).toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(' ');
+    return sha256(JSON.stringify({ skill: [1, body ? sha256(body) : null], templates: this.templates.map((t) => `${t.id}@${t.version}`), model: ir.model, privacy_class: privacyClass, topic }));
+  }
+
+  #maps() {
+    try { const m = JSON.parse(readFileSync(join(this.dir, 'field-maps.json'), 'utf8')); return m && typeof m === 'object' && !Array.isArray(m) ? m : {}; } catch { return {}; }
+  }
+
+  #keepMap(ir) {
+    const maps = this.#maps();
+    maps[this.cacheKey(ir, 'public')] = { at: this.now().toISOString(), map: ir.field_map };
+    const kept = Object.entries(maps).sort((a, b) => String(b[1]?.at).localeCompare(String(a[1]?.at))).slice(0, 200);
+    mkdirSync(this.dir, { recursive: true });
+    writeJson(join(this.dir, 'field-maps.json'), Object.fromEntries(kept));
   }
 
   #opts(ir, mode, task) { return { subsystem: 'interstitial-research', task_id: task ?? null, privacy_mode: mode }; }
@@ -134,10 +167,14 @@ export class Interstitial {
   }
 
   fieldMap(ir, block) {
+    // A cached map stands for the run: one written anyway isn't taken (generated on a miss only).
+    if (ir.cache === 'hit') { ir.ignored_map = true; return; }
     if (block.value) {
       ir.field_map = block.value;
       ir.field_map_errors = null;
       if (block.value.privacy_class) ir.privacy_class = order(block.value.privacy_class, ir.privacy_class);
+      ir.cache = ir.privacy_class === 'public' ? 'stored' : 'per-task';
+      if (ir.cache === 'stored') this.#keepMap(ir);
     } else if (!ir.field_map) ir.field_map_errors = block.errors;
   }
 
@@ -183,11 +220,12 @@ export class Interstitial {
     const body = this.skillText();
     return {
       skill: { id: SKILL_ID, version: 1, sha256: body ? sha256(body).slice(0, 16) : null },
-      templates: [{ id: VERIFY, version: 1 }, { id: OUTBOUND, version: 1 }],
+      templates: this.templates.map((t) => ({ ...t })),
       depth,
       ...(ir.field_map ? {} : { depth_why: ir.field_map_errors ? `The field map didn’t validate (${ir.field_map_errors.slice(0, 3).join('; ')}), so this ran at Quick depth, core only.` : 'No field map was written, so this ran at Quick depth, core only.' }),
       privacy_class: ir.privacy_class,
       field_map: ir.field_map,
+      field_map_cache: ir.cache,
       ...(ir.field_map_errors ? { field_map_errors: ir.field_map_errors.slice(0, 10) } : {}),
       searches: ir.searches,
       sources: ir.sources.map(({ url, origin, screen, verdict }) => ({ url, origin, screen, verdict })),
