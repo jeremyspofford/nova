@@ -6,6 +6,12 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-05 · Test stability · The Gmail disconnect check waits for its own message**
+- What changed: nothing in Nova. The screenshot walkthrough (`scripts/shots.js`) checks that disconnecting Gmail deletes the app password and says so ("the app password is gone"). Nova sends its "skills changed" signal before it answers the Disconnect click, so the page can redraw Gmail as not connected before the click's own message appears. The check read the message as soon as the redraw showed, and sometimes found the previous one. It now waits until the message changes, whatever it says, and then checks what it says.
+- What you can now do: nothing new. CI fails less often for no reason.
+- Still unfinished: nothing in this item.
+- Checked: in the CI-matching sandbox, with the answer to the click held 800 ms (the signal not held), the old walkthrough failed this check 3 of 3, and the new one passed 3 of 3.
+
 **2026-11-05 · Test stability · The skeleton test measures a conversation after its entrance, not during it**
 - What changed: nothing in the app. When a conversation is drawn whole, Nova holds its animations off until the next frame, then the thread rises 4 px into place. The M9 skeleton test could check "is anything moving?" in the frame before that rise began. Nothing was moving yet, so the test went on, then measured the blocks one frame later, 4 px into the rise. That is the random "off by up to 4.00 px: block 12" failure. The skeleton itself was right all along. The kept shape is measured from the thread's own edge, so the rise doesn't change it. Now "the view is drawn" (`settled` in the M9 test helpers) also waits until that held frame has passed, the same rule the navigation tests already use. The 0.5 px tolerance is unchanged.
 - What you can now do: nothing new. A stand-in that lets the held frame through right after the "anything moving?" check reproduces CI's exact numbers before the fix: block 12, skeleton 346,−273, final 346,−269 (3 of 3 runs). With the fix, the blocks land at 0.00 px every time (3 of 3).
