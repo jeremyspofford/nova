@@ -4,7 +4,9 @@ Decisions, dependencies and deviations, newest first within each section.
 
 ## What changed (plain language)
 
-What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
+**From 2026-11-06, each merge's entry is its own file in [docs/ledger/](ledger/README.md)**, newest first by file name. One file per pull request means pull requests no longer collide on this file and can merge as soon as their own checks pass. The entries below are the history up to then, unchanged.
+
+What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 **2026-11-06 · CI · Every merge to main gets its own finished check**
 - What changed: nothing in Nova. CI cancelled a running check whenever a newer one started on the same branch. That is right for a pull request (the newer push replaces the older), but on main it meant a merge landing while the previous merge was still being checked cancelled that check: main showed red ("cancelled") and that commit never got an answer. It happened to #348's merge on 2026-11-06. Now runs on main always finish; on pull-request branches a newer push still cancels the older run.
