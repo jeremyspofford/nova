@@ -1053,8 +1053,29 @@ function installConfirm(view) {
 <div class="connection-actions"><button type="button" class="btn primary" data-action="models-confirm">${esc(c.ok)}</button><button type="button" class="btn quiet" data-action="models-not-now">Not now</button></div></div>`;
 }
 
+// Wake on demand (proposed, 2026-11-06; docs/plans/wol-inference-nodes-adr-2026-11-06.md): a compute
+// device that sleeps says whether Nova can wake it, what a wake is doing now, why one failed and what
+// Nova does instead, and its sleep policy. `device.wake`: {state: asleep | waking | awake | failed,
+// pill, lines, waiting?: {text, since}, actions?: [{action, label}], policy: {idle, demand, notes}}.
+const WAKE_PILL = { asleep: '', waking: '', awake: ' is-on', failed: ' is-warn' };
+const SLEEP_IDLE = [['never', 'Never sleep'], ['15', 'Sleep after 15 minutes'], ['30', 'Sleep after 30 minutes'], ['60', 'Sleep after 1 hour'], ['120', 'Sleep after 2 hours']];
+const SLEEP_DEMAND = [['wake', 'Nova wakes it'], ['wait', 'Wait until it’s turned on']];
+function wakeStatus(view) {
+  const w = view.device.wake;
+  const wait = w.waiting ? waitingLine(w.waiting.text, { since: w.waiting.since }) : '';
+  const acts = w.actions?.length ? `<div class="connection-actions">${w.actions.map((a) => `<button type="button" class="btn quiet" data-action="${esc(a.action)}">${esc(a.label)}</button>`).join('')}</div>` : '';
+  return `<div class="dm-wake" data-wake="${esc(w.state)}"><p class="dm-seen"><span class="pill${WAKE_PILL[w.state] ?? ''}">${esc(w.pill)}</span>${view.device.seen ? ` ${esc(view.device.seen)}` : ''}</p>${wait}${w.lines.map((l) => `<p class="settings-note">${esc(l)}</p>`).join('')}${acts}</div>`;
+}
+function sleepPolicy(view) {
+  const p = view.device.wake.policy;
+  const id = `${view.id}-sleep`;
+  const select = (key, label, value, options) => `<label class="dm-field" for="${id}-${key}"><span class="dm-field-label">${esc(label)}</span><select class="input" id="${id}-${key}" data-models-sleep="${key}">${options.map(([v, l]) => `<option value="${v}"${v === value ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
+  return `<section class="dm-sleep" aria-labelledby="${id}-title"><h4 class="section-title" id="${id}-title">Sleep and wake</h4>
+<div class="dm-controls">${select('idle', 'When it’s idle', p.idle, SLEEP_IDLE)}${select('demand', 'When work needs it', p.demand, SLEEP_DEMAND)}</div>${p.notes.map((n) => `<p class="settings-note">${esc(n)}</p>`).join('')}</section>`;
+}
+
 // The whole screen. `view`: { id, device: {name, path, hardware, memory, budget_bytes, ram_bytes,
-// overhead_source, overhead_loads, seen?}, plan: [{name, quant, quants, context, contexts, installed,
+// overhead_source, overhead_loads, seen?, wake?}, plan: [{name, quant, quants, context, contexts, installed,
 // loaded, estimate, result}], total (the plan's own fit result), catalog: [names], advice, privacy,
 // crumb?, confirm?: {title, lines, ok}, status?, busy? }. `device.seen` is said for a device that is
 // asleep: how old what it shows is. `confirm` replaces the install button while it asks.
@@ -1067,14 +1088,14 @@ export function deviceModels(view) {
   const status = view.status ? `<p class="settings-note dm-status" role="status">${esc(view.status)}</p>` : '';
   const add = `<div class="dm-add"><label class="dm-field" for="${view.id}-add"><span class="dm-field-label">Add a model</span><select class="input" id="${view.id}-add">${view.catalog.map((n) => `<option>${esc(n)}</option>`).join('')}</select></label><button type="button" class="btn" data-action="models-add">Add to the plan</button></div>`;
   const crumb = view.crumb === undefined ? `Settings › Devices › ${view.device.name}` : view.crumb;
-  const seen = view.device.seen ? `<p class="dm-seen" data-asleep><span class="pill">Asleep</span> ${esc(view.device.seen)}</p>` : '';
+  const seen = view.device.wake ? wakeStatus(view) : view.device.seen ? `<p class="dm-seen" data-asleep><span class="pill">Asleep</span> ${esc(view.device.seen)}</p>` : '';
   return `<section class="panel device-models" aria-labelledby="${view.id}-title" data-device-models="${esc(view.id)}">
 <header class="dm-head">${crumb ? `<p class="dm-crumb">${esc(crumb)}</p>` : ''}<h3 class="dm-title" id="${view.id}-title">Models</h3><p class="dm-device">${esc(view.device.hardware)}</p>${seen}</header>
 ${view.total ? memoryBudget(view) : ''}
 <section class="dm-plan" aria-labelledby="${view.id}-plan-title"><h4 class="section-title" id="${view.id}-plan-title">Planned on this device</h4>
 ${view.plan.length ? `<ul class="dm-models">${view.plan.map((m, i) => modelPlanRow(view, m, i)).join('')}</ul>` : '<p class="settings-note">Nothing is planned here yet. Plan a pick below, or add a model.</p>'}
 ${view.plan.length > 1 ? together(view) : ''}${add}${action}${status}</section>
-${taskPicks(view)}</section>`;
+${taskPicks(view)}${view.device.wake ? sleepPolicy(view) : ''}</section>`;
 }
 
 export function settingsRow({ id = '', title, note = '', control = '' }) {
