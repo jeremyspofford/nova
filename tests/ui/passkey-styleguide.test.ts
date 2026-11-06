@@ -6,7 +6,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Browser, Page } from 'playwright-core';
-import { browser, webkitBrowser, device, still, ROOT } from './support.ts';
+import { browser, webkitBrowser, device, still, ROOT, shortTargets } from './support.ts';
 import { createNova } from '../../src/server.js';
 import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
@@ -69,8 +69,7 @@ async function geometry(page: Page, label: string) {
   assert.ok(pageWidth <= width, `${label}: page overflow ${pageWidth} > ${width}`);
   const root = page.locator('#sg-passkey-approval');
   assert.deepEqual(await root.evaluate((r) => [...r.querySelectorAll<HTMLElement>('button, label, p, h2, h3')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)), [], `${label}: clipped text`);
-  // In one task, from the live page: a locator's evaluateAll can be handed nodes a styleguide redraw has just replaced.
-  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#sg-passkey-approval :is(button, input)')].filter((e) => !(e as HTMLInputElement).disabled).map((e) => e.closest('label') ?? e).filter((e) => e.getBoundingClientRect().height < 44).map((e) => e.outerHTML)), [], `${label}: touch targets (a wrapped input's target is its label)`);
+  assert.deepEqual(await shortTargets(page, '#sg-passkey-approval :is(button, input)', { label: true }), [], `${label}: touch targets (a wrapped input's target is its label)`);
   const ids = await page.locator('[id]').evaluateAll((els) => els.map((e) => e.id));
   assert.equal(new Set(ids).size, ids.length, `${label}: duplicate ids`);
 }
