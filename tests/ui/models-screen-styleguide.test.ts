@@ -15,7 +15,7 @@ import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
 import { GiB, PRIOR_OVERHEAD_BYTES, fit } from '../../src/core/models/fit.ts';
 
-const STATES = ['3090-one-model', '3090-two-models', '8gb-nothing-at-16k', 'mac-16gb-unified', 'unknown-shape', 'no-gpu'];
+const STATES = ['3090-one-model', '3090-two-models', '8gb-nothing-at-16k', 'mac-16gb-unified', 'unknown-shape', 'no-gpu', 'asleep', 'install-confirm'];
 // The owner's matrix: desktop bands, iPad-class, phones, and the foldables' postures.
 const MATRIX = {
   'desktop-1920': { width: 1920, height: 1080 }, 'desktop-1440': { width: 1440, height: 900 }, 'desktop-1280': { width: 1280, height: 800 },
@@ -66,12 +66,16 @@ async function padded(page: Page, selector: string, path: string) {
 async function geometry(page: Page, label: string) {
   const width = page.viewportSize()!.width;
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= width, `${label}: no horizontal scroll`);
-  const root = page.locator('#sg-models-screen');
-  assert.deepEqual(await root.evaluate((r) => [...r.querySelectorAll<HTMLElement>('button, label, p, h3, h4, h5, .fit-verdict, .fit-what, .fit-gb, .dm-out, .settings-label')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)), [], `${label}: clipped text`);
-  assert.deepEqual(await root.evaluate((r) => { const box = r.querySelector('[data-device-models]')!.getBoundingClientRect(); return [...r.querySelectorAll<HTMLElement>('[data-device-models] *')].filter((el) => { const b = el.getBoundingClientRect(); return b.width && (b.right > box.right + 1 || b.left < box.left - 1); }).map((el) => el.className || el.tagName); }), [], `${label}: nothing spills out of the panel`);
-  assert.deepEqual(await root.locator('button, select, input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).disabled && e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80))), [], `${label}: 44px targets`);
-  assert.deepEqual(await root.locator('select, input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).labels?.length).map((e) => e.outerHTML.slice(0, 80))), [], `${label}: every control is labelled`);
-  const ids = await page.locator('[id]').evaluateAll((els) => els.map((e) => e.id));
+  // Each check queries the live page and measures in the same task (page.evaluate). A locator's
+  // evaluate or evaluateAll first finds its elements, then runs the function in a second step; a
+  // redraw in between (the styleguide's whole page when the appearance arrives, a device's screen when
+  // its models refresh) hands the function nodes no longer in the page: no size and no labels.
+  const root = '#sg-models-screen';
+  assert.deepEqual(await page.evaluate((sel) => [...document.querySelector(sel)!.querySelectorAll<HTMLElement>('button, label, p, h3, h4, h5, .fit-verdict, .fit-what, .fit-gb, .dm-out, .settings-label')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent), root), [], `${label}: clipped text`);
+  assert.deepEqual(await page.evaluate((sel) => { const r = document.querySelector(sel)!; const box = r.querySelector('[data-device-models]')!.getBoundingClientRect(); return [...r.querySelectorAll<HTMLElement>('[data-device-models] *')].filter((el) => { const b = el.getBoundingClientRect(); return b.width && (b.right > box.right + 1 || b.left < box.left - 1); }).map((el) => el.className || el.tagName); }, root), [], `${label}: nothing spills out of the panel`);
+  assert.deepEqual(await page.evaluate((sel) => [...document.querySelectorAll<HTMLElement>(`${sel} button, ${sel} select, ${sel} input`)].filter((e) => !(e as HTMLInputElement).disabled && e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80)), root), [], `${label}: 44px targets`);
+  assert.deepEqual(await page.evaluate((sel) => [...document.querySelectorAll<HTMLInputElement>(`${sel} select, ${sel} input`)].filter((e) => !e.labels?.length).map((e) => e.outerHTML.slice(0, 80)), root), [], `${label}: every control is labelled`);
+  const ids = await page.evaluate(() => [...document.querySelectorAll('[id]')].map((e) => e.id));
   assert.equal(new Set(ids).size, ids.length, `${label}: duplicate ids`);
 }
 
@@ -135,6 +139,16 @@ async function stateChecks(page: Page, s: string, label: string) {
     assert.match(text, /No GPU found\./);
     assert.match(text, /It runs on the CPU, slow\./);
     assert.match(await root.locator('[data-task="screening"]').innerText(), /qwen3/, `${label}: the hub screens`);
+  }
+  if (s === 'asleep') {
+    assert.equal(await root.locator('[data-asleep]').count(), 1, `${label}: an asleep device says so`);
+    assert.match(await root.locator('[data-asleep]').innerText(), /Asleep\s+Last seen 3 h ago\. What shows here is what it last reported/, `${label}: stamped with its age`);
+  }
+  if (s === 'install-confirm') {
+    assert.equal(await root.locator('[data-models-confirm]').count(), 1, `${label}: Install and assign asks first`);
+    assert.equal(await root.locator('[data-action="models-install"]').count(), 0, `${label}: the ask takes the button's place`);
+    assert.match(await root.locator('[data-models-confirm]').innerText(), /about 14\.6 GB, downloads to Study desktop, then serves thinking and writing/);
+    assert.equal(await root.locator('.btn.primary').count(), 1, `${label}: one standout`);
   }
 }
 
