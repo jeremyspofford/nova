@@ -270,6 +270,28 @@ test('Backups failed mesh refresh clears key and stays read-only; fresh retry re
   assert.equal(await folder.inputValue(), `${target}/draft`); await noKey(page);
 }));
 
+// The race behind the flaky test above: the failed mesh check shows Try again while the profile's
+// Backups read is still on its way. Try again then joined that read, whose mesh answer had already
+// failed, so it showed Try again once more and never asked again. Here the read is held until after
+// the click, so the order is certain. Would fail if Try again could join a read begun before it.
+test('Backups Try again during a slow read still asks again', async () => appCase(async ({ m, page, target, encrypted }) => {
+  await openBackups(page); await configure(page, target, encrypted);
+  let release!: () => void; const held = new Promise<void>(r => { release = r; });
+  let reached!: () => void; const received = new Promise<void>(r => { reached = r; });
+  let holding = true;
+  await page.route('**/api/v1/backups', async r => { if (!holding) return r.continue(); holding = false; const response = await r.fetch(); reached(); await held; await r.fulfill({ response }); });
+  await page.route('**/api/v1/mesh/status', r => r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Synthetic missing mesh"}' }));
+  await m.send('PUT', '/api/v1/profile/user/name', { value: 'Slow read missing mesh' });
+  await received;
+  await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#settings-backups [name="target"]')?.disabled === true);
+  await page.unroute('**/api/v1/mesh/status');
+  await page.locator('[data-action="backups-retry"]').click();
+  release();
+  await page.locator('[data-action="backups-save"]').waitFor();
+  assert.equal(await page.locator('#settings-backups input:disabled').count(), 0);
+  await noKey(page);
+}));
+
 test('Backups offline save failure keeps draft and allows a real retry', async () => appCase(async ({ m, page, target }) => {
   await openBackups(page);
   await page.locator('#settings-backups [name="target"]').fill(target);
