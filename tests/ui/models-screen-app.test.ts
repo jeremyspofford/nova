@@ -243,7 +243,10 @@ test('Models screen (app): live recompute, an over-budget warning, a sleeping de
 
       // The overview: every device, and where each task runs.
       const d = await sleepingSpoke(nova, spoke);
+      // A fresh page. From #models-on-hub, going to #models only changes the fragment, so goto alone
+      // keeps this page and the overview it drew before the spoke joined until a refresh lands.
       await page.goto(`${base}/settings#models`);
+      await page.reload();
       await ready(page);
       const models = page.locator('#models');
       await models.locator('.dm-routes').waitFor();
