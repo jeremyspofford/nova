@@ -41,6 +41,9 @@ export function loadConfig(env = process.env, root = ROOT) {
     // What this instance is for, said to the agent in its briefing: preview (scripts/preview.sh),
     // development (npm run dev), or production.
     instance: instanceOf(env.NOVA_INSTANCE ?? file.instance, env.NOVA_DEV === '1'),
+    // Features that ship off: features.interstitial in nova.config.json, or NOVA_FEATURE_INTERSTITIAL=1|0
+    // (the environment wins). Off unless it says on.
+    features: { interstitial: flag(env.NOVA_FEATURE_INTERSTITIAL ?? file.features?.interstitial) },
     maxSteps: Number(file.max_tool_steps ?? 8),
     execTimeoutMs: Number(file.exec_timeout_ms ?? 120_000),
     // Stand-ins for Google and the search engine, for tests and screenshots.
@@ -106,6 +109,8 @@ export function meshConfig(env, file = {}) {
 function instanceOf(v, dev) {
   return ['preview', 'production', 'development'].includes(v) ? v : dev ? 'development' : 'production';
 }
+
+const flag = (v) => v === true || v === '1' || v === 'true';
 
 function egress(v) {
   return ['none', 'local', 'remote'].includes(v) ? v : 'remote';
