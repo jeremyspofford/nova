@@ -353,6 +353,104 @@ test('Models screen (app): a refresh from Nova keeps the model picked to add and
   } finally { await b.close(); }
 });
 
+const frames = (page: Page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+// The add list and the first slider as they are now, kept in the page, so a check can ask whether a
+// refresh replaced them (an open native list, or a drag, goes with the element).
+const holdControls = (page: Page) => page.evaluate(() => { const r = document.querySelector('#settings-devices')!; (window as unknown as { held: Element[] }).held = [r.querySelector('select[id$="-add"]')!, r.querySelector('[data-models-context="0"]')!]; });
+const inPlace = (page: Page) => page.evaluate(() => { const [list, range] = (window as unknown as { held: [Element, Element] }).held; return { list: list.isConnected, range: range.isConnected, focused: document.activeElement === list }; });
+// A press held on the slider's middle (its 8k, the plan's context), not let go.
+async function pressSlider(page: Page, root: Locator) {
+  const range = root.locator('[data-models-context="0"]');
+  await range.scrollIntoViewIfNeeded();
+  const box = (await range.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+}
+
+test('Models screen (app): a heartbeat that changes nothing on the screen leaves the list and the slider in use in place', { timeout: 120_000 }, async (t) => {
+  const b = await browser();
+  if (typeof b === 'string') return t.skip(b);
+  try {
+    await fixture(async ({ base, nova }) => {
+      const core = nova.core;
+      const keys = generateDeviceKeys();
+      const den = core.mesh.devices.add({ name: 'Example den PC', platform: 'linux x64', kind: 'computer', purposes: ['compute'], public_key: keys.ed25519.publicKey, x25519_public_key: keys.x25519.publicKey, capabilities: ['heartbeat', 'queue'] }, 'test');
+      const hardware = hubHardware({ hostname: 'example-den', gpus: [gpu('Example GPU 8GB', 8)] });
+      const beat = () => core.mesh.spokes.heartbeat(den, { capabilities: ['heartbeat', 'queue'], hardware });
+      beat();
+      const { page, errors } = await device(b, { width: 1280, height: 900 });
+      await openHub(page, base);
+      const root = screen(page);
+      await setPlan(root, [['qwen3:8b', 'Q4_K_M', 8192]]);
+      // What a paired computer's heartbeat does: its device event refreshes the device list (Settings ›
+      // Devices draws its pane again) and its hardware reading refreshes the models.
+      const heartbeat = async () => {
+        await page.evaluate(() => { (window as unknown as { listed: Promise<void> }).listed = new Promise((r) => addEventListener('nova:devices', () => setTimeout(r), { once: true })); });
+        const read = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/models');
+        beat();
+        await Promise.all([read, page.evaluate(() => (window as unknown as { listed: Promise<void> }).listed)]);
+        await frames(page);
+      };
+      await root.locator('select[id$="-add"]').focus();
+      await holdControls(page);
+      await heartbeat();
+      assert.deepEqual(await inPlace(page), { list: true, range: true, focused: true }, 'a focused list (one that may be open) is the same element after a heartbeat');
+      await pressSlider(page, root);
+      await heartbeat();
+      const held = await inPlace(page);
+      await page.mouse.up();
+      assert.equal(held.range, true, 'a slider held down is the same element after a heartbeat');
+      assert.equal(held.list, true, 'and so is the list');
+      assert.deepEqual(errors, []);
+    });
+  } finally { await b.close(); }
+});
+
+test('Models screen (app): a refresh that does change the screen waits for a focused list or a held slider, then shows the latest', { timeout: 120_000 }, async (t) => {
+  const b = await browser();
+  if (typeof b === 'string') return t.skip(b);
+  try {
+    await fixture(async ({ base, nova, setHw }) => {
+      const { page, errors } = await device(b, { width: 1280, height: 900 });
+      await openHub(page, base);
+      const root = screen(page);
+      await setPlan(root, [['qwen3:8b', 'Q4_K_M', 8192]]);
+      const line = root.locator('.dm-device');
+      const reading = async (k: 'gpu8' | 'gpu12') => {
+        await setHw(k);
+        const read = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/models');
+        nova.core.models.emit('change', { action: 'hardware', device: 'hub' });
+        await read;
+        await frames(page);
+      };
+      // A list focused: the new reading (an 8 GB GPU) waits until it loses focus.
+      const add = root.locator('select[id$="-add"]');
+      const pick = (await add.locator('option').allTextContents()).at(-1)!;
+      await add.selectOption(pick);
+      await add.focus();
+      await holdControls(page);
+      const was = await line.innerText();
+      await reading('gpu8');
+      assert.deepEqual(await inPlace(page), { list: true, range: true, focused: true }, 'the list in use is the same element while the new reading waits');
+      assert.equal(await line.innerText(), was, 'the new reading waits');
+      await add.evaluate((el: HTMLElement) => el.blur());
+      await page.waitForFunction(() => document.querySelector('#settings-devices .dm-device')?.textContent?.includes('8.0 GB video memory'));
+      assert.equal(await add.inputValue(), pick, 'the model picked to add is still picked');
+      // The slider held down: the next reading (a 12 GB GPU) waits until it is let go.
+      await holdControls(page);
+      await pressSlider(page, root);
+      await reading('gpu12');
+      const during = { range: (await inPlace(page)).range, line: await line.innerText() };
+      await page.mouse.up();
+      assert.equal(during.range, true, 'the slider held down is the same element while the new reading waits');
+      assert.match(during.line, /8\.0 GB video memory/, 'the new reading waits');
+      await page.waitForFunction(() => document.querySelector('#settings-devices .dm-device')?.textContent?.includes('12.0 GB video memory'));
+      assert.equal(await root.locator('[data-models-context="0"]').inputValue(), '2', 'the slider stays where it was let go');
+      assert.deepEqual(errors, []);
+    });
+  } finally { await b.close(); }
+});
+
 for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]] as const) {
   test(`Models screen (app) ${engine}: the design's states across the responsive matrix; accessible; screenshots for the owner`, { timeout: 900_000 }, async () => {
     let b: Browser | undefined;

@@ -174,24 +174,44 @@ function inner(id, where) {
 // The frame: Settings › Devices gets a way back to the list; device setup has its own.
 export function deviceModelsFrame(id, where = 'settings') {
   const back = where === 'settings' ? `<button type="button" class="btn quiet dm-back" data-action="dm-back" data-device="${esc(id)}">${ICONS.back}<span>Devices</span></button>` : '';
-  return `<div class="dm-screen" id="models-on-${esc(id)}" data-dm-device="${esc(id)}" data-dm-where="${esc(where)}">${back}<div data-dm-body>${inner(id, where)}</div></div>`;
+  const html = inner(id, where);
+  drawn.set(`${id}\n${where}`, html);
+  return `<div class="dm-screen" id="models-on-${esc(id)}" data-dm-device="${esc(id)}" data-dm-where="${esc(where)}">${back}<div data-dm-body>${html}</div></div>`;
 }
+
+// What each frame (device and place) last drew, and the frames whose refresh waits for the person.
+// A refresh from Nova comes with every hardware reading, a paired computer's heartbeat among them, and
+// replacing the frame's HTML takes away the control in use: a list held open, a slider being dragged.
+// So a refresh that would draw the same HTML draws nothing; one that would change it, while the person
+// has a list focused or a pointer held down in the frame, waits until that ends (blur, change,
+// pointerup), then draws once from the latest data.
+const drawn = new Map();
+const waiting = new Set();
+let pressed = null;
+const inUse = (body) => (pressed && body.contains(pressed)) || (body.contains(document.activeElement) && document.activeElement.tagName === 'SELECT');
 
 // Redraws every frame on the page for a device (or all), keeping focus on the control that had it.
 // `held`: a refresh from Nova (new data, the same plan) also keeps what the person has set but not
 // yet acted on: the model picked in the add list, a slider still being moved. Only while the plan is
 // the same one: a redraw after a plan change, or after an install starts a new plan, doesn't, since
-// its controls may now stand for another model.
-function redraw(only = null, focusId = null, { held = false } = {}) {
+// its controls may now stand for another model. `force`: draw even though a list still has focus (its
+// change has ended what it was open for).
+function redraw(only = null, focusId = null, { held = false, force = false } = {}) {
   const active = document.activeElement;
   for (const f of document.querySelectorAll('[data-dm-device]')) {
     const id = f.dataset.dmDevice;
     if (only && id !== only) continue;
     const body = f.querySelector('[data-dm-body]');
+    const key = `${id}\n${f.dataset.dmWhere}`;
+    const html = inner(id, f.dataset.dmWhere);
+    if (held && html === drawn.get(key)) { waiting.delete(key); continue; }
+    if (held && (force ? pressed && body.contains(pressed) : inUse(body))) { waiting.add(key); continue; }
+    waiting.delete(key);
+    drawn.set(key, html);
     const keep = focusId ?? (body.contains(active) && active.id ? active.id : null);
     const plan = plans.get(id);
     const values = held && plan ? [...body.querySelectorAll('select[id], input[type="range"][id]')].map((c) => [c.id, c.value]) : [];
-    body.innerHTML = inner(id, f.dataset.dmWhere);
+    body.innerHTML = html;
     if (plans.get(id) !== plan) values.length = 0;
     for (const [cid, value] of values) {
       const c = document.getElementById(cid);
@@ -201,6 +221,28 @@ function redraw(only = null, focusId = null, { held = false } = {}) {
   }
 }
 part.rerender = () => redraw(null, null, { held: true });
+
+// Settings › Devices drawing its pane again (a device's heartbeat refreshes the device list): the
+// Models screen already there is refreshed in place, by the same rules, rather than replaced.
+export function refreshDeviceModels(box, id) {
+  if (!box.querySelector(`[data-dm-device="${CSS.escape(id)}"][data-dm-where="settings"]`)) return false;
+  redraw(id, null, { held: true });
+  return true;
+}
+
+// The interaction a refresh waited for has ended: draw what waited, once, after the event has done
+// its own work (a click that follows the pointerup, focus moving to the next control).
+function ended(force) {
+  // wait: after the event: no delay, only the end of the event's own task.
+  setTimeout(() => {
+    if (!waiting.size) return;
+    for (const key of [...waiting]) redraw(key.split('\n')[0], null, { held: true, force });
+  });
+}
+document.addEventListener('pointerdown', (e) => { pressed = e.target.closest?.('[data-dm-body]') ? e.target : null; }, true);
+for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, () => { if (pressed) { pressed = null; ended(false); } }, true);
+document.addEventListener('focusout', () => ended(false), true);
+document.addEventListener('change', () => ended(true), true);
 
 const frameOf = (el) => el.closest('[data-dm-device]');
 const idOf = (el) => frameOf(el)?.dataset.dmDevice ?? null;

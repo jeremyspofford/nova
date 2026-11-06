@@ -20,7 +20,7 @@ import { bindConnections, loadConnections, renderConnections } from './connectio
 import { bindSites, loadSites, renderSites } from './sites.js';
 import { bindCapture, captureChanged, loadCapture, loadCaptureView, renderCaptureSettings, renderCaptureView } from './capture.js';
 import { bindModels, loadModels, renderModels } from './models.js';
-import { bindDeviceModels, deviceModelsFrame, screenDevice, setScreenDevice } from './device-models.js';
+import { bindDeviceModels, deviceModelsFrame, refreshDeviceModels, screenDevice, setScreenDevice } from './device-models.js';
 import { bindChanges, loadChanges, renderChanges } from './changes.js';
 import { bindCheckpoints, loadCheckpoints, renderCheckpoints } from './checkpoints.js';
 import { bindTopology, showTopology, topologyVisible, submitTopology } from './topology.js';
@@ -1656,7 +1656,8 @@ const PARTS = {
   // Drawn in place, so its live regions stay the same elements (surfaces.js drawAppearance).
   look: { draw: (box) => core.drawAppearance(box) },
   // Settings › Devices › [device] › Models (model-fit step 3) takes the Devices pane while it is open.
-  devices: () => (screenDevice() ? deviceModelsFrame(screenDevice()) : core.renderDevices()),
+  // When that screen is already showing (a heartbeat refreshes the device list), it refreshes in place.
+  devices: { draw: (box) => { const id = screenDevice(); if (id && refreshDeviceModels(box, id)) return; box.innerHTML = id ? deviceModelsFrame(id) : core.renderDevices(); } },
   services: () => renderServices(),
   security: () => renderSecurity(),
   form: () => renderConfigForm(),
