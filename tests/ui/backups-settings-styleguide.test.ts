@@ -64,7 +64,8 @@ async function geometry(page: Page, label: string) {
   if (overflow.pageWidth > viewport.width) await failureShot(page, `${label}-overflow`);
   assert.ok(overflow.pageWidth <= viewport.width, `${label}: page overflow ${JSON.stringify(overflow)}`);
   assert.deepEqual(await page.locator('.backups-settings').evaluate((root) => [...root.querySelectorAll<HTMLElement>('button, label, p, pre, code, h2, h3')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)), [], `${label}: clipped text`);
-  assert.deepEqual(await page.locator('.backups-settings button, .backups-settings input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).disabled).filter((e) => e.getBoundingClientRect().height < 44).map((e) => e.outerHTML)), [], `${label}: touch targets`);
+  // In one task, from the live page: a locator's evaluateAll can be handed nodes a styleguide redraw has just replaced.
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.backups-settings button, .backups-settings input')].filter((e) => !(e as HTMLInputElement).disabled).filter((e) => e.getBoundingClientRect().height < 44).map((e) => e.outerHTML)), [], `${label}: touch targets`);
   const ids = await page.locator('[id]').evaluateAll((els) => els.map((e) => e.id));
   assert.equal(new Set(ids).size, ids.length, `${label}: duplicate ids`);
   assert.equal(await page.locator('form form').count(), 0);

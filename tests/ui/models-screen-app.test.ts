@@ -140,11 +140,15 @@ async function setPlan(root: Locator, plan: Plan) {
 async function geometry(page: Page, label: string) {
   const width = page.viewportSize()!.width;
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= width, `${label}: no horizontal scroll`);
-  const root = page.locator('#settings-devices');
-  assert.deepEqual(await root.evaluate((r) => [...r.querySelectorAll<HTMLElement>('button, label, p, h3, h4, h5, .fit-verdict, .fit-what, .fit-gb, .dm-out, .settings-label')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)), [], `${label}: clipped text`);
-  assert.deepEqual(await root.evaluate((r) => { const box = r.querySelector('[data-device-models]')!.getBoundingClientRect(); return [...r.querySelectorAll<HTMLElement>('[data-device-models] *')].filter((el) => { const b = el.getBoundingClientRect(); return b.width && (b.right > box.right + 1 || b.left < box.left - 1); }).map((el) => el.className || el.tagName); }), [], `${label}: nothing spills out of the panel`);
-  assert.deepEqual(await root.locator('button, select, input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).disabled && e.checkVisibility() && e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80))), [], `${label}: 44px targets`);
-  assert.deepEqual(await root.locator('select, input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).labels?.length).map((e) => e.outerHTML.slice(0, 80))), [], `${label}: every control is labelled`);
+  // Each check queries the live page and measures in the same task (page.evaluate). A locator's
+  // evaluate or evaluateAll first finds its elements, then runs the function in a second step; a
+  // redraw in between (the styleguide's whole page when the appearance arrives, a device's screen when
+  // its models refresh) hands the function nodes no longer in the page: no size and no labels.
+  const root = '#settings-devices';
+  assert.deepEqual(await page.evaluate((sel) => [...document.querySelector(sel)!.querySelectorAll<HTMLElement>('button, label, p, h3, h4, h5, .fit-verdict, .fit-what, .fit-gb, .dm-out, .settings-label')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent), root), [], `${label}: clipped text`);
+  assert.deepEqual(await page.evaluate((sel) => { const r = document.querySelector(sel)!; const box = r.querySelector('[data-device-models]')!.getBoundingClientRect(); return [...r.querySelectorAll<HTMLElement>('[data-device-models] *')].filter((el) => { const b = el.getBoundingClientRect(); return b.width && (b.right > box.right + 1 || b.left < box.left - 1); }).map((el) => el.className || el.tagName); }, root), [], `${label}: nothing spills out of the panel`);
+  assert.deepEqual(await page.evaluate((sel) => [...document.querySelectorAll<HTMLElement>(`${sel} button, ${sel} select, ${sel} input`)].filter((e) => !(e as HTMLInputElement).disabled && e.checkVisibility() && e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80)), root), [], `${label}: 44px targets`);
+  assert.deepEqual(await page.evaluate((sel) => [...document.querySelectorAll<HTMLInputElement>(`${sel} select, ${sel} input`)].filter((e) => !e.labels?.length).map((e) => e.outerHTML.slice(0, 80)), root), [], `${label}: every control is labelled`);
 }
 
 // The whole screen for the owner's comparison, after every check at the real size: the app scrolls
@@ -312,6 +316,40 @@ test('Models screen (app): device setup shows the same component when Nova finds
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal scroll');
       assert.deepEqual(errors, []);
     }, { finish: false });
+  } finally { await b.close(); }
+});
+
+test('Models screen (app): a refresh from Nova keeps the model picked to add and a slider still being moved', { timeout: 120_000 }, async (t) => {
+  const b = await browser();
+  if (typeof b === 'string') return t.skip(b);
+  try {
+    await fixture(async ({ base, nova }) => {
+      const { page, errors } = await device(b, { width: 1280, height: 900 });
+      await openHub(page, base);
+      const root = screen(page);
+      await setPlan(root, [['qwen3:8b', 'Q4_K_M', 4096]]);
+      const add = root.locator('select[id$="-add"]');
+      const pick = (await add.locator('option').allTextContents()).at(-1)!;
+      await add.selectOption(pick);
+      assert.notEqual(pick, (await add.locator('option').allTextContents())[0], 'the pick is not the list’s first');
+      // The slider moved to 16k ('input' events) and not yet let go ('change').
+      const range = root.locator('[data-models-context="0"]');
+      await range.evaluate((r: HTMLInputElement) => { r.value = '3'; r.dispatchEvent(new Event('input', { bubbles: true })); });
+      await add.focus();
+      // What a computer's heartbeat or a new hardware reading does: the model manager says it changed,
+      // and the screen reads its data again.
+      const read = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/models');
+      nova.core.models.emit('change', { action: 'hardware', device: 'hub' });
+      await read;
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      assert.equal(await add.inputValue(), pick, 'the model picked to add is still picked');
+      assert.equal(await range.inputValue(), '3', 'the slider stays where it is being moved');
+      assert.equal(await page.evaluate(() => document.activeElement?.id), await add.getAttribute('id'), 'focus stays on the list');
+      // A change to the plan itself still draws from the plan: removing the model clears its row.
+      await root.locator('[data-action="models-remove"]').click();
+      await page.waitForFunction(() => !document.querySelector('#settings-devices [data-models-context="0"]'));
+      assert.deepEqual(errors, []);
+    });
   } finally { await b.close(); }
 });
 

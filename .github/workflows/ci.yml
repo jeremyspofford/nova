@@ -84,12 +84,19 @@ jobs:
     # (both in this image): the review's ten postures over every main view, the derived bands in
     # every design system, the committed screenshot baselines and the safe area. It gates, like the
     # rest of test:ui.
-    name: UI gate (Chromium and WebKit)
+    name: UI gate (Chromium and WebKit) ${{ matrix.shard }}
     needs: changes
     if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-latest
-    # It takes about 20 minutes. PR #236's first run hung for 90: a failed test left a server open,
-    # so its file never ended (test:ui now force-exits and times tests out). This is the backstop.
+    # The suite runs in two halves side by side (node --test-shard splits it by test file), every test
+    # in one of them: by November 2026 the whole suite took over 45 minutes in one job and the
+    # backstop below cut it off mid-run. A failed or cancelled half fails the gate.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/2', '2/2']
+    # Each half takes about 25 minutes. PR #236's first run hung for 90: a failed test left a server
+    # open, so its file never ended (test:ui now force-exits and times tests out). This is the backstop.
     timeout-minutes: 45
     # The Playwright image for the pinned playwright-core (package.json): its Chromium and system
     # libraries, the same image scripts/ui-test.sh uses locally. (Playwright 1.56 can't install
@@ -99,22 +106,24 @@ jobs:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
       - run: npm ci
-      - run: npm run test:ui
+      - run: npm run test:ui:shard
         env:
+          NOVA_UI_SHARD: ${{ matrix.shard }}
           NOVA_UI_SHOTS: ${{ runner.temp }}/ui-shots
       # The accessibility advisory (UX review 1, F5): axe-core's default rules (pinned in package.json)
       # over every view at ten postures, per rule and per view in the job summary, so regrowth shows
       # on the PR. Advisory only: the script always exits 0, and continue-on-error keeps even a crash
       # from failing this job or the gate.
       - name: accessibility (advisory, never fails)
-        if: ${{ !cancelled() }}
+        # Once, in the first half's job.
+        if: ${{ !cancelled() && matrix.shard == '1/2' }}
         continue-on-error: true
         timeout-minutes: 15
         run: npm run ui:axe
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ui-gate-screenshots
+          name: ui-gate-screenshots-${{ strategy.job-index }}
           path: ${{ runner.temp }}/ui-shots
           if-no-files-found: ignore
 
