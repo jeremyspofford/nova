@@ -335,7 +335,11 @@ test('Models screen (app): a Mac’s budget line says whether it is the limit se
       assert.match(text, /GPU memory limit set on this Mac: 56\.0 GB\./, 'the measured limit is the budget, and says so');
       assert.doesNotMatch(text, /Estimated GPU share/);
       await setHw('mac16');
-      await openHub(page, base);
+      // The same URL again is a same-document navigation; reload so the new reading is fetched.
+      await page.reload();
+      await ready(page);
+      await screen(page).waitFor();
+      await page.waitForFunction(() => document.querySelector('#settings-devices [data-device-models]')?.textContent?.includes('16.0 GB unified memory'));
       await setPlan(screen(page), [['qwen3:8b', 'Q4_K_M', 4096]]);
       await screen(page).locator('.fit-bar').waitFor();
       text = await screen(page).innerText();
