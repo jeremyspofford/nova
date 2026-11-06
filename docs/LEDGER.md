@@ -6,6 +6,12 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-05 · Test stability · The Models overview test opens a fresh page**
+- What changed: nothing in Nova. The Models screen test pairs a second computer that has gone to sleep, then opens Settings › Models to check the overview shows both devices and where each task runs. It went there from `/settings#models-on-hub` to `/settings#models`. That only changes the part after `#`, so the browser kept the same page, and the overview it had drawn before the second computer joined, until its own refresh arrived. When the test read first, it saw one device (`every device: 1 !== 2`) or the task routes from before the model was assigned. The test now reloads the page, so the overview it reads is drawn from what Nova says after the computer joined. The checks are unchanged.
+- What you can now do: nothing new. CI fails less often for no reason.
+- Still unfinished: in about 2 of 20 runs the same test timed out earlier, waiting for "Won't fit" on the 8 GB card. That is a different step and its cause isn't found yet. The WebKit 44 px failure in the Models styleguide test isn't fixed here either.
+- Checked: in the CI-matching sandbox, with every Models read held 6 s once the second computer starts to join, the old test failed 3 of 3 with CI's `every device`, and the new one passed 3 of 3.
+
 **2026-11-06 · Models screen · A refresh no longer undoes what you were choosing**
 - What changed: a device's Models screen reads Nova's data again whenever the model manager says something changed. That includes every heartbeat from a paired computer that reports its hardware. Each time, it redrew the screen from scratch. It kept focus, but a model you had picked in the "Add to the plan" list went back to the first in the list, and a context slider you were still moving jumped back. So you could click Add and get a different model than the one you chose. Now a refresh keeps both, as long as the plan is still the same one. A change to the plan itself, or a new plan after an install, still draws from the plan.
 - What you can now do: pick a model and adjust the slider without a background refresh changing them under you.
