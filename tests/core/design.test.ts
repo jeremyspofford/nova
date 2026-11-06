@@ -195,10 +195,10 @@ test('CSS is never generated from an invalid package', () => {
 
 // ---- the built-ins, selection, apply, rollback ---------------------------------------------
 
-test('the six built-ins are present on a blank install, all valid, and Orb Teal is the default', () => {
+test('the seven built-ins are present on a blank install, all valid, and Orb Teal is the default', () => {
   const { db, design } = host();
   const list = design.list();
-  assert.deepEqual(list.map((d) => d.id).sort(), ['aurora', 'companion-light', 'nova', 'obsidian', 'orb-teal', 'paper']);
+  assert.deepEqual(list.map((d) => d.id).sort(), ['aurora', 'companion-light', 'nebula', 'nova', 'obsidian', 'orb-teal', 'paper']);
   for (const d of list) assert.deepEqual(d.problems, [], d.id);
   assert.ok(list.every((d) => d.valid && d.builtin));
   assert.equal(DEFAULT_DESIGN_SYSTEM, 'orb-teal');
@@ -215,7 +215,7 @@ test('built-ins install whatever Nova’s version string, and a broken one is re
   const extensions = new Extensions({ db, home: mkdtempSync(join(tmpdir(), 'nova-design-')), novaVersion: 'test' });
   const design = new Design({ extensions, profile: new Profile(db) });
   assert.deepEqual(design.ensureBuiltins(), []);
-  assert.equal(design.list().length, 6);
+  assert.equal(design.list().length, 7);
 
   const dir = mkdtempSync(join(tmpdir(), 'nova-builtins-'));
   writeFileSync(join(dir, 'broken.json'), JSON.stringify({ ...fixture(), id: 'example.broken', permissions: [{ kind: 'network', target: 'x.example', why: 'fonts' }] }));
@@ -233,7 +233,7 @@ test('ensureBuiltins is idempotent and leaves the person’s choice alone', () =
   const { design } = host();
   design.apply('paper', { scope: 'user' });
   design.ensureBuiltins();
-  assert.equal(design.list().length, 6);
+  assert.equal(design.list().length, 7);
   assert.equal(design.active().id, 'paper');
 });
 

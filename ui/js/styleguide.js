@@ -14,11 +14,15 @@ import { renderTopology } from './topology-view.js';
 import { escapeHtml as esc } from './markdown.js';
 import { workCosts, diagnosticsDownload, configImport, configSetup, configProposal, passkeySetup, PASSKEY_STATES, PASSKEY_SETUP_STATES, deviceModels } from './components.js';
 import * as fitEngine from './fit-engine.js';
+import { UC_FRAMES, entryOf, ucEntry, ucFrame } from './sg-compositions.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const css = (name) => `--${name.replace(/\//g, '-')}`;
-const only = new URLSearchParams(location.search).get('entry');
+const params = new URLSearchParams(location.search);
+const only = params.get('entry');
+// One composition frame at the size of the window (?entry=ui-…&frame=<kind>-<state>), for the owner's screenshots.
+const frame = UC_FRAMES.find(([k, s]) => `${k}-${s}` === params.get('frame') && entryOf(k) === only);
 
 // ---- sample content: what Nova really shows, with neutral names ------------------------------
 
@@ -696,6 +700,12 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['conversations', 'Conversations list and an empty conversation', 'The list of conversations, and what a new one says.',
         () => `${state('Conversations', `<div class="sg-frame"><nav class="toc">${renderToc([{ id: '2026-10-21-aaaaaa', title: 'Morning plan', created: t0.toISOString() }, { id: '2026-10-21-bbbbbb', title: 'Timecard for Monday and Tuesday', created: t0.toISOString() }], '2026-10-21-aaaaaa')}</nav></div>`)}${state('An empty conversation', `<div class="thread">${renderEmpty()}</div>`)}`],
     ]],
+    ['UI rebuild (compositions for the owner’s reaction)', [
+      ['ui-shell-chat', 'Shell and chat (proposed)', 'Linear’s structure for the shell, Claude.ai’s chat, Arc’s spaces at the foot of the rail, Raycast’s palette. The orb is the one standout. Static compositions: nothing is sent.', () => ucEntry(['shell-chat'], (l, h) => state(l, h, 'uc-state'))],
+      ['ui-settings', 'Settings (proposed)', 'Raycast’s clarity: search first, a category list and a detail pane, no decoration. Top level, and Privacy with a search active.', () => ucEntry(['settings'], (l, h) => state(l, h, 'uc-state'))],
+      ['ui-about', 'About, changelog and pipeline (proposed)', 'The running build said honestly, what changed in plain words, and where Nova stands, each item with its evidence. The dashboard’s data is sample data.', () => ucEntry(['about', 'changelog', 'pipeline'], (l, h) => state(l, h, 'uc-state'))],
+      ['ui-orb', 'Nebula orb and theme (proposed)', 'The swirl from the owner’s icon, drawn at any size from the palette tokens; seven states by motion and light, still and distinct under reduced motion. Use the switch above for Nebula light and dark.', () => ucEntry(['orb'], (l, h) => state(l, h, 'uc-state'))],
+    ]],
     ['Views', [
       ['memory', 'Memory', 'What Nova keeps, by kind, and the day’s notes.', () => `<div class="thread memory">${renderMemory(memorySample)}</div>`],
       ['gmail', 'Gmail connection', 'The production connection card: not connected, connected, and reconnecting, with either sign-in method. Remote clients do not offer local OAuth actions.',
@@ -715,6 +725,11 @@ function render() {
   const groups = entries();
   const all = groups.flatMap(([, list]) => list);
   const shown = only ? all.filter(([id]) => id === only) : null;
+  if (frame) {
+    document.body.classList.add('sg-full');
+    sg.innerHTML = draw(() => ucFrame(frame[0], frame[1]));
+    return;
+  }
   const one = ([id, name, about, body]) => `<article class="sg-entry" id="sg-${id}" aria-labelledby="sg-${id}-name"><header class="sg-entry-head"><h3 class="sg-entry-name" id="sg-${id}-name">${name}</h3><a class="sg-alone" href="?entry=${id}">Open alone</a></header><p class="sg-about">${about}</p>${draw(body)}</article>`;
   if (shown) {
     sg.innerHTML = shown.length ? `<p class="sg-back"><a class="link" href="/styleguide#sg-${only}">The whole styleguide</a></p>${shown.map(one).join('')}` : `<p class="sg-about">No entry is called “${only.replace(/[<>&"]/g, '')}”. <a class="link" href="/styleguide">The whole styleguide</a></p>`;
@@ -746,13 +761,15 @@ async function renderSwitch() {
 <label class="sg-pick">Mode <select class="input" id="sg-mode">${MODES.map((m) => `<option value="${m}"${m === shownMode ? ' selected' : ''}>${m[0].toUpperCase()}${m.slice(1)}</option>`).join('')}</select></label>`;
 }
 
-let shown = null;
-let shownMode = 'auto';
+// ?ds=<design system>&mode=<light|dark> previews one design system on this page, as the switch does.
+let shown = params.get('ds');
+let shownMode = MODES.includes(params.get('mode')) ? params.get('mode') : 'auto';
 async function preview() {
   const res = await fetch(previewCss(shown, shownMode), { cache: 'no-store' });
   if (!res.ok) return;
   document.getElementById('ds').textContent = await res.text();
   document.getElementById('ds-boot')?.remove();
+  document.documentElement.dataset.sgPreview = `${shown}-${shownMode}`;
   requestAnimationFrame(render);
 }
 
@@ -770,3 +787,4 @@ window.addEventListener('nova:appearance', () => {
 
 apply();
 render();
+if (shown) preview();

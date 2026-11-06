@@ -106,7 +106,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
           await p.getByLabel('Specimen state').waitFor();
           await p.locator('#sg-ds option').first().waitFor({ state: 'attached' });
           const themes = await p.locator('#sg-ds option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
-          assert.equal(themes.length, 6);
+          assert.equal(themes.length, 7);
           for (const theme of themes) {
             const response = p.waitForResponse((r) => r.url().includes('/preview.css') && r.status() === 200);
             await p.locator('#sg-ds').selectOption(theme);
@@ -210,7 +210,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
           const since = Number(await waiting.getAttribute('data-since'));
           assert.equal(since, Date.parse('2026-11-03T12:00:00Z') - 1500, 'the specimen supplies a stable request start');
           const themes = await p.locator('#sg-ds option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
-          assert.equal(themes.length, 6);
+          assert.equal(themes.length, 7);
           for (const theme of themes) {
             const response = p.waitForResponse((r) => r.url().includes('/preview.css') && r.status() === 200);
             await p.locator('#sg-ds').selectOption(theme);
