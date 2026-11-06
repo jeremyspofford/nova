@@ -64,6 +64,23 @@ async function padded(page: Page, selector: string, path: string) {
   await page.screenshot({ path, animations: 'disabled', caret: 'hide', fullPage: true, clip: { x, y, width: Math.min(r.vw - x, r.w + 32), height: r.h + 32 } });
 }
 async function geometry(page: Page, label: string) {
+  // DIAGNOSTICS ONLY (draft PR, never merged): every control's state when a size or label check would fail.
+  { const snap = await page.evaluate((rootSel) => {
+      const root = document.querySelector(rootSel);
+      const els = [...document.querySelectorAll<HTMLElement>(`${rootSel} button, ${rootSel} select, ${rootSel} input`)];
+      const bad = els.filter((e) => !(e as HTMLInputElement).disabled && (e.getBoundingClientRect().height < 44 || (e.matches('select, input') && !(e as HTMLInputElement).labels?.length)));
+      if (!bad.length) return null;
+      const hiddenUp = (e: Element) => { for (let n: Element | null = e; n; n = n.parentElement) { const cs = getComputedStyle(n); if (cs.display === 'none' || cs.visibility !== 'visible' || (cs.contentVisibility && cs.contentVisibility !== 'visible')) return `${n.tagName}#${n.id}.${String(n.className).slice(0, 30)} d=${cs.display} v=${cs.visibility} cv=${cs.contentVisibility}`; } return ''; };
+      return {
+        roots: document.querySelectorAll(rootSel).length, controls: els.length, bad: bad.length,
+        list: bad.slice(0, 12).map((e) => { const r = e.getBoundingClientRect(); const cs = getComputedStyle(e); return `${e.tagName}#${e.id} h=${r.height} w=${r.width} y=${Math.round(r.top)} vis=${e.checkVisibility()} minh=${cs.minHeight} disp=${cs.display} app=${cs.appearance} labels=${(e as HTMLInputElement).labels?.length ?? '-'} sameId=${e.id ? document.querySelectorAll('#' + CSS.escape(e.id)).length : '-'} byId=${e.id ? document.getElementById(e.id) === e : '-'} conn=${e.isConnected} hidden=${hiddenUp(e)}`; }),
+        hit: getComputedStyle(document.documentElement).getPropertyValue('--hit'),
+        sheets: [...document.styleSheets].map((x) => { let n = -1; try { n = x.cssRules.length; } catch { /* */ } return `${(x.href ?? 'inline').replace(/^.*\//, '')}:${n}`; }),
+        html: (root?.outerHTML ?? '').length, anims: document.getAnimations().map((a) => `${(a as any).animationName ?? a.constructor.name}:${a.playState}:${String((a.effect as any)?.target?.className ?? '')}`).slice(0, 8),
+        focus: document.activeElement?.id || document.activeElement?.tagName, now: Math.round(performance.now()), vw: innerWidth, vh: innerHeight, dpr: devicePixelRatio, zoom: (getComputedStyle(document.documentElement) as any).zoom,
+      };
+    }, '#sg-models-screen');
+    if (snap) console.log(`DIAGSNAP ${label}: ${JSON.stringify(snap)}`); }
   const width = page.viewportSize()!.width;
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= width, `${label}: no horizontal scroll`);
   const root = page.locator('#sg-models-screen');
