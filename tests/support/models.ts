@@ -22,12 +22,13 @@ export function hubHardware(over: Record<string, unknown> = {}) {
 }
 
 // What the stand-in Ollama has installed: a small model for sorting, a deep one, a coder, an
-// embedder.
+// embedder. The deep one Fits the 24 GB hub (at 19.9e9 it was Tight, and Nova never picks a Tight
+// model for you); the coder took the 0.2e9 so the installed total is unchanged.
 export const INSTALLED = [
   { name: 'example-small:3b', size: 2.0e9, parameter_size: '3.2B', family: 'example', capabilities: ['completion', 'tools'] },
   { name: 'example-mid:8b', size: 5.0e9, parameter_size: '8.0B', family: 'example', capabilities: ['completion', 'tools'] },
-  { name: 'example-deep:32b', size: 19.9e9, parameter_size: '32.8B', family: 'example', capabilities: ['completion', 'thinking'] },
-  { name: 'example-coder:30b', size: 18.6e9, parameter_size: '30.5B', family: 'example', capabilities: ['completion', 'tools'] },
+  { name: 'example-deep:32b', size: 19.7e9, parameter_size: '32.8B', family: 'example', capabilities: ['completion', 'thinking'] },
+  { name: 'example-coder:30b', size: 18.8e9, parameter_size: '30.5B', family: 'example', capabilities: ['completion', 'tools'] },
   { name: 'example-embed', size: 0.27e9, parameter_size: '137M', family: 'example-bert', capabilities: ['embedding'] },
 ];
 

@@ -37,6 +37,8 @@ const CONTEXTS = [2048, 4096, 8192, 16384, 32768];
 const gpu = (name: string, gb: number, used = 0) => ({ vendor: 'nvidia', name, vram_bytes: gb * GiB, vram_free_bytes: Math.round((gb - used) * GiB), unified: false });
 const HW = {
   gpu24: hubHardware({ gpus: [gpu('Example GPU 24GB', 24, 0.45)], ram_bytes: 64 * GiB }),
+  // The same card with a little more in use by other programs: a reading that changes the screen.
+  gpu24busy: hubHardware({ gpus: [gpu('Example GPU 24GB', 24, 0.6)], ram_bytes: 64 * GiB }),
   gpu8: hubHardware({ gpus: [gpu('Example GPU 8GB', 8)], ram_bytes: 32 * GiB }),
   gpu12: hubHardware({ gpus: [gpu('Example GPU 12GB', 12, 0.3)], ram_bytes: 32 * GiB }),
   mac16: hubHardware({ platform: 'darwin', arch: 'arm64', gpus: [{ vendor: 'apple', name: 'Example Apple GPU', vram_bytes: 12 * GiB, vram_free_bytes: null, unified: true }], ram_bytes: 16 * GiB }),
@@ -51,8 +53,14 @@ const STATES: Record<string, { hw: keyof typeof HW; privacy?: string; plan: Plan
   'mac-16gb-unified': { hw: 'mac16', privacy: 'local-preferred', plan: [['qwen3:8b', 'Q4_K_M', 16384]] },
   'unknown-shape': { hw: 'gpu12', plan: [['example-mid:8b', 'Q4_K_M', 8192]] },
   'no-gpu': { hw: 'cpu32', plan: [['qwen3:4b', 'Q4_K_M', 4096]] },
+  // 2026-11-06: a tight plan, with the acknowledgement Install waits for.
+  'tight-ack': { hw: 'gpu24', plan: [['qwen3:32b', 'Q4_K_M', 4096]] },
 };
-const LIBRARY = { 'qwen3:8b': { size: 5.2e9, layers: 3, parameter_size: '8.2B', capabilities: ['completion'] } };
+const LIBRARY = {
+  'qwen3:8b': { size: 5.2e9, layers: 3, parameter_size: '8.2B', capabilities: ['completion'] },
+  'qwen3:32b': { size: 20.2e9, layers: 3, parameter_size: '32.8B', capabilities: ['completion'] },
+};
+const ACK = 'I understand this model leaves little memory headroom, so replies may slow down sharply or fail under load.';
 
 async function fixture(run: (o: { base: string; nova: ReturnType<typeof createNova>; setHw: (k: keyof typeof HW) => Promise<void>; ollama: Awaited<ReturnType<typeof startFakeOllama>>; spoke: Awaited<ReturnType<typeof startFakeOllama>> }) => Promise<void>, { finish = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nova-models-app-'));
@@ -319,11 +327,11 @@ test('Models screen (app): device setup shows the same component when Nova finds
   } finally { await b.close(); }
 });
 
-test('Models screen (app): a refresh from Nova keeps the model picked to add and a slider still being moved', { timeout: 120_000 }, async (t) => {
+test('Models screen (app): a refresh from Nova keeps the model picked to add, a slider still being moved, and a tight plan’s acknowledgement', { timeout: 120_000 }, async (t) => {
   const b = await browser();
   if (typeof b === 'string') return t.skip(b);
   try {
-    await fixture(async ({ base, nova }) => {
+    await fixture(async ({ base, nova, setHw }) => {
       const { page, errors } = await device(b, { width: 1280, height: 900 });
       await openHub(page, base);
       const root = screen(page);
@@ -348,6 +356,62 @@ test('Models screen (app): a refresh from Nova keeps the model picked to add and
       // A change to the plan itself still draws from the plan: removing the model clears its row.
       await root.locator('[data-action="models-remove"]').click();
       await page.waitForFunction(() => !document.querySelector('#settings-devices [data-models-context="0"]'));
+      // A tight plan, acknowledged: a reading that redraws the screen (more memory in use by other
+      // programs, the plan unchanged) keeps the tick and Install on.
+      await setPlan(root, [['qwen3:32b', 'Q4_K_M', 4096]]);
+      await root.locator('[data-models-ack]').click();
+      await root.locator('[data-action="models-install"]:not([disabled])').waitFor();
+      await setHw('gpu24busy');
+      const redrawn = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/models');
+      nova.core.models.emit('change', { action: 'hardware', device: 'hub' });
+      await redrawn;
+      await page.waitForFunction(() => document.querySelector('#settings-devices .fit-key[data-seg="other"]')?.parentElement?.textContent?.includes('0.6 GB'));
+      assert.equal(await root.locator('[data-models-ack]').isChecked(), true, 'the acknowledgement survives a refresh of the same plan');
+      assert.equal(await root.locator('[data-action="models-install"]').isDisabled(), false, 'and Install stays on');
+      assert.deepEqual(errors, []);
+    });
+  } finally { await b.close(); }
+});
+
+test('Models screen (app): a tight model is never the pick; Install waits for the acknowledgement, a change to the plan clears it, and the install carries it', { timeout: 120_000 }, async (t) => {
+  const b = await browser();
+  if (typeof b === 'string') return t.skip(b);
+  try {
+    await fixture(async ({ base, nova }) => {
+      const { page, errors } = await device(b, { width: 1280, height: 900 });
+      await openHub(page, base);
+      const root = screen(page);
+      // On the 24 GB card 32B at Q4_K_M is only Tight: chat picks 14B at Q8_0, which Fits.
+      const chat = root.locator('[data-task="general-chat"]');
+      assert.match(await chat.innerText(), /qwen3:14b at Q8_0, 4k context/);
+      assert.equal(await chat.locator('.fit-verdict').getAttribute('data-verdict'), 'fits');
+      await setPlan(root, [['qwen3:32b', 'Q4_K_M', 4096]]);
+      const box = root.locator('input[type="checkbox"][data-models-ack]');
+      assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll<HTMLInputElement>('#settings-devices input[data-models-ack]')].map((e) => [...(e.labels ?? [])].map((l) => l.textContent!.trim()).join('|'))), [ACK], 'labelled in the owner’s words');
+      assert.equal(await box.isChecked(), false, 'never ticked for the person');
+      assert.equal(await root.locator('[data-action="models-install"]').isDisabled(), true, 'Install waits for the tick');
+      await box.click();
+      await root.locator('[data-action="models-install"]:not([disabled])').waitFor();
+      // The plan changes (8k context, still tight): the tick is gone, and stays gone back at 4k.
+      await root.locator('[data-models-context="0"]').fill('2');
+      await root.locator('.dm-model .dm-out', { hasText: '8k' }).waitFor();
+      assert.equal(await root.locator('input[data-models-ack]').isChecked(), false, 'a change to the plan clears the tick');
+      assert.equal(await root.locator('[data-action="models-install"]').isDisabled(), true);
+      await root.locator('[data-models-context="0"]').fill('1');
+      await root.locator('.dm-model .dm-out', { hasText: '4k' }).waitFor();
+      assert.equal(await root.locator('input[data-models-ack]').isChecked(), false, 'and it isn’t given back by undoing the change');
+      // Ticked for this plan, Install and assign sends the acknowledgement, and the download, once
+      // verified, serves the role.
+      await root.locator('input[data-models-ack]').click();
+      const sent = page.waitForRequest((r) => new URL(r.url()).pathname === '/api/v1/models/install');
+      const answered = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/models/install');
+      await root.locator('[data-action="models-install"]').click();
+      await root.locator('[data-action="models-confirm"]').click();
+      assert.equal(JSON.parse((await sent).postData()!).accept_tight, true);
+      assert.equal((await answered).status(), 201);
+      await page.waitForFunction(() => /qwen3:32b is downloaded and checked, and serves thinking and writing/.test(document.querySelector('#settings-devices')?.textContent ?? ''), null, { timeout: 30_000 });
+      const placed = await (async () => { for (let i = 0; i < 200; i++) { const p = nova.core.models.placement('reasoner'); if (p) return p; await new Promise((r) => setTimeout(r, 25)); } return null; })();
+      assert.equal(placed?.model, 'qwen3:32b');
       assert.deepEqual(errors, []);
     });
   } finally { await b.close(); }

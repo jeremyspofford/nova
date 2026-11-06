@@ -118,6 +118,9 @@
 .dm-confirm .settings-note, .dm-confirm .settings-label { margin: 0; }
 .dm-confirm .connection-actions { margin-top: var(--space-2); }
 .dm-status { margin: var(--space-3) 0 0; }
+/* A tight plan: the house acknowledgement box, ticked before Install and assign; 44 px to hit. */
+.dm-ack { margin-top: var(--space-4); min-height: var(--hit); color: var(--text-primary); }
+.dm-ack input { flex-shrink: 0; min-height: var(--hit); }
 .dm-back { margin-bottom: var(--space-3); }
 .dm-routes { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
 .dm-route { display: grid; gap: var(--space-1); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }

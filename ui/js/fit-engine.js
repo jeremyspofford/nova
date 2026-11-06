@@ -295,6 +295,8 @@ const SCREENING_MAX_PARAMS = 9_000_000_000;
                          
                        
                               
+                                                                                                      
+                        
                                                                            
                                                             
                                                      
@@ -331,7 +333,7 @@ export function recommendFit(input                )             {
   const local = input.candidates.filter((c) => c.where === 'local');
   const cloud = privacy === 'local-only' ? [] : input.candidates.filter((c) => c.where !== 'local').map((c) => ({ name: c.name, words: 'runs off your devices'          }));
   const advice = (o                                         )             => ({
-    task, context, pick: null, alternative: null, nothing_fits: null, cloud,
+    task, context, pick: null, alternative: null, tight: null, nothing_fits: null, cloud,
     cloud_order: cloud.length ? (privacy === 'local-preferred' ? 'after-local' : 'beside-local') : null, ...o,
   });
 
@@ -369,8 +371,9 @@ export function recommendFit(input                )             {
     || a.c.name.localeCompare(b.c.name));
   const toPick = (x        )          => ({ name: x.c.name, quant: x.quant, context: x.context, verdict: x.r.verdict, basis: x.r.basis, max_context_fits: x.r.max_context_fits, words: x.r.words });
 
-  // 5. The pick is the first. Tight may be the pick here: in this step one model is planned per device.
-  const first = ranked[0];
+  // 5. The pick is the first that Fits. A Tight model is never the pick (the owner, 2026-11-06): it
+  //    leaves too little headroom to choose for the person; installing one needs their acknowledgement.
+  const first = ranked.find((x) => x.r.verdict === 'fits');
   if (first) {
     // 6. The alternative: the best of a smaller class that Fits.
     const alt = ranked.find((x) => paramClass(x.c.params) < paramClass(first.c.params) && x.r.verdict === 'fits');
@@ -379,6 +382,9 @@ export function recommendFit(input                )             {
       words: `${first.c.name}: ${first.r.words}${alt ? ` Smaller and faster: ${alt.c.name}, ${alt.r.words.charAt(0).toLowerCase()}${alt.r.words.slice(1)}` : ''}`,
     });
   }
+
+  // 6b. Nothing Fits, but something is Tight: no pick; the best Tight option is shown, labelled.
+  if (ranked[0]) return advice({ tight: toPick(ranked[0]), words: 'Nothing fits comfortably on this device; a tight option is shown below.' });
 
   // 7. Nothing local fits: say so, with the largest context that would.
   const ctxText = context ? `${ctxWords(context)} context` : 'its own context';

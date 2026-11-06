@@ -515,10 +515,14 @@ const MODEL_STATES = {
     title: 'Download this model and assign?', ok: 'Download and assign',
     lines: ['qwen3:14b at Q8_0, about 14.6 GB, downloads to Study desktop, then serves thinking and writing.', 'Ollama downloads from its library on the internet; nothing of yours is sent. A role is given only once Nova has checked the download arrived.'],
   } },
+  // Added 2026-11-06 (the owner: a Tight fit is never picked for you): a tight plan shows the
+  // acknowledgement next to Install, which stays off until it is ticked, for this plan only.
+  'tight-ack': { label: 'A tight plan: Install waits for your acknowledgement', device: 'study', privacy: 'local-only', plan: [['qwen3:32b', 'Q4_K_M', 4096]] },
 };
 const MODEL_SPECIMENS = Object.keys(MODEL_STATES);
 let modelsState = '3090-two-models';
 let modelsPlan = null;
+let modelsAcked = false;
 const modelInfo = (d, name) => d.extra?.[name] ?? MODEL_CATALOG[name];
 function modelsDevice(d) { return fitEngine.deviceBudget(d.hw, { overhead: d.learned ?? null }); }
 function planEntry(d, [name, quant, context, loaded = false]) {
@@ -541,7 +545,7 @@ function modelsView() {
   candidates.push({ name: 'A cloud model, through your provider', params: 0, capabilities: ['completion'], where: 'cloud', installed: null, arch: null, arch_source: null });
   const advice = fitEngine.TASK_CLASSES.map((task) => fitEngine.recommendFit({ device, privacy: s.privacy, task, hub: Boolean(d.hub), candidates }));
   return {
-    id: `dm-${s.device}`, privacy: s.privacy, plan, total, advice, confirm: s.confirm ?? null,
+    id: `dm-${s.device}`, privacy: s.privacy, plan, total, advice, confirm: s.confirm ?? null, acked: modelsAcked,
     catalog: [...Object.keys(MODEL_CATALOG), ...Object.keys(d.extra ?? {})],
     device: { name: d.name, hardware: d.words, memory: device.memory, budget_bytes: device.budget_bytes, ram_bytes: d.hw.ram_bytes, overhead_source: device.overhead_source, overhead_loads: d.learned?.n ?? 0, seen: s.seen ?? null },
   };
@@ -566,9 +570,11 @@ function bindModels() {
   };
   entry.addEventListener('change', (e) => {
     const t = e.target;
-    if (t.id === 'models-state') { modelsState = t.value; modelsPlan = null; content.innerHTML = modelsSpecimen(); note(''); return; }
-    if (t.dataset.modelsQuant !== undefined) { modelsPlan[Number(t.dataset.modelsQuant)].quant = t.value; redraw(t.id); }
-    if (t.dataset.modelsContext !== undefined) { const m = modelsPlan[Number(t.dataset.modelsContext)]; m.context = m.contexts[Number(t.value)] ?? m.context; redraw(t.id); }
+    if (t.id === 'models-state') { modelsState = t.value; modelsPlan = null; modelsAcked = false; content.innerHTML = modelsSpecimen(); note(''); return; }
+    if (t.dataset.modelsAck !== undefined) { modelsAcked = t.checked; redraw(t.id, modelsAcked ? 'Acknowledged for this plan. Demo only: nothing is installed.' : null); return; }
+    // Any change to the plan clears the acknowledgement: it was for the plan as it was.
+    if (t.dataset.modelsQuant !== undefined) { modelsAcked = false; modelsPlan[Number(t.dataset.modelsQuant)].quant = t.value; redraw(t.id); }
+    if (t.dataset.modelsContext !== undefined) { modelsAcked = false; const m = modelsPlan[Number(t.dataset.modelsContext)]; m.context = m.contexts[Number(t.value)] ?? m.context; redraw(t.id); }
   });
   entry.addEventListener('click', (e) => {
     const b = e.target.closest('[data-action^="models-"]');
@@ -577,6 +583,7 @@ function bindModels() {
     const d = MODEL_DEVICES[MODEL_STATES[modelsState].device];
     const act = b.dataset.action;
     if (act === 'models-install' || act === 'models-confirm' || act === 'models-not-now') return note('Demo only. Nothing was installed or assigned.');
+    modelsAcked = false;
     if (act === 'models-remove') { modelsPlan.splice(Number(b.dataset.index), 1); return redraw(entry.querySelector('[data-device-models] select[id$="-add"]')?.id); }
     const name = act === 'models-add' ? b.closest('.dm-add').querySelector('select').value : b.dataset.name;
     const info = modelInfo(d, name);

@@ -85,13 +85,26 @@ test('Case 1, a 24 GB RTX 3090: the ADR table, to the hundredth of a GB', () => 
   ]);
 });
 
-test('Case 1, a 24 GB RTX 3090: chat picks 32B Q4_K_M (tight), coding picks 14B Q8_0 at 16k', () => {
+// The owner, 2026-11-06 (ADR open question 2): a Tight model is never the pick. 32B at Q4_K_M is
+// Tight here, so chat picks 14B at Q8_0, which Fits (it was the 32B, Tight, before).
+test('Case 1, a 24 GB RTX 3090: chat picks 14B Q8_0 (32B is only tight), coding picks 14B Q8_0 at 16k', () => {
   const chat = advise(24 * GiB, 'general-chat');
-  assert.equal(short(chat.pick), 'qwen3:32b Q4_K_M 4k tight');
-  assert.equal(short(chat.alternative), 'qwen3:14b Q8_0 4k fits');
+  assert.equal(short(chat.pick), 'qwen3:14b Q8_0 4k fits');
+  assert.equal(short(chat.alternative), 'qwen3:8b Q8_0 4k fits');
+  assert.equal(chat.tight, null, 'with a Fits pick there is no tight stand-in');
   const code = advise(24 * GiB, 'coding');
   assert.equal(short(code.pick), 'qwen3:14b Q8_0 16k fits');
   assert.equal(short(code.alternative), 'qwen3:8b Q8_0 16k fits');
+});
+
+test('nothing Fits but something is Tight: no pick, no alternative; the tight option is shown, labelled', () => {
+  const only32 = CANDIDATES.filter((c) => c.name === 'qwen3:32b');
+  const a = recommendFit({ device: device(24 * GiB), privacy: 'local-only', task: 'general-chat', hub: true, candidates: only32 });
+  assert.equal(a.pick, null);
+  assert.equal(a.alternative, null);
+  assert.equal(short(a.tight), 'qwen3:32b Q4_K_M 4k tight');
+  assert.equal(a.nothing_fits, null);
+  assert.equal(a.words, 'Nothing fits comfortably on this device; a tight option is shown below.');
 });
 
 // ---- Case 2: an 8 GB card ------------------------------------------------------------------------
@@ -169,8 +182,9 @@ test('Case 3, a 16 GB unified-memory Mac: picks at the pending budget fraction',
     assert.equal(short(code.pick), 'qwen3:8b Q4_K_M 16k fits');
     assert.equal(code.alternative, null);
   } else {
-    assert.equal(short(chat.pick), 'qwen3:14b Q4_K_M 4k tight');
-    assert.equal(short(chat.alternative), 'qwen3:8b Q8_0 4k fits');
+    // 14B at Q4_K_M is only Tight at 0.75, so it isn't the pick (owner, 2026-11-06).
+    assert.equal(short(chat.pick), 'qwen3:8b Q8_0 4k fits');
+    assert.equal(chat.alternative, null);
     assert.equal(short(code.pick), 'qwen3:8b Q4_K_M 16k fits');
     assert.equal(code.alternative, null);
   }
@@ -215,7 +229,8 @@ test('Case 4, a 32 GB unified-memory Mac: picks at the pending budget fraction',
     assert.equal(short(code.pick), 'qwen3:14b Q4_K_M 16k fits');
     assert.equal(short(code.alternative), 'qwen3:8b Q8_0 16k fits');
   } else {
-    assert.equal(short(chat.pick), 'qwen3:32b Q4_K_M 4k tight');
+    // Case 1's budget, so Case 1's picks: 32B is only Tight, so 14B at Q8_0.
+    assert.equal(short(chat.pick), 'qwen3:14b Q8_0 4k fits');
     assert.equal(short(code.pick), 'qwen3:14b Q8_0 16k fits');
   }
 });
@@ -340,7 +355,7 @@ test('a model whose shape Nova doesn’t know is estimated from the reference sh
 test('privacy filters first: local-preferred lists cloud after local; local-only drops cloud and remote', () => {
   const base = { device: device(24 * GiB), task: 'general-chat' as const, hub: true, candidates: CANDIDATES };
   const pref = recommendFit({ ...base, privacy: 'local-preferred' });
-  assert.equal(short(pref.pick), 'qwen3:32b Q4_K_M 4k tight');
+  assert.equal(short(pref.pick), 'qwen3:14b Q8_0 4k fits');
   assert.deepEqual(pref.cloud.map((c) => c.name), CLOUDY);
   assert.equal(pref.cloud_order, 'after-local');
   for (const c of pref.cloud) assert.equal(c.words, 'runs off your devices');

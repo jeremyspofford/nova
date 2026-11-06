@@ -15,7 +15,8 @@ import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
 import { GiB, PRIOR_OVERHEAD_BYTES, fit } from '../../src/core/models/fit.ts';
 
-const STATES = ['3090-one-model', '3090-two-models', '8gb-nothing-at-16k', 'mac-16gb-unified', 'unknown-shape', 'no-gpu', 'asleep', 'install-confirm'];
+const STATES = ['3090-one-model', '3090-two-models', '8gb-nothing-at-16k', 'mac-16gb-unified', 'unknown-shape', 'no-gpu', 'asleep', 'install-confirm', 'tight-ack'];
+const ACK = /^I understand this (model|plan) leaves little memory headroom, so replies may slow down sharply or fail under load\.$/;
 // The owner's matrix: desktop bands, iPad-class, phones, and the foldables' postures.
 const MATRIX = {
   'desktop-1920': { width: 1920, height: 1080 }, 'desktop-1440': { width: 1440, height: 900 }, 'desktop-1280': { width: 1280, height: 800 },
@@ -106,6 +107,28 @@ async function stateChecks(page: Page, s: string, label: string) {
     assert.deepEqual(await verdicts('.dm-model'), ['tight', 'fits'], `${label}: each model on its own`);
     assert.equal(await root.locator('[data-together="tight"]').count(), 1, `${label}: both stay loaded together, tight`);
     assert.match(text, /Both stay loaded together, but it’s tight/);
+    assert.equal(await root.locator('input[type="checkbox"][data-models-ack]').count(), 1, `${label}: a tight plan asks for the acknowledgement`);
+    assert.equal(await root.locator('[data-action="models-install"]').isDisabled(), true, `${label}: Install waits for it`);
+  }
+  if (s === 'tight-ack') {
+    assert.deepEqual(await verdicts('.dm-total-row'), ['tight']);
+    // The chat pick Fits (14B at Q8_0); the tight 32B is in the plan, labelled, not picked.
+    assert.match(await root.locator('[data-task="general-chat"]').innerText(), /qwen3:14b at Q8_0, 4k context[\s\S]*Fits/);
+    const box = root.locator('input[type="checkbox"][data-models-ack]');
+    assert.equal(await box.count(), 1, `${label}: one acknowledgement`);
+    // Its label, read in the same task that finds it.
+    assert.match(await page.evaluate(() => [...document.querySelectorAll<HTMLInputElement>('#sg-models-screen input[data-models-ack]')].map((e) => [...(e.labels ?? [])].map((l) => l.textContent!.trim()).join('|')).join('/')), ACK, `${label}: labelled in the owner’s words`);
+    const install = root.locator('[data-action="models-install"]');
+    assert.equal(await box.isChecked(), false);
+    assert.equal(await install.isDisabled(), true, `${label}: Install is off until it is ticked`);
+    // Keyboard: Space ticks it, focus stays on it, and Install turns on; Space again turns it off.
+    await box.focus();
+    await page.keyboard.press('Space');
+    await root.locator('[data-action="models-install"]:not([disabled])').waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-models-ack')), true, `${label}: focus stays on the box`);
+    await page.keyboard.press('Space');
+    await root.locator('[data-action="models-install"][disabled]').waitFor();
+    assert.equal(await root.locator('input[data-models-ack]').isChecked(), false);
   }
   if (s === '8gb-nothing-at-16k') {
     assert.deepEqual(await verdicts('.dm-model'), ['wont-fit']);

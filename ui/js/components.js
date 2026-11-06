@@ -1029,10 +1029,13 @@ const pickWords = (p) => `${p.name} at ${p.quant}, ${ctxK(p.context)} context`;
 export function taskPicks(view) {
   const rows = view.advice.map((a) => {
     const label = `<p class="settings-label">${esc(TASK_WORDS[a.task] ?? a.task)}</p>`;
-    if (a.pick) {
+    // A pick always Fits. With none, a tight option is shown, labelled Tight, never as the pick.
+    const shown = a.pick ?? a.tight;
+    if (shown) {
       const alt = a.alternative ? `<p class="settings-note">Smaller and faster: ${esc(pickWords(a.alternative))}, ${esc(FIT_WORDS[a.alternative.verdict].toLowerCase())}.</p>` : '';
-      const est = a.pick.basis === 'tier-table' ? ' · <span class="dm-estimate">Estimate</span>' : '';
-      return `<li class="settings-row dm-pick" data-task="${esc(a.task)}"><div class="settings-text">${label}<p class="settings-note">${esc(pickWords(a.pick))}${est}</p>${alt}</div><div class="settings-control">${verdictPill(a.pick.verdict)}<button type="button" class="btn quiet" data-action="models-plan" data-name="${esc(a.pick.name)}" data-quant="${esc(a.pick.quant)}" data-context="${a.pick.context}" aria-label="Plan it: ${esc(a.pick.name)} for ${esc((TASK_WORDS[a.task] ?? a.task).toLowerCase())}">Plan it</button></div></li>`;
+      const est = shown.basis === 'tier-table' ? ' · <span class="dm-estimate">Estimate</span>' : '';
+      const why = a.pick ? '' : `<p class="settings-note">${esc(a.words)}</p>`;
+      return `<li class="settings-row dm-pick" data-task="${esc(a.task)}"${a.pick ? '' : ' data-tight-option'}><div class="settings-text">${label}${why}<p class="settings-note">${esc(pickWords(shown))}${est}</p>${alt}</div><div class="settings-control">${verdictPill(shown.verdict)}<button type="button" class="btn quiet" data-action="models-plan" data-name="${esc(shown.name)}" data-quant="${esc(shown.quant)}" data-context="${shown.context}" aria-label="Plan it: ${esc(shown.name)} for ${esc((TASK_WORDS[a.task] ?? a.task).toLowerCase())}">Plan it</button></div></li>`;
     }
     const why = a.nothing_fits
       ? `Nothing here fits at ${ctxK(a.context)} context. ${a.nothing_fits.name} at ${a.nothing_fits.quant} fits up to ${ctxK(a.nothing_fits.max_context)}.${view.privacy === 'local-only' ? ' Under local only, the work waits for a device it fits.' : ''}`
@@ -1056,13 +1059,18 @@ function installConfirm(view) {
 // The whole screen. `view`: { id, device: {name, path, hardware, memory, budget_bytes, ram_bytes,
 // overhead_source, overhead_loads, seen?}, plan: [{name, quant, quants, context, contexts, installed,
 // loaded, estimate, result}], total (the plan's own fit result), catalog: [names], advice, privacy,
-// crumb?, confirm?: {title, lines, ok}, status?, busy? }. `device.seen` is said for a device that is
+// crumb?, confirm?: {title, lines, ok}, status?, busy?, acked? }. `acked`: the person ticked that a
+// tight plan leaves little headroom, for this plan. `device.seen` is said for a device that is
 // asleep: how old what it shows is. `confirm` replaces the install button while it asks.
 export function deviceModels(view) {
   const planned = view.plan.some((m) => !m.installed);
   const wont = view.total && view.total.verdict === 'wont-fit';
+  // A tight plan (a model, or the set together: the set's verdict covers each) is installed only once
+  // the person ticks that they understand, for this plan; Nova never picks one for them.
+  const tight = view.total && view.total.verdict === 'tight';
+  const ack = tight ? `<label class="confirm dm-ack" for="${view.id}-ack"><input type="checkbox" id="${view.id}-ack" data-models-ack${view.acked ? ' checked' : ''}> I understand ${view.plan.length > 1 ? 'this plan' : 'this model'} leaves little memory headroom, so replies may slow down sharply or fail under load.</label>` : '';
   const action = view.confirm ? installConfirm(view) : view.plan.length
-    ? `<div class="connection-actions"><button type="button" class="btn primary" data-action="models-install"${wont || view.busy ? ' disabled' : ''}${wont ? ' aria-describedby="' + view.id + '-why"' : ''}>${planned ? 'Install and assign' : 'Assign'}</button></div>${wont ? `<p class="settings-note" id="${view.id}-why">The plan doesn’t fit yet. Lower a quant or a context, or remove a model.</p>` : ''}`
+    ? `${ack}<div class="connection-actions"><button type="button" class="btn primary" data-action="models-install"${wont || view.busy || (tight && !view.acked) ? ' disabled' : ''}${wont ? ' aria-describedby="' + view.id + '-why"' : ''}>${planned ? 'Install and assign' : 'Assign'}</button></div>${wont ? `<p class="settings-note" id="${view.id}-why">The plan doesn’t fit yet. Lower a quant or a context, or remove a model.</p>` : ''}`
     : '';
   const status = view.status ? `<p class="settings-note dm-status" role="status">${esc(view.status)}</p>` : '';
   const add = `<div class="dm-add"><label class="dm-field" for="${view.id}-add"><span class="dm-field-label">Add a model</span><select class="input" id="${view.id}-add">${view.catalog.map((n) => `<option>${esc(n)}</option>`).join('')}</select></label><button type="button" class="btn" data-action="models-add">Add to the plan</button></div>`;

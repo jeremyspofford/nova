@@ -236,8 +236,11 @@ Each class gets a pick for this device and a smaller, faster alternative, each w
 4. **Rank:** larger parameter class first; within a class, Fits before Tight, then the higher quant.
    A current eval scorecard (`scorecards.ts`) breaks ties within a class. It never lifts a model that
    won't fit.
-5. **Pick** = the first. Tight may be the pick only when it would be the only model planned on that
-   device; step 3's combinations check it again.
+5. **Pick** = the first whose verdict is Fits. A Tight model is never the pick or a role default
+   (the owner, 2026-11-06; open question 2). When nothing Fits but something is Tight, there is no
+   pick: the best Tight option is shown, labelled Tight ("Nothing fits comfortably on this device; a
+   tight option is shown below."), and the person may install or assign it only after ticking an
+   acknowledgement for that plan on that device.
 6. **Alternative** = the best candidate of a smaller class whose verdict is Fits, or none.
 7. **Nothing local fits:** say so, with the largest context that would fit (`max_context_fits`).
    Under local-only the work waits, as it does today. Otherwise a cloud option may follow.
@@ -280,7 +283,8 @@ Budget 24.00 GB. Reserve max(0.5, 1.20) = 1.20 GB. Fits up to 21.60 GB.
 | 32B | Q8_0 | 4k | 32.46 | 1.00 | 1.00 | 1.20 | 35.66 | −11.66 | Won't fit |
 
 **Expected recommendations:**
-- General chat (4k): pick **32B at Q4_K_M, 4k, Tight**. The alternative is 14B at Q8_0, 4k, Fits.
+- General chat (4k): pick **14B at Q8_0, 4k, Fits**. The alternative is 8B at Q8_0, 4k, Fits. 32B at
+  Q4_K_M, 4k is only Tight, so it is never the pick (answered 2026-11-06; it was the pick before).
 - Coding (16k): pick **14B at Q8_0, 16k, Fits**, because 32B won't fit at 16k. The alternative is 8B
   at Q8_0, 16k, Fits.
 
@@ -350,7 +354,7 @@ Budget 2/3 × 32 = 21.33 GB. Reserve max(0.5, 1.07) = 1.07 GB. Fits up to 19.20 
 
 | Device | Chat (4k) pick | Alternative | Coding (16k) pick | Alternative |
 |---|---|---|---|---|
-| 24 GB RTX 3090 | 32B Q4_K_M, Tight | 14B Q8_0, Fits | 14B Q8_0, Fits | 8B Q8_0, Fits |
+| 24 GB RTX 3090 | 14B Q8_0, Fits | 8B Q8_0, Fits | 14B Q8_0, Fits | 8B Q8_0, Fits |
 | 8 GB card | 8B Q4_K_M, Fits | none | none at 16k; 8B Q4_K_M up to 6k | — |
 | 16 GB Mac | 8B Q4_K_M, Fits | none | 8B Q4_K_M, Fits | none |
 | 32 GB Mac | 14B Q8_0, Fits | 8B Q8_0, Fits | 14B Q4_K_M, Fits | 8B Q8_0, Fits |
@@ -414,3 +418,9 @@ its own PR with its own gate, design-first as always.
 1. The unified-memory budget: 2/3 below 36 GB (this ADR), or keep 0.75 until a real Mac is measured?
 2. Should Tight be allowed as the general-chat pick (as in Case 1), or should the pick always be Fits,
    with Tight shown only as an option?
+   **Answered by the owner, 2026-11-06:** a Tight verdict is never a recommended or default pick;
+   recommendations and defaults only pick Fits. A Tight model stays visible and labelled. The person
+   may install or assign one only after ticking an explicit acknowledgement for that plan on that
+   device: "I understand this model leaves little memory headroom, so replies may slow down sharply
+   or fail under load." The API refuses a Tight plan or assignment without `accept_tight: true`
+   (POST /models/install, PUT /models/roles/{role}); Won't fit is always refused.

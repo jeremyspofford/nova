@@ -178,13 +178,20 @@ test('recommendations use the fit engine: context and the learned overhead count
   assert.equal(recommend([deviceOf(mac16(), [])]).find((a) => a.role === 'reasoner')!.pick!.model, 'qwen3:8b');
   assert.match(capacityWords(mac16() as Hardware), /^Runs models up to about .* parameters at Q4_K_M with 4k context\) on Apple M2, sharing 11 GB of memory\.$/);
 
-  // The 24 GB hub: the 32B model and the sorting model can't both stay loaded, now that the KV cache
-  // for each is counted.
-  const hub = recommend([deviceOf(hubHardware(), installed([
+  // The 24 GB hub: a 19.9e9-byte 32B model is only Tight there, so it is never the default (owner,
+  // 2026-11-06); the 3B, which Fits, is.
+  const tightHub = recommend([deviceOf(hubHardware(), installed([
     { name: 'example-deep:32b', size: 19.9e9, parameter_size: '32.8B' }, { name: 'example-small:3b', size: 2.0e9, parameter_size: '3.2B' },
   ]))]);
+  assert.equal(tightHub.find((a) => a.role === 'reasoner')!.pick!.model, 'example-small:3b');
+  assert.equal(tightHub.find((a) => a.role === 'reasoner')!.pick!.fit!.verdict, 'fits');
+  // A 19.7e9-byte one Fits, and it and the 8B sorting model can't both stay loaded, now that the KV
+  // cache for each is counted.
+  const hub = recommend([deviceOf(hubHardware(), installed([
+    { name: 'example-deep:32b', size: 19.7e9, parameter_size: '32.8B' }, { name: 'example-mid:8b', size: 5.0e9, parameter_size: '8.0B' },
+  ]))]);
   assert.equal(hub.find((a) => a.role === 'reasoner')!.pick!.model, 'example-deep:32b');
-  assert.equal(hub.find((a) => a.role === 'reasoner')!.pick!.fit!.verdict, 'tight');
+  assert.equal(hub.find((a) => a.role === 'reasoner')!.pick!.fit!.verdict, 'fits');
   assert.match(hub.find((a) => a.role === 'reasoner')!.pick!.tradeoff, /can’t both stay loaded/);
   assert.equal(capacityWords(hubHardware() as Hardware), 'Runs models up to about 21 GB (around 35B parameters at Q4_K_M with 4k context) on Example GPU 24GB with 24 GB.');
 
