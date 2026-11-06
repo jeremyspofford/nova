@@ -69,7 +69,21 @@ async function geometry(page: Page, label: string) {
   const root = page.locator('#sg-models-screen');
   assert.deepEqual(await root.evaluate((r) => [...r.querySelectorAll<HTMLElement>('button, label, p, h3, h4, h5, .fit-verdict, .fit-what, .fit-gb, .dm-out, .settings-label')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)), [], `${label}: clipped text`);
   assert.deepEqual(await root.evaluate((r) => { const box = r.querySelector('[data-device-models]')!.getBoundingClientRect(); return [...r.querySelectorAll<HTMLElement>('[data-device-models] *')].filter((el) => { const b = el.getBoundingClientRect(); return b.width && (b.right > box.right + 1 || b.left < box.left - 1); }).map((el) => el.className || el.tagName); }), [], `${label}: nothing spills out of the panel`);
-  assert.deepEqual(await root.locator('button, select, input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).disabled && e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80))), [], `${label}: 44px targets`);
+  // DIAGNOSTICS ONLY (draft PR, never merged): what the page had when a 44px check fails.
+  const small44 = await root.locator('button, select, input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).disabled && e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80)));
+  if (small44.length) {
+    const st = await page.evaluate(() => ({
+      hit: getComputedStyle(document.documentElement).getPropertyValue('--hit'),
+      heights: [...document.querySelectorAll<HTMLElement>('#sg-models-screen button, #sg-models-screen select, #sg-models-screen input')].slice(0, 4).map((e) => `${e.tagName}:${e.getBoundingClientRect().height}:${getComputedStyle(e).minHeight}`),
+      boot: !!document.getElementById('ds-boot'), ds: document.getElementById('ds')?.textContent?.length,
+      sheets: [...document.styleSheets].map((x) => { let n = -1; try { n = x.cssRules.length; } catch { /* */ } return `${(x.href ?? 'inline').replace(/^.*\//, '')}:${n}${x.disabled ? ':disabled' : ''}`; }),
+      links: [...document.querySelectorAll('link[rel=stylesheet]')].map((l) => `${l.getAttribute('href')}:${(l as HTMLLinkElement).sheet ? 'sheet' : 'nosheet'}`),
+      res: performance.getEntriesByType('resource').filter((r) => /\.css/.test(r.name)).map((r: any) => `${r.name.replace(/^.*\//, '')} end=${Math.round(r.responseEnd)} size=${r.transferSize}/${r.decodedBodySize} status=${r.responseStatus ?? '?'}`),
+      ready: document.readyState, now: Math.round(performance.now()), ua: navigator.userAgent,
+    }));
+    console.log(`DIAG44 ${label}: ${JSON.stringify({ ...st, net: (page as any).__css ?? [] })}`);
+  }
+  assert.deepEqual(small44, [], `${label}: 44px targets`);
   assert.deepEqual(await root.locator('select, input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).labels?.length).map((e) => e.outerHTML.slice(0, 80))), [], `${label}: every control is labelled`);
   const ids = await page.locator('[id]').evaluateAll((els) => els.map((e) => e.id));
   assert.equal(new Set(ids).size, ids.length, `${label}: duplicate ids`);
@@ -189,6 +203,10 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
           const p = d.page;
           const changes: string[] = [];
           p.on('request', (r) => { if (!['GET', 'HEAD'].includes(r.method())) changes.push(`${r.method()} ${r.url()}`); });
+          // DIAGNOSTICS ONLY: every stylesheet response and failure this page saw.
+          const net: string[] = (p as any).__css = [];
+          p.on('response', async (r) => { if (/\.css/.test(r.url())) { let len = -1; try { len = (await r.body()).length; } catch { /* */ } net.push(`${r.url().replace(/^.*\//, '')} ${r.status()} cl=${r.headers()['content-length'] ?? '-'} te=${r.headers()['transfer-encoding'] ?? '-'} body=${len}`); } });
+          p.on('requestfailed', (r) => net.push(`FAILED ${r.url().replace(/^.*\//, '')} ${r.failure()?.errorText}`));
           await p.goto(`${base}/styleguide?entry=models-screen`);
           await p.waitForLoadState('load');
           await p.locator('[data-models-specimen]').waitFor();
