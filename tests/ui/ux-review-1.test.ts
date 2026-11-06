@@ -103,7 +103,7 @@ test('F1: the Health card says what is wrong in human terms; the technical messa
   if (typeof b === 'string') return t.skip(b);
   const { m, nova } = await reviewProfile('nova-ux1-f1-');
   try {
-    const problems = await m.get('/api/v1/problems?open=1') as { message: string }[];
+    const problems = await m.get('/api/v1/problems?open=1') as { id: string | number; message: string }[];
     assert.ok(problems.length >= 1, 'the profile has an open problem');
     const { page } = await device(b, { width: 1366, height: 768 });
     for (const path of ['/', '/tasks']) {
@@ -119,7 +119,9 @@ test('F1: the Health card says what is wrong in human terms; the technical messa
     }
     await page.goto(`${m.base}/health`);
     await ready(page);
-    await page.locator('#health-view .settings-list').first().waitFor();
+    // Health draws its other lists (the work-cost limits) before the problems arrive, and until then
+    // its Problems section says none are open: wait for each open problem's own row, not any list.
+    for (const p of problems) await page.locator(`#health-view #pr-${p.id}`).waitFor({ state: 'attached' });
     const health = await page.locator('#health-view').textContent() ?? '';
     for (const p of problems) assert.ok(health.includes(p.message.slice(0, 30)), 'Health itself shows the full message');
   } finally {

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Browser, Locator, Page } from 'playwright-core';
-import { blank, browser, webkitBrowser, device, finishSetup, ready, still, ROOT } from './support.ts';
+import { blank, browser, webkitBrowser, device, finishSetup, ready, still, ROOT, shortTargets } from './support.ts';
 import { createNova } from '../../src/server.js';
 import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
@@ -23,7 +23,7 @@ async function geometry(page: Page) {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no page overflow');
   const root = page.locator('.backups-settings');
   assert.deepEqual(await root.evaluate(e => [...e.querySelectorAll<HTMLElement>('h2,h3,p,button,pre,code')].filter(n => n.clientWidth && n.scrollWidth > n.clientWidth + 1).map(n => n.tagName)), [], 'no text clipped');
-  assert.deepEqual(await root.locator('input:not(:disabled), button:not(:disabled)').evaluateAll(es => es.filter(e => e.getBoundingClientRect().height < 44).map(e => e.tagName)), [], '44px touch controls');
+  assert.deepEqual(await shortTargets(page, '.backups-settings input:not(:disabled), .backups-settings button:not(:disabled)'), [], '44px touch controls');
   const counts = await page.locator('[id]').evaluateAll(es => {
     const ids: Record<string, number> = {}; for (const e of es) ids[e.id] = (ids[e.id] ?? 0) + 1;
     return Object.entries(ids).filter(([, n]) => n > 1).sort(([a], [b]) => a.localeCompare(b));

@@ -97,7 +97,10 @@ export async function settled(page: Page, view: string) {
   await page.waitForFunction((v) => {
     const sel: Record<string, string> = { home: '#home .home-cards .card', chat: '#thread .turn', tasks: '#tasks-view .task-list, #tasks-view .empty-state', settings: '#settings-view .settings-cat', memory: '#memory .memory-item' };
     const el = document.querySelector(sel[v]!);
-    return !!el && !document.querySelector('[data-skeleton]');
+    // A conversation drawn whole holds its animations off until the next frame (renderAll's
+    // no-anim), so its entrance has not begun yet: until then nothing reads as moving, and a reading
+    // taken in that frame meets the entrance's first 4 px.
+    return !!el && !document.querySelector('[data-skeleton]') && !document.querySelector('#thread.no-anim');
   }, view, { timeout: 15000 });
 }
 
