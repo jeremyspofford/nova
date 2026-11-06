@@ -145,6 +145,28 @@ function nics(): Nic[] {
   return out.slice(0, 8);
 }
 
+// Whether each card answers a magic packet (the WoL ADR's inventory addition). Linux: ethtool's
+// "Wake-on:" when it is installed (g is the magic packet, d is off), else the card's
+// /sys/class/net/<if>/device/power/wakeup; a Wi-Fi card is `unknown`. macOS: pmset's "womp". Windows:
+// `unknown` for now (shortcut: Windows has no unprivileged reading; upgrade when its agent can ask
+// Get-NetAdapterPowerManagement). `unknown` never blocks a wake; only `off` does.
+export async function withWol(list: Nic[], os: string, run: Run, read: (p: string) => string | null = (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } }): Promise<Nic[]> {
+  if (os === 'darwin') {
+    const womp = /^\s*womp\s+(\d)/m.exec((await run('pmset', ['-g'])) ?? '')?.[1];
+    return list.map((n) => ({ ...n, wol: womp === '1' ? 'magic' : womp === '0' ? 'off' : 'unknown' }));
+  }
+  if (os !== 'linux') return list.map((n) => ({ ...n, wol: 'unknown' }));
+  const out: Nic[] = [];
+  for (const n of list) {
+    if (!/^[\w.-]{1,15}$/.test(n.name) || /DEVTYPE=wlan/.test(read(`/sys/class/net/${n.name}/uevent`) ?? '')) { out.push({ ...n, wol: 'unknown' }); continue; }
+    const on = /Wake-on:\s*(\w+)/.exec((await run('ethtool', [n.name])) ?? '')?.[1];
+    const sys = read(`/sys/class/net/${n.name}/device/power/wakeup`)?.trim();
+    const wol: Wol = on !== undefined ? (on.includes('g') ? 'magic' : 'off') : sys === 'enabled' ? 'magic' : sys === 'disabled' ? 'off' : 'unknown';
+    out.push({ ...n, wol });
+  }
+  return out;
+}
+
 export async function detectHardware(o: { run?: Run; exec?: ExecFileLike; diskPath?: string; now?: () => Date } = {}): Promise<Hardware> {
   const run = o.run ?? runTool;
   const sources: string[] = ['os'];
@@ -177,7 +199,7 @@ export async function detectHardware(o: { run?: Run; exec?: ExecFileLike; diskPa
   return {
     at: (o.now ?? (() => new Date()))().toISOString(), platform: os, arch: arch(), hostname: hostname(),
     cpu: { model: (c[0]?.model ?? 'unknown').replace(/\s+/g, ' ').trim(), threads: c.length },
-    ram_bytes: ram, ram_free_bytes: free.bytes, gpus, disk, network: nics(), whisper: onPath(WHISPER), gpu_wired_limit_bytes: wired, sources,
+    ram_bytes: ram, ram_free_bytes: free.bytes, gpus, disk, network: await withWol(nics(), os, run), whisper: onPath(WHISPER), gpu_wired_limit_bytes: wired, sources,
   };
 }
 

@@ -157,8 +157,51 @@ function viewOf(d, where) {
     catalog: p.candidates.filter((c) => c.where === 'local').map((c) => c.name),
     crumb: where === 'setup' ? `Setup › ${d.name}` : undefined,
     confirm: ask ? confirmOf(d, planOf(d)) : null, status: said.get(d.id) ?? null, busy: busy.has(d.id),
-    device: { name: d.name, hardware: hardwareLine(d), memory: device.memory, budget_bytes: device.budget_bytes, budget_source: device.budget_source, ram_bytes: d.hardware.ram_bytes, overhead_source: device.overhead_source, overhead_loads: p.overhead.n, seen: seenLine(d) },
+    device: { name: d.name, hardware: hardwareLine(d), memory: device.memory, budget_bytes: device.budget_bytes, budget_source: device.budget_source, ram_bytes: d.hardware.ram_bytes, overhead_source: device.overhead_source, overhead_loads: p.overhead.n, seen: seenLine(d), wake: wakeOf(d) },
   };
+}
+
+// A computer's wake state and its sleep policy, as the hub derives them (the approved styleguide
+// states, WoL ADR): the waiting line's start comes as a time and is counted here from it.
+function wakeOf(d) {
+  const s = d.wake?.screen;
+  if (!s) return null;
+  return { ...s, waiting: s.waiting ? { text: s.waiting.text, since: Date.parse(s.waiting.since) } : null, ...(said.has(`wake:${d.id}`) ? { lines: [...s.lines, said.get(`wake:${d.id}`)] } : {}) };
+}
+
+// The person's own wake ("Try waking it again"), "Use the cloud model this once", and the two sleep
+// choices; each goes to the hub as asked, and the screen shows what it said.
+async function wakeAction(d, a) {
+  busy.add(d.id);
+  try {
+    if (a === 'models-wake-again') {
+      said.set(`wake:${d.id}`, 'Asking Nova to wake it.');
+      redraw(d.id);
+      const r = await api('POST', `/models/devices/${encodeURIComponent(d.id)}/wake`, {});
+      said.set(`wake:${d.id}`, r.words);
+    } else {
+      const r = await api('POST', `/models/devices/${encodeURIComponent(d.id)}/cloud-once`, {});
+      said.set(`wake:${d.id}`, `${r.released.length === 1 ? 'The task goes' : `${r.released.length} tasks go`} to your cloud model this once.`);
+    }
+  } catch (e) {
+    said.set(`wake:${d.id}`, e.message);
+  } finally {
+    busy.delete(d.id);
+  }
+  toast(said.get(`wake:${d.id}`));
+  await loadDeviceModels();
+}
+
+async function setSleep(d, key, value) {
+  const body = key === 'idle' ? { sleep_after_min: value === 'never' ? null : Number(value) } : { on_demand: value === 'wake' };
+  try {
+    await api('PUT', `/models/devices/${encodeURIComponent(d.id)}/power`, body);
+    said.delete(`wake:${d.id}`);
+  } catch (e) {
+    said.set(`wake:${d.id}`, e.message);
+    toast(e.message);
+  }
+  await loadDeviceModels();
 }
 
 // What goes inside a screen's frame for one device: the component, or why it can't be drawn yet.
@@ -289,6 +332,7 @@ export function bindDeviceModels(root) {
     const id = idOf(t);
     const d = id && deviceOf(id);
     if (!d?.plan) return;
+    if (t.dataset.modelsSleep !== undefined) { setSleep(d, t.dataset.modelsSleep, t.value); return; }
     const plan = planOf(d);
     if (t.dataset.modelsQuant !== undefined) { const m = plan[Number(t.dataset.modelsQuant)]; if (m) m.quant = t.value; }
     else if (t.dataset.modelsContext !== undefined) { const m = plan[Number(t.dataset.modelsContext)]; if (m) { const c = cand(d, m.name); m.context = contextsOf(c, m.context)[Number(t.value)] ?? m.context; } }
@@ -313,6 +357,7 @@ export function bindDeviceModels(root) {
     if (a === 'models-install') { asks.set(d.id, true); said.delete(d.id); redraw(d.id); frame.querySelector('[data-action="models-confirm"]')?.focus({ preventScroll: true }); return; }
     if (a === 'models-not-now') { asks.delete(d.id); said.set(d.id, 'Nothing was installed or assigned.'); redraw(d.id); frame.querySelector('[data-action="models-install"]')?.focus({ preventScroll: true }); return; }
     if (a === 'models-confirm') { install(d); return; }
+    if (a === 'models-wake-again' || a === 'models-cloud-once') { wakeAction(d, a); return; }
     asks.delete(d.id);
     said.delete(d.id);
     if (a === 'models-remove') { plan.splice(Number(b.dataset.index), 1); redraw(d.id, `${key}-add`); return; }

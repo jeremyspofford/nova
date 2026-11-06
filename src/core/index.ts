@@ -233,7 +233,7 @@ export interface CoreOptions {
   // hardware reading and quicker watch and wake polls.
   // hubCards, wakeSender, wakeGapMs: Wake-on-LAN's own cards, sender and packet gap, for tests (a
   // recorder that opens no socket; see ModelsOptions).
-  models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number; hubCards?: () => Card[]; wakeSender?: Sender; wakeGapMs?: number };
+  models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number; hubCards?: () => Card[]; wakeSender?: Sender; wakeGapMs?: number; wakeClock?: { now(): number; sleep(ms: number): Promise<void> }; wakeHealthyMs?: number };
   // The Decision Service (DS1), for tests: a verdict store in place of the committed eval verdicts
   // (src/core/decision-service/tev1-verdicts.json), so a stand-in seat can be trusted or not.
   decisions?: { verdicts?: VerdictStore };
@@ -419,6 +419,8 @@ export function createCore(o: CoreOptions) {
     ...(o.models?.hubCards ? { hubCards: o.models.hubCards } : {}),
     ...(o.models?.wakeSender ? { wakeSender: o.models.wakeSender } : {}),
     ...(o.models?.wakeGapMs !== undefined ? { wakeGapMs: o.models.wakeGapMs } : {}),
+    ...(o.models?.wakeClock ? { wakeClock: o.models.wakeClock } : {}),
+    ...(o.models?.wakeHealthyMs ? { wakeHealthyMs: o.models.wakeHealthyMs } : {}),
     diskPath: o.home,
     meshHost: (h) => meshHosts().has(h),
     secret: (v) => { const n = secretName(v); return n ? providerSecret(n) : null; },
@@ -897,6 +899,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   spokes.on('change', (d: Device) => bus.emit('event', 'device', { action: 'heartbeat', device: deviceView(d) }));
   spokes.on('event', (e) => bus.emit('event', 'device_event', e));
   spokes.on('hardware', (d: Device, hw: unknown) => models!.heartbeat(d, hw));
+  spokes.powerAnswer = (d, body) => models!.powerAnswer(d, body);
   models.on('change', (c) => bus.emit('event', 'models', c));
   models.on('progress', (p) => bus.emit('event', 'model_progress', p));
   enroll.on('change', (r) => bus.emit('event', 'join_request', r));

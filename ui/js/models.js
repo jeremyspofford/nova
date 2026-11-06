@@ -82,7 +82,7 @@ function routes() {
     const r = role ? data.roles.find((x) => x.role === role) : null;
     const where = !role ? note
       : role === 'transcriber' ? r?.words ?? ''
-      : r?.assigned ? `${r.assigned.model} on ${r.assigned.device_name}${r.assigned.hub_model ? `; small jobs: ${r.assigned.hub_model} on the hub` : ''}.${note ? ` ${note}` : ''}`
+      : r?.assigned ? `${r.assigned.model} on ${r.assigned.device_name}${r.assigned.wake_words ? ` (${r.assigned.wake_words})` : ''}${r.assigned.hub_model ? `; small jobs: ${r.assigned.hub_model} on the hub` : ''}.${note ? ` ${note}` : ''}`
       : `Not set yet.${note ? ` ${note}` : ''}`;
     const [label, tone] = r ? STATE_WORDS[r.state] ?? ['', ''] : ['', ''];
     return `<li class="dm-route" data-route="${esc(role ?? 'none')}"><div class="conn-head"><p class="settings-label">${esc(task)}</p>${label ? `<span class="pill ${tone}">${esc(label)}</span>` : ''}</div><p class="settings-note">${esc(where)}</p></li>`;
