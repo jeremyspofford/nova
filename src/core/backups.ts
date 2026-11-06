@@ -16,6 +16,10 @@ const TABLE = /^[a-z_]+$/;
 // folder (in every folder backup and checkpoint) and the journal's copies of its files go.
 export const SKILL = 'skill';
 export const skillDir = (id: string) => `skills/${id}/`;
+// A skill's own data outside its folder (in the workspace), which goes with it when it is removed.
+export const SKILL_DATA: Readonly<Record<string, string>> = Object.freeze({ 'interstitial-research': 'workspace/interstitial/' });
+// Every folder a removed skill leaves nothing in: its own, and its data's.
+export const skillDirs = (id: string): string[] => [skillDir(id), ...(SKILL_DATA[id] ? [SKILL_DATA[id]!] : [])];
 
 type Also = (table: string, ids: string[], words: string[]) => { cleaned: string[]; destroyed: string[] };
 
@@ -110,7 +114,7 @@ export function cleanDbFile(path: string, table: string, ids: string[], words: s
       for (const id of originals) entry.run('file', `capture/raw/${id}`);
       if (table === SKILL) {
         const under = db.prepare(`DELETE FROM sync_log WHERE tbl = 'file' AND substr(pk, 1, length(?)) = ?`);
-        for (const id of ids) under.run(skillDir(id), skillDir(id));
+        for (const id of ids) for (const d of skillDirs(id)) under.run(d, d);
       }
       if (table === 'memory') {
         const carrying = db.prepare(`DELETE FROM sync_log WHERE (tbl = 'memory' OR (tbl = 'file' AND (pk = 'MEMORY.md' OR pk LIKE 'memory/%'))) AND instr(row, ?) > 0`);

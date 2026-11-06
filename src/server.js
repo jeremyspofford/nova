@@ -116,7 +116,9 @@ export function createNova(config = loadConfig(), deps = {}) {
   // Curated memory lives in the core; MEMORY.md is rendered from it. The first start imports
   // an existing MEMORY.md once, and every start takes in hand edits made while Nova was off.
   // The ingest gate (Amendment 2026-10-30-C Part 3) screens what the agent reads from outside.
-  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault, ingest: core.ingest });
+  // The Decision Service's ask, for the Interstitial Research hook (used only with its flag on).
+  // deps.decisionAsk: tests only (a stand-in that answers with chosen probabilities).
+  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault, ingest: core.ingest, decisions: deps.decisionAsk ?? core.decisionService.ask });
   // Era 2's Gmail as a connector: its secrets in the vault, Settings › Connections, mail events.
   core.connectors.register(gmailConnector(runner.gmail));
   // Forgetting through the core's API reaches MEMORY.md and the day notes as well.
@@ -125,6 +127,7 @@ export function createNova(config = loadConfig(), deps = {}) {
   runner.memory.sync();
   runner.chatProvider = chatProvider;
   runner.caps = core.caps;
+  runner.ledger = core.ledger;
   // Coding through chat (M10c): the chat agent's code_change and code_status tools start and read the
   // core's coding runs.
   runner.coding = core.coding;
@@ -187,7 +190,7 @@ export function createNova(config = loadConfig(), deps = {}) {
       try { announce('activity', busy()); } catch { /* closing */ }
     }, 150);
   };
-  const STEPS = new Set(['session', 'user', 'tool_call', 'approval', 'tool_result', 'skill', 'memory', 'done', 'error', 'stopped', 'delivered']);
+  const STEPS = new Set(['session', 'user', 'tool_call', 'approval', 'tool_result', 'skill', 'memory', 'done', 'error', 'stopped', 'delivered', 'interstitial']);
   runner.on('event', (_, ev) => { if (STEPS.has(ev.type)) moved(); });
   runner.on('live', moved);
   helpers.on('change', moved);
@@ -426,9 +429,12 @@ export function createNova(config = loadConfig(), deps = {}) {
       try {
         let skill = null;
         let files;
+        let data = null;
         if (action === 'install') { skill = skills.install(id); runner.trustSkill(id); }
         else if (action === 'remove') {
           files = skills.remove(id);
+          // Its own data in the workspace (the Interstitial Research skill's counters and records) goes too.
+          data = skills.removeData(id);
           core.ingest.release('skill', id);
           core.mesh.sync.removed();
           // Out of every backup and checkpoint too, the way a forget goes.
@@ -436,13 +442,15 @@ export function createNova(config = loadConfig(), deps = {}) {
         }
         else if (action === 'restore') {
           // Put back from Undo: screened again, exactly as when it came in.
-          const prepared = skills.prepareRestore(id, (await readBody(req)).files);
+          const body = await readBody(req);
+          const prepared = skills.prepareRestore(id, body.files);
           // One Nova ships, exactly as it ships it, comes back as it was; anything else is screened.
-          if (skills.isCatalogCopy(prepared)) { skill = skills.commit(prepared); runner.trustSkill(id); }
+          if (skills.isCatalogCopy(prepared)) { skill = skills.commit(prepared); runner.trustSkill(id); skills.restoreData(id, body.data); }
           else {
             const done = await installScreened(prepared, { refused: 'Nova didn’t put this skill back:' });
             if (done.error) return json(res, 400, { error: done.error });
             skill = done.skill;
+            skills.restoreData(id, body.data);
           }
         }
         // Turning on a skill that is held back (or that changed since Nova checked it) is the person's call.
@@ -453,7 +461,7 @@ export function createNova(config = loadConfig(), deps = {}) {
         }
         else return json(res, 404, { error: 'Not found' });
         announce('skills');
-        return json(res, 200, files ? { files } : { skill });
+        return json(res, 200, files ? { files, ...(data ? { data } : {}) } : { skill });
       } catch (e) {
         if (e instanceof SkillError) return json(res, e.status, { error: e.message });
         throw e;

@@ -67,6 +67,12 @@ function applyTurnEvent(t, ev) {
     case 'skill':
       t.items.push({ kind: 'skill', id: ev.skill, name: ev.name, how: ev.how });
       break;
+    // The Interstitial Research hook (src/interstitial.js): a claim check, a correction, or the run's record.
+    case 'interstitial': {
+      const { type, turn: _t, attempt: _a, ...rest } = ev;
+      t.items.push({ ...rest, kind: 'interstitial' });
+      break;
+    }
     case 'assistant':
       t.items.push({ kind: 'text', id: ev.id, text: ev.text, ts: ev.ts });
       break;
