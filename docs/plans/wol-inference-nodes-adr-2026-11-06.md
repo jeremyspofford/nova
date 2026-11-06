@@ -10,7 +10,7 @@ manager: `src/core/models/` (`wake.ts`, `hardware.ts`, `index.ts`). The device a
 Replication: `src/core/mesh/sync.ts`. Who may call what: `src/core/mesh/access.ts`. Waiting text:
 `ui/js/wait.js` (DESIGN-SYSTEM §1, binding). The services track: `src/core/services/placement.ts`.
 
-**Status:** this is the design, for the owner's approval. Nothing in Nova changes in this step. The
+**Status:** APPROVED by the owner, 2026-11-06, with all eight recommended defaults below accepted as the build's answers. This is the design; Nothing in Nova changes in this step. The
 styleguide shows the proposed states (`/styleguide?entry=models-screen`, the states from "Asleep,
 wakeable" on); screenshots are in `docs/screenshots/wol-design-2026-11-06/`. The build starts from
 this document once it is approved; each golden case below is written to become one test.
@@ -394,7 +394,7 @@ two labelled choices.
 
 ## Open questions for the owner
 
-Each has the default this design recommends, which the build follows unless the owner says otherwise.
+Each has the default this design recommends. **Answered 2026-11-06: the owner approved the design with every recommended default, so the build follows each one.**
 
 1. **Amend Decision 1 for a `power` verb (`hold`, `release`, `sleep`)?**
    *Recommended: yes.* Without it, "sleep after N minutes" can only be the OS's own setting, and
