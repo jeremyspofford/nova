@@ -6,6 +6,12 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-05 · CI · The UI gate runs in two halves side by side**
+- What changed: nothing in Nova. The browser test suite had grown past the 45 minutes its CI job is allowed: on PR #336 it was cut off while still passing tests, and every change would have been. Rather than give it longer, it now runs as two jobs at once, each with half the test files (Node's own `--test-shard`, which splits by file, so every test runs in exactly one half). The accessibility advisory runs once, in the first half. Either half failing, or being cut off, fails the gate as before. Locally, `npm run test:ui` still runs everything; `NOVA_UI_SHARD=1/2 npm run test:ui:shard` runs one half.
+- What you can now do: nothing new. Changes get their UI result in about half the time.
+- Still unfinished: nothing known.
+- Checked: both halves in the CI-matching sandbox run different tests with none in both (49 and 28 test names before the run was stopped at 5 minutes). The workflow itself is checked by its own CI run on this change.
+
 **2026-11-05 · Test stability · The orb stays offline when a slow answer arrives after the server goes down**
 - What changed: when Nova's server came back after an outage, the page refreshed everything at once. If the server went down again while one slow part of that refresh was still on its way, the parts that had already answered counted as "Nova is back". The orb then turned from offline to idle, and the "isn't answering" banner went away, with the server still down, and nothing checked again until something else happened. Now each outage has its own number. An answer to a read sent before the latest outage can still say Nova is unreachable, but it can't say Nova is back. Only reads sent after the outage began, or a live event stream that opens again, can. This is what made the offline test fail at random with "outage 2: still offline after 1s".
 - What you can now do: nothing new to click. A new browser test holds one part of the refresh in the page until the outage is on screen, then lets it go. Before the fix the orb went back to idle every time (5 of 5 runs). With it, the orb stays offline every time (5 of 5).
