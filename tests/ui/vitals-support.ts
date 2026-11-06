@@ -26,7 +26,13 @@ export function compute() {
   for (const [id, d] of v.events) by.set(id, Math.max(by.get(id) ?? 0, d));
   const inp = Math.max(0, ...by.values());
   const worst = [...by].find(([, d]) => d === inp)?.[0];
-  return { moved: (v.moved ?? []).join(' | '), lcp, cls, inp, interactions: by.size, worst: worst ? `${v.names?.[worst]} (${Math.round(inp)} ms)` : '' };
+  // Every trusted interaction, however quick. Event Timing reports an entry only at 16 ms or more
+  // (the lowest durationThreshold the spec allows), so a fast press leaves none, but it still
+  // counts every event it times in performance.eventCounts: a key press is one keydown, a click or
+  // a tap one pointerup. A press under 16 ms can't raise INP, so INP itself is unchanged.
+  const counts = (performance as any).eventCounts;
+  const interactions = Math.max(by.size, (counts?.get('keydown') ?? 0) + (counts?.get('pointerup') ?? 0));
+  return { moved: (v.moved ?? []).join(' | '), lcp, cls, inp, interactions, worst: worst ? `${v.names?.[worst]} (${Math.round(inp)} ms)` : '' };
 }
 
 export const p75 = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.ceil(0.75 * xs.length) - 1]!;

@@ -8,7 +8,8 @@
 //   CLS  the largest session window (gaps under 1 s, at most 5 s) of layout shifts, leaving out
 //        those within 500 ms of input (hadRecentInput);
 //   INP  the longest interaction (event timing, grouped by interactionId, durationThreshold 16 ms;
-//        under 50 interactions, so none is dropped as an outlier), from real, trusted input.
+//        under 50 interactions, so none is dropped as an outlier), from real, trusted input. Every
+//        interaction is counted, from performance.eventCounts, since one under 16 ms leaves no entry.
 // The numbers are printed for the evidence (docs/evidence/m9-gate.md).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
