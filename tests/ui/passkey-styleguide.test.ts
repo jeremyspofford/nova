@@ -69,7 +69,8 @@ async function geometry(page: Page, label: string) {
   assert.ok(pageWidth <= width, `${label}: page overflow ${pageWidth} > ${width}`);
   const root = page.locator('#sg-passkey-approval');
   assert.deepEqual(await root.evaluate((r) => [...r.querySelectorAll<HTMLElement>('button, label, p, h2, h3')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)), [], `${label}: clipped text`);
-  assert.deepEqual(await root.locator('button, input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).disabled).map((e) => e.closest('label') ?? e).filter((e) => e.getBoundingClientRect().height < 44).map((e) => e.outerHTML)), [], `${label}: touch targets (a wrapped input's target is its label)`);
+  // In one task, from the live page: a locator's evaluateAll can be handed nodes a styleguide redraw has just replaced.
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#sg-passkey-approval :is(button, input)')].filter((e) => !(e as HTMLInputElement).disabled).map((e) => e.closest('label') ?? e).filter((e) => e.getBoundingClientRect().height < 44).map((e) => e.outerHTML)), [], `${label}: touch targets (a wrapped input's target is its label)`);
   const ids = await page.locator('[id]').evaluateAll((els) => els.map((e) => e.id));
   assert.equal(new Set(ids).size, ids.length, `${label}: duplicate ids`);
 }
