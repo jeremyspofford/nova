@@ -34,11 +34,12 @@
 /* ---- rows: the grid everything sits on (44 px, hairline-separated groups) ---- */
 .uc-row {
   display: flex;
+  padding-block: var(--space-1);
   align-items: center;
   gap: var(--space-3);
   width: 100%;
   min-height: var(--hit);
-  padding: 0 var(--space-3);
+  padding-inline: var(--space-3);
   border: 0;
   border-radius: var(--radius-input);
   background: transparent;
@@ -51,7 +52,7 @@
 .uc-row:hover { background: var(--surface-card-hover); }
 .uc-row.is-on { background: var(--surface-card-hover); font-weight: var(--type-weight-strong); }
 .uc-row.is-on .uc-ic { color: var(--text-primary); }
-.uc-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uc-label { flex: 1; overflow-wrap: anywhere; }
 .uc-count { padding: 0 var(--space-2); border-radius: var(--radius-pill); background: var(--surface-card-hover); color: var(--text-secondary); font-size: var(--type-caption); font-variant-numeric: tabular-nums; }
 .uc-group { margin: var(--space-4) 0 var(--space-1); padding: 0 var(--space-3); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
 .uc-icon {
@@ -92,6 +93,7 @@
 .uc-stamp { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-height: var(--hit); padding: 0 var(--space-3); color: var(--text-secondary); font-size: var(--type-caption); text-decoration: none; }
 .uc-stamp:hover { color: var(--text-primary); }
 .uc-stamp.is-pending { color: var(--status-attention); }
+.uc-stamp-ic { display: none; }
 .uc-dot { display: inline-block; flex: none; width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: currentColor; }
 
 /* Collapsed (wide frames) and the drawer (narrow frames) are container queries in layout.css. */
@@ -148,6 +150,7 @@
 .uc-bare::placeholder { color: var(--text-secondary); opacity: 1; }
 .uc-palette-list { padding: 0 var(--space-2) var(--space-2); overflow: auto; }
 .uc-palette-list ul { margin: 0; padding: 0; list-style: none; }
+.uc-palette .uc-row { padding-block: var(--space-1); }
 .uc-palette .uc-row.is-on { border-left: 2px solid var(--accent-primary); }
 .uc-palette-foot { margin: 0; padding: var(--space-2) var(--space-4); border-top: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: var(--type-caption); }
 
@@ -161,7 +164,8 @@
 .uc-h { margin: 0; font: var(--type-weight-strong) var(--type-h2)/var(--type-line-tight) var(--font-display); }
 .uc-lede { margin: var(--space-1) 0 var(--space-5); color: var(--text-secondary); font-size: var(--type-small); }
 .uc-set { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-5); min-height: calc(var(--hit) + var(--space-4)); margin: 0; padding: var(--space-3) 0; border: 0; border-top: 1px solid var(--border-subtle); }
-.uc-set-text { flex: 1 1 calc(var(--space-8) * 4); }
+.uc-set-text { flex: 1 1 calc(var(--space-8) * 2); }
+.uc-set-ctl:has(.uc-toggle) { flex: none; }
 .uc-set-name { display: block; font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); color: var(--text-primary); }
 .uc-set-note { margin: var(--space-1) 0 0; color: var(--text-secondary); font-size: var(--type-small); }
 .uc-set-ctl { display: flex; flex: 0 1 calc(var(--space-8) * 4); justify-content: flex-end; }
@@ -230,7 +234,7 @@
 
 /* ---- orb sheet ---- */
 .uc-orb-hero { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-7); padding: var(--space-6) 0; }
-.uc-icons { display: flex; align-items: flex-end; gap: var(--space-5); }
+.uc-icons { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-5); }
 .uc-orbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--space-8) + var(--space-6)), 1fr)); gap: var(--space-4); margin: 0 0 var(--space-5); padding: 0; list-style: none; }
 .uc-orb-cell { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-4) var(--space-2); text-align: center; }
 .uc-orb-name { font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); }
@@ -242,27 +246,33 @@
    One continuous spiral curling into a dark centre: an arm of colour (conic, off-centre), a dark
    eye, a rotating sheen and fine stars. The design's state variables still drive the glow's motion,
    the light (--orb-filter) and the mark (ring/dashed); the arms' turn speed is the state's own. */
-.orb-nebula { --orb-turn: none; --orb-deep: color-mix(in srgb, var(--orb-core) 45%, var(--accent-secondary)); }
-.orb-nebula > .orb-glow { --orb-g: color-mix(in srgb, var(--orb-glow) 70%, var(--orb-c)); }
-.orb-nebula > .orb-field { background: var(--orb-core); filter: brightness(0.12) saturate(0.7); }
+.orb-nebula { --orb-turn: none; }
 .uc-top .orb { margin-inline-end: var(--space-3); }
+.orb-nebula > .orb-glow { --orb-g: color-mix(in srgb, var(--orb-glow) 70%, var(--orb-c)); }
 .orb-nebula > .orb-arms {
-  background: conic-gradient(from 200deg at 44% 56%, var(--orb-deep) 0deg, var(--orb-c) 80deg, var(--accent-secondary) 150deg, color-mix(in srgb, var(--orb-listening) 55%, var(--accent-secondary)) 200deg, var(--orb-listening) 240deg, var(--orb-attention) 285deg, color-mix(in srgb, var(--orb-attention) 40%, var(--orb-deep)) 320deg, var(--orb-deep) 360deg);
-  filter: blur(calc(var(--orb-size) * 0.03)) var(--orb-filter);
+  background: conic-gradient(from 160deg at 46% 54%, var(--orb-c) 0deg, var(--orb-c) 40deg, var(--accent-secondary) 110deg, color-mix(in srgb, var(--orb-listening) 50%, var(--accent-secondary)) 160deg, var(--orb-listening) 200deg, var(--orb-attention) 245deg, color-mix(in srgb, var(--orb-attention) 50%, var(--orb-c)) 300deg, var(--orb-c) 360deg);
+  filter: blur(calc(var(--orb-size) * 0.025)) saturate(1.3) var(--orb-filter);
   animation: var(--orb-turn);
 }
-/* The curl: two bright crescents around an off-centre eye read as one spiral arm turning inward. */
+/* Deep space: one side of the vortex falls away into dark blue. */
+.orb-nebula > .orb-field {
+  background: var(--orb-core);
+  filter: brightness(0.32) saturate(1.4) blur(calc(var(--orb-size) * 0.03));
+  -webkit-mask: conic-gradient(from 150deg at 46% 54%, transparent 0deg, var(--orb-core) 70deg, var(--orb-core) 150deg, transparent 220deg);
+  mask: conic-gradient(from 150deg at 46% 54%, transparent 0deg, var(--orb-core) 70deg, var(--orb-core) 150deg, transparent 220deg);
+  animation: var(--orb-turn);
+}
+/* The curl: one bright arc, warm into cool, wrapping the eye, so the arm reads as turning inward. */
 .orb-nebula > .orb-swirl {
-  opacity: 0.9;
-  background: conic-gradient(from 300deg at 54% 46%, transparent 0deg, color-mix(in srgb, var(--orb-hi) 85%, transparent) 50deg, transparent 150deg, transparent 180deg, color-mix(in srgb, var(--orb-c) 80%, transparent) 240deg, transparent 330deg);
-  -webkit-mask: radial-gradient(circle at 54% 46%, transparent 0 17%, var(--orb-core) 23%, var(--orb-core) 27%, transparent 34%, transparent 40%, var(--orb-core) 46%, transparent 54%);
-  mask: radial-gradient(circle at 54% 46%, transparent 0 17%, var(--orb-core) 23%, var(--orb-core) 27%, transparent 34%, transparent 40%, var(--orb-core) 46%, transparent 54%);
+  opacity: 0.95;
+  background: conic-gradient(from 200deg at 52% 48%, transparent 0deg, color-mix(in srgb, var(--orb-attention) 90%, transparent) 40deg, color-mix(in srgb, var(--orb-hi) 80%, transparent) 110deg, color-mix(in srgb, var(--orb-c) 70%, transparent) 170deg, transparent 220deg);
+  -webkit-mask: radial-gradient(circle at 52% 48%, transparent 0 22%, var(--orb-core) 28%, var(--orb-core) 34%, transparent 44%);
+  mask: radial-gradient(circle at 52% 48%, transparent 0 22%, var(--orb-core) 28%, var(--orb-core) 34%, transparent 44%);
   mix-blend-mode: screen;
-  filter: blur(calc(var(--orb-size) * 0.012));
+  filter: blur(calc(var(--orb-size) * 0.015));
   animation: var(--orb-turn);
 }
-.orb-nebula > .orb-eye { inset: 36% 30% 42% 38%; background: var(--orb-core); filter: brightness(0.07) blur(calc(var(--orb-size) * 0.04)); }
-.orb-nebula > .orb-field { inset: 0; -webkit-mask: radial-gradient(circle, transparent 62%, var(--orb-core) 100%); mask: radial-gradient(circle, transparent 62%, var(--orb-core) 100%); z-index: 1; }
+.orb-nebula > .orb-eye { inset: 30% 28% 34% 34%; background: var(--orb-core); filter: brightness(0.06) blur(calc(var(--orb-size) * 0.05)); }
 .orb-nebula > .orb-stars {
   background: radial-gradient(circle at 22% 30%, var(--orb-listening) 0 1%, transparent 1.6%), radial-gradient(circle at 78% 72%, var(--orb-core) 0 0.8%, transparent 1.4%), radial-gradient(circle at 30% 80%, var(--orb-hi) 0 0.7%, transparent 1.3%), radial-gradient(circle at 70% 22%, var(--orb-hi) 0 0.6%, transparent 1.2%);
   opacity: 0.8;
@@ -271,8 +281,8 @@
 .orb-nebula[data-state="listening"] { --orb-turn: orb-swirl calc(var(--motion-breathe) * 2) linear infinite; }
 .orb-nebula[data-state="working"] { --orb-turn: orb-swirl calc(var(--motion-pulse) * 2) linear infinite; }
 .orb-nebula[data-state="speaking"] { --orb-turn: orb-swirl calc(var(--motion-breathe) * 2) linear infinite; }
-.orb-nebula[data-state="needs-you"] { --orb-turn: orb-swirl calc(var(--motion-breathe) * 3) linear infinite; --orb-deep: color-mix(in srgb, var(--orb-attention) 40%, var(--accent-secondary)); }
-.orb-nebula[data-state="stopped"] > .orb-arms, .orb-nebula[data-state="stopped"] > .orb-swirl { filter: saturate(0.1) var(--orb-filter); }
+.orb-nebula[data-state="needs-you"] { --orb-turn: orb-swirl calc(var(--motion-breathe) * 3) linear infinite; }
+.orb-nebula[data-state="stopped"] > .orb-arms, .orb-nebula[data-state="stopped"] > .orb-field, .orb-nebula[data-state="stopped"] > .orb-swirl { filter: saturate(0.1) var(--orb-filter); }
 .orb-nebula[data-state="stopped"] > .orb-arms { scale: 0.86; }
 .orb-nebula[data-state="offline"] > .orb-swirl, .orb-nebula[data-state="stopped"] > .orb-swirl { opacity: 0.2; }
 /* Still: what reduced motion shows. Brightness and the mark carry the state. */
@@ -285,7 +295,7 @@
 }
 
 /* The app icon: the swirl on a near-black rounded square (DESIGN-SYSTEM §1), never upscaled. */
-.orb-icon { position: relative; display: inline-grid; place-items: center; overflow: hidden; border-radius: var(--radius-card); isolation: isolate; }
+.orb-icon { position: relative; flex: none; display: inline-grid; place-items: center; overflow: hidden; border-radius: var(--radius-card); isolation: isolate; }
 .orb-icon::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--orb-core); filter: brightness(0.09) saturate(0.5); }
 .orb-icon[data-k="3"] { width: calc(var(--space-8) * 2); height: calc(var(--space-8) * 2); --uc-icon-orb: calc(var(--space-8) * 1.7); }
 .orb-icon[data-k="2"] { width: var(--space-8); height: var(--space-8); --uc-icon-orb: calc(var(--space-8) * 0.85); }

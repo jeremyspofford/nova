@@ -227,10 +227,14 @@ body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { displ
    own width, so a frame inside the styleguide's column and a full-screen frame lay out the same. */
 @container uc (min-width: 720px) {
   .is-collapsed .uc-rail { width: calc(var(--hit) + var(--space-4)); }
-  .is-collapsed .uc-rail .uc-label, .is-collapsed .uc-rail .uc-count, .is-collapsed .uc-rail .uc-chev, .is-collapsed .uc-rail .uc-group, .is-collapsed .uc-recent, .is-collapsed .uc-rail-head .uc-icon, .is-collapsed .uc-stamp span:not(.uc-dot) { display: none; }
+  .is-collapsed .uc-rail .uc-label, .is-collapsed .uc-rail .uc-count, .is-collapsed .uc-rail .uc-chev, .is-collapsed .uc-rail .uc-group, .is-collapsed .uc-recent, .is-collapsed .uc-rail-head .uc-icon, .is-collapsed .uc-stamp span:not(.uc-dot):not(.uc-stamp-ic) { display: none; }
   .is-collapsed .uc-rail .uc-row, .is-collapsed .uc-stamp { justify-content: center; padding: 0; }
   .is-collapsed .uc-spaces { flex-direction: column; }
-  .is-collapsed .uc-stamp::before { content: "v"; }
+  .is-collapsed .uc-stamp-ic { display: inline-grid; }
+}
+@container uc (min-width: 720px) and (max-width: 1023px) {
+  .uc-cats { width: calc(var(--space-8) * 3); }
+  .uc-detail { padding: var(--space-4); }
 }
 @container uc (max-width: 719px) {
   .uc-rail { position: absolute; inset: 0 auto 0 0; z-index: 2; width: min(85%, calc(var(--space-8) * 4)); visibility: hidden; translate: -100% 0; background: var(--bg-raised); box-shadow: var(--shadow-raised); }

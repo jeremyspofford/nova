@@ -34,7 +34,7 @@ const DOC = (p) => `https://github.com/jeremyspofford/nova/blob/main/${p}`;
 // motion, light and mark variables), drawn as a vortex of light from the palette tokens.
 export function nebulaOrb({ state = 'idle', size = 'rail', label = null } = {}) {
   const words = label ?? `Nova: ${state.replace('-', ' ')}`;
-  return `<span class="orb orb-${size} orb-nebula" data-state="${state}" role="img" aria-label="${words}"><span class="orb-glow"></span><span class="orb-field"></span><span class="orb-arms"></span><span class="orb-swirl"></span><span class="orb-eye"></span><span class="orb-stars"></span></span>`;
+  return `<span class="orb orb-${size} orb-nebula" data-state="${state}" role="img" aria-label="${words}"><span class="orb-glow"></span><span class="orb-arms"></span><span class="orb-field"></span><span class="orb-swirl"></span><span class="orb-eye"></span><span class="orb-stars"></span></span>`;
 }
 
 const icon = (name) => ICONS[name] ?? '';
@@ -47,19 +47,19 @@ const RECENT = ['Friday plan', 'Reply to the landlord', 'Train times for March',
 const SPACES = [['Home', 'home'], ['Work', 'tasks'], ['Study desktop', 'device'], ['Cabin', 'brief']];
 
 function stamp(id, build, pending) {
-  const said = pending ? `Running ${build.running}, latest merged ${build.latest}: redeploy pending` : `Nova ${build.version}, build ${build.running}`;
-  return `<a class="uc-stamp${pending ? ' is-pending' : ''}" href="#${id}-about" aria-label="${said}. About Nova">${pending ? '<span class="uc-dot" aria-hidden="true"></span>' : ''}<span>${build.version}</span><span class="uc-mono">${build.running}</span>${pending ? '<span>redeploy pending</span>' : ''}</a>`;
+  const said = pending ? `${build.version} ${build.running} redeploy pending: latest merged is ${build.latest}` : `${build.version} ${build.running}`;
+  return `<a class="uc-stamp${pending ? ' is-pending' : ''}" href="#${id}-about" aria-label="${said}. About Nova"><span class="uc-ic uc-stamp-ic" aria-hidden="true">${icon('health')}</span>${pending ? '<span class="uc-dot" aria-hidden="true"></span>' : ''}<span>${build.version}</span> <span class="uc-mono">${build.running}</span>${pending ? ' <span>redeploy pending</span>' : ''}</a>`;
 }
 
 function rail(id, { active = 'chat', recent = 0, pending = false } = {}) {
-  return `<aside class="uc-rail" aria-label="Navigation">
+  return `<div class="uc-rail">
 <div class="uc-rail-head"><button type="button" class="uc-row uc-space-btn" aria-label="Space: Home. Switch space"><span class="uc-space-mark" aria-hidden="true">${nebulaOrb({ size: 'mini', label: '' }).replace('role="img" aria-label=""', 'aria-hidden="true"')}</span><span class="uc-label">Home</span><span class="uc-chev" aria-hidden="true">${icon('chevron')}</span></button>
 <button type="button" class="uc-icon" aria-label="Search or jump (Ctrl K)">${icon('search')}</button><button type="button" class="uc-icon" aria-label="New chat">${icon('plus')}</button></div>
-<nav class="uc-nav" aria-label="Places">${NAV.map(([ic, name, n]) => `<a class="uc-row${ic === active ? ' is-on' : ''}" href="#${id}-${ic}"${ic === active ? ' aria-current="page"' : ''}><span class="uc-ic" aria-hidden="true">${icon(ic)}</span><span class="uc-label">${name}</span>${n ? `<span class="uc-count" aria-label="${n} waiting">${n}</span>` : ''}</a>`).join('')}</nav>
+<nav class="uc-nav" aria-label="Places">${NAV.map(([ic, name, n]) => `<a class="uc-row${ic === active ? ' is-on' : ''}" href="#${id}-${ic}"${ic === active ? ' aria-current="page"' : ''} aria-label="${name}${n ? ` ${n} waiting` : ''}"><span class="uc-ic" aria-hidden="true">${icon(ic)}</span><span class="uc-label">${name}</span>${n ? ` <span class="uc-count">${n}</span>` : ''}</a>`).join('')}</nav>
 <p class="uc-group">Recent</p>
 <nav class="uc-nav uc-recent" aria-label="Recent conversations">${RECENT.map((t, i) => `<a class="uc-row${active === 'chat' && i === recent ? ' is-on' : ''}" href="#${id}-r${i}"><span class="uc-ic" aria-hidden="true">${icon('chat')}</span><span class="uc-label">${t}</span></a>`).join('')}</nav>
 <div class="uc-rail-foot"><div class="uc-spaces" role="group" aria-label="Spaces">${SPACES.map(([name, ic], i) => `<button type="button" class="uc-icon${i === 0 ? ' is-on' : ''}" aria-label="Space: ${name}"${i === 0 ? ' aria-pressed="true"' : ' aria-pressed="false"'}>${icon(ic)}</button>`).join('')}</div>${stamp(id, pending ? PENDING : BUILD, pending)}</div>
-</aside>`;
+</div>`;
 }
 
 function topbar(id, title, orbState = 'idle') {
@@ -67,7 +67,7 @@ function topbar(id, title, orbState = 'idle') {
 }
 
 function screen(kind, state, body, { rail: railHtml = '', mode = '' } = {}) {
-  return `<div class="uc-screen${mode ? ` ${mode}` : ''}" data-uc-frame="${kind}-${state}">${railHtml}<main class="uc-main">${body}</main></div>`;
+  return `<div class="uc-screen${mode ? ` ${mode}` : ''}" data-uc-frame="${kind}-${state}">${railHtml}<div class="uc-main">${body}</div></div>`;
 }
 
 function composer(id, { replying = false, big = false } = {}) {
@@ -93,11 +93,11 @@ function replyChat(id) {
 }
 
 function palette(id) {
-  const row = (ic, name, where, keys = '', on = false) => `<li role="option" aria-selected="${on}"><button type="button" class="uc-row uc-hit${on ? ' is-on' : ''}"><span class="uc-ic" aria-hidden="true">${icon(ic)}</span><span class="uc-label">${name}</span><span class="uc-faint">${where}</span>${keys}</button></li>`;
+  const row = (ic, name, where, keys = '', on = false) => `<li><button type="button" class="uc-row uc-hit${on ? ' is-on' : ''}"${on ? ' aria-current="true"' : ''}><span class="uc-ic" aria-hidden="true">${icon(ic)}</span><span class="uc-label">${name}</span><span class="uc-faint">${where}</span>${keys}</button></li>`;
   return `<div class="uc-scrim"></div><div class="uc-palette" role="dialog" aria-modal="true" aria-label="Command palette"><div class="uc-palette-search"><span class="uc-ic" aria-hidden="true">${icon('search')}</span><label class="sr-only" for="${id}-cmd">Search or type a command</label><input id="${id}-cmd" class="uc-bare" value="mod" placeholder="Search or type a command"></div>
-<div class="uc-palette-list"><p class="uc-group">Settings</p><ul role="listbox" aria-label="Settings">${row('settings', 'Models', 'Settings › Models', '', true)}${row('settings', 'Models on Study desktop', 'Settings › Devices')}</ul>
-<p class="uc-group">Spaces</p><ul role="listbox" aria-label="Spaces">${row('device', 'Study desktop', 'Switch space', kbd('Ctrl 3'))}</ul>
-<p class="uc-group">Actions</p><ul role="listbox" aria-label="Actions">${row('plus', 'New chat', 'Chat', kbd('Ctrl N'))}${row('brief', 'What’s new', 'Changelog')}</ul></div>
+<div class="uc-palette-list"><p class="uc-group">Settings</p><ul aria-label="Settings">${row('settings', 'Models', 'Settings › Models', '', true)}${row('settings', 'Models on Study desktop', 'Settings › Devices')}</ul>
+<p class="uc-group">Spaces</p><ul aria-label="Spaces">${row('device', 'Study desktop', 'Switch space', kbd('Ctrl 3'))}</ul>
+<p class="uc-group">Actions</p><ul aria-label="Actions">${row('plus', 'New chat', 'Chat', kbd('Ctrl N'))}${row('brief', 'What’s new', 'Changelog')}</ul></div>
 <p class="uc-palette-foot">${kbd('↑')}${kbd('↓')} move · ${kbd('Enter')} open · ${kbd('Esc')} close</p></div>`;
 }
 
@@ -114,7 +114,7 @@ function settingsPane(id, { cat = 'General', search = '', counts = null, pane = 
   const list = (counts ? CATEGORIES.filter(([c]) => counts[c]) : CATEGORIES).map(([c, ic]) => `<a class="uc-row${c === cat ? ' is-on' : ''}" href="#${id}-cat-${c}"${c === cat ? ' aria-current="page"' : ''}><span class="uc-ic" aria-hidden="true">${icon(ic)}</span><span class="uc-label">${c}</span>${counts ? `<span class="uc-count" aria-label="${counts[c]} matches">${counts[c]}</span>` : ''}</a>`).join('');
   return `<div class="uc-settings" data-uc-pane="${pane}"><div class="uc-cats"><div class="uc-search"><span class="uc-ic" aria-hidden="true">${icon('search')}</span><label class="sr-only" for="${id}-find">Search settings</label><input id="${id}-find" class="uc-bare" placeholder="Search settings" value="${search}">${search ? `<button type="button" class="uc-icon" aria-label="Clear search">${icon('close')}</button>` : kbd('/')}</div>
 <nav class="uc-nav" aria-label="Settings categories">${list}</nav>${counts ? '<p class="uc-faint uc-cats-note">Only categories with a match are listed.</p>' : ''}</div>
-<section class="uc-detail" aria-labelledby="${id}-detail-title"><a class="uc-row uc-back" href="#${id}-back"><span class="uc-ic" aria-hidden="true">${icon('back')}</span><span>Settings</span></a>${detail}</section></div>`;
+<div class="uc-detail"><a class="uc-row uc-back" href="#${id}-back"><span class="uc-ic" aria-hidden="true">${icon('back')}</span><span>Settings</span></a>${detail}</div></div>`;
 }
 
 function settingsTop(id) {
@@ -202,7 +202,7 @@ const ORB_SAID = { idle: 'Slow turn, soft light', listening: 'Faster turn, full 
 function orbSheet() {
   const row = (still) => `<ul class="uc-orbs${still ? ' uc-still' : ''}" aria-label="${still ? 'Reduced motion' : 'Moving'}">${ORB_STATES.map((s) => `<li class="uc-orb-cell">${nebulaOrb({ state: s, size: 'rail' })}<span class="uc-orb-name">${s}</span><span class="uc-faint">${still ? (s === 'stopped' ? 'Grey, solid ring' : s === 'needs-you' || s === 'working' ? 'Dashed ring' : ORB_SAID[s].split(',')[1]?.trim() ?? 'Still') : ORB_SAID[s]}</span></li>`).join('')}</ul>`;
   const tokens = ['orb/core', 'orb/glow', 'orb/listening', 'orb/attention', 'accent/primary', 'accent/secondary', 'bg/base', 'surface/card', 'text/primary'];
-  return `${topbar('uc-orb', 'Orb and theme', 'speaking')}<div class="uc-page uc-wide"><div class="uc-orb-hero">${nebulaOrb({ state: 'idle', size: 'hero', label: 'Nova, idle' })}<div class="uc-icons" aria-label="App icon sizes" role="group">${[3, 2, 1].map((k) => `<span class="orb-icon" data-k="${k}" role="img" aria-label="App icon">${nebulaOrb({ state: 'idle', size: 'hero', label: '' }).replace('role="img" aria-label=""', 'aria-hidden="true"')}</span>`).join('')}</div></div>
+  return `${topbar('uc-orb', 'Orb and theme', 'speaking')}<div class="uc-page uc-wide" tabindex="0"><div class="uc-orb-hero">${nebulaOrb({ state: 'idle', size: 'hero', label: 'Nova, idle' })}<div class="uc-icons" aria-label="App icon sizes" role="group">${[3, 2, 1].map((k) => `<span class="orb-icon" data-k="${k}" role="img" aria-label="App icon">${nebulaOrb({ state: 'idle', size: 'hero', label: '' }).replace('role="img" aria-label=""', 'aria-hidden="true"')}</span>`).join('')}</div></div>
 <h3 class="uc-group">Moving</h3>${row(false)}<h3 class="uc-group">Reduced motion: still, and still distinct</h3>${row(true)}
 <h3 class="uc-group">Nebula tokens, filed first</h3><ul class="uc-swatches">${tokens.map((t) => `<li class="uc-swatch"><span class="uc-chip-sw" style="background: var(--${t.replace('/', '-')})"></span><span class="uc-mono">${t}</span></li>`).join('')}</ul></div>`;
 }
@@ -226,6 +226,7 @@ export function ucFrame(kind, state) {
 
 // One styleguide entry: every frame of a kind, each with its full-screen address.
 export function ucEntry(kinds, wrap) {
-  return UC_FRAMES.filter(([k]) => kinds.includes(k)).map(([k, s, said]) => wrap(`${said} · <a class="link" href="?entry=${entryOf(k)}&amp;frame=${k}-${s}">Full screen</a>`, ucFrame(k, s))).join('');
+  // Several frames on one page: each frame's landmarks get its name, so no two are called the same.
+  return UC_FRAMES.filter(([k]) => kinds.includes(k)).map(([k, s, said]) => wrap(`${said} · <a class="link" href="?entry=${entryOf(k)}&amp;frame=${k}-${s}">Full screen</a>`, ucFrame(k, s).replace(/(<nav [^>]*aria-label=")([^"]+)"/g, `$1$2 (${said})"`))).join('');
 }
 export const entryOf = (kind) => (['about', 'changelog', 'pipeline'].includes(kind) ? 'ui-about' : `ui-${kind}`);
