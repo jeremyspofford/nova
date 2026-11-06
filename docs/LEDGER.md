@@ -4,7 +4,9 @@ Decisions, dependencies and deviations, newest first within each section.
 
 ## What changed (plain language)
 
-What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
+**From 2026-11-06, each merge's entry is its own file in [docs/ledger/](ledger/README.md)**, newest first by file name. One file per pull request means pull requests no longer collide on this file and can merge as soon as their own checks pass. The entries below are the history up to then, unchanged.
+
+What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
 **2026-11-06 · Settings · Appearance no longer redraws its design cards when nothing changed**
 - What changed: the Appearance settings are redrawn every time the appearance settings load, which happens when the page opens, after any design change made on any device, and after Save, Cancel or Undo there. Each part was supposed to be rewritten only if it would show something different, but it decided that by comparing with what the browser reads back from the page, which is never written exactly the same way. So every load rewrote the design cards and the "Change it for" and "Light and dark" choices, even when nothing had changed. That took away keyboard focus on a card and a hover, and reopened "More designs" if you had closed it while one of those designs was in use. Now each part remembers what it was last asked to show and is rewritten only when that changes. If something else ever replaces a part's contents, it is written again.
