@@ -14,6 +14,7 @@ const HELPERS = {
     takeoverState: 'what the takeover panel says', takeoverActions: 'buttons inside the takeover panel', takeoverRefused: 'a line inside the takeover panel',
     problemsSummary: 'words inside HealthCard', voiceState: 'words beside the composer',
     configField: 'one setting inside the config setup step (config doors)',
+    memoryBudget: 'the budget bar and its legend, drawn inside deviceModels (models-screen)', taskPicks: 'the per-task picks, drawn inside deviceModels (models-screen)',
     passkeyLine: 'a line inside ApprovalSheet and every tier-3 sheet (passkey.js)', passkeyConfirm: 'drawn inside ApprovalSheet', passkeyAction: 'buttons inside ApprovalSheet',
     // Known debt, said plainly: exported but drawn nowhere in the app (the shell draws its own toast).
     toast: 'unused: the app’s toast is drawn by shell.js, whose markup the styleguide shows',
@@ -42,7 +43,7 @@ test('each styleguide entry has its own anchor and address, so it can be approve
   const ids = [...guide.matchAll(/^\s+\['([a-z][a-z-]*)', '[^']+', '/gm)].map((m) => m[1]);
   assert.ok(ids.length >= 30, `entries: ${ids.join(', ')}`);
   assert.equal(new Set(ids).size, ids.length, 'entry ids are unique');
-  for (const entry of ['work-costs', 'diagnostics']) assert.ok(ids.includes(entry), `${entry} is reviewable alone`);
+  for (const entry of ['work-costs', 'diagnostics', 'models-screen']) assert.ok(ids.includes(entry), `${entry} is reviewable alone`);
   for (const reserved of ['ds', 'mode']) assert.ok(!ids.includes(reserved), `#sg-${reserved} is the design switch`);
   assert.match(guide, /id="sg-\$\{id\}"/);
   assert.match(guide, /href="\?entry=\$\{id\}"/);

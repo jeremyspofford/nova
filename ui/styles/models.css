@@ -24,3 +24,103 @@
 .model-notices { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
 .model-cards .settings-label { margin: 0; }
 @media (prefers-reduced-motion: reduce) { .model-progress { transition: none; } }
+
+/* A device's Models screen (proposed, 2026-11-04; styleguide entry models-screen). The Stage-2 look:
+   opaque surfaces, sections under caption headings, rows on hairlines, colour only for status. The
+   budget bar is never read by colour alone: its legend says every segment in words and numbers. */
+.device-models { max-width: var(--layout-content-max); background: var(--bg-raised); backdrop-filter: none; -webkit-backdrop-filter: none; font-variant-numeric: tabular-nums; }
+.device-models > * + * { margin-top: var(--space-6); }
+.device-models .section-title { margin: 0 0 var(--space-3); }
+.dm-head { display: grid; gap: var(--space-1); }
+.dm-crumb { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.dm-title { font: var(--type-weight-strong) var(--type-h2)/var(--type-line-tight) var(--font-display); color: var(--text-primary); }
+.dm-device { font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body); color: var(--text-primary); overflow-wrap: anywhere; }
+
+/* The verdict: a word, a mark and a status colour; the word alone carries it. */
+.fit-verdict { display: inline-flex; flex: none; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-3); border: 1px solid color-mix(in srgb, var(--fit-c) 55%, transparent); border-radius: var(--radius-pill); background: color-mix(in srgb, var(--fit-c) 14%, transparent); color: var(--text-primary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); white-space: nowrap; }
+.fit-verdict .icon { width: var(--space-4); height: var(--space-4); color: var(--fit-c); }
+.fit-verdict[data-verdict="fits"] { --fit-c: var(--status-ok); }
+.fit-verdict[data-verdict="tight"] { --fit-c: var(--status-waiting); }
+.fit-verdict[data-verdict="wont-fit"] { --fit-c: var(--status-attention); }
+.fit-tight-mark { width: var(--space-3); height: var(--space-3); border: 2px solid var(--fit-c); border-radius: var(--radius-pill); }
+
+/* The bar: one row of segments, each as wide as its share of the budget (or of what is needed,
+   when that is more), in the legend's order. */
+.dm-total-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); margin-bottom: var(--space-3); }
+.dm-total { font: var(--type-weight-strong) var(--type-body)/var(--type-line-body) var(--font-body); color: var(--text-primary); }
+.fit-bar { position: relative; display: flex; height: var(--space-6); border: 1px solid var(--border-strong); border-radius: var(--radius-input); background: var(--bg-base); overflow: hidden; }
+.fit-seg { flex-basis: 0; flex-shrink: 0; min-width: var(--space-1); border-inline-end: 1px solid var(--bg-raised); }
+.fit-seg:last-child { border-inline-end: 0; }
+.fit-limit { position: absolute; inset-block: 0; width: 0; border-inline-start: 2px solid var(--text-primary); }
+.fit-scale { display: flex; justify-content: space-between; margin-top: var(--space-1); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); }
+.dm-budget > .settings-note { margin-top: var(--space-3); }
+
+/* Segment fills, shared by the bar and the legend's keys. Models take the accents; a model's context
+   memory is its own colour, lighter; the rest are neutral, the reserve dashed and free left empty. */
+[data-seg="weights"][data-model="0"] { background: var(--accent-primary); }
+[data-seg="kv"][data-model="0"] { background: color-mix(in srgb, var(--accent-primary) 45%, var(--bg-base)); }
+[data-seg="weights"][data-model="1"] { background: var(--accent-secondary); }
+[data-seg="kv"][data-model="1"] { background: color-mix(in srgb, var(--accent-secondary) 45%, var(--bg-base)); }
+[data-seg="weights"][data-model="2"] { background: var(--status-working); }
+[data-seg="kv"][data-model="2"] { background: color-mix(in srgb, var(--status-working) 45%, var(--bg-base)); }
+[data-seg="overhead"] { background: var(--text-faint); }
+[data-seg="other"] { background: var(--text-secondary); }
+[data-seg="reserve"] { background: var(--surface-card-hover); }
+.fit-key[data-seg="reserve"] { border: 1px dashed var(--text-secondary); }
+[data-seg="free"] { background: transparent; }
+.fit-key[data-seg="free"] { border: 1px solid var(--border-strong); }
+.fit-key[data-seg="over"] { background: transparent; border: 2px solid var(--status-attention); }
+
+/* Two columns where there is room, so the legend stays below the plan in weight; one on a phone. */
+.fit-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--space-8) * 4)), 1fr)); column-gap: var(--space-5); list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+.fit-legend-row { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-2) 0; border-top: 1px solid var(--border-subtle); }
+.fit-key { flex: none; width: var(--space-3); height: var(--space-3); margin-top: var(--space-1); border-radius: var(--radius-input); }
+.fit-what { display: grid; flex: 1 1 0; min-width: 0; font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-primary); overflow-wrap: anywhere; }
+.fit-sub { font-size: var(--type-caption); color: var(--text-secondary); }
+.fit-gb { flex: none; font: var(--type-weight-strong) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-primary); }
+
+/* The plan: one model per row, its verdict at the right end, its controls under it. */
+.dm-models { list-style: none; margin: 0; padding: 0; }
+.dm-model, .dm-together { display: grid; gap: var(--space-2); padding: var(--space-4) 0; border-top: 1px solid var(--border-subtle); }
+.dm-model:last-child, .dm-together { border-bottom: 1px solid var(--border-subtle); }
+.dm-model .settings-note, .dm-together .settings-note { margin: 0; }
+.dm-model-head { display: flex; align-items: center; gap: var(--space-3); }
+.dm-model-head .fit-key { margin-top: 0; }
+.dm-model-text { flex: 1 1 0; min-width: 0; }
+.dm-model-name { font: var(--type-weight-strong) var(--type-body)/var(--type-line-tight) var(--font-body); color: var(--text-primary); overflow-wrap: anywhere; }
+.dm-together .dm-model-name { flex: 1 1 0; }
+.dm-model-meta { font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.dm-estimate { color: var(--status-attention); font-weight: var(--type-weight-strong); }
+.dm-controls, .dm-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); }
+.dm-add { margin-top: var(--space-4); }
+.dm-field { display: grid; gap: var(--space-1); flex: 0 1 auto; min-width: 0; }
+.dm-field:has(.dm-range) { flex: 1 1 calc(var(--space-8) * 3); grid-template-columns: minmax(0, 1fr) auto; }
+.dm-field:has(.dm-range) .dm-field-label { grid-column: 1 / -1; }
+.dm-field-label { font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); }
+.dm-field select { max-width: 100%; }
+.dm-range { width: 100%; min-width: 0; height: var(--hit); margin: 0; accent-color: var(--accent-primary); }
+.dm-out { align-self: center; min-width: var(--space-6); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); color: var(--text-primary); }
+.dm-fixed { align-self: center; }
+.dm-fixed .dm-out { font-weight: var(--type-weight-regular); }
+.device-models .connection-actions { margin-top: var(--space-4); }
+
+/* The picks: rows on hairlines; privacy said first. */
+.dm-privacy { margin: 0 0 var(--space-2); }
+.dm-privacy strong { color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.dm-pick .settings-control { flex: none; }
+.dm-sub-title { margin: var(--space-4) 0 var(--space-2); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); }
+
+/* The app's Models screen (model-fit step 3, built from the approved composition): a device that is
+   asleep says how old what it shows is; Install and assign asks before anything downloads, in place
+   of its button; what happened since is said under it. */
+.dm-seen { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-1); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.dm-confirm { display: grid; gap: var(--space-2); margin-top: var(--space-4); padding: var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius-input); background: var(--bg-base); }
+.dm-confirm .settings-note, .dm-confirm .settings-label { margin: 0; }
+.dm-confirm .connection-actions { margin-top: var(--space-2); }
+.dm-status { margin: var(--space-3) 0 0; }
+.dm-back { margin-bottom: var(--space-3); }
+.dm-routes { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+.dm-route { display: grid; gap: var(--space-1); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+.dm-route .settings-note, .dm-route .settings-label { margin: 0; }
+.model-device .sheet-actions { margin-top: var(--space-2); }
+.setup-models { display: grid; gap: var(--space-3); }

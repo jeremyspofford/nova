@@ -317,8 +317,8 @@ export function createCore(o: CoreOptions) {
       ...Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((a) => a.address)),
     ].filter(Boolean),
   });
-  // Page reads are screened by the ingest gate (wired below) as they are taken.
-  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}), screen: (r) => ingest.screen({ text: r.text, source: { kind: 'web', origin: r.origin, ref: r.ref } }) });
+  // Page reads are screened by the ingest gate, wired below with the rest.
+  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}) });
   const browserChecks = browserCheckers(o.home);
   verifier.registerKind('screenshot', browserChecks.screenshot);
   verifier.registerKind('url', browserChecks.url);
@@ -515,7 +515,7 @@ export function createCore(o: CoreOptions) {
   });
   // Nova Browser (M10b): sign-ins from the vault, the co-pilot on the local sorting model (Noul,
   // through the decision stack, forced local-only), site templates through the template path, and
-  // the ingest screen for every dialog and every co-pilot input.
+  // the ingest screen for every page read, every dialog and every co-pilot input.
   browser.wire({
     db, vault, templates, rules, decisions,
     screen: async (text, origin, ref) => {

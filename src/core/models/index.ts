@@ -19,8 +19,8 @@ import { chatMessages } from '../providers/openai.ts';
 import { str, type Usage } from '../providers/types.ts';
 import { checkHardware, detectHardware, gb, hardwareWords, privateAddress, type Hardware } from './hardware.ts';
 import { Ollama, RuntimeDown, runsRemotely, type InstalledModel, type LoadedModel, type Message, type ModelShape } from './ollama.ts';
-import { CATALOG, HEADROOM, ROLES, ROLE_WORDS, capacityWords, recommend, roleContext, type DeviceModels, type Pick, type Role, type RoleAdvice } from './recommend.ts';
-import { learnOverhead, overheadWords, priorOverhead, type LearnedOverhead } from './fit.ts';
+import { CATALOG, HEADROOM, ROLES, ROLE_WORDS, capacityWords, fitDevice, isEmbedder, isText, planCandidates, quantTag, recommend, roleContext, type DeviceModels, type Pick, type Role, type RoleAdvice } from './recommend.ts';
+import { fit, learnOverhead, overheadWords, priorOverhead, weightsBytes, type LearnedOverhead, type Quant } from './fit.ts';
 import { sendMagic } from './wake.ts';
 import type { Db } from '../db.ts';
 import type { Ledger, LanedWorker, Task } from '../ledger.ts';
@@ -168,6 +168,9 @@ export class Models extends EventEmitter {
     // Cloud usage that came back in a report from a provider that sends off the devices (a coding
     // agent in the cloud) is tracked here too, so the budget sees every dollar.
     o.ledger.on('task', (t: Task) => this.#trackReport(t));
+    // Install and assign (the Models screen): a download asked for with a role is assigned once
+    // Nova has verified it.
+    o.ledger.on('task', (t: Task) => this.#assignAfterPull(t));
     // A computer revoked (or no longer a trusted computer for any reason) loses its roles at once.
     o.devices.on('revoked', () => this.#forgetUntrusted());
     o.devices.on('change', () => this.#forgetUntrusted());
@@ -1026,14 +1029,15 @@ export class Models extends EventEmitter {
   // ---- downloads and removal: tier-2 ledger tasks ------------------------------------------------
 
   // Asks for a download. Refused at once when the disk budget can't take what Nova knows of its size.
-  async requestPull(body: Record<string, unknown>): Promise<Task> {
+  // `then` is never read from a request: only installPlan (below) passes it, already checked.
+  async requestPull(body: Record<string, unknown>, then?: { assign: { role: Role; context: number | null } | null; size: number | null }): Promise<Task> {
     const model = str(body.model);
     if (!MODEL_NAME.test(model)) throw new CoreError('validation', 'model is the name to download, like nomic-embed-text or qwen3:8b.');
     const device = str(body.device) || HUB;
     if (!this.#computes(device)) throw new CoreError('conflict', `${this.#noCompute(device)}.`);
     const url = this.#urlFor(device);
     if (!url) throw new CoreError('conflict', `Nova doesn’t know where ${this.#deviceName(device)}’s models answer.`);
-    const known = CATALOG.find((c) => c.name === model)?.size;
+    const known = CATALOG.find((c) => c.name === model)?.size ?? then?.size ?? undefined;
     const digest = str(body.digest).replace(/^sha256:/, '');
     if (digest && !/^[0-9a-f]{64}$/.test(digest)) throw new CoreError('validation', 'digest is the sha256 Nova should expect, 64 hex characters.');
     if (known) {
@@ -1046,13 +1050,107 @@ export class Models extends EventEmitter {
       goal: `${model} is installed on ${this.#deviceName(device)}, and Nova has read its digest from the runtime itself.`,
       origin: { kind: 'user' },
       evidence_required: [{ kind: 'confirmation', note: 'the model’s digest, read by Nova from the runtime' }],
-      inputs: { action: 'pull', model, device, url, ...(digest ? { digest } : {}), ...(known ? { size: known } : {}) },
+      inputs: { action: 'pull', model, device, url, ...(digest ? { digest } : {}), ...(known ? { size: known } : {}), ...(then?.assign ? { assign: then.assign } : {}) },
       privacy_mode: 'local-only',
       // Downloading takes disk, bandwidth and time: Nova asks first.
       approval_tier: 2,
       user_visibility: 'handling',
     });
     return task;
+  }
+
+  // Install and assign (the per-device Models screen, model-fit step 3): a planned set of models for
+  // one device, each with its quant and context and, if it serves one, its role. Checked here, at the
+  // API's edge: the device must be one that may run model work, every model one Nova lists for it
+  // (installed there, or in its catalog), never one that runs off the person's devices, each role
+  // once, and the set must fit the device together (the fit engine, overhead and reserve counted
+  // once). Nothing is loosened: an installed model is assigned now, exactly as PUT
+  // /models/roles/{role} does; every download is the same tier-2 task POST /models/pull makes, which
+  // waits for the person's OK, and its role is assigned only once Nova has verified the download.
+  async installPlan(body: Record<string, unknown>): Promise<{ device: string; assigned: { role: Role; model: string }[]; tasks: { id: string; title: string; model: string; role: Role | null; size: number | null; state: string }[]; words: string }> {
+    const device = str(body.device) || HUB;
+    if (device !== HUB && !this.#trusted(device)) throw new CoreError('validation', 'device is the hub, or one of your paired computers.');
+    if (!this.#computes(device)) throw new CoreError('conflict', `${this.#noCompute(device)}.`);
+    const name = this.#deviceName(device);
+    const plan = body.plan;
+    if (!Array.isArray(plan) || plan.length < 1 || plan.length > 4) throw new CoreError('validation', 'plan is what to put on the device: 1 to 4 of {model, quant, context?, role?}.');
+    const dm = (await this.#deviceModels()).find((d) => d.id === device);
+    if (!dm?.hardware) throw new CoreError('conflict', `Nova doesn’t know ${name}’s hardware yet, so it can’t check that the plan fits.`);
+    // Local candidates only, whatever the privacy mode: nothing that runs elsewhere is installed.
+    const candidates = planCandidates(dm, { privacy: 'local-only', cloud: null }).filter((c) => c.where === 'local');
+    const ROLE_OK = ['triage-text', 'reasoner', 'embedder'] as const;
+    const items = plan.map((raw, i) => {
+      if (!isObj(raw)) throw new CoreError('validation', `plan[${i}] is {model, quant, context?, role?}.`);
+      const model = str(raw.model);
+      const c = candidates.find((x) => x.name === model);
+      if (!c) throw new CoreError('validation', `plan[${i}].model: ${model || 'nothing'} isn’t a model Nova lists for ${name}. Pick one from the screen’s list.`);
+      if (!c.quants.includes(raw.quant as Quant)) throw new CoreError('validation', `plan[${i}].quant is one of ${c.quants.join(', ')} for ${model}.`);
+      const quant = raw.quant as Quant;
+      let role: Role | null = null;
+      if (raw.role !== undefined && raw.role !== null) {
+        if (!ROLE_OK.includes(raw.role as (typeof ROLE_OK)[number])) throw new CoreError('validation', `plan[${i}].role is one of ${ROLE_OK.join(', ')}, or null.`);
+        role = raw.role as Role;
+        const asModel = { name: c.name, capabilities: c.capabilities } as InstalledModel;
+        if (role === 'embedder' ? !isEmbedder(asModel) : !isText(asModel)) throw new CoreError('validation', `plan[${i}]: ${model} can’t serve ${ROLE_WORDS[role].name.toLowerCase()}.`);
+      }
+      const own = c.max_context ?? null;
+      let context: number;
+      if (raw.context === undefined || raw.context === null) {
+        if (!own && role !== 'embedder') throw new CoreError('validation', `plan[${i}].context is how many tokens it runs with, ${CONTEXT_MIN} to ${CONTEXT_MAX.toLocaleString('en-US')}.`);
+        context = own ?? 2048;
+      } else {
+        if (!okContext(raw.context)) throw new CoreError('validation', `plan[${i}].context is how many tokens it runs with: a whole number from ${CONTEXT_MIN} to ${CONTEXT_MAX.toLocaleString('en-US')}.`);
+        context = raw.context;
+      }
+      const installed = !!c.installed && c.installed.quant === quant;
+      return { c, quant, role, context, installed, model: installed ? c.name : quantTag(c.name, quant, c.default_quant) };
+    });
+    const roles = items.map((x) => x.role).filter((r): r is Role => r !== null);
+    if (new Set(roles).size !== roles.length) throw new CoreError('validation', 'Each role can be given to one model of the plan.');
+    if (new Set(items.map((x) => x.model)).size !== items.length) throw new CoreError('validation', 'The plan names the same model twice.');
+    const r = fit({
+      device: fitDevice(dm.hardware, dm.overhead),
+      models: items.map((x) => ({ name: x.model, params: x.c.params, weights_bytes: x.installed ? x.c.installed!.weights_bytes : null, quant: x.quant, context: x.context, arch: x.c.arch, arch_source: x.c.arch_source, kv_type: 'f16' })),
+    });
+    if (r.verdict === 'wont-fit') throw new CoreError('conflict', `That plan doesn’t fit on ${name}: ${r.words} Nothing was installed or assigned.`);
+    const url = device === HUB ? undefined : this.#urlFor(device) ?? undefined;
+    const assigned: { role: Role; model: string }[] = [];
+    for (const x of items.filter((y) => y.installed && y.role)) {
+      await this.assign(x.role, { device, model: x.model, ...(url ? { url } : {}), ...(x.role === 'embedder' ? {} : { context: x.context }) });
+      assigned.push({ role: x.role!, model: x.model });
+    }
+    const tasks = [];
+    for (const x of items.filter((y) => !y.installed)) {
+      const size = x.c.default_quant === x.quant && x.c.size ? x.c.size : weightsBytes(x.c.params, x.quant);
+      const t = await this.requestPull({ model: x.model, device }, { assign: x.role ? { role: x.role, context: x.role === 'embedder' ? null : x.context } : null, size });
+      tasks.push({ id: t.id, title: t.title, model: x.model, role: x.role, size, state: t.state });
+    }
+    const words = [
+      assigned.length ? `${assigned.map((a) => `${a.model} serves ${ROLE_WORDS[a.role].name.toLowerCase()}`).join('; ')} now.` : '',
+      tasks.length ? `${tasks.length === 1 ? 'One download waits' : `${tasks.length} downloads wait`} for your OK; ${tasks.some((t) => t.role) ? 'each is assigned once Nova has checked it arrived.' : 'nothing is assigned until you choose.'}` : '',
+    ].filter(Boolean).join(' ') || 'Nothing to change: the plan is installed, and serves no role yet.';
+    return { device, assigned, tasks, words };
+  }
+
+  // A download asked for with a role (installPlan) is assigned once the task is done, which is after
+  // the verifier has checked Nova's own reading of the runtime. Once per task.
+  #afterPull = new Set<string>();
+  #assignAfterPull(t: Task): void {
+    if (t.owner !== this.worker.id || t.state !== 'done' || this.#afterPull.has(t.id)) return;
+    const i = (t.brief.inputs ?? {}) as { action?: string; model?: string; device?: string; assign?: { role?: Role; context?: number | null } };
+    if (i.action !== 'pull' || !isObj(i.assign) || !i.assign.role) return;
+    this.#afterPull.add(t.id);
+    const device = str(i.device) || HUB;
+    const role = i.assign.role;
+    const context = i.assign.context;
+    void (async () => {
+      const inv = await this.inventory(device);
+      const model = str(i.model);
+      const got = inv.models.find((m) => m.name === model)?.name ?? inv.models.find((m) => m.name === `${model}:latest`)?.name ?? model;
+      const url = device === HUB ? null : this.#urlFor(device);
+      await this.assign(role, { device, model: got, ...(url ? { url } : {}), ...(context ? { context } : {}) });
+      this.#o.log.info('models', `${got} is downloaded and checked, so it now serves ${ROLE_WORDS[role].name.toLowerCase()} on ${this.#deviceName(device)}.`);
+    })().catch((e) => this.#o.log.warn('models', `Nova downloaded ${i.model} but couldn’t give it its role.`, { error: (e as Error).message }));
   }
 
   async requestRemove(body: Record<string, unknown>): Promise<Task> {
@@ -1241,24 +1339,48 @@ export class Models extends EventEmitter {
     return (this.#inventory.get(HUB)?.models ?? []).map((m) => ({ name: m.name, digest: m.digest }));
   }
 
+  // What the per-device Models screen plans with (model-fit step 3): the device's learned overhead,
+  // what its runtime has loaded now (with the memory each load takes), the models it can plan (its
+  // installed ones, then the catalog; privacy first, see planCandidates), the roles it serves, and
+  // how old its hardware reading and model list are, for a device that sleeps. Null for a computer
+  // that may not run model work. The screen runs the same fit engine in the browser.
+  async #planView(id: string, dm: DeviceModels | undefined, hardwareAt: string | null) {
+    if (!dm) return null;
+    const inv = this.#inventory.get(id);
+    const url = this.#urlFor(id);
+    const loaded: LoadedModel[] = url && inv?.ok ? await new Ollama(url).loaded(AbortSignal.timeout(1200)).catch(() => []) : [];
+    const cloud = this.cloud();
+    return {
+      overhead: this.overhead(id),
+      candidates: planCandidates(dm, { privacy: this.#privacy(), cloud: cloud ? cloud.name : null }),
+      loaded: loaded.map((l) => ({ name: l.name, size_bytes: l.size_bytes, vram_bytes: l.vram_bytes, context: l.context })),
+      roles: ROLES.flatMap((r) => { const p = this.placement(r); return p && p.device === id ? [{ role: r, model: p.model, context: p.context ?? null }] : []; }),
+      models_at: inv?.at ?? null, models_live: !!inv?.ok, hardware_at: hardwareAt,
+    };
+  }
+
   async view() {
-    const advice = await this.recommendation();
+    const dms = await this.#deviceModels();
+    const advice = recommend(dms);
     const hubHw = await this.hubHardware();
     const hubInv = this.#inventory.get(HUB)!;
-    const deviceView = (id: string, name: string, hub: boolean, hw: Hardware | null, d?: Device) => {
+    const deviceView = async (id: string, name: string, hub: boolean, hw: Hardware | null, d?: Device) => {
       const inv = this.#inventory.get(id);
       const nic = hw?.network[0];
       const online = hub || (d?.last_seen ? this.#now().getTime() - Date.parse(d.last_seen) < 2 * 60_000 : false);
       const latency = hub ? null : this.wakeLatency(id);
+      const hardwareAt = hub ? hw?.at ?? null : this.#o.db.get<{ updated_at: string }>('SELECT updated_at FROM device_hardware WHERE device_id = ?', id)?.updated_at ?? null;
       return {
-        id, name, hub, online, hardware: hw, words: hw ? hardwareWords(hw) : 'It hasn’t reported its hardware yet.', capacity: hw ? capacityWords(hw, this.overhead(id)) : '',
+        id, name, hub, online, last_seen: hub ? null : d?.last_seen ?? null, compute: this.#computes(id),
+        plan: await this.#planView(id, dms.find((x) => x.id === id), hardwareAt),
+        hardware: hw, words: hw ? hardwareWords(hw) : 'It hasn’t reported its hardware yet.', capacity: hw ? capacityWords(hw, this.overhead(id)) : '',
         overhead: overheadWords(this.overhead(id)),
         ...(hub ? { decision_model: this.#o.decisionModel?.() ?? null } : {}),
         runtime: inv ? { url: this.#urlFor(id), ok: inv.ok, version: inv.version, models: inv.models.length, problem: inv.problem, words: inv.ok ? `Ollama ${inv.version} · ${inv.models.length} model${inv.models.length === 1 ? '' : 's'}` : `Ollama isn’t answering${inv.problem ? `: ${inv.problem}` : ''}` } : null,
         wake: hub ? null : { mac: nic?.mac ?? null, latency_ms: latency, words: !nic ? 'Can’t be woken: no network card reported.' : latency !== null ? `Wakes in about ${secs(latency)} (measured).` : 'Can be woken; how long it takes isn’t measured yet.' },
       };
     };
-    const devices = [deviceView(HUB, this.#o.hubName(), true, hubHw), ...this.#spokes().map((d) => deviceView(d.id, d.name, false, this.#spokeHardware(d.id), d))];
+    const devices = await Promise.all([deviceView(HUB, this.#o.hubName(), true, hubHw), ...this.#spokes().map((d) => deviceView(d.id, d.name, false, this.#spokeHardware(d.id), d))]);
     const roles = await Promise.all(advice.map(async (a) => {
       const p = this.placement(a.role);
       const problem = p ? (this.#inventory.get(p.device)?.models.some((m) => m.name === p.model) === false && this.#inventory.get(p.device)?.ok ? `${p.model} isn’t installed there any more.` : await this.probe(a.role)) : null;
@@ -1392,6 +1514,7 @@ export class Models extends EventEmitter {
       { method: 'PUT', path: '/models/roles/{role}', summary: 'Assign a role (triage-text, reasoner, embedder) to an installed model on the hub or a paired computer. A computer’s url must be one of its own addresses; hub_model is what small jobs use while it sleeps.', body: '{model, device?, url?, hub_model?}', handle: async ({ params, body }) => ({ placement: await this.assign(params.role, body), view: await view() }) },
       { method: 'DELETE', path: '/models/roles/{role}', summary: 'Leave a role unassigned.', handle: async ({ params }) => { this.unassign(params.role); return view(); } },
       { method: 'POST', path: '/models/pull', status: 201, summary: 'Download a model (a tier-2 ledger task: it waits for your OK). Refused at once when the disk budget can’t take it. digest: the sha256 to expect, if known.', body: '{model, device?, digest?}', handle: ({ body }) => this.requestPull(body) },
+      { method: 'POST', path: '/models/install', status: 201, summary: 'Install and assign a plan for one device (the Models screen): each model at its quant and context, with the role it serves, if any. Refused when a model isn’t one Nova lists for the device, runs off your devices, or the plan won’t fit together. An installed model is assigned now, as PUT /models/roles/{role}; each download is a tier-2 ledger task that waits for your OK, as POST /models/pull, and is assigned once Nova has verified it.', body: '{device?, plan: [{model, quant, context?, role?}]}', handle: ({ body }) => this.installPlan(body) },
       { method: 'POST', path: '/models/remove', status: 201, summary: 'Remove an installed model (a tier-2 ledger task). A model serving a role must be replaced first.', body: '{model, device?}', handle: ({ body }) => this.requestRemove(body) },
       { method: 'PUT', path: '/models/wake', summary: 'Where Wake-on-LAN packets go (host:port; by default the computer’s own broadcast address) and how long to wait for a computer never woken before (wait_s, 120 by default). After the first wake Nova waits as long as it took, half again, plus 2 s.', body: '{target?, wait_s?}', handle: async ({ body }) => { this.setWake(body); return view(); } },
       { method: 'PUT', path: '/models/disk-budget', summary: 'The most disk models may use, in GB (null for none). Downloads past it are refused.', body: '{gb}', handle: async ({ body }) => { this.setDiskBudget(body.gb); return view(); } },

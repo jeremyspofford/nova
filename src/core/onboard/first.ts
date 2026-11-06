@@ -29,7 +29,8 @@ export interface FirstView {
   looked: boolean;
   imported: Imported[];
   waiting: number;
-  device: { words: string; roles: string[]; roles_words: string; backend: string; backend_words: string };
+  // gpu: Nova found a GPU here; with the compute role, it brings the Models step into setup (model-fit step 3).
+  device: { words: string; roles: string[]; roles_words: string; backend: string; backend_words: string; gpu: boolean };
   action: FirstAction;
 }
 
