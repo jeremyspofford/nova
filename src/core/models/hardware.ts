@@ -34,6 +34,9 @@ export interface Hardware {
   network: Nic[];
   // A transcription runtime found on the PATH (whisper.cpp and friends), or null.
   whisper: string | null;
+  // A Mac's GPU memory limit (sysctl iogpu.wired_limit_mb) when it has been raised; null at the
+  // macOS default (0), off a Mac, or unreadable. Absent from agents older than this field.
+  gpu_wired_limit_bytes?: number | null;
   // How each part was read, so the person can see where a number came from.
   sources: string[];
 }
@@ -96,6 +99,22 @@ async function apple(run: Run, ram: number): Promise<Gpu[] | null> {
   } catch { return []; }
 }
 
+// The slice of node:child_process.execFile this file uses, so a test can stand in for it.
+export type ExecFileLike = (file: string, args: string[], o: { timeout: number; maxBuffer: number; windowsHide: boolean }, cb: (err: Error | null, stdout: string | Buffer) => void) => unknown;
+
+// A Mac's GPU wired-memory limit in bytes, or null: 0 is the macOS default ("not raised"), and an
+// error, a timeout, odd output or another platform say nothing. A fixed path and args, no shell.
+export function gpuWiredLimit(os: string, exec: ExecFileLike = execFile): Promise<number | null> {
+  if (os !== 'darwin') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    exec('/usr/sbin/sysctl', ['-n', 'iogpu.wired_limit_mb'], { timeout: 2000, maxBuffer: 64, windowsHide: true }, (err, stdout) => {
+      const t = err ? '' : String(stdout).trim();
+      const mb = /^\d{1,9}$/.test(t) ? Number(t) : 0;
+      resolve(mb > 0 ? mb * MIB : null);
+    });
+  });
+}
+
 // Free memory: Linux says what is available (cache counts as free); elsewhere Node's figure.
 function memAvailable(): { bytes: number; source: string } {
   try {
@@ -123,7 +142,7 @@ function nics(): Nic[] {
   return out.slice(0, 8);
 }
 
-export async function detectHardware(o: { run?: Run; diskPath?: string; now?: () => Date } = {}): Promise<Hardware> {
+export async function detectHardware(o: { run?: Run; exec?: ExecFileLike; diskPath?: string; now?: () => Date } = {}): Promise<Hardware> {
   const run = o.run ?? runTool;
   const sources: string[] = ['os'];
   const ram = totalmem();
@@ -142,6 +161,8 @@ export async function detectHardware(o: { run?: Run; diskPath?: string; now?: ()
     gpus = g;
     if (g.length) break;
   }
+  const wired = await gpuWiredLimit(os, o.exec);
+  if (wired !== null) sources.push('sysctl');
   let disk: Hardware['disk'] = null;
   const path = o.diskPath ?? process.cwd();
   try {
@@ -153,7 +174,7 @@ export async function detectHardware(o: { run?: Run; diskPath?: string; now?: ()
   return {
     at: (o.now ?? (() => new Date()))().toISOString(), platform: os, arch: arch(), hostname: hostname(),
     cpu: { model: (c[0]?.model ?? 'unknown').replace(/\s+/g, ' ').trim(), threads: c.length },
-    ram_bytes: ram, ram_free_bytes: free.bytes, gpus, disk, network: nics(), whisper: onPath(WHISPER), sources,
+    ram_bytes: ram, ram_free_bytes: free.bytes, gpus, disk, network: nics(), whisper: onPath(WHISPER), gpu_wired_limit_bytes: wired, sources,
   };
 }
 
@@ -200,12 +221,16 @@ export function checkHardware(v: unknown): Hardware {
     const netmask = IPV4.test(text(n.netmask, 15)) ? text(n.netmask, 15) : '255.255.255.0';
     return [{ name: text(n.name, 32) || 'net', mac, address, netmask, broadcast: broadcastOf(address, netmask) }];
   }) : [];
+  const ram = bytes(v.ram_bytes);
+  // Trusted only as a whole number of bytes the machine's memory can hold; anything else is unknown.
+  const w = v.gpu_wired_limit_bytes;
+  const wired = typeof w === 'number' && Number.isSafeInteger(w) && w > 0 && w <= ram ? w : null;
   return {
     at: text(v.at, 40) || new Date().toISOString(), platform: text(v.platform, 20) || 'unknown', arch: text(v.arch, 20) || 'unknown', hostname: hostLabel(v.hostname),
     cpu: { model: text(cpu.model) || 'unknown', threads: Math.min(4096, bytes(cpu.threads)) },
-    ram_bytes: bytes(v.ram_bytes), ram_free_bytes: bytes(v.ram_free_bytes), gpus,
+    ram_bytes: ram, ram_free_bytes: bytes(v.ram_free_bytes), gpus,
     disk: d ? { path: text(d.path, 200), total_bytes: bytes(d.total_bytes), free_bytes: bytes(d.free_bytes) } : null,
-    network, whisper: text(v.whisper, 200) || null,
+    network, whisper: text(v.whisper, 200) || null, gpu_wired_limit_bytes: wired,
     sources: Array.isArray(v.sources) ? v.sources.slice(0, 8).map((s) => text(s, 30)).filter(Boolean) : [],
   };
 }
@@ -232,9 +257,11 @@ export function modelMemory(h: Hardware): { bytes: number; on: 'gpu' | 'cpu'; wo
   return { bytes: Math.floor(h.ram_bytes * 0.5), on: 'cpu', words: `no GPU Nova can use, so models run on the CPU from ${gb(h.ram_bytes)} of memory` };
 }
 
-export function hardwareWords(h: Hardware): string {
+// `shared`: what a unified-memory GPU may use, from the fit engine on the hub (this file can't
+// import it); without it, the GPU's own figure.
+export function hardwareWords(h: Hardware, shared?: number): string {
   const parts = [
-    h.gpus.length ? h.gpus.map((g) => `${g.name} (${gb(g.vram_bytes)}${g.unified ? ' shared' : ''})`).join(', ') : 'no GPU',
+    h.gpus.length ? h.gpus.map((g) => `${g.name} (${gb(g.unified && shared !== undefined ? shared : g.vram_bytes)}${g.unified ? ' shared' : ''})`).join(', ') : 'no GPU',
     `${gb(h.ram_bytes)} memory`, `${h.cpu.threads} threads`,
     h.disk ? `${gb(h.disk.free_bytes)} free disk` : 'disk space unknown',
   ];

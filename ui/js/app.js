@@ -1116,10 +1116,10 @@ async function removeSkill(item) {
   const next = items[items.indexOf(item) + 1] ?? items[items.indexOf(item) - 1];
   item.classList.add('is-leaving');
   try {
-    const { files } = await post(`/api/skills/${id}/remove`);
+    const { files, data } = await post(`/api/skills/${id}/remove`);
     state.undo = async () => {
       try {
-        await post(`/api/skills/${id}/restore`, { files });
+        await post(`/api/skills/${id}/restore`, { files, ...(data ? { data } : {}) });
         await loadSkills();
         $(`s-${id}`)?.focus();
         toast('Back, exactly as it was.');

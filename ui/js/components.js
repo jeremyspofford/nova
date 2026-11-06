@@ -943,7 +943,10 @@ export const FIT_WORDS = { fits: 'Fits', tight: 'Tight', 'wont-fit': 'Won’t fi
 const verdictPill = (v, extra = '') => `<span class="fit-verdict" data-verdict="${esc(v)}"${extra}>${v === 'fits' ? ICONS.check : v === 'wont-fit' ? ICONS.close : '<span class="fit-tight-mark" aria-hidden="true"></span>'}${FIT_WORDS[v] ?? esc(v)}</span>`;
 const MEMORY_WORDS = {
   gpu: (d) => `Budget: ${gbWords(d.budget_bytes)}, one GPU’s own memory. A model sits on one GPU; Nova doesn’t add GPUs together unless the backend splits models across them.`,
-  unified: (d) => `Budget: ${gbWords(d.budget_bytes)}, the share of this Mac’s ${gbWords(d.ram_bytes)} unified memory that macOS lets the GPU use.`,
+  // Where the number came from: the limit set on the Mac, or Nova's estimate of the macOS default.
+  unified: (d) => (d.budget_source === 'measured'
+    ? `GPU memory limit set on this Mac: ${gbWords(d.budget_bytes)}.`
+    : `Estimated GPU share of ${gbWords(d.ram_bytes)} unified memory: ${gbWords(d.budget_bytes)} (macOS default).`),
   cpu: (d) => `No GPU found. Nova plans against half of this computer’s ${gbWords(d.ram_bytes)} of memory, and models run on the processor, slowly.`,
 };
 
@@ -1074,7 +1077,7 @@ function sleepPolicy(view) {
 <div class="dm-controls">${select('idle', 'When it’s idle', p.idle, SLEEP_IDLE)}${select('demand', 'When work needs it', p.demand, SLEEP_DEMAND)}</div>${p.notes.map((n) => `<p class="settings-note">${esc(n)}</p>`).join('')}</section>`;
 }
 
-// The whole screen. `view`: { id, device: {name, path, hardware, memory, budget_bytes, ram_bytes,
+// The whole screen. `view`: { id, device: {name, path, hardware, memory, budget_bytes, budget_source, ram_bytes,
 // overhead_source, overhead_loads, seen?, wake?}, plan: [{name, quant, quants, context, contexts, installed,
 // loaded, estimate, result}], total (the plan's own fit result), catalog: [names], advice, privacy,
 // crumb?, confirm?: {title, lines, ok}, status?, busy? }. `device.seen` is said for a device that is

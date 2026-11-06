@@ -20,7 +20,7 @@ import { str, type Usage } from '../providers/types.ts';
 import { checkHardware, detectHardware, gb, hardwareWords, privateAddress, type Hardware } from './hardware.ts';
 import { Ollama, RuntimeDown, runsRemotely, type InstalledModel, type LoadedModel, type Message, type ModelShape } from './ollama.ts';
 import { CATALOG, HEADROOM, ROLES, ROLE_WORDS, capacityWords, fitDevice, isEmbedder, isText, planCandidates, quantTag, recommend, roleContext, type DeviceModels, type Pick, type Role, type RoleAdvice } from './recommend.ts';
-import { fit, learnOverhead, overheadWords, priorOverhead, weightsBytes, type LearnedOverhead, type Quant } from './fit.ts';
+import { fit, learnOverhead, overheadWords, priorOverhead, unifiedBudgetBytes, weightsBytes, type LearnedOverhead, type Quant } from './fit.ts';
 import { sendMagic } from './wake.ts';
 import type { Db } from '../db.ts';
 import type { Ledger, LanedWorker, Task } from '../ledger.ts';
@@ -1442,7 +1442,7 @@ export class Models extends EventEmitter {
       return {
         id, name, hub, online, last_seen: hub ? null : d?.last_seen ?? null, compute: this.#computes(id),
         plan: await this.#planView(id, dms.find((x) => x.id === id), hardwareAt),
-        hardware: hw, words: hw ? hardwareWords(hw) : 'It hasn’t reported its hardware yet.', capacity: hw ? capacityWords(hw, this.overhead(id)) : '',
+        hardware: hw, words: hw ? hardwareWords(hw, unifiedBudgetBytes(hw.ram_bytes, hw.gpu_wired_limit_bytes)) : 'It hasn’t reported its hardware yet.', capacity: hw ? capacityWords(hw, this.overhead(id)) : '',
         overhead: overheadWords(this.overhead(id)),
         ...(hub ? { decision_model: this.#o.decisionModel?.() ?? null } : {}),
         runtime: inv ? { url: this.#urlFor(id), ok: inv.ok, version: inv.version, models: inv.models.length, problem: inv.problem, words: inv.ok ? `Ollama ${inv.version} · ${inv.models.length} model${inv.models.length === 1 ? '' : 's'}` : `Ollama isn’t answering${inv.problem ? `: ${inv.problem}` : ''}` } : null,
