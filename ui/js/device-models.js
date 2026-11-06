@@ -233,6 +233,7 @@ export function refreshDeviceModels(box, id) {
 // The interaction a refresh waited for has ended: draw what waited, once, after the event has done
 // its own work (a click that follows the pointerup, focus moving to the next control).
 function ended(force) {
+  // wait: after the event: no delay, only the end of the event's own task.
   setTimeout(() => {
     if (!waiting.size) return;
     for (const key of [...waiting]) redraw(key.split('\n')[0], null, { held: true, force });

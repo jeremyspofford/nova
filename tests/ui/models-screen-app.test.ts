@@ -357,7 +357,7 @@ const frames = (page: Page) => page.evaluate(() => new Promise((r) => requestAni
 // The add list and the first slider as they are now, kept in the page, so a check can ask whether a
 // refresh replaced them (an open native list, or a drag, goes with the element).
 const holdControls = (page: Page) => page.evaluate(() => { const r = document.querySelector('#settings-devices')!; (window as unknown as { held: Element[] }).held = [r.querySelector('select[id$="-add"]')!, r.querySelector('[data-models-context="0"]')!]; });
-const inPlace = (page: Page) => page.evaluate(() => { const [list, range] = (window as unknown as { held: Element[] }).held; return { list: list.isConnected, range: range.isConnected, focused: document.activeElement === list }; });
+const inPlace = (page: Page) => page.evaluate(() => { const [list, range] = (window as unknown as { held: [Element, Element] }).held; return { list: list.isConnected, range: range.isConnected, focused: document.activeElement === list }; });
 // A press held on the slider's middle (its 8k, the plan's context), not let go.
 async function pressSlider(page: Page, root: Locator) {
   const range = root.locator('[data-models-context="0"]');
