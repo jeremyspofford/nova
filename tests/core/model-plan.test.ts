@@ -163,6 +163,92 @@ test('POST /models/install: an installed model is assigned now; a download is a 
   } finally { await api.close(); await core.close(); await ollama.close(); }
 });
 
+// The installed models take about 45.8e9 bytes. A 44 GB budget leaves about 1.4e9, less than
+// qwen3:4b's 2.6e9; a 50 GB budget leaves about 7.9e9, enough for it.
+const MIXED = [
+  { model: 'example-mid:8b', quant: 'Q4_K_M', context: 8192, role: 'reasoner' },
+  { model: 'qwen3:4b', quant: 'Q4_K_M', context: 4096, role: 'triage-text' },
+];
+
+test('POST /models/install: a download the disk budget refuses refuses the whole plan; no role changes and no task is made', async () => {
+  const ollama = await startFakeOllama({ models: INSTALLED });
+  const { core } = modelsCore(ollama.url, { privacy: 'local-only' });
+  const api = await served(core);
+  try {
+    await core.models.assign('reasoner', { model: 'example-small:3b' });
+    core.models.setDiskBudget(44);
+    const before = core.ledger.list({ limit: 50 }).length;
+    const r = await api.call('POST', '/models/install', { plan: MIXED });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /Refused: qwen3:4b takes about .* past the disk budget of 44 GB/);
+    assert.doesNotMatch(r.body.error, /applied only in part/);
+    assert.equal(core.models.placement('reasoner')?.model, 'example-small:3b', 'the installed model’s role is left as it was');
+    assert.equal(core.models.placement('triage-text'), null);
+    assert.equal(core.ledger.list({ limit: 50 }).length, before, 'no download task');
+  } finally { await api.close(); await core.close(); await ollama.close(); }
+});
+
+test('POST /models/install: within the disk budget, a mixed plan assigns the installed model and queues the download with its role', async () => {
+  const ollama = await startFakeOllama({ models: INSTALLED });
+  const { core } = modelsCore(ollama.url, { privacy: 'local-only' });
+  const api = await served(core);
+  try {
+    await core.models.assign('reasoner', { model: 'example-small:3b' });
+    core.models.setDiskBudget(50);
+    const r = await api.call('POST', '/models/install', { plan: MIXED });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.deepEqual(r.body.assigned, [{ role: 'reasoner', model: 'example-mid:8b' }]);
+    assert.equal(core.models.placement('reasoner')?.model, 'example-mid:8b');
+    assert.equal(r.body.tasks.length, 1);
+    const t = core.ledger.get(r.body.tasks[0].id);
+    assert.equal(t.approval_tier, 2);
+    assert.equal(t.state, 'waiting');
+    assert.deepEqual((t.brief.inputs as { model: string; assign: unknown }).assign, { role: 'triage-text', context: 4096 });
+    assert.equal(core.models.placement('triage-text'), null, 'no role before the download is verified');
+    assert.match(r.body.words, /example-mid:8b serves thinking and writing now\. One download waits for your OK/);
+  } finally { await api.close(); await core.close(); await ollama.close(); }
+});
+
+// A 49 GB budget leaves about 6.8e9: qwen3:4b (2.6e9) fits alone, qwen3:8b (5.2e9) fits alone, not both.
+test('POST /models/install: two downloads that each fit the disk budget but not together refuse the whole plan, naming the total', async () => {
+  const ollama = await startFakeOllama({ models: INSTALLED });
+  const { core } = modelsCore(ollama.url, { privacy: 'local-only' });
+  const api = await served(core);
+  try {
+    await core.models.assign('reasoner', { model: 'example-small:3b' });
+    core.models.setDiskBudget(49);
+    const before = core.ledger.list({ limit: 50 }).length;
+    const r = await api.call('POST', '/models/install', { plan: [...MIXED, { model: 'qwen3:8b', quant: 'Q4_K_M', context: 4096 }] });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /^Refused: qwen3:4b and qwen3:8b take about 7\.3 GB together\. With the 43 GB your models already use that is past the disk budget of 49 GB\..*Nothing was installed or assigned\.$/);
+    assert.equal(core.models.placement('reasoner')?.model, 'example-small:3b', 'no role changed');
+    assert.equal(core.models.placement('triage-text'), null);
+    assert.equal(core.ledger.list({ limit: 50 }).length, before, 'no task made');
+    // POST /models/pull still checks one download at a time: each alone is asked for.
+    assert.equal((await api.call('POST', '/models/pull', { model: 'qwen3:8b' })).status, 201);
+    // And a plan counts what is already waiting: qwen3:4b no longer fits beside it.
+    const again = await api.call('POST', '/models/install', { plan: MIXED });
+    assert.equal(again.status, 409, JSON.stringify(again.body));
+    assert.match(again.body.error, /^Refused: qwen3:4b takes about 2\.4 GB, and a download already waiting or under way about 4\.8 GB, 7\.3 GB in all\. .*past the disk budget of 49 GB/);
+    assert.equal(core.models.placement('reasoner')?.model, 'example-small:3b');
+    assert.equal(core.ledger.list({ limit: 50 }).length, before + 1, 'only the one download asked for alone');
+  } finally { await api.close(); await core.close(); await ollama.close(); }
+});
+
+test('POST /models/install: a step that fails after the plan began to change says what had already changed', async () => {
+  const ollama = await startFakeOllama({ models: INSTALLED });
+  const { core } = modelsCore(ollama.url, { privacy: 'local-only' });
+  const api = await served(core);
+  try {
+    core.ledger.create = () => { throw new Error('example ledger write error'); };
+    const r = await api.call('POST', '/models/install', { plan: MIXED });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /The plan was applied only in part: example-mid:8b serves thinking and writing\. The rest wasn’t\./);
+    assert.doesNotMatch(r.body.error, /example ledger write error/, 'the inside error is logged, not shown');
+    assert.equal(core.models.placement('reasoner')?.model, 'example-mid:8b', 'what it says changed did');
+  } finally { await api.close(); await core.close(); await ollama.close(); }
+});
+
 test('POST /models/install: a quant other than the default asks for its own tag; a download with no role is assigned nothing', async () => {
   const ollama = await startFakeOllama({ models: INSTALLED });
   const { core } = modelsCore(ollama.url, { privacy: 'local-only' });

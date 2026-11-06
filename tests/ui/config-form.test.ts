@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { stop, until } from '../acceptance/support.ts';
-import { blank, browser, device, finishSetup, ready } from './support.ts';
+import { blank, browser, device, finishSetup, ready, shortTargets } from './support.ts';
 
 test('Config door 2: questions end in the diff and save through the checked path; Use the default; plain refusals', { timeout: 180_000 }, async (t) => {
   const b = await browser();
@@ -68,7 +68,7 @@ test('Config door 2: questions end in the diff and save through the checked path
     // The fold cover: no sideways scroll, every target at least 44px.
     await page.setViewportSize({ width: 344, height: 882 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal scroll');
-    assert.deepEqual(await form.locator('button, select, input').evaluateAll((els) => els.filter((e) => e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80))), [], '44px targets');
+    assert.deepEqual(await shortTargets(page, '#config-form :is(button, select, input)', { enabled: false }), [], '44px targets');
     assert.deepEqual(errors, []);
   } finally {
     await b.close();
