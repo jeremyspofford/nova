@@ -9,6 +9,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, join, relative, resolve, sep } from 'node:path';
+import { SKILL_DATA } from './core/index.ts';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const MAX_FILES = 200;
@@ -20,6 +21,9 @@ const displayName = (name, id) => {
   const n = String(name || id);
   return ID.test(n) ? n.charAt(0).toUpperCase() + n.slice(1).replace(/-/g, ' ') : n;
 };
+// Skills that ship behind a feature flag (config.features): while it is off, Nova behaves as if
+// they didn't exist (not listed, matched, loaded or installed). Removing one still works.
+export const FEATURE_SKILLS = Object.freeze({ 'interstitial-research': 'interstitial' });
 const list = (v) => String(v ?? '').split(',').map((w) => w.trim().toLowerCase()).filter(Boolean);
 
 export function parseFrontMatter(text) {
@@ -47,7 +51,8 @@ export function parseFrontMatter(text) {
   return { meta, body: (m ? text.slice(m[0].length) : String(text)).trim() };
 }
 
-function readSkill(dir, id) {
+function readSkill(dir, id, features = null) {
+  if (FEATURE_SKILLS[id] && !features?.[FEATURE_SKILLS[id]]) return null;
   const path = join(dir, id, 'SKILL.md');
   if (!ID.test(id) || !existsSync(path)) return null;
   const { meta, body } = parseFrontMatter(readFileSync(path, 'utf8'));
@@ -66,9 +71,9 @@ function readSkill(dir, id) {
   };
 }
 
-function readAll(dir) {
+function readAll(dir, features) {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).sort().map((id) => readSkill(dir, id)).filter(Boolean);
+  return readdirSync(dir).sort().map((id) => readSkill(dir, id, features)).filter(Boolean);
 }
 
 // path → text, or { base64 } for a file that isn't UTF-8 text.
@@ -101,15 +106,18 @@ function writeFiles(dir, files) {
 }
 
 export class Skills {
-  constructor(root, home) {
+  // features: config.features, read live (a flag that is off hides its skill everywhere).
+  constructor(root, home, features = {}) {
+    this.features = features;
+    this.home = home;
     this.catalogDir = join(root, 'skills');
     this.connectorsDir = join(root, 'connectors');
     this.dir = join(home, 'skills');
   }
 
-  installed() { return readAll(this.dir).map((s) => ({ ...s, own: !existsSync(join(this.catalogDir, s.id, 'SKILL.md')) })); }
-  catalog() { return readAll(this.catalogDir); }
-  get(id) { return readSkill(this.dir, String(id)); }
+  installed() { return readAll(this.dir, this.features).map((s) => ({ ...s, own: !existsSync(join(this.catalogDir, s.id, 'SKILL.md')) })); }
+  catalog() { return readAll(this.catalogDir, this.features); }
+  get(id) { return readSkill(this.dir, String(id), this.features); }
 
   available() {
     const have = new Set(existsSync(this.dir) ? readdirSync(this.dir) : []);
@@ -118,7 +126,7 @@ export class Skills {
 
   install(id) {
     const from = join(this.catalogDir, String(id));
-    if (!readSkill(this.catalogDir, String(id))) throw new SkillError(404, "Nova doesn't have a skill by that name.");
+    if (!readSkill(this.catalogDir, String(id), this.features)) throw new SkillError(404, "Nova doesn't have a skill by that name.");
     const to = join(this.dir, id);
     if (existsSync(to)) throw new SkillError(409, 'That skill is already installed.');
     mkdirSync(this.dir, { recursive: true });
@@ -133,6 +141,31 @@ export class Skills {
     const files = filesIn(dir);
     rmSync(dir, { recursive: true, force: true });
     return files;
+  }
+
+  // A skill's own data in the workspace (SKILL_DATA), deleted with it; what was there comes back
+  // for Undo. Nothing for a skill that keeps none.
+  removeData(id) {
+    const dir = this.dataDir(id);
+    if (!dir || !existsSync(dir)) return null;
+    const files = filesIn(dir);
+    rmSync(dir, { recursive: true, force: true });
+    return files;
+  }
+
+  // Undo of removeData. Paths stay inside the data folder. The files come back as unknown content
+  // (not marked Nova's own), so a later read of them is screened.
+  restoreData(id, files) {
+    const dir = this.dataDir(id);
+    if (!dir || !files || typeof files !== 'object') return;
+    const entries = Object.entries(files).map(([p, v]) => [p, decodeFile(v)]);
+    if (entries.some(([, d]) => !d)) throw new SkillError(400, 'That skill has a file Nova can’t put back.');
+    writeFiles(dir, entries);
+  }
+
+  dataDir(id) {
+    const rel = SKILL_DATA[String(id)];
+    return rel ? join(this.home, ...rel.split('/').filter(Boolean)) : null;
   }
 
   // What restoring would write, checked, without writing it (the ingest gate screens it first).
@@ -152,7 +185,7 @@ export class Skills {
   // the catalog has it, and nothing else.
   isCatalogCopy({ id, entries }) {
     const dir = join(this.catalogDir, String(id));
-    if (!readSkill(this.catalogDir, String(id))) return false;
+    if (!readSkill(this.catalogDir, String(id), this.features)) return false;
     const have = filesIn(dir, { names: true });
     if (Object.keys(have).length !== entries.length) return false;
     return entries.every(([p, data]) => {
@@ -209,8 +242,10 @@ export class Skills {
   // Skills whose words appear in the message. The rest are listed for the
   // model, which can load one with use_skill.
   match(text) {
-    const said = new Set(String(text).toLowerCase().match(/[a-z]+/g) ?? []);
-    return this.installed().filter((s) => s.words.some((w) => said.has(w)));
+    // A word matches a word; a phrase ("deep dive", "deep-dive") matches those words in a row.
+    const said = ` ${(String(text).toLowerCase().match(/[a-z]+/g) ?? []).join(' ')} `;
+    const has = (w) => { const p = (w.match(/[a-z]+/g) ?? []).join(' '); return !!p && said.includes(` ${p} `); };
+    return this.installed().filter((s) => s.words.some(has));
   }
 
   connectorDoc(name) {
