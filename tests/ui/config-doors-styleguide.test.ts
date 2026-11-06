@@ -7,7 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Browser, Page } from 'playwright-core';
-import { browser, webkitBrowser, device, still, ROOT } from './support.ts';
+import { browser, webkitBrowser, device, still, ROOT, shortTargets } from './support.ts';
 import { createNova } from '../../src/server.js';
 import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
@@ -58,8 +58,7 @@ async function geometry(page: Page, label: string) {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= width, `${label}: no horizontal scroll`);
   const root = page.locator('#sg-config-doors');
   assert.deepEqual(await root.evaluate((r) => [...r.querySelectorAll<HTMLElement>('button, label, p, h3, del, ins, .pill')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)), [], `${label}: clipped text`);
-  // In one task, from the live page: a locator's evaluateAll can be handed nodes a styleguide redraw has just replaced.
-  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#sg-config-doors :is(button, select:not(#config-state), input:not([type="file"]))')].filter((e) => !(e as HTMLInputElement).disabled && e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80))), [], `${label}: 44px targets`);
+  assert.deepEqual(await shortTargets(page, '#sg-config-doors :is(button, select:not(#config-state), input:not([type="file"]))'), [], `${label}: 44px targets`);
   const ids = await page.locator('[id]').evaluateAll((els) => els.map((e) => e.id));
   assert.equal(new Set(ids).size, ids.length, `${label}: duplicate ids`);
 }

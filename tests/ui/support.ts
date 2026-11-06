@@ -119,6 +119,21 @@ export async function device(b: Browser, { width = 1280, height = 820, id = `ui-
 }
 
 export const ready = (page: Page) => page.waitForSelector('html[data-ready]');
+
+// Hit targets that are short of `min` px tall (44 to a pointer), by the browser's own layout
+// precision: WebKit lays boxes out in 1/64 px units (LayoutUnit), and getBoundingClientRect turns
+// a 44 px box at a fractional position into 43.99993896 (#347, offsetHeight 44), so heights are
+// read back at 1/64 px. That's not a tolerance: a box 1/64 px short still fails. Queried and measured
+// in one task (a locator's two steps can be handed nodes a redraw has just replaced). `enabled`:
+// skip disabled controls; `visible`: skip hidden ones; `label`: a control's target is its label.
+export const LAYOUT_UNIT = 64;
+export function shortTargets(page: Page, selector: string, { min = 44, enabled = true, visible = false, label = false } = {}): Promise<string[]> {
+  return page.evaluate(({ selector, min, enabled, visible, label, unit }) => [...document.querySelectorAll<HTMLElement>(selector)]
+    .filter((e) => (!enabled || !(e as HTMLInputElement).disabled) && (!visible || e.checkVisibility()))
+    .map((e) => (label ? (e.closest('label') ?? e) : e) as HTMLElement)
+    .filter((e) => Math.round(e.getBoundingClientRect().height * unit) / unit < min)
+    .map((e) => e.outerHTML.slice(0, 80)), { selector, min, enabled, visible, label, unit: LAYOUT_UNIT });
+}
 // Before a screenshot: every finite animation (an entrance, a fade) has finished. The orb's
 // breathing never finishes, so it doesn't count.
 export const still = (page: Page) => page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity));
