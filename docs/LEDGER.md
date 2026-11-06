@@ -6,6 +6,12 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-06 · Test stability · Touch-target sizes are measured at the browser's own layout precision**
+- What changed: nothing in Nova. The UI tests check that every button, list and slider is at least 44 px tall. In CI, the Models screen's "Add a model" list and its "Add to the plan" button sometimes measured 43.99993896 px, while the browser's own layout said 44 (offsetHeight 44, computed height 44px). The browser lays pages out in steps of 1/64 px. When a control sits at a fractional position, for example under an animation that is still moving by a fraction of a pixel, the measurement it reports back carries tiny rounding noise. All seven 44 px checks in the UI tests now go through one shared helper that reads heights back at that same 1/64 px precision. This is not a tolerance: a control even 1/64 px short still fails. A new test proves it in Chromium and WebKit. An exactly-44 px button under a fractional move passes, while 43.5 px and 43.98 px buttons fail.
+- What you can now do: nothing new. The UI gate stops failing on this.
+- Still unfinished: nothing in this item.
+- Checked: in the CI-matching sandbox, with the device screen moved by 0.1507 px, the old check failed 3 of 3 with CI's exact two controls, and the new one passed 3 of 3. The new test passes in both browsers.
+
 **2026-11-05 · Test stability · The Health card test waits for Health's own problems**
 - What changed: nothing in the app. The UX review test F1 opens Health and checks that each open problem's full message is there. It waited for "a list" on the page. But Health draws other lists first (the work-cost limits), and until the problems arrive its Problems section says none are open. In a full run, where Health takes a few seconds to load, the test read the page in that gap and failed. Alone it always passed. Now it waits for each open problem's own row on Health, and the check itself is unchanged.
 - What you can now do: nothing new. A stand-in that delays Health's problems read by 3 seconds, as CI saw, makes the old test fail every time (3 of 3, "Health itself shows the full message"). The fixed test passes every time (3 of 3).
