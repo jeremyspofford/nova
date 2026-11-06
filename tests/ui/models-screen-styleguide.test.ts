@@ -15,7 +15,10 @@ import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
 import { GiB, PRIOR_OVERHEAD_BYTES, fit } from '../../src/core/models/fit.ts';
 
-const STATES = ['3090-one-model', '3090-two-models', '8gb-nothing-at-16k', 'mac-16gb-unified', 'mac-limit-set', 'unknown-shape', 'no-gpu', 'asleep', 'install-confirm', 'tight-ack'];
+// Wake on demand (proposed, docs/plans/wol-inference-nodes-adr-2026-11-06.md): the owner's Dell, woken by the hub.
+const WAKE = ['asleep-wakeable', 'waking', 'woke-loading', 'couldnt-wake', 'couldnt-wake-no-sender', 'couldnt-wake-unhealthy', 'sleep-policy'];
+const STATES = ['3090-one-model', '3090-two-models', '8gb-nothing-at-16k', 'mac-16gb-unified', 'mac-limit-set', 'unknown-shape', 'no-gpu', 'asleep', 'install-confirm', ...WAKE, 'tight-ack'];
+const LOCAL_FIRST = ['mac-16gb-unified', 'couldnt-wake-no-sender'];
 const ACK = /^I understand this (model|plan) leaves little memory headroom, so replies may slow down sharply or fail under load\.$/;
 // The owner's matrix: desktop bands, iPad-class, phones, and the foldables' postures.
 const MATRIX = {
@@ -142,6 +145,8 @@ async function stateChecks(page: Page, s: string, label: string) {
     assert.match(text, /Estimated GPU share of 16\.0 GB unified memory: 10\.7 GB \(macOS default\)\./, `${label}: an estimate says so`);
     assert.doesNotMatch(text, /limit set on this Mac/);
     assert.match(text, /can’t see what else is using this memory/);
+  }
+  if (LOCAL_FIRST.includes(s)) {
     assert.match(text, /Local first\./);
     // Local first: local picks come first, the cloud option after them, without a verdict.
     const order = await root.evaluate((r) => { const all = [...r.querySelectorAll('.dm-pick, [data-cloud]')]; return all.map((e) => (e.matches('[data-cloud]') ? 'cloud' : 'local')); });
@@ -175,12 +180,93 @@ async function stateChecks(page: Page, s: string, label: string) {
     assert.equal(await root.locator('[data-asleep]').count(), 1, `${label}: an asleep device says so`);
     assert.match(await root.locator('[data-asleep]').innerText(), /Asleep\s+Last seen 3 h ago\. What shows here is what it last reported/, `${label}: stamped with its age`);
   }
+  if (WAKE.includes(s)) await wakeChecks(page, s, label, text);
+  else assert.equal(await root.locator('[data-wake], .dm-sleep').count(), 0, `${label}: no wake state or sleep policy on a device that isn't a wake specimen`);
   if (s === 'install-confirm') {
     assert.equal(await root.locator('[data-models-confirm]').count(), 1, `${label}: Install and assign asks first`);
     assert.equal(await root.locator('[data-action="models-install"]').count(), 0, `${label}: the ask takes the button's place`);
     assert.match(await root.locator('[data-models-confirm]').innerText(), /about 14\.6 GB, downloads to Study desktop, then serves thinking and writing/);
     assert.equal(await root.locator('.btn.primary').count(), 1, `${label}: one standout`);
   }
+}
+
+// The wake states (WoL ADR): what each says, the wait-text rules on its waiting line, the catalog kept
+// while asleep, and the sleep policy control. Measured in one page.evaluate, so a redraw can't split it.
+async function wakeChecks(page: Page, s: string, label: string, text: string) {
+  const w = await page.evaluate(() => {
+    const r = document.querySelector('#sg-models-screen [data-device-models]')!;
+    const wake = r.querySelectorAll<HTMLElement>('[data-wake]');
+    const wait = r.querySelector<HTMLElement>('[data-wake] .waiting');
+    const sel = (k: string) => r.querySelector<HTMLSelectElement>(`[data-models-sleep="${k}"]`);
+    return {
+      count: wake.length, state: wake[0]?.dataset.wake ?? null, pill: wake[0]?.querySelector('.pill')?.textContent ?? null, pillClass: wake[0]?.querySelector('.pill')?.className ?? '',
+      wait: wait ? { text: wait.innerText.trim(), cls: wait.className, role: wait.getAttribute('role'), since: wait.hasAttribute('data-since') } : null,
+      models: r.querySelectorAll('.dm-model').length, picks: r.querySelectorAll('.dm-pick').length,
+      idle: sel('idle') ? { value: sel('idle')!.value, options: [...sel('idle')!.options].map((o) => o.text), label: sel('idle')!.labels?.[0]?.querySelector('.dm-field-label')?.textContent ?? '' } : null,
+      demand: sel('demand') ? { value: sel('demand')!.value, label: sel('demand')!.labels?.[0]?.querySelector('.dm-field-label')?.textContent ?? '' } : null,
+      actions: [...r.querySelectorAll<HTMLElement>('[data-wake] [data-action]')].map((b) => b.dataset.action),
+      sleepLast: r.lastElementChild?.classList.contains('dm-sleep') ?? false,
+    };
+  });
+  assert.equal(w.count, 1, `${label}: one wake state`);
+  assert.equal(w.models, 1, `${label}: the plan is kept`);
+  assert.ok(w.picks >= 1, `${label}: the picks are kept`);
+  assert.ok(w.sleepLast, `${label}: the sleep policy is the screen's last section`);
+  assert.deepEqual(w.idle, { value: '30', options: ['Never sleep', 'Sleep after 15 minutes', 'Sleep after 30 minutes', 'Sleep after 1 hour', 'Sleep after 2 hours'], label: 'When it’s idle' }, `${label}: never sleep, or sleep after N idle minutes`);
+  assert.deepEqual(w.demand, { value: 'wake', label: 'When work needs it' });
+  assert.match(text, /own device agent puts it to sleep/, `${label}: says who sleeps it`);
+  assert.doesNotMatch(text, /\d+ s left|remaining|\d+%/, `${label}: no countdown, no percentage`);
+  const asleepSeen = /Last seen \d+ (h|days) ago\. What shows here is what it last reported: its hardware \d+ (h|days) ago, its models \d+ (h|days) ago\./;
+  const expect: Record<string, { state: string; pill: string; is?: string }> = {
+    'asleep-wakeable': { state: 'asleep', pill: 'Asleep, wakeable' }, 'waking': { state: 'waking', pill: 'Waking' }, 'woke-loading': { state: 'awake', pill: 'Awake', is: 'is-on' },
+    'couldnt-wake': { state: 'failed', pill: 'Couldn’t wake', is: 'is-warn' }, 'couldnt-wake-no-sender': { state: 'failed', pill: 'Couldn’t wake', is: 'is-warn' },
+    'couldnt-wake-unhealthy': { state: 'failed', pill: 'Couldn’t wake', is: 'is-warn' }, 'sleep-policy': { state: 'awake', pill: 'Online', is: 'is-on' },
+  };
+  const e = expect[s]!;
+  assert.equal(w.state, e.state, label);
+  assert.equal(w.pill, e.pill, label);
+  if (e.is) assert.match(w.pillClass, new RegExp(e.is), `${label}: the pill's mark`);
+  if (['asleep-wakeable', 'waking', 'couldnt-wake'].includes(s)) assert.match(text, asleepSeen, `${label}: last-seen inventory, stamped with its age`);
+  if (s === 'asleep-wakeable') assert.match(text, /Nova wakes it when work needs it: Mini PC \(the hub\) sends the wake signal on their shared network\. Waking took 38 s last time\./);
+  if (s === 'waking') {
+    // Past 10 s: what is waited for, and the time so far; the estimate is the measured wake, never a countdown.
+    assert.ok(w.wait && w.wait.role === 'status' && /is-late/.test(w.wait.cls) && /is-long/.test(w.wait.cls), `${label}: a long wait, said: ${JSON.stringify(w.wait)}`);
+    assert.match(w.wait!.text, /^Waking Dell desktop for “Summarize the lease”… · 2\d s so far$/);
+    assert.equal(w.wait!.since, false, `${label}: the specimen's wait is frozen`);
+    assert.match(text, /Waking took 38 s last time, so Nova waits up to 59 s before it says what it will do instead\./);
+  }
+  if (s === 'woke-loading') {
+    assert.ok(w.wait && /is-late/.test(w.wait.cls) && !/is-long/.test(w.wait.cls), `${label}: 1–10 s, an indicator only`);
+    assert.equal(w.wait!.text, 'Loading qwen3:14b for “Summarize the lease”…');
+    assert.match(text, /Woke after 41 s \(38 s last time\)\. Its hardware is fresh again, and qwen3:14b at Q8_0 with 16k context still fits\./);
+  }
+  if (!['waking', 'woke-loading'].includes(s)) assert.equal(w.wait, null, `${label}: nothing is waited for`);
+  if (s === 'couldnt-wake') {
+    assert.match(text, /sent the wake signal at 14:02 and waited 59 s, half again what waking took last time \(38 s\)\. Dell desktop didn’t answer\./, `${label}: the reason`);
+    assert.match(text, /This is local only, so “Summarize the lease” waits on your devices and runs once Dell desktop checks in\. Nova won’t keep waking it\./, `${label}: what Nova does`);
+    assert.deepEqual(w.actions, ['models-wake-again']);
+  }
+  if (s === 'couldnt-wake-no-sender') {
+    assert.match(text, /None of your always-on devices is on its network, so nothing can send the wake signal\./);
+    assert.match(text, /Nova asks before anything goes to the cloud/, `${label}: never silently to the cloud`);
+    assert.deepEqual(w.actions, ['models-cloud-once']);
+  }
+  if (s === 'couldnt-wake-unhealthy') {
+    assert.match(text, /woke after 40 s and its device agent checked in, but Ollama didn’t answer in the minute after\./);
+    assert.match(text, /Nova won’t wake it again for this task\./);
+    assert.deepEqual(w.actions, []);
+  }
+}
+
+// The wake specimens' controls are demo only: a sleep policy change or a wake asks nothing of anyone.
+async function interactWake(page: Page, label: string) {
+  const root = page.locator('#sg-models-screen');
+  await root.locator('#models-state').selectOption('couldnt-wake');
+  await root.locator('[data-models-specimen="couldnt-wake"]').waitFor();
+  await root.locator('[data-action="models-wake-again"]').click();
+  assert.equal(await root.locator('[data-models-demo-notice]').innerText(), 'Demo only. Nothing was woken or sent.', label);
+  await root.locator('[data-models-sleep="idle"]').selectOption('never');
+  assert.equal(await root.locator('[data-models-demo-notice]').innerText(), 'Demo only. Nothing was changed.', label);
 }
 
 // The controls recompute with the engine: the 8 GB card's model fits once its context comes down,
@@ -250,7 +336,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               assert.deepEqual(axe.violations.map((v: { id: string; nodes: { target: string[] }[] }) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`), [], `${label}: axe`);
             }
           }
-          if (size === 'phone' || size === 'desktop-1440') await interact(p, `${engine}/${size}`);
+          if (size === 'phone' || size === 'desktop-1440') { await interactWake(p, `${engine}/${size}`); await interact(p, `${engine}/${size}`); }
           assert.deepEqual(after, [], 'the specimen makes no requests');
           assert.deepEqual(changes, [], 'the specimen changes nothing');
           assert.deepEqual(d.errors, []);

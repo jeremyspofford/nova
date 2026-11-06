@@ -1,0 +1,213 @@
+{
+ "cases_sha256": "b8dbee7d8dcc9e38d9a48482ae61a6a3766012d5b73a7c6cb0649cdcf1b449a7",
+ "total": 18,
+ "expected": {
+  "interstitial.verify-transfer:use_established": 3,
+  "interstitial.verify-transfer:use_hypothesis": 1,
+  "interstitial.verify-transfer:discard": 5,
+  "interstitial.outbound-check:send": 3,
+  "interstitial.outbound-check:withhold": 6
+ },
+ "counts": {
+  "sound, established": 3,
+  "sound, hypothesis": 1,
+  "surface analogy": 1,
+  "wrong field": 1,
+  "unsupported": 2,
+  "nothing holds": 1,
+  "abstract": 3,
+  "person": 2,
+  "record": 2,
+  "memory": 2
+ },
+ "rows": [
+  {
+   "id": "vt-wip",
+   "template": "interstitial.verify-transfer",
+   "category": "sound, established",
+   "labels": [
+    "from_field",
+    "mechanism",
+    "supports",
+    "established"
+   ],
+   "expected": "use_established",
+   "input_sha256": "9bbd769c18c7176d39bb507bbfea0dff966232a87577bbf9e94687bc1cce1e85"
+  },
+  {
+   "id": "vt-queue",
+   "template": "interstitial.verify-transfer",
+   "category": "sound, established",
+   "labels": [
+    "from_field",
+    "mechanism",
+    "supports",
+    "established"
+   ],
+   "expected": "use_established",
+   "input_sha256": "643c0dcf6889c7e540fcb8234a754c9911b2769871c2100deb292dc95fe5257c"
+  },
+  {
+   "id": "vt-thermal",
+   "template": "interstitial.verify-transfer",
+   "category": "sound, established",
+   "labels": [
+    "from_field",
+    "mechanism",
+    "supports",
+    "established"
+   ],
+   "expected": "use_established",
+   "input_sha256": "b650ce3cc8f80d72eb584b80473c5baf04b2a11f51483e540c1a8e63bb6a0bed"
+  },
+  {
+   "id": "vt-hyp",
+   "template": "interstitial.verify-transfer",
+   "category": "sound, hypothesis",
+   "labels": [
+    "from_field",
+    "mechanism",
+    "supports"
+   ],
+   "expected": "use_hypothesis",
+   "input_sha256": "9ee42207f66bdda6fb87a1bbb48a805f08616989d277a167593fcd406faa9782"
+  },
+  {
+   "id": "vt-surface",
+   "template": "interstitial.verify-transfer",
+   "category": "surface analogy",
+   "labels": [
+    "from_field",
+    "supports"
+   ],
+   "expected": "discard",
+   "input_sha256": "8f7235e19668dfd6706f08698f57753c92f7441803b98a412e35262e2a6c5462"
+  },
+  {
+   "id": "vt-field",
+   "template": "interstitial.verify-transfer",
+   "category": "wrong field",
+   "labels": [
+    "mechanism",
+    "supports"
+   ],
+   "expected": "discard",
+   "input_sha256": "9731646ff15029b5e16526fe2404af3054c1a38a6862e11b75263685dca3dfe8"
+  },
+  {
+   "id": "vt-unsupported",
+   "template": "interstitial.verify-transfer",
+   "category": "unsupported",
+   "labels": [
+    "from_field",
+    "mechanism"
+   ],
+   "expected": "discard",
+   "input_sha256": "8311e1ea2fbb172ebc860ff5a573d183cf63ee93f6c72d49a348f7652a06e4ba"
+  },
+  {
+   "id": "vt-overstated",
+   "template": "interstitial.verify-transfer",
+   "category": "unsupported",
+   "labels": [
+    "from_field",
+    "mechanism"
+   ],
+   "expected": "discard",
+   "input_sha256": "8525b260715cfe355e753ebf011c80132b4d62409dfa0589cf277f763f55b95b"
+  },
+  {
+   "id": "vt-none",
+   "template": "interstitial.verify-transfer",
+   "category": "nothing holds",
+   "labels": [],
+   "expected": "discard",
+   "input_sha256": "af826eb536e7e420467b26dd35217707fc47be7993beb8f197dc289a6f79459a"
+  },
+  {
+   "id": "oc-public",
+   "template": "interstitial.outbound-check",
+   "category": "abstract",
+   "labels": [],
+   "expected": "send",
+   "input_sha256": "3c6b36a71b3cea19be00aae72cf8500b8d12e9a2a478332609bb577dc546bfde"
+  },
+  {
+   "id": "oc-general-health",
+   "template": "interstitial.outbound-check",
+   "category": "abstract",
+   "labels": [],
+   "expected": "send",
+   "input_sha256": "8776af834d6e3bcb8a42348615904c0c08b8768f4cc6982a6758e4815d169e5c"
+  },
+  {
+   "id": "oc-public-figure",
+   "template": "interstitial.outbound-check",
+   "category": "abstract",
+   "labels": [],
+   "expected": "send",
+   "input_sha256": "a01441c4064ba613bc8c0b2df4d8a0d1d2d54f129697a4ee2e7dd013a3fda6d0"
+  },
+  {
+   "id": "oc-name",
+   "template": "interstitial.outbound-check",
+   "category": "person",
+   "labels": [
+    "person"
+   ],
+   "expected": "withhold",
+   "input_sha256": "922c33f2c90b521859bb2996cfc58d5a9b40bfaa90957254b218b2cf2cdbd94c"
+  },
+  {
+   "id": "oc-email",
+   "template": "interstitial.outbound-check",
+   "category": "person",
+   "labels": [
+    "person"
+   ],
+   "expected": "withhold",
+   "input_sha256": "ccf238bbaf1f322fd571bc8663276ef1e840d83cdc36e70335d5bb2fcf83b307"
+  },
+  {
+   "id": "oc-rx",
+   "template": "interstitial.outbound-check",
+   "category": "record",
+   "labels": [
+    "record"
+   ],
+   "expected": "withhold",
+   "input_sha256": "5947105139c9f573cdfd839acb8a166452c51193a3fba9bb565bc1a1407acd7e"
+  },
+  {
+   "id": "oc-salary",
+   "template": "interstitial.outbound-check",
+   "category": "record",
+   "labels": [
+    "record"
+   ],
+   "expected": "withhold",
+   "input_sha256": "b219fa966479506e795a45d6ac21271ea77b2453f19f7566a04f0cf00022b869"
+  },
+  {
+   "id": "oc-memory",
+   "template": "interstitial.outbound-check",
+   "category": "memory",
+   "labels": [
+    "person",
+    "memory"
+   ],
+   "expected": "withhold",
+   "input_sha256": "0c0a212f40809acf61451a150ef99434dd84ecbdbed6956c4225c6f596d047b9"
+  },
+  {
+   "id": "oc-capture",
+   "template": "interstitial.outbound-check",
+   "category": "memory",
+   "labels": [
+    "memory"
+   ],
+   "expected": "withhold",
+   "input_sha256": "cad811d1cbaa45528728854f11fd6f9950b4c6a674ffb03539c0a0db861eea7a"
+  }
+ ]
+}

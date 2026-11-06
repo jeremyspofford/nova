@@ -500,6 +500,8 @@ const MODEL_DEVICES = {
   // Added 2026-11-06: a Mac whose GPU memory limit was raised (sysctl iogpu.wired_limit_mb=57344).
   studio: { name: 'Studio Mac', words: 'Apple M2 Max · 64.0 GB unified memory', hw: { ...hardware([{ vendor: 'apple', name: 'Apple M2 Max', vram_bytes: 48 * GiB, vram_free_bytes: null, unified: true }], 64), platform: 'darwin', arch: 'arm64', gpu_wired_limit_bytes: 56 * GiB } },
   workshop: { name: 'Workshop PC', words: 'NVIDIA GeForce RTX 4070 · 12.0 GB video memory', hw: hardware([gpu('NVIDIA GeForce RTX 4070', 12, 0.3)], 32), installed: { 'tuned-assistant:12b': tunedFile }, extra: { 'tuned-assistant:12b': { params: 12_200_000_000, capabilities: ['completion'], arch: null } } },
+  // The owner's Dell, woken by the always-on mini-PC hub (WoL ADR's golden case); sample GPU.
+  dell: { name: 'Dell desktop', words: 'NVIDIA GeForce RTX 3090 · 24.0 GB video memory', hw: hardware([gpu('NVIDIA GeForce RTX 3090', 24, 0.45)], 64), learned: { bytes: Math.round(1.12 * GiB), n: 3, last_observed: null, updated_at: null } },
   mini: { name: 'Mini PC (the hub)', words: 'No GPU · 32.0 GB memory · this is the hub', hw: hardware([], 32), hub: true, extra: { 'qwen3:4b': { params: 4_000_000_000, capabilities: ['completion'], arch: shape(36, 8, 128) } } },
 };
 // Each state: the device, its privacy mode, and the plan as [model, quant, context, loaded?].
@@ -521,7 +523,26 @@ const MODEL_STATES = {
   // Added 2026-11-06 (the owner: a Tight fit is never picked for you): a tight plan shows the
   // acknowledgement next to Install, which stays off until it is ticked, for this plan only.
   'tight-ack': { label: 'A tight plan: Install waits for your acknowledgement', device: 'study', privacy: 'local-only', plan: [['qwen3:32b', 'Q4_K_M', 4096]] },
+  // Proposed with the Wake-on-LAN ADR (2026-11-06): asleep but wakeable, waking, woke and loading,
+  // three ways a wake fails and what Nova does then, and the sleep policy. `waiting` is how long ago
+  // the wait began; the specimen's waiting line is frozen (no clock).
+  ...wakeStates(),
 };
+function wakeStates() {
+  const SEEN_2H = 'Last seen 2 h ago. What shows here is what it last reported: its hardware 2 h ago, its models 2 h ago.';
+  const SLEEP_NOTES = ['Dell desktop’s own device agent puts it to sleep once nothing of Nova’s has run there for that long and no one is using it. Nova keeps it awake while work runs.', 'Mini PC (the hub) wakes it with a signal on their shared network, and only there: never across the internet or over your mesh.'];
+  const dell = (label, privacy, wake, seen = SEEN_2H) => ({ label, device: 'dell', privacy, plan: [['qwen3:14b', 'Q8_0', 16384]], seen, wake: { ...wake, policy: { idle: '30', demand: 'wake', notes: SLEEP_NOTES, ...wake.policy } } });
+  const task = '“Summarize the lease”';
+  return {
+    'asleep-wakeable': dell('Asleep, wakeable', 'local-only', { state: 'asleep', pill: 'Asleep, wakeable', lines: ['Nova wakes it when work needs it: Mini PC (the hub) sends the wake signal on their shared network. Waking took 38 s last time.'] }),
+    'waking': dell('Waking, for a task', 'local-only', { state: 'waking', pill: 'Waking', waiting: { text: `Waking Dell desktop for ${task}`, ms: 23_000 }, lines: ['Mini PC (the hub) sent the wake signal at 14:02. Waking took 38 s last time, so Nova waits up to 59 s before it says what it will do instead.', 'This is local only: the task waits on your devices, and nothing goes to the cloud.'] }),
+    'woke-loading': dell('Woke, loading the model', 'local-only', { state: 'awake', pill: 'Awake', waiting: { text: `Loading qwen3:14b for ${task}`, ms: 4000 }, lines: ['Woke after 41 s (38 s last time). Its hardware is fresh again, and qwen3:14b at Q8_0 with 16k context still fits.'] }, null),
+    'couldnt-wake': dell('Couldn’t wake: no answer', 'local-only', { state: 'failed', pill: 'Couldn’t wake', lines: ['Mini PC (the hub) sent the wake signal at 14:02 and waited 59 s, half again what waking took last time (38 s). Dell desktop didn’t answer.', `Nothing else that is awake fits qwen3:14b at 16k context. This is local only, so ${task} waits on your devices and runs once Dell desktop checks in. Nova won’t keep waking it.`], actions: [{ action: 'models-wake-again', label: 'Try waking it again' }] }),
+    'couldnt-wake-no-sender': dell('Couldn’t wake: nothing on its network can', 'local-preferred', { state: 'failed', pill: 'Couldn’t wake', lines: ['None of your always-on devices is on its network, so nothing can send the wake signal. Nova doesn’t send wake signals across networks or over your mesh.', `This is local first, so Nova asks before anything goes to the cloud: ${task} waits until Dell desktop is on, unless you send it to your cloud model this once.`], actions: [{ action: 'models-cloud-once', label: 'Use the cloud model this once' }], policy: { notes: [SLEEP_NOTES[0], 'Nova can wake it only from an always-on device of yours on the same network, like the hub at home.'] } }, 'Last seen 2 days ago. What shows here is what it last reported: its hardware 2 days ago, its models 2 days ago.'),
+    'couldnt-wake-unhealthy': dell('Couldn’t wake: woke, but its models didn’t answer', 'local-only', { state: 'failed', pill: 'Couldn’t wake', lines: ['Dell desktop woke after 40 s and its device agent checked in, but Ollama didn’t answer in the minute after.', `Nova opened a problem with what to check. ${task} waits on your devices and runs when Ollama answers; Nova won’t wake it again for this task.`] }, null),
+    'sleep-policy': dell('Sleep policy, while it’s on', 'local-only', { state: 'awake', pill: 'Online', lines: ['Nothing of Nova’s is running here now.'] }, null),
+  };
+}
 const MODEL_SPECIMENS = Object.keys(MODEL_STATES);
 let modelsState = '3090-two-models';
 let modelsPlan = null;
@@ -550,11 +571,13 @@ function modelsView() {
   return {
     id: `dm-${s.device}`, privacy: s.privacy, plan, total, advice, confirm: s.confirm ?? null, acked: modelsAcked,
     catalog: [...Object.keys(MODEL_CATALOG), ...Object.keys(d.extra ?? {})],
-    device: { name: d.name, hardware: d.words, memory: device.memory, budget_bytes: device.budget_bytes, budget_source: device.budget_source, ram_bytes: d.hw.ram_bytes, overhead_source: device.overhead_source, overhead_loads: d.learned?.n ?? 0, seen: s.seen ?? null },
+    device: { name: d.name, hardware: d.words, memory: device.memory, budget_bytes: device.budget_bytes, budget_source: device.budget_source, ram_bytes: d.hw.ram_bytes, overhead_source: device.overhead_source, overhead_loads: d.learned?.n ?? 0, seen: s.seen ?? null,
+      wake: s.wake ? { ...s.wake, waiting: s.wake.waiting ? { text: s.wake.waiting.text, since: Date.now() - s.wake.waiting.ms } : null } : null },
   };
 }
 function modelsSpecimen() {
-  return `<div data-models-specimen="${esc(modelsState)}">${deviceModels(modelsView())}</div>`;
+  // A waiting line here is a frozen specimen: without its start time the page's clock leaves it alone.
+  return `<div data-models-specimen="${esc(modelsState)}">${deviceModels(modelsView()).replace(/ data-since="\d+"/g, '')}</div>`;
 }
 function modelsEntry() {
   return `<label class="sg-pick" for="models-state">State <select class="input" id="models-state">${MODEL_SPECIMENS.map((s) => `<option value="${s}"${s === modelsState ? ' selected' : ''}>${esc(MODEL_STATES[s].label)}</option>`).join('')}</select></label>
@@ -575,6 +598,7 @@ function bindModels() {
     const t = e.target;
     if (t.id === 'models-state') { modelsState = t.value; modelsPlan = null; modelsAcked = false; content.innerHTML = modelsSpecimen(); note(''); return; }
     if (t.dataset.modelsAck !== undefined) { modelsAcked = t.checked; redraw(t.id, modelsAcked ? 'Acknowledged for this plan. Demo only: nothing is installed.' : null); return; }
+    if (t.dataset.modelsSleep !== undefined) return note('Demo only. Nothing was changed.');
     // Any change to the plan clears the acknowledgement: it was for the plan as it was.
     if (t.dataset.modelsQuant !== undefined) { modelsAcked = false; modelsPlan[Number(t.dataset.modelsQuant)].quant = t.value; redraw(t.id); }
     if (t.dataset.modelsContext !== undefined) { modelsAcked = false; const m = modelsPlan[Number(t.dataset.modelsContext)]; m.context = m.contexts[Number(t.value)] ?? m.context; redraw(t.id); }
@@ -586,6 +610,7 @@ function bindModels() {
     const d = MODEL_DEVICES[MODEL_STATES[modelsState].device];
     const act = b.dataset.action;
     if (act === 'models-install' || act === 'models-confirm' || act === 'models-not-now') return note('Demo only. Nothing was installed or assigned.');
+    if (act === 'models-wake-again' || act === 'models-cloud-once') return note('Demo only. Nothing was woken or sent.');
     modelsAcked = false;
     if (act === 'models-remove') { modelsPlan.splice(Number(b.dataset.index), 1); return redraw(entry.querySelector('[data-device-models] select[id$="-add"]')?.id); }
     const name = act === 'models-add' ? b.closest('.dm-add').querySelector('select').value : b.dataset.name;
@@ -655,7 +680,7 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
       ['memory-card', 'MemoryHighlightCard', 'One thing Nova kept, or that nothing is kept yet.',
         () => `<div class="sg-cards">${state('Kept', memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] }))}${state('Nothing yet', memoryHighlightCard())}</div>`],
       ['config-doors', 'Configuration: three doors (proposed)', 'A file, the form or a chat with Nova: one layered store, the same diff before anything applies, a layer on every setting. Demo only.', () => configEntry()],
-      ['models-screen', 'Models on a device (proposed)', 'A device’s memory budget as one labelled bar, each planned model with its quant, context and verdict, whether several stay loaded together, and picks per task with privacy first. Real fit-engine numbers; demo only.', () => modelsEntry()],
+      ['models-screen', 'Models on a device (proposed)', 'A device’s memory budget as one labelled bar, each planned model with its quant, context and verdict, whether several stay loaded together, and picks per task with privacy first; proposed: waking a sleeping device, and its sleep policy. Real fit-engine numbers; demo only.', () => modelsEntry()],
       ['passkey-approval', 'Passkey confirmation', 'Tier 3 on Nova’s own screen, confirmed with a passkey so a program on this computer can’t approve itself. Tiers 0–2 are unchanged. Demo only: no passkey is requested.', () => passkeyEntry()],
       ['approval-sheet', 'ApprovalSheet', 'Tiered: tier 2 asks; tier 3 needs an explicit confirmation every time.',
         () => `<div class="sg-cards">${state('Tier 2', sheet(approvalSheet(task('a2', 'Send the draft reply', 'waiting', { approval_tier: 2 }))))}${state('Tier 3', sheet(approvalSheet(task('a3', 'Delete the old backups', 'waiting', { approval_tier: 3 }))))}</div>`],

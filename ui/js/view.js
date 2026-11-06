@@ -770,6 +770,7 @@ function stepLine(s, open = false) {
   if (s.kind === 'skill') return `Followed <a href="/skills#s-${esc(s.id)}">${esc(s.name)}</a>`;
   if (s.kind === 'memory') return s.forgot && !s.kept ? 'Forgot something, as asked' : `Kept ${count(s.kept, 'thing')} in memory${s.forgot ? ', forgot one' : ''}`;
   if (s.kind === 'error') return `<span class="act-problem">${esc(s.message)}</span>`;
+  if (s.kind === 'interstitial') return esc(s.words);
   const st = toolState(s, open);
   const label = toolLabel(s, st === 'skipped' ? 'failed' : st);
   const stamp = s.approval ? `<span class="stamp${s.approval.decision === 'deny' ? ' is-declined' : ''}">${stampWord(s.approval)}</span>` : '';
