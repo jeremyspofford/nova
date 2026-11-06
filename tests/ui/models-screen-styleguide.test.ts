@@ -15,7 +15,7 @@ import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
 import { GiB, PRIOR_OVERHEAD_BYTES, fit } from '../../src/core/models/fit.ts';
 
-const STATES = ['3090-one-model', '3090-two-models', '8gb-nothing-at-16k', 'mac-16gb-unified', 'unknown-shape', 'no-gpu', 'asleep', 'install-confirm'];
+const STATES = ['3090-one-model', '3090-two-models', '8gb-nothing-at-16k', 'mac-16gb-unified', 'mac-limit-set', 'unknown-shape', 'no-gpu', 'asleep', 'install-confirm'];
 // The owner's matrix: desktop bands, iPad-class, phones, and the foldables' postures.
 const MATRIX = {
   'desktop-1920': { width: 1920, height: 1080 }, 'desktop-1440': { width: 1440, height: 900 }, 'desktop-1280': { width: 1280, height: 800 },
@@ -116,7 +116,8 @@ async function stateChecks(page: Page, s: string, label: string) {
     assert.equal(await root.locator('.fit-limit').count(), 1, `${label}: the budget's end is marked`);
   }
   if (s === 'mac-16gb-unified') {
-    assert.match(text, /Budget: 10\.7 GB, the share of this Mac’s 16\.0 GB unified memory/);
+    assert.match(text, /Estimated GPU share of 16\.0 GB unified memory: 10\.7 GB \(macOS default\)\./, `${label}: an estimate says so`);
+    assert.doesNotMatch(text, /limit set on this Mac/);
     assert.match(text, /can’t see what else is using this memory/);
     assert.match(text, /Local first\./);
     // Local first: local picks come first, the cloud option after them, without a verdict.
@@ -129,6 +130,13 @@ async function stateChecks(page: Page, s: string, label: string) {
     assert.equal(await root.locator('[data-cloud]').count(), 0, `${label}: no cloud list under local only`);
     assert.doesNotMatch(text, /cloud model|off your devices/i, `${label}: no cloud option is mentioned`);
     assert.match(text, /Local only\./);
+  }
+  if (s === 'mac-limit-set') {
+    // The Mac's own limit (56 GB) is the budget, not the 3/4 estimate (48 GB).
+    assert.match(text, /GPU memory limit set on this Mac: 56\.0 GB\./, `${label}: the measured limit says where it came from`);
+    assert.doesNotMatch(text, /Estimated GPU share|macOS default/, `${label}: not called an estimate`);
+    assert.match(text, /budget 56\.0 GB/);
+    assert.deepEqual(await verdicts('.dm-model'), ['fits']);
   }
   if (s === 'unknown-shape') {
     assert.match(text, /Estimate: Nova doesn’t know this model’s shape\./, `${label}: labelled as an estimate`);

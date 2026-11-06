@@ -26,6 +26,8 @@ export const QUANTS = ['Q4_K_M', 'Q5_K_M', 'Q6_K', 'Q8_0', 'F16']         ;
                             
                                     
                        
+                                                                                                   
+                               
                                                                            
                            
                                                                         
@@ -58,6 +60,7 @@ export const QUANTS = ['Q4_K_M', 'Q5_K_M', 'Q6_K', 'Q8_0', 'F16']         ;
                           
                      
                        
+                              
                          
                                   
                 
@@ -156,23 +159,29 @@ export function fit(input          )            {
     verdict, basis,
     assumed: models.map((m) => ({ quant: m.quant, context: m.context, kv_type: m.kv_type })),
     parts, overhead_bytes: overhead, reserve_bytes: reserve, other_use_bytes: other,
-    need_bytes: need, budget_bytes: budget, headroom_bytes: budget - need,
+    need_bytes: need, budget_bytes: budget, budget_source: device.budget_source ?? 'estimate', headroom_bytes: budget - need,
     max_context_fits: max, words,
   };
 }
 
 // ---- the device budget ---------------------------------------------------------------------------
 
-// OPEN OWNER QUESTION (ADR, open question 1), pending the owner's answer: how much of a
-// unified-memory Mac's RAM the GPU may use below 36 GB. 2/3 is the ADR's conservative choice
-// (macOS's reported default working-set limit); hardware.ts writes 0.75 × RAM today, and stays as
-// it is until the owner decides. The answer is a change to this one line; the golden tests read it.
+// A unified-memory Mac (ADR, open question 1, answered by the owner 2026-11-06): the budget is the
+// Mac's own GPU memory limit when it has been set (sysctl iogpu.wired_limit_mb, which hardware.ts
+// reads), 'measured'. Otherwise it is these fractions of RAM, 'estimate': Nova's reading of macOS's
+// default, not yet checked on a real Mac.
 export const UNIFIED_BUDGET_FRACTION_BELOW_36GB = 2 / 3;
 export const UNIFIED_BUDGET_FRACTION_FROM_36GB = 3 / 4;
 export const UNIFIED_LARGE_RAM_BYTES = 36 * GiB;
 
-export const unifiedBudgetBytes = (ram        )         =>
-  Math.floor(ram * (ram < UNIFIED_LARGE_RAM_BYTES ? UNIFIED_BUDGET_FRACTION_BELOW_36GB : UNIFIED_BUDGET_FRACTION_FROM_36GB));
+                                                   
+
+export const unifiedBudget = (ram        , wiredLimit                )                                          =>
+  typeof wiredLimit === 'number' && wiredLimit > 0
+    ? { bytes: wiredLimit, source: 'measured' }
+    : { bytes: Math.floor(ram * (ram < UNIFIED_LARGE_RAM_BYTES ? UNIFIED_BUDGET_FRACTION_BELOW_36GB : UNIFIED_BUDGET_FRACTION_FROM_36GB)), source: 'estimate' };
+
+export const unifiedBudgetBytes = (ram        , wiredLimit                )         => unifiedBudget(ram, wiredLimit).bytes;
 
 // The budget the engine uses for a device, from the hardware Nova already reads. `loaded_vram_bytes`
 // is what the backend reports its loaded models use, so the rest of the GPU's used memory is other
@@ -182,16 +191,19 @@ export function deviceBudget(h          , o                                     
   const overhead = learned ? clampOverhead(o.overhead .bytes) : PRIOR_OVERHEAD_BYTES;
   const base = { overhead_bytes: overhead, overhead_source: learned ? 'learned'          : 'prior'          };
   const gpus = h.gpus.filter((g) => g.unified || g.vram_bytes >= 2 * GiB).sort((a, b) => b.vram_bytes - a.vram_bytes);
-  if (gpus[0]?.unified) return { ...base, memory: 'unified', budget_bytes: unifiedBudgetBytes(h.ram_bytes), other_use_bytes: 0, other_use_known: false };
+  if (gpus[0]?.unified) {
+    const u = unifiedBudget(h.ram_bytes, h.gpu_wired_limit_bytes);
+    return { ...base, memory: 'unified', budget_bytes: u.bytes, budget_source: u.source, other_use_bytes: 0, other_use_known: false };
+  }
   if (gpus.length) {
     const used = o.split_across_gpus ? gpus : [gpus[0] ];
     const total = used.reduce((s, g) => s + g.vram_bytes, 0);
     const known = used.every((g) => g.vram_free_bytes !== null);
     const other = known ? Math.max(0, total - used.reduce((s, g) => s + g.vram_free_bytes , 0) - (o.loaded_vram_bytes ?? 0)) : 0;
     // Split across GPUs, the overhead is paid on each.
-    return { ...base, overhead_bytes: overhead * used.length, memory: 'gpu', budget_bytes: total, other_use_bytes: other, other_use_known: known };
+    return { ...base, overhead_bytes: overhead * used.length, memory: 'gpu', budget_bytes: total, budget_source: 'measured', other_use_bytes: other, other_use_known: known };
   }
-  return { ...base, memory: 'cpu', budget_bytes: Math.floor(h.ram_bytes * 0.5), other_use_bytes: 0, other_use_known: true };
+  return { ...base, memory: 'cpu', budget_bytes: Math.floor(h.ram_bytes * 0.5), budget_source: 'estimate', other_use_bytes: 0, other_use_known: true };
 }
 
 // ---- the learned overhead ------------------------------------------------------------------------
