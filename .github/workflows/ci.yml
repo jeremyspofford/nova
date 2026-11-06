@@ -10,7 +10,9 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a PR branch makes the older run moot, so it is cancelled. On main every merge
+  # commit's run finishes: cancelling it left main red ("cancelled") with no answer for that commit.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # What the change touches (scripts/ci-changes.sh): a docs-only change skips the heavy jobs.
