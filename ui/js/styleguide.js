@@ -497,6 +497,8 @@ const MODEL_DEVICES = {
   study: { name: 'Study desktop', words: 'NVIDIA GeForce RTX 3090 · 24.0 GB video memory', hw: hardware([gpu('NVIDIA GeForce RTX 3090', 24, 0.45)], 64), learned: { bytes: Math.round(1.12 * GiB), n: 3, last_observed: null, updated_at: null }, installed: { 'nomic-embed-text': embedderFile } },
   tower: { name: 'Small tower', words: 'NVIDIA GeForce RTX 3060 Ti · 8.0 GB video memory', hw: hardware([gpu('NVIDIA GeForce RTX 3060 Ti', 8)], 32) },
   laptop: { name: 'Laptop', words: 'Apple M2 · 16.0 GB unified memory', hw: { ...hardware([{ vendor: 'apple', name: 'Apple M2', vram_bytes: 12 * GiB, vram_free_bytes: null, unified: true }], 16), platform: 'darwin', arch: 'arm64' } },
+  // Added 2026-11-06: a Mac whose GPU memory limit was raised (sysctl iogpu.wired_limit_mb=57344).
+  studio: { name: 'Studio Mac', words: 'Apple M2 Max · 64.0 GB unified memory', hw: { ...hardware([{ vendor: 'apple', name: 'Apple M2 Max', vram_bytes: 48 * GiB, vram_free_bytes: null, unified: true }], 64), platform: 'darwin', arch: 'arm64', gpu_wired_limit_bytes: 56 * GiB } },
   workshop: { name: 'Workshop PC', words: 'NVIDIA GeForce RTX 4070 · 12.0 GB video memory', hw: hardware([gpu('NVIDIA GeForce RTX 4070', 12, 0.3)], 32), installed: { 'tuned-assistant:12b': tunedFile }, extra: { 'tuned-assistant:12b': { params: 12_200_000_000, capabilities: ['completion'], arch: null } } },
   mini: { name: 'Mini PC (the hub)', words: 'No GPU · 32.0 GB memory · this is the hub', hw: hardware([], 32), hub: true, extra: { 'qwen3:4b': { params: 4_000_000_000, capabilities: ['completion'], arch: shape(36, 8, 128) } } },
 };
@@ -506,6 +508,7 @@ const MODEL_STATES = {
   '3090-two-models': { label: '24 GB RTX 3090, two models (one tight)', device: 'study', privacy: 'local-only', plan: [['qwen3:32b', 'Q4_K_M', 4096], ['nomic-embed-text', 'F16', 2048, true]] },
   '8gb-nothing-at-16k': { label: '8 GB card: nothing fits at 16k', device: 'tower', privacy: 'local-only', plan: [['qwen3:8b', 'Q4_K_M', 16384]] },
   'mac-16gb-unified': { label: '16 GB Mac, unified memory (local first)', device: 'laptop', privacy: 'local-preferred', plan: [['qwen3:8b', 'Q4_K_M', 16384]] },
+  'mac-limit-set': { label: '64 GB Mac with its GPU memory limit set', device: 'studio', privacy: 'local-only', plan: [['qwen3:32b', 'Q8_0', 16384]] },
   'unknown-shape': { label: 'A model of unknown shape: an estimate', device: 'workshop', privacy: 'local-only', plan: [['tuned-assistant:12b', 'Q4_K_M', 8192, true]] },
   'no-gpu': { label: 'No GPU found', device: 'mini', privacy: 'local-only', plan: [['qwen3:4b', 'Q4_K_M', 4096]] },
   // Added with the app build (2026-11-05): a device asleep shows what it last reported, with its age;
@@ -543,7 +546,7 @@ function modelsView() {
   return {
     id: `dm-${s.device}`, privacy: s.privacy, plan, total, advice, confirm: s.confirm ?? null,
     catalog: [...Object.keys(MODEL_CATALOG), ...Object.keys(d.extra ?? {})],
-    device: { name: d.name, hardware: d.words, memory: device.memory, budget_bytes: device.budget_bytes, ram_bytes: d.hw.ram_bytes, overhead_source: device.overhead_source, overhead_loads: d.learned?.n ?? 0, seen: s.seen ?? null },
+    device: { name: d.name, hardware: d.words, memory: device.memory, budget_bytes: device.budget_bytes, budget_source: device.budget_source, ram_bytes: d.hw.ram_bytes, overhead_source: device.overhead_source, overhead_loads: d.learned?.n ?? 0, seen: s.seen ?? null },
   };
 }
 function modelsSpecimen() {
