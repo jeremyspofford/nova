@@ -178,18 +178,29 @@ export function deviceModelsFrame(id, where = 'settings') {
 }
 
 // Redraws every frame on the page for a device (or all), keeping focus on the control that had it.
-function redraw(only = null, focusId = null) {
+// `held`: a refresh from Nova (new data, the same plan) also keeps what the person has set but not
+// yet acted on: the model picked in the add list, a slider still being moved. Only while the plan is
+// the same one: a redraw after a plan change, or after an install starts a new plan, doesn't, since
+// its controls may now stand for another model.
+function redraw(only = null, focusId = null, { held = false } = {}) {
   const active = document.activeElement;
   for (const f of document.querySelectorAll('[data-dm-device]')) {
     const id = f.dataset.dmDevice;
     if (only && id !== only) continue;
     const body = f.querySelector('[data-dm-body]');
     const keep = focusId ?? (body.contains(active) && active.id ? active.id : null);
+    const plan = plans.get(id);
+    const values = held && plan ? [...body.querySelectorAll('select[id], input[type="range"][id]')].map((c) => [c.id, c.value]) : [];
     body.innerHTML = inner(id, f.dataset.dmWhere);
+    if (plans.get(id) !== plan) values.length = 0;
+    for (const [cid, value] of values) {
+      const c = document.getElementById(cid);
+      if (c && body.contains(c) && (c.tagName !== 'SELECT' || [...c.options].some((o) => o.value === value))) c.value = value;
+    }
     if (keep) document.getElementById(keep)?.focus({ preventScroll: true });
   }
 }
-part.rerender = () => redraw();
+part.rerender = () => redraw(null, null, { held: true });
 
 const frameOf = (el) => el.closest('[data-dm-device]');
 const idOf = (el) => frameOf(el)?.dataset.dmDevice ?? null;
