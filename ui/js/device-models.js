@@ -157,7 +157,7 @@ function viewOf(d, where) {
     catalog: p.candidates.filter((c) => c.where === 'local').map((c) => c.name),
     crumb: where === 'setup' ? `Setup › ${d.name}` : undefined,
     confirm: ask ? confirmOf(d, planOf(d)) : null, status: said.get(d.id) ?? null, busy: busy.has(d.id),
-    device: { name: d.name, hardware: hardwareLine(d), memory: device.memory, budget_bytes: device.budget_bytes, ram_bytes: d.hardware.ram_bytes, overhead_source: device.overhead_source, overhead_loads: p.overhead.n, seen: seenLine(d) },
+    device: { name: d.name, hardware: hardwareLine(d), memory: device.memory, budget_bytes: device.budget_bytes, budget_source: device.budget_source, ram_bytes: d.hardware.ram_bytes, overhead_source: device.overhead_source, overhead_loads: p.overhead.n, seen: seenLine(d) },
   };
 }
 
