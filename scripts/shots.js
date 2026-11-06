@@ -944,9 +944,13 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.waitForSelector('.skill');
   check('mobile: no horizontal page scroll', !overflow);
 
-  // Disconnecting deletes the app password, and says how to remove it at Google too.
+  // Disconnecting deletes the app password, and says how to remove it at Google too. Nova sends its
+  // `skills` event before it answers the click, so the list can show the setup state before the
+  // click's own toast: wait for that toast, whatever it says, then check what it says.
+  const before = await p.textContent('#toast');
   await p.click('[data-action="disconnect-gmail"]');
   await p.waitForSelector('.connection[data-state="setup"]');
+  await p.waitForFunction((t) => document.querySelector('#toast').textContent !== t, before);
   check('disconnecting deletes the app password', appPassword() === null && /app password is gone/.test(await p.textContent('#toast')));
 }
 

@@ -6,6 +6,12 @@ Decisions, dependencies and deviations, newest first within each section.
 
 What each merge to main changed, for the owner: newest first, one entry per merge (dates are GitHub's merge dates, UTC). A merge without an entry here is incomplete, the same as one without gate evidence. The audit entries below this section are unchanged.
 
+**2026-11-05 · Test stability · The Gmail disconnect check waits for its own message**
+- What changed: nothing in Nova. The screenshot walkthrough (`scripts/shots.js`) checks that disconnecting Gmail deletes the app password and says so ("the app password is gone"). Nova sends its "skills changed" signal before it answers the Disconnect click, so the page can redraw Gmail as not connected before the click's own message appears. The check read the message as soon as the redraw showed, and sometimes found the previous one. It now waits until the message changes, whatever it says, and then checks what it says.
+- What you can now do: nothing new. CI fails less often for no reason.
+- Still unfinished: nothing in this item.
+- Checked: in the CI-matching sandbox, with the answer to the click held 800 ms (the signal not held), the old walkthrough failed this check 3 of 3, and the new one passed 3 of 3.
+
 **2026-11-05 · Test stability · The Core Web Vitals gate counts every tap and key press**
 - What changed: nothing in Nova. The M9 Core Web Vitals test checks that each run really pressed things, at least 2 per run. It counted presses from the browser's timing entries, but the browser only writes one when a press takes 16 ms or more until the screen updates, the lowest threshold the standard allows. On a fast machine Home's three presses can finish in under 16 ms each, so the test sometimes counted 1 and failed. It now counts every press from the browser's own counter of trusted key presses and taps (`performance.eventCounts`). INP is still the slowest press, and its 200 ms limit, like LCP's and CLS's, is unchanged; a press under 16 ms can't raise it.
 - What you can now do: nothing new. CI fails less often for no reason.
