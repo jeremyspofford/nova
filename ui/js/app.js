@@ -89,11 +89,12 @@ async function post(path, body = {}) {
 }
 
 async function loadList() {
+  const seen = outage;
   try {
     const res = await fetch('/api/sessions');
     if (!res.ok) throw new Error();
     state.list = await res.json();
-    setReachable(!fromCache(res));
+    since(seen, !fromCache(res));
   } catch { setReachable(false); }
   renderToc_();
 }
@@ -235,8 +236,14 @@ function watch() {
 }
 
 let healthTimer = null;
+// Each time the page learns Nova is out of reach, a new outage begins. An answer to a read sent
+// before that is no sign Nova is back: it left before the outage (a slow part of a refresh still on
+// its way when the server went down), so it may say "unreachable" but never "reachable".
+let outage = 0;
+const since = (seen, ok) => { if (!ok || seen === outage) setReachable(ok); };
 function setReachable(ok) {
   if (state.reachable === ok) return;
+  if (!ok) outage++;
   state.reachable = ok;
   core.store.reachable = ok;
   renderChrome();
@@ -357,7 +364,8 @@ let refreshing = null;
 function refreshCore(parts) {
   // The chrome too: the "saved earlier" banner depends on whether these answers were live.
   // No part answered at all, not even from the offline cache: Nova is out of reach, and the page says so.
-  refreshing = core.load(parts).then(({ any, live }) => { setReachable(any && live); renderChrome(); renderCore(); renderVoice(); });
+  const seen = outage;
+  refreshing = core.load(parts).then(({ any, live }) => { since(seen, any && live); renderChrome(); renderCore(); renderVoice(); });
   return refreshing;
 }
 
