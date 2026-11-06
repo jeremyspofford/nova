@@ -43,15 +43,13 @@ export const ACCOUNT_PRESENT_MS = 10 * 60_000;
 
 // `hub`: where Nova itself listens, which no browser task may reach (plan.ts).
 // `launch`: how a browser is started; a stand-in in tests.
-// screen: the ingest gate (Amendment 2026-10-30-C Part 3). Each page read is screened as it is
-// taken, so its verdict is kept with it before any model step could ever read it.
 export interface BrowserOptions {
   home: string; log: Log; now?: () => Date; env?: NodeJS.ProcessEnv; hub?: () => Hub; launch?: SessionOptions['launch'];
-  screen?: (r: { text: string; origin: string; ref: string }) => Promise<{ id: string; verdict: string }>;
 }
 
 // What the rest of the core gives Nova Browser once it exists (index.ts): the vault (sign-ins), the
-// decision stack (the co-pilot and site templates), the full ingest screen, and its own records.
+// decision stack (the co-pilot and site templates), its own records, and the ingest gate
+// (Amendment 2026-10-30-C Part 3), the one screen for every page read, dialog and co-pilot input.
 export interface Screened { id: string; verdict: string; flags: { kind: string; level: string }[]; extract: string }
 export interface Wired {
   db: Db;
@@ -63,19 +61,6 @@ export interface Wired {
   // Whether the local sorting model can answer the co-pilot now, and which provider is it.
   copilotReady: () => boolean;
   providerId: string;
-}
-
-// A page read's screen, failing closed: a screen that is missing or throws leaves the read marked
-// blocked (no screen id), never with no verdict.
-export type ReadScreen = (r: { text: string; origin: string; ref: string }) => Promise<{ id: string; verdict: string }>;
-export async function screenRead(screen: ReadScreen | undefined, text: string, url: string): Promise<{ id: string | null; verdict: string; error?: string }> {
-  if (!screen) return { id: null, verdict: 'block', error: 'Nova couldn’t screen this read.' };
-  try {
-    const r = await screen({ text, origin: hostOf(url), ref: url });
-    return { id: r.id, verdict: r.verdict };
-  } catch (e) {
-    return { id: null, verdict: 'block', error: `Nova couldn’t screen this read: ${(e as Error).message}` };
-  }
 }
 
 const sel = (s: string) => JSON.stringify(s);
@@ -567,7 +552,10 @@ export class Browser extends EventEmitter {
         // Page text is data: it is kept and compared, never followed.
         const raw = await s.evaluate<string>(`(() => { const el = document.querySelector(${sel(step.selector)}); return el ? (el.innerText ?? el.textContent ?? '') : ''; })()`);
         const text = red.text(raw);
-        run.reads.push({ selector: step.selector, text: clip(text, 2000), screen: await screenRead(this.#o.screen, text, s.url) });
+        // Screened as it is taken, so its verdict is kept with it before any model step could
+        // read it. No screen (missing, failed) keeps it blocked, never with no verdict.
+        const r = await this.#screen(text, s.url);
+        run.reads.push({ selector: step.selector, text: clip(text, 2000), screen: r ? { id: r.id, verdict: r.verdict } : { id: null, verdict: 'block', error: 'Nova couldn’t screen this read.' } });
         if (step.expect && !squash(raw).includes(squash(step.expect))) throw new Error(`${step.selector} reads “${clip(squash(text), 80)}”, not “${step.expect}”.`);
         return;
       }
@@ -784,6 +772,8 @@ export class Browser extends EventEmitter {
     return { injection, extract: extracts.join('\n\n') };
   }
 
+  // The one way the worker screens page text. Null, never a verdict, when there is no screen
+  // or it fails: each caller treats that as blocked.
   async #screen(text: string, url: string): Promise<Screened | null> {
     if (!this.#w) return null;
     try { return await this.#w.screen(text, hostOf(url), url); } catch { return null; }

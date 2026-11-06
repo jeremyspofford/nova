@@ -931,6 +931,152 @@ export function configProposal({ state = 'asking', changes = [], tier = 2 } = {}
 ${state === 'asking' ? `<div class="connection-actions"><button type="button" class="btn primary" data-action="config-apply">${n === 1 ? 'Make this change' : `Make these ${n} changes`}</button><button type="button" class="btn quiet" data-action="config-cancel">Not now</button></div>` : ''}</article>`;
 }
 
+// ---- a device's models: the memory budget, the plan, the picks (proposed; owner direction 2026-11-04) --
+// Settings › Devices › [device] › Models, and the same component in device setup. Every number and
+// verdict is the fit engine's (src/core/models/fit.ts; docs/plans/model-fit-adr-2026-11-04.md): these
+// functions only say it. The bar is never read by colour alone: each segment is a row of the legend
+// beside it, in words and numbers, in the bar's order, and the bar's own label says the total.
+const GIB = 1024 ** 3;
+const gbWords = (b) => `${(b / GIB).toFixed(1)} GB`;
+const ctxK = (n) => `${Math.round(n / 1024)}k`;
+export const FIT_WORDS = { fits: 'Fits', tight: 'Tight', 'wont-fit': 'Won’t fit' };
+const verdictPill = (v, extra = '') => `<span class="fit-verdict" data-verdict="${esc(v)}"${extra}>${v === 'fits' ? ICONS.check : v === 'wont-fit' ? ICONS.close : '<span class="fit-tight-mark" aria-hidden="true"></span>'}${FIT_WORDS[v] ?? esc(v)}</span>`;
+const MEMORY_WORDS = {
+  gpu: (d) => `Budget: ${gbWords(d.budget_bytes)}, one GPU’s own memory. A model sits on one GPU; Nova doesn’t add GPUs together unless the backend splits models across them.`,
+  unified: (d) => `Budget: ${gbWords(d.budget_bytes)}, the share of this Mac’s ${gbWords(d.ram_bytes)} unified memory that macOS lets the GPU use.`,
+  cpu: (d) => `No GPU found. Nova plans against half of this computer’s ${gbWords(d.ram_bytes)} of memory, and models run on the processor, slowly.`,
+};
+
+// The segments, left to right: each model's weights then its context (KV cache), the overhead, the
+// reserve, anything else on the GPU, and what's free. Over budget, the bar spans what's needed and a
+// line marks where the budget ends.
+function budgetSegments(view) {
+  const r = view.total;
+  const segs = [];
+  r.parts.forEach((p, i) => {
+    const m = view.plan[i] ?? {};
+    const est = r.basis === 'tier-table' && m.estimate ? ', estimated' : '';
+    segs.push({ kind: 'weights', model: i, what: `${p.name}: weights`, sub: `${m.quant}${m.installed ? ', the installed file' : ''}`, bytes: p.weights_bytes });
+    segs.push({ kind: 'kv', model: i, what: `${p.name}: context memory`, sub: `KV cache for ${ctxK(m.context)} tokens${est}`, bytes: p.kv_bytes });
+  });
+  segs.push({ kind: 'overhead', what: 'Runtime overhead', sub: view.device.overhead_source === 'learned' ? `measured from ${view.device.overhead_loads} load${view.device.overhead_loads === 1 ? '' : 's'} on this device` : 'Nova’s estimate; measured after the first load', bytes: r.overhead_bytes });
+  segs.push({ kind: 'reserve', what: 'Safety reserve', sub: 'always kept free', bytes: r.reserve_bytes });
+  if (r.other_use_bytes > 0) segs.push({ kind: 'other', what: 'In use by other programs', sub: 'the display and other apps', bytes: r.other_use_bytes });
+  if (r.headroom_bytes > 0) segs.push({ kind: 'free', what: 'Free', sub: r.verdict === 'fits' ? 'room to spare' : 'less than a tenth of the budget', bytes: r.headroom_bytes });
+  return segs;
+}
+
+export function memoryBudget(view) {
+  const r = view.total;
+  const segs = budgetSegments(view);
+  const span = Math.max(r.budget_bytes, r.need_bytes);
+  const over = r.headroom_bytes < 0;
+  const id = `${view.id}-budget`;
+  const summary = over
+    ? `${gbWords(r.need_bytes)} needed, ${gbWords(-r.headroom_bytes)} more than the ${gbWords(r.budget_bytes)} budget.`
+    : `${gbWords(r.need_bytes)} of ${gbWords(r.budget_bytes)} planned, ${gbWords(r.headroom_bytes)} free.`;
+  const bar = `<div class="fit-bar" role="img" aria-labelledby="${id}-total" aria-describedby="${id}-legend">${segs.map((s) => `<span class="fit-seg" data-seg="${s.kind}"${s.model === undefined ? '' : ` data-model="${s.model % 3}"`} style="flex-grow: ${(s.bytes / span).toFixed(4)}"></span>`).join('')}${over ? `<span class="fit-limit" style="inset-inline-start: ${((r.budget_bytes / span) * 100).toFixed(2)}%"></span>` : ''}</div>`;
+  const legend = `<ul class="fit-legend" id="${id}-legend">${segs.map((s) => `<li class="fit-legend-row"><span class="fit-key" data-seg="${s.kind}"${s.model === undefined ? '' : ` data-model="${s.model % 3}"`} aria-hidden="true"></span><span class="fit-what">${esc(s.what)}<span class="fit-sub">${esc(s.sub)}</span></span><span class="fit-gb">${gbWords(s.bytes)}</span></li>`).join('')}${over ? `<li class="fit-legend-row is-over"><span class="fit-key" data-seg="over" aria-hidden="true"></span><span class="fit-what">Over budget<span class="fit-sub">this plan needs more than the device has</span></span><span class="fit-gb">${gbWords(-r.headroom_bytes)}</span></li>` : ''}</ul>`;
+  return `<section class="dm-budget" aria-labelledby="${id}-title"><h4 class="section-title" id="${id}-title">Memory budget</h4>
+<div class="dm-total-row"><p class="dm-total" id="${id}-total">${esc(summary)}</p>${verdictPill(r.verdict)}</div>
+${bar}<div class="fit-scale" aria-hidden="true"><span>0</span><span>${over ? `needed ${gbWords(r.need_bytes)}` : `budget ${gbWords(r.budget_bytes)}`}</span></div>
+<p class="settings-note">${esc(MEMORY_WORDS[view.device.memory](view.device))}</p>${legend}</section>`;
+}
+
+// One planned or loaded model: its verdict on its own, with the quant and context it assumed, how far
+// its context stretches, and the controls that change them.
+function modelPlanRow(view, m, i) {
+  const r = m.result;
+  const key = `${view.id}-m${i}`;
+  // How far the context stretches, said once: a Won't fit verdict already says it, a model with one
+  // context has nothing to stretch, and past the longest context offered Nova says that instead.
+  const longest = Math.max(...m.contexts);
+  const stretch = m.contexts.length < 2 || (r.verdict === 'wont-fit' && r.max_context_fits) ? ''
+    : r.max_context_fits === null ? (r.basis === 'tier-table' ? 'How far its context stretches is unknown until Nova can read the model’s shape.' : '')
+    : r.max_context_fits >= longest ? `Fits comfortably even at ${ctxK(longest)}, the longest context offered.`
+    : r.max_context_fits >= 1024 ? `Fits comfortably up to ${ctxK(r.max_context_fits)} context at ${m.quant}.`
+    : `At ${m.quant} it doesn’t fit comfortably at any context.`;
+  const ctxIndex = Math.max(0, m.contexts.indexOf(m.context));
+  const context = m.contexts.length > 1
+    ? `<label class="dm-field" for="${key}-ctx"><span class="dm-field-label">Context</span><input class="dm-range" type="range" id="${key}-ctx" min="0" max="${m.contexts.length - 1}" step="1" value="${ctxIndex}" aria-valuetext="${ctxK(m.context)} tokens" data-models-context="${i}"><output class="dm-out" for="${key}-ctx">${ctxK(m.context)}</output></label>`
+    : `<p class="dm-field dm-fixed"><span class="dm-field-label">Context</span><span class="dm-out">${ctxK(m.context)}, the model’s own</span></p>`;
+  return `<li class="dm-model" data-model-row="${i}"><div class="dm-model-head"><span class="fit-key" data-seg="weights" data-model="${i % 3}" aria-hidden="true"></span><div class="dm-model-text"><p class="dm-model-name">${esc(m.name)}</p><p class="dm-model-meta">${m.loaded ? 'Loaded now' : m.installed ? 'Installed' : 'Planned, not installed'}${m.estimate ? ' · <span class="dm-estimate">Estimate</span>' : ''}${view.plan.length > 1 ? ' · on its own' : ''}</p></div>${verdictPill(r.verdict)}</div>
+<p class="settings-note dm-words">${esc(r.words)}</p>${stretch ? `<p class="settings-note">${esc(stretch)}</p>` : ''}
+<div class="dm-controls"><label class="dm-field" for="${key}-quant"><span class="dm-field-label">Quant</span><select class="input" id="${key}-quant" data-models-quant="${i}">${m.quants.map((q) => `<option${q === m.quant ? ' selected' : ''}>${esc(q)}</option>`).join('')}</select></label>${context}<button type="button" class="btn quiet" data-action="models-remove" data-index="${i}" aria-label="Remove ${esc(m.name)} from the plan">Remove</button></div></li>`;
+}
+
+// Several models planned: whether they all stay loaded together (overhead and reserve counted once).
+function together(view) {
+  const r = view.total;
+  const n = view.plan.length;
+  const all = n === 2 ? 'Both' : `All ${n}`;
+  const line = r.verdict === 'fits' ? `${all} stay loaded together, with ${gbWords(r.headroom_bytes)} to spare.`
+    : r.verdict === 'tight' ? `${all} stay loaded together, but it’s tight: ${gbWords(r.headroom_bytes)} to spare, and nothing else can load.`
+    : `These don’t stay loaded together: ${gbWords(-r.headroom_bytes)} over budget. Nova would load one at a time and swap when a task needs the other. Lower a quant or a context, or remove one.`;
+  return `<div class="dm-together" data-together="${esc(r.verdict)}"><div class="dm-model-head"><p class="dm-model-name">Together</p>${verdictPill(r.verdict)}</div><p class="settings-note">${esc(line)}</p></div>`;
+}
+
+export const TASK_WORDS = { 'general-chat': 'General chat', coding: 'Coding', screening: 'Screening and decisions', embeddings: 'Embeddings (memory search)', vision: 'Vision', transcription: 'Transcription' };
+const PRIVACY_PICKS = {
+  'local-only': '<strong>Local only.</strong> Every pick runs on your own devices; no cloud option is offered.',
+  'local-preferred': '<strong>Local first.</strong> Local picks come first. A cloud option is listed after them, and runs only if you allow it.',
+  'cloud-allowed': '<strong>Cloud allowed.</strong> Cloud options are listed beside the local picks.',
+};
+const pickWords = (p) => `${p.name} at ${p.quant}, ${ctxK(p.context)} context`;
+
+// Per task class: a pick for this device and a smaller, faster alternative, each with its verdict.
+// Privacy comes first: under local-only no cloud option is drawn at all.
+export function taskPicks(view) {
+  const rows = view.advice.map((a) => {
+    const label = `<p class="settings-label">${esc(TASK_WORDS[a.task] ?? a.task)}</p>`;
+    if (a.pick) {
+      const alt = a.alternative ? `<p class="settings-note">Smaller and faster: ${esc(pickWords(a.alternative))}, ${esc(FIT_WORDS[a.alternative.verdict].toLowerCase())}.</p>` : '';
+      const est = a.pick.basis === 'tier-table' ? ' · <span class="dm-estimate">Estimate</span>' : '';
+      return `<li class="settings-row dm-pick" data-task="${esc(a.task)}"><div class="settings-text">${label}<p class="settings-note">${esc(pickWords(a.pick))}${est}</p>${alt}</div><div class="settings-control">${verdictPill(a.pick.verdict)}<button type="button" class="btn quiet" data-action="models-plan" data-name="${esc(a.pick.name)}" data-quant="${esc(a.pick.quant)}" data-context="${a.pick.context}" aria-label="Plan it: ${esc(a.pick.name)} for ${esc((TASK_WORDS[a.task] ?? a.task).toLowerCase())}">Plan it</button></div></li>`;
+    }
+    const why = a.nothing_fits
+      ? `Nothing here fits at ${ctxK(a.context)} context. ${a.nothing_fits.name} at ${a.nothing_fits.quant} fits up to ${ctxK(a.nothing_fits.max_context)}.${view.privacy === 'local-only' ? ' Under local only, the work waits for a device it fits.' : ''}`
+      : a.words;
+    return `<li class="settings-row dm-pick" data-task="${esc(a.task)}"><div class="settings-text">${label}<p class="settings-note">${esc(why)}</p></div>${a.nothing_fits ? `<div class="settings-control">${verdictPill('wont-fit')}</div>` : ''}</li>`;
+  }).join('');
+  const cloud = view.privacy === 'local-only' ? [] : [...new Map(view.advice.flatMap((a) => a.cloud).map((c) => [c.name, c])).values()];
+  const cloudList = cloud.length ? `<h5 class="dm-sub-title">${view.privacy === 'local-preferred' ? 'After the local picks' : 'Beside the local picks'}</h5><ul class="settings-list" data-cloud>${cloud.map((c) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(c.name)}</p><p class="settings-note">Runs off your devices; asked for each time, and recorded.</p></div></li>`).join('')}</ul>` : '';
+  return `<section class="dm-picks" aria-labelledby="${view.id}-picks-title"><h4 class="section-title" id="${view.id}-picks-title">Recommended for this device</h4>
+<p class="settings-note dm-privacy">${PRIVACY_PICKS[view.privacy] ?? ''}</p><ul class="settings-list">${rows}</ul>${cloudList}</section>`;
+}
+
+// Install and assign, asked before anything downloads: what goes where, and what it serves. The
+// downloads are tier-2 tasks that wait for this OK, as every model download does.
+function installConfirm(view) {
+  const c = view.confirm;
+  return `<div class="dm-confirm" role="group" aria-labelledby="${view.id}-confirm-title" data-models-confirm><p class="settings-label" id="${view.id}-confirm-title">${esc(c.title)}</p>${c.lines.map((l) => `<p class="settings-note">${esc(l)}</p>`).join('')}
+<div class="connection-actions"><button type="button" class="btn primary" data-action="models-confirm">${esc(c.ok)}</button><button type="button" class="btn quiet" data-action="models-not-now">Not now</button></div></div>`;
+}
+
+// The whole screen. `view`: { id, device: {name, path, hardware, memory, budget_bytes, ram_bytes,
+// overhead_source, overhead_loads, seen?}, plan: [{name, quant, quants, context, contexts, installed,
+// loaded, estimate, result}], total (the plan's own fit result), catalog: [names], advice, privacy,
+// crumb?, confirm?: {title, lines, ok}, status?, busy? }. `device.seen` is said for a device that is
+// asleep: how old what it shows is. `confirm` replaces the install button while it asks.
+export function deviceModels(view) {
+  const planned = view.plan.some((m) => !m.installed);
+  const wont = view.total && view.total.verdict === 'wont-fit';
+  const action = view.confirm ? installConfirm(view) : view.plan.length
+    ? `<div class="connection-actions"><button type="button" class="btn primary" data-action="models-install"${wont || view.busy ? ' disabled' : ''}${wont ? ' aria-describedby="' + view.id + '-why"' : ''}>${planned ? 'Install and assign' : 'Assign'}</button></div>${wont ? `<p class="settings-note" id="${view.id}-why">The plan doesn’t fit yet. Lower a quant or a context, or remove a model.</p>` : ''}`
+    : '';
+  const status = view.status ? `<p class="settings-note dm-status" role="status">${esc(view.status)}</p>` : '';
+  const add = `<div class="dm-add"><label class="dm-field" for="${view.id}-add"><span class="dm-field-label">Add a model</span><select class="input" id="${view.id}-add">${view.catalog.map((n) => `<option>${esc(n)}</option>`).join('')}</select></label><button type="button" class="btn" data-action="models-add">Add to the plan</button></div>`;
+  const crumb = view.crumb === undefined ? `Settings › Devices › ${view.device.name}` : view.crumb;
+  const seen = view.device.seen ? `<p class="dm-seen" data-asleep><span class="pill">Asleep</span> ${esc(view.device.seen)}</p>` : '';
+  return `<section class="panel device-models" aria-labelledby="${view.id}-title" data-device-models="${esc(view.id)}">
+<header class="dm-head">${crumb ? `<p class="dm-crumb">${esc(crumb)}</p>` : ''}<h3 class="dm-title" id="${view.id}-title">Models</h3><p class="dm-device">${esc(view.device.hardware)}</p>${seen}</header>
+${view.total ? memoryBudget(view) : ''}
+<section class="dm-plan" aria-labelledby="${view.id}-plan-title"><h4 class="section-title" id="${view.id}-plan-title">Planned on this device</h4>
+${view.plan.length ? `<ul class="dm-models">${view.plan.map((m, i) => modelPlanRow(view, m, i)).join('')}</ul>` : '<p class="settings-note">Nothing is planned here yet. Plan a pick below, or add a model.</p>'}
+${view.plan.length > 1 ? together(view) : ''}${add}${action}${status}</section>
+${taskPicks(view)}</section>`;
+}
+
 export function settingsRow({ id = '', title, note = '', control = '' }) {
   return `<li class="settings-row"${id ? ` id="${esc(id)}"` : ''}><div class="settings-text"><p class="settings-label">${esc(title)}</p>${note ? `<p class="settings-note">${esc(note)}</p>` : ''}</div>${control ? `<div class="settings-control">${control}</div>` : ''}</li>`;
 }

@@ -12,6 +12,7 @@
 import { api, on } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { toast } from './shell.js';
+import { ago } from './components.js';
 import { left, makePart, since, waitingLine } from './wait.js';
 
 let data = null;
@@ -61,15 +62,47 @@ function scoreLine(model) {
   return c ? `<p class="settings-note model-score${c.state === 'current' ? '' : ' is-unchecked'}">${esc(c.words)}</p>` : '';
 }
 
+// Where each task goes now (model-fit step 3's overview): the role that serves it, on which device.
+// Privacy is said first; a cloud model is named only where the privacy setting lets work go there.
+const TASK_ROUTES = [
+  ['General chat', 'reasoner', ''],
+  ['Coding', 'reasoner', 'Coding has no role of its own yet, so it goes where thinking and writing does.'],
+  ['Screening and decisions', 'triage-text', ''],
+  ['Embeddings (memory search)', 'embedder', ''],
+  ['Vision', null, 'Nothing sends images to a local model yet; a vision model can be planned on a device.'],
+  ['Transcription', 'transcriber', ''],
+];
+const PRIVACY_ROUTES = {
+  'local-only': 'Local only: every task stays on your devices, and no cloud model is used.',
+  'local-preferred': 'Local first: your devices answer first; the cloud model helps only when they can’t.',
+  'cloud-allowed': 'Cloud allowed: Nova may choose the cloud model as well as your devices.',
+};
+function routes() {
+  const rows = TASK_ROUTES.map(([task, role, note]) => {
+    const r = role ? data.roles.find((x) => x.role === role) : null;
+    const where = !role ? note
+      : role === 'transcriber' ? r?.words ?? ''
+      : r?.assigned ? `${r.assigned.model} on ${r.assigned.device_name}${r.assigned.hub_model ? `; small jobs: ${r.assigned.hub_model} on the hub` : ''}.${note ? ` ${note}` : ''}`
+      : `Not set yet.${note ? ` ${note}` : ''}`;
+    const [label, tone] = r ? STATE_WORDS[r.state] ?? ['', ''] : ['', ''];
+    return `<li class="dm-route" data-route="${esc(role ?? 'none')}"><div class="conn-head"><p class="settings-label">${esc(task)}</p>${label ? `<span class="pill ${tone}">${esc(label)}</span>` : ''}</div><p class="settings-note">${esc(where)}</p></li>`;
+  }).join('');
+  return `<h3 class="conn-sub">Where each task runs</h3><p class="settings-note">${esc(PRIVACY_ROUTES[data.privacy] ?? '')}</p><ul class="dm-routes">${rows}</ul>`;
+}
+
 function deviceCard(d) {
   const pill = d.online ? '<span class="pill is-on">Online</span>' : '<span class="pill">Asleep or away</span>';
+  const serves = data.roles.filter((r) => r.assigned?.device === d.id).map((r) => r.name.toLowerCase());
   return `<li class="model-device" data-device="${esc(d.id)}">
   <div class="conn-head"><p class="settings-label">${esc(d.name)}${d.hub ? ' <span class="model-tag">hub</span>' : ''}</p>${pill}</div>
   <p class="settings-note">${esc(d.words)}</p>
+  ${!d.online && !d.hub ? `<p class="settings-note">Last seen ${esc(d.last_seen ? ago(d.last_seen) : 'never')}; what shows is what it last reported.</p>` : ''}
+  <p class="settings-note">${serves.length ? `Serves ${esc(serves.join(', '))}.` : 'Serves no task yet.'}</p>
   ${d.capacity ? `<p class="settings-note">${esc(d.capacity)}</p>` : ''}
   ${d.runtime ? `<p class="settings-note">${esc(d.runtime.words)}</p>` : ''}
   ${d.wake ? `<p class="settings-note">${esc(d.wake.words)}</p>` : ''}
   ${d.decision_model?.model ? `<p class="settings-note">Decision model: ${esc(d.decision_model.model)}${d.decision_model.digest ? ` (sha256:${esc(d.decision_model.digest.replace(/^sha256:/, '').slice(0, 12))}…)` : ''}. ${esc(d.decision_model.why)}</p>` : ''}
+  ${d.plan && d.hardware ? `<div class="sheet-actions"><button type="button" class="btn" data-action="device-models" data-device="${esc(d.id)}">Models on ${esc(d.name)}</button></div>` : ''}
 </li>`;
 }
 
@@ -196,6 +229,7 @@ export function renderModels() {
   const b = cloud.budget ?? {};
   return `${head}
 <p class="memory-lede">${esc(lede)}</p>
+${routes()}
 <h3 class="conn-sub">Your devices</h3>
 <ul class="model-list">${data.devices.map(deviceCard).join('')}</ul>
 <h3 class="conn-sub">What runs where</h3>
@@ -253,7 +287,8 @@ export function bindModels(root, render) {
   on('task', (t) => { if (data?.recent.some((x) => x.id === t?.id) || t?.title?.startsWith('Download ') || t?.title?.startsWith('Remove ')) loadModels(); });
   root.addEventListener('click', (e) => {
     const b = e.target.closest('[data-action]');
-    if (!b || !b.dataset.action.startsWith('models-')) return;
+    // A device's Models screen has its own models-* actions (device-models.js); they aren't these.
+    if (!b || !b.dataset.action.startsWith('models-') || b.closest('[data-device-models]')) return;
     const a = b.dataset.action;
     if (a === 'models-retry') loadModels();
     if (a === 'models-accept') act(() => api('POST', '/models/roles/accept'), (r) => (r.assigned.length ? `Nova uses ${r.assigned.length === 1 ? 'that model' : 'those models'} now.` : 'Nothing to change.'));
