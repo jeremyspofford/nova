@@ -416,6 +416,14 @@ its own PR with its own gate, design-first as always.
 ## Open questions for the owner
 
 1. The unified-memory budget: 2/3 below 36 GB (this ADR), or keep 0.75 until a real Mac is measured?
+   **Answered (owner, 2026-11-06):** on a unified-memory Mac the budget is the Mac's real GPU limit
+   when it is known: the device agent reads `sysctl -n iogpu.wired_limit_mb` and reports
+   `gpu_wired_limit_bytes` (MB × 1,048,576 when above 0; null at 0, the macOS default, or when it
+   can't be read), and the hub keeps it only as a positive whole number of bytes no larger than the
+   reported memory. Without it, the fractions above (2/3 below 36 GB, 3/4 from 36 GB) are the
+   fallback, labelled on the screen as an estimate. Those fractions are still Nova's estimate of
+   Apple's default and haven't been measured on a real Mac. The field lives in the existing
+   `device_hardware` JSON, so there is no migration and nothing new is replicated.
 2. Should Tight be allowed as the general-chat pick (as in Case 1), or should the pick always be Fits,
    with Tight shown only as an option?
    **Answered by the owner, 2026-11-06:** a Tight verdict is never a recommended or default pick;

@@ -150,6 +150,27 @@ test('unified memory: the budget is the named constant × RAM below 36 GB, 3/4 f
   assert.equal(unifiedBudgetBytes(64 * GiB), 48 * GiB);
 });
 
+// Owner decision 2026-11-06: the limit set on the Mac wins; the fractions are the labelled fallback.
+test('unified memory: a measured GPU limit is the budget; without one the fallback is unchanged', () => {
+  assert.equal(unifiedBudgetBytes(16 * GiB), Math.floor(16 * GiB * UNIFIED_BUDGET_FRACTION_BELOW_36GB));
+  assert.equal(unifiedBudgetBytes(36 * GiB), 27 * GiB);
+  assert.equal(unifiedBudgetBytes(64 * GiB), 48 * GiB);
+  assert.equal(unifiedBudgetBytes(192 * GiB), 144 * GiB);
+  for (const none of [undefined, null, 0, -1]) assert.equal(unifiedBudgetBytes(192 * GiB, none), 144 * GiB, `no limit (${none}): the fallback`);
+  assert.equal(unifiedBudgetBytes(192 * GiB, 180 * GiB), 180 * GiB, 'the measured limit wins over the bands');
+  assert.equal(unifiedBudgetBytes(16 * GiB, 12 * GiB), 12 * GiB);
+
+  const mac = (ram: number, limit?: number | null) => deviceBudget(hw({ platform: 'darwin', arch: 'arm64', ram_bytes: ram, gpus: [{ vendor: 'apple', name: 'Apple M-series', vram_bytes: Math.floor(ram * 0.75), vram_free_bytes: null, unified: true }], gpu_wired_limit_bytes: limit }));
+  assert.deepEqual([mac(192 * GiB, 180 * GiB).budget_bytes, mac(192 * GiB, 180 * GiB).budget_source], [180 * GiB, 'measured']);
+  assert.deepEqual([mac(192 * GiB).budget_bytes, mac(192 * GiB).budget_source], [144 * GiB, 'estimate']);
+  assert.deepEqual([mac(16 * GiB, null).budget_bytes, mac(16 * GiB, null).budget_source], [unifiedBudgetBytes(16 * GiB), 'estimate']);
+  // The verdict carries where its budget came from.
+  const r = fit({ device: mac(192 * GiB, 180 * GiB), models: [planned('32B', 'Q8_0', '16k')] });
+  assert.deepEqual([r.budget_bytes, r.budget_source], [180 * GiB, 'measured']);
+  assert.equal(fit({ device: mac(64 * GiB), models: [planned('8B', 'Q4_K_M', '4k')] }).budget_source, 'estimate');
+  assert.equal(fit({ device: device(24 * GiB), models: [planned('8B', 'Q4_K_M', '4k')] }).budget_source, 'estimate', 'a hand-made device without a source is an estimate');
+});
+
 test('Case 3, a 16 GB unified-memory Mac: the table at the pending budget fraction', () => {
   const budget = unifiedBudgetBytes(16 * GiB);
   if (TWO_THIRDS) {

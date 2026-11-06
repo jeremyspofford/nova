@@ -43,6 +43,8 @@ const HW = {
   gpu12: hubHardware({ gpus: [gpu('Example GPU 12GB', 12, 0.3)], ram_bytes: 32 * GiB }),
   mac16: hubHardware({ platform: 'darwin', arch: 'arm64', gpus: [{ vendor: 'apple', name: 'Example Apple GPU', vram_bytes: 12 * GiB, vram_free_bytes: null, unified: true }], ram_bytes: 16 * GiB }),
   cpu32: hubHardware({ gpus: [], ram_bytes: 32 * GiB }),
+  // A Mac whose GPU memory limit was raised to 56 GB (the 3/4 estimate would be 48 GB).
+  mac64set: hubHardware({ platform: 'darwin', arch: 'arm64', gpus: [{ vendor: 'apple', name: 'Example Apple GPU', vram_bytes: 48 * GiB, vram_free_bytes: null, unified: true }], ram_bytes: 64 * GiB, gpu_wired_limit_bytes: 56 * GiB }),
 };
 type Plan = [string, string, number][];
 // The design's states, on the app: the hub's hardware, its privacy, and the plan the person makes.
@@ -324,6 +326,34 @@ test('Models screen (app): device setup shows the same component when Nova finds
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no horizontal scroll');
       assert.deepEqual(errors, []);
     }, { finish: false });
+  } finally { await b.close(); }
+});
+
+test('Models screen (app): a Mac’s budget line says whether it is the limit set on the Mac or Nova’s estimate', { timeout: 120_000 }, async (t) => {
+  const b = await browser();
+  if (typeof b === 'string') return t.skip(b);
+  try {
+    await fixture(async ({ base, setHw }) => {
+      const { page, errors } = await device(b, { width: 1280, height: 900 });
+      await setHw('mac64set');
+      await openHub(page, base);
+      await setPlan(screen(page), [['qwen3:8b', 'Q4_K_M', 4096]]);
+      await screen(page).locator('.fit-bar').waitFor();
+      let text = await screen(page).innerText();
+      assert.match(text, /GPU memory limit set on this Mac: 56\.0 GB\./, 'the measured limit is the budget, and says so');
+      assert.doesNotMatch(text, /Estimated GPU share/);
+      await setHw('mac16');
+      // The same URL again is a same-document navigation; reload so the new reading is fetched.
+      await page.reload();
+      await ready(page);
+      await screen(page).waitFor();
+      await page.waitForFunction(() => document.querySelector('#settings-devices [data-device-models]')?.textContent?.includes('16.0 GB unified memory'));
+      await setPlan(screen(page), [['qwen3:8b', 'Q4_K_M', 4096]]);
+      await screen(page).locator('.fit-bar').waitFor();
+      text = await screen(page).innerText();
+      assert.match(text, /Estimated GPU share of 16\.0 GB unified memory: 10\.7 GB \(macOS default\)\./, 'without a limit, the estimate is labelled');
+      assert.deepEqual(errors, []);
+    });
   } finally { await b.close(); }
 });
 

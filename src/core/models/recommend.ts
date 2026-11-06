@@ -134,7 +134,7 @@ const pickFit = (r: FitResult | null, m: FitModel): PickFit | null =>
   r ? { verdict: r.verdict, quant: m.quant, context: m.context, basis: r.basis, need_bytes: r.need_bytes, budget_bytes: r.budget_bytes, words: r.words } : null;
 
 // The memory models sit in, in words. A unified-memory device is named with the engine's budget
-// (UNIFIED_BUDGET_FRACTION_BELOW_36GB in fit.ts), not hardware.ts's 0.75 × RAM.
+// (the Mac's GPU memory limit when set, else the fractions in fit.ts), not hardware.ts's 0.75 × RAM.
 function memoryWords(h: Hardware, dev: FitDevice): string {
   const unified = h.gpus.find((g) => g.unified);
   return dev.memory === 'unified' && unified ? `${unified.name}, sharing ${gb(dev.budget_bytes)} of memory` : modelMemory(h).words;
