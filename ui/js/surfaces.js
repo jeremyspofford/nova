@@ -823,7 +823,20 @@ const FRAME = `<section class="memory-section" id="appearance" aria-labelledby="
 <p class="settings-note" id="appearance-iphone">On an iPhone with Nova on the Home Screen, a dark design also fills the strip with the time and battery. After you switch to or from a dark design, that strip may only change once you close Nova and open it again.</p>
 <p class="perm-foot"><a class="set-link" href="/styleguide">Styleguide</a></p></section>`;
 
-const setHtml = (node, html) => { if (node && node.innerHTML !== html) node.innerHTML = html; };
+// Each part is written again only when what it should show changes. The browser never reads
+// innerHTML back exactly as written (quotes, entities, boolean attributes), so comparing with it
+// rewrote the design cards on every refresh, taking focus and hover with them. Each part keeps
+// the source it was last given and the children that made; a part whose children were replaced
+// some other way is written again. FRAME makes new parts, which start with nothing kept.
+const drawn = new WeakMap();
+const setHtml = (node, html) => {
+  if (!node) return;
+  const last = drawn.get(node);
+  const kids = node.childNodes;
+  if (last?.html === html && last.kids.length === kids.length && last.kids.every((k, i) => k === kids[i])) return;
+  node.innerHTML = html;
+  drawn.set(node, { html, kids: [...node.childNodes] });
+};
 
 export function drawAppearance(box) {
   if (!box.querySelector('#appearance')) box.innerHTML = FRAME;
