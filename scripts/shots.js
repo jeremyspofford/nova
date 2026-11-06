@@ -827,7 +827,7 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.waitForSelector('html[data-ready] .ds-card');
   await p.waitForTimeout(400);
   await shot(p, 'nova-settings-appearance');
-  check('appearance: Settings lists every design system, one recommended, and the light/dark choices', await p.evaluate(() => document.querySelectorAll('#appearance .ds-card').length === 6 && document.querySelectorAll('#appearance .ds-recommended .ds-card').length === 1 && document.querySelectorAll('#appearance input[name="mode"]').length === 3));
+  check('appearance: Settings lists every design system, one recommended, and the light/dark choices', await p.evaluate(() => document.querySelectorAll('#appearance .ds-card').length === 7 && document.querySelectorAll('#appearance .ds-recommended .ds-card').length === 1 && document.querySelectorAll('#appearance input[name="mode"]').length === 3));
   check('appearance: no preview frame', await p.evaluate(() => !document.querySelector('#settings-view iframe')));
   await p.evaluate(() => { window.__boot = 1; });
   await p.click('.ds-card[data-ds="companion-light"]');
