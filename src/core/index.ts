@@ -61,6 +61,7 @@ import { checkers as browserCheckers } from './browser/evidence.ts';
 import { Capture, PROMOTE, SCREEN_TEMPLATE } from './capture/capture.ts';
 import { captureRoutes } from './capture/routes.ts';
 import { Models, ROLE_WORDS as MODEL_ROLE_WORDS, type Hardware } from './models/index.ts';
+import type { Card, Sender } from './models/wake.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { wireIngest, type ScreenInput, type Taint } from './ingest/index.ts';
 import { NovaComputer, type ComputerOptions } from './computer/index.ts';
@@ -230,7 +231,9 @@ export interface CoreOptions {
   capture?: { pollMs?: number; fetch?: typeof fetch };
   // The local model manager (M6b): where the hub's Ollama answers by default, and (tests) a fixed
   // hardware reading and quicker watch and wake polls.
-  models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number };
+  // hubCards, wakeSender, wakeGapMs: Wake-on-LAN's own cards, sender and packet gap, for tests (a
+  // recorder that opens no socket; see ModelsOptions).
+  models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number; hubCards?: () => Card[]; wakeSender?: Sender; wakeGapMs?: number };
   // The Decision Service (DS1), for tests: a verdict store in place of the committed eval verdicts
   // (src/core/decision-service/tev1-verdicts.json), so a stand-in seat can be trusted or not.
   decisions?: { verdicts?: VerdictStore };
@@ -413,6 +416,9 @@ export function createCore(o: CoreOptions) {
     ...(o.models?.hardware ? { hardware: o.models.hardware } : {}),
     ...(o.models?.watchMs ? { watchMs: o.models.watchMs } : {}),
     ...(o.models?.wakePollMs ? { wakePollMs: o.models.wakePollMs } : {}),
+    ...(o.models?.hubCards ? { hubCards: o.models.hubCards } : {}),
+    ...(o.models?.wakeSender ? { wakeSender: o.models.wakeSender } : {}),
+    ...(o.models?.wakeGapMs !== undefined ? { wakeGapMs: o.models.wakeGapMs } : {}),
     diskPath: o.home,
     meshHost: (h) => meshHosts().has(h),
     secret: (v) => { const n = secretName(v); return n ? providerSecret(n) : null; },
@@ -423,6 +429,7 @@ export function createCore(o: CoreOptions) {
     refreshed: () => ds?.refresh() ?? Promise.resolve(),
   });
   ledger.workers.set(models.worker.id, models.worker);
+  ledger.workers.set(models.wakeWorker.id, models.wakeWorker);
   // The model-swap scorecards (Amendment B Part 4): files under workers/evals/, read by Settings ›
   // Models before a switch.
   const scorecards = new Scorecards(o.home);

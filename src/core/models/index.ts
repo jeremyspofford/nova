@@ -21,7 +21,7 @@ import { checkHardware, detectHardware, gb, hardwareWords, privateAddress, type 
 import { Ollama, RuntimeDown, runsRemotely, type InstalledModel, type LoadedModel, type Message, type ModelShape } from './ollama.ts';
 import { CATALOG, HEADROOM, ROLES, ROLE_WORDS, capacityWords, fitDevice, isEmbedder, isText, planCandidates, quantTag, recommend, roleContext, type DeviceModels, type Pick, type Role, type RoleAdvice } from './recommend.ts';
 import { fit, learnOverhead, overheadWords, priorOverhead, unifiedBudgetBytes, weightsBytes, type LearnedOverhead, type Quant } from './fit.ts';
-import { sendMagic } from './wake.ts';
+import { hubCards, parseTarget, sendMagic, targetOnRoute, wakeRoute, type Card, type RouteRefusal, type Sender, type WakeRoute } from './wake.ts';
 import type { Db } from '../db.ts';
 import type { Ledger, LanedWorker, Task } from '../ledger.ts';
 import type { Log } from '../log.ts';
@@ -133,6 +133,12 @@ export interface ModelsOptions {
   // How often waiting tasks are checked against returning capacity; how often a waking device is asked.
   watchMs?: number;
   wakePollMs?: number;
+  // The hub's own network cards, which wakes are sent from (the OS's, unless a test hands in its own),
+  // what sends a datagram (a UDP socket, unless a test hands in a recorder), and the gap between the
+  // three packets of one wake (1 s).
+  hubCards?: () => Card[];
+  wakeSender?: Sender;
+  wakeGapMs?: number;
   // The hub's decision model as the Decision Service sees it (DS1 NOTE 4), for the device record.
   decisionModel?: () => { model: string | null; digest: string | null; why: string } | null;
   // Called after /models/refresh has read the hub again, so a newly pulled decision model is seen.
@@ -145,8 +151,26 @@ interface Inventory { ok: boolean; version: string | null; models: InstalledMode
 interface PullSpec { model: string; device: string; url: string; digest: string; known: number | undefined }
 interface Download { task_id: string; action: 'pull' | 'remove'; model: string; device: string; status: string; completed: number; total: number; digest: string | null }
 
+// Wake-on-LAN (docs/plans/wol-inference-nodes-adr-2026-11-06.md). Waking is the person's choice per
+// device (`power.<device_id>` in the profile's models section), off until they turn it on; the idle
+// choices are a fixed list. Rate limits: per device and across the hub, per hour, from any origin.
+export const SLEEP_AFTER = [15, 30, 60, 120] as const;
+export interface PowerPolicy { on_demand: boolean; sleep_after_min: null | (typeof SLEEP_AFTER)[number] }
+export const WAKE_LIMITS = { device: 4, hub: 12, windowMs: 3600_000, maxWaitMs: 300_000 } as const;
+export type WakeOrigin = 'routing' | 'person';
+export type WakeRefusal = 'not_trusted' | 'not_compute' | 'off' | 'paused' | 'once' | 'rate_limit' | 'rate_limit_hub' | 'address' | 'duplicate_mac' | 'wol_off' | 'target' | RouteRefusal;
+const WAKE_CONFIRMATION = 'device-wake';
+// What the person's choice is until they make one: never sleep, and wait until it is turned on.
+const NO_POLICY: PowerPolicy = { on_demand: false, sleep_after_min: null };
+
 export class Models extends EventEmitter {
   readonly worker: LanedWorker;
+  // The person's own wakes (POST /models/devices/{id}/wake), and routing's for work with no task of
+  // its own: each is a tier-1 ledger task "Wake ⟨device⟩" that only this module makes.
+  readonly wakeWorker: LanedWorker;
+  #wakeKey = Symbol('wake');
+  #pending = new Map<string, (r: WakeResult) => void>();
+  #dupes = new Set<string>();
   #o: ModelsOptions;
   #now: () => Date;
   #hw: Hardware | null = null;
@@ -166,10 +190,16 @@ export class Models extends EventEmitter {
     this.#o = o;
     this.#now = o.now ?? (() => new Date());
     o.verifier.registerConfirmation(CONFIRMATION_SYSTEM, (e, brief) => this.#confirm(e, brief));
+    o.verifier.registerConfirmation(WAKE_CONFIRMATION, (e, brief) => this.#confirmWake(e, brief));
     this.worker = this.#makeWorker();
+    this.wakeWorker = this.#makeWakeWorker();
     // Cloud usage that came back in a report from a provider that sends off the devices (a coding
     // agent in the cloud) is tracked here too, so the budget sees every dollar.
-    o.ledger.on('task', (t: Task) => this.#trackReport(t));
+    // A wake task that ended without running (cancelled, or failed before it could) answers its caller.
+    o.ledger.on('task', (t: Task) => {
+      this.#trackReport(t);
+      if (t.state === 'failed' || t.state === 'cancelled') this.#pending.get(t.id)?.({ ok: false, waited_ms: 0, limit_ms: 0, words: t.reason ?? 'The wake didn’t run.' });
+    });
     // Install and assign (the Models screen): a download asked for with a role is assigned once
     // Nova has verified it.
     o.ledger.on('task', (t: Task) => this.#assignAfterPull(t));
@@ -327,6 +357,10 @@ export class Models extends EventEmitter {
       this.#o.log.warn('models', `${device.name} sent hardware Nova couldn’t read.`, { error: (e as Error).message });
       return;
     }
+    // A card's MAC that changed is noted in the device's activity: it is what a wake is sent for.
+    const was = this.#spokeHardware(device.id)?.network.map((n) => n.mac).sort().join(', ');
+    const now = hw.network.map((n) => n.mac).sort().join(', ');
+    if (was !== undefined && was !== now) this.#o.log.info('models', `${device.name}’s network cards changed: ${was || 'none'} before, ${now || 'none'} now. Wakes go to the new ones.`, { device: device.id });
     this.#o.db.run(
       `INSERT INTO device_hardware (device_id, hardware, updated_at) VALUES (?, ?, ?)
        ON CONFLICT (device_id) DO UPDATE SET hardware = excluded.hardware, updated_at = excluded.updated_at`,
@@ -677,7 +711,7 @@ export class Models extends EventEmitter {
           model = p.hub_model;
           notes.push(`${name} is asleep and this was small, so ${model} on the hub answered rather than waking it${latency ? ` (waking takes about ${Math.round(latency / 1000)} s)` : ''}.`);
         } else {
-          const w = await this.wake(p.device);
+          const w = await this.wake(p.device, { origin: 'routing', task_id: req.task_id ?? null });
           if (!w.ok) throw new LocalDown(w.words);
           notes.push(w.words);
         }
@@ -843,6 +877,7 @@ export class Models extends EventEmitter {
 
   // After a restart: anything still parked is watched again.
   start(): void {
+    this.#firstRunPower();
     if (this.#waiters().length) this.#watch();
   }
 
@@ -851,7 +886,7 @@ export class Models extends EventEmitter {
     this.#timer = null;
   }
 
-  // ---- waking a GPU spoke ----------------------------------------------------------------------
+  // ---- waking a compute device (docs/plans/wol-inference-nodes-adr-2026-11-06.md) ---------------
 
   // How long the device took to wake last time it was woken, or null when Nova hasn't seen it.
   wakeLatency(device: string): number | null {
@@ -859,58 +894,221 @@ export class Models extends EventEmitter {
     return r ? r.waited_ms : null;
   }
 
-  wake(device: string): Promise<WakeResult> {
+  // The person's sleep and wake choices for a device, or the default: Nova never sleeps it, and wakes
+  // it only once they turn waking on.
+  power(device: string): PowerPolicy {
+    const p = this.#get<Record<string, unknown>>(`power.${device}`);
+    if (!isObj(p)) return { ...NO_POLICY };
+    return { on_demand: p.on_demand === true, sleep_after_min: SLEEP_AFTER.includes(p.sleep_after_min as never) ? p.sleep_after_min as PowerPolicy['sleep_after_min'] : null };
+  }
+
+  // PUT /models/devices/{id}/power (the person scope, tier 1: reversible, and nothing leaves the
+  // devices). Either choice may be sent alone; each is one of a fixed list.
+  setPower(device: string, v: unknown): PowerPolicy {
+    if (device === HUB || !this.#trusted(device)) throw new CoreError('not_found', `${this.#deviceName(device)} isn’t one of your trusted computers.`);
+    if (!isObj(v)) throw new CoreError('validation', 'The sleep and wake choices are {on_demand?: true | false, sleep_after_min?: null | 15 | 30 | 60 | 120}.');
+    const out = this.power(device);
+    if (v.on_demand !== undefined) {
+      if (typeof v.on_demand !== 'boolean') throw new CoreError('validation', 'on_demand is true (Nova wakes it when work needs it) or false (wait until it’s turned on).');
+      out.on_demand = v.on_demand;
+    }
+    if (v.sleep_after_min !== undefined) {
+      if (!(v.sleep_after_min === null || SLEEP_AFTER.includes(v.sleep_after_min as never))) throw new CoreError('validation', 'sleep_after_min is null (never sleep) or 15, 30, 60 or 120 minutes.');
+      out.sleep_after_min = v.sleep_after_min as PowerPolicy['sleep_after_min'];
+    }
+    this.#set(`power.${device}`, out);
+    this.emit('change', { action: 'power', device });
+    return out;
+  }
+
+  // Waking became opt-in with this build (the owner's answer to the ADR's question 5). So that a
+  // device Nova already wakes for work keeps working, the first run turns waking on for each trusted
+  // computer that serves a role and that Nova has sent a wake before (the owner's Dell); every other
+  // device waits for the person's choice.
+  #firstRunPower(): void {
+    if (this.#get('power.first_run') !== undefined) return;
+    for (const d of this.#spokes()) {
+      if (this.#get(`power.${d.id}`) !== undefined || !this.rolesOn(d.id).length) continue;
+      if (!this.#o.db.get(`SELECT 1 FROM device_wake WHERE device_id = ? AND outcome != 'refused'`, d.id)) continue;
+      this.#set(`power.${d.id}`, { on_demand: true, sleep_after_min: null });
+      this.#o.log.info('models', `Waking is now your choice for each device. ${d.name} serves a model role and Nova has woken it before, so it stays on: Nova wakes it when work needs it (Settings › Models, “Sleep and wake”).`);
+    }
+    this.#set('power.first_run', this.#now().toISOString());
+  }
+
+  // Paused: the last wake sent to it failed, and it hasn't been heard from since. Routing doesn't wake
+  // it again until then; the person still can ("Try waking it again").
+  #paused(device: string): boolean {
+    const last = this.#o.db.get<{ sent_at: string; outcome: string }>(`SELECT sent_at, outcome FROM device_wake WHERE device_id = ? AND outcome NOT IN ('refused', 'waiting') ORDER BY id DESC LIMIT 1`, device);
+    if (!last || last.outcome === 'awake') return false;
+    const seen = this.#o.devices.find(device)?.last_seen;
+    return !seen || Date.parse(seen) < Date.parse(last.sent_at);
+  }
+
+  // The rate limits, counted from the durable (and replicated) wake table: wakes that were sent, from
+  // any origin, in the last hour. When one is reached, when the oldest of them leaves the hour.
+  #rateLimit(device: string): { reason: 'rate_limit' | 'rate_limit_hub'; at: Date } | null {
+    const since = new Date(this.#now().getTime() - WAKE_LIMITS.windowMs).toISOString();
+    const sent = `outcome NOT IN ('refused', 'not_sent') AND sent_at > ?`;
+    const mine = this.#o.db.all<{ sent_at: string }>(`SELECT sent_at FROM device_wake WHERE device_id = ? AND ${sent} ORDER BY sent_at`, device, since);
+    if (mine.length >= WAKE_LIMITS.device) return { reason: 'rate_limit', at: new Date(Date.parse(mine[mine.length - WAKE_LIMITS.device]!.sent_at) + WAKE_LIMITS.windowMs) };
+    const all = this.#o.db.all<{ sent_at: string }>(`SELECT sent_at FROM device_wake WHERE ${sent} ORDER BY sent_at`, since);
+    if (all.length >= WAKE_LIMITS.hub) return { reason: 'rate_limit_hub', at: new Date(Date.parse(all[all.length - WAKE_LIMITS.hub]!.sent_at) + WAKE_LIMITS.windowMs) };
+    return null;
+  }
+
+  // Another trusted computer that reports one of these MACs: then neither is woken until one changes,
+  // since a wake for one would wake the other. Said once as a problem.
+  #sharedMac(device: string, macs: string[]): { other: string; mac: string } | null {
+    for (const d of this.#spokes()) {
+      if (d.id === device) continue;
+      const mac = this.#spokeHardware(d.id)?.network.find((n) => macs.includes(n.mac))?.mac;
+      if (!mac) continue;
+      const key = [device, d.id].sort().join('|') + mac;
+      if (!this.#dupes.has(key)) {
+        this.#dupes.add(key);
+        this.#o.log.problem('models', `${this.#deviceName(device)} and ${d.name} both report the network card ${mac}, so Nova wakes neither until one of them changes. Check which machine that card is in.`);
+      }
+      return { other: d.name, mac };
+    }
+    return null;
+  }
+
+  // Every check a wake must pass before anything is sent (the ADR's step 1), in order: trusted ·
+  // compute · the person's opt-in · not paused · once per task · rate limits · where its models
+  // answer · its cards (a MAC no other device claims, Wake-on-LAN not off) · a hub card on its own
+  // network (the same-network test) · the person's own target, if set, on that network.
+  async #wakeCheck(device: string, origin: WakeOrigin, taskId: string | null): Promise<
+    { ok: true; route: WakeRoute; mac: string; url: string; target: string } | { ok: false; reason: WakeRefusal; words: string; retry_at?: string }> {
+    const name = this.#deviceName(device);
+    const no = (reason: WakeRefusal, words: string, retry?: Date) => ({ ok: false as const, reason, words, ...(retry ? { retry_at: retry.toISOString() } : {}) });
+    if (device === HUB || !this.#trusted(device)) return no('not_trusted', `${name} isn’t one of your trusted computers, so Nova won’t wake it.`);
+    if (!this.#computes(device)) return no('not_compute', `${this.#noCompute(device)}.`);
+    if (!this.power(device).on_demand) return no('off', `Nova doesn’t wake ${name}: you chose to wait until it’s turned on (Settings › Models, “Sleep and wake”).`);
+    if (origin === 'routing' && this.#paused(device)) return no('paused', `Nova woke ${name} and it didn’t come up, so it won’t wake it again by itself until ${name} is heard from. You can try waking it again.`);
+    if (origin === 'routing' && taskId && this.#o.ledger.events(taskId).some((e) => e.kind === 'wake' && (e.detail as { outcome?: string } | null)?.outcome !== 'refused')) {
+      return no('once', `Nova already woke ${name} once for this task and won’t keep waking it.`);
+    }
+    const limit = this.#rateLimit(device);
+    if (limit) {
+      const at = limit.at.toTimeString().slice(0, 5);
+      return no(limit.reason, limit.reason === 'rate_limit'
+        ? `Nova has woken ${name} ${WAKE_LIMITS.device} times this hour; it can try again at ${at}.`
+        : `Nova has sent ${WAKE_LIMITS.hub} wakes this hour across your devices; it can try again at ${at}.`, limit.at);
+    }
+    const url = this.#urlFor(device);
+    if (!url) return no('address', `Nova doesn’t know where ${name}’s models answer.`);
+    const wrong = await this.#spokeAddress(device, url);
+    if (wrong) return no('address', `Nova won’t wake ${name}: ${wrong}.`);
+    const cards = this.#spokeHardware(device)?.network ?? [];
+    if (!cards.length) return no('no_card', `${name} hasn’t told Nova its network card, so Nova can’t wake it. It needs to be on for its heartbeat once.`);
+    const shared = this.#sharedMac(device, cards.map((c) => c.mac));
+    if (shared) return no('duplicate_mac', `${name} and ${shared.other} both report the network card ${shared.mac}, so Nova wakes neither until one of them changes.`);
+    const able = cards.filter((c) => c.wol !== 'off');
+    if (!able.length) return no('wol_off', `${name}’s network card has Wake-on-LAN turned off, so Nova can’t wake it. Turn it on in its BIOS or network settings.`);
+    let host = '';
+    try { host = new URL(url).hostname; } catch { /* checked above */ }
+    const r = wakeRoute((this.#o.hubCards ?? hubCards)(), able, (a) => this.#o.meshHost?.(a) === true, host);
+    if (!r.ok) {
+      return no(r.reason, {
+        no_card: `${name} hasn’t told Nova its network card, so Nova can’t wake it.`,
+        not_private: `None of ${name}’s network cards is on a private network Nova can send a wake signal on.`,
+        mesh: `${name} reports only its mesh address, and Nova doesn’t send wake signals over your mesh.`,
+        netmask: `${name}’s network card reports a netmask that is too broad, or not a netmask, so Nova won’t send a wake signal on it: only on a home network from /16 to /30.`,
+        no_sender: 'None of your always-on devices is on its network, so nothing can send the wake signal. Nova doesn’t send wake signals across networks or over your mesh.',
+      }[r.reason]);
+    }
+    // The person's own target, if set, must be on that same network; otherwise it is refused for this
+    // device (Nova never falls back to 255.255.255.255).
+    const w = this.#get<{ target?: string }>('wake') ?? {};
+    let target = `${r.route.target}:${r.route.port}`;
+    if (str(w.target)) {
+      const t = parseTarget(str(w.target));
+      if (!targetOnRoute(t.host, r.route)) return no('target', `The wake target you set (${w.target}) isn’t on ${name}’s network, so Nova won’t send its wake there.`);
+      target = `${t.host}:${t.port}`;
+    }
+    return { ok: true, route: r.route, mac: r.route.card.mac!, url, target };
+  }
+
+  // Wakes a device, or says why not. `origin`: routing (work routed to its role) or the person.
+  // Routing's wake for a task is an event on that task; the person's wake, and routing's for work
+  // with no task of its own, is a tier-1 task "Wake ⟨device⟩" (refused routing ones without a task go
+  // to the wake table and the activity log). One wake per device at a time.
+  wake(device: string, o: { origin?: WakeOrigin; task_id?: string | null } = {}): Promise<WakeResult> {
     const going = this.#waking.get(device);
     if (going) return going;
-    const p = this.#wake(device).finally(() => this.#waking.delete(device));
+    const origin = o.origin ?? 'routing';
+    const run = async (): Promise<WakeResult> => {
+      if (o.task_id) return this.#wakeNow(device, origin, o.task_id);
+      if (origin === 'routing') {
+        const c = await this.#wakeCheck(device, origin, null);
+        if (!c.ok) return this.#refused(device, origin, null, c);
+      }
+      return this.#wakeTask(device, origin);
+    };
+    const p = run().finally(() => this.#waking.delete(device));
     this.#waking.set(device, p);
     return p;
   }
 
-  async #wake(device: string): Promise<WakeResult> {
+  #record(device: string, origin: WakeOrigin, outcome: string, at: Date, more: { sender?: string | null; reason?: string | null } = {}): number {
+    return Number(this.#o.db.get<{ id: number }>(
+      'INSERT INTO device_wake (device_id, sent_at, outcome, origin, sender, reason) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+      device, at.toISOString(), outcome, origin, more.sender ?? null, more.reason ?? null,
+    )!.id);
+  }
+
+  #ledgerWake(taskId: string | null, detail: Record<string, unknown>): void {
+    if (taskId) try { this.#o.ledger.note(taskId, 'wake', detail); } catch { /* not a task Nova knows */ }
+  }
+
+  #refused(device: string, origin: WakeOrigin, taskId: string | null, c: { reason: WakeRefusal; words: string; retry_at?: string }): WakeResult {
+    this.#record(device, origin, 'refused', this.#now(), { reason: c.reason });
+    this.#ledgerWake(taskId, { device, origin, sender: null, target: null, outcome: 'refused', reason: c.reason, words: c.words, waited_ms: 0 });
+    if (!taskId) this.#o.log.info('models', `No wake sent: ${c.words}`, { device, origin, reason: c.reason });
+    this.emit('change', { action: 'wake-refused', device });
+    return { ok: false, waited_ms: 0, limit_ms: 0, words: c.words, reason: c.reason, ...(c.retry_at ? { retry_at: c.retry_at } : {}) };
+  }
+
+  async #wakeNow(device: string, origin: WakeOrigin, taskId: string | null): Promise<WakeResult> {
     const name = this.#deviceName(device);
-    if (device === HUB || !this.#trusted(device)) return { ok: false, waited_ms: 0, limit_ms: 0, words: `${name} isn’t one of your trusted computers, so Nova won’t wake it.` };
-    const hw = this.#spokeHardware(device);
-    const url = this.#urlFor(device);
-    if (!url) return { ok: false, waited_ms: 0, limit_ms: 0, words: `Nova doesn’t know where ${name}’s models answer.` };
-    const wrong = await this.#spokeAddress(device, url);
-    if (wrong) return { ok: false, waited_ms: 0, limit_ms: 0, words: `Nova won’t wake ${name}: ${wrong}.` };
-    let host = '';
-    try { host = new URL(url).hostname; } catch { /* checked above */ }
-    const nic = hw?.network.find((n) => n.address === host) ?? hw?.network[0];
-    if (!nic) return { ok: false, waited_ms: 0, limit_ms: 0, words: `${name} hasn’t told Nova its network card, so Nova can’t wake it. It needs to be on for its heartbeat once.` };
-    const w = this.#get<{ target?: string; wait_s?: number }>('wake') ?? {};
-    const target = str(w.target) || (nic.broadcast ? `${nic.broadcast}:9` : '255.255.255.255:9');
-    // Wake packets stay on the person's network, whatever an older heartbeat or setting says.
-    if (!privateAddress(target.split(':')[0]!)) return { ok: false, waited_ms: 0, limit_ms: 0, words: `Nova won’t send a wake packet to ${target}: it isn’t a private or broadcast address on your network.` };
+    const c = await this.#wakeCheck(device, origin, taskId);
+    if (!c.ok) return this.#refused(device, origin, taskId, c);
+    const w = this.#get<{ wait_s?: number }>('wake') ?? {};
     const measured = this.wakeLatency(device);
-    // Honest about latency: wait as long as it took last time, with a margin; never measured,
-    // wait the setting (two minutes by default) and say that is a guess.
-    const limit = measured !== null ? Math.round(measured * 1.5) + 2000 : (typeof w.wait_s === 'number' && w.wait_s > 0 ? w.wait_s : 120) * 1000;
+    // Honest about latency: wait as long as it took last time, with a margin; never measured, wait the
+    // setting (two minutes by default) and say that is a guess. Never more than five minutes.
+    const limit = Math.min(WAKE_LIMITS.maxWaitMs, measured !== null ? Math.round(measured * 1.5) + 2000 : (typeof w.wait_s === 'number' && w.wait_s > 0 ? w.wait_s : 120) * 1000);
     const sent = this.#now();
     const started = Date.now();
+    const base = { device, origin, sender: HUB, card: c.route.sender.name ?? c.route.bind, target: c.target };
     try {
-      await sendMagic(nic.mac, target);
+      await sendMagic(c.mac, c.target, { bind: c.route.bind, count: 3, gapMs: this.#o.wakeGapMs ?? 1000, ...(this.#o.wakeSender ? { sender: this.#o.wakeSender } : {}) });
     } catch (e) {
-      this.#o.db.run('INSERT INTO device_wake (device_id, sent_at, outcome) VALUES (?, ?, ?)', device, sent.toISOString(), 'not_sent');
-      return { ok: false, waited_ms: 0, limit_ms: limit, words: `Nova couldn’t send the wake packet to ${name}: ${(e as Error).message}.` };
+      const why = (e as Error).message;
+      this.#record(device, origin, 'not_sent', sent, { sender: HUB, reason: why });
+      this.#ledgerWake(taskId, { ...base, outcome: 'not_sent', reason: why, waited_ms: 0 });
+      return { ok: false, waited_ms: 0, limit_ms: limit, words: `Nova couldn’t send the wake signal to ${name}: ${why}.`, reason: 'not_sent' };
     }
-    const id = Number(this.#o.db.get<{ id: number }>(`INSERT INTO device_wake (device_id, sent_at, outcome) VALUES (?, ?, 'waiting') RETURNING id`, device, sent.toISOString())!.id);
+    const id = this.#record(device, origin, 'waiting', sent, { sender: HUB });
     this.emit('change', { action: 'waking', device });
-    const rt = new Ollama(url);
+    const rt = new Ollama(c.url);
     const poll = this.#o.wakePollMs ?? 1000;
     for (;;) {
       const ok = await rt.version(AbortSignal.timeout(Math.min(2000, poll * 2))).then(() => true, () => false);
       const waited = Date.now() - started;
       if (ok) {
         this.#o.db.run(`UPDATE device_wake SET awake_at = ?, waited_ms = ?, outcome = 'awake' WHERE id = ?`, this.#now().toISOString(), waited, id);
+        this.#ledgerWake(taskId, { ...base, outcome: 'awake', waited_ms: waited });
         this.emit('change', { action: 'awake', device });
-        return { ok: true, waited_ms: waited, limit_ms: limit, words: `Nova woke ${name}; it answered after ${secs(waited)}${measured !== null ? ` (last time ${secs(measured)})` : ''}.` };
+        return { ok: true, waited_ms: waited, limit_ms: limit, wake_id: id, words: `Nova woke ${name}; it answered after ${secs(waited)}${measured !== null ? ` (last time ${secs(measured)})` : ''}.` };
       }
       if (waited >= limit) {
-        this.#o.db.run(`UPDATE device_wake SET waited_ms = ?, outcome = 'no_answer' WHERE id = ?`, waited, id);
+        this.#o.db.run(`UPDATE device_wake SET waited_ms = ?, outcome = 'no_answer', reason = 'no_answer' WHERE id = ?`, waited, id);
+        this.#ledgerWake(taskId, { ...base, outcome: 'no_answer', waited_ms: waited });
+        this.emit('change', { action: 'wake-failed', device });
         return {
-          ok: false, waited_ms: waited, limit_ms: limit,
+          ok: false, waited_ms: waited, limit_ms: limit, reason: 'no_answer',
           words: measured !== null
             ? `${name} didn’t answer after Nova woke it: it waited ${secs(waited)}, half again what waking took last time (${secs(measured)})`
             : `${name} didn’t answer after Nova woke it: it waited ${secs(waited)}. It has never been woken before, so that wait was a guess`,
@@ -918,6 +1116,55 @@ export class Models extends EventEmitter {
       }
       await new Promise((r) => setTimeout(r, poll));
     }
+  }
+
+  // A tier-1 task "Wake ⟨device⟩" that the wake worker runs, and its result once it has run.
+  #wakeTask(device: string, origin: WakeOrigin): Promise<WakeResult> {
+    const name = this.#deviceName(device);
+    const t = this.#o.ledger.create({
+      title: `Wake ${name}`,
+      owner: this.wakeWorker.id,
+      goal: `${name} is awake and its models answer.`,
+      origin: origin === 'person' ? { kind: 'user' } : { kind: 'trigger', ref: 'model-routing' },
+      evidence_required: [{ kind: 'confirmation', note: 'the device’s models answered after the wake, as Nova read them itself' }],
+      inputs: { action: 'wake', device, origin },
+      privacy_mode: 'local-only',
+      // Waking is reversible and sends nothing of the person's anywhere (the ADR's question 4).
+      approval_tier: 1,
+      user_visibility: 'handling',
+    }, { as: this.#wakeKey });
+    return new Promise((resolve) => {
+      this.#pending.set(t.id, (r) => { this.#pending.delete(t.id); resolve({ ...r, task_id: t.id }); });
+    });
+  }
+
+  #makeWakeWorker(): LanedWorker {
+    return {
+      id: 'wake',
+      name: 'Wake-on-LAN',
+      about: 'Wakes one of your compute devices with a Wake-on-LAN signal on its own network, and waits for its models to answer.',
+      egress: 'local',
+      evidence: ['confirmation'],
+      timeoutMs: WAKE_LIMITS.maxWaitMs + 60_000,
+      health: () => ({ ok: true }),
+      lane: () => ({ key: 'wake', max: 4 }),
+      internal: { key: this.#wakeKey, why: 'Only Nova’s model manager makes wake tasks. Wake a computer with POST /models/devices/{id}/wake.' },
+      run: async (brief) => {
+        const report = reporter(brief);
+        const i = (brief.inputs ?? {}) as { device?: string; origin?: string };
+        const r = await this.#wakeNow(str(i.device), i.origin === 'person' ? 'person' : 'routing', brief.task_id);
+        this.#pending.get(brief.task_id)?.(r);
+        return r.ok ? report('done', r.words, { evidence: [{ kind: 'confirmation', system: WAKE_CONFIRMATION, id: String(r.wake_id) }] }) : report('blocked', r.words);
+      },
+    };
+  }
+
+  // The verifier's check of a wake task: Nova's own record that this device's models answered.
+  #confirmWake(e: { kind: string; id?: string }, brief: Brief): { ok: boolean; why: string } {
+    const row = this.#o.db.get<{ device_id: string; outcome: string; waited_ms: number | null }>('SELECT device_id, outcome, waited_ms FROM device_wake WHERE id = ?', Number(e.id));
+    const device = str((brief.inputs as { device?: string } | undefined)?.device);
+    if (!row || row.device_id !== device) return { ok: false, why: 'Nova has no record of that wake for this device.' };
+    return row.outcome === 'awake' ? { ok: true, why: `Nova read ${this.#deviceName(device)}’s models answering ${secs(row.waited_ms ?? 0)} after the wake.` } : { ok: false, why: `Nova’s record says the wake ended ${row.outcome}.` };
   }
 
   // ---- cloud budgets ---------------------------------------------------------------------------
@@ -1438,6 +1685,8 @@ export class Models extends EventEmitter {
       const nic = hw?.network[0];
       const online = hub || (d?.last_seen ? this.#now().getTime() - Date.parse(d.last_seen) < 2 * 60_000 : false);
       const latency = hub ? null : this.wakeLatency(id);
+      // Whether routing could wake it now, by the same checks a wake passes (nothing is sent).
+      const can = hub ? null : await this.#wakeCheck(id, 'routing', null);
       const hardwareAt = hub ? hw?.at ?? null : this.#o.db.get<{ updated_at: string }>('SELECT updated_at FROM device_hardware WHERE device_id = ?', id)?.updated_at ?? null;
       return {
         id, name, hub, online, last_seen: hub ? null : d?.last_seen ?? null, compute: this.#computes(id),
@@ -1446,7 +1695,10 @@ export class Models extends EventEmitter {
         overhead: overheadWords(this.overhead(id)),
         ...(hub ? { decision_model: this.#o.decisionModel?.() ?? null } : {}),
         runtime: inv ? { url: this.#urlFor(id), ok: inv.ok, version: inv.version, models: inv.models.length, problem: inv.problem, words: inv.ok ? `Ollama ${inv.version} · ${inv.models.length} model${inv.models.length === 1 ? '' : 's'}` : `Ollama isn’t answering${inv.problem ? `: ${inv.problem}` : ''}` } : null,
-        wake: hub ? null : { mac: nic?.mac ?? null, latency_ms: latency, words: !nic ? 'Can’t be woken: no network card reported.' : latency !== null ? `Wakes in about ${secs(latency)} (measured).` : 'Can be woken; how long it takes isn’t measured yet.' },
+        wake: !can ? null : {
+          mac: nic?.mac ?? null, latency_ms: latency, policy: this.power(id), able: can.ok, reason: can.ok ? null : can.reason,
+          words: !can.ok ? can.words : latency !== null ? `Wakes in about ${secs(latency)} (measured).` : 'Can be woken; how long it takes isn’t measured yet.',
+        },
       };
     };
     const devices = await Promise.all([deviceView(HUB, this.#o.hubName(), true, hubHw), ...this.#spokes().map((d) => deviceView(d.id, d.name, false, this.#spokeHardware(d.id), d))]);
@@ -1585,12 +1837,13 @@ export class Models extends EventEmitter {
       { method: 'POST', path: '/models/pull', status: 201, summary: 'Download a model (a tier-2 ledger task: it waits for your OK). Refused at once when the disk budget can’t take it. digest: the sha256 to expect, if known.', body: '{model, device?, digest?}', handle: ({ body }) => this.requestPull(body) },
       { method: 'POST', path: '/models/install', status: 201, summary: 'Install and assign a plan for one device (the Models screen): each model at its quant and context, with the role it serves, if any. Refused when a model isn’t one Nova lists for the device, runs off your devices, or the plan won’t fit together. An installed model is assigned now, as PUT /models/roles/{role}; each download is a tier-2 ledger task that waits for your OK, as POST /models/pull, and is assigned once Nova has verified it.', body: '{device?, plan: [{model, quant, context?, role?}]}', handle: ({ body }) => this.installPlan(body) },
       { method: 'POST', path: '/models/remove', status: 201, summary: 'Remove an installed model (a tier-2 ledger task). A model serving a role must be replaced first.', body: '{model, device?}', handle: ({ body }) => this.requestRemove(body) },
-      { method: 'PUT', path: '/models/wake', summary: 'Where Wake-on-LAN packets go (host:port; by default the computer’s own broadcast address) and how long to wait for a computer never woken before (wait_s, 120 by default). After the first wake Nova waits as long as it took, half again, plus 2 s.', body: '{target?, wait_s?}', handle: async ({ body }) => { this.setWake(body); return view(); } },
+      { method: 'PUT', path: '/models/wake', summary: 'Where Wake-on-LAN packets go (host:port; by default the broadcast address of the hub’s own card on the computer’s network; a target set here must be on that network too, or that computer’s wake is refused) and how long to wait for a computer never woken before (wait_s, 120 by default). After the first wake Nova waits as long as it took, half again, plus 2 s.', body: '{target?, wait_s?}', handle: async ({ body }) => { this.setWake(body); return view(); } },
       { method: 'PUT', path: '/models/disk-budget', summary: 'The most disk models may use, in GB (null for none). Downloads past it are refused.', body: '{gb}', handle: async ({ body }) => { this.setDiskBudget(body.gb); return view(); } },
       { method: 'PUT', path: '/models/budget', summary: 'Cloud budgets: per task and per period (day, week or month), in US dollars. Over budget, work waits with the reason; local stays the default.', body: '{per_task_usd?, per_period_usd?, period}', handle: async ({ body }) => { this.setBudget(body); return view(); } },
       { method: 'PUT', path: '/models/prices', summary: 'Prices per million tokens by model, for cloud usage that reports tokens but no cost (a coding agent off your devices). With a budget set, usage Nova can’t price makes the cloud wait.', body: '{"<model>": {usd_per_mtok_in, usd_per_mtok_out}}', handle: async ({ body }) => { this.setPrices(body); return view(); } },
       { method: 'PUT', path: '/models/cloud', summary: 'The cloud model local-preferred and cloud-allowed work may use when it must (an OpenAI-compatible address; its key in the vault). A new address needs {confirm: true}. {cloud: null} removes it.', body: '{cloud, confirm?}', handle: async ({ body }) => { this.setCloud(body.cloud, body.confirm === true); return view(); } },
-      { method: 'POST', path: '/models/devices/{id}/wake', summary: 'Wake a paired computer with a Wake-on-LAN packet and wait for its models, as long as waking took last time.', handle: ({ params }) => this.wake(params.id!) },
+      { method: 'POST', path: '/models/devices/{id}/wake', summary: 'Wake a paired computer with a Wake-on-LAN signal and wait for its models, as long as waking took last time. A tier-1 ledger task “Wake ⟨device⟩”. Only on its own network, from the hub’s card there; only when waking is on for it; at most 4 wakes of a device and 12 across the hub per hour. A refusal says why and sends nothing.', handle: ({ params }) => this.wake(params.id!, { origin: 'person' }) },
+      { method: 'PUT', path: '/models/devices/{id}/power', summary: 'A computer’s sleep and wake choices: on_demand (Nova wakes it when work needs it, or waits until it’s turned on) and sleep_after_min (null to never sleep, or 15, 30, 60 or 120 idle minutes).', body: '{on_demand?, sleep_after_min?}', handle: async ({ params, body }) => { this.setPower(params.id!, body); return view(); } },
       {
         method: 'POST', path: '/models/infer', summary: 'Ask the model serving a role (the internal inference API, for tools and tests): a reply to messages, or embeddings of input. It keeps to the privacy mode: local-only never leaves your devices.', body: '{role, messages? | input?, privacy_mode?, task_id?}',
         handle: async ({ body }) => {
@@ -1602,7 +1855,9 @@ export class Models extends EventEmitter {
   }
 }
 
-export interface WakeResult { ok: boolean; waited_ms: number; limit_ms: number; words: string }
+// `reason`: why a wake was refused or failed (a WakeRefusal, `not_sent` or `no_answer`); `retry_at`:
+// when a rate limit lets it try again; `task_id`: the "Wake ⟨device⟩" task, when one was made.
+export interface WakeResult { ok: boolean; waited_ms: number; limit_ms: number; words: string; reason?: string; retry_at?: string; task_id?: string; wake_id?: number }
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+|-+$/g, '').slice(0, 48) || 'device';
 const cloudWords = (model: string) => `${model} runs in Ollama’s cloud, not on your devices, so it can’t serve a role: what it is given would leave them. Pick a model that runs locally.`;

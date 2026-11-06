@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { createCore, generateDeviceKeys, type Core } from '../../src/core/index.ts';
 import { checkHardware, detectHardware, broadcastOf, modelMemory } from '../../src/core/models/hardware.ts';
 import { recommend, type DeviceModels } from '../../src/core/models/recommend.ts';
-import { magicPacket, parseTarget } from '../../src/core/models/wake.ts';
+import { magicPacket, parseTarget, sendMagic } from '../../src/core/models/wake.ts';
 import { answerSchema, checkAnswer } from '../../src/core/models/decide.ts';
 import { toInstalled } from '../../src/core/models/ollama.ts';
 import { ModelsWaiting } from '../../src/core/models/index.ts';
@@ -16,7 +16,7 @@ import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
 import { startFakeScreenpipe } from '../../scripts/fake-screenpipe.js';
 import { magicMac, startFakeWol } from '../../scripts/stand-ins/fake-wol.js';
 import { filesReply, startFakeOpenAI } from '../../scripts/stand-ins/fake-openai.js';
-import { INSTALLED, LIBRARY, hubHardware, modelsCore, say } from '../support/models.ts';
+import { INSTALLED, LIBRARY, SPOKE_LAN, SPOKE_LOOPBACK, hubHardware, modelsCore, say } from '../support/models.ts';
 import { PASSED_4B, PASSED_OLLAMA, captureScore } from '../support/capture-check.ts';
 import { FIXED_SUM, calcTask, writeCalc } from '../support/providers.ts';
 import { readFileSync } from 'node:fs';
@@ -246,19 +246,24 @@ test('local-only, local reasoner down: it waits on local capacity, the person is
 
 // ---- waking a GPU spoke ------------------------------------------------------------------------
 
-test('GPU spoke: woken over (loopback) Wake-on-LAN, latency measured and said honestly; small jobs stay on the hub', { timeout: 60_000 }, async () => {
+test('GPU spoke: woken over (stand-in) Wake-on-LAN on its own network, latency measured and said honestly; small jobs stay on the hub', { timeout: 60_000 }, async () => {
   const hubOllama = await startFakeOllama({ models: INSTALLED });
   const spoke = await startFakeOllama({ models: [INSTALLED[2]!] });
   let wakes = true;
-  const wol = await startFakeWol({ onWake: () => { if (wakes) setTimeout(() => spoke.setAsleep(false), 300); } });
-  const { core } = modelsCore(hubOllama.url);
+  const { core, wol } = modelsCore(hubOllama.url);
+  // The stand-in "machine" wakes on the first packet of a wake.
+  wol.onSend(() => { if (wakes) setTimeout(() => spoke.setAsleep(false), 300); });
   try {
     const keys = generateDeviceKeys();
     const d = core.mesh.devices.add({ name: 'Example desktop', platform: 'linux x64', kind: 'computer', purposes: ['compute'], public_key: keys.ed25519.publicKey, x25519_public_key: keys.x25519.publicKey, capabilities: ['heartbeat', 'queue'] }, 'test');
-    core.mesh.spokes.heartbeat(d, { hardware: hubHardware({ hostname: 'example-desktop', network: [{ name: 'eth0', mac: '02:00:00:00:00:42', address: '127.0.0.1', netmask: '255.0.0.0' }] }) });
-    core.models.setWake({ target: wol.target, wait_s: 1 });
+    const beat = () => core.mesh.spokes.heartbeat(d, { hardware: hubHardware({ hostname: 'example-desktop', network: [SPOKE_LAN, SPOKE_LOOPBACK] }) });
+    beat();
+    core.models.setWake({ wait_s: 1 });
     await assert.rejects(core.models.assign('reasoner', { device: d.id, model: 'example-deep:32b', url: 'http://198.51.100.7:11434' }), /isn’t one of Example desktop’s addresses/);
     await core.models.assign('reasoner', { device: d.id, model: 'example-deep:32b', url: spoke.url, hub_model: 'example-small:3b' });
+    // Waking is the person's choice: off until they turn it on.
+    assert.match((await core.models.view()).devices[1]!.wake!.words, /you chose to wait until it’s turned on/);
+    core.models.setPower(d.id, { on_demand: true });
     const map = await core.models.view();
     assert.equal(map.devices.length, 2);
     assert.match(map.devices[1]!.wake!.words, /how long it takes isn’t measured yet/);
@@ -268,9 +273,14 @@ test('GPU spoke: woken over (loopback) Wake-on-LAN, latency measured and said ho
     // Never woken before, and it doesn't come up: Nova waited its setting, and says that was a guess.
     wakes = false;
     await assert.rejects(core.models.infer({ role: 'reasoner', messages: big }), /Example desktop didn’t answer after Nova woke it: it waited \d+ s\. It has never been woken before, so that wait was a guess/);
-    assert.equal(wol.packets.at(-1)!.mac, '02:00:00:00:00:42');
+    assert.equal(magicMac(wol.packets.at(-1)!.bytes), '02:00:5e:10:00:42');
+    assert.equal(wol.packets.length, 3, 'one wake is three packets');
+    // Paused until it is heard from: no second wake for the next job.
+    await assert.rejects(core.models.infer({ role: 'reasoner', messages: big }), /won’t wake it again by itself until Example desktop is heard from/);
+    assert.equal(wol.packets.length, 3);
 
-    // It wakes: served there, and the wait is measured.
+    // Heard from again, then asleep: it wakes, is served there, and the wait is measured.
+    beat();
     wakes = true;
     const out = await core.models.infer({ role: 'reasoner', messages: big });
     assert.equal(out.device, d.id);
@@ -293,12 +303,25 @@ test('GPU spoke: woken over (loopback) Wake-on-LAN, latency measured and said ho
     await assert.rejects(core.models.infer({ role: 'reasoner', messages: big }), /didn’t answer after Nova woke it: it waited \d+ s, half again what waking took last time/);
     const waited = Date.now() - started;
     assert.ok(waited >= latency * 1.5 + 1500 && waited < latency * 1.5 + 6000, `${waited} ms against a measured ${latency} ms`);
-    assert.match((await core.models.view()).devices[1]!.wake!.words, /Wakes in about \d+ s \(measured\)/);
+    assert.match((await core.models.view()).devices[1]!.wake!.words, /won’t wake it again by itself/);
+    // Each wake went to the hub's own broadcast on that network, from the hub's card there.
+    for (const p of wol.packets) assert.deepEqual([p.host, p.port, p.bind], ['192.168.1.255', 9, '192.168.1.10']);
   } finally {
     await core.close();
     await hubOllama.close();
     await spoke.close();
-    await wol.close();
+  }
+});
+
+test('wake: the real socket sends what magicPacket builds, on loopback only', async () => {
+  const listener = await startFakeWol({});
+  try {
+    await sendMagic('02:00:00:00:00:42', listener.target, { bind: '127.0.0.1' });
+    await until(() => listener.packets.length, (n) => n > 0, 5000);
+    assert.equal(listener.packets[0]!.mac, '02:00:00:00:00:42');
+    assert.equal(listener.packets[0]!.bytes, 102);
+  } finally {
+    await listener.close();
   }
 });
 
