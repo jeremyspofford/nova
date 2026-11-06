@@ -140,11 +140,15 @@ async function setPlan(root: Locator, plan: Plan) {
 async function geometry(page: Page, label: string) {
   const width = page.viewportSize()!.width;
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= width, `${label}: no horizontal scroll`);
-  const root = page.locator('#settings-devices');
-  assert.deepEqual(await root.evaluate((r) => [...r.querySelectorAll<HTMLElement>('button, label, p, h3, h4, h5, .fit-verdict, .fit-what, .fit-gb, .dm-out, .settings-label')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent)), [], `${label}: clipped text`);
-  assert.deepEqual(await root.evaluate((r) => { const box = r.querySelector('[data-device-models]')!.getBoundingClientRect(); return [...r.querySelectorAll<HTMLElement>('[data-device-models] *')].filter((el) => { const b = el.getBoundingClientRect(); return b.width && (b.right > box.right + 1 || b.left < box.left - 1); }).map((el) => el.className || el.tagName); }), [], `${label}: nothing spills out of the panel`);
-  assert.deepEqual(await root.locator('button, select, input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).disabled && e.checkVisibility() && e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80))), [], `${label}: 44px targets`);
-  assert.deepEqual(await root.locator('select, input').evaluateAll((els) => els.filter((e) => !(e as HTMLInputElement).labels?.length).map((e) => e.outerHTML.slice(0, 80))), [], `${label}: every control is labelled`);
+  // Each check queries the live page and measures in the same task (page.evaluate). A locator's
+  // evaluate or evaluateAll first finds its elements, then runs the function in a second step; a
+  // redraw in between (the styleguide's whole page when the appearance arrives, a device's screen when
+  // its models refresh) hands the function nodes no longer in the page: no size and no labels.
+  const root = '#settings-devices';
+  assert.deepEqual(await page.evaluate((sel) => [...document.querySelector(sel)!.querySelectorAll<HTMLElement>('button, label, p, h3, h4, h5, .fit-verdict, .fit-what, .fit-gb, .dm-out, .settings-label')].filter((el) => el.clientWidth && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent), root), [], `${label}: clipped text`);
+  assert.deepEqual(await page.evaluate((sel) => { const r = document.querySelector(sel)!; const box = r.querySelector('[data-device-models]')!.getBoundingClientRect(); return [...r.querySelectorAll<HTMLElement>('[data-device-models] *')].filter((el) => { const b = el.getBoundingClientRect(); return b.width && (b.right > box.right + 1 || b.left < box.left - 1); }).map((el) => el.className || el.tagName); }, root), [], `${label}: nothing spills out of the panel`);
+  assert.deepEqual(await page.evaluate((sel) => [...document.querySelectorAll<HTMLElement>(`${sel} button, ${sel} select, ${sel} input`)].filter((e) => !(e as HTMLInputElement).disabled && e.checkVisibility() && e.getBoundingClientRect().height < 44).map((e) => e.outerHTML.slice(0, 80)), root), [], `${label}: 44px targets`);
+  assert.deepEqual(await page.evaluate((sel) => [...document.querySelectorAll<HTMLInputElement>(`${sel} select, ${sel} input`)].filter((e) => !e.labels?.length).map((e) => e.outerHTML.slice(0, 80)), root), [], `${label}: every control is labelled`);
 }
 
 // The whole screen for the owner's comparison, after every check at the real size: the app scrolls
