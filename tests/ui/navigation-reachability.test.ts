@@ -4,15 +4,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { Locator, Page } from 'playwright-core';
+import type { Page } from 'playwright-core';
 import { registeredViews, missingViews } from '../support/navigation-registry.js';
 import { routeOf } from '../../ui/js/nav.js';
 import { stop } from '../acceptance/support.ts';
 import { blank, browser, device, finishSetup } from './support.ts';
-import { drawn, trackDocument, assertRetainedDocument, documentRequests } from './navigation-support.ts';
+import { drawn, press, trackDocument, assertRetainedDocument, documentRequests, type Door, type Step } from './navigation-support.ts';
 
-type Door = { href: string; label: string; section: string };
-type Step = Door | { button: string; label: string };
 type ControlEvidence = { tag: string; id: string; text: string; ariaLabel: string | null; action: string | null; form: string | null; name: string | null; type: string | null };
 type CrawlState = { path: string; view: string; steps: Step[]; sections: string[]; links: Door[]; headings: string[]; controls: ControlEvidence[] };
 type Report = {
@@ -28,19 +26,6 @@ async function doors(page: Page): Promise<Door[]> {
     return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && !el.closest('[inert], [aria-hidden="true"], form') && !el.hasAttribute('download') && el.target !== '_blank' && el.origin === location.origin;
   }).map(a => ({ href: a.getAttribute('href')!, label: (a.textContent ?? '').replace(/\s+/g, ' ').trim() || a.getAttribute('aria-label') || '', section: a.closest('[id]')?.id ?? '' })));
   return found.filter(d => !routeOf(new URL(d.href, page.url()).pathname).unknown && !d.href.startsWith('#'));
-}
-
-async function press(page: Page, step: Step, touch: boolean) {
-  let el: Locator;
-  if ('button' in step) el = page.locator(step.button);
-  else {
-    const link = `a[href=${JSON.stringify(step.href)}]`;
-    const scope = step.section ? `[id=${JSON.stringify(step.section)}] ${link}, ${link}[id=${JSON.stringify(step.section)}]` : link;
-    el = page.locator(scope).filter({ visible: true }).first();
-  }
-  assert.ok(await el.isVisible(), `Visible door: ${JSON.stringify(step)}`);
-  if (touch) await el.tap(); else await el.click();
-  await drawn(page);
 }
 
 for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false]] as const) {

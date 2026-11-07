@@ -137,6 +137,24 @@ export function shortTargets(page: Page, selector: string, { min = 44, enabled =
 // Before a screenshot: every finite animation (an entrance, a fade) has finished. The orb's
 // breathing never finishes, so it doesn't count.
 export const still = (page: Page) => page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity));
+
+// Waits until an async in-page check is truthy. page.waitForFunction doesn't await a predicate's
+// promise: a Promise is truthy, so `waitForFunction(async () => false)` resolves at once (#356's phone
+// navigation failure: the crawl's readiness had never waited). page.evaluate does await, so poll it.
+// The default 30 s is waitForFunction's own; a navigation mid-poll (a destroyed context) polls again.
+export async function until<A>(page: Page, check: (arg: A) => unknown, arg?: A, { timeout = 30_000, every = 50 } = {}): Promise<unknown> {
+  const end = Date.now() + timeout;
+  for (;;) {
+    try {
+      const v = await page.evaluate(check as (arg: unknown) => unknown, arg as unknown);
+      if (v) return v;
+    } catch (e) {
+      if (!/Execution context was destroyed|navigat/i.test(String(e))) throw e;
+    }
+    if (Date.now() >= end) throw new Error(`Timed out after ${timeout} ms waiting for ${String(check).replace(/\s+/g, ' ').slice(0, 160)}`);
+    await page.waitForTimeout(every);
+  }
+}
 export const shoot = async (page: Page, path: string) => { await still(page); await page.screenshot({ path }); };
 export const cssVar = (page: Page, name: string) => page.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim().toLowerCase(), name);
 

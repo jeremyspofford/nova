@@ -13,7 +13,7 @@ import { loadConfig } from '../../src/config.js';
 import { MARKER } from '../../src/core/diagnostics/index.ts';
 import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
 import { hubHardware } from '../support/models.ts';
-import { blank, browser, webkitBrowser, device, finishSetup, still } from './support.ts';
+import { blank, browser, webkitBrowser, device, finishSetup, still, until } from './support.ts';
 import { drawn, trackDocument, documentRequests } from './navigation-support.ts';
 import { diagnosticsPaint } from './health-diagnostics-visual.ts';
 
@@ -96,7 +96,7 @@ async function diagnosticsWorkerUpgrade(b: Browser, m: ReturnType<typeof blank>,
       });
       await registration.update(); await changed;
     });
-    await p.waitForFunction(async ({ oldVersion, newVersion }) => { const keys = await caches.keys(); return keys.includes(newVersion) && !keys.includes(oldVersion); }, { oldVersion, newVersion });
+    await until(p, async ({ oldVersion, newVersion }) => { const keys = await caches.keys(); return keys.includes(newVersion) && !keys.includes(oldVersion); }, { oldVersion, newVersion });
     assert.equal(await p.evaluate(() => caches.has('other-app-public-example')), true, 'worker upgrade preserves an unrelated cache');
     assert.equal(await p.evaluate(async () => (await (await caches.open('other-app-public-example')).match('/unrelated-public-example'))!.text()), 'synthetic-unrelated-cache-sentinel');
     await healthFromHome(p, true);
@@ -112,7 +112,7 @@ async function diagnosticsWorkerUpgrade(b: Browser, m: ReturnType<typeof blank>,
     // A later positive cache write is the barrier: the policy must still retain an eligible
     // ordinary API answer, without retaining any prior diagnostics response/query variant.
     await p.evaluate(async () => { const r = await fetch('/api/v1/tasks?limit=100'); await r.json(); });
-    await p.waitForFunction(async () => !!(await caches.match('/api/v1/tasks?limit=100')));
+    await until(p, async () => !!(await caches.match('/api/v1/tasks?limit=100')));
     console.log('HEALTH upgraded worker versions', await Promise.all(d.ctx.serviceWorkers().map(w => w.evaluate('VERSION').catch(e => String(e)))));
     const finalCaches = await p.evaluate(() => caches.keys());
     assert.ok(!finalCaches.includes(oldVersion), 'legacy owned cache remains absent after the new worker serves diagnostics');
