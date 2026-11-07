@@ -3,7 +3,7 @@
 // still passes its integrity check, and nothing restored from one brings the skill back.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createNova } from '../src/server.js';
@@ -75,6 +75,24 @@ test('a removed skill leaves no copy in backups or checkpoints, and no restore b
   }
   const d = await c.resilience.drill();
   assert.equal(d.ok, true, JSON.stringify(d.checks));
+});
+
+test('a skill’s own workspace data (interstitial-research) leaves no copy in checkpoints either', async () => {
+  const c = nova.core;
+  nova.runner.config.features.interstitial = true;
+  try {
+    assert.equal((await post('/api/skills/interstitial-research/install')).status, 200);
+    const data = join(home, 'workspace', 'interstitial');
+    mkdirSync(data, { recursive: true });
+    writeFileSync(join(data, 'runs.jsonl'), '{"depth":"quick","marker":"ir-data-marker"}\n');
+    takeCheckpoint({ home, db: c.db, kind: 'named', name: 'With interstitial data', version: '0.1.0' });
+    const before = scanCheckpoints(home).found.find((f) => f.manifest.name === 'With interstitial data');
+    assert.ok(before.manifest.files.some((f) => f.path.startsWith('workspace/interstitial/')), 'the checkpoint had it');
+    assert.equal((await post('/api/skills/interstitial-research/remove')).status, 200);
+    assert.equal(existsSync(data), false);
+    const after = scanCheckpoints(home).found.find((f) => f.manifest.id === before.manifest.id);
+    assert.ok(!after.manifest.files.some((f) => f.path.startsWith('workspace/interstitial/') || f.path.startsWith('skills/interstitial-research/')));
+    verifyCheckpoint(after);  } finally { nova.runner.config.features.interstitial = false; }
 });
 
 test('removed while the backup drive is unplugged: owed, and carried in when it is back', async () => {
