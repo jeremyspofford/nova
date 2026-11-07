@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFil
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { call, scripted, sleep, startNova } from './support.js';
-import { Interstitial, OUTBOUND, VERIFY, readBlocks, validateFieldMap } from '../../src/interstitial.js';
+import { Interstitial, OUTBOUND, VERIFY, readBlocks, unbacked, validateFieldMap } from '../../src/interstitial.js';
 
 const FIELD_MAP = {
   core_fields: ['CI/CD'],
@@ -74,7 +74,7 @@ test('flag on, skill loaded: outbound check per search, one verify per fetched c
   });
   h0 = h;
   try {
-    const { s } = await h.run(`Research why our CI pipelines got slower. My notes: ${h.web.base}/plain`, () => 'allow');
+    const { s } = await h.run(`Research why CI pipelines got slower. Notes: ${h.web.base}/plain`, () => 'allow');
     assert.ok(items(s).some((i) => i.kind === 'skill' && i.id === 'interstitial-research' && i.how === 'matched'));
     assert.deepEqual(asked.map((a) => a.id), [OUTBOUND, VERIFY], 'one outbound check, one verify (the unfetched claim needs no model)');
     assert.equal(asked[0].fields.query, 'flow efficiency build pipelines');
@@ -282,12 +282,12 @@ test('field-map cache (errata E1): same public topic and key hits; another model
   const home = mkdtempSync(join(tmpdir(), 'nova-ir-'));
   const mk = (o = {}) => new Interstitial({ home, ask: async () => null, skillText: () => 'playbook v1', ...o });
   const hook = mk();
-  const topic = 'Research why our CI pipelines got slower';
+  const topic = 'Research why CI pipelines got slower';
   const a = hook.begin({ topic, model: 'model-a' });
   assert.equal(a.cache, 'miss');
   hook.fieldMap(a, { value: FIELD_MAP, errors: [] });
   assert.equal(a.cache, 'stored');
-  const b = hook.begin({ topic: 'research why our CI pipelines got slower?', model: 'model-a' });
+  const b = hook.begin({ topic: 'research why CI pipelines got slower?', model: 'model-a' });
   assert.equal(b.cache, 'hit');
   assert.deepEqual(b.field_map, FIELD_MAP);
   hook.fieldMap(b, { value: { ...FIELD_MAP, core_fields: ['something else'] }, errors: [] });
@@ -319,8 +319,8 @@ test('field-map cache end to end: a second conversation on the same public topic
   for (const pd of [false, true]) {
     const { h, m } = await start({ plan: plan(pd) });
     try {
-      const first = (await h.run('Research why our CI pipelines got slower')).s;
-      const second = (await h.run('Research why our CI pipelines got slower')).s;
+      const first = (await h.run('Research why CI pipelines got slower')).s;
+      const second = (await h.run('Research why CI pipelines got slower')).s;
       const [r1] = steps(first, 'record');
       const [r2] = steps(second, 'record');
       if (!pd) {
@@ -344,4 +344,92 @@ test('a tampered state.json can only hold counts', () => {
   writeFileSync(join(home, 'workspace', 'interstitial', 'state.json'), '{"runs":"lots","breaches":{"quick":-4,"x":9},"proposals":[{"task":1},"no"],"window":{"runs":9.7}}');
   const s = new Interstitial({ home, ask: async () => null }).state();
   assert.deepEqual(s, { runs: 0, breaches: { quick: 0, standard: 0, deep: 0 }, corrections: 0, window: { runs: 9, breaches: { quick: 0, standard: 0, deep: 0 }, corrections: 0 }, proposals: [] });
+});
+
+// ---- Part 3 findings: the record says what happened ------------------------------------------------
+
+test('Part 3 P1: a topic about the person, or a query carrying a word from their memory, is personal-derived', async () => {
+  const hook = new Interstitial({ home: mkdtempSync(join(tmpdir(), 'nova-ir-')), ask: async () => null });
+  assert.equal(hook.begin({ topic: 'Research sleep aids like the ones in my health records' }).privacy_class, 'personal-derived');
+  assert.equal(hook.begin({ topic: 'Research how sleep aids work' }).privacy_class, 'public');
+  const asked = [];
+  const memoryHook = new Interstitial({ home: mkdtempSync(join(tmpdir(), 'nova-ir-')), ask: async (id, f) => { asked.push(f.privacy_class); return null; } });
+  const ir = memoryHook.begin({ topic: 'Research sleep aids', personal: 'Takes zolpidem 10 mg nightly since March 2024.' });
+  assert.equal(ir.privacy_class, 'public');
+  await memoryHook.outbound(ir, 'how do sleep aids work', 'cloud-allowed');
+  await memoryHook.outbound(ir, 'alternatives to zolpidem', 'cloud-allowed');
+  assert.deepEqual(asked, ['public', 'personal-derived'], 'the check is told before it decides');
+  assert.equal(ir.searches[1].from_memory, true);
+  assert.equal(ir.searches[0].from_memory, undefined);
+  const rec = memoryHook.record(ir);
+  assert.equal(rec.privacy_class, 'personal-derived');
+  assert.doesNotMatch(JSON.stringify(rec), /personal_terms|nightly|March/, 'the person’s own words are never in the record');
+});
+
+test('Part 3 P1 end to end: MEMORY.md feeds the check; the query never leaves, and the record is not "public"', async () => {
+  const { h, asked } = await start({
+    ask: (id, f) => (id === OUTBOUND ? (f.privacy_class === 'personal-derived' ? decided(OUTBOUND, 'withhold', nouls({ person: 0.2, record: 0.9, memory: 0.9 })) : SEND()) : USE()),
+    plan: (step) => [call('web_search', { query: 'alternatives to zolpidem and melatonin' }), 'Sleep aids work in a few ways.'][step] ?? 'Done.',
+  });
+  try {
+    writeFileSync(join(h.home, 'MEMORY.md'), '- Health record: takes zolpidem 10 mg nightly; also tried melatonin.\n');
+    const { s } = await h.run('Research sleep aids');
+    assert.equal(asked[0].fields.privacy_class, 'personal-derived');
+    assert.ok(!h.web.hits.some((x) => /zolpidem/i.test(decodeURIComponent(x.url))));
+    const [rec] = steps(s, 'record');
+    assert.equal(rec.privacy_class, 'personal-derived');
+    assert.deepEqual(rec.searches.map((x) => [x.sent, x.why_withheld, x.from_memory]), [[false, 'judged', true]]);
+  } finally { await h.close(); }
+});
+
+test('Part 3: an untrusted check says so to the model, and the record says why it held back', async () => {
+  const { h, m } = await start({ ask: (id) => decided(id, id === OUTBOUND ? 'withhold' : 'quarantine', null, 'none'), plan: (step) => [call('web_search', { query: 'flow efficiency' }), 'No outside search was done. From what I know: flow matters.'][step] ?? 'Done.' });
+  try {
+    const { s } = await h.run('Research CI flow');
+    assert.match(m.calls[1].prompt, /hasn’t passed its eval yet[\s\S]*say plainly that no outside search was done/);
+    assert.doesNotMatch(m.calls[1].prompt, /could carry something of the person’s own/);
+    const [rec] = steps(s, 'record');
+    assert.equal(rec.privacy_class, 'public');
+    assert.equal(rec.searches[0].why_withheld, 'untrusted');
+    assert.deepEqual(rec.unbacked, [], 'an honest answer is not flagged');
+    assert.equal(steps(s, 'honesty').length, 0);
+  } finally { await h.close(); }
+});
+
+test('Part 3: headings and "verified"/"searched" with nothing behind them are flagged in the record and to the person', async () => {
+  const answer = 'I searched as “design patterns across fields” and verified the main idea.\n\n## Core findings\n...\n\n## Interstitial insight\n...\n\n## Gaps confirmed\n...';
+  const { h } = await start({ ask: (id) => decided(id, 'withhold', null, 'none'), plan: (step) => [answer][step] ?? 'Done.' });
+  try {
+    const { s } = await h.run('Research design patterns across fields');
+    const [rec] = steps(s, 'record');
+    assert.deepEqual(rec.layers, ['Core findings', 'Interstitial insight', 'Gaps confirmed'], 'headings are still listed as headings');
+    assert.deepEqual(rec.unbacked, ['adjacent-unchecked', 'gaps-unsearched', 'says-verified', 'says-searched']);
+    const [note] = steps(s, 'honesty');
+    assert.match(note.words, /^Read this answer with care: it has adjacent or interstitial findings, but no claim behind them passed the check; .*no search left Nova in this run\.$/);
+    const act = await h.get('/api/activity');
+    const step = act.days.flatMap((d) => d.entries).flatMap((e) => e.steps).find((x) => x.kind === 'interstitial');
+    assert.match(step.words, /the answer claims more than the run backs/);
+  } finally { await h.close(); }
+  // Negation is not a claim.
+  const ir = { text: 'Nothing here could be verified, and no search was sent; I never searched.', searches: [], claims: [] };
+  assert.deepEqual(unbacked(ir), []);
+});
+
+test('Part 3 cost: the playbook carried in every call is the skill’s, so a run with only core searches still shows its overhead', async () => {
+  const hook = new Interstitial({ home: mkdtempSync(join(tmpdir(), 'nova-ir-')), ask: async () => null });
+  const ir = hook.begin({ topic: 'Research CI flow' });
+  hook.tokens(ir, 1000, 400);
+  hook.tokens(ir, 1000, 5000);
+  assert.deepEqual(ir.tokens, { core: 600, skill: 1400 }, 'a share is never more than the call');
+  const rec = hook.record(ir);
+  assert.ok(rec.cost.overhead > 2 && rec.cost.breach === true);
+  // End to end: a run whose only search is core still counts the playbook.
+  const { h } = await start({ plan: (step) => [call('web_search', { query: 'ci flow' }), 'Flow matters.'][step] ?? 'Done.' });
+  try {
+    const { s } = await h.run('Research CI flow');
+    const [r] = steps(s, 'record');
+    assert.equal(r.cost.searches.skill, 0);
+    assert.ok(r.cost.tokens.skill > 0, 'the playbook’s tokens are the skill’s');
+    assert.ok(r.cost.overhead > 0);
+  } finally { await h.close(); }
 });
