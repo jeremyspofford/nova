@@ -1,0 +1,13 @@
+{
+  "bounds": {
+    "vt_false_use_max": 0,
+    "vt_use_recall_min": 0.5,
+    "oc_false_send_max": 0,
+    "oc_send_recall_min": 0.66,
+    "ece_max": 0.15,
+    "bins": 10
+  },
+  "pre_run_commit": null,
+  "cases_sha256": null,
+  "records": []
+}
