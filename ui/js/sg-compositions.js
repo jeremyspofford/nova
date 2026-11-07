@@ -30,11 +30,39 @@ const PENDING = { ...BUILD, running: '8001cd2', built: 'Nov 6, 2026, 18:40 UTC' 
 const PR = (n) => `https://github.com/jeremyspofford/nova/pull/${n}`;
 const DOC = (p) => `https://github.com/jeremyspofford/nova/blob/main/${p}`;
 
+// The vortex: two arms of a logarithmic spiral (r = 47·e^(−0.4θ)) curling into the centre, cut into
+// short segments whose colour steps smoothly through the palette's range, cool and wide at the rim
+// to warm and fine at the eye; the rim fades into the dark field (a mask in CSS). Every colour is a design token (or a mix of two); none is written here.
+const ARM_A = ['color-mix(in srgb, var(--orb-c) 70%, var(--accent-secondary))', 'var(--orb-c)', 'var(--orb-c)', 'color-mix(in srgb, var(--orb-c) 50%, var(--accent-secondary))', 'var(--accent-secondary)', 'color-mix(in srgb, var(--orb-listening) 45%, var(--accent-secondary))', 'var(--orb-attention)'];
+const ARM_B = ['color-mix(in srgb, var(--accent-secondary) 80%, var(--orb-c))', 'var(--accent-secondary)', 'color-mix(in srgb, var(--orb-listening) 45%, var(--accent-secondary))', 'var(--orb-listening)', 'var(--orb-attention)', 'var(--orb-attention)', 'color-mix(in srgb, var(--orb-attention) 60%, var(--orb-listening))'];
+const SPIRAL = (() => {
+  const SEG = 30;
+  const END = 5.4;
+  const tone = (stops, s) => {
+    const at = (s / (SEG - 1)) * (stops.length - 1);
+    const i = Math.min(Math.floor(at), stops.length - 2);
+    return `color-mix(in srgb, ${stops[i + 1]} ${Math.round((at - i) * 100)}%, ${stops[i]})`;
+  };
+  const arm = (stops, turn) => Array.from({ length: SEG }, (_, s) => {
+    const pts = [];
+    // Opaque segments overlapping a hair, so no seam shows at the joins; the rim's fade is a mask in CSS.
+    const t0 = (s * END) / SEG;
+    const t1 = ((s + 1) * END) / SEG + 0.02;
+    for (let k = 0; k <= 4; k++) {
+      const t = t0 + ((t1 - t0) * k) / 4;
+      const r = 47 * Math.exp(-0.4 * t);
+      pts.push(`${(50 + r * Math.cos(t + turn)).toFixed(2)} ${(50 + r * Math.sin(t + turn)).toFixed(2)}`);
+    }
+    return `<path d="M${pts.join('L')}" stroke-width="${(28 - s * 0.75).toFixed(1)}" style="stroke: ${tone(stops, s)}"/>`;
+  }).join('');
+  return `<svg class="orb-spiral" viewBox="0 0 100 100" aria-hidden="true" focusable="false"><g fill="none" stroke-linecap="butt">${arm(ARM_A, 0)}${arm(ARM_B, Math.PI)}</g></svg>`;
+})();
+
 // The Nebula orb: the orb's own markup and state vocabulary (data-state drives the design's
-// motion, light and mark variables), drawn as a vortex of light from the palette tokens.
+// motion, light and mark variables), drawn as the vortex from the owner's icon.
 export function nebulaOrb({ state = 'idle', size = 'rail', label = null } = {}) {
   const words = label ?? `Nova: ${state.replace('-', ' ')}`;
-  return `<span class="orb orb-${size} orb-nebula" data-state="${state}" role="img" aria-label="${words}"><span class="orb-glow"></span><span class="orb-arms"></span><span class="orb-field"></span><span class="orb-swirl"></span><span class="orb-eye"></span><span class="orb-stars"></span></span>`;
+  return `<span class="orb orb-${size} orb-nebula" data-state="${state}" role="img" aria-label="${words}"><span class="orb-glow"></span><span class="orb-field"></span>${SPIRAL}<span class="orb-eye"></span><span class="orb-stars"></span></span>`;
 }
 
 const icon = (name) => ICONS[name] ?? '';

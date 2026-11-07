@@ -50,7 +50,7 @@ test('the briefing states the registry as it is: instance, person, models, captu
       assert.match(b, /Devices: only this hub; no other devices paired/);
       assert.match(b, /Morning summary \(Every day at 7:00, last run failed 60 min ago: “The model command exited with code 1”\)/);
       assert.match(b, /Approvals: asks first to run commands on this computer\. Goes ahead without asking to set up, change and remove schedules\./);
-      assert.match(b, /Appearance: Obsidian, mode auto; installed: Aurora, Companion Light, Nova, Obsidian, Orb Teal, Paper/);
+      assert.match(b, /Appearance: Obsidian, mode auto; installed: Aurora, Companion Light, Nebula \(proposed\), Nova, Obsidian, Orb Teal, Paper/);
       assert.match(b, /Open problems: 1; latest: capture: “Screenpipe answered but refused Nova/);
       assert.match(b, /OpenRouter included/, 'the way to add a provider is named');
       assert.match(b, /OpenRouter included\) goes in Settings › Providers as the "Local model \(Ollama or compatible\)" provider/);
