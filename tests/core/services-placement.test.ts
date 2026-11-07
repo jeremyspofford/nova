@@ -158,3 +158,41 @@ test('review finding 8: a device that lost its role is said so, not “hasn’t 
   const away = resolvePlacement(def({ mode: 'floating', replicas: 1 }), [{ ...big, healthy: false, last_seen: ago(90) }, small], { now: NOW, current: ['big'], failoverAfterMs: 60_000 });
   assert.ok(away.ok && away.devices[0]!.id === 'small' && away.moved, JSON.stringify(away));
 });
+
+// ---- Wake-on-LAN (docs/plans/wol-inference-nodes-adr-2026-11-06.md, "The services track") ----------
+
+test('WoL: a computer that sleeps by design is never a new home for a service; asleep and wakeable is "down, wakeable"', () => {
+  const SLEEPY = dev({ id: 'sleepy', purposes: ['compute'], hardware: GPU.hardware, sleep: { sleeps: true, wakeable: true } });
+  // Awake, it can take it, but a preferred service goes to the awake-by-design device instead.
+  const r = resolvePlacement(inference(), [SLEEPY, SMALL_GPU], { now: NOW });
+  assert.equal(r.ok, true, r.why);
+  assert.deepEqual(r.ok && r.devices.map((d) => d.id), ['small-gpu'], 'more GPU memory, but it sleeps by design');
+  assert.match(r.considered.find((c) => c.id === 'sleepy')!.why, /sleeps when idle, so Nova doesn’t move services onto it; pin one there/);
+  // A service already there stays while it is answering (Nova holds it awake for it).
+  const stay = resolvePlacement(inference(), [SLEEPY, SMALL_GPU], { now: NOW, current: 'sleepy' });
+  assert.equal(stay.ok && stay.devices[0]!.id, 'sleepy');
+  // Only sleepers may run it: no placement, said plainly, and not "down".
+  const only = resolvePlacement(inference(), [SLEEPY, HUB], { now: NOW });
+  assert.equal(only.ok, false);
+  assert.equal(!only.ok && only.down, false);
+  assert.match(only.why, /sleep when idle, and Nova doesn’t move services onto a computer that sleeps\. Pin it to one/);
+  // Pinned there and asleep: down, wakeable, and a service never wakes it.
+  const ASLEEP = { ...SLEEPY, healthy: false, last_seen: ago(3600) };
+  const pinned = resolvePlacement(def({ mode: 'pinned', device: 'sleepy', roles: ['compute'] }), [ASLEEP], { now: NOW });
+  assert.equal(pinned.ok, false);
+  assert.deepEqual(!pinned.ok && [pinned.down, pinned.wakeable], [true, true]);
+  assert.match(pinned.why, /which is asleep, so the service is down until sleepy wakes\. Nova may wake it for models, not for a service/);
+  // Pinned and awake: it runs there (the pin is what keeps it awake).
+  assert.equal(resolvePlacement(def({ mode: 'pinned', device: 'sleepy', roles: ['compute'] }), [SLEEPY], { now: NOW }).ok, true);
+  // Asleep but not wakeable: plain down, as before.
+  const off = resolvePlacement(def({ mode: 'pinned', device: 'sleepy', roles: ['compute'] }), [{ ...ASLEEP, sleep: { sleeps: true, wakeable: false } }], { now: NOW });
+  assert.deepEqual(!off.ok && [off.down, off.wakeable], [true, undefined]);
+  assert.match(off.why, /isn’t answering/);
+  // An awake-by-design computer that may be woken, asleep now: a preferred service is down, wakeable.
+  const MANUAL = dev({ id: 'manual', purposes: ['compute'], hardware: GPU.hardware, healthy: false, last_seen: ago(3600), sleep: { sleeps: false, wakeable: true } });
+  const pref = resolvePlacement(inference(), [MANUAL], { now: NOW });
+  assert.deepEqual(!pref.ok && [pref.down, pref.wakeable], [true, true]);
+  // No sleep choices reported (older hubs, tests): unchanged.
+  const plain = resolvePlacement(inference(), [{ ...GPU, healthy: false, last_seen: ago(3600) }], { now: NOW });
+  assert.deepEqual(!plain.ok && [plain.down, plain.wakeable], [true, undefined]);
+});
