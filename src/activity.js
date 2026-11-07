@@ -67,7 +67,7 @@ function interstitialWords(r) {
   const c = r.claims ?? [];
   const sent = (r.searches ?? []).filter((s) => s.sent).length;
   const held = (r.searches ?? []).length - sent;
-  return `Interstitial research at ${r.depth} depth: ${n(sent, 'search')}${held ? `, ${held} held back` : ''}, ${n(c.length, 'claim')} checked (${c.filter((x) => x.verified).length} used, ${r.quarantined ?? 0} uncertain, ${r.discarded ?? 0} left out)${r.proposal ? '; an improvement review waits for your OK' : ''}`;
+  return `Interstitial research at ${r.depth} depth: ${n(sent, 'search')}${held ? `, ${held} held back` : ''}, ${n(c.length, 'claim')} checked (${c.filter((x) => x.verified).length} used, ${r.quarantined ?? 0} uncertain, ${r.discarded ?? 0} left out)${r.unbacked?.length ? '; the answer claims more than the run backs' : ''}${r.proposal ? '; an improvement review waits for your OK' : ''}`;
 }
 
 // Work Ledger tasks of one chat-run kind whose run hasn't started.
