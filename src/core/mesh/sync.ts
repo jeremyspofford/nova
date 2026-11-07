@@ -36,6 +36,9 @@ export const REPLICATED: Readonly<Record<string, readonly string[]>> = {
   // Migration 0025 (model fit): each device's runtime overhead learned from real loads, so a hub
   // that takes over plans models with what was measured, not the prior again.
   device_overhead: ['device_id', 'backend'],
+  // Migration 0026 (Wake-on-LAN): each device's last hardware (its network cards) and every wake, so a
+  // hub that takes over can wake a sleeping device and keeps counting its rate limits.
+  device_hardware: ['device_id'], device_wake: ['id'],
 };
 // Columns a release added to a replicated table, by the schema version that added them (M10f review,
 // finding 3: one mechanism for every such column). A standby a release behind doesn't have them:
@@ -57,6 +60,8 @@ export const ADDED_COLUMNS: Readonly<Record<number, Readonly<Record<string, read
   // M10h: where a captured event came from and how it got here (the capture data path's provenance).
   // A standby without it keeps the event without its provenance until it catches up.
   23: { capture_event: ['provenance'] },
+  // Wake-on-LAN: who asked for each wake, which card sent it, and why one was refused or failed.
+  26: { device_wake: ['origin', 'sender', 'reason'] },
 });
 export const UNSTATED_SCHEMA = 19;
 

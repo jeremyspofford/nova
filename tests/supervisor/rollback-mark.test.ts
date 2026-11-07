@@ -7,13 +7,13 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { api, cli, releaseRepo, scratch, supervise } from './support.ts';
+import { VERSION, api, cli, releaseRepo, scratch, supervise } from './support.ts';
 
 test('work a new release did on starting counts: going back is refused rather than undo it', async () => {
   const dir = scratch('nova-rel-mark-');
   const r = releaseRepo(dir);
   r.tag('v1.3.0', (root) => {
-    r.edit(root, 'package.json', '"version": "0.1.0"', '"version": "0.1.3"');
+    r.edit(root, 'package.json', `"version": "${VERSION}"`, '"version": "0.1.3"');
     writeFileSync(join(root, 'src', 'core', 'migrations', `${r.nextMigration(root)}_release_note.sql`), '-- A harmless new table, so this release upgrades the database.\nCREATE TABLE release_note (id INTEGER PRIMARY KEY, text TEXT NOT NULL);\n');
   });
   const s = await supervise({ dir, repo: r.repo });

@@ -15,6 +15,9 @@ import { blank, start, stop, until, sleep, type Running } from './support.ts';
 // range, where no server on port 0 in a parallel test can take it meanwhile.
 import { freePort } from './m4c-support.ts';
 
+// The runtime the hub signs is versioned by package.json (createNova reads it).
+const VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'package.json'), 'utf8')).version;
+
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 test('M4b: join by the one-line command, Online, offline queue across a hub outage (exactly once), revocation', { timeout: 120_000 }, async () => {
@@ -64,7 +67,7 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
     const online = await until(computer, (d) => !!d?.online, 400);
     assert.ok(online?.online, 'the computer shows Online');
     assert.equal(online!.agent!.safe_mode, false);
-    assert.match(online!.agent!.runtime_version, /^0\.1\.0\+[0-9a-f]{12}$/, 'running the runtime the hub signed');
+    assert.match(online!.agent!.runtime_version, new RegExp(`^${VERSION.replace(/\./g, '\\.')}\\+[0-9a-f]{12}$`), 'running the runtime the hub signed');
     // M6b: its heartbeat carries what it can run models on, read by the boot agent; the hub's
     // device map shows it.
     const mapped = await until(async () => ((await m.get('/api/v1/models')) as { devices: { id: string; hub: boolean; hardware: { cpu: { threads: number }; ram_bytes: number } | null }[] }).devices.find((d) => d.id === online!.id), (d) => !!d?.hardware, 400);

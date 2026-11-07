@@ -33,7 +33,8 @@ import { acceptRoster, assignmentAllowed, bundleKeys, checkProof, epochVerdict, 
 import { Watchdog } from './watchdog.ts';
 import { detectHardware, type Hardware } from '../core/models/hardware.ts';
 import { Queue, QUEUE_KINDS, type QueueKind } from './queue.ts';
-import type { CallAnswer, FromRuntime, SessionMessage, VerbAnswer } from './runtime.ts';
+import type { CallAnswer, FromRuntime, PowerAnswer, SessionMessage, ToRuntime, VerbAnswer } from './runtime.ts';
+import { Power, checkPowerRequest, readPower, sleepRefusal } from './power.ts';
 import { devicePlatformKey, Workloads, type VerbRequest } from './workloads.ts';
 import { readAssignments, type Assignment } from './rollout.ts';
 import { Carrier } from './carrier.ts';
@@ -52,7 +53,8 @@ export const AGENT_VERSION = (() => {
 })();
 // What the runtime agent consists of; the hub's bundle carries the same files.
 const RUNTIME_FILES = ['runtime.ts', 'queue.ts', 'rollout.ts'];
-const CAPABILITIES = ['heartbeat', 'queue'];
+// power: this agent has the sixth verb (the WoL ADR), so the hub knows Nova can sleep it.
+const CAPABILITIES = ['heartbeat', 'queue', 'power'];
 // The process exits with this when the hub revoked the device, so a supervisor can tell.
 export const EXIT_REVOKED = 3;
 // Why it stopped, when the hub it paired with was factory reset.
@@ -524,14 +526,22 @@ export class Boot {
   readonly workloads: Workloads;
   // The capture data path (M10h): this agent holds the key, so it signs and carries; it starts nothing.
   readonly carrier: Carrier;
+  // The sixth verb, power (WoL ADR): holds this machine awake, lets it go, or suspends it, after its
+  // own checks. The hub's latest `power` answer, when the last heartbeat answer came, and how many
+  // workload verbs are running now (no sleep while one is).
+  readonly power: Power;
+  #lastPower: { sleep_after_min: number | null; hold: boolean } | null = null;
+  #lastBeat = 0;
+  #verbsRunning = 0;
 
   // Where the agent's plain-words lines go (its log).
   readonly say: (line: string) => void;
   // A stand-in platform label (tests: NOVA_DEVICE_PLATFORM), said in the hardware too.
   #platformLabel: string | null;
 
-  constructor(home: string, env: NodeJS.ProcessEnv = process.env, o: { say?: (line: string) => void } = {}) {
+  constructor(home: string, env: NodeJS.ProcessEnv = process.env, o: { say?: (line: string) => void; power?: Power } = {}) {
     this.say = o.say ?? say;
+    this.power = o.power ?? new Power();
     this.#platformLabel = env.NOVA_DEVICE_PLATFORM && devicePlatformKey(env) === env.NOVA_DEVICE_PLATFORM ? env.NOVA_DEVICE_PLATFORM : null;
     this.p = paths(home);
     this.o = runOptions(env);
@@ -732,6 +742,14 @@ export class Boot {
       if (m.path === '/api/v1/mesh/devices/me/heartbeat' && r.status === 200) {
         this.#saveState({ workload_assignments: readAssignments(r.body?.workloads) });
         this.#heardPurposes(r.body); this.#heardReset(r.body); void this.#heardRoster(r.body);
+        // The sleep policy: kept for the sleep check, and the person's idle time goes to the runtime
+        // before the answer, so it counts with both. A long gap since the last answer means this
+        // machine slept: its hardware is read again, so the hub re-fits against what it is now.
+        this.#lastPower = readPower(r.body?.power);
+        const now = Date.now();
+        if (this.#lastBeat && now - this.#lastBeat > 5 * 60_000) void this.#readHardware();
+        this.#lastBeat = now;
+        if (this.#lastPower?.sleep_after_min && c?.connected) c.send({ type: 'idle', ms: await this.power.osIdleMs() } satisfies ToRuntime);
       }
       answer({ status: r.status, body: r.body });
     } catch (e) {
@@ -755,7 +773,31 @@ export class Boot {
       case 'heartbeat': return;
       case 'call': return this.#callForRuntime(m);
       case 'verb': return this.#verbForRuntime(m);
+      case 'power': return this.#powerForRuntime(m);
     }
+  }
+
+  // The sixth verb, asked by the runtime. The whole request goes to the check, so anything more than
+  // its action is refused. Sleep is checked again here, then the hub hears going_to_sleep in one last
+  // heartbeat (so it shows this machine asleep at once), then the OS is asked to suspend.
+  async #powerForRuntime(m: Extract<FromRuntime, { type: 'power' }>): Promise<void> {
+    const c = this.watchdog.child;
+    const { type: _t, id, ...request } = m as unknown as Record<string, unknown>;
+    const answer = (ok: boolean, said: string) => { if (c?.connected && typeof id === 'number') c.send({ type: 'power_answer', id, ok, said } satisfies PowerAnswer); };
+    const r = checkPowerRequest(request);
+    if (!r.ok) return answer(false, r.said);
+    if (r.action === 'hold') { const h = this.power.hold(); return answer(h.ok, h.said); }
+    if (r.action === 'release') { const h = this.power.release(); return answer(h.ok, h.said); }
+    const no = sleepRefusal({ safeMode: this.watchdog.safeMode, verbsRunning: this.#verbsRunning, power: this.#lastPower });
+    if (no) return answer(false, `Not going to sleep: ${no}`);
+    const s = this.#session;
+    if (s) {
+      const inst = readJson<Installed>(this.p.installed);
+      await call(s.url, 'POST', '/api/v1/mesh/devices/me/heartbeat', { token: s.token, body: { capabilities: CAPABILITIES, version: AGENT_VERSION, runtime_version: inst?.version ?? null, safe_mode: false, going_to_sleep: true } }).catch(() => null);
+    }
+    this.say('Nothing of Nova’s has run here and no one has used this computer for the time its sleep policy says, so it is going to sleep.');
+    const done = await this.power.sleep();
+    answer(done.ok, done.said);
   }
 
   // One of the five verbs, asked by the runtime (Decision 1: it decides, this agent does). The whole
@@ -764,7 +806,9 @@ export class Boot {
   async #verbForRuntime(m: Extract<FromRuntime, { type: 'verb' }>): Promise<void> {
     const c = this.watchdog.child;
     const { type: _t, id, ...request } = m as unknown as Record<string, unknown>;
-    const r = await this.workloads.perform(request);
+    this.#verbsRunning++;
+    let r: Awaited<ReturnType<Workloads['perform']>>;
+    try { r = await this.workloads.perform(request); } finally { this.#verbsRunning--; }
     if (r.refused && r.said) void this.#hubCall('POST', '/api/v1/mesh/devices/me/report', { problem: 'workload_refused', detail: r.said.slice(0, 280) }).catch(() => {});
     if (c?.connected && typeof id === 'number') c.send({ type: 'verb_answer', id, ...r } satisfies VerbAnswer);
     // A capture workload installed offers its kinds: only then does the runtime need a new session

@@ -56,8 +56,18 @@ function steps(turn) {
       if (kept || forgot) out.push({ kind: 'memory', kept, forgot });
     }
     if (it.kind === 'error') out.push({ kind: 'error', message: it.message });
+    if (it.kind === 'interstitial' && it.phase === 'record') out.push({ kind: 'interstitial', words: interstitialWords(it) });
   }
   return out;
+}
+
+// An Interstitial Research run, in a line.
+function interstitialWords(r) {
+  const n = (k, one) => `${k} ${one}${k === 1 ? '' : 's'}`;
+  const c = r.claims ?? [];
+  const sent = (r.searches ?? []).filter((s) => s.sent).length;
+  const held = (r.searches ?? []).length - sent;
+  return `Interstitial research at ${r.depth} depth: ${n(sent, 'search')}${held ? `, ${held} held back` : ''}, ${n(c.length, 'claim')} checked (${c.filter((x) => x.verified).length} used, ${r.quarantined ?? 0} uncertain, ${r.discarded ?? 0} left out)${r.unbacked?.length ? '; the answer claims more than the run backs' : ''}${r.proposal ? '; an improvement review waits for your OK' : ''}`;
 }
 
 // Work Ledger tasks of one chat-run kind whose run hasn't started.

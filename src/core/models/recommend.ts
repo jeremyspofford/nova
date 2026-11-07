@@ -5,8 +5,8 @@
 //
 // Whether a model fits a device is the fit engine's answer (fit.ts, docs/plans/model-fit-adr-2026-11-04.md):
 // weights, the KV cache for the context the role runs at, the device's overhead (learned or the
-// prior) and the reserve, against the device's budget. Tight counts as fitting here: one model is
-// planned per role, as the ADR's step 2 allows.
+// prior) and the reserve, against the device's budget. Only Fits counts here: a Tight model is never
+// a default (the owner, 2026-11-06); the person may assign one only by acknowledging it.
 import { gb, modelMemory, type Hardware } from './hardware.ts';
 import { runsRemotely, type InstalledModel } from './ollama.ts';
 import {
@@ -114,7 +114,7 @@ export function quantOf(label: string): Quant {
 const contextFor = (role: Exclude<Role, 'transcriber'>, own: number | null | undefined) => (role === 'embedder' ? own ?? EMBED_CONTEXT : TASK_CONTEXT[ROLE_TASK[role]]!);
 
 // An installed model as the engine plans it: its own file size, its shape when the runtime said it.
-function installedModel(m: InstalledModel, role: Exclude<Role, 'transcriber'>): FitModel {
+export function installedModel(m: InstalledModel, role: Exclude<Role, 'transcriber'>): FitModel {
   const quant = quantOf(m.quantization);
   const params = m.params_b ? Math.round(m.params_b * 1e9) : Math.round((m.size * 8) / BITS_PER_WEIGHT[quant]);
   const arch = m.arch ?? null;
@@ -128,8 +128,8 @@ function plannedModel(c: CatalogEntry, role: Exclude<Role, 'transcriber'>): FitM
 }
 
 const fitOf = (d: DeviceModels, models: FitModel[]): FitResult | null => (d.hardware ? fit({ device: fitDevice(d.hardware, d.overhead), models }) : null);
-// Without hardware Nova can't tell, and doesn't rule a model out.
-const fits = (r: FitResult | null) => !r || r.verdict !== 'wont-fit';
+// Without hardware Nova can't tell, and doesn't rule a model out. Tight is not fitting, for a default.
+const fits = (r: FitResult | null) => !r || r.verdict === 'fits';
 const pickFit = (r: FitResult | null, m: FitModel): PickFit | null =>
   r ? { verdict: r.verdict, quant: m.quant, context: m.context, basis: r.basis, need_bytes: r.need_bytes, budget_bytes: r.budget_bytes, words: r.words } : null;
 
@@ -160,6 +160,15 @@ export function capacityWords(h: Hardware, overhead?: LearnedOverhead | null): s
 function size(m: InstalledModel) { return `${m.parameter_size || '?'} parameters, ${gb(m.size)}`; }
 
 const installedFits = (d: DeviceModels, m: InstalledModel, role: Exclude<Role, 'transcriber'>) => fits(fitOf(d, [installedModel(m, role)]));
+
+// The engine's verdict for an installed model serving a role on a device, at the context it would
+// run with (PUT /models/roles checks it); null when Nova doesn't know the hardware or the model.
+export function roleFit(d: DeviceModels, model: string, role: Exclude<Role, 'transcriber'>, context?: number): FitResult | null {
+  const m = d.models?.find((x) => x.name === model);
+  if (!m) return null;
+  const planned = installedModel(m, role);
+  return fitOf(d, [context && role !== 'embedder' ? { ...planned, context } : planned]);
+}
 
 function triagePick(d: DeviceModels): InstalledModel | null {
   const ok = (d.models ?? []).filter((m) => isText(m) && !isCloud(m) && installedFits(d, m, 'triage-text') && (m.params_b === null ? m.size <= 6e9 : m.params_b <= 9));

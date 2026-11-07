@@ -61,6 +61,7 @@ import { checkers as browserCheckers } from './browser/evidence.ts';
 import { Capture, PROMOTE, SCREEN_TEMPLATE } from './capture/capture.ts';
 import { captureRoutes } from './capture/routes.ts';
 import { Models, ROLE_WORDS as MODEL_ROLE_WORDS, type Hardware } from './models/index.ts';
+import type { Card, Sender } from './models/wake.ts';
 import { LocalModelProvider, PROVIDER_ID as LOCAL_MODEL_PROVIDER } from './models/decide.ts';
 import { wireIngest, type ScreenInput, type Taint } from './ingest/index.ts';
 import { NovaComputer, type ComputerOptions } from './computer/index.ts';
@@ -90,6 +91,7 @@ import { Restarter } from './resilience/restart.ts';
 import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
 import { Self } from './self.ts';
+import { Build } from './build.ts';
 import { Caps, capsRoutes } from './caps/index.ts';
 import { buildDiagnostics, diagnosticsRoutes } from './diagnostics/index.ts';
 import { CODE_ROOT } from './resilience/sandbox.ts';
@@ -104,6 +106,7 @@ export { render as renderIdentity } from './identity.ts';
 export { permits } from './workers.ts';
 export { ENVELOPE_VERSION, reportOf } from './envelope.ts';
 export { sha256, writeAtomic, writeJson } from './workspace.ts';
+export { SKILL_DATA } from './backups.ts';
 export { terms } from './memory.ts';
 export { TERMINAL } from './ledger.ts';
 export type { Brief, Evidence, Report } from './envelope.ts';
@@ -142,6 +145,8 @@ export { BrokerClient } from './broker/client.ts';
 export { ipcLink, ipcBroker, consoleStatus } from './resilience/link.ts';
 export type { SupervisorState, SupervisorProblem, ReleaseSlot, Stage as DeployStage, ProbeLine } from './resilience/link.ts';
 export { CODE_ROOT, copyHome, smoke, startSandbox } from './resilience/sandbox.ts';
+export { Build, readLatest, words as buildWords, LATEST_MAX_BYTES } from './build.ts';
+export type { BuildIdentity, Latest, VersionView } from './build.ts';
 export type { Sandbox } from './resilience/sandbox.ts';
 export { restoreInto, backupFiles, sha256File, openEncrypted } from './resilience/backup.ts';
 // Factory reset (M7 amendment §2): finished at start, before the database opens (server.js too).
@@ -230,12 +235,17 @@ export interface CoreOptions {
   capture?: { pollMs?: number; fetch?: typeof fetch };
   // The local model manager (M6b): where the hub's Ollama answers by default, and (tests) a fixed
   // hardware reading and quicker watch and wake polls.
-  models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number };
+  // hubCards, wakeSender, wakeGapMs: Wake-on-LAN's own cards, sender and packet gap, for tests (a
+  // recorder that opens no socket; see ModelsOptions).
+  models?: { ollamaUrl?: string; hardware?: () => Promise<Hardware>; watchMs?: number; wakePollMs?: number; hubCards?: () => Card[]; wakeSender?: Sender; wakeGapMs?: number; wakeClock?: { now(): number; sleep(ms: number): Promise<void> }; wakeHealthyMs?: number };
   // The Decision Service (DS1), for tests: a verdict store in place of the committed eval verdicts
   // (src/core/decision-service/tev1-verdicts.json), so a stand-in seat can be trusted or not.
   decisions?: { verdicts?: VerdictStore };
   // The supervisor that started this server, when one did (resilience/link.ts: ipcLink).
   supervisor?: SupervisorLink | null;
+  // The running build (build.ts), for tests: the environment it reads in place of process.env
+  // (NOVA_BUILD_COMMIT, NOVA_BUILD_DATE, NOVA_LATEST_FILE) and when the process started.
+  build?: { env?: Record<string, string | undefined>; startedAt?: Date };
   // Supplied only by the private supervisor bootstrap; legacy consumers remain on vault.ts.
   broker?: BrokerClient | null;
   // Fixed public source supplied by server.js; never a caller-selected file or broker import.
@@ -413,6 +423,11 @@ export function createCore(o: CoreOptions) {
     ...(o.models?.hardware ? { hardware: o.models.hardware } : {}),
     ...(o.models?.watchMs ? { watchMs: o.models.watchMs } : {}),
     ...(o.models?.wakePollMs ? { wakePollMs: o.models.wakePollMs } : {}),
+    ...(o.models?.hubCards ? { hubCards: o.models.hubCards } : {}),
+    ...(o.models?.wakeSender ? { wakeSender: o.models.wakeSender } : {}),
+    ...(o.models?.wakeGapMs !== undefined ? { wakeGapMs: o.models.wakeGapMs } : {}),
+    ...(o.models?.wakeClock ? { wakeClock: o.models.wakeClock } : {}),
+    ...(o.models?.wakeHealthyMs ? { wakeHealthyMs: o.models.wakeHealthyMs } : {}),
     diskPath: o.home,
     meshHost: (h) => meshHosts().has(h),
     secret: (v) => { const n = secretName(v); return n ? providerSecret(n) : null; },
@@ -423,6 +438,7 @@ export function createCore(o: CoreOptions) {
     refreshed: () => ds?.refresh() ?? Promise.resolve(),
   });
   ledger.workers.set(models.worker.id, models.worker);
+  ledger.workers.set(models.wakeWorker.id, models.wakeWorker);
   // The model-swap scorecards (Amendment B Part 4): files under workers/evals/, read by Settings ›
   // Models before a switch.
   const scorecards = new Scorecards(o.home);
@@ -890,6 +906,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   spokes.on('change', (d: Device) => bus.emit('event', 'device', { action: 'heartbeat', device: deviceView(d) }));
   spokes.on('event', (e) => bus.emit('event', 'device_event', e));
   spokes.on('hardware', (d: Device, hw: unknown) => models!.heartbeat(d, hw));
+  spokes.powerAnswer = (d, body) => models!.powerAnswer(d, body);
   models.on('change', (c) => bus.emit('event', 'models', c));
   models.on('progress', (p) => bus.emit('event', 'model_progress', p));
   enroll.on('change', (r) => bus.emit('event', 'join_request', r));
@@ -957,7 +974,9 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   function placementRows(hubHw: typeof hubHwCache): PlacementDevice[] {
     return devices.list().map((d) => {
       const hw = d.id === meshIdentity.id ? hubHw : models?.hardwareOf(d.id) ?? null;
+      const pw = models && d.id !== meshIdentity.id ? models.power(d.id) : null;
       return {
+        sleep: pw ? { sleeps: pw.sleep_after_min !== null, wakeable: pw.on_demand } : null,
         id: d.id, name: d.name, kind: d.kind, role: d.role, platform: d.platform, purposes: d.purposes, trust: d.trust, last_seen: d.last_seen,
         hardware: hw ? { ram_bytes: hw.ram_bytes, gpus: hw.gpus.map((g) => ({ vram_bytes: g.vram_bytes, unified: g.unified })), disk: hw.disk ? { free_bytes: hw.disk.free_bytes } : null, platform: hw.platform, arch: hw.arch } : null,
         healthy: deviceView(d).online,
@@ -1092,6 +1111,9 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     if (!confirm) throw new CoreError('validation', 'Changing automatic failover needs an explicit confirmation: send confirm: true.');
   }
 
+  // Which build this is (build.ts): read once now; the latest-merged file on every ask.
+  const build = new Build({ version: o.version, codeRoot: CODE_ROOT, home: o.home, ...(o.build?.env ? { env: o.build.env } : {}), ...(o.build?.startedAt ? { startedAt: o.build.startedAt } : {}) });
+
   const header = (h: IncomingHttpHeaders, name: string) => { const v = h[name]; return Array.isArray(v) ? v[0] : v; };
   const str = (v: unknown, what: string) => {
     if (typeof v !== 'string' || !v.trim()) throw new CoreError('validation', `${what} is required.`);
@@ -1101,6 +1123,9 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   const routes: Route[] = [
     ...(o.sealModule ? [{ method: 'GET' as const, path: '/broker/seal.js', access: 'person' as const, summary: 'The fixed public browser helper for sealed credential entry.', handle: () => new Raw('text/javascript; charset=utf-8', o.sealModule!()) }] : []),
     { method: 'GET', path: '/health', summary: 'Whether each part of the core is working, in plain words.', handle: () => health() },
+    // The running build and whether it is the latest merged (build.ts): read-only, from the
+    // environment, the code's checkout and the deploy step's file; never the network.
+    { method: 'GET', path: '/version', summary: 'The running build: version, commit, when it was built (or, when that isn’t known, when it started), the latest merged build as the deploy step recorded it, and whether a redeploy is pending, in plain words.', handle: () => build.view() },
     // The ingest gate (Amendment 2026-10-30-C Part 3).
     { method: 'GET', path: '/ingest/screens', summary: 'The latest screens of outside content: source, scores, flags and verdict, by hash; never the content. ?limit=', handle: ({ query }) => ingest.list(Number(query.get('limit')) || 50) },
     { method: 'GET', path: '/ingest/candidates', summary: 'Memory waiting for your OK: what a conversation that read outside content, or one of your devices, wanted kept, with where it came from.', handle: () => ingest.candidates() },
@@ -1713,7 +1738,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
 
   // Grounding (self.ts): the briefing and the agent's read-only status tools, in process.
   const self = new Self({
-    home: o.home, ingest, version: o.version, instance: () => o.instance ?? 'production', codeRoot: CODE_ROOT,
+    home: o.home, ingest, version: o.version, build, instance: () => o.instance ?? 'production',
     profile, memory, providers, models: models!, connectors, capture, devices, triggers, design, log, now,
     hubId: () => meshIdentity.id, role: () => role.role(), online: (d) => deviceView(d).online, setupDone: () => setup.view().done,
     ...(o.chat ? { chat: o.chat } : {}),

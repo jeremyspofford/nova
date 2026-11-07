@@ -88,8 +88,11 @@ export class Spokes extends EventEmitter {
   // A factory reset of this hub (resilience/reset.ts): each computer hears it in its next
   // heartbeat's reply, and `told` is called once it has.
   resetNotice: { id: string; said: string; told: (device: Device) => void } | null = null;
+  // Wake-on-LAN's sleep policy (the model manager): what each computer's heartbeat is answered with,
+  // `power: {sleep_after_min, hold}`, its own only. An agent without the power verb ignores it.
+  powerAnswer: ((device: Device, body: Record<string, unknown>) => { sleep_after_min: number | null; hold: boolean }) | null = null;
 
-  heartbeat(device: Device, body: Record<string, unknown>): { workloads?: unknown; ok: true; epoch: number; roster_digest: string; runtime: { version: string }; purposes: string[]; restart_runtime?: true; hub_reset?: { id: string; said: string; signature: string; signer: string } } {
+  heartbeat(device: Device, body: Record<string, unknown>): { workloads?: unknown; ok: true; epoch: number; roster_digest: string; runtime: { version: string }; purposes: string[]; restart_runtime?: true; power?: { sleep_after_min: number | null; hold: boolean }; hub_reset?: { id: string; said: string; signature: string; signer: string } } {
     const at = this.#now().toISOString();
     const caps = body.capabilities;
     if (caps !== undefined && (!Array.isArray(caps) || caps.length > 32 || !caps.every((c) => typeof c === 'string' && /^[a-z][a-z0-9._-]{0,39}$/.test(c)))) {
@@ -122,8 +125,10 @@ export class Spokes extends EventEmitter {
       try { this.#effects.workloads.report(device, body.workloads); } catch (e) { if (!(e instanceof CoreError)) throw e; }
       workloads = this.#effects.workloads.answer(device);
     }
+    // Its sleep policy, and whether Nova holds it awake now (the WoL ADR).
+    const power = device.kind === 'computer' ? this.powerAnswer?.(this.#devices.get(device.id), body) ?? null : null;
     // Its roles (M10f), so its agent can refuse an assignment they don't allow.
-    return { ...workloads, ok: true, epoch: this.#devices.state().epoch, roster_digest: rosterDigest(this.#devices.roster()), runtime: { version: this.runtime().manifest.version }, purposes: this.#devices.get(device.id).purposes, ...(restart ? { restart_runtime: true } : {}), ...(reset ? { hub_reset: { id: reset.id, said: reset.said, signature: this.#identity.sign(hubResetMessage(device.id, reset.id)), signer: this.#identity.publicKey } } : {}) };
+    return { ...workloads, ok: true, epoch: this.#devices.state().epoch, roster_digest: rosterDigest(this.#devices.roster()), runtime: { version: this.runtime().manifest.version }, purposes: this.#devices.get(device.id).purposes, ...(power ? { power } : {}), ...(restart ? { restart_runtime: true } : {}), ...(reset ? { hub_reset: { id: reset.id, said: reset.said, signature: this.#identity.sign(hubResetMessage(device.id, reset.id)), signer: this.#identity.publicKey } } : {}) };
   }
 
   // Asks a computer's boot agent, at its next heartbeat in safe mode, to start its runtime again

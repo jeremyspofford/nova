@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 export const ROOT = join(import.meta.dirname, '..', '..');
+// The version the scratch release repository starts at: this tree's own (package.json).
+export const VERSION: string = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const COPY = ['src', 'ui', 'templates', 'design-systems', 'package.json', 'package-lock.json'];

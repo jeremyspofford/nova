@@ -1,6 +1,6 @@
 {
   "name": "nova",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "description": "Nova, a personal agent. Plain files are the source of truth.",
   "type": "module",
@@ -15,6 +15,7 @@
     "test": "sh scripts/test.sh 'tests/*.test.js' 'tests/core/*.test.ts' 'tests/acceptance/*.test.ts' 'tests/supervisor/*.test.ts' 'tests/chaos/*.test.ts' 'tests/ingest/*.test.ts' 'tests/ingest/*.test.js'",
     "lint:tokens": "node scripts/lint-tokens.js",
     "check:themes": "node scripts/check-themes.js",
+    "changelog": "node scripts/changelog.js",
     "check": "npm run lint:tokens && npm run check:themes && npm run typecheck && npm test",
     "shots": "node scripts/shots.js",
     "typecheck": "tsc -p tsconfig.json",

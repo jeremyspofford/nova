@@ -7,7 +7,7 @@ import type { Page } from 'playwright-core';
 import { Joiner } from '../core/mesh-support.ts';
 import { createServer } from 'node:net';
 import { stop } from '../acceptance/support.ts';
-import { blank, browser, device, finishSetup, ready, still } from './support.ts';
+import { blank, browser, device, finishSetup, ready, still, until } from './support.ts';
 import { trackDocument, assertRetainedDocument } from './navigation-support.ts';
 
 async function openBackups(page: Page) {
@@ -65,7 +65,7 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
       const refreshed = p.waitForResponse(r => r.url().endsWith('/api/v1/profile'));
       await m.send('PUT', '/api/v1/profile/user/name', { value: 'Synthetic refresh' });
       await (await refreshed).finished();
-      await p.waitForFunction(async n => (window as any).__backupDraws > n && (await import(String('/js/surfaces.js'))).store.profile?.user?.name === 'Synthetic refresh', beforeDraw);
+      await until(p, async n => (window as any).__backupDraws > n && (await import(String('/js/surfaces.js'))).store.profile?.user?.name === 'Synthetic refresh', beforeDraw);
       await p.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
       assert.equal(await folder.inputValue(), `${target}/unsaved`);
       assert.deepEqual(await folder.evaluate((e: HTMLInputElement) => [document.activeElement === e, e.selectionStart, e.selectionEnd]), [true, 3, 6]);
@@ -276,13 +276,14 @@ test('Backups failed mesh refresh clears key and stays read-only; fresh retry re
 // the click, so the order is certain. Would fail if Try again could join a read begun before it.
 test('Backups Try again during a slow read still asks again', async () => appCase(async ({ m, page, target, encrypted }) => {
   await openBackups(page); await configure(page, target, encrypted);
+  await settleBackupsReads(m, page);
   let release!: () => void; const held = new Promise<void>(r => { release = r; });
-  let reached!: () => void; const received = new Promise<void>(r => { reached = r; });
   let holding = true;
-  await page.route('**/api/v1/backups', async r => { if (!holding) return r.continue(); holding = false; const response = await r.fetch(); reached(); await held; await r.fulfill({ response }); });
+  await page.route('**/api/v1/backups', async r => { if (!holding) return r.continue(); holding = false; const response = await r.fetch(); await held; await r.fulfill({ response }); });
   await page.route('**/api/v1/mesh/status', r => r.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Synthetic missing mesh"}' }));
+  const read = page.waitForRequest(r => r.url().endsWith('/api/v1/backups'));
   await m.send('PUT', '/api/v1/profile/user/name', { value: 'Slow read missing mesh' });
-  await received;
+  await read;
   await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#settings-backups [name="target"]')?.disabled === true);
   await page.unroute('**/api/v1/mesh/status');
   await page.locator('[data-action="backups-retry"]').click();
@@ -291,6 +292,21 @@ test('Backups Try again during a slow read still asks again', async () => appCas
   assert.equal(await page.locator('#settings-backups input:disabled').count(), 0);
   await noKey(page);
 }));
+
+// Saving fires profile events of its own, and each starts or joins a Backups read. One still on its
+// way when the next profile change arrives is joined, not repeated, so a hold set up in between sees
+// no new read and waits forever. This returns once the page has handled one more profile change (and
+// so every earlier one: the stream is in order) and the read it started or joined is done.
+async function settleBackupsReads(m: ReturnType<typeof blank>, page: Page) {
+  await page.evaluate(async () => {
+    const core = await import(String('/js/core.js')); const surfaces = await import(String('/js/surfaces.js'));
+    (window as any).__backupsSettled = false;
+    // Added after the app's own listener, so by now its read has started or been joined.
+    const off = core.on('profile', (c: { section?: string } | null) => { if (c?.section !== 'user') return; off(); surfaces.loadBackups().then(() => { (window as any).__backupsSettled = true; }); });
+  });
+  await m.send('PUT', '/api/v1/profile/user/name', { value: 'Settle earlier Backups reads' });
+  await page.waitForFunction(() => (window as any).__backupsSettled === true);
+}
 
 test('Backups offline save failure keeps draft and allows a real retry', async () => appCase(async ({ m, page, target }) => {
   await openBackups(page);
@@ -378,7 +394,7 @@ test('Backups loading clock is a stable request start and stale GET stays read-o
   const since = Number(await wait.getAttribute('data-since'));
   assert.ok(Number.isFinite(since) && since > 0 && since <= Date.now());
   await m.send('PUT', '/api/v1/profile/user/name', { value: 'Loading refresh' });
-  await page.waitForFunction(async () => (await import(String('/js/surfaces.js'))).store.profile?.user?.name === 'Loading refresh');
+  await until(page, async () => (await import(String('/js/surfaces.js'))).store.profile?.user?.name === 'Loading refresh');
   assert.equal(Number(await wait.getAttribute('data-since')), since);
   assert.equal(await page.locator('#settings-backups input, #settings-backups code').count(), 0);
   release();
@@ -478,6 +494,6 @@ async function refreshProfileBackups(m: ReturnType<typeof blank>, page: Page, na
   const mesh = page.waitForResponse(r => r.url().endsWith('/api/v1/mesh/status'));
   await m.send('PUT', '/api/v1/profile/user/name', { value: name });
   await Promise.all([(await backups).finished(), (await mesh).finished()]);
-  await page.waitForFunction(async expected => (window as any).__backupsRefreshDraws > 0 && (await import(String('/js/surfaces.js'))).store.profile?.user?.name === expected, name);
+  await until(page, async expected => (window as any).__backupsRefreshDraws > 0 && (await import(String('/js/surfaces.js'))).store.profile?.user?.name === expected, name);
   await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 }

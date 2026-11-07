@@ -298,13 +298,17 @@ export interface FitCandidate {
   score?: number | null;             // a current eval scorecard; breaks ties within a class only
 }
 
-export interface FitPick { name: string; quant: Quant; context: number; verdict: Verdict; basis: FitResult['basis']; max_context_fits: number | null; words: string }
+// budget_source: the verdict's own (FitResult), so a pick on a Mac says whether it assumed the limit
+// set on the Mac or Nova's estimate of the macOS default.
+export interface FitPick { name: string; quant: Quant; context: number; verdict: Verdict; basis: FitResult['basis']; budget_source: BudgetSource; max_context_fits: number | null; words: string }
 
 export interface TaskAdvice {
   task: TaskClass;
   context: number | null;
   pick: FitPick | null;
   alternative: FitPick | null;
+  // When nothing Fits: the best Tight option, shown and labelled, never the pick (owner, 2026-11-06).
+  tight: FitPick | null;
   nothing_fits: { name: string; quant: Quant; max_context: number } | null;
   cloud: { name: string; words: 'runs off your devices' }[];
   cloud_order: 'after-local' | 'beside-local' | null;
@@ -341,7 +345,7 @@ export function recommendFit(input: RecommendInput): TaskAdvice {
   const local = input.candidates.filter((c) => c.where === 'local');
   const cloud = privacy === 'local-only' ? [] : input.candidates.filter((c) => c.where !== 'local').map((c) => ({ name: c.name, words: 'runs off your devices' as const }));
   const advice = (o: Partial<TaskAdvice> & { words: string }): TaskAdvice => ({
-    task, context, pick: null, alternative: null, nothing_fits: null, cloud,
+    task, context, pick: null, alternative: null, tight: null, nothing_fits: null, cloud,
     cloud_order: cloud.length ? (privacy === 'local-preferred' ? 'after-local' : 'beside-local') : null, ...o,
   });
 
@@ -377,10 +381,11 @@ export function recommendFit(input: RecommendInput): TaskAdvice {
     || QUANTS.indexOf(b.quant) - QUANTS.indexOf(a.quant)
     || (b.c.score ?? -Infinity) - (a.c.score ?? -Infinity)
     || a.c.name.localeCompare(b.c.name));
-  const toPick = (x: Ranked): FitPick => ({ name: x.c.name, quant: x.quant, context: x.context, verdict: x.r.verdict, basis: x.r.basis, max_context_fits: x.r.max_context_fits, words: x.r.words });
+  const toPick = (x: Ranked): FitPick => ({ name: x.c.name, quant: x.quant, context: x.context, verdict: x.r.verdict, basis: x.r.basis, budget_source: x.r.budget_source, max_context_fits: x.r.max_context_fits, words: x.r.words });
 
-  // 5. The pick is the first. Tight may be the pick here: in this step one model is planned per device.
-  const first = ranked[0];
+  // 5. The pick is the first that Fits. A Tight model is never the pick (the owner, 2026-11-06): it
+  //    leaves too little headroom to choose for the person; installing one needs their acknowledgement.
+  const first = ranked.find((x) => x.r.verdict === 'fits');
   if (first) {
     // 6. The alternative: the best of a smaller class that Fits.
     const alt = ranked.find((x) => paramClass(x.c.params) < paramClass(first.c.params) && x.r.verdict === 'fits');
@@ -389,6 +394,9 @@ export function recommendFit(input: RecommendInput): TaskAdvice {
       words: `${first.c.name}: ${first.r.words}${alt ? ` Smaller and faster: ${alt.c.name}, ${alt.r.words.charAt(0).toLowerCase()}${alt.r.words.slice(1)}` : ''}`,
     });
   }
+
+  // 6b. Nothing Fits, but something is Tight: no pick; the best Tight option is shown, labelled.
+  if (ranked[0]) return advice({ tight: toPick(ranked[0]), words: 'Nothing fits comfortably on this device; a tight option is shown below.' });
 
   // 7. Nothing local fits: say so, with the largest context that would.
   const ctxText = context ? `${ctxWords(context)} context` : 'its own context';

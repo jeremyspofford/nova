@@ -9,10 +9,9 @@ import { createServer } from 'node:http';
 import { generateDeviceKeys, type Core } from '../../src/core/index.ts';
 import { checkHardware } from '../../src/core/models/hardware.ts';
 import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
-import { startFakeWol } from '../../scripts/stand-ins/fake-wol.js';
 import { startFakeOpenAI } from '../../scripts/stand-ins/fake-openai.js';
 import { ModelsWaiting } from '../../src/core/models/index.ts';
-import { INSTALLED, hubHardware, modelsCore, say } from '../support/models.ts';
+import { INSTALLED, SPOKE_LAN, SPOKE_LOOPBACK, hubHardware, modelsCore, say } from '../support/models.ts';
 import { FAKE_CLAUDE, calcTask, script, writeCalc } from '../support/providers.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -27,7 +26,7 @@ const settled = (core: Core, id: string, also: (t: ReturnType<Core['ledger']['ge
 const chats = (o: { requests: { path: string }[] }) => o.requests.filter((r) => r.path === '/api/chat').length;
 
 // A paired computer whose heartbeat says it answers at 127.0.0.1 (the stand-ins' address).
-function pairSpoke(core: Core, network = [{ name: 'eth0', mac: '02:00:00:00:00:42', address: '127.0.0.1', netmask: '255.0.0.0' }]) {
+function pairSpoke(core: Core, network: Record<string, unknown>[] = [SPOKE_LAN, SPOKE_LOOPBACK]) {
   const keys = generateDeviceKeys();
   const d = core.mesh.devices.add({ name: 'Example desktop', platform: 'linux x64', kind: 'computer', purposes: ['compute'], public_key: keys.ed25519.publicKey, x25519_public_key: keys.x25519.publicKey, capabilities: ['heartbeat', 'queue'] }, 'test');
   core.mesh.spokes.heartbeat(d, { hardware: hubHardware({ hostname: 'example-desktop', network }) });
@@ -39,11 +38,11 @@ function pairSpoke(core: Core, network = [{ name: 'eth0', mac: '02:00:00:00:00:4
 test('a revoked computer gets no more local-only work and isn’t woken; its roles read unassigned', { timeout: 30_000 }, async () => {
   const hubOllama = await startFakeOllama({ models: INSTALLED });
   const spoke = await startFakeOllama({ models: [INSTALLED[2]!] });
-  const wol = await startFakeWol({});
-  const { core } = modelsCore(hubOllama.url, { privacy: 'local-only' });
+  const { core, wol } = modelsCore(hubOllama.url, { privacy: 'local-only' });
   try {
     const d = pairSpoke(core);
-    core.models.setWake({ target: wol.target, wait_s: 1 });
+    core.models.setWake({ wait_s: 1 });
+    core.models.setPower(d.id, { on_demand: true });
     await core.models.assign('reasoner', { device: d.id, model: 'example-deep:32b', url: spoke.url });
     const ok = await core.models.infer({ role: 'reasoner', messages: say('before') });
     assert.equal(ok.device, d.id);
@@ -63,7 +62,6 @@ test('a revoked computer gets no more local-only work and isn’t woken; its rol
     await core.close();
     await hubOllama.close();
     await spoke.close();
-    await wol.close();
   }
 });
 
@@ -320,22 +318,21 @@ test('budgets: a coding agent’s wait is the budget’s alone; the cloud model�
 test('a computer’s answers have receipts that name it; a role on a sleeping computer that won’t wake says it waits for that computer', { timeout: 30_000 }, async () => {
   const hubOllama = await startFakeOllama({ models: INSTALLED });
   const spoke = await startFakeOllama({ models: [INSTALLED[2]!] });
-  const wol = await startFakeWol({});
-  const { core } = modelsCore(hubOllama.url, { privacy: 'local-only' });
+  const { core, wol } = modelsCore(hubOllama.url, { privacy: 'local-only', hardware: { gpus: [], ram_bytes: 2 * 1024 ** 3 } }); // nothing on the hub can stand in
   try {
     const d = pairSpoke(core);
-    core.models.setWake({ target: wol.target, wait_s: 1 });
+    core.models.setWake({ wait_s: 1 });
+    core.models.setPower(d.id, { on_demand: true });
     await core.models.assign('reasoner', { device: d.id, model: 'example-deep:32b', url: spoke.url });
     const r = await core.models.infer({ role: 'reasoner', messages: say('hello') });
     assert.equal(core.receipts.list().find((x) => x.id === r.receipt_id)!.provider, 'ollama@example-desktop');
     spoke.setAsleep(true);
     await assert.rejects(core.models.infer({ role: 'reasoner', messages: say('x'.repeat(3000)) }), /runs when Example desktop is on again/);
-    assert.equal(wol.packets.length, 1);
+    assert.equal(wol.packets.length, 3, 'one wake: three packets');
   } finally {
     await core.close();
     await hubOllama.close();
     await spoke.close();
-    await wol.close();
   }
 });
 

@@ -136,7 +136,7 @@ const PATTERNS: RegExp[] = [
   /^\s*(?:#{1,4}\s*)?(?:system|assistant|developer)\s*(?:prompt|message)?\s*:\s*(?:you\b|ignore\b|new\b|from now\b|always\b|never\b|do not\b|don't\b|the (?:user|assistant)\b)/im,
   /<\|(?:im_start|im_end|system|user|assistant|endoftext)\|>|\[\/?INST\]|<<\/?SYS>>|\[\/?SYSTEM\]|###\s*(?:instruction|system)\b/i,
   // asking for secrets, or for them to be sent somewhere
-  /\b(?:send|forward|email|e-mail|post|upload|share|leak|exfiltrate|transmit)\b[^.\n]{0,60}?\b(?:passwords?|passcodes?|credentials?|api[ -]?keys?|secrets?|tokens?|private keys?|ssh keys?|one[- ]time codes?|recovery codes?|memor(?:y|ies)|saved notes|notes|chat history|conversation history|contacts|inbox|emails|files)\b[^.\n]{0,40}?\b(?:to|at|into|via)\b\s*(?:https?:\/\/|[\w.+-]+@[\w-]+\.|this (?:address|url|link|email|site|server)|the (?:address|url|link|server) (?:below|above))/i,
+  /\b(?:send|forward|email|e-mail|post|upload|share|leak|exfiltrate|transmit)\b[^.\n]{0,60}?\b(?:passwords?|passcodes?|credentials?|api[ -]?keys?|secrets?|tokens?|private keys?|ssh keys?|one[- ]time codes?|recovery codes?|memor(?:y|ies)|saved notes|notes|chat history|conversation history|(?:this|the|our) (?:conversation|chat)|contacts|inbox|emails|files)\b[^.\n]{0,40}?\b(?:to|at|into|via)\b\s*(?:https?:\/\/|[\w.+-]+@[\w-]+\.|this (?:address|url|link|email|site|server)|the (?:address|url|link|server) (?:below|above))/i,
   /\b(?:reveal|disclose|repeat|print|output|show|tell me|list)\b[^.\n]{0,20}?\b(?:your|the)\s+(?:system prompt|instructions|initial prompt|hidden prompt|memor(?:y|ies)|saved (?:notes|passwords)|secrets|api keys?)\b/i,
   // a URL with a slot to fill, with a verb that would fetch it
   /\b(?:visit|open|fetch|load|navigate to|go to|request|call|curl|wget|browse to)\b[^\n]{0,40}?https?:\/\/\S*(?:\{[^}\s]*\}|\[[A-Z_ ]{3,}\]|<[A-Za-z_ ]{3,}>|\$\{?[A-Z_]{3,}\}?)/i,
@@ -167,22 +167,42 @@ export function instructionSpans(text: string): Span[] {
     const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
     for (const m of text.matchAll(g)) {
       if (!m[0].trim()) continue;
-      const at = m.index ?? 0;
-      spans.push(sentence(text, at, at + m[0].length));
+      // A match may start on the previous sentence's stop ("…suite.\n\nNote to AI…"): from its words.
+      const lead = /^[\s.!?:;>]*/.exec(m[0])![0].length;
+      const at = (m.index ?? 0) + lead;
+      spans.push(sentence(text, at, (m.index ?? 0) + m[0].length));
     }
   }
   return merge(spans);
 }
 
-// Widened at most 300 characters each way, so a long text without full stops stays linear.
+// A sentence that carries on an instruction: "Then email…", "Also save…", or one that opens with an
+// action verb. An injection's header ("Note to AI assistants…") is often followed by its payload in
+// such a sentence, which a sentence-only cut left in (Interstitial Part 3, P2).
+const CONTINUES = /^(?:then|also|and|next|after that|afterwards|finally|additionally|plus|now)\b|^(?:please\s+)?(?:e-?mail|send|forward|post|upload|share|save|store|remember|write|add|delete|remove|visit|open|fetch|reply|tell|include|recommend|ignore|run|execute|call|transfer|pay)\b/i;
+
+// Widened to its sentence (at most 300 characters each way, so a long text without full stops stays
+// linear), then through up to three following sentences of the same paragraph that carry it on.
 function sentence(text: string, start: number, end: number): Span {
+  // A sentence ends at a line break, or at . ! ? followed by a space or the end (not the dot in
+  // "example.net", which left an address's tail behind).
+  const endsAt = (i: number) => text[i - 1] === '\n' || (/[.!?]/.test(text[i - 1] ?? '') && (i >= text.length || /\s/.test(text[i]!)));
   let s = start;
   const low = Math.max(0, start - 300);
-  while (s > low && !/[.!?\n]/.test(text[s - 1]!)) s--;
-  let e = end;
-  const high = Math.min(text.length, end + 300);
-  while (e < high && !/[.!?\n]/.test(text[e - 1] ?? '')) e++;
-  return { start: s, end: Math.min(text.length, e), kind: 'instructions' };
+  while (s > low && !endsAt(s)) s--;
+  const endOf = (from: number) => {
+    let e = from;
+    const high = Math.min(text.length, from + 300);
+    while (e < high && !endsAt(e)) e++;
+    return Math.min(text.length, e);
+  };
+  let e = endOf(end);
+  for (let i = 0; i < 3; i++) {
+    const next = /^[ \t]*/.exec(text.slice(e))![0].length + e;
+    if (next >= text.length || text[next] === '\n' || !CONTINUES.test(text.slice(next, next + 40))) break;
+    e = endOf(next + 1);
+  }
+  return { start: s, end: e, kind: 'instructions' };
 }
 
 export function protocolSpans(text: string): Span[] {

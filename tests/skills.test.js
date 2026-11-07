@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Skills, parseFrontMatter } from '../src/skills.js';
@@ -21,13 +21,20 @@ test('front matter: name, about, when, words, needs', () => {
   assert.deepEqual(parseFrontMatter('# No front matter').meta, {});
 });
 
-test('the shipped skills are both complete', () => {
+test('the shipped skills are complete; one behind a flag shows only with it on', () => {
   const { skills } = fresh();
-  const all = skills.catalog();
-  assert.deepEqual(all.map((s) => s.id), ['email-summary', 'shopping']);
+  assert.deepEqual(skills.catalog().map((s) => s.id), ['email-summary', 'shopping'], 'interstitial-research ships off');
+  const on = new Skills(root, mkdtempSync(join(tmpdir(), 'nova-k-')), { interstitial: true });
+  const all = on.catalog();
+  assert.deepEqual(all.map((s) => s.id), ['email-summary', 'interstitial-research', 'shopping']);
   for (const s of all) {
     assert.ok(s.name && s.about && s.when && s.words.length && s.body.length > 500, s.id);
   }
+  // The always-listed line stays one short line; the description is kept for the standard format.
+  const ir = all[1];
+  assert.ok(ir.when.length < 200 && !ir.when.includes('\n'), ir.when);
+  assert.match(ir.about, /^Nova research mode for the gaps between fields\./);
+  assert.equal(skills.catalog().find((s) => s.id === 'email-summary').needs[0], 'gmail');
   assert.deepEqual(all[0].needs, ['gmail']);
   assert.match(skills.connectorDoc('gmail'), /## Capabilities[\s\S]*## Limits[\s\S]*## Auth/);
 });
@@ -69,6 +76,61 @@ test('matching: a skill whose words appear is loaded; others are only listed', (
   assert.match(section, /- shopping: Shopping research\. Use when:/);
   assert.match(section, /<skill name="email-summary">[\s\S]*<\/skill>\n<connector name="gmail">/);
   assert.doesNotMatch(section, /<skill name="shopping">/);
+});
+
+test('interstitial-research: its words and phrases trigger it; the never-trigger cases N1–N5 do not', () => {
+  const home = mkdtempSync(join(tmpdir(), 'nova-k-'));
+  const skills = new Skills(root, home, { interstitial: true });
+  skills.install('interstitial-research');
+  const ids = (t) => skills.match(t).map((s) => s.id);
+  for (const t of ['Research why our CI pipelines got slower over the last year and what the options are to fix it.',
+    'Deep-dive the options for local LLM inference on a 24 GB GPU for a personal agent.',
+    'Can you do a deep dive on onboarding?', 'What is everyone missing about home energy storage?', 'Investigate why the build cache misses.']) {
+    assert.deepEqual(ids(t), ['interstitial-research'], t);
+  }
+  for (const t of ['What time does the library open on Saturdays?', 'What did I work on last Tuesday?', 'Turn off the living-room lights.', 'Move my 3pm to 4pm.', 'Summarise this email thread.']) {
+    assert.deepEqual(ids(t), [], t);
+  }
+  // A phrase matches only as those words in a row; single words still match exactly.
+  assert.deepEqual(ids('dive deep into the lake'), []);
+  assert.deepEqual(ids('researcher'), []);
+});
+
+test('flag off: a home with the skill installed builds exactly the context of a home without it', () => {
+  const withIt = mkdtempSync(join(tmpdir(), 'nova-k-'));
+  const without = mkdtempSync(join(tmpdir(), 'nova-k-'));
+  new Skills(root, withIt, { interstitial: true }).install('interstitial-research');
+  for (const h of [withIt, without]) new Skills(root, h).install('shopping');
+  const context = (home) => {
+    const skills = new Skills(root, home, { interstitial: false });
+    const q = 'Research the options for quieter bike tyres';
+    assert.equal(skills.get('interstitial-research'), null);
+    assert.throws(() => skills.install('interstitial-research'), /doesn't have/);
+    const tools = availableTools({ skills: skills.installed().length });
+    const section = skillsSection(skills.installed(), skills.match(q), (c) => skills.connectorDoc(c));
+    return buildSystem({ root, home, timezone: 'UTC' }, new Date('2026-11-06T12:00:00Z'), { tools, skills: section }) + JSON.stringify(skills.available().map((s) => s.id));
+  };
+  assert.ok(existsSync(join(withIt, 'skills', 'interstitial-research', 'SKILL.md')));
+  assert.equal(context(withIt), context(without));
+  assert.doesNotMatch(context(withIt), /interstitial/i);
+});
+
+test('removing it deletes its workspace data too, and Undo can put that back', () => {
+  const home = mkdtempSync(join(tmpdir(), 'nova-k-'));
+  const skills = new Skills(root, home, { interstitial: true });
+  skills.install('interstitial-research');
+  const data = join(home, 'workspace', 'interstitial');
+  mkdirSync(data, { recursive: true });
+  writeFileSync(join(data, 'state.json'), '{"runs":3}');
+  writeFileSync(join(data, 'dead-ends.md'), '- ci x astronomy (2026-11-01)\n');
+  skills.remove('interstitial-research');
+  const kept = skills.removeData('interstitial-research');
+  assert.equal(existsSync(data), false);
+  assert.deepEqual(Object.keys(kept).sort(), ['dead-ends.md', 'state.json']);
+  assert.equal(skills.removeData('shopping'), null, 'a skill with no data keeps none');
+  skills.restoreData('interstitial-research', JSON.parse(JSON.stringify(kept)));
+  assert.equal(readFileSync(join(data, 'state.json'), 'utf8'), '{"runs":3}');
+  assert.throws(() => skills.restoreData('interstitial-research', { '../../USER.md': 'x' }), /outside the skill's folder/);
 });
 
 test('tools on offer follow what is installed and connected', () => {

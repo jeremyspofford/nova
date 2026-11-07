@@ -123,6 +123,8 @@ function renderTurn(t, timezone) {
       // Outside content only ever in its screened form (data, an extract, or the block line).
       else if (it.result) parts.push(`<tool_result name="${it.name}" ok="${it.result.ok}">\n${it.result.screened ?? esc(it.result.output)}\n</tool_result>`);
     }
+    // The Interstitial Research hook's claim check, and a cached field map, read back as data.
+    if (it.kind === 'interstitial' && (it.phase === 'verify' || it.phase === 'field-map')) parts.push(`<tool_result name="interstitial_${it.phase === 'verify' ? 'verify' : 'field_map'}" ok="true">\n${esc(it.words)}\n</tool_result>`);
   }
   if (t.state === 'stopped') parts.push('<note>The user stopped this reply here.</note>');
   return parts.join('\n');
