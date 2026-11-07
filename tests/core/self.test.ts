@@ -175,3 +175,20 @@ test('nova_settings lists its parts, refuses an unknown one, and shows appearanc
     assert.match(h.core.self.settings('privacy'), /Privacy setting: local-only/);
   });
 });
+
+test('Nova states its own version, commit and whether a redeploy is pending, from core state', async () => {
+  const running = 'a'.repeat(40);
+  const merged = '0123456789abcdef0123456789abcdef01234567';
+  await withHub(async (h) => {
+    let b = await h.core.self.briefing();
+    assert.match(b, /\n- Version: Nova 0\.1\.0-alpha\.1, commit aaaaaaaa, started 2026-11-06T12:00:00\.000Z \(the build date wasn’t recorded\)\. Running aaaaaaaa; Nova doesn't know the latest merged build\.\n/);
+    mkdirSync(join(h.home, 'deploy'));
+    writeFileSync(join(h.home, 'deploy', 'latest.json'), JSON.stringify({ commit: merged, merged_at: '2026-11-06T18:22:01Z' }));
+    b = await h.core.self.briefing();
+    assert.match(b, /- Version: Nova 0\.1\.0-alpha\.1, commit aaaaaaaa, [^\n]*Running aaaaaaaa, latest merged 01234567 — redeploy pending\./);
+    writeFileSync(join(h.home, 'deploy', 'latest.json'), JSON.stringify({ commit: running, merged_at: '2026-11-06T18:22:01Z' }));
+    assert.match(await h.core.self.briefing(), /Running aaaaaaaa, the latest merged build\./);
+    assert.match(await h.core.self.instance(), /\nVersion: Nova 0\.1\.0-alpha\.1, commit aaaaaaaa, [^\n]*the latest merged build\./, 'nova_instance says it too');
+    assert.equal(h.core.self.build(), 'aaaaaaaa');
+  }, { version: '0.1.0-alpha.1', build: { env: { NOVA_BUILD_COMMIT: running }, startedAt: new Date('2026-11-06T12:00:00.000Z') } });
+});

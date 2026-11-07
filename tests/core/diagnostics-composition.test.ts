@@ -14,6 +14,8 @@ import { startFakeOllama } from '../../scripts/stand-ins/fake-ollama.js';
 import { hubHardware } from '../support/models.ts';
 import { SessionStore } from '../../src/sessions.js';
 
+const VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'package.json'), 'utf8')).version;
+
 const canary = (s: string) => `synthetic-${s}-7f3a91c2e8b4+/=`;
 const files = (home: string): string[] => readdirSync(home, { recursive: true, withFileTypes: true })
   .filter((d) => d.isFile()).map((d) => join(d.parentPath, d.name)).sort();
@@ -59,7 +61,7 @@ test('production diagnostics downloads fresh numeric Era2 counts with person acc
     const first = await c('GET', '/api/v1/diagnostics');
     assert.equal(first.status, 200, 'actual createNova mounts the existing diagnostics route');
     assert.deepEqual(first.body.work.era2, { chat_logs: 1, schedules: 0, skills: 0 });
-    assert.equal(first.body.about.nova, '0.1.0');
+    assert.equal(first.body.about.nova, VERSION);
     assert.match(first.body.about.build, /^[a-f0-9]{7,40}$/);
     assert.equal(first.body.about.instance, 'development');
 
