@@ -7,7 +7,7 @@ import type { Page } from 'playwright-core';
 import { Joiner } from '../core/mesh-support.ts';
 import { createServer } from 'node:net';
 import { stop } from '../acceptance/support.ts';
-import { blank, browser, device, finishSetup, ready, still } from './support.ts';
+import { blank, browser, device, finishSetup, ready, still, until } from './support.ts';
 import { trackDocument, assertRetainedDocument } from './navigation-support.ts';
 
 async function openBackups(page: Page) {
@@ -65,7 +65,7 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
       const refreshed = p.waitForResponse(r => r.url().endsWith('/api/v1/profile'));
       await m.send('PUT', '/api/v1/profile/user/name', { value: 'Synthetic refresh' });
       await (await refreshed).finished();
-      await p.waitForFunction(async n => (window as any).__backupDraws > n && (await import(String('/js/surfaces.js'))).store.profile?.user?.name === 'Synthetic refresh', beforeDraw);
+      await until(p, async n => (window as any).__backupDraws > n && (await import(String('/js/surfaces.js'))).store.profile?.user?.name === 'Synthetic refresh', beforeDraw);
       await p.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
       assert.equal(await folder.inputValue(), `${target}/unsaved`);
       assert.deepEqual(await folder.evaluate((e: HTMLInputElement) => [document.activeElement === e, e.selectionStart, e.selectionEnd]), [true, 3, 6]);
@@ -394,7 +394,7 @@ test('Backups loading clock is a stable request start and stale GET stays read-o
   const since = Number(await wait.getAttribute('data-since'));
   assert.ok(Number.isFinite(since) && since > 0 && since <= Date.now());
   await m.send('PUT', '/api/v1/profile/user/name', { value: 'Loading refresh' });
-  await page.waitForFunction(async () => (await import(String('/js/surfaces.js'))).store.profile?.user?.name === 'Loading refresh');
+  await until(page, async () => (await import(String('/js/surfaces.js'))).store.profile?.user?.name === 'Loading refresh');
   assert.equal(Number(await wait.getAttribute('data-since')), since);
   assert.equal(await page.locator('#settings-backups input, #settings-backups code').count(), 0);
   release();
@@ -494,6 +494,6 @@ async function refreshProfileBackups(m: ReturnType<typeof blank>, page: Page, na
   const mesh = page.waitForResponse(r => r.url().endsWith('/api/v1/mesh/status'));
   await m.send('PUT', '/api/v1/profile/user/name', { value: name });
   await Promise.all([(await backups).finished(), (await mesh).finished()]);
-  await page.waitForFunction(async expected => (window as any).__backupsRefreshDraws > 0 && (await import(String('/js/surfaces.js'))).store.profile?.user?.name === expected, name);
+  await until(page, async expected => (window as any).__backupsRefreshDraws > 0 && (await import(String('/js/surfaces.js'))).store.profile?.user?.name === expected, name);
   await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 }

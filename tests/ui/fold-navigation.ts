@@ -1,7 +1,7 @@
 // Navigation/readiness for the seeded fold review, owned by the tests.
 import assert from 'node:assert/strict';
 import type { Page } from 'playwright-core';
-import { still } from './support.ts';
+import { still, until } from './support.ts';
 
 const CONTENT: Record<string, [string, string, string?]> = {
   '/': ['home', '#home .home-cards .card'],
@@ -22,7 +22,7 @@ export async function foldViewReady(page: Page, url: string) {
   await page.waitForURL(url);
   await page.waitForSelector('html[data-ready]', { timeout: 20_000 });
   // The aside renders cards even before its first answers: no-skeleton alone is insufficient.
-  await page.waitForFunction(async () => {
+  await until(page, async () => {
     const { store } = await import(String('/js/surfaces.js'));
     return store.loaded && store.health && store.tasks.some((task: { title: string }) => task.title === 'Save the shopping list');
   }, null, { timeout: 15_000 });

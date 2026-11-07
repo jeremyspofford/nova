@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Browser, Locator, Page } from 'playwright-core';
-import { blank, browser, webkitBrowser, device, finishSetup, ready, still, ROOT, shortTargets } from './support.ts';
+import { blank, browser, webkitBrowser, device, finishSetup, ready, still, ROOT, shortTargets, until } from './support.ts';
 import { createNova } from '../../src/server.js';
 import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
@@ -78,7 +78,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         const app = await device(b, { ...size, touch: posture !== 'rail', scheme: 'dark', serviceWorkers: 'block' });
         const specimen = await device(b, { ...size, touch: posture !== 'rail', scheme: 'dark', serviceWorkers: 'block' });
         await app.page.goto(`${m.base}/`); await ready(app.page); await open(app.page);
-        await app.page.waitForFunction(async () => (await import(String('/js/surfaces.js'))).store.reachable === true);
+        await until(app.page, async () => (await import(String('/js/surfaces.js'))).store.reachable === true);
         // Ruling8/16: this must pass on the actual qualified Health integration. The inherited
         // pre-Health false-offline banner is retained as raw evidence, never hidden by a fixture.
         assert.equal(await app.page.locator('#banner').filter({ visible: true }).count(), 0, 'neutral live capture has no outage banner');
