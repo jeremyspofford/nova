@@ -300,7 +300,9 @@ const SCREENING_MAX_PARAMS = 9_000_000_000;
                                                                                                  
  
 
-                                                                                                                                                                     
+// budget_source: the verdict's own (FitResult), so a pick on a Mac says whether it assumed the limit
+// set on the Mac or Nova's estimate of the macOS default.
+                                                                                                                                                                                                  
 
                              
                   
@@ -381,7 +383,7 @@ export function recommendFit(input                )             {
     || QUANTS.indexOf(b.quant) - QUANTS.indexOf(a.quant)
     || (b.c.score ?? -Infinity) - (a.c.score ?? -Infinity)
     || a.c.name.localeCompare(b.c.name));
-  const toPick = (x        )          => ({ name: x.c.name, quant: x.quant, context: x.context, verdict: x.r.verdict, basis: x.r.basis, max_context_fits: x.r.max_context_fits, words: x.r.words });
+  const toPick = (x        )          => ({ name: x.c.name, quant: x.quant, context: x.context, verdict: x.r.verdict, basis: x.r.basis, budget_source: x.r.budget_source, max_context_fits: x.r.max_context_fits, words: x.r.words });
 
   // 5. The pick is the first that Fits. A Tight model is never the pick (the owner, 2026-11-06): it
   //    leaves too little headroom to choose for the person; installing one needs their acknowledgement.

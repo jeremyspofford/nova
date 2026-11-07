@@ -275,7 +275,22 @@ test('Models screen (app): live recompute, an over-budget warning, a sleeping de
       await models.locator(`.model-device[data-device="${d.id}"] [data-action="device-models"]`).click();
       const den = page.locator(`#models-on-${d.id} [data-device-models]`);
       await den.waitFor();
-      assert.match(await den.locator('[data-asleep]').innerText(), /Asleep\s+Last seen 3 h ago\. What shows here is what it last reported: its hardware 3 h ago, its models just now\./, 'Nova read its model list during this test; its hardware reading is three hours old');
+      // Its wake state (the WoL ADR's styleguide states, from the hub): asleep, and why Nova doesn't wake it.
+      const status = den.locator('[data-wake="asleep"]');
+      assert.match(await status.innerText(), /Asleep or away\s+Last seen 3 h ago\. What shows here is what it last reported: its hardware 3 h ago, its models just now\./, 'Nova read its model list during this test; its hardware reading is three hours old');
+      assert.match(await status.innerText(), /Nova doesn’t wake Example den PC: you chose to wait until it’s turned on/);
+      // Sleep and wake, the screen's last section: each choice goes to the hub as the person makes it.
+      const sleep = den.locator('.dm-sleep');
+      assert.equal(await den.locator('section').last().getAttribute('class'), 'dm-sleep');
+      await sleep.locator('[data-models-sleep="demand"]').selectOption('wake');
+      await page.waitForFunction((id) => !/you chose to wait/.test(document.querySelector(`#models-on-${id} [data-wake]`)?.textContent ?? 'you chose to wait'), d.id);
+      assert.equal(nova.core.models.power(d.id).on_demand, true);
+      // Its only card is loopback, so Nova still can't wake it, and says so.
+      assert.match(await den.locator('[data-wake]').innerText(), /None of Example den PC’s network cards is on a private network Nova can send a wake signal on/);
+      await den.locator('[data-models-sleep="idle"]').selectOption('30');
+      for (let i = 0; i < 50 && nova.core.models.power(d.id).sleep_after_min !== 30; i++) await new Promise((r) => setTimeout(r, 50));
+      assert.deepEqual(nova.core.models.power(d.id), { on_demand: true, sleep_after_min: 30 });
+      assert.match(await den.locator('.dm-sleep').innerText(), /Its device agent can’t put it to sleep yet; the OS’s own power settings decide/);
       assert.match(await den.locator('.dm-device').innerText(), /Example GPU 8GB · 8\.0 GB video memory/);
       assert.ok((await den.locator('select[id$="-add"] option').allTextContents()).includes('example-small:3b'), 'its last-seen models are there to plan with');
       assert.equal(new URL(page.url()).hash, `#models-on-${d.id}`);
@@ -342,6 +357,12 @@ test('Models screen (app): a Mac’s budget line says whether it is the limit se
       let text = await screen(page).innerText();
       assert.match(text, /GPU memory limit set on this Mac: 56\.0 GB\./, 'the measured limit is the budget, and says so');
       assert.doesNotMatch(text, /Estimated GPU share/);
+      // The picks were worked out against the same budget; with the budget line on screen, not said twice.
+      assert.equal(await screen(page).locator('[data-picks-budget]').count(), 0, 'the picks don’t repeat the budget line');
+      // With nothing planned there is no budget line, so the picks say it, in the same words.
+      await setPlan(screen(page), []);
+      await screen(page).locator('.dm-picks [data-picks-budget="measured"]').waitFor();
+      assert.equal(await screen(page).locator('.dm-picks [data-picks-budget="measured"]').innerText(), 'GPU memory limit set on this Mac: 56.0 GB.');
       await setHw('mac16');
       // The same URL again is a same-document navigation; reload so the new reading is fetched.
       await page.reload();
