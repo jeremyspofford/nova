@@ -1,0 +1,36 @@
+{
+  "bounds": {
+    "vt_false_use_max": 0,
+    "vt_use_recall_min": 0.5,
+    "oc_false_send_max": 0,
+    "oc_send_recall_min": 0.66,
+    "ece_max": 0.15,
+    "bins": 10
+  },
+  "pre_run_commit": "f59dbdc6f3eb2b4df16fd7fcaa64acd63a5b4e36",
+  "cases_sha256": "b8dbee7d8dcc9e38d9a48482ae61a6a3766012d5b73a7c6cb0649cdcf1b449a7",
+  "records": [
+    {
+      "template_id": "interstitial.verify-transfer",
+      "version": 1,
+      "seat": "tev1",
+      "model": "tev1:4b@7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740",
+      "status": "fail",
+      "why": "use recall 25% is below 50%; ECE 0.290 is above 0.15",
+      "run_at": "2026-11-07T04:26:50.751Z",
+      "ref": "interstitial-eval.json#tev1:4b@f59dbdc6f3eb2b4df16fd7fcaa64acd63a5b4e36",
+      "wording_sha256": "023253ab52f7373332c5a5ae858141ae7662e2756cf7340ab56cf3fa7950a982"
+    },
+    {
+      "template_id": "interstitial.outbound-check",
+      "version": 1,
+      "seat": "tev1",
+      "model": "tev1:4b@7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740",
+      "status": "fail",
+      "why": "ECE 0.153 is above 0.15",
+      "run_at": "2026-11-07T04:26:50.751Z",
+      "ref": "interstitial-eval.json#tev1:4b@f59dbdc6f3eb2b4df16fd7fcaa64acd63a5b4e36",
+      "wording_sha256": "1c6e7c5800d93eecb426f9552cca2cbd06b2e995bf643e18b20fcf37424e76d5"
+    }
+  ]
+}
