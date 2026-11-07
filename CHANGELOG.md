@@ -11,6 +11,9 @@ this file. A change merged but not yet in a version waits at the top of docs/cha
 
 ### Added
 
+- Nova has a version: 0.1.0-alpha.1, the first of its alpha line. Ask Nova in chat which version and build it is running, and it answers from its own state, including whether a newer merged build is waiting to be deployed.
+- Nova's API says which build is running (version, commit, and when it was built or started) and whether it is the latest one merged, so the coming About area and footer can show "redeploy pending" instead of leaving you to wonder.
+- This changelog: every change that alters what Nova does now comes with a plain-language entry, and checks refuse a change that leaves its entry out.
 - Nova is your own agent, running on your machine: you chat with it, it remembers what you let it remember, and you can see, correct, export or forget any memory. Plain files in its home folder are the source of truth.
 - Setup is a short interview. After it, Nova knows your name, timezone and how you like to be spoken to, and it can tell you plainly what it is and what it is connected to.
 - Schedules, helpers and skills: Nova does work at set times, hands steps to helpers, and reads skills in Claude's skill format. Everything it does is a task with its evidence, which you can look back on.
