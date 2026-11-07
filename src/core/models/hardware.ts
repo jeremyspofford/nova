@@ -148,12 +148,18 @@ function nics(): Nic[] {
 // Whether each card answers a magic packet (the WoL ADR's inventory addition). Linux: ethtool's
 // "Wake-on:" when it is installed (g is the magic packet, d is off), else the card's
 // /sys/class/net/<if>/device/power/wakeup; a Wi-Fi card is `unknown`. macOS: pmset's "womp". Windows:
-// `unknown` for now (shortcut: Windows has no unprivileged reading; upgrade when its agent can ask
-// Get-NetAdapterPowerManagement). `unknown` never blocks a wake; only `off` does.
+// a wired card that `powercfg /devicequery wake_armed` doesn't list can't wake the computer (`off`);
+// an armed one is `magic` only when Get-NetAdapterPowerManagement says its magic packet is on, which
+// often needs an administrator, so otherwise `unknown`. Matched by MAC. `unknown` never blocks a
+// wake; only `off` does.
 export async function withWol(list: Nic[], os: string, run: Run, read: (p: string) => string | null = (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } }): Promise<Nic[]> {
   if (os === 'darwin') {
     const womp = /^\s*womp\s+(\d)/m.exec((await run('pmset', ['-g'])) ?? '')?.[1];
     return list.map((n) => ({ ...n, wol: womp === '1' ? 'magic' : womp === '0' ? 'off' : 'unknown' }));
+  }
+  if (os === 'win32') {
+    const cards = windowsWol(await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WIN_WOL]));
+    return list.map((n) => ({ ...n, wol: cards.get(n.mac.toLowerCase().replace(/-/g, ':')) ?? 'unknown' }));
   }
   if (os !== 'linux') return list.map((n) => ({ ...n, wol: 'unknown' }));
   const out: Nic[] = [];
@@ -165,6 +171,26 @@ export async function withWol(list: Nic[], os: string, run: Run, read: (p: strin
     out.push({ ...n, wol });
   }
   return out;
+}
+
+// The fixed Windows reading: each physical card's MAC, whether Windows lets it wake the computer, its
+// magic-packet setting when readable, and its medium. Nothing in it comes from the hub.
+export const WIN_WOL = '$a = @(powercfg /devicequery wake_armed); @(Get-NetAdapter -Physical | ForEach-Object { $m = try { [string](Get-NetAdapterPowerManagement -Name $_.Name -ErrorAction Stop).WakeOnMagicPacket } catch { "" }; [pscustomobject]@{ mac = $_.MacAddress; armed = ($a -contains $_.InterfaceDescription); magic = $m; media = [string]$_.PhysicalMediaType } }) | ConvertTo-Json -Compress';
+
+// What WIN_WOL printed, by MAC (lower case, colons). Odd output says nothing (every card `unknown`).
+export function windowsWol(out: string | null): Map<string, Wol> {
+  const m = new Map<string, Wol>();
+  let rows: unknown;
+  try { rows = JSON.parse(out ?? ''); } catch { return m; }
+  for (const r of Array.isArray(rows) ? rows : [rows]) {
+    if (typeof r !== 'object' || r === null) continue;
+    const { mac, armed, magic, media } = r as Record<string, unknown>;
+    if (typeof mac !== 'string' || !/^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(mac)) continue;
+    // Wi-Fi wakes only on networks it's joined to while asleep: `unknown`, as on Linux.
+    const wol: Wol = media !== '802.3' ? 'unknown' : armed === false ? 'off' : magic === 'Disabled' ? 'off' : armed === true && magic === 'Enabled' ? 'magic' : 'unknown';
+    m.set(mac.toLowerCase().replace(/-/g, ':'), wol);
+  }
+  return m;
 }
 
 export async function detectHardware(o: { run?: Run; exec?: ExecFileLike; diskPath?: string; now?: () => Date } = {}): Promise<Hardware> {

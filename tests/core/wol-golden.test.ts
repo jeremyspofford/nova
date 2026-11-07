@@ -12,7 +12,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateDeviceKeys, type Core } from '../../src/core/index.ts';
-import { checkHardware, withWol } from '../../src/core/models/hardware.ts';
+import { WIN_WOL, checkHardware, windowsWol, withWol } from '../../src/core/models/hardware.ts';
 import { SyncLog } from '../../src/core/mesh/sync.ts';
 import { Log } from '../../src/core/log.ts';
 import { Runtime, idleStep, type FromRuntime } from '../../src/device/runtime.ts';
@@ -401,4 +401,25 @@ test('golden case 16: a standby takes over while the Dell sleeps: it has the Del
     await a.close();
     await b.close();
   }
+});
+
+test('Windows: a wired card Windows won’t let wake the computer is off; armed with the magic packet on is magic; anything unreadable is unknown', async () => {
+  const card = (mac: string, name = 'Ethernet') => ({ name, mac, address: '192.168.1.20', netmask: '255.255.255.0', broadcast: '192.168.1.255' });
+  const cards = [card('aa:bb:cc:00:00:01'), card('aa:bb:cc:00:00:02'), card('aa:bb:cc:00:00:03'), card('aa:bb:cc:00:00:04', 'Wi-Fi'), card('aa:bb:cc:00:00:05'), card('aa:bb:cc:00:00:06')];
+  const out = JSON.stringify([
+    { mac: 'AA-BB-CC-00-00-01', armed: false, magic: '', media: '802.3' },
+    { mac: 'AA-BB-CC-00-00-02', armed: true, magic: 'Enabled', media: '802.3' },
+    { mac: 'AA-BB-CC-00-00-03', armed: true, magic: '', media: '802.3' },
+    { mac: 'AA-BB-CC-00-00-04', armed: false, magic: '', media: 'Native 802.11' },
+    { mac: 'AA-BB-CC-00-00-05', armed: true, magic: 'Disabled', media: '802.3' },
+    { mac: '', armed: true, magic: 'Enabled', media: '802.3' },
+  ]);
+  const asked: string[][] = [];
+  const got = await withWol(cards, 'win32', async (p, a) => { asked.push([p, ...a]); return out; });
+  assert.deepEqual(got.map((n) => n.wol), ['off', 'magic', 'unknown', 'unknown', 'off', 'unknown']);
+  assert.deepEqual(asked, [['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', WIN_WOL]], 'one fixed reading, nothing from the hub');
+  // One adapter prints an object, not a list; odd output says nothing.
+  assert.equal(windowsWol(JSON.stringify({ mac: 'AA-BB-CC-00-00-01', armed: false, media: '802.3' })).get('aa:bb:cc:00:00:01'), 'off');
+  assert.equal(windowsWol('not json').size, 0);
+  assert.equal(windowsWol('[{"mac":"aa:bb:cc:00:00:01; rm -rf","armed":false,"media":"802.3"}]').size, 0);
 });

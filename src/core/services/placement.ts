@@ -37,13 +37,18 @@ export interface PlacementDevice {
   healthy: boolean;
   // When it was last heard from, to tell how long it has been unhealthy.
   last_seen: string | null;
+  // The person's sleep choices for it (Models › Sleep and wake; the WoL ADR, "The services track"):
+  // sleeps, Nova sleeps it when idle; wakeable, Nova may wake it. Missing means neither.
+  sleep?: { sleeps: boolean; wakeable: boolean } | null;
 }
 
 export interface Considered { id: string; name: string; eligible: boolean; healthy: boolean; why: string }
 
+// wakeable: down because a computer that may be woken is asleep ("down, wakeable"). Inference
+// routing may wake it; a service never does (the ADR), so it waits for the computer to be awake.
 export type Resolution =
   | { ok: true; mode: Placement['mode']; devices: { id: string; name: string }[]; moved: boolean; why: string; considered: Considered[] }
-  | { ok: false; mode: Placement['mode'] | null; down: boolean; why: string; considered: Considered[] };
+  | { ok: false; mode: Placement['mode'] | null; down: boolean; wakeable?: true; why: string; considered: Considered[] };
 
 export interface ResolveOptions {
   now?: Date;
@@ -122,19 +127,34 @@ export function resolvePlacement(def: Def, devices: readonly PlacementDevice[], 
   const now = (o.now ?? new Date()).getTime();
   const window = o.failoverAfterMs ?? FAILOVER_AFTER_MS;
   const p = def.placement;
+  const sleeps = (d: PlacementDevice) => !!d.sleep?.sleeps;
+  const wakeable = (d: PlacementDevice) => !d.healthy && !!d.sleep?.wakeable;
   const considered: Considered[] = devices.map((d) => {
     const why = ineligible(def, d);
-    return { id: d.id, name: d.name, eligible: !why, healthy: d.healthy, why: why ?? (d.healthy ? `${d.name} can take it.` : `${d.name} can take it, but isn’t answering now.`) };
+    return {
+      id: d.id, name: d.name, eligible: !why, healthy: d.healthy,
+      why: why ?? (wakeable(d) ? `${d.name} can take it, but is asleep (Nova may wake it for models, not for a service).`
+        : !d.healthy ? `${d.name} can take it, but isn’t answering now.`
+          : sleeps(d) ? `${d.name} can take it, but sleeps when idle, so Nova doesn’t move services onto it; pin one there and Nova keeps it awake.`
+            : `${d.name} can take it.`),
+    };
   });
   const byId = new Map(devices.map((d) => [d.id, d]));
   const okOf = (id: string) => considered.find((c) => c.id === id)!;
   const pick = (d: PlacementDevice) => ({ id: d.id, name: d.name });
   const eligible = devices.filter((d) => okOf(d.id).eligible).sort((a, b) => rank(def, a, b));
-  const healthy = eligible.filter((d) => d.healthy);
+  // A computer that sleeps by design is never a new home for a service (only a pin puts one there).
+  const healthy = eligible.filter((d) => d.healthy && !sleeps(d));
   const noWhere = (): Resolution => ({
     ok: false, mode: p.mode, down: false, considered,
     why: `No device may run it: ${considered.map((c) => c.why).join(' ') || 'there are no devices.'}`,
   });
+  // None answering and awake-by-design: down, and "wakeable" when one that may run it can be woken.
+  const noneUp = (why: string): Resolution => {
+    const awake = eligible.filter((d) => !sleeps(d));
+    if (!awake.length) return { ok: false, mode: p.mode, down: false, considered, why: `The devices that may run it (${eligible.map((d) => d.name).join(', ')}) sleep when idle, and Nova doesn’t move services onto a computer that sleeps. Pin it to one (Nova then keeps it awake), or turn its sleep off in Settings › Models.` };
+    return { ok: false, mode: p.mode, down: true, ...(awake.some(wakeable) ? { wakeable: true as const } : {}), considered, why };
+  };
   const resolveId = (id: string | undefined) => (id === 'hub' && o.hubId ? o.hubId : id);
 
   if (p.mode === 'pinned') {
@@ -142,6 +162,7 @@ export function resolvePlacement(def: Def, devices: readonly PlacementDevice[], 
     if (!d) return { ok: false, mode: 'pinned', down: false, considered, why: `It is pinned to ${p.device}, and there is no such device.` };
     const c = okOf(d.id);
     if (!c.eligible) return { ok: false, mode: 'pinned', down: false, considered, why: `It is pinned to ${d.name}, which can’t take it: ${c.why}` };
+    if (wakeable(d)) return { ok: false, mode: 'pinned', down: true, wakeable: true, considered, why: `It is pinned to ${d.name}, which is asleep, so the service is down until ${d.name} wakes. Nova may wake it for models, not for a service; once it’s awake, Nova keeps it awake while the service is there.` };
     if (!d.healthy) return { ok: false, mode: 'pinned', down: true, considered, why: `It is pinned to ${d.name}, which isn’t answering, so the service is down until ${d.name} is back.` };
     return { ok: true, mode: 'pinned', devices: [pick(d)], moved: false, considered, why: `Pinned to ${d.name}.` };
   }
@@ -174,7 +195,7 @@ export function resolvePlacement(def: Def, devices: readonly PlacementDevice[], 
       };
     }
     if (!eligible.length) return noWhere();
-    return { ok: false, mode: 'preferred', down: true, considered, why: `The devices that may run it (${eligible.map((d) => d.name).join(', ')}) aren’t answering, so it is down until one is back.` };
+    return noneUp(`The devices that may run it (${eligible.filter((d) => !sleeps(d)).map((d) => d.name).join(', ')}) aren’t answering, so it is down until one is back.`);
   }
 
   // Floating: as many eligible devices as replicas asks for. Where its copies run now, they stay
@@ -184,7 +205,7 @@ export function resolvePlacement(def: Def, devices: readonly PlacementDevice[], 
   const now_ = new Set(Array.isArray(o.current) ? o.current : typeof o.current === 'string' ? [o.current] : []);
   const kept = eligible.filter((d) => now_.has(d.id) && within(d)).slice(0, want);
   const chosen = [...kept, ...healthy.filter((d) => !kept.includes(d))].slice(0, want);
-  if (!chosen.length) return { ok: false, mode: 'floating', down: true, considered, why: `The devices that may run it (${eligible.map((d) => d.name).join(', ')}) aren’t answering.` };
+  if (!chosen.length) return noneUp(`The devices that may run it (${eligible.filter((d) => !sleeps(d)).map((d) => d.name).join(', ')}) aren’t answering.`);
   const moved = [...now_].some((id) => !chosen.some((d) => d.id === id));
   return {
     ok: true, mode: 'floating', devices: chosen.map(pick), moved, considered,

@@ -974,7 +974,9 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   function placementRows(hubHw: typeof hubHwCache): PlacementDevice[] {
     return devices.list().map((d) => {
       const hw = d.id === meshIdentity.id ? hubHw : models?.hardwareOf(d.id) ?? null;
+      const pw = models && d.id !== meshIdentity.id ? models.power(d.id) : null;
       return {
+        sleep: pw ? { sleeps: pw.sleep_after_min !== null, wakeable: pw.on_demand } : null,
         id: d.id, name: d.name, kind: d.kind, role: d.role, platform: d.platform, purposes: d.purposes, trust: d.trust, last_seen: d.last_seen,
         hardware: hw ? { ram_bytes: hw.ram_bytes, gpus: hw.gpus.map((g) => ({ vram_bytes: g.vram_bytes, unified: g.unified })), disk: hw.disk ? { free_bytes: hw.disk.free_bytes } : null, platform: hw.platform, arch: hw.arch } : null,
         healthy: deviceView(d).online,
