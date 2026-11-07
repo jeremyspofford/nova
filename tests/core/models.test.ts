@@ -250,7 +250,7 @@ test('GPU spoke: woken over (stand-in) Wake-on-LAN on its own network, latency m
   const hubOllama = await startFakeOllama({ models: INSTALLED });
   const spoke = await startFakeOllama({ models: [INSTALLED[2]!] });
   let wakes = true;
-  const { core, wol } = modelsCore(hubOllama.url, { hardware: { gpus: [], ram_bytes: 2 * 1024 ** 3 } }); // a hub too small to stand in for the reasoner
+  const { core, wol } = modelsCore(hubOllama.url);
   // The stand-in "machine" wakes on the first packet of a wake.
   wol.onSend(() => { if (wakes) setTimeout(() => spoke.setAsleep(false), 300); });
   try {
@@ -261,6 +261,9 @@ test('GPU spoke: woken over (stand-in) Wake-on-LAN on its own network, latency m
     core.models.setWake({ wait_s: 1 });
     await assert.rejects(core.models.assign('reasoner', { device: d.id, model: 'example-deep:32b', url: 'http://198.51.100.7:11434' }), /isn’t one of Example desktop’s addresses/);
     await core.models.assign('reasoner', { device: d.id, model: 'example-deep:32b', url: spoke.url, hub_model: 'example-small:3b' });
+    // From here the hub has too little memory to stand in for the reasoner (fallback rule 1), so big
+    // jobs wait for the desktop; small ones still use its small model, as assigned.
+    Object.assign(await core.models.hubHardware(), { gpus: [], ram_bytes: 2 * GiB });
     // Waking is the person's choice: off until they turn it on.
     assert.match((await core.models.view()).devices[1]!.wake!.words, /you chose to wait until it’s turned on/);
     core.models.setPower(d.id, { on_demand: true });
