@@ -111,6 +111,7 @@ function roleRow(r) {
   const where = r.assigned ? `${r.assigned.model} on ${r.assigned.device_name}${r.assigned.hub_model ? `; small jobs: ${r.assigned.hub_model} on the hub` : ''}.` : '';
   const lines = [];
   if (where) lines.push(`<p class="settings-note model-where">${esc(where)}${r.problem ? ` ${esc(r.problem)}` : ''}</p>`);
+  if (r.assigned?.fit_words) lines.push(`<p class="settings-note model-fit">${esc(r.assigned.fit_words)}</p>`);
   if (r.assigned) lines.push(scoreLine(r.assigned.model));
   if (r.role === 'transcriber') lines.push(`<p class="settings-note">${esc(r.words)}</p>`);
   else if (r.recommended) {
