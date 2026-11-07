@@ -47,7 +47,9 @@ type Period = (typeof PERIODS)[number];
 // model. A role on a GPU spoke may name a hub model that small jobs use instead of waking it.
 // `context` is the context the role runs with (Ollama's num_ctx), when the person set one; otherwise
 // the role's planned context (recommend.ts roleContext), the one the fit verdict assumed.
-export interface Placement { device: string; runtime: 'ollama'; url: string; model: string; hub_model?: string; context?: number }
+// accepted_tight: the person acknowledged a tight fit when they assigned it (#354); an assignment
+// without it that the fit check now calls Tight is flagged on the Models screen, never changed.
+export interface Placement { device: string; runtime: 'ollama'; url: string; model: string; hub_model?: string; context?: number; accepted_tight?: true }
 export const CONTEXT_MIN = 512;
 export const CONTEXT_MAX = 1_048_576;
 const okContext = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= CONTEXT_MIN && (v as number) <= CONTEXT_MAX;
@@ -251,8 +253,8 @@ export class Models extends EventEmitter {
   #stored(role: Role): Placement | null {
     const p = this.#get<Placement>(`role.${role}`);
     if (!(isObj(p) && typeof p.model === 'string' && typeof p.device === 'string')) return null;
-    const { context, ...rest } = p;
-    return { ...rest, runtime: 'ollama', url: p.device === HUB ? this.hubUrl() : p.url, ...(okContext(context) ? { context } : {}) };
+    const { context, accepted_tight, ...rest } = p;
+    return { ...rest, runtime: 'ollama', url: p.device === HUB ? this.hubUrl() : p.url, ...(okContext(context) ? { context } : {}), ...(accepted_tight === true ? { accepted_tight: true as const } : {}) };
   }
 
   // The hub, or a paired computer the person still trusts. Checked on every call, not only when a
@@ -627,7 +629,7 @@ export class Models extends EventEmitter {
     const ack = body.accept_tight === true;
     const refusal = await this.#fitRefusal(device, model, r, context, ack);
     if (refusal) throw new CoreError('conflict', refusal);
-    const p: Placement = { device, runtime: 'ollama', url: device === HUB ? '' : url, model, ...(context ? { context } : {}) };
+    const p: Placement = { device, runtime: 'ollama', url: device === HUB ? '' : url, model, ...(context ? { context } : {}), ...(ack ? { accepted_tight: true as const } : {}) };
     const hubModel = str(body.hub_model);
     if (hubModel && device !== HUB) {
       const hub = await this.inventory(HUB);
@@ -1978,8 +1980,16 @@ export class Models extends EventEmitter {
       const w = p && p.device !== HUB ? devices.find((x) => x.id === p.device)?.wake : null;
       const wakeWords = !w ? null : w.state === 'asleep-wakeable' ? `asleep, wakeable; ${w.latency_ms !== null ? `waking took ${secs(w.latency_ms)}` : 'waking isn’t measured yet'}`
         : w.state === 'asleep' ? 'asleep or away; Nova doesn’t wake it' : w.state === 'waking' ? 'waking' : w.state === 'wake-failed' ? 'couldn’t wake' : null;
+      // Re-checked every time: an assignment from before Nova asked about tight fits (#354), or one
+      // whose computer changed since, is flagged here. Nothing is reassigned.
+      const fit = p && a.role !== 'transcriber' ? roleFit(await this.#deviceModel(p.device), p.model, a.role, p.context) : null;
+      const name = p ? this.#deviceName(p.device) : '';
+      const fitWords = !fit || !p ? null
+        : fit.verdict === 'wont-fit' ? `Nova’s fit check now says it doesn’t fit on ${name}: ${fit.words} Pick another model.`
+          : fit.verdict === 'tight' && !p.accepted_tight ? `It’s tight on ${name}, and you haven’t acknowledged that (it was assigned before Nova asked, or ${name} has changed since): ${fit.words} Replies may slow down sharply or fail under load. To keep it, assign it again from Models on ${name} with the acknowledgement ticked; or pick another.`
+            : null;
       return {
-        role: a.role, ...ROLE_WORDS[a.role], assigned: p ? { ...p, device_name: this.#deviceName(p.device), ...(wakeWords ? { wake_words: wakeWords } : {}) } : null,
+        role: a.role, ...ROLE_WORDS[a.role], assigned: p ? { ...p, device_name: name, ...(wakeWords ? { wake_words: wakeWords } : {}), ...(fit ? { fit: fit.verdict } : {}), ...(fitWords ? { fit_words: fitWords } : {}) } : null,
         state: a.role === 'transcriber' ? 'no-runtime' : !p ? 'unassigned' : problem ? (p.device !== HUB ? 'asleep' : 'down') : 'ready',
         problem, pick: a.pick, recommended, words: a.words,
       };
