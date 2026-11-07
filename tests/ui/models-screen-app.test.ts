@@ -342,6 +342,12 @@ test('Models screen (app): a Mac’s budget line says whether it is the limit se
       let text = await screen(page).innerText();
       assert.match(text, /GPU memory limit set on this Mac: 56\.0 GB\./, 'the measured limit is the budget, and says so');
       assert.doesNotMatch(text, /Estimated GPU share/);
+      // The picks were worked out against the same budget; with the budget line on screen, not said twice.
+      assert.equal(await screen(page).locator('[data-picks-budget]').count(), 0, 'the picks don’t repeat the budget line');
+      // With nothing planned there is no budget line, so the picks say it, in the same words.
+      await setPlan(screen(page), []);
+      await screen(page).locator('.dm-picks [data-picks-budget="measured"]').waitFor();
+      assert.equal(await screen(page).locator('.dm-picks [data-picks-budget="measured"]').innerText(), 'GPU memory limit set on this Mac: 56.0 GB.');
       await setHw('mac16');
       // The same URL again is a same-document navigation; reload so the new reading is fetched.
       await page.reload();
