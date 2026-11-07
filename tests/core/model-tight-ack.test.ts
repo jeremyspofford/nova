@@ -161,3 +161,29 @@ test('PUT /models/roles/{role}: the hub model named for a computer’s role is f
     assert.deepEqual([core.models.placement('reasoner')?.model, core.models.placement('reasoner')?.hub_model], ['example-mid:8b', TIGHT.name]);
   } finally { await api.close(); await core.close(); await hubOllama.close(); await spoke.close(); }
 });
+
+test('re-checked on the Models screen: a tight assignment with no acknowledgement on record is flagged, never changed; one acknowledged is not', async () => {
+  await hub(async ({ core, call }) => {
+    // As an assignment made before #354 sits in the profile: no accepted_tight.
+    core.profile.set('models', 'role.reasoner', { device: 'hub', runtime: 'ollama', url: '', model: TIGHT.name, context: 4096 }, 'settings');
+    const before = await call('GET', '/models');
+    const r = before.body.roles.find((x: { role: string }) => x.role === 'reasoner');
+    assert.equal(r.assigned.model, TIGHT.name, 'still assigned: nothing is changed');
+    assert.equal(r.assigned.fit, 'tight');
+    assert.match(r.assigned.fit_words, /^It’s tight on .*, and you haven’t acknowledged that \(it was assigned before Nova asked, or .* has changed since\): .* Replies may slow down sharply or fail under load\. To keep it, assign it again from Models on .* with the acknowledgement ticked; or pick another\.$/);
+    // Assigned again with the acknowledgement: on record, and no longer flagged.
+    assert.equal((await call('PUT', '/models/roles/reasoner', { model: TIGHT.name, context: 4096, accept_tight: true })).status, 200);
+    assert.equal(core.models.placement('reasoner')?.accepted_tight, true);
+    const after = (await call('GET', '/models')).body.roles.find((x: { role: string }) => x.role === 'reasoner');
+    assert.equal(after.assigned.fit, 'tight');
+    assert.equal(after.assigned.fit_words, undefined);
+    // A model that now won't fit at all is flagged, acknowledgement or not.
+    core.profile.set('models', 'role.reasoner', { device: 'hub', runtime: 'ollama', url: '', model: HUGE.name, accepted_tight: true }, 'settings');
+    const huge = (await call('GET', '/models')).body.roles.find((x: { role: string }) => x.role === 'reasoner');
+    assert.equal(huge.assigned.fit, 'wont-fit');
+    assert.match(huge.assigned.fit_words, /^Nova’s fit check now says it doesn’t fit on .*Pick another model\.$/);
+    // Only `true` is the acknowledgement.
+    core.profile.set('models', 'role.reasoner', { device: 'hub', runtime: 'ollama', url: '', model: TIGHT.name, context: 4096, accepted_tight: 'yes' }, 'settings');
+    assert.equal(core.models.placement('reasoner')?.accepted_tight, undefined);
+  });
+});
