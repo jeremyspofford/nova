@@ -1029,7 +1029,21 @@ const pickWords = (p) => `${p.name} at ${p.quant}, ${ctxK(p.context)} context`;
 
 // Per task class: a pick for this device and a smaller, faster alternative, each with its verdict.
 // Privacy comes first: under local-only no cloud option is drawn at all.
+// On a Mac, where each verdict's budget came from (the pick's budget_source), in the budget line's own
+// words. Said once: every pick here is worked out against the same budget. Not repeated when the
+// Memory budget section above already says the same; per row only if the picks ever disagree.
+function picksBudget(view) {
+  if (view.device.memory !== 'unified') return { once: '', row: () => '' };
+  const line = (p) => `<p class="settings-note" data-picks-budget="${esc(p.budget_source)}">${esc(MEMORY_WORDS.unified({ ...view.device, budget_source: p.budget_source }))}</p>`;
+  const shown = view.advice.flatMap((a) => [a.pick ?? a.tight, a.alternative]).filter(Boolean);
+  const sources = new Set(shown.map((p) => p.budget_source));
+  if (sources.size > 1) return { once: '', row: (p) => line(p) };
+  const said = view.total && sources.has(view.device.budget_source);
+  return { once: shown.length && !said ? line(shown[0]) : '', row: () => '' };
+}
+
 export function taskPicks(view) {
+  const budget = picksBudget(view);
   const rows = view.advice.map((a) => {
     const label = `<p class="settings-label">${esc(TASK_WORDS[a.task] ?? a.task)}</p>`;
     // A pick always Fits. With none, a tight option is shown, labelled Tight, never as the pick.
@@ -1038,7 +1052,7 @@ export function taskPicks(view) {
       const alt = a.alternative ? `<p class="settings-note">Smaller and faster: ${esc(pickWords(a.alternative))}, ${esc(FIT_WORDS[a.alternative.verdict].toLowerCase())}.</p>` : '';
       const est = shown.basis === 'tier-table' ? ' · <span class="dm-estimate">Estimate</span>' : '';
       const why = a.pick ? '' : `<p class="settings-note">${esc(a.words)}</p>`;
-      return `<li class="settings-row dm-pick" data-task="${esc(a.task)}"${a.pick ? '' : ' data-tight-option'}><div class="settings-text">${label}${why}<p class="settings-note">${esc(pickWords(shown))}${est}</p>${alt}</div><div class="settings-control">${verdictPill(shown.verdict)}<button type="button" class="btn quiet" data-action="models-plan" data-name="${esc(shown.name)}" data-quant="${esc(shown.quant)}" data-context="${shown.context}" aria-label="Plan it: ${esc(shown.name)} for ${esc((TASK_WORDS[a.task] ?? a.task).toLowerCase())}">Plan it</button></div></li>`;
+      return `<li class="settings-row dm-pick" data-task="${esc(a.task)}"${a.pick ? '' : ' data-tight-option'}><div class="settings-text">${label}${why}<p class="settings-note">${esc(pickWords(shown))}${est}</p>${budget.row(shown)}${alt}${a.alternative ? budget.row(a.alternative) : ''}</div><div class="settings-control">${verdictPill(shown.verdict)}<button type="button" class="btn quiet" data-action="models-plan" data-name="${esc(shown.name)}" data-quant="${esc(shown.quant)}" data-context="${shown.context}" aria-label="Plan it: ${esc(shown.name)} for ${esc((TASK_WORDS[a.task] ?? a.task).toLowerCase())}">Plan it</button></div></li>`;
     }
     const why = a.nothing_fits
       ? `Nothing here fits at ${ctxK(a.context)} context. ${a.nothing_fits.name} at ${a.nothing_fits.quant} fits up to ${ctxK(a.nothing_fits.max_context)}.${view.privacy === 'local-only' ? ' Under local only, the work waits for a device it fits.' : ''}`
@@ -1048,7 +1062,7 @@ export function taskPicks(view) {
   const cloud = view.privacy === 'local-only' ? [] : [...new Map(view.advice.flatMap((a) => a.cloud).map((c) => [c.name, c])).values()];
   const cloudList = cloud.length ? `<h5 class="dm-sub-title">${view.privacy === 'local-preferred' ? 'After the local picks' : 'Beside the local picks'}</h5><ul class="settings-list" data-cloud>${cloud.map((c) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(c.name)}</p><p class="settings-note">Runs off your devices; asked for each time, and recorded.</p></div></li>`).join('')}</ul>` : '';
   return `<section class="dm-picks" aria-labelledby="${view.id}-picks-title"><h4 class="section-title" id="${view.id}-picks-title">Recommended for this device</h4>
-<p class="settings-note dm-privacy">${PRIVACY_PICKS[view.privacy] ?? ''}</p><ul class="settings-list">${rows}</ul>${cloudList}</section>`;
+<p class="settings-note dm-privacy">${PRIVACY_PICKS[view.privacy] ?? ''}</p>${budget.once}<ul class="settings-list">${rows}</ul>${cloudList}</section>`;
 }
 
 // Install and assign, asked before anything downloads: what goes where, and what it serves. The

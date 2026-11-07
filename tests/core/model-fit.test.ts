@@ -171,6 +171,23 @@ test('unified memory: a measured GPU limit is the budget; without one the fallba
   assert.equal(fit({ device: device(24 * GiB), models: [planned('8B', 'Q4_K_M', '4k')] }).budget_source, 'estimate', 'a hand-made device without a source is an estimate');
 });
 
+test('a pick, its alternative and a tight option carry where their budget came from: the Mac’s limit or the estimate', () => {
+  const mac = (ram: number, limit?: number) => deviceBudget(hw({ platform: 'darwin', arch: 'arm64', ram_bytes: ram, gpus: [{ vendor: 'apple', name: 'Apple M-series', vram_bytes: Math.floor(ram * 0.75), vram_free_bytes: null, unified: true }], gpu_wired_limit_bytes: limit }));
+  const chat = (device: FitDevice, candidates = CANDIDATES) => recommendFit({ device, privacy: 'local-only', task: 'general-chat', hub: true, candidates });
+  const only32 = CANDIDATES.filter((c) => c.name === 'qwen3:32b');
+  for (const [label, device, source] of [['measured', mac(64 * GiB, 56 * GiB), 'measured'], ['estimate', mac(64 * GiB), 'estimate']] as const) {
+    const a = chat(device);
+    assert.ok(a.pick && a.alternative, `${label}: a pick and an alternative`);
+    assert.deepEqual([a.pick.budget_source, a.alternative.budget_source], [source, source], label);
+  }
+  // 24 GB set on the Mac, and 35 GB of memory at the 2/3 estimate (23.3 GB): only a tight 32B.
+  for (const [label, device, source] of [['measured', mac(64 * GiB, 24 * GiB), 'measured'], ['estimate', mac(35 * GiB), 'estimate']] as const) {
+    const a = chat(device, only32);
+    assert.equal(a.pick, null, label);
+    assert.deepEqual([a.tight?.verdict, a.tight?.budget_source], ['tight', source], label);
+  }
+});
+
 test('Case 3, a 16 GB unified-memory Mac: the table at the pending budget fraction', () => {
   const budget = unifiedBudgetBytes(16 * GiB);
   if (TWO_THIRDS) {
