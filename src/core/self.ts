@@ -9,7 +9,6 @@
 // Everything leaving here passes redactText as well, so a value the vault knows can't slip through
 // an error message. The briefing reaches whatever model the conversation uses, cloud ones included.
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { hostname, platform } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { CoreError } from './errors.ts';
@@ -30,6 +29,7 @@ import type { Design } from './design.ts';
 import type { Egress } from './workers.ts';
 import { escapeProtocol, type Ingest } from './ingest/screen.ts';
 import { fold } from './ingest/checks.ts';
+import type { Build } from './build.ts';
 
 // Where the person puts what they want Nova to learn from: notes, another assistant's export, a
 // Nova memory export (POST /api/v1/memory/export writes memory.json).
@@ -52,10 +52,10 @@ export interface SelfOptions {
   // The ingest gate: an import file is screened, and its records wait as memory candidates.
   ingest: Ingest;
   version: string;
+  // The running build (build.ts): its commit, and whether it is the latest merged.
+  build: Build;
   // preview, production or development: what this instance is for (NOVA_INSTANCE).
   instance: () => string;
-  // The code's commit, when it runs from a git checkout (a release slot is one too).
-  codeRoot: string;
   profile: Profile;
   memory: Memory;
   providers: Providers;
@@ -98,7 +98,6 @@ export class Self {
   #o: SelfOptions;
   #era2: Era2State = {};
   #cached: { at: number; value: Runtime } | null = null;
-  #build: string | null | undefined;
 
   constructor(o: SelfOptions) {
     this.#o = o;
@@ -118,6 +117,7 @@ export class Self {
   async briefing(): Promise<string> {
     const lines = [
       `- Instance: ${this.#instanceLine()}`,
+      `- Version: ${this.#versionLine()}`,
       `- Person: ${this.#personLine()}`,
       `- Chat model (you): ${this.#chatLine()}`,
       `- Model providers: ${this.#providersLine()}`,
@@ -155,8 +155,14 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
   #instanceLine(): string {
     const o = this.#o;
     const hub = o.devices.find(o.hubId());
-    const build = this.build();
-    return `${o.instance()}, data home ${o.home}, on ${hub ? quote(hub.name) : hostname()} (${platform()}), ${o.role() === 'hub' ? 'the hub' : 'a standby copy of the hub'}. Nova ${o.version}${build ? ` (build ${build})` : ''}. Privacy setting: ${o.profile.privacyDefault()}.`;
+    return `${o.instance()}, data home ${o.home}, on ${hub ? quote(hub.name) : hostname()} (${platform()}), ${o.role() === 'hub' ? 'the hub' : 'a standby copy of the hub'}. Privacy setting: ${o.profile.privacyDefault()}.`;
+  }
+
+  // The version, the commit and the running-vs-latest sentence, as GET /api/v1/version has them.
+  #versionLine(): string {
+    const v = this.#o.build.view();
+    const when = v.built_at ? `built ${v.built_at}` : `started ${v.started_at} (the build date wasn’t recorded)`;
+    return `Nova ${v.version}${v.commit_short ? `, commit ${v.commit_short}` : ''}, ${when}. ${v.words}`;
   }
 
   #personLine(): string {
@@ -290,14 +296,9 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     return out;
   }
 
+  // The running commit, short (diagnostics).
   build(): string | null {
-    if (this.#build !== undefined) return this.#build;
-    try {
-      this.#build = execFileSync('git', ['-C', this.#o.codeRoot, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
-    } catch {
-      this.#build = null;
-    }
-    return this.#build;
+    return this.#o.build.identity.commit_short;
   }
 
   // ---- the status tools ------------------------------------------------------------------------
@@ -315,6 +316,7 @@ Not listed means not in this setup yet. Ways to add: ${this.#openAiWay()}; a con
     const providers = this.#providerViews().map((p) => `- ${p.name} [${p.id}]: ${p.enabled ? 'on' : p.id === chat ? 'in use' : 'off'}${p.id === chat ? ', your chat model' : ''}; ${p.class}${addressOf(p.config)}${p.model ? `; model ${p.model}` : ''}; ${plain(p.egress.words)} Health: ${plain(p.health.words)}${p.health.checked_at ? ` (checked ${ago(p.health.checked_at, this.#now())})` : ''}`);
     const out = [
       `Instance: ${this.#instanceLine()}`,
+      `Version: ${this.#versionLine()}`,
       `Person: ${this.#personLine()}`,
       `Chat model: ${this.#chatLine()}`,
       'Model providers:',

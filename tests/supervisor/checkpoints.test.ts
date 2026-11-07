@@ -4,12 +4,12 @@
 // restart is neither a crash toward safe mode nor held to one a minute.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { api, cli, releaseRepo, scratch, supervise, until } from './support.ts';
+import { VERSION, api, cli, releaseRepo, scratch, supervise, until } from './support.ts';
 
 test('before switching to a new release, the supervisor takes a checkpoint of the stopped home', async () => {
   const dir = scratch('nova-sup-cp-');
   const r = releaseRepo(dir);
-  r.tag('v1.1.0', (root) => r.edit(root, 'package.json', '"version": "0.1.0"', '"version": "0.1.1"'));
+  r.tag('v1.1.0', (root) => r.edit(root, 'package.json', `"version": "${VERSION}"`, '"version": "0.1.1"'));
   const s = await supervise({ dir, repo: r.repo });
   try {
     assert.equal((await api(s.base(), 'POST', '/api/v1/memory', { kind: 'fact', content: 'The shed key is on the blue hook.' })).status, 201);
@@ -19,7 +19,7 @@ test('before switching to a new release, the supervisor takes a checkpoint of th
     const cp = list.find((c) => c.reason === 'Before switching to release v1.1.0');
     assert.ok(cp, JSON.stringify(list));
     assert.equal(cp!.kind, 'auto');
-    assert.equal(cp!.nova_version, '0.1.0', 'taken of the home as the release before it left it');
+    assert.equal(cp!.nova_version, VERSION, 'taken of the home as the release before it left it');
   } finally {
     await s.stop();
   }

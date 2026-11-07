@@ -18,6 +18,8 @@ import { drawn, trackDocument, documentRequests } from './navigation-support.ts'
 import { diagnosticsPaint } from './health-diagnostics-visual.ts';
 
 const require = createRequire(import.meta.url);
+// createNova reads package.json: the diagnostics name its version.
+const VERSION: string = require('../../package.json').version;
 const axe = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 const names = ['task.iterations', 'task.tokens', 'task.usd', 'day.iterations', 'day.tokens', 'day.usd'];
 const values = ['31', '4100', '0.75', '62', '8200', '1.50'];
@@ -101,11 +103,11 @@ async function diagnosticsWorkerUpgrade(b: Browser, m: ReturnType<typeof blank>,
     const before = files(m.home);
     const downloading = p.waitForEvent('download'); await p.locator('[data-download-diagnostics]').tap();
     const downloaded = JSON.parse(readFileSync((await (await downloading).path())!, 'utf8'));
-    assert.equal(downloaded.about.nova, '0.1.0'); assert.equal(downloaded.redaction.marker, MARKER);
+    assert.equal(downloaded.about.nova, VERSION); assert.equal(downloaded.redaction.marker, MARKER);
     assert.deepEqual(files(m.home), before, 'installed-worker native download leaves no server bundle');
     for (const path of ['/api/v1/diagnostics', '/api/v1/diagnostics?example=1']) {
       const response = await p.evaluate(async path => { const r = await fetch(path); const body = await r.json(); return { status: r.status, cache: r.headers.get('cache-control'), nova: body.about.nova }; }, path);
-      assert.equal(response.status, 200); assert.match(response.cache!, /no-store/); assert.equal(response.nova, '0.1.0');
+      assert.equal(response.status, 200); assert.match(response.cache!, /no-store/); assert.equal(response.nova, VERSION);
     }
     // A later positive cache write is the barrier: the policy must still retain an eligible
     // ordinary API answer, without retaining any prior diagnostics response/query variant.
@@ -460,7 +462,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         const partialDownload = await partialDownloading;
         const partialBundle = JSON.parse(readFileSync((await partialDownload.path())!, 'utf8'));
         assert.equal(partialBundle.redaction.marker, MARKER);
-        assert.equal(partialBundle.about.nova, '0.1.0');
+        assert.equal(partialBundle.about.nova, VERSION);
         assert.equal(documentRequests(unloaded.page).filter(url => new URL(url).pathname !== '/api/v1/diagnostics').length, 1, 'native partial-failure diagnostics retains the Home-start document');
         console.log(`HEALTH PARTIAL ${engine}/${posture}: Caps503/unavailable/Save disabled; actual health200/Core SSE200; truthful live banner/orb; native diagnostics JSON`);
         initiallyUnavailable = false;
@@ -517,7 +519,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         assert.match(download.suggestedFilename(), /^nova-diagnostics-.*\.json$/);
         const text = readFileSync((await download.path())!, 'utf8');
         const bundle = JSON.parse(text);
-        assert.equal(bundle.about.nova, '0.1.0');
+        assert.equal(bundle.about.nova, VERSION);
         assert.equal(bundle.redaction.marker, MARKER);
         assert.ok(text.includes(MARKER));
         assert.doesNotMatch(text, /https?:\/\/(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/);

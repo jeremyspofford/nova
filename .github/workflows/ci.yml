@@ -54,6 +54,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+      # A pull request that changes what Nova ships (src/, ui/, skills/, templates/, system/) adds a
+      # changelog fragment and a ledger entry (scripts/check-changelog.sh), unless it is labelled
+      # no-changelog (after labelling, re-run this job). The checkout is one commit deep: the base
+      # branch and enough history to find where the branch left it are fetched first.
+      - name: changelog and ledger entries
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.base_ref }}
+          NO_CHANGELOG: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') && '1' || '' }}
+        run: |
+          git fetch --no-tags --depth=200 origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" "$GITHUB_SHA"
+          sh scripts/check-changelog.sh "origin/$BASE"
       # Installs the toolchain pinned in mise.toml.
       - uses: jdx/mise-action@v5
       - run: node --version

@@ -8,9 +8,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, lstatSync, readlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { api, cli, releaseRepo, scratch, supervise, until } from './support.ts';
+import { VERSION, api, cli, releaseRepo, scratch, supervise, until } from './support.ts';
 
-const bump = (version: string) => (root: string, r: ReturnType<typeof releaseRepo>) => r.edit(root, 'package.json', '"version": "0.1.0"', `"version": "${version}"`);
+const bump = (version: string) => (root: string, r: ReturnType<typeof releaseRepo>) => r.edit(root, 'package.json', `"version": "${VERSION}"`, `"version": "${version}"`);
 
 test('a good release deploys only with a tier-3 confirmation, canaries, and stays; the data is untouched', async () => {
   const dir = scratch('nova-rel-good-');
@@ -20,7 +20,7 @@ test('a good release deploys only with a tier-3 confirmation, canaries, and stay
   try {
     const m = await api(s.base(), 'POST', '/api/v1/memory', { kind: 'fact', content: 'The shed key is on the blue hook.' });
     assert.equal(m.status, 201);
-    assert.equal((await api(s.base(), 'GET', '/api/v1/health')).body.version, '0.1.0');
+    assert.equal((await api(s.base(), 'GET', '/api/v1/health')).body.version, VERSION);
 
     // Tier 3: never without the explicit confirmation, on the command line or the API.
     const unconfirmed = await cli(s.dir, 'deploy', 'v1.1.0');
