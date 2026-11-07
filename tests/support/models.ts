@@ -45,16 +45,36 @@ export function hardwareFile(dir: string, over: Record<string, unknown> = {}): s
   return file;
 }
 
-// A core whose hub Ollama is the stand-in at `ollama`, on the fixed hardware.
-export function modelsCore(ollama: string, o: { privacy?: string; hardware?: Record<string, unknown>; secrets?: Record<string, string> } = {}): { core: Core; home: string } {
+// Wake-on-LAN without a network (the WoL ADR's test plan): a stand-in sender that keeps each packet's
+// bytes, target, port and bound address and opens no socket at all, and the hub's own card on the
+// example home network 192.168.1.0/24.
+export interface WolPacket { bytes: Buffer; host: string; port: number; bind: string | null }
+export function wolRecorder(onSend?: (p: WolPacket) => void) {
+  const packets: WolPacket[] = [];
+  const sender = async (s: { packet: Buffer; host: string; port: number; bind: string | null }) => {
+    const p = { bytes: Buffer.from(s.packet), host: s.host, port: s.port, bind: s.bind };
+    packets.push(p);
+    onSend?.(p);
+  };
+  return { packets, sender, onSend: (f: (p: WolPacket) => void) => { onSend = f; } };
+}
+export const HUB_LAN = [{ name: 'eth0', address: '192.168.1.10', netmask: '255.255.255.0' }];
+// A paired computer's card on that network, and the loopback address its stand-in Ollama answers at.
+export const SPOKE_LAN = { name: 'eth0', mac: '02:00:5e:10:00:42', address: '192.168.1.42', netmask: '255.255.255.0', wol: 'magic' };
+export const SPOKE_LOOPBACK = { name: 'lo-test', mac: '02:00:5e:10:00:43', address: '127.0.0.1', netmask: '255.0.0.0' };
+
+// A core whose hub Ollama is the stand-in at `ollama`, on the fixed hardware. Wakes always go to the
+// recorder (`wol`), so no test of the model manager can send a real packet.
+export function modelsCore(ollama: string, o: { privacy?: string; hardware?: Record<string, unknown>; secrets?: Record<string, string>; hubCards?: { name?: string; address: string; netmask: string }[]; now?: () => Date } = {}): { core: Core; home: string; wol: ReturnType<typeof wolRecorder> } {
   const home = mkdtempSync(join(tmpdir(), 'nova-models-'));
   const hw = hubHardware(o.hardware ?? {});
+  const wol = wolRecorder();
   const core = createCore({
-    home, version: '0.1.0', trustedOrigin: () => true, secrets: (n) => o.secrets?.[n] ?? null,
-    models: { ollamaUrl: ollama, hardware: async () => hw as never, watchMs: 100, wakePollMs: 50 },
+    home, version: '0.1.0', trustedOrigin: () => true, secrets: (n) => o.secrets?.[n] ?? null, ...(o.now ? { now: o.now } : {}),
+    models: { ollamaUrl: ollama, hardware: async () => hw as never, watchMs: 100, wakePollMs: 50, hubCards: () => o.hubCards ?? HUB_LAN, wakeSender: wol.sender, wakeGapMs: 0 },
   });
   core.profile.set('privacy', 'default', o.privacy ?? 'local-only', 'settings');
-  return { core, home };
+  return { core, home, wol };
 }
 
 export const say = (text: string) => [{ role: 'user' as const, content: text }];

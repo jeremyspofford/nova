@@ -19,7 +19,10 @@ export interface Gpu {
   unified: boolean;
 }
 
-export interface Nic { name: string; mac: string; address: string; netmask: string; broadcast: string | null }
+// `wol`: whether the card answers a magic packet, as the device read it (`unknown` when it can't
+// tell, and from agents older than the field). `off` means Nova can't wake it on this card.
+export type Wol = 'magic' | 'off' | 'unknown';
+export interface Nic { name: string; mac: string; address: string; netmask: string; broadcast: string | null; wol?: Wol }
 
 export interface Hardware {
   at: string;
@@ -203,6 +206,10 @@ export function privateAddress(a: string): boolean {
     || (a1 === 192 && a2 === 0 && a3 === 2) || (a1 === 198 && a2 === 51 && a3 === 100) || (a1 === 203 && a2 === 0 && a3 === 113);
 }
 
+// A MAC one card can own: not the all-zero MAC, and not a group (multicast or broadcast) MAC, whose
+// first byte has its low bit set. A magic packet naming a group MAC would wake nothing in particular.
+const unicastMac = (mac: string): boolean => mac !== '00:00:00:00:00:00' && (parseInt(mac.slice(0, 2), 16) & 1) === 0;
+
 // A heartbeat's hardware, kept to what Nova uses and to sane sizes. Throws on what isn't hardware.
 export function checkHardware(v: unknown): Hardware {
   if (!isObj(v)) throw new Error('hardware must be an object.');
@@ -217,9 +224,10 @@ export function checkHardware(v: unknown): Hardware {
     const address = text(n.address, 15);
     // Only an address on the person's own network is kept: Nova sends this computer prompts and
     // wake packets at what it reports, and a public address would take them off the devices.
-    if (!MAC.test(mac) || !IPV4.test(address) || !privateAddress(address)) return [];
+    if (!MAC.test(mac) || !unicastMac(mac) || !IPV4.test(address) || !privateAddress(address)) return [];
     const netmask = IPV4.test(text(n.netmask, 15)) ? text(n.netmask, 15) : '255.255.255.0';
-    return [{ name: text(n.name, 32) || 'net', mac, address, netmask, broadcast: broadcastOf(address, netmask) }];
+    const wol: Wol = n.wol === 'magic' || n.wol === 'off' ? n.wol : 'unknown';
+    return [{ name: text(n.name, 32) || 'net', mac, address, netmask, broadcast: broadcastOf(address, netmask), wol }];
   }) : [];
   const ram = bytes(v.ram_bytes);
   // Trusted only as a whole number of bytes the machine's memory can hold; anything else is unknown.
