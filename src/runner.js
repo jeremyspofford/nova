@@ -22,7 +22,7 @@ import { commitHome, readStanding } from './home.js';
 import { TOOLS, ToolTagFilter, WRITABLE, availableTools, extractMemory, homeTarget, parseToolCall, withinPrivacy } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 import { stricter } from './chat-run.js';
-import { CORRECTION, Interstitial, SKILL_ID as IR_SKILL, readBlocks, verdictWords } from './interstitial.js';
+import { CORRECTION, Interstitial, SKILL_ID as IR_SKILL, UNBACKED as IR_UNBACKED, readBlocks, verdictWords } from './interstitial.js';
 
 const shortId = () => randomUUID().slice(0, 8);
 const hostOf = (u) => { try { return new URL(String(u)).hostname; } catch { return String(u ?? '').slice(0, 100); } };
@@ -373,6 +373,7 @@ export class Runner extends EventEmitter {
       if (stopAt) { ceiling(stopAt); return; }
       const draft = this.receipt(sessionId, run, mode, { system, prompt, recall });
       const spentBefore = meter ? meter.spent.tokens_in + meter.spent.tokens_out : 0;
+      const inBefore = meter ? meter.spent.tokens_in : 0;
       if (!chat?.ownReceipt) this.identity?.receipt?.(draft);
       const { text, aborted, usage } = await (chat ? (o) => chat.call(o) : this.agent)({
         ...(chat?.ownReceipt ? { receipt: draft, privacy: mode } : {}),
@@ -393,7 +394,12 @@ export class Runner extends EventEmitter {
       });
 
       meter?.model({ provider: draft.provider, model: draft.model, where: chat ? chat.egress : (this.config.agentEgress === 'remote' ? 'remote' : 'local'), usage, sent: system.length + prompt.length, received: String(text ?? streamed).length });
-      if (run.ir && meter) this.irHook().tokens(run.ir, meter.spent.tokens_in + meter.spent.tokens_out - spentBefore);
+      if (run.ir && meter) {
+        // The playbook's share of what this call sent: the skill's cost, whatever led to the call.
+        const body = run.skills.get(IR_SKILL)?.body ?? '';
+        const share = body && system.includes(`<skill name="${IR_SKILL}">`) ? (meter.spent.tokens_in - inBefore) * Math.min(1, body.length / Math.max(1, system.length + prompt.length)) : 0;
+        this.irHook().tokens(run.ir, meter.spent.tokens_in + meter.spent.tokens_out - spentBefore, share);
+      }
 
       if (aborted) {
         if (streamed.trim()) this.record(sessionId, { type: 'assistant', ...tag, id: shortId(), text: streamed.trim() });
@@ -452,7 +458,10 @@ export class Runner extends EventEmitter {
       // a search it doesn't clear never leaves (generalise it, or drop it).
       if (!failed && run.ir && call.name === 'web_search') {
         const oc = await this.irHook().outbound(run.ir, call.args?.query, mode, task);
-        if (!oc.send) failed = 'Not sent: this search could carry something of the person’s own (a name, a record, or something from memory or capture). Search for the abstract shape of the problem instead, with no names, records or remembered details, or leave it out.';
+        // Say why truthfully: an untrusted check holds back every search, personal or not.
+        if (!oc.send) failed = oc.trusted
+          ? 'Not sent: this search could carry something of the person’s own (a name, a record, or something from memory or capture). Search for the abstract shape of the problem instead, with no names, records or remembered details, or leave it out.'
+          : 'Not sent: Nova’s check for research searches hasn’t passed its eval yet, so no search from this skill leaves Nova, however it’s worded. Don’t search again in this reply. Answer from what you already know, and say plainly that no outside search was done.';
       }
       const needsApproval = !failed && (!!tool?.needsApproval || !!guard);
       this.record(sessionId, { type: 'tool_call', ...tag, id, name: call?.name ?? 'unknown', args: call?.args ?? {}, needs_approval: needsApproval, ...(preview ? { preview } : {}), ...(guard ? { guard } : {}) });
@@ -561,6 +570,8 @@ export class Runner extends EventEmitter {
       const rec = hook.record(run.ir, { meter: run.meter });
       const task = hook.counted(rec);
       this.record(sessionId, { type: 'interstitial', turn, attempt, phase: 'record', ...rec, ...(task ? { proposal: task.id } : {}) });
+      // What the answer claims and the run doesn't back, said to the person under the answer.
+      if (rec.unbacked.length) this.record(sessionId, { type: 'interstitial', turn, attempt, phase: 'honesty', unbacked: rec.unbacked, words: `Read this answer with care: ${rec.unbacked.map((c) => IR_UNBACKED[c]).join('; ')}.` });
     } catch (e) {
       this.record(sessionId, { type: 'interstitial', turn, attempt, phase: 'record', error: `Nova couldn’t keep this run’s record: ${e.message}` });
     }
@@ -572,7 +583,7 @@ export class Runner extends EventEmitter {
     if (run.skills.has(skill.id)) return false;
     run.skills.set(skill.id, skill);
     if (skill.id === IR_SKILL && this.irEnabled()) {
-      run.ir = this.irHook().begin({ recall: run.recall ?? [], topic: run.question ?? '', model: this.chat()?.model ?? this.config.agentCmd });
+      run.ir = this.irHook().begin({ recall: run.recall ?? [], topic: run.question ?? '', model: this.chat()?.model ?? this.config.agentCmd, personal: run.helper ? '' : readStanding(this.config.home).find((f) => f.name === 'MEMORY.md')?.text ?? '' });
       // A cached field map (public topic, same key): the model is handed it, and writes none.
       if (run.ir.cache === 'hit') this.record(sessionId, { type: 'interstitial', ...tag, phase: 'field-map', cached: true, words: `A field map for this topic is already cached (same skill, templates, model and privacy class). Use it as this run's field map; don't write a new one:\n${JSON.stringify(run.ir.field_map)}` });
     }
