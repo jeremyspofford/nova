@@ -138,7 +138,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
                   await p.screenshot({ path: join(folder, `${frame}-reduced-motion-${size}-${theme}.png`), animations: 'disabled', caret: 'hide' });
                   await p.emulateMedia({ reducedMotion: null });
                   // The app icon drawn large (not upscaled: the swirl is redrawn at this size), for the side-by-side.
-                  await p.evaluate(() => document.querySelector<HTMLElement>('.orb-icon[data-k="3"]')!.setAttribute('style', 'width: 480px; height: 480px; --uc-icon-orb: 408px; border-radius: 96px'));
+                  await p.evaluate(() => document.querySelector<HTMLElement>('.orb-icon[data-k="3"]')!.setAttribute('style', 'width: 480px; height: 480px; --uc-icon-orb: 480px; border-radius: 96px'));
                   await p.locator('.orb-icon[data-k="3"]').screenshot({ path: join(folder, `orb-icon-large-${theme}.png`), animations: 'disabled' });
                 }
               }

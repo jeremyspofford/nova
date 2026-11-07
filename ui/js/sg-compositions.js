@@ -30,39 +30,80 @@ const PENDING = { ...BUILD, running: '8001cd2', built: 'Nov 6, 2026, 18:40 UTC' 
 const PR = (n) => `https://github.com/jeremyspofford/nova/pull/${n}`;
 const DOC = (p) => `https://github.com/jeremyspofford/nova/blob/main/${p}`;
 
-// The vortex: two arms of a logarithmic spiral (r = 47·e^(−0.4θ)) curling into the centre, cut into
-// short segments whose colour steps smoothly through the palette's range, cool and wide at the rim
-// to warm and fine at the eye; the rim fades into the dark field (a mask in CSS). Every colour is a design token (or a mix of two); none is written here.
-const ARM_A = ['color-mix(in srgb, var(--orb-c) 70%, var(--accent-secondary))', 'var(--orb-c)', 'var(--orb-c)', 'color-mix(in srgb, var(--orb-c) 50%, var(--accent-secondary))', 'var(--accent-secondary)', 'color-mix(in srgb, var(--orb-listening) 45%, var(--accent-secondary))', 'var(--orb-attention)'];
-const ARM_B = ['color-mix(in srgb, var(--accent-secondary) 80%, var(--orb-c))', 'var(--accent-secondary)', 'color-mix(in srgb, var(--orb-listening) 45%, var(--accent-secondary))', 'var(--orb-listening)', 'var(--orb-attention)', 'var(--orb-attention)', 'color-mix(in srgb, var(--orb-attention) 60%, var(--orb-listening))'];
-const SPIRAL = (() => {
-  const SEG = 30;
-  const END = 5.4;
-  const tone = (stops, s) => {
-    const at = (s / (SEG - 1)) * (stops.length - 1);
+// The supernova (owner, 2026-11-06): an N for Nova. Two arms trace the N around a black hole that
+// everything falls into: the left arm rises from the lower left and curls over the top, the right
+// arm comes down the right side and curls under, and between them the band sweeps diagonally
+// through the centre. Each arm is a spiral pushed out toward the corners of a rounded square (so
+// the N fills the icon), cut into short segments whose colour steps smoothly, wide and deep at the
+// rim, thinner and brighter as it falls in, with a lit ridge along its inner edge. Every colour is a
+// design token or a mix of two; none is written here.
+const ARM_A = ['color-mix(in srgb, var(--orb-c) 55%, var(--accent-secondary))', 'var(--orb-c)', 'var(--orb-c)', 'color-mix(in srgb, var(--orb-c) 65%, var(--orb-hi))'];
+const ARM_B = ['var(--accent-secondary)', 'color-mix(in srgb, var(--orb-listening) 40%, var(--accent-secondary))', 'var(--orb-listening)', 'var(--orb-attention)', 'var(--orb-attention)'];
+const squircle = (phi) => 1 / (Math.abs(Math.cos(phi)) ** 4 + Math.abs(Math.sin(phi)) ** 4) ** 0.25;
+const SWEEP = 4.7;
+const SEG = 24;
+const pt = (x, y) => `${x.toFixed(2)} ${y.toFixed(2)}`;
+function armPaths(stops, start, lit) {
+  const tone = (u) => {
+    const at = u * (stops.length - 1);
     const i = Math.min(Math.floor(at), stops.length - 2);
     return `color-mix(in srgb, ${stops[i + 1]} ${Math.round((at - i) * 100)}%, ${stops[i]})`;
   };
-  const arm = (stops, turn) => Array.from({ length: SEG }, (_, s) => {
-    const pts = [];
-    // Opaque segments overlapping a hair, so no seam shows at the joins; the rim's fade is a mask in CSS.
-    const t0 = (s * END) / SEG;
-    const t1 = ((s + 1) * END) / SEG + 0.02;
+  const at = (u) => {
+    const phi = start + u * SWEEP;
+    const r = 44 * Math.exp(-0.3 * u * SWEEP) * (1 + (squircle(phi) - 1) * (1 - u) ** 1.5);
+    return { phi, r, w: 4 + 22 * (1 - u) ** 0.9 };
+  };
+  // The body: opaque segments that overlap a little, so no seam shows where they meet.
+  let body = '';
+  for (let s = 0; s < SEG; s++) {
+    const u0 = s / SEG;
+    const u1 = Math.min(1, (s + 1) / SEG + 0.02);
+    const line = [];
     for (let k = 0; k <= 4; k++) {
-      const t = t0 + ((t1 - t0) * k) / 4;
-      const r = 47 * Math.exp(-0.4 * t);
-      pts.push(`${(50 + r * Math.cos(t + turn)).toFixed(2)} ${(50 + r * Math.sin(t + turn)).toFixed(2)}`);
+      const { phi, r } = at(u0 + ((u1 - u0) * k) / 4);
+      line.push(pt(50 + r * Math.cos(phi), 50 + r * Math.sin(phi)));
     }
-    return `<path d="M${pts.join('L')}" stroke-width="${(28 - s * 0.75).toFixed(1)}" style="stroke: ${tone(stops, s)}"/>`;
-  }).join('');
-  return `<svg class="orb-spiral" viewBox="0 0 100 100" aria-hidden="true" focusable="false"><g fill="none" stroke-linecap="butt">${arm(ARM_A, 0)}${arm(ARM_B, Math.PI)}</g></svg>`;
-})();
+    body += `<path d="M${line.join('L')}" stroke-width="${at((u0 + u1) / 2).w.toFixed(1)}" style="stroke: ${tone((u0 + u1) / 2)}"/>`;
+  }
+  // The lit ridge: one continuous line along the arm's inner edge, so nothing doubles.
+  const ridge = [];
+  for (let k = 0; k <= 80; k++) {
+    const { phi, r, w } = at(0.15 + (0.85 * k) / 80);
+    ridge.push(pt(50 + (r - w * 0.28) * Math.cos(phi), 50 + (r - w * 0.28) * Math.sin(phi)));
+  }
+  return { body, ridge: `<path d="M${ridge.join('L')}" style="stroke: ${lit}"/>` };
+}
+// Stars: deterministic (the same sky every time), many tiny points of varied brightness, a few larger.
+function starField(n, w, h, seed) {
+  let x = seed;
+  const rnd = () => { x = (x * 16807) % 2147483647; return x / 2147483647; };
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    const big = rnd() < 0.06;
+    out += `<circle cx="${(rnd() * w).toFixed(1)}" cy="${(rnd() * h).toFixed(1)}" r="${(big ? 0.3 + rnd() * 0.18 : 0.07 + rnd() * 0.14).toFixed(2)}" fill-opacity="${(0.25 + rnd() * 0.75).toFixed(2)}"/>`;
+  }
+  return out;
+}
+const A = armPaths(ARM_A, (3 * Math.PI) / 4, 'color-mix(in srgb, var(--orb-c) 60%, var(--orb-hi))');
+const B = armPaths(ARM_B, (7 * Math.PI) / 4, 'color-mix(in srgb, var(--orb-listening) 70%, var(--orb-attention))');
+const ARMS = `<g fill="none" stroke-linecap="butt">${A.body}${B.body}</g>`;
+// Everything an orb draws: the sky (behind the arms, so it shows in the dark between them), the arms,
+// their lit ridges, the accretion edge round the hole (teal inner rim, the coral arc hugging it from
+// below), and a second copy of the arms that falls inward while Nova is active (the inflow).
+const NOVA = `<svg class="orb-sky" viewBox="0 0 100 100" aria-hidden="true" focusable="false">${starField(320, 100, 100, 7)}</svg>`
+  + `<svg class="orb-spiral" viewBox="0 0 100 100" aria-hidden="true" focusable="false">${ARMS}<g class="orb-ridge" fill="none" stroke-linecap="butt">${A.ridge}${B.ridge}</g>`
+  + '<g class="orb-accretion" fill="none" stroke-linecap="round"><circle cx="50" cy="50" r="10.6"/><path d="M62.56 53.36A13 13 0 0 1 37.44 53.36"/></g></svg>'
+  + `<svg class="orb-inflow" viewBox="0 0 100 100" aria-hidden="true" focusable="false"><g class="orb-fall">${ARMS}</g></svg>`;
+// A band of the same sky for identity moments (the empty new chat, About, the icon): low contrast,
+// screen-blended so it vanishes on a light theme, never behind text.
+export const SKY_BAND = `<svg class="uc-sky" viewBox="0 0 400 100" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">${starField(260, 400, 100, 11)}</svg>`;
 
 // The Nebula orb: the orb's own markup and state vocabulary (data-state drives the design's
-// motion, light and mark variables), drawn as the vortex from the owner's icon.
+// motion, light and mark variables), drawn as the supernova from the owner's icon.
 export function nebulaOrb({ state = 'idle', size = 'rail', label = null } = {}) {
   const words = label ?? `Nova: ${state.replace('-', ' ')}`;
-  return `<span class="orb orb-${size} orb-nebula" data-state="${state}" role="img" aria-label="${words}"><span class="orb-glow"></span><span class="orb-field"></span>${SPIRAL}<span class="orb-eye"></span><span class="orb-stars"></span></span>`;
+  return `<span class="orb orb-${size} orb-nebula" data-state="${state}" role="img" aria-label="${words}"><span class="orb-glow"></span><span class="orb-field"></span>${NOVA}<span class="orb-eye"></span></span>`;
 }
 
 const icon = (name) => ICONS[name] ?? '';
@@ -104,7 +145,7 @@ function composer(id, { replying = false, big = false } = {}) {
 }
 
 function emptyChat(id) {
-  return `${topbar(id, 'New chat')}<div class="uc-chat uc-chat-empty">${nebulaOrb({ state: 'idle', size: 'hero', label: 'Nova is here' })}<h3 class="uc-greet">Good evening, Alex</h3>${composer(id, { big: true })}
+  return `${topbar(id, 'New chat')}<div class="uc-chat uc-chat-empty"><div class="uc-hero">${SKY_BAND}${nebulaOrb({ state: 'idle', size: 'hero', label: 'Nova is here' })}</div><h3 class="uc-greet">Good evening, Alex</h3>${composer(id, { big: true })}
 <div class="uc-chips" role="group" aria-label="Suggestions">${['What needs me today?', 'Plan Friday', 'Check the repo'].map((s) => `<button type="button" class="uc-chip">${s}</button>`).join('')}</div></div>`;
 }
 
@@ -170,7 +211,7 @@ function about(id, which) {
     : which === 'unknown' ? `<p class="uc-state is-unknown" role="status"><span class="uc-dot" aria-hidden="true"></span>Running ${b.running}. The latest merged build couldn’t be checked: GitHub isn’t reachable from this hub.</p>`
       : `<p class="uc-state is-ok" role="status"><span class="uc-dot" aria-hidden="true"></span>Running the latest merged build, ${b.running}.</p>`;
   const rows = [['Version', b.version], ['Build', `<span class="uc-mono">${b.running}</span>`], ['Built', b.built], ['Latest merged', which === 'unknown' ? 'Unknown' : `<span class="uc-mono">${b.latest}</span>`]];
-  const detail = `<h3 class="uc-h" id="${id}-detail-title">About Nova</h3><div class="uc-about-id">${nebulaOrb({ state: which === 'pending' ? 'needs-you' : 'idle', size: 'avatar', label: 'Nova' })}<p class="uc-version">Nova ${b.version}</p></div>${line}
+  const detail = `<h3 class="uc-h" id="${id}-detail-title">About Nova</h3><div class="uc-hero uc-about-hero">${SKY_BAND}${nebulaOrb({ state: which === 'pending' ? 'needs-you' : 'idle', size: 'rail', label: 'Nova' })}</div><p class="uc-version">Nova ${b.version}</p>${line}
 <dl class="uc-facts">${rows.map(([k, v]) => `<div class="uc-fact"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
 <div class="uc-links"><a class="uc-row" href="#${id}-changelog"><span class="uc-label">What’s new in this build</span><span class="uc-ic" aria-hidden="true">${icon('chevron')}</span></a><a class="uc-row" href="#${id}-pipeline"><span class="uc-label">Where Nova stands</span><span class="uc-ic" aria-hidden="true">${icon('chevron')}</span></a></div>`;
   return settingsPane(id, { cat: 'About', pane: 'detail', detail });
@@ -225,12 +266,12 @@ ${TRACKS.map(([track, items]) => `<section class="uc-track" aria-label="${track}
 
 // ---- orb -----------------------------------------------------------------------------------------
 
-const ORB_SAID = { idle: 'Slow turn, soft light', listening: 'Faster turn, full light', working: 'Steady spin and beat', speaking: 'Light rippling outward', 'needs-you': 'Warms, beckons, dashed ring', stopped: 'Motion stops, colour drains, solid ring', offline: 'Still and dim' };
+const ORB_SAID = { idle: 'Slow inflow, soft light', listening: 'Faster inflow, full light', working: 'Fastest inflow, a beat', speaking: 'Inflow, light rippling out', 'needs-you': 'Warms, beckons, dashed ring', stopped: 'Motion stops, colour drains, solid ring', offline: 'Still and dim' };
 
 function orbSheet() {
   const row = (still) => `<ul class="uc-orbs${still ? ' uc-still' : ''}" aria-label="${still ? 'Reduced motion' : 'Moving'}">${ORB_STATES.map((s) => `<li class="uc-orb-cell">${nebulaOrb({ state: s, size: 'rail' })}<span class="uc-orb-name">${s}</span><span class="uc-faint">${still ? (s === 'stopped' ? 'Grey, solid ring' : s === 'needs-you' || s === 'working' ? 'Dashed ring' : ORB_SAID[s].split(',')[1]?.trim() ?? 'Still') : ORB_SAID[s]}</span></li>`).join('')}</ul>`;
   const tokens = ['orb/core', 'orb/glow', 'orb/listening', 'orb/attention', 'accent/primary', 'accent/secondary', 'bg/base', 'surface/card', 'text/primary'];
-  return `${topbar('uc-orb', 'Orb and theme', 'speaking')}<div class="uc-page uc-wide" tabindex="0"><div class="uc-orb-hero">${nebulaOrb({ state: 'idle', size: 'hero', label: 'Nova, idle' })}<div class="uc-icons" aria-label="App icon sizes" role="group">${[3, 2, 1].map((k) => `<span class="orb-icon" data-k="${k}" role="img" aria-label="App icon">${nebulaOrb({ state: 'idle', size: 'hero', label: '' }).replace('role="img" aria-label=""', 'aria-hidden="true"')}</span>`).join('')}</div></div>
+  return `${topbar('uc-orb', 'Orb and theme', 'speaking')}<div class="uc-page uc-wide" tabindex="0"><div class="uc-orb-hero">${SKY_BAND}${nebulaOrb({ state: 'idle', size: 'hero', label: 'Nova, idle' })}<div class="uc-icons" aria-label="App icon sizes" role="group">${[3, 2, 1].map((k) => `<span class="orb-icon" data-k="${k}" role="img" aria-label="App icon">${nebulaOrb({ state: 'idle', size: 'hero', label: '' }).replace('role="img" aria-label=""', 'aria-hidden="true"')}</span>`).join('')}</div></div>
 <h3 class="uc-group">Moving</h3>${row(false)}<h3 class="uc-group">Reduced motion: still, and still distinct</h3>${row(true)}
 <h3 class="uc-group">Nebula tokens, filed first</h3><ul class="uc-swatches">${tokens.map((t) => `<li class="uc-swatch"><span class="uc-chip-sw" style="background: var(--${t.replace('/', '-')})"></span><span class="uc-mono">${t}</span></li>`).join('')}</ul></div>`;
 }

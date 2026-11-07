@@ -13,8 +13,10 @@ a direction reference, NOT a production asset; recreate at full resolution).
   curls into a dark centre. Deep space blue and teal on one side, violet
   and magenta on the other, a warm coral/orange arc through the lower
   centre. Fine star speckles in the dark areas.
-- No face, no text, no symbol, no letterform. Abstract light and motion
-  only — which already complies with the settled orb rule (NO face).
+- Owner clarification 2026-11-06: the shape IS an N for Nova (a supernova):
+  the arms trace an N around a black hole that everything swirls into; the
+  stars are the space theme.
+- No face, no text — which keeps the settled orb rule (NO face).
 
 ## Palette (sampled from the image, approximate)
 
