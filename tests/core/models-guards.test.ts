@@ -318,7 +318,7 @@ test('budgets: a coding agent’s wait is the budget’s alone; the cloud model�
 test('a computer’s answers have receipts that name it; a role on a sleeping computer that won’t wake says it waits for that computer', { timeout: 30_000 }, async () => {
   const hubOllama = await startFakeOllama({ models: INSTALLED });
   const spoke = await startFakeOllama({ models: [INSTALLED[2]!] });
-  const { core, wol } = modelsCore(hubOllama.url, { privacy: 'local-only' });
+  const { core, wol } = modelsCore(hubOllama.url, { privacy: 'local-only', hardware: { gpus: [], ram_bytes: 2 * 1024 ** 3 } }); // nothing on the hub can stand in
   try {
     const d = pairSpoke(core);
     core.models.setWake({ wait_s: 1 });

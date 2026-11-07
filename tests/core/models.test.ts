@@ -250,7 +250,7 @@ test('GPU spoke: woken over (stand-in) Wake-on-LAN on its own network, latency m
   const hubOllama = await startFakeOllama({ models: INSTALLED });
   const spoke = await startFakeOllama({ models: [INSTALLED[2]!] });
   let wakes = true;
-  const { core, wol } = modelsCore(hubOllama.url);
+  const { core, wol } = modelsCore(hubOllama.url, { hardware: { gpus: [], ram_bytes: 2 * 1024 ** 3 } }); // a hub too small to stand in for the reasoner
   // The stand-in "machine" wakes on the first packet of a wake.
   wol.onSend(() => { if (wakes) setTimeout(() => spoke.setAsleep(false), 300); });
   try {

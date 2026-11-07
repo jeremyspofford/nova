@@ -39,7 +39,7 @@ const rows = (core: Core, id: string) => core.db.all<{ outcome: string; origin: 
 async function dell(o: { network?: Record<string, unknown>[]; onDemand?: boolean } = {}) {
   const hubOllama = await startFakeOllama({ models: INSTALLED });
   const spoke = await startFakeOllama({ models: [INSTALLED[2]!] });
-  const { core, wol } = modelsCore(hubOllama.url);
+  const { core, wol } = modelsCore(hubOllama.url, { hardware: { gpus: [], ram_bytes: 2 * 1024 ** 3 } }); // a hub too small to stand in for the reasoner
   const d = addDell(core);
   beat(core, d, o.network ?? [DELL_LAN, SPOKE_LOOPBACK]);
   core.models.setWake({ wait_s: 1 });

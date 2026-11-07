@@ -1865,7 +1865,7 @@ export class Models extends EventEmitter {
   // what the per-device Models screen shows for it: the approved styleguide states (components.js
   // wakeStatus and sleepPolicy). `screen`: {state, pill, lines, waiting?: {text, since}, actions?,
   // policy: {idle, demand, notes}}; `since` is an ISO time the page turns into its waiting line.
-  #wakeState(id: string, online: boolean, can: Awaited<ReturnType<Models['wakeCheckFor']>>, latency: number | null) {
+  #wakeState(id: string, online: boolean, can: Awaited<ReturnType<Models['wakeCheckFor']>>, latency: number | null): { state: 'awake' | 'asleep-wakeable' | 'asleep' | 'waking' | 'woke-loading' | 'wake-failed'; screen: WakeScreen } {
     const name = this.#deviceName(id);
     const hubName = this.#o.hubName();
     const p = this.power(id);
@@ -2097,6 +2097,17 @@ export class Models extends EventEmitter {
       },
     ];
   }
+}
+
+// What the per-device Models screen draws for a computer's wake state (components.js wakeStatus,
+// sleepPolicy): the approved styleguide states.
+export interface WakeScreen {
+  state: 'asleep' | 'waking' | 'awake' | 'failed';
+  pill: string;
+  lines: string[];
+  waiting?: { text: string; since: string };
+  actions?: { action: string; label: string }[];
+  policy: { idle: string; demand: string; notes: string[] };
 }
 
 // `reason`: why a wake was refused or failed (a WakeRefusal, `not_sent` or `no_answer`); `retry_at`:

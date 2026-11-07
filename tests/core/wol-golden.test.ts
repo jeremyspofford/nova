@@ -105,7 +105,7 @@ test('golden case 1: the Dell, woken by the hub: 3 packets to 192.168.1.255:9 fr
     assert.deepEqual(rows(x.core, x.d.id).at(-1), { outcome: 'awake', origin: 'routing', sender: 'hub', reason: null, waited_ms: 3000 });
     const ev = x.core.ledger.events(task.id).filter((e) => e.kind === 'wake');
     assert.equal((ev.at(-1)!.detail as { outcome: string }).outcome, 'awake');
-    assert.equal(x.spoke.requests.filter((r) => r.path === '/api/chat').length, 1, 'the model loaded and ran there');
+    assert.equal(x.spoke.requests.filter((r: { path: string }) => r.path === '/api/chat').length, 1, 'the model loaded and ran there');
     assert.equal((await wakeView(x.core, x.d.id)).state, 'awake');
   } finally {
     await x.close();
@@ -218,7 +218,7 @@ test('golden case 8: woke, no longer fits: the fresh heartbeat shows 18 GB of vi
   });
   try {
     await assert.rejects(x.core.models.infer({ role: 'reasoner', messages: big, task_id: hostTask(x.core).id }), /Dell desktop woke, but 18 GB of its video memory is in use by other programs now, so example-deep:32b at \S+ with 4k context doesn’t fit/);
-    assert.equal(x.spoke.requests.filter((r) => r.path === '/api/chat').length, 0, 'nothing loaded');
+    assert.equal(x.spoke.requests.filter((r: { path: string }) => r.path === '/api/chat').length, 0, 'nothing loaded');
     assert.equal(rows(x.core, x.d.id).at(-1)!.outcome, 'awake', 'the wake itself worked');
   } finally {
     await x.close();
@@ -376,10 +376,11 @@ test('golden case 16: a standby takes over while the Dell sleeps: it has the Del
     // The old hub's log, applied on the new one (as a standby's pull would), less what is the new
     // hub's own: everything replicated, the Dell's hardware and wake history among it.
     const from = new SyncLog({ db: a.core.db, log: new Log(a.core.db, null), home: mkdtempSync(join(tmpdir(), 'nova-wol-a-')), node: 'hub', now: () => new Date() });
-    const batch = from.batch(0, { limit: 10_000 });
+    const batch = from.batch(0, { limit: 10_000, peerSchema: 26 });
     assert.ok(batch.rows.some((r) => r.tbl === 'device_hardware' && r.pk === a.d.id));
     assert.ok(batch.rows.some((r) => r.tbl === 'device_wake'));
     b.core.db.run('DELETE FROM device_wake');
+    b.core.db.run('DELETE FROM sync_log');
     // The new hub's own sample Dell isn't part of this story (it would share the MAC).
     b.core.db.run('DELETE FROM device_hardware WHERE device_id = ?', b.d.id);
     b.core.db.raw.exec('UPDATE sync_state SET logging = 0 WHERE id = 1');
@@ -394,6 +395,8 @@ test('golden case 16: a standby takes over while the Dell sleeps: it has the Del
     assert.equal(w.ok, true, w.words);
     assert.deepEqual(b.wol.packets.map((p) => [p.host, p.port, p.bind]), Array(3).fill(['192.168.1.255', 9, '192.168.1.10']));
     assert.equal(a.wol.packets.length, 0);
+    // The history came along, so the limits count from it: the old hub's wake and the new one's.
+    assert.equal(b.core.db.all("SELECT 1 FROM device_wake WHERE device_id = ? AND outcome = 'awake'", a.d.id).length, 2);
   } finally {
     await a.close();
     await b.close();
