@@ -38,7 +38,7 @@ test('M6b: Settings › Models — device map, recommendation, roles, a download
     assert.match((await hub.textContent()) ?? '', /Ollama 0\.0\.0-stand-in · 5 models/);
     // One recommendation per role, with why and the trade-off; transcription says it has no runtime.
     const reasoner = section.locator('.model-role[data-role="reasoner"]');
-    assert.match((await reasoner.textContent()) ?? '', /Nova recommends example-deep:32b: example-deep:32b \(32\.8B parameters, 19 GB\) is the deepest model that fits Example GPU 24GB with 24 GB\./);
+    assert.match((await reasoner.textContent()) ?? '', /Nova recommends example-deep:32b: example-deep:32b \(32\.8B parameters, 18 GB\) is the deepest model that fits Example GPU 24GB with 24 GB\./);
     assert.match((await section.locator('.model-role[data-role="transcriber"]').textContent()) ?? '', /There is no transcription runtime on your devices .* so transcription stays off\. Nothing is sent elsewhere to transcribe instead\./);
     assert.equal(await section.locator('.btn.primary').count(), 1, 'one standout');
     assert.equal(await section.locator('.btn.primary').textContent(), 'Use these');

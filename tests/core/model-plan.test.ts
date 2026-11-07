@@ -23,7 +23,8 @@ test('a 24 GB card with nothing installed plans from the catalog: coding at 16k 
   const candidates = planCandidates(empty(), { privacy: 'local-only', cloud: null });
   const advise = (task: 'general-chat' | 'coding' | 'vision' | 'embeddings') => recommendFit({ device: gpuDevice(24), privacy: 'local-only', task, hub: true, candidates });
   const chat = advise('general-chat');
-  assert.deepEqual([chat.pick?.name, chat.pick?.quant, chat.pick?.verdict], ['qwen3:32b', 'Q4_K_M', 'tight']);
+  // 32B at Q4_K_M is only Tight here, so it is never the pick (owner, 2026-11-06).
+  assert.deepEqual([chat.pick?.name, chat.pick?.quant, chat.pick?.verdict], ['qwen3:14b', 'Q8_0', 'fits']);
   const coding = advise('coding');
   assert.deepEqual([coding.pick?.name, coding.pick?.quant, coding.pick?.context, coding.pick?.verdict], ['qwen3:14b', 'Q8_0', 16384, 'fits']);
   assert.deepEqual([coding.alternative?.name, coding.alternative?.quant], ['qwen3:8b', 'Q8_0']);
