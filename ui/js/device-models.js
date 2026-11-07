@@ -35,6 +35,11 @@ const asks = new Map();
 const said = new Map();
 const busy = new Set();
 const following = new Map();
+// A tight plan's acknowledgement, per device: the plan it was ticked for. Never stored; any change to
+// the plan, or a new plan, clears it, and it counts only while the plan is that one.
+const acks = new Map();
+const planKey = (d) => JSON.stringify(withRoles(d, planOf(d)).map((m) => [m.name, m.quant, m.context, m.role]));
+const acked = (d) => acks.get(d.id) === planKey(d);
 
 // The screen Settings › Devices shows instead of its list, or null.
 let screen = null;
@@ -156,7 +161,7 @@ function viewOf(d, where) {
     id: `dm-${where}-${d.id.replace(/[^\w-]/g, '')}`, privacy: data.privacy, plan, total, advice,
     catalog: p.candidates.filter((c) => c.where === 'local').map((c) => c.name),
     crumb: where === 'setup' ? `Setup › ${d.name}` : undefined,
-    confirm: ask ? confirmOf(d, planOf(d)) : null, status: said.get(d.id) ?? null, busy: busy.has(d.id),
+    confirm: ask ? confirmOf(d, planOf(d)) : null, status: said.get(d.id) ?? null, busy: busy.has(d.id), acked: acked(d),
     device: { name: d.name, hardware: hardwareLine(d), memory: device.memory, budget_bytes: device.budget_bytes, budget_source: device.budget_source, ram_bytes: d.hardware.ram_bytes, overhead_source: device.overhead_source, overhead_loads: p.overhead.n, seen: seenLine(d), wake: wakeOf(d) },
   };
 }
@@ -293,12 +298,14 @@ const keyOf = (el) => el.closest('[data-device-models]')?.dataset.deviceModels ?
 
 async function install(d) {
   const rows = confirmOf(d, planOf(d)).rows;
+  const ack = acked(d);
   busy.add(d.id);
   asks.delete(d.id);
+  acks.delete(d.id);
   said.set(d.id, 'Asking Nova to install and assign.');
   redraw(d.id);
   try {
-    const r = await api('POST', '/models/install', { device: d.id, plan: rows.map((m) => ({ model: m.name, quant: m.quant, context: isEmbed(cand(d, m.name)) ? null : m.context, role: m.role ?? null })) });
+    const r = await api('POST', '/models/install', { device: d.id, plan: rows.map((m) => ({ model: m.name, quant: m.quant, context: isEmbed(cand(d, m.name)) ? null : m.context, role: m.role ?? null })), ...(ack ? { accept_tight: true } : {}) });
     // The person's OK above is the OK each download waits for, given now, one task at a time.
     const failed = [];
     for (const t of r.tasks) {
@@ -334,11 +341,13 @@ export function bindDeviceModels(root) {
     if (!d?.plan) return;
     if (t.dataset.modelsSleep !== undefined) { setSleep(d, t.dataset.modelsSleep, t.value); return; }
     const plan = planOf(d);
+    if (t.dataset.modelsAck !== undefined) { if (t.checked) acks.set(d.id, planKey(d)); else acks.delete(d.id); redraw(d.id, t.id); return; }
     if (t.dataset.modelsQuant !== undefined) { const m = plan[Number(t.dataset.modelsQuant)]; if (m) m.quant = t.value; }
     else if (t.dataset.modelsContext !== undefined) { const m = plan[Number(t.dataset.modelsContext)]; if (m) { const c = cand(d, m.name); m.context = contextsOf(c, m.context)[Number(t.value)] ?? m.context; } }
     else return;
     asks.delete(d.id);
     said.delete(d.id);
+    acks.delete(d.id);
     redraw(d.id, t.id);
   });
   root.addEventListener('click', (e) => {
@@ -360,6 +369,7 @@ export function bindDeviceModels(root) {
     if (a === 'models-wake-again' || a === 'models-cloud-once') { wakeAction(d, a); return; }
     asks.delete(d.id);
     said.delete(d.id);
+    acks.delete(d.id);
     if (a === 'models-remove') { plan.splice(Number(b.dataset.index), 1); redraw(d.id, `${key}-add`); return; }
     let entry;
     if (a === 'models-add') {

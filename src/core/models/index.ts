@@ -19,7 +19,7 @@ import { chatMessages } from '../providers/openai.ts';
 import { str, type Usage } from '../providers/types.ts';
 import { checkHardware, detectHardware, gb, hardwareWords, privateAddress, type Hardware } from './hardware.ts';
 import { Ollama, RuntimeDown, runsRemotely, type InstalledModel, type LoadedModel, type Message, type ModelShape } from './ollama.ts';
-import { CATALOG, HEADROOM, ROLES, ROLE_WORDS, capacityWords, fitDevice, installedModel, isEmbedder, isText, planCandidates, quantTag, recommend, roleContext, type DeviceModels, type Pick, type Role, type RoleAdvice } from './recommend.ts';
+import { CATALOG, HEADROOM, ROLES, ROLE_WORDS, capacityWords, fitDevice, installedModel, isEmbedder, isText, planCandidates, quantTag, recommend, roleContext, roleFit, type DeviceModels, type Pick, type Role, type RoleAdvice } from './recommend.ts';
 import { deviceBudget, fit, learnOverhead, overheadWords, priorOverhead, unifiedBudgetBytes, weightsBytes, type LearnedOverhead, type Quant } from './fit.ts';
 import { hubCards, parseTarget, sendMagic, targetOnRoute, wakeRoute, type Card, type RouteRefusal, type Sender, type WakeRoute } from './wake.ts';
 import type { Db } from '../db.ts';
@@ -51,6 +51,8 @@ export interface Placement { device: string; runtime: 'ollama'; url: string; mod
 export const CONTEXT_MIN = 512;
 export const CONTEXT_MAX = 1_048_576;
 const okContext = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= CONTEXT_MIN && (v as number) <= CONTEXT_MAX;
+// Why a Tight fit waits for the person (the owner, 2026-11-06): Nova never picks one for them.
+const TIGHT_WORDS = 'It leaves little memory headroom, so replies may slow down sharply or fail under load. Nova installs or assigns it only once you acknowledge that for this plan (accept_tight: true).';
 
 export interface Cloud { name: string; base_url: string; model: string; api_key?: string; usd_per_mtok_in?: number; usd_per_mtok_out?: number; max_tokens?: number }
 // The longest reply a cloud call may give, unless the person set one: it bounds what a call costs.
@@ -479,16 +481,32 @@ export class Models extends EventEmitter {
   }
 
   async #deviceModels(): Promise<DeviceModels[]> {
-    const hub = await this.inventory(HUB);
-    const hubUrl = this.hubUrl();
-    const out: DeviceModels[] = [{ id: HUB, name: this.#o.hubName(), hub: true, hardware: await this.hubHardware(), models: hub.ok || hub.models.length ? await this.#withShapes(hubUrl, hub) : null, url: hubUrl, overhead: this.overhead(HUB) }];
+    const out: DeviceModels[] = [await this.#deviceModel(HUB)];
     // Only computers that may run model work are recommended for it.
-    for (const d of this.#spokes().filter((x) => this.#computes(x.id))) {
-      const url = this.#urlFor(d.id);
-      const inv = url ? await this.inventory(d.id, { timeoutMs: 1200 }) : null;
-      out.push({ id: d.id, name: d.name, hub: false, hardware: this.#spokeHardware(d.id), models: url && inv && (inv.ok || inv.models.length) ? await this.#withShapes(url, inv) : null, url, overhead: this.overhead(d.id) });
-    }
+    for (const d of this.#spokes().filter((x) => this.#computes(x.id))) out.push(await this.#deviceModel(d.id));
     return out;
+  }
+
+  async #deviceModel(id: string): Promise<DeviceModels> {
+    if (id === HUB) {
+      const hub = await this.inventory(HUB);
+      const hubUrl = this.hubUrl();
+      return { id: HUB, name: this.#o.hubName(), hub: true, hardware: await this.hubHardware(), models: hub.ok || hub.models.length ? await this.#withShapes(hubUrl, hub) : null, url: hubUrl, overhead: this.overhead(HUB) };
+    }
+    const url = this.#urlFor(id);
+    const inv = url ? await this.inventory(id, { timeoutMs: 1200 }) : null;
+    return { id, name: this.#deviceName(id), hub: false, hardware: this.#spokeHardware(id), models: url && inv && (inv.ok || inv.models.length) ? await this.#withShapes(url, inv) : null, url, overhead: this.overhead(id) };
+  }
+
+  // Whether a model may serve a role on a device, by the fit engine: Won't fit never; Tight only with
+  // the person's acknowledgement for it (accept_tight); null when it may, or Nova can't tell.
+  async #fitRefusal(device: string, model: string, role: Exclude<Role, 'transcriber'>, context: number | undefined, ack: boolean): Promise<string | null> {
+    const d = await this.#deviceModel(device);
+    const r = roleFit(d, model, role, context);
+    if (!r || r.verdict === 'fits' || (r.verdict === 'tight' && ack)) return null;
+    return r.verdict === 'wont-fit'
+      ? `${model} doesn’t fit on ${d.name}: ${r.words} Nothing was assigned.`
+      : `${model} is tight on ${d.name}: ${r.words} ${TIGHT_WORDS} Nothing was assigned.`;
   }
 
   // ---- model shapes and the learned overhead (model fit) ---------------------------------------
@@ -606,12 +624,18 @@ export class Models extends EventEmitter {
     if (!inv.models.some((m) => m.name === model)) {
       throw new CoreError('conflict', inv.ok ? `${this.#deviceName(device)} doesn’t have ${model}. Download it first.` : `Nova can’t check ${this.#deviceName(device)}’s models right now (${inv.problem}), and hasn’t seen ${model} there before.`);
     }
+    const ack = body.accept_tight === true;
+    const refusal = await this.#fitRefusal(device, model, r, context, ack);
+    if (refusal) throw new CoreError('conflict', refusal);
     const p: Placement = { device, runtime: 'ollama', url: device === HUB ? '' : url, model, ...(context ? { context } : {}) };
     const hubModel = str(body.hub_model);
     if (hubModel && device !== HUB) {
       const hub = await this.inventory(HUB);
       if (runsRemotely(hubModel, hub.models.find((m) => m.name === hubModel))) throw new CoreError('validation', cloudWords(hubModel));
       if (!hub.models.some((m) => m.name === hubModel)) throw new CoreError('conflict', `The hub doesn’t have ${hubModel}.`);
+      // The hub model serves the same role's small jobs, so it is fit-checked the same way.
+      const hubRefusal = await this.#fitRefusal(HUB, hubModel, r, context, ack);
+      if (hubRefusal) throw new CoreError('conflict', hubRefusal);
       p.hub_model = hubModel;
     }
     this.#set(`role.${r}`, p);
@@ -1489,7 +1513,7 @@ export class Models extends EventEmitter {
   }
 
   // Makes the download task for a request #pullCheck has passed. `assign` is installPlan's role.
-  #queuePull({ model, device, url, digest, known }: PullSpec, assign: { role: Role; context: number | null } | null): Task {
+  #queuePull({ model, device, url, digest, known }: PullSpec, assign: { role: Role; context: number | null; accept_tight?: true } | null): Task {
     const task = this.#o.ledger.create({
       title: `Download ${model}${device === HUB ? '' : ` on ${this.#deviceName(device)}`}`,
       owner: this.worker.id,
@@ -1510,7 +1534,7 @@ export class Models extends EventEmitter {
   // API's edge: the device must be one that may run model work, every model one Nova lists for it
   // (installed there, or in its catalog), never one that runs off the person's devices, each role
   // once, and the set must fit the device together (the fit engine, overhead and reserve counted
-  // once). Nothing is loosened: an installed model is assigned now, exactly as PUT
+  // once; a Tight set only with accept_tight, the person's acknowledgement). Nothing is loosened: an installed model is assigned now, exactly as PUT
   // /models/roles/{role} does; every download is the same tier-2 task POST /models/pull makes, which
   // waits for the person's OK, and its role is assigned only once Nova has verified the download.
   // A plan refused on any of these, or on a check a download is refused on at once (the disk
@@ -1563,6 +1587,10 @@ export class Models extends EventEmitter {
       models: items.map((x) => ({ name: x.model, params: x.c.params, weights_bytes: x.installed ? x.c.installed!.weights_bytes : null, quant: x.quant, context: x.context, arch: x.c.arch, arch_source: x.c.arch_source, kv_type: 'f16' })),
     });
     if (r.verdict === 'wont-fit') throw new CoreError('conflict', `That plan doesn’t fit on ${name}: ${r.words} Nothing was installed or assigned.`);
+    // Tight, only with the person's acknowledgement for this plan. The verdict for the whole plan
+    // covers each model in it: overhead and reserve count once, so no one model needs more than all.
+    const ack = body.accept_tight === true;
+    if (r.verdict === 'tight' && !ack) throw new CoreError('conflict', `That plan is tight on ${name}: ${r.words} ${TIGHT_WORDS} Nothing was installed or assigned.`);
     // Every download passes POST /models/pull's own checks (the disk budget among them) before
     // anything changes, so a plan refused here assigns nothing and makes no task.
     const pulls = [];
@@ -1578,11 +1606,11 @@ export class Models extends EventEmitter {
     const tasks: { id: string; title: string; model: string; role: Role | null; size: number | null; state: string }[] = [];
     try {
       for (const x of items.filter((y) => y.installed && y.role)) {
-        await this.assign(x.role, { device, model: x.model, ...(url ? { url } : {}), ...(x.role === 'embedder' ? {} : { context: x.context }) });
+        await this.assign(x.role, { device, model: x.model, ...(url ? { url } : {}), ...(x.role === 'embedder' ? {} : { context: x.context }), ...(ack ? { accept_tight: true } : {}) });
         assigned.push({ role: x.role!, model: x.model });
       }
       for (const { x, size, spec } of pulls) {
-        const t = this.#queuePull(spec, x.role ? { role: x.role, context: x.role === 'embedder' ? null : x.context } : null);
+        const t = this.#queuePull(spec, x.role ? { role: x.role, context: x.role === 'embedder' ? null : x.context, ...(ack ? { accept_tight: true } : {}) } : null);
         tasks.push({ id: t.id, title: t.title, model: x.model, role: x.role, size, state: t.state });
       }
     } catch (e) {
@@ -1605,7 +1633,7 @@ export class Models extends EventEmitter {
   #afterPull = new Set<string>();
   #assignAfterPull(t: Task): void {
     if (t.owner !== this.worker.id || t.state !== 'done' || this.#afterPull.has(t.id)) return;
-    const i = (t.brief.inputs ?? {}) as { action?: string; model?: string; device?: string; assign?: { role?: Role; context?: number | null } };
+    const i = (t.brief.inputs ?? {}) as { action?: string; model?: string; device?: string; assign?: { role?: Role; context?: number | null; accept_tight?: boolean } };
     if (i.action !== 'pull' || !isObj(i.assign) || !i.assign.role) return;
     this.#afterPull.add(t.id);
     const device = str(i.device) || HUB;
@@ -1616,7 +1644,8 @@ export class Models extends EventEmitter {
       const model = str(i.model);
       const got = inv.models.find((m) => m.name === model)?.name ?? inv.models.find((m) => m.name === `${model}:latest`)?.name ?? model;
       const url = device === HUB ? null : this.#urlFor(device);
-      await this.assign(role, { device, model: got, ...(url ? { url } : {}), ...(context ? { context } : {}) });
+      // The person's acknowledgement of a tight plan carries through to the assignment it asked for.
+      await this.assign(role, { device, model: got, ...(url ? { url } : {}), ...(context ? { context } : {}), ...(i.assign!.accept_tight === true ? { accept_tight: true } : {}) });
       this.#o.log.info('models', `${got} is downloaded and checked, so it now serves ${ROLE_WORDS[role].name.toLowerCase()} on ${this.#deviceName(device)}.`);
     })().catch((e) => this.#o.log.warn('models', `Nova downloaded ${i.model} but couldn’t give it its role.`, { error: (e as Error).message }));
   }
@@ -2075,10 +2104,10 @@ export class Models extends EventEmitter {
       { method: 'POST', path: '/models/refresh', summary: 'Read the hub’s hardware and every runtime again, now.', handle: async () => { await this.hubHardware(true); await this.#o.refreshed?.().catch(() => {}); return view(); } },
       { method: 'GET', path: '/models/versions', summary: 'Every model version Nova has seen on a device (?device=hub), by digest, with when it was first and last seen and when it went.', handle: ({ query }) => this.versions(query.get('device') ?? HUB) },
       { method: 'POST', path: '/models/roles/accept', summary: 'Assign every role Nova recommends from installed models. Roles needing a download or a runtime are left, and said.', handle: async () => ({ ...(await this.accept()), view: await view() }) },
-      { method: 'PUT', path: '/models/roles/{role}', summary: 'Assign a role (triage-text, reasoner, embedder) to an installed model on the hub or a paired computer. A computer’s url must be one of its own addresses; hub_model is what small jobs use while it sleeps.', body: '{model, device?, url?, hub_model?}', handle: async ({ params, body }) => ({ placement: await this.assign(params.role, body), view: await view() }) },
+      { method: 'PUT', path: '/models/roles/{role}', summary: 'Assign a role (triage-text, reasoner, embedder) to an installed model on the hub or a paired computer. A computer’s url must be one of its own addresses; hub_model is what small jobs use while it sleeps. Refused when the model (or the hub model) won’t fit the device; when it is tight, refused unless accept_tight is true, the person’s acknowledgement.', body: '{model, device?, url?, hub_model?, context?, accept_tight?}', handle: async ({ params, body }) => ({ placement: await this.assign(params.role, body), view: await view() }) },
       { method: 'DELETE', path: '/models/roles/{role}', summary: 'Leave a role unassigned.', handle: async ({ params }) => { this.unassign(params.role); return view(); } },
       { method: 'POST', path: '/models/pull', status: 201, summary: 'Download a model (a tier-2 ledger task: it waits for your OK). Refused at once when the disk budget can’t take it. digest: the sha256 to expect, if known.', body: '{model, device?, digest?}', handle: ({ body }) => this.requestPull(body) },
-      { method: 'POST', path: '/models/install', status: 201, summary: 'Install and assign a plan for one device (the Models screen): each model at its quant and context, with the role it serves, if any. Refused when a model isn’t one Nova lists for the device, runs off your devices, or the plan won’t fit together. An installed model is assigned now, as PUT /models/roles/{role}; each download is a tier-2 ledger task that waits for your OK, as POST /models/pull, and is assigned once Nova has verified it.', body: '{device?, plan: [{model, quant, context?, role?}]}', handle: ({ body }) => this.installPlan(body) },
+      { method: 'POST', path: '/models/install', status: 201, summary: 'Install and assign a plan for one device (the Models screen): each model at its quant and context, with the role it serves, if any. Refused when a model isn’t one Nova lists for the device, runs off your devices, or the plan won’t fit together; when it fits only tightly, refused unless accept_tight is true, the person’s acknowledgement for this plan. An installed model is assigned now, as PUT /models/roles/{role}; each download is a tier-2 ledger task that waits for your OK, as POST /models/pull, and is assigned once Nova has verified it.', body: '{device?, plan: [{model, quant, context?, role?}], accept_tight?}', handle: ({ body }) => this.installPlan(body) },
       { method: 'POST', path: '/models/remove', status: 201, summary: 'Remove an installed model (a tier-2 ledger task). A model serving a role must be replaced first.', body: '{model, device?}', handle: ({ body }) => this.requestRemove(body) },
       { method: 'PUT', path: '/models/wake', summary: 'Where Wake-on-LAN packets go (host:port; by default the broadcast address of the hub’s own card on the computer’s network; a target set here must be on that network too, or that computer’s wake is refused) and how long to wait for a computer never woken before (wait_s, 120 by default). After the first wake Nova waits as long as it took, half again, plus 2 s.', body: '{target?, wait_s?}', handle: async ({ body }) => { this.setWake(body); return view(); } },
       { method: 'PUT', path: '/models/disk-budget', summary: 'The most disk models may use, in GB (null for none). Downloads past it are refused.', body: '{gb}', handle: async ({ body }) => { this.setDiskBudget(body.gb); return view(); } },
