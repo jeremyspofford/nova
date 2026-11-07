@@ -7,8 +7,8 @@ import { DEFAULT_DESIGN_SYSTEM, IOS_STATUS_BAR_UNDECLARED, STATUS_BAR_TAG, iosSt
 
 const packages = readdirSync('design-systems').filter((f) => f.endsWith('.json'));
 
-test('six design systems ship: Orb Teal, Companion Light, and Era 2’s four themes', () => {
-  assert.deepEqual(packages.sort(), ['aurora.json', 'companion-light.json', 'nova.json', 'obsidian.json', 'orb-teal.json', 'paper.json']);
+test('seven design systems ship: Orb Teal, Companion Light, Era 2’s four themes, and Nebula (proposed)', () => {
+  assert.deepEqual(packages.sort(), ['aurora.json', 'companion-light.json', 'nebula.json', 'nova.json', 'obsidian.json', 'orb-teal.json', 'paper.json']);
   assert.equal(existsSync('ui/themes'), false, 'the Era 2 theme files are now packages');
 });
 

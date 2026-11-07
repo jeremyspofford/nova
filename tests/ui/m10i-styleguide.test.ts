@@ -58,7 +58,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         await p.locator('#sg-topology [data-topology-state="overview"]').waitFor();
         await p.locator('#sg-ds option').first().waitFor({ state: 'attached' });
         const packages = await p.locator('#sg-ds option').evaluateAll((els) => els.map((el) => (el as HTMLOptionElement).value));
-        assert.equal(packages.length, 6, 'all installed starter packages are covered');
+        assert.equal(packages.length, 7, 'all installed starter packages are covered');
         for (const pkg of packages) {
           if (!['phone', 'desktop'].includes(size) && pkg !== 'orb-teal') continue;
           const response = p.waitForResponse((r) => r.url().includes('/preview.css') && r.status() === 200);
