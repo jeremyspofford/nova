@@ -547,6 +547,14 @@ export class Runner extends EventEmitter {
     return new Interstitial({ home: this.config.home, ask: (...a) => this.decisions(...a), ledger: this.ledger, skillText: () => this.skills.get(IR_SKILL)?.body ?? '' });
   }
 
+  // The person's own text the model sees in every call (context.js buildSystem): MEMORY.md and
+  // yesterday's and today's notes. Its distinctive words make a search personal-derived.
+  irPersonal(now = new Date()) {
+    const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+    const days = [this.memory.today(yesterday), this.memory.today(now)].map((d) => join(this.config.home, 'memory', `${d}.md`)).filter((p) => existsSync(p)).map((p) => { try { return readFileSync(p, 'utf8'); } catch { return ''; } });
+    return [readStanding(this.config.home).find((f) => f.name === 'MEMORY.md')?.text ?? '', ...days].join('\n');
+  }
+
   // The model's field map and claims, out of its text; the claims are verified once each.
   async irBlocks(run, text, mode, task) {
     const b = readBlocks(text);
@@ -583,7 +591,7 @@ export class Runner extends EventEmitter {
     if (run.skills.has(skill.id)) return false;
     run.skills.set(skill.id, skill);
     if (skill.id === IR_SKILL && this.irEnabled()) {
-      run.ir = this.irHook().begin({ recall: run.recall ?? [], topic: run.question ?? '', model: this.chat()?.model ?? this.config.agentCmd, personal: run.helper ? '' : readStanding(this.config.home).find((f) => f.name === 'MEMORY.md')?.text ?? '' });
+      run.ir = this.irHook().begin({ recall: run.recall ?? [], topic: run.question ?? '', model: this.chat()?.model ?? this.config.agentCmd, personal: run.helper ? '' : this.irPersonal() });
       // A cached field map (public topic, same key): the model is handed it, and writes none.
       if (run.ir.cache === 'hit') this.record(sessionId, { type: 'interstitial', ...tag, phase: 'field-map', cached: true, words: `A field map for this topic is already cached (same skill, templates, model and privacy class). Use it as this run's field map; don't write a new one:\n${JSON.stringify(run.ir.field_map)}` });
     }

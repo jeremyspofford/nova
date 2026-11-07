@@ -433,3 +433,19 @@ test('Part 3 cost: the playbook carried in every call is the skill’s, so a run
     assert.ok(r.cost.overhead > 0);
   } finally { await h.close(); }
 });
+
+test('Part 3 P1: today’s notes are the person’s own text too (they are in every prompt)', async () => {
+  const { h, asked } = await start({
+    ask: (id, f) => (id === OUTBOUND ? (f.privacy_class === 'personal-derived' ? decided(OUTBOUND, 'withhold', nouls({ person: 0.2, record: 0.9, memory: 0.9 })) : SEND()) : USE()),
+    plan: (step) => [call('web_search', { query: 'side effects of trazodone' }), 'Sleep aids work in a few ways.'][step] ?? 'Done.',
+  });
+  try {
+    mkdirSync(join(h.home, 'memory'), { recursive: true });
+    writeFileSync(join(h.home, 'memory', `${h.nova.runner.memory.today()}.md`), '- Started trazodone tonight, per the clinic.\n');
+    const { s } = await h.run('Research sleep aids');
+    assert.equal(asked[0].fields.privacy_class, 'personal-derived');
+    assert.ok(!h.web.hits.some((x) => /trazodone/i.test(decodeURIComponent(x.url))));
+    const [rec] = steps(s, 'record');
+    assert.equal(rec.searches[0].from_memory, true);
+  } finally { await h.close(); }
+});
