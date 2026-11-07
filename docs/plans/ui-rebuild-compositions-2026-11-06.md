@@ -79,9 +79,9 @@ From the versioning spec (`nova-versioning-changelog-2026-11-03.md`) plus the de
 
 ## 5. Responsive
 
-Every frame across the house matrix (phone 390, tablet portrait 820, fold cover 344, fold half-open
+Every frame across the house matrix (phone 390, tablet portrait 820, a foldable's cover screen 412×960 and an older narrow one 344×882, its inner screen opened flat 832×750, half-open
 884×540, duo open 720×540, desktop 1440), in Chromium and WebKit, in Nebula light and dark: no
-horizontal scroll and nothing clipping sideways in any frame, 44 px targets (via `shortTargets`),
+horizontal scroll and nothing clipping sideways in any frame, no text overlapping other text, 44 px targets (via `shortTargets`),
 every control labelled, no duplicate ids, no page errors, no requests that change anything; axe
 on the stacked entries at phone and desktop. Under 720 px a frame drops the rail to a drawer (menu
 button in the title bar) and Settings becomes list-then-detail. Breakpoints are container queries,

@@ -23,11 +23,16 @@ const FRAMES = [
   ['ui-orb', 'orb-states'],
 ] as const;
 const ENTRIES = ['ui-shell-chat', 'ui-settings', 'ui-about', 'ui-orb'];
-// The house matrix.
+// The house matrix. Foldables (owner, 2026-11-07: used on the cover screen and opened): a current
+// book-style fold's cover screen (412×960 CSS px) and an older narrow one (344×882); its inner screen
+// opened flat, near-square (832×750); half-open in book posture (884×540); a dual-screen open (720×540).
 const MATRIX = {
-  'phone': { width: 390, height: 844 }, 'tablet-portrait': { width: 820, height: 1180 }, 'fold-cover': { width: 344, height: 882 },
+  'phone': { width: 390, height: 844 }, 'tablet-portrait': { width: 820, height: 1180 },
+  'fold-cover': { width: 412, height: 960 }, 'fold-cover-narrow': { width: 344, height: 882 }, 'fold-open': { width: 832, height: 750 },
   'fold-half-open': { width: 884, height: 540 }, 'duo-open': { width: 720, height: 540 }, 'desktop-1440': { width: 1440, height: 900 },
 };
+// The sizes the owner gets screenshots of.
+const SHOT_SIZES = new Set(['phone', 'desktop-1440', 'fold-cover', 'fold-open']);
 const THEMES = ['light', 'dark'] as const;
 const SHOTS = process.env.NOVA_UC_SHOTS ? resolve(process.env.NOVA_UC_SHOTS) : null;
 
@@ -66,7 +71,7 @@ async function open(page: Page, url: string, theme: string) {
 }
 
 // Each check queries and measures in one page.evaluate, so a redraw can't hand it stale nodes.
-async function geometry(page: Page, label: string) {
+async function geometry(page: Page, label: string, { overlap = true } = {}) {
   const width = page.viewportSize()!.width;
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= width, `${label}: no horizontal scroll`);
   assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-uc-frame], [data-uc-frame] *')]
@@ -77,6 +82,35 @@ async function geometry(page: Page, label: string) {
   assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-uc-frame] :is(button, a, input, select, textarea)')]
     .filter((e) => (e instanceof HTMLInputElement || e instanceof HTMLSelectElement || e instanceof HTMLTextAreaElement) ? !e.labels?.length : !(e.getAttribute('aria-label') || e.textContent?.trim()))
     .map((e) => e.outerHTML.slice(0, 80))), [], `${label}: every control is labelled`);
+  // No two runs of visible text overlap, checked on each full-screen frame (a stacked entry runs past
+  // the viewport, where what covers what can't be hit-tested) (a squeezed column passes every check above: the pipeline's
+  // sections once shared the toggle's .uc-track class and stacked their words on top of each other).
+  if (overlap) assert.deepEqual(await page.evaluate(() => {
+    const boxes: { r: DOMRect; t: string; el: Element }[] = [];
+    for (const frame of document.querySelectorAll('[data-uc-frame]')) {
+      const walk = document.createTreeWalker(frame, NodeFilter.SHOW_TEXT);
+      for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+        const el = n.parentElement!;
+        if (!n.textContent!.trim() || !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) || el.closest('.sr-only, [aria-hidden="true"]')) continue;
+        const range = document.createRange(); range.selectNodeContents(n);
+        for (const r of range.getClientRects()) {
+          if (r.width <= 1 || r.height <= 1) continue;
+          // Text under a drawer or scrim on purpose is covered at its centre: not "overlapping".
+          const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          if (top && !el.contains(top) && !top.contains(el)) continue;
+          boxes.push({ r, t: n.textContent!.trim().slice(0, 30), el });
+        }
+      }
+    }
+    const hits: string[] = [];
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i]!, b = boxes[j]!;
+      if (a.el === b.el) continue;
+      const w = Math.min(a.r.right, b.r.right) - Math.max(a.r.left, b.r.left), h = Math.min(a.r.bottom, b.r.bottom) - Math.max(a.r.top, b.r.top);
+      if (w > 2 && h > 2) hits.push(`"${a.t}" × "${b.t}"`);
+    }
+    return hits.slice(0, 8);
+  }), [], `${label}: no text overlaps other text`);
   const ids = await page.evaluate(() => [...document.querySelectorAll('[id]')].map((e) => e.id));
   assert.equal(new Set(ids).size, ids.length, `${label}: duplicate ids`);
 }
@@ -127,7 +161,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               await open(p, `${base}/styleguide?entry=${entry}&frame=${frame}`, theme);
               assert.equal(await p.locator(`[data-uc-frame="${frame}"]`).count(), 1, `${label}: the frame is drawn`);
               await geometry(p, label);
-              if (SHOTS && (size === 'desktop-1440' || size === 'phone')) {
+              if (SHOTS && SHOT_SIZES.has(size)) {
                 const folder = join(SHOTS, engine);
                 mkdirSync(folder, { recursive: true });
                 await p.mouse.move(0, 0);
@@ -146,7 +180,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
             // Every entry, all its frames stacked in the styleguide's column.
             for (const entry of ENTRIES) {
               await open(p, `${base}/styleguide?entry=${entry}`, theme);
-              await geometry(p, `${engine}/${size}/${theme}/${entry}`);
+              await geometry(p, `${engine}/${size}/${theme}/${entry}`, { overlap: false });
               if (engine === 'chromium' && theme === 'dark' && (size === 'phone' || size === 'desktop-1440')) {
                 if (!await p.evaluate(() => 'axe' in window)) await p.addScriptTag({ content: readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8') });
                 const axe = await p.evaluate(async () => (window as any).axe.run(document.querySelector('.sg-main'), { rules: { region: { enabled: false } } }));
