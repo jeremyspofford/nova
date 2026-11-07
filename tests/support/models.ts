@@ -65,13 +65,13 @@ export const SPOKE_LOOPBACK = { name: 'lo-test', mac: '02:00:5e:10:00:43', addre
 
 // A core whose hub Ollama is the stand-in at `ollama`, on the fixed hardware. Wakes always go to the
 // recorder (`wol`), so no test of the model manager can send a real packet.
-export function modelsCore(ollama: string, o: { privacy?: string; hardware?: Record<string, unknown>; secrets?: Record<string, string>; hubCards?: { name?: string; address: string; netmask: string }[]; now?: () => Date } = {}): { core: Core; home: string; wol: ReturnType<typeof wolRecorder> } {
+export function modelsCore(ollama: string, o: { privacy?: string; hardware?: Record<string, unknown>; secrets?: Record<string, string>; hubCards?: { name?: string; address: string; netmask: string }[]; now?: () => Date; models?: { wakePollMs?: number; wakeClock?: { now(): number; sleep(ms: number): Promise<void> }; wakeHealthyMs?: number } } = {}):{ core: Core; home: string; wol: ReturnType<typeof wolRecorder> } {
   const home = mkdtempSync(join(tmpdir(), 'nova-models-'));
   const hw = hubHardware(o.hardware ?? {});
   const wol = wolRecorder();
   const core = createCore({
     home, version: '0.1.0', trustedOrigin: () => true, secrets: (n) => o.secrets?.[n] ?? null, ...(o.now ? { now: o.now } : {}),
-    models: { ollamaUrl: ollama, hardware: async () => hw as never, watchMs: 100, wakePollMs: 50, hubCards: () => o.hubCards ?? HUB_LAN, wakeSender: wol.sender, wakeGapMs: 0 },
+    models: { ollamaUrl: ollama, hardware: async () => hw as never, watchMs: 100, wakePollMs: 50, hubCards: () => o.hubCards ?? HUB_LAN, wakeSender: wol.sender, wakeGapMs: 0, ...o.models },
   });
   core.profile.set('privacy', 'default', o.privacy ?? 'local-only', 'settings');
   return { core, home, wol };

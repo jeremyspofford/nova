@@ -114,7 +114,7 @@ export function quantOf(label: string): Quant {
 const contextFor = (role: Exclude<Role, 'transcriber'>, own: number | null | undefined) => (role === 'embedder' ? own ?? EMBED_CONTEXT : TASK_CONTEXT[ROLE_TASK[role]]!);
 
 // An installed model as the engine plans it: its own file size, its shape when the runtime said it.
-function installedModel(m: InstalledModel, role: Exclude<Role, 'transcriber'>): FitModel {
+export function installedModel(m: InstalledModel, role: Exclude<Role, 'transcriber'>): FitModel {
   const quant = quantOf(m.quantization);
   const params = m.params_b ? Math.round(m.params_b * 1e9) : Math.round((m.size * 8) / BITS_PER_WEIGHT[quant]);
   const arch = m.arch ?? null;
