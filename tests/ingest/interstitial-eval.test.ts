@@ -102,6 +102,25 @@ test('the harness runs every case against the stand-in seat; a model that says n
   } finally { await s.close(); }
 });
 
+test('the live-eval corpus: fixture-marked pages, known sets and roles, every case finds pages, the injection only in P2', async () => {
+  const { PAGES, SETS } = await import('./interstitial-eval/corpus/pages.js');
+  const { CASES } = await import('./interstitial-eval/corpus/cases.js');
+  const { search, pageHtml } = await import('./interstitial-eval/corpus/serve.js');
+  const roles = ['core', 'adjacent', 'false-analogy', 'gap', 'dead-end', 'injected'];
+  assert.equal(new Set(PAGES.map((p: { slug: string }) => p.slug)).size, PAGES.length, 'slugs are unique');
+  for (const p of PAGES) {
+    assert.ok(roles.includes(p.role) && p.sets.length && p.sets.every((s: string) => SETS.includes(s)), p.slug);
+    assert.match(pageHtml(p), /Fixture page written for Nova's Interstitial Research eval/, p.slug);
+    assert.doesNotMatch(p.body, /https?:\/\//, `${p.slug}: no links out`);
+  }
+  assert.deepEqual(PAGES.filter((p: { role: string }) => p.role === 'injected').map((p: { sets: string[] }) => p.sets), [['p2']]);
+  for (const [id, c] of Object.entries(CASES) as [string, { set: string; text: string }][]) {
+    if (c.set !== 'none') assert.ok(search(c.set, c.text).length > 0, `${id} finds pages with its own words`);
+  }
+  // G1–G3 each have core, adjacent, a false analogy and a gap page.
+  for (const s of ['g1', 'g2', 'g3']) for (const r of ['core', 'adjacent', 'false-analogy', 'gap']) assert.ok(PAGES.some((p: { sets: string[]; role: string }) => p.sets.includes(s) && p.role === r), `${s} ${r}`);
+});
+
 test('placeholder people only, and every input fits its template', () => {
   const names = new Set(cases.flatMap((c) => [...JSON.stringify(c.input).matchAll(/\b[A-Z][a-z]+ Placeholder\b/g)].map((x) => x[0])));
   for (const n of names) assert.match(n, /^(Alex|Sam|Jordan|Taylor) Placeholder$/);
