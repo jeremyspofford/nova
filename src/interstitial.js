@@ -31,7 +31,41 @@ const EXCERPT_MAX = 12_000;
 const BLOCK = /```interstitial-(field-map|claims)[ \t]*\r?\n([\s\S]*?)```/g;
 // shortcut: a correction is the person's next message opening with (or saying) that the answer was
 // wrong; a pattern, recorded as a heuristic. Upgrade to a template once corrections are an eval set.
-export const CORRECTION = /^\s*(no\b|nope\b|wrong\b|incorrect\b|actually\b|not (quite|right|true)\b|that['’]?s (not|wrong|incorrect))|\b(you(['’]re| are) wrong|that['’]?s (wrong|incorrect|not right|not true)|isn['’]?t (right|true|correct)|you missed|is a mistake)\b/i;
+// A topic about the person themself, or their own things.
+export const FIRST_PERSON = /\b(i|me|my|mine|myself|we|us|our|ours)\b/i;
+
+// The distinctive words of the person's own text (5+ letters, not a common word, not already in
+// the topic): a search carrying one may carry something of theirs. Kept in the run's state only.
+const COMMON = new Set('about above after again against along among another around because before being below between could doing during either every first found further getting going having which while other others their there these those thing things think through under until using where whether would should might never often since still today tomorrow yesterday right always people really maybe something someone general please thanks notes memory entry entries remember things'.split(' '));
+export function personalTerms(text, topic = '') {
+  const inTopic = new Set(String(topic).toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+  return new Set((String(text).toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => w.length >= 5 && !COMMON.has(w) && !inTopic.has(w)));
+}
+
+// What the answer claims that the run doesn't back (Part 3: headings were counted as layers, and an
+// answer could say "verified" or "searched" when nothing was). Codes only; the words are UNBACKED.
+export const UNBACKED = Object.freeze({
+  'adjacent-unchecked': 'it has adjacent or interstitial findings, but no claim behind them passed the check',
+  'gaps-unsearched': 'it lists gaps or dead ends as checked, but no search left Nova in this run',
+  'says-verified': 'it calls something verified, but no claim passed the check',
+  'says-searched': 'it says it searched, but no search left Nova in this run',
+});
+const NEGATED = /\b(not|never|no|nothing|none|unable|couldn['’]?t|can['’]?t|wasn['’]?t|weren['’]?t|isn['’]?t|aren['’]?t|without|un)\W*(\w+\W+){0,3}$/i;
+const said = (text, re) => [...text.matchAll(re)].some((m) => !NEGATED.test(text.slice(Math.max(0, m.index - 30), m.index)));
+export function unbacked(ir) {
+  const t = String(ir.text ?? '');
+  const low = t.toLowerCase();
+  const sent = ir.searches.some((s) => s.sent);
+  const usable = ir.claims.some((c) => c.verified);
+  const out = [];
+  if (!usable && ['adjacent findings', 'interstitial insight'].some((h) => low.includes(h))) out.push('adjacent-unchecked');
+  if (!sent && ['gaps confirmed', 'checked, nothing there'].some((h) => low.includes(h))) out.push('gaps-unsearched');
+  if (!usable && said(t, /\b(verified|fact-checked)\b/gi)) out.push('says-verified');
+  if (!sent && said(t, /\b(searched|search(?:es)? (?:found|showed|shows|returned|turned up)|looked (?:it )?up online)\b/gi)) out.push('says-searched');
+  return out;
+}
+
+export const CORRECTION =/^\s*(no\b|nope\b|wrong\b|incorrect\b|actually\b|not (quite|right|true)\b|that['’]?s (not|wrong|incorrect))|\b(you(['’]re| are) wrong|that['’]?s (wrong|incorrect|not right|not true)|isn['’]?t (right|true|correct)|you missed|is a mistake)\b/i;
 
 const order = (a, b) => (PRIVACY_CLASSES.indexOf(a) >= PRIVACY_CLASSES.indexOf(b) ? a : b);
 const canon = (u) => { try { const x = new URL(String(u ?? '')); x.hash = ''; return x.href; } catch { return null; } };
@@ -115,11 +149,16 @@ export class Interstitial {
   // that brought the person's own notes with it is personal-derived). topic: the person's message.
   // model: the chat model that writes the field map. A public topic whose map is cached under the
   // same key (errata E1) starts with that map: none is written again.
-  begin({ recall = [], topic = '', model = '' } = {}) {
+  // personal: the person's own text the model sees in this run (MEMORY.md); it never leaves the
+  // run's state. A topic about the person ("my", "our"…) or one that recalled notes is
+  // personal-derived: the model may fold their details into it whatever was recalled (Part 3 P1).
+  begin({ recall = [], topic = '', model = '', personal = '' } = {}) {
+    const mine = FIRST_PERSON.test(String(topic));
     const ir = {
-      started: Date.now(), privacy_class: recall.length ? 'personal-derived' : 'public', topic: String(topic), model: String(model),
+      started: Date.now(), privacy_class: recall.length || mine ? 'personal-derived' : 'public', topic: String(topic), model: String(model),
       field_map: null, field_map_errors: null, cache: 'miss', searches: [], sources: [], claims: [], claim_errors: null, decisions: [],
       tokens: { core: 0, skill: 0 }, last: 'core', text: '',
+      personal_terms: personalTerms([personal, ...recall.map((n) => n?.text ?? '')].join('\n'), topic),
     };
     if (ir.privacy_class === 'public') {
       const hit = this.#maps()[this.cacheKey(ir, 'public')];
@@ -154,16 +193,23 @@ export class Interstitial {
   #opts(ir, mode, task) { return { subsystem: 'interstitial-research', task_id: task ?? null, privacy_mode: mode }; }
 
   // Before a web_search leaves: a trusted "send", or the query stays here.
+  // why_withheld: 'untrusted' (no check has passed its eval, so nothing goes whatever the query) or
+  // 'judged' (a trusted check said withhold). A query that carries a term from the person's own
+  // text makes the run personal-derived before the check is asked.
   async outbound(ir, query, mode, task = null) {
     const q = String(query ?? '').slice(0, 500);
+    const words = new Set(q.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+    const personal = [...(ir.personal_terms ?? [])].some((t) => words.has(t));
+    if (personal) ir.privacy_class = order('personal-derived', ir.privacy_class);
     let d = null;
     try { d = await this.ask(OUTBOUND, { query: q, privacy_class: ir.privacy_class }, this.#opts(ir, mode, task)); } catch { d = null; }
     ir.decisions.push(decisionOf(d, OUTBOUND));
     const send = d?.outcome === 'send';
+    const trusted = !!d && d.trust !== 'none';
     const cell = ir.field_map?.search_matrix.find((m) => m.query.trim().toLowerCase() === q.trim().toLowerCase())?.cell ?? 'core';
-    ir.searches.push({ query: q, cell, sent: send, outcome: d?.outcome ?? 'withhold', decision: d?.id ?? null });
+    ir.searches.push({ query: q, cell, sent: send, outcome: d?.outcome ?? 'withhold', decision: d?.id ?? null, ...(personal ? { from_memory: true } : {}), ...(send ? {} : { why_withheld: trusted ? 'judged' : 'untrusted' }) });
     ir.last = /^core$/i.test(cell) ? 'core' : 'skill';
-    return { send, why: d?.why ?? 'The outbound check gave no answer.' };
+    return { send, trusted, why: d?.why ?? 'The outbound check gave no answer.' };
   }
 
   fieldMap(ir, block) {
@@ -209,8 +255,18 @@ export class Interstitial {
     return out;
   }
 
-  // A model call's tokens, counted to the part of the run that led to it.
-  tokens(ir, n) { if (Number.isFinite(n) && n > 0) ir.tokens[ir.last] += n; ir.last = 'core'; }
+  // A model call's tokens, counted to the part of the run that led to it. skill: the tokens of this
+  // call spent carrying the skill's playbook (it rides in every call after it loads), always the
+  // skill's; the rest goes to whichever part led to the call. Without that share a run whose
+  // searches were all core would report no overhead however much the playbook cost (Part 3).
+  tokens(ir, n, skill = 0) {
+    if (Number.isFinite(n) && n > 0) {
+      const s = Number.isFinite(skill) && skill > 0 ? Math.min(Math.round(skill), n) : 0;
+      ir.tokens.skill += s;
+      ir.tokens[ir.last] += n - s;
+    }
+    ir.last = 'core';
+  }
 
   // The per-run record (SKILL.md §7).
   record(ir, { meter = null } = {}) {
@@ -234,6 +290,7 @@ export class Interstitial {
       quarantined: ir.claims.filter((c) => c.outcome === 'quarantine').length,
       discarded: ir.claims.filter((c) => c.outcome === 'discard').length,
       layers: LAYERS.filter((l) => ir.text.toLowerCase().includes(l.toLowerCase())),
+      unbacked: unbacked(ir),
       cost: {
         searches: { core: ir.searches.filter((s) => s.sent && s.cell.toLowerCase() === 'core').length, skill: ir.searches.filter((s) => s.sent && s.cell.toLowerCase() !== 'core').length, withheld: ir.searches.filter((s) => !s.sent).length },
         tokens: { core: ir.tokens.core, skill: ir.tokens.skill, total: spent ? spent.tokens_in + spent.tokens_out : null },
