@@ -17,18 +17,21 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: calc(var(--space-7) + var(--space-1));
-  padding: var(--space-2) var(--space-5);
+  min-height: calc(var(--hit) + var(--space-2));
+  padding: var(--space-1) var(--space-4);
 }
+/* One line: a small strong title, not a heading-sized one. */
 .topbar-title {
   flex: 1;
   min-width: 0;
-  font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-display);
+  margin: 0;
+  font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body);
+  color: var(--text-primary);
   /* A long title wraps rather than losing its end (M9: 200% text keeps all the words). */
   overflow-wrap: anywhere;
-  text-wrap: balance;
 }
-.topbar-orb { align-items: center; }
+/* Nova's small orb sits at the bar's right end. */
+.topbar-orb { align-items: center; margin-inline-end: var(--space-2); }
 .scroller {
   flex: 1;
   min-height: 0;
@@ -717,6 +720,26 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 }
 .composer textarea::placeholder { color: var(--text-secondary); }
 .composer textarea:focus-visible { outline: none; }
+/* The chat's composer is two rows: the field on top, and under it a bar with the privacy chip on
+   the left and the microphone and Send/Stop on the right. The field's cap leaves room for the bar,
+   so the whole control still stays at about a quarter of the screen. */
+.composer-rows { flex-direction: column; align-items: stretch; gap: var(--space-1); padding: var(--space-2); }
+.composer-rows textarea { flex: none; max-height: calc(25dvh - var(--hit)); padding: var(--space-2); }
+.composer-bar { display: flex; align-items: center; gap: var(--space-1); }
+.composer-rows .mic { margin-inline-start: auto; }
+.composer-rows .send { border-radius: var(--radius-input); }
+.privacy-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  min-height: var(--hit);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-input);
+  color: var(--text-secondary);
+  font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-body);
+  text-decoration: none;
+}
+.privacy-chip:hover { background: var(--surface-card-hover); color: var(--text-primary); }
 .send, .mic {
   display: grid;
   place-items: center;
