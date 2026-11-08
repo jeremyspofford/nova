@@ -13,6 +13,7 @@ import { ORB_STATES } from './status.js';
 import { renderTopology } from './topology-view.js';
 import { escapeHtml as esc } from './markdown.js';
 import { workCosts, diagnosticsDownload, configImport, configSetup, configProposal, passkeySetup, PASSKEY_STATES, PASSKEY_SETUP_STATES, deviceModels } from './components.js';
+import { aboutCard, changelogEntry, pipelineRow, versionStamp } from './components.js';
 import * as fitEngine from './fit-engine.js';
 import { UC_FRAMES, entryOf, ucEntry, ucFrame } from './sg-compositions.js';
 import { bindStatusIcons, statusIconEntry } from './sg-status-icons.js';
@@ -422,6 +423,34 @@ function costFixture() {
   }
   return { state: costState, view: ['loading', 'unavailable'].includes(costState) ? null : { accounting, limits, month: { month: '2026-11', providers, total: providers.reduce((sum, p) => Object.fromEntries(Object.keys(sum).map((k) => [k, sum[k] + p[k]])), empty) } }, invalid: costState === 'invalid' ? { 'task.usd': 'Enter a finite number greater than zero, or choose Unlimited.' } : {} };
 }
+// About Nova, What's new, Where Nova stands and the version stamp (the app's /about, /changelog,
+// /pipeline and the rail's foot), from sample builds and entries in the shapes the core returns.
+const aboutRunning = 'b66f2c51'.padEnd(40, '0');
+const aboutLatest = '8001cd2a'.padEnd(40, '0');
+const aboutBuilds = {
+  current: { version: '0.1.0-alpha.2', commit: aboutRunning, commit_short: 'b66f2c51', built_at: '2026-11-08T21:02:00.000Z', latest: { commit: aboutRunning, merged_at: '2026-11-08T20:58:00.000Z' }, behind: false, words: 'Running b66f2c51, the latest merged build.' },
+  pending: { version: '0.1.0-alpha.2', commit: aboutRunning, commit_short: 'b66f2c51', built_at: '2026-11-08T21:02:00.000Z', latest: { commit: aboutLatest, merged_at: '2026-11-08T22:40:00.000Z' }, behind: true, words: 'Running b66f2c51, latest merged 8001cd2a — redeploy pending.' },
+  unknown: { version: '0.1.0-alpha.2', commit: aboutRunning, commit_short: 'b66f2c51', started_at: '2026-11-08T21:05:00.000Z', latest: null, behind: null, words: 'Running b66f2c51; Nova doesn’t know the latest merged build.' },
+};
+const aboutRelease = { version: '0.1.0-alpha.2', date: '2026-11-08', sections: [{ name: 'Added', items: ['About Nova says which build is running and whether a newer merged one is waiting to be deployed.', 'What’s new lists every change in plain words, newest first.'] }, { name: 'Fixed', items: ['The version at the foot of the navigation opens About.'] }] };
+const aboutWaiting = { waiting: true, sections: [{ name: 'Changed', items: ['Where Nova stands shows each piece of work with the record behind its state.'] }] };
+const aboutItems = [
+  { id: 'm9', name: 'M9 · Feel and polish', state: 'merged', why: 'Its gate evidence is filed.', evidence: { kind: 'gate', path: 'docs/evidence/m9-gate.md', title: 'M9 gate: evidence' } },
+  { id: 'm10', name: 'M10 · Execution Plane', state: 'progress', why: '9 of its 11 phases are merged; M10j, M10k not yet.', evidence: { kind: 'plan', path: 'docs/plans/M10.md', title: 'M10 plan: the Execution Plane' } },
+  { id: 'ui-design', name: 'A proposed calmer look, shown on the real app', state: 'designed', why: 'A design merged; the ledger has no build for it in this entry.', evidence: { kind: 'ledger', path: 'docs/ledger/2026-11-06-sample.md', title: 'A proposed calmer look, shown on the real app', date: '2026-11-06', changed: 'Nothing in the app yet: the styleguide shows the proposal.', now: 'React to the proposal.', unfinished: 'All of the building.' } },
+  { id: 'm10k', name: 'M10k · A phase the roadmap names', state: 'none', why: 'The roadmap names it; it has no plan or evidence yet.', evidence: { kind: 'roadmap', path: 'docs/builder-packet/ROADMAP-AND-GATES.md', title: 'M10k, named in the roadmap' } },
+];
+function aboutEntry() {
+  const card = (label, html) => state(label, `<div class="view about sg-about-view">${html}</div>`);
+  const stamp = (label, v, open) => state(label, `<div class="sg-stamp${open ? ' sg-stamp-open' : ''}">${versionStamp(v)}</div>`);
+  return `<div class="sg-pair">${card('About: the latest merged build', aboutCard({ build: aboutBuilds.current }))}${card('About: redeploy pending', aboutCard({ build: aboutBuilds.pending }))}</div>
+<div class="sg-pair">${card('About: latest merged build unknown, start time only', aboutCard({ build: aboutBuilds.unknown }))}${card('About: reading', aboutCard({ state: 'loading' }))}${card('About: the server didn’t answer', aboutCard({ state: 'failed' }))}</div>
+<div class="sg-pair">${stamp('Stamp, open rail and drawer', aboutBuilds.current, true)}${stamp('Stamp, redeploy pending', aboutBuilds.pending, true)}${stamp('Stamp, slim rail', aboutBuilds.current, false)}${stamp('Stamp, slim rail, pending', aboutBuilds.pending, false)}</div>
+${state('Changelog entry: merged, not yet in a version', `<div class="view about sg-about-view">${changelogEntry(aboutWaiting)}</div>`)}
+${state('Changelog entry: the version running', `<div class="view about sg-about-view">${changelogEntry({ ...aboutRelease, running: true })}</div>`)}
+${state('Pipeline rows: merged, in progress, designed, not started (open one for its evidence)', `<div class="view about sg-about-view"><ul class="pipeline-list">${aboutItems.map((it) => pipelineRow(it)).join('')}</ul></div>`)}`;
+}
+
 function healthEntry(kind) {
   const costs = kind === 'work-costs';
   const selected = costs ? costState : diagnosticState;
@@ -687,6 +716,7 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
       ['memory-card', 'MemoryHighlightCard', 'One thing Nova kept, or that nothing is kept yet.',
         () => `<div class="sg-cards">${state('Kept', memoryHighlightCard({ records: [{ active: true, user_state: 'active', kind: 'preference', content: 'Prefers short answers before nine.', created_at: at(-2) }] }))}${state('Nothing yet', memoryHighlightCard())}</div>`],
       ['config-doors', 'Configuration: three doors (proposed)', 'A file, the form or a chat with Nova: one layered store, the same diff before anything applies, a layer on every setting. Demo only.', () => configEntry()],
+      ['about-nova', 'About Nova, What’s new, Where Nova stands and the version stamp', 'The running build said honestly: up to date, redeploy pending, or not known, with when it was built (or started). A changelog entry in plain words, the version running marked. A pipeline row: name, state, and the record behind the state one tap away. The stamp at the foot of the rail (and of a phone’s navigation drawer), a link to About.', aboutEntry],
       ['models-screen', 'Models on a device (proposed)', 'A device’s memory budget as one labelled bar, each planned model with its quant, context and verdict, whether several stay loaded together, and picks per task with privacy first; proposed: waking a sleeping device, and its sleep policy. Real fit-engine numbers; demo only.', () => modelsEntry()],
       ['passkey-approval', 'Passkey confirmation', 'Tier 3 on Nova’s own screen, confirmed with a passkey so a program on this computer can’t approve itself. Tiers 0–2 are unchanged. Demo only: no passkey is requested.', () => passkeyEntry()],
       ['approval-sheet', 'ApprovalSheet', 'Tiered: tier 2 asks; tier 3 needs an explicit confirmation every time.',

@@ -92,6 +92,8 @@ import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
 import { Self } from './self.ts';
 import { Build } from './build.ts';
+import { changelogView } from './changelog.ts';
+import { pipelineView } from './pipeline.ts';
 import { Caps, capsRoutes } from './caps/index.ts';
 import { buildDiagnostics, diagnosticsRoutes } from './diagnostics/index.ts';
 import { CODE_ROOT } from './resilience/sandbox.ts';
@@ -1126,6 +1128,12 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     // The running build and whether it is the latest merged (build.ts): read-only, from the
     // environment, the code's checkout and the deploy step's file; never the network.
     { method: 'GET', path: '/version', summary: 'The running build: version, commit, when it was built (or, when that isn’t known, when it started), the latest merged build as the deploy step recorded it, and whether a redeploy is pending, in plain words.', handle: () => build.view() },
+    // What changed and where Nova stands (About; docs/builder-packet/nova-about-deploy-visibility-
+    // delta-2026-11-06.md): read-only, at person access like /version, from fixed files in the code's
+    // own checkout (CHANGELOG.md and docs/changelog/; the roadmap, gate evidence, plans and ledger),
+    // read on every ask. No parameter names a file, nothing is written, and no network is asked.
+    { method: 'GET', path: '/changelog', summary: 'What changed in Nova, newest version first, as CHANGELOG.md says it; the changes merged but not yet in a version; and the running version, to compare with.', handle: () => changelogView(CODE_ROOT, { version: build.identity.version, commit_short: build.identity.commit_short }) },
+    { method: 'GET', path: '/pipeline', summary: 'Where Nova stands: each workstream’s items (merged, in progress, designed or not started) with the evidence behind each state, generated from the roadmap, gate evidence, plans and the ledger.', handle: () => pipelineView(CODE_ROOT) },
     // The ingest gate (Amendment 2026-10-30-C Part 3).
     { method: 'GET', path: '/ingest/screens', summary: 'The latest screens of outside content: source, scores, flags and verdict, by hash; never the content. ?limit=', handle: ({ query }) => ingest.list(Number(query.get('limit')) || 50) },
     { method: 'GET', path: '/ingest/candidates', summary: 'Memory waiting for your OK: what a conversation that read outside content, or one of your devices, wanted kept, with where it came from.', handle: () => ingest.candidates() },
