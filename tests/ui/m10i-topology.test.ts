@@ -47,7 +47,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     const f = await topologyFixture();
     try {
       const packages = (await f.send('GET', '/api/v1/design-systems')).body;
-      assert.equal(packages.length, 6);
+      assert.equal(packages.length, 7);
       for (const [size, vp] of [['phone', { width: 390, height: 844, touch: true }], ['desktop', { width: 1440, height: 900 }]] as const) {
         const d = await device(b, { ...vp, serviceWorkers: 'block' }); const p = d.page;
         for (const pkg of packages) {

@@ -77,6 +77,10 @@ test('the child gets exactly that env and the preload', async () => {
 });
 
 const gone = (pid: number) => { try { process.kill(pid, 0); return false; } catch { return true; } };
+// The child a failed start stopped, as its error names it. Not given.json: when the stop lands before
+// or during the child's first write, that file is missing, a previous child's, or empty (CI 2026-11-07:
+// "Unexpected end of JSON input").
+const stoppedPid = (seen: { pid?: number | null }) => (e: Error & { pid?: number | null }) => { seen.pid = e.pid ?? null; return true; };
 
 test('abort stops the child and says “stopped”', async () => {
   const root = fakeRoot();
@@ -85,9 +89,11 @@ test('abort stops the child and says “stopped”', async () => {
   const ac = new AbortController();
   setTimeout(() => ac.abort(), 300);
   const began = Date.now();
-  await assert.rejects(startSandbox({ root, home, env: { NOVA_FAKE: 'hang' }, timeoutMs: 20_000, signal: ac.signal }), (e: Error & { exitCode?: number | null }) => e.message === 'stopped' && e.exitCode === null);
+  const seen: { pid?: number | null } = {};
+  await assert.rejects(startSandbox({ root, home, env: { NOVA_FAKE: 'hang' }, timeoutMs: 20_000, signal: ac.signal }), (e: Error & { exitCode?: number | null; pid?: number | null }) => stoppedPid(seen)(e) && e.message === 'stopped' && e.exitCode === null);
   assert.ok(Date.now() - began < 10_000, 'it did not wait for the timeout');
-  assert.ok(gone(JSON.parse(readFileSync(join(home, 'given.json'), 'utf8')).pid), 'the child is gone');
+  assert.equal(typeof seen.pid, 'number', 'the error names the child it stopped');
+  assert.ok(gone(seen.pid!), 'the child is gone');
 });
 
 test('a failed start throws with all its output and exit code; the timeout stops the child', async () => {
@@ -96,9 +102,11 @@ test('a failed start throws with all its output and exit code; the timeout stops
   mkdirSync(home);
   await assert.rejects(startSandbox({ root, home, env: { NOVA_FAKE: 'boom' } }), (e: Error & { output?: string; exitCode?: number | null }) =>
     e.exitCode === 3 && /boom: the database is locked/.test(e.output ?? '') && e.message.startsWith('The sandbox Nova stopped as it started (exit 3):'));
-  await assert.rejects(startSandbox({ root, home, env: { NOVA_FAKE: 'hang' }, timeoutMs: 300 }), (e: Error & { exitCode?: number | null }) =>
-    e.exitCode === null && e.message.startsWith('The sandbox Nova didn’t start in time'));
-  assert.ok(gone(JSON.parse(readFileSync(join(home, 'given.json'), 'utf8')).pid), 'the child is gone');
+  const seen: { pid?: number | null } = {};
+  await assert.rejects(startSandbox({ root, home, env: { NOVA_FAKE: 'hang' }, timeoutMs: 300 }), (e: Error & { exitCode?: number | null; pid?: number | null }) =>
+    stoppedPid(seen)(e) && e.exitCode === null && e.message.startsWith('The sandbox Nova didn’t start in time'));
+  assert.equal(typeof seen.pid, 'number', 'the error names the child it stopped');
+  assert.ok(gone(seen.pid!), 'the child is gone');
 });
 
 test('the change sandbox’s failed start keeps its wording and output as evidence', async () => {
