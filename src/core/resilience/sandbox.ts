@@ -68,7 +68,8 @@ export async function startSandbox(o: { root?: string; home: string; env?: Recor
     await stop();
     const tail = said().trim().split('\n').slice(-12).join('\n');
     const why = exitCode !== null ? `The sandbox Nova stopped as it started (exit ${exitCode}):\n${tail}` : o.signal?.aborted ? 'stopped' : `The sandbox Nova didn’t start in time:\n${tail}`;
-    throw Object.assign(new Error(why), { output: said(), exitCode });
+    // pid: which process this was (already stopped), for the evidence and to check it's gone.
+    throw Object.assign(new Error(why), { output: said(), exitCode, pid: proc.pid ?? null });
   }
   return { proc, port, base: `http://127.0.0.1:${port}`, output: said, stop };
 }
