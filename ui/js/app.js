@@ -30,6 +30,7 @@ import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
 import { begin, over, remember, waitingLine } from './wait.js';
 import { blocksOf, doneWaiting, keepShape, showWaiting } from './skeleton.js';
+import { initPalette, openPalette } from './palette.js';
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -2046,10 +2047,14 @@ function step(dir) {
   if (next) navigate(`/c/${next.id}`);
 }
 
+// The command palette (Ctrl K / Cmd K, palette.js) goes through this router, like every door.
+initPalette({ navigate, conversations: () => state.list, toggleAside: () => { toggleAside(); renderCore(); } });
+
 document.addEventListener('keydown', (e) => {
   if (setupShowing() || e.defaultPrevented) return;
   const mod = e.metaKey || e.ctrlKey;
   const inField = e.target.closest?.('input, textarea, select, [contenteditable]');
+  if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); return; }
   if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); navigate('/new'); return; }
   if (mod && e.key === '\\') { e.preventDefault(); if (layout.layout === 'desktop' && layout.room === 'yes') { toggleAside(); renderCore(); } return; }
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); step(e.key === 'ArrowUp' ? -1 : 1); return; }

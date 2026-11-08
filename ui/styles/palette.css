@@ -1,0 +1,47 @@
+/*
+ * The command palette (Ctrl K / Cmd K; ui/js/palette.js), as the owner-approved composition draws it
+ * (UI rebuild compositions, 2026-11-06: .uc-palette): search first, rows second, keys last. Tokens
+ * only. A phone (and a foldable's cover screen) gets it the full width, at the top.
+ */
+.palette {
+  width: min(calc(100vw - var(--space-6)), calc(var(--space-8) * 10));
+  max-width: 100vw;
+  max-height: calc(100dvh - var(--space-8) * 2);
+  margin: var(--space-7) auto auto;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-raised);
+  overflow: hidden;
+}
+.palette[open] { display: flex; flex-direction: column; animation: rise var(--motion-transition) var(--motion-ease) both; }
+/* A plain veil, as the sheets have: a whole-screen blur costs a slow paint (M9: INP). */
+.palette::backdrop { background: color-mix(in srgb, var(--bg-base) 70%, transparent); }
+
+.palette-search { display: flex; flex: none; align-items: center; gap: var(--space-2); min-height: calc(var(--hit) + var(--space-2)); padding: 0 var(--space-3); border-bottom: 1px solid var(--border-subtle); }
+.palette-search:focus-within { border-bottom-color: var(--accent-primary); }
+.palette-input { flex: 1; width: 100%; min-width: 0; min-height: var(--hit); padding: 0; border: 0; background: transparent; color: var(--text-primary); font: var(--type-weight-regular) var(--type-body)/var(--type-line-tight) var(--font-body); outline: none; }
+.palette-input::placeholder { color: var(--text-secondary); opacity: 1; }
+.palette-ic { display: inline-grid; place-items: center; flex: none; width: var(--space-5); height: var(--space-5); color: var(--text-secondary); }
+.palette-ic svg { width: var(--space-5); height: var(--space-5); }
+
+.palette-list { flex: 1; min-height: 0; padding: 0 var(--space-2) var(--space-2); overflow: auto; overscroll-behavior: contain; }
+.palette-group-title { margin: var(--space-4) 0 var(--space-1); padding: 0 var(--space-3); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.palette-row { display: flex; align-items: center; gap: var(--space-3); min-height: var(--hit); padding: var(--space-1) var(--space-3); border-left: 2px solid transparent; border-radius: var(--radius-input); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-body); cursor: pointer; }
+.palette-row.is-on { border-left-color: var(--accent-primary); background: var(--surface-card-hover); font-weight: var(--type-weight-strong); }
+.palette-row.is-on .palette-ic { color: var(--text-primary); }
+.palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-hint { flex: none; max-width: 40%; overflow: hidden; color: var(--text-secondary); font-weight: var(--type-weight-regular); text-overflow: ellipsis; white-space: nowrap; }
+.palette-keys { flex: none; display: inline-flex; }
+.palette kbd { display: inline-block; margin-inline-start: var(--space-1); padding: 0 var(--space-1); border: 1px solid var(--border-subtle); border-radius: var(--radius-input); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-body) var(--font-mono); }
+.palette-empty { margin: 0; padding: var(--space-4); color: var(--text-secondary); font-size: var(--type-small); }
+.palette-foot { flex: none; margin: 0; padding: var(--space-2) var(--space-4); border-top: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: var(--type-caption); }
+.palette-foot kbd:first-child { margin-inline-start: 0; }
+
+body[data-layout="phone"] .palette { width: calc(100vw - var(--space-2) * 2); max-height: calc(100dvh - var(--space-2) * 2); margin: var(--space-2) auto auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .palette[open] { animation: none; }
+}
