@@ -17,8 +17,8 @@ test('M3 gate: a design system swaps live, is tried before saving, applies per d
   try {
     await finishSetup(m);
     const bg = async (id: string) => String((await m.get(`/api/v1/design-systems/${id}`)).manifest.tokens['bg/base']).toLowerCase();
-    const [teal, light, paper] = [await bg('orb-teal'), await bg('companion-light'), await bg('paper')];
-    assert.equal(new Set([teal, light, paper]).size, 3, 'three distinct backgrounds to tell them apart');
+    const [nebula, light, paper] = [await bg('nebula'), await bg('companion-light'), await bg('paper')];
+    assert.equal(new Set([nebula, light, paper]).size, 3, 'three distinct backgrounds to tell them apart');
 
     const one = await device(b, { width: 1280 });
     const other = await device(b, { width: 1280 });
@@ -28,8 +28,8 @@ test('M3 gate: a design system swaps live, is tried before saving, applies per d
     }
     const page = one.page;
     await page.evaluate(() => { (window as any).__boot = 'first-load'; });
-    assert.equal(await cssVar(page, '--bg-base'), teal, 'Orb Teal shows on a fresh profile');
-    if (shots) await shoot(page, join(shots, 'swap-1-orb-teal.png'));
+    assert.equal(await cssVar(page, '--bg-base'), nebula, 'Nebula shows on a fresh profile');
+    if (shots) await shoot(page, join(shots, 'swap-1-nebula.png'));
 
     // 1. Applied for everyone over the API: both open pages change without reloading.
     const pid = nova.proc.pid;

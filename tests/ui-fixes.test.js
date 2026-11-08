@@ -148,22 +148,27 @@ function list() {
 test('Nova recommends one design, with a reason: its own design at the bar first, else the starter that fits and reads well', () => {
   const l = list();
   // Packages aren't equals (DESIGN-SYSTEM §0, owner direction 2026-11-01): the lead, at the bar.
-  assert.deepEqual(l.filter((d) => d.at_bar).map((d) => d.id), ['orb-teal']);
-  assert.equal(l.find((d) => d.id === 'orb-teal').lead, true);
+  assert.deepEqual(l.filter((d) => d.at_bar).map((d) => d.id), ['nebula', 'orb-teal']);
+  assert.equal(l.find((d) => d.id === 'nebula').lead, true);
+  assert.equal(l.find((d) => d.id === 'orb-teal').lead, false);
   const dark = recommend(l, { mode: 'auto', prefers: 'dark' });
-  assert.equal(dark.id, 'orb-teal');
+  assert.equal(dark.id, 'nebula');
   assert.match(dark.reason, /design bar.*Dark/);
   assert.match(dark.reason, /contrast/);
-  // A light device still gets Nova's own design, told plainly it is dark and why.
+  // A light device gets the lead's light look.
   const light = recommend(l, { mode: 'auto', prefers: 'light' });
-  assert.equal(light.id, 'orb-teal');
-  assert.match(light.reason, /It’s dark: no light design has reached the bar yet/);
-  assert.equal(recommend(l, { mode: 'light', prefers: 'dark' }).id, 'orb-teal');
+  assert.equal(light.id, 'nebula');
+  assert.match(light.reason, /design bar.*Light/);
+  assert.equal(recommend(l, { mode: 'light', prefers: 'dark' }).id, 'nebula');
+  // With only a dark design at the bar, a light device still gets it, told plainly it is dark and why.
+  const darkOnly = recommend(l.filter((d) => d.id !== 'nebula'), { mode: 'auto', prefers: 'light' });
+  assert.equal(darkOnly.id, 'orb-teal');
+  assert.match(darkOnly.reason, /It’s dark: no light design has reached the bar yet/);
   // With no design at the bar, the starter that fits the device.
   const unranked = l.map((d) => ({ ...d, at_bar: false }));
   assert.equal(recommend(unranked, { mode: 'auto', prefers: 'light' }).id, 'companion-light');
   assert.match(recommend(unranked, { mode: 'auto', prefers: 'light' }).reason, /light/);
-  assert.equal(recommend(unranked, { mode: 'dark', prefers: 'light' }).id, 'orb-teal', 'an explicit choice beats the system');
+  assert.equal(recommend(unranked, { mode: 'dark', prefers: 'light' }).id, 'nebula', 'an explicit choice beats the system');
   // Without the starters, the best-reading design that fits.
   const others = unranked.filter((d) => !d.starter);
   assert.equal(recommend(others, { mode: 'auto', prefers: 'light' }).looks.default.scheme, 'light');

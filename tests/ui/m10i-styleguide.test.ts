@@ -60,7 +60,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         const packages = await p.locator('#sg-ds option').evaluateAll((els) => els.map((el) => (el as HTMLOptionElement).value));
         assert.equal(packages.length, 7, 'all installed starter packages are covered');
         for (const pkg of packages) {
-          if (!['phone', 'desktop'].includes(size) && pkg !== 'orb-teal') continue;
+          if (!['phone', 'desktop'].includes(size) && pkg !== 'nebula') continue;
           const response = p.waitForResponse((r) => r.url().includes('/preview.css') && r.status() === 200);
           await p.locator('#sg-ds').selectOption(pkg);
           const stylesheet = await (await response).text();
@@ -113,7 +113,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               await noOverflow(p, `${pkg}/${size}/${state}/service`);
               await p.locator('#topology-state').selectOption(state);
             }
-            if (process.env.NOVA_UI_SHOTS && pkg === 'orb-teal') {
+            if (process.env.NOVA_UI_SHOTS && pkg === 'nebula') {
               await p.screenshot({ path: join(out, `${state}-${size}.png`), fullPage: true, animations: 'disabled', caret: 'hide' });
               if (engine === 'chromium' && ['desktop', 'phone'].includes(size) && ['overview', 'machine', 'service', 'attention-service'].includes(state)) await p.locator('.topology').screenshot({ path: join(out, `specimen-${state}-${size}.png`), animations: 'disabled', caret: 'hide' });
             }

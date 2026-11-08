@@ -195,17 +195,17 @@ test('CSS is never generated from an invalid package', () => {
 
 // ---- the built-ins, selection, apply, rollback ---------------------------------------------
 
-test('the seven built-ins are present on a blank install, all valid, and Orb Teal is the default', () => {
+test('the seven built-ins are present on a blank install, all valid, and Nebula is the default', () => {
   const { db, design } = host();
   const list = design.list();
   assert.deepEqual(list.map((d) => d.id).sort(), ['aurora', 'companion-light', 'nebula', 'nova', 'obsidian', 'orb-teal', 'paper']);
   for (const d of list) assert.deepEqual(d.problems, [], d.id);
   assert.ok(list.every((d) => d.valid && d.builtin));
-  assert.equal(DEFAULT_DESIGN_SYSTEM, 'orb-teal');
-  assert.equal(design.active().id, 'orb-teal');
+  assert.equal(DEFAULT_DESIGN_SYSTEM, 'nebula');
+  assert.equal(design.active().id, 'nebula');
   assert.equal(design.active().scope, 'default');
   assert.equal(db.get('SELECT 1 FROM profile LIMIT 1'), undefined, 'the default needs no profile record, so setup still sees a blank profile');
-  assert.match(design.css(), /Orb Teal/);
+  assert.match(design.css(), /Nebula/);
   assert.ok(BUILTIN_DIR.endsWith('design-systems'));
 });
 
@@ -242,7 +242,7 @@ test('apply for the user, then roll back: the previous package returns, and each
   const out = design.apply('companion-light', { scope: 'user' });
   assert.equal(out.active.id, 'companion-light');
   assert.equal(profile.get('appearance', 'design_system'), 'companion-light');
-  assert.equal(profile.get('appearance', 'previous'), 'orb-teal');
+  assert.equal(profile.get('appearance', 'previous'), 'nebula');
   assert.match(design.css(), /Companion Light/);
   design.apply('paper', { scope: 'user' });
   assert.equal(profile.get('appearance', 'previous'), 'companion-light');
@@ -295,7 +295,7 @@ test('preview CSS renders any valid package without applying it', () => {
   const { design, events } = host();
   const css = design.previewCss('companion-light');
   assert.match(css, /Companion Light/);
-  assert.equal(design.active().id, 'orb-teal');
+  assert.equal(design.active().id, 'nebula');
   assert.equal(events.length, 0);
   assert.match(design.previewCss('paper', 'dark'), /--bg-base: #171512;/);
   assert.throws(() => design.previewCss('nope'), /No design system "nope"/);
@@ -312,9 +312,9 @@ test('a third-party package installs through the extension host, applies, and re
   assert.match(design.css(), /Example Slate/);
   const removed = extensions.remove('example.slate');
   assert.deepEqual(removed.kept, []);
-  assert.equal(design.active().id, 'orb-teal', 'removing the applied package falls back to the previous one');
-  assert.equal(design.active('device-aaaa1111').id, 'orb-teal');
-  assert.equal(profile.get('appearance', 'design_system'), 'orb-teal');
+  assert.equal(design.active().id, 'nebula', 'removing the applied package falls back to the previous one');
+  assert.equal(design.active('device-aaaa1111').id, 'nebula');
+  assert.equal(profile.get('appearance', 'design_system'), 'nebula');
   assert.ok(!design.list().some((d) => d.id === 'example.slate'));
 });
 
@@ -327,7 +327,7 @@ test('an invalid package can be installed and inspected but never applied or pre
   assert.deepEqual(design.validate('example.faded').ok, false);
   assert.throws(() => design.apply('example.faded', { scope: 'user' }), /can’t be applied/);
   assert.throws(() => design.previewCss('example.faded'), /can’t be applied/);
-  assert.equal(design.active().id, 'orb-teal');
+  assert.equal(design.active().id, 'nebula');
 });
 
 test('install refuses a package that isn’t a design system, or that asks for permissions', () => {
