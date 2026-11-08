@@ -38,7 +38,7 @@ self.addEventListener('install', (e) => {
 
 // Upgrading removes only Nova's versioned offline stores, never another cache on this origin.
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => /^nova-shell-v46\d+$/.test(k) && k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => /^nova-shell-v\d+$/.test(k) && k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 const offline = (res) => {
