@@ -36,6 +36,7 @@ export function bindJarvis(root) {
     cores.push(core);
   }
   const flourish = cores.filter((c) => c.parentElement.dataset.jvCell.startsWith('success-'));
+  // Success never rests: the sheet replays its flourish so it can be seen. wait: clock: the replay
   const replay = setInterval(() => (flourish[0].isConnected ? flourish.forEach((el) => el.setStatus('success')) : clearInterval(replay)), REPLAY_MS);
   const hero = jarvisCore({ status: 'idle', size: HERO });
   preview.querySelector('[data-jv-hero]').append(hero);
