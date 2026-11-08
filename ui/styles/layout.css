@@ -49,6 +49,9 @@
 .band-probe[data-band="three"] { width: var(--band-three); }
 .band-probe[data-band="rail"] { width: var(--band-rail); }
 body[data-rail="open"] { --rail-col: var(--rail-open-width); }
+/* More opens beside the rail, at its current width. */
+body[data-layout="tablet"] .more,
+body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--rail-col) + var(--space-2)); margin: 0; width: calc(var(--space-8) * 4); }
 .band-probe[data-band="scrollbar"] { width: var(--space-8); height: var(--space-8); overflow-y: scroll; }
 
 :root { --segments: none; }
