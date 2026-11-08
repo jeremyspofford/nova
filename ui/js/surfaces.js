@@ -863,9 +863,12 @@ export function drawAppearance(box) {
   const inUse = others.some((d) => [showing, a.user, a.device].includes(d.id));
   const more = look.more || inUse;
   const kicker = rec?.at_bar ? 'Nova’s design' : 'Recommended';
-  const otherNote = others.some((d) => !d.at_bar) ? '<p class="settings-note">These work, and each says whether it reads well, but none has yet been held to the design bar Nova’s own design meets. They may change as they are brought up to it.</p>' : '';
+  // Orb Teal is at the bar too, though not the lead: count only the ones that aren't.
+  const below = others.filter((d) => !d.at_bar).length;
+  const moreNote = below === others.length ? `${below}, not yet at Nova’s design bar` : below ? `${others.length}, ${below} not yet at Nova’s design bar` : `${others.length}`;
+  const otherNote = below ? '<p class="settings-note">These work, and each says whether it reads well, but none has yet been held to the design bar Nova’s own design meets. They may change as they are brought up to it.</p>' : '';
   setHtml(box.querySelector('#appearance-design'), `${rec ? `<div class="ds-recommended"><p class="ds-kicker">${kicker}</p>${designCard(rec, a, { big: true, showing, want })}<p class="ds-reason">${esc(rec.reason)}</p></div>` : ''}
-${others.length ? `<details class="ds-more"${more ? ' open' : ''}><summary class="ds-more-summary">${ICONS.chevron}More designs <span class="ds-more-note">· ${others.length}, not yet at Nova’s design bar</span></summary>${otherNote}<ul class="ds-others" aria-label="More designs">${others.map((d) => `<li>${designCard(d, a, { showing, want })}${d.valid ? '' : `<p class="settings-note">${esc(d.problems.slice(0, 2).join(' '))}</p>`}</li>`).join('')}</ul></details>` : ''}`);
+${others.length ? `<details class="ds-more"${more ? ' open' : ''}><summary class="ds-more-summary">${ICONS.chevron}More designs <span class="ds-more-note">· ${moreNote}</span></summary>${otherNote}<ul class="ds-others" aria-label="More designs">${others.map((d) => `<li>${designCard(d, a, { showing, want })}${d.valid ? '' : `<p class="settings-note">${esc(d.problems.slice(0, 2).join(' '))}</p>`}</li>`).join('')}</ul></details>` : ''}`);
   const details = box.querySelector('.ds-more');
   if (details && !details.dataset.wired) { details.dataset.wired = '1'; details.addEventListener('toggle', () => { look.more = details.open; }); }
   const check = box.querySelector('#contrast-check');

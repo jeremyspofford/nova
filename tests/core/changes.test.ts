@@ -276,7 +276,7 @@ test('every kind goes through: a design system on one device then everyone, a se
     const ds = core.changes.propose({ kind: 'design-system', artifact: variant('example-dusk') });
     await checked(core, ds.id); await inCanary(core, ds.id);
     assert.equal(core.design.active(hub).id, 'example-dusk', 'on the canary device');
-    assert.equal(core.design.active('another-device-1').id, 'orb-teal', 'and nowhere else yet');
+    assert.equal(core.design.active('another-device-1').id, 'nebula', 'and nowhere else yet');
     assert.equal((await watch(core, clock, ds.id)).state, 'live');
     assert.equal(core.design.active('another-device-1').id, 'example-dusk', 'then everyone');
 

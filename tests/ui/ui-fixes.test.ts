@@ -15,7 +15,7 @@ import { blank, browser, cssVar, device, finishSetup, ready, shoot, shotsDir } f
 const PHONE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 820 };
 const SIZES = [['phone', PHONE], ['desktop', DESKTOP]] as const;
-const STARTERS = ['orb-teal', 'companion-light'];
+const STARTERS = ['nebula', 'orb-teal', 'companion-light'];
 const ALL = ['home', 'chat', 'tasks', 'memory', 'automations', 'skills', 'activity', 'health', 'settings'];
 const PATHS: Record<string, string> = { home: '/', chat: '/c/2026-10-28-garden', settings: '/settings' };
 
@@ -261,7 +261,7 @@ test('UI fixes 4: Settings is one structure in two layouts, with a search that k
         if (size === 'phone') {
           assert.ok(await nav.isVisible(), `${where}: the phone starts on the grouped list`);
           assert.equal(await d.page.locator('.settings-pane:not([hidden])').count(), 0, `${where}: no page open yet`);
-          if (shots && design === 'orb-teal') await shoot(d.page, join(shots, 'settings-phone-list.png'));
+          if (shots && design === 'nebula') await shoot(d.page, join(shots, 'settings-phone-list.png'));
           await nav.locator('.settings-cat[data-cat="appearance"]').click();
           await d.page.locator('#appearance').waitFor();
           assert.equal(await nav.isVisible(), false, `${where}: the page replaces the list`);
@@ -278,7 +278,7 @@ test('UI fixes 4: Settings is one structure in two layouts, with a search that k
           await d.page.locator('#devices').waitFor();
           assert.equal(await nav.locator('[aria-current="page"]').getAttribute('data-cat'), 'devices');
           assert.equal(await nav.evaluate((e) => getComputedStyle(e).overflowY), 'visible', `${where}: the sidebar doesn’t scroll on its own`);
-          if (shots && design === 'orb-teal') await shoot(d.page, join(shots, 'settings-desktop.png'));
+          if (shots && design === 'nebula') await shoot(d.page, join(shots, 'settings-desktop.png'));
         }
         assert.equal(await d.page.locator('.settings-detail #settings-nav, .settings-pane .settings-cat').count(), 0, `${where}: no second level`);
 
@@ -290,7 +290,7 @@ test('UI fixes 4: Settings is one structure in two layouts, with a search that k
           assert.match((await first.locator('.result-path').textContent()) ?? '', new RegExp(`^${path.replace(/[›]/g, '\\$&')}`), `${where}: “${q}” finds ${path}`);
         }
         await d.page.fill('#settings-search', 'dark mode');
-        if (shots && design === 'orb-teal') await shoot(d.page, join(shots, `settings-${size}-search.png`));
+        if (shots && design === 'nebula') await shoot(d.page, join(shots, `settings-${size}-search.png`));
         await d.page.locator('#settings-results .settings-result').first().click();
         const target = d.page.locator('#appearance-mode');
         await target.waitFor();
@@ -329,7 +329,7 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
   const { m, nova } = await boot('nova-ui-fixes-look-');
   const shots = shotsDir();
   try {
-    const bg = { teal: await bgOf(m, 'orb-teal'), light: await bgOf(m, 'companion-light'), paper: await bgOf(m, 'paper') };
+    const bg = { nebula: await bgOf(m, 'nebula'), teal: await bgOf(m, 'orb-teal'), light: await bgOf(m, 'companion-light'), paper: await bgOf(m, 'paper') };
     for (const [size, vp] of SIZES) {
       for (const design of STARTERS) {
         await useDesign(m, design);
@@ -342,7 +342,7 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
         await ready(d.page);
         const look = d.page.locator('#appearance');
         await look.locator('.ds-card').first().waitFor();
-        const start = design === 'orb-teal' ? bg.teal : bg.light;
+        const start = design === 'nebula' ? bg.nebula : design === 'orb-teal' ? bg.teal : bg.light;
         await showing(d.page, start);
 
         // The embedded preview is gone; swatches stay, as thumbnails on the picker.
@@ -351,11 +351,15 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
         // One recommendation, with a reason: Nova's own design, the lead at the design bar
         // (DESIGN-SYSTEM §0). The rest are secondary, behind More designs, not yet at the bar.
         assert.equal(await look.locator('.ds-recommended .ds-card').count(), 1, `${where}: one recommended design`);
-        assert.equal(await look.locator('.ds-recommended .ds-card').getAttribute('data-ds'), 'orb-teal', `${where}: Nova's own design, on a light system too`);
+        assert.equal(await look.locator('.ds-recommended .ds-card').getAttribute('data-ds'), 'nebula', `${where}: Nova's own design, light on a light system`);
         assert.match((await look.locator('.ds-recommended .ds-kicker').textContent()) ?? '', /Nova’s design/, `${where}: said to be Nova's own`);
-        assert.match((await look.locator('.ds-reason').textContent()) ?? '', /design bar.*contrast.*no light design has reached the bar/i, `${where}: with its reason, plainly`);
-        assert.match((await look.locator('.ds-more-summary').textContent()) ?? '', /More designs.*not yet at Nova’s design bar/, `${where}: the others are not presented as equals`);
-        assert.equal(await look.locator('.ds-more').evaluate((e) => (e as HTMLDetailsElement).open), design !== 'orb-teal', `${where}: folded away unless one is in use`);
+        assert.match((await look.locator('.ds-reason').textContent()) ?? '', /design bar.*Light.*contrast/i, `${where}: with its reason, plainly`);
+        const moreSummary = (await look.locator('.ds-more-summary').textContent()) ?? '';
+        assert.match(moreSummary, /More designs.*not yet at Nova’s design bar/, `${where}: the others are not presented as equals`);
+        // Orb Teal is at the bar too: the note counts only the designs that aren't.
+        const [, shown, below] = /· (\d+), (\d+) not yet/.exec(moreSummary) ?? [];
+        assert.ok(Number(below) === Number(shown) - 1, `${where}: Orb Teal isn't counted as below the bar (${moreSummary})`);
+        assert.equal(await look.locator('.ds-more').evaluate((e) => (e as HTMLDetailsElement).open), design !== 'nebula', `${where}: folded away unless one is in use`);
         await openMore(look);
         assert.ok(await look.locator('.ds-others .ds-card').count() >= 5, `${where}: the others listed below it`);
         const sizeOf = (sel: string) => look.locator(sel).first().evaluate((e) => e.getBoundingClientRect().height);
@@ -374,7 +378,7 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
         await undo.waitFor({ timeout: 2000 }).catch(() => {});
         assert.ok(await undo.isVisible(), `${where}: Undo is right there`);
         assert.equal(await cssVar(other.page, '--bg-base'), start, `${where}: another device is untouched`);
-        if (shots && design === 'orb-teal') { await d.page.evaluate(() => document.getElementById('appearance-scope')!.scrollIntoView({ block: 'start' })); await shoot(d.page, join(shots, `appearance-${size}-undo.png`)); }
+        if (shots && design === 'nebula') { await d.page.evaluate(() => document.getElementById('appearance-scope')!.scrollIntoView({ block: 'start' })); await shoot(d.page, join(shots, `appearance-${size}-undo.png`)); }
         await undo.click();
         await showing(d.page, start);
 
@@ -390,7 +394,7 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
         assert.equal((await m.get('/api/v1/design-systems/active')).id, design, `${where}: nothing is saved yet`);
         await other.page.waitForTimeout(200);
         assert.equal(await cssVar(other.page, '--bg-base'), start, `${where}: so other devices don’t change`);
-        if (shots && design === 'orb-teal') { await d.page.evaluate(() => document.getElementById('appearance-scope')!.scrollIntoView({ block: 'start' })); await shoot(d.page, join(shots, `appearance-${size}-save.png`)); }
+        if (shots && design === 'nebula') { await d.page.evaluate(() => document.getElementById('appearance-scope')!.scrollIntoView({ block: 'start' })); await shoot(d.page, join(shots, `appearance-${size}-save.png`)); }
         await save.click();
         await showing(other.page, bg.paper);
         assert.equal((await m.get('/api/v1/design-systems/active')).id, 'paper', `${where}: saved for every device`);
@@ -430,12 +434,12 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
       assert.deepEqual(d.errors, [], `${size}: no errors in the page`);
       await d.ctx.close();
     }
-    // A dark system gets the dark starter.
+    // A dark system gets the lead's dark look.
     const dark = await device(b, { ...DESKTOP, scheme: 'dark' });
     await dark.page.goto(`${m.base}/settings#appearance`);
     await ready(dark.page);
     await dark.page.locator('.ds-recommended .ds-card').waitFor();
-    assert.equal(await dark.page.locator('.ds-recommended .ds-card').getAttribute('data-ds'), 'orb-teal');
+    assert.equal(await dark.page.locator('.ds-recommended .ds-card').getAttribute('data-ds'), 'nebula');
     await dark.ctx.close();
   } finally {
     await b.close();

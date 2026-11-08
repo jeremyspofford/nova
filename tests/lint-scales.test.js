@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { lint, scaleProblems } from '../scripts/lint-tokens.js';
-import { ICON_STROKE, SPACE_SCALE, packageScaleFindings, scaleFindings } from '../src/core/index.ts';
+import { ICON_STROKE, LEAD_DESIGN_SYSTEM, SPACE_SCALE, packageScaleFindings, scaleFindings } from '../src/core/index.ts';
 
 const msgs = (text, path = 'ui/x.css') => lint(path, text).map((p) => p[1]);
 const one = (text, re, path) => {
@@ -90,12 +90,12 @@ test('all of ui/ is on the designed scales', () => {
 
 test('the packages: the lead is on the scales; spacing is the system’s in every package', () => {
   const pkg = (id) => JSON.parse(readFileSync(`design-systems/${id}.json`, 'utf8'));
-  assert.deepEqual(packageScaleFindings(pkg('orb-teal')), []);
+  assert.deepEqual(packageScaleFindings(pkg(LEAD_DESIGN_SYSTEM)), []);
   for (const f of readdirSync('design-systems')) {
     const t = JSON.parse(readFileSync(`design-systems/${f}`, 'utf8')).tokens;
     for (const [n, { px }] of Object.entries(SPACE_SCALE)) assert.equal(t[n], `${px}px`, `${f} ${n}`);
   }
-  const lead = pkg('orb-teal').tokens;
+  const lead = pkg(LEAD_DESIGN_SYSTEM).tokens;
   assert.match(scaleFindings({ ...lead, 'type/h3': '17px' }).join(' '), /type\/h3 is 17px/);
   assert.match(scaleFindings({ ...lead, 'radius/card': '6px' }).join(' '), /radius\/card|smaller than radius\/card/);
   assert.match(scaleFindings({ ...lead, 'shadow/raised': '0 1px 1px rgba(0, 0, 0, 0.2)' }).join(' '), /two levels/);
