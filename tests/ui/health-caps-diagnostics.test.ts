@@ -189,6 +189,9 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         const draft = p.locator('[data-work-limits] [name="task.tokens"]');
         await p.locator('[name="task.tokens.unlimited"]').uncheck();
         await draft.fill('9876');
+        // On a phone, Home is in the navigation drawer.
+        const menu = p.locator('#nav-menu');
+        if (await menu.isVisible()) { if (touch) await menu.tap(); else await menu.click(); }
         const home = p.locator('a[data-dest="home"]').filter({ visible: true }).first();
         if (touch) await home.tap(); else await home.click();
         await drawn(p);
