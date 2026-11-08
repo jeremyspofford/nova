@@ -3,7 +3,7 @@
 // reference always shows the real components. The PWA's own components are in components.js.
 import { escapeHtml as esc, renderMarkdown } from './markdown.js';
 import { ICONS, configDiff, settingsRow, status } from './components.js';
-import { activityStatus, toolTier } from './status.js';
+import { activityStatus, greeting, toolTier } from './status.js';
 import { since, waitState, waitingLine } from './wait.js';
 
 // The conversation's icons are the one set's (components.js ICONS), under the names this file uses.
@@ -82,11 +82,26 @@ export function renderToc(list, currentId, now = new Date()) {
 
 // ---- conversation --------------------------------------------------------
 
-// The front page with nothing on it yet, or a fresh conversation. Empty states orient, say what the
-// place is for, and offer one action (Amendment 2026-10-31-B Part 2): here the one action is the
-// message box right below, so the line points at it.
-export function renderEmpty(now = new Date(), { fresh = false } = {}) {
-  return `<div class="empty"><p class="empty-date">${esc(longDate(now, now))}</p><p class="empty-line">${fresh ? 'A new conversation, apart from the main one.' : 'Nothing needs you yet.'}</p><p class="memory-lede">Write to Nova below: ask something, or tell it what to remember.</p></div>`;
+// A band of stars around the hero orb, for this identity moment only (UI rebuild §4): the same sky
+// every time, screen-blended so a light theme shows none of it. Ported from sg-compositions.js,
+// which the app never imports.
+function starField(n, w, h, seed) {
+  let x = seed;
+  const rnd = () => { x = (x * 16807) % 2147483647; return x / 2147483647; };
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    const big = rnd() < 0.06;
+    out += `<circle cx="${(rnd() * w).toFixed(1)}" cy="${(rnd() * h).toFixed(1)}" r="${(big ? 0.3 + rnd() * 0.18 : 0.07 + rnd() * 0.14).toFixed(2)}" fill-opacity="${(0.25 + rnd() * 0.75).toFixed(2)}"/>`;
+  }
+  return out;
+}
+const SKY_BAND = `<svg class="chat-sky" viewBox="0 0 400 100" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">${starField(260, 400, 100, 11)}</svg>`;
+
+// An empty chat, the main conversation or a fresh one (UI rebuild PR 4): the orb, under it the
+// greeting, and the composer below it, centred (body[data-empty]) with three suggestions under it.
+// `orb` is the page's live hero orb (shell.js liveOrb), passed in so this stays a pure builder.
+export function renderEmpty(now = new Date(), { name = '', orb = '' } = {}) {
+  return `<div class="empty chat-empty"><div class="chat-hero">${SKY_BAND}${orb}</div><h2 class="greeting">${esc(greeting(now, name))}</h2></div>`;
 }
 
 // Today's page in the main conversation, before anything has happened today.
@@ -310,6 +325,16 @@ export function renderSkillNote(item, skills = null) {
     : `<p class="margin-note is-quiet">followed ${esc(item.name)}, since removed</p>`;
 }
 
+// A turn's finished steps as one collapsed line, "2 steps · 3 s" (UI rebuild PR 4), each step's
+// own record inside. The time is from the first one starting to the last one finishing.
+const STEPS = '\u0000steps\u0000';
+function renderSteps(list, running) {
+  const starts = list.map((t) => t.ts).filter(Boolean).sort();
+  const ends = list.map((t) => t.result?.ts ?? t.approval?.ts).filter(Boolean).sort();
+  const time = starts.length && ends.length ? ` · ${esc(took(starts[0], ends.at(-1)))}` : '';
+  return `<details class="steps"><summary>${list.length} ${list.length === 1 ? 'step' : 'steps'}${time}</summary><div class="steps-list">${list.map((t) => renderTool(t, running)).join('')}</div></details>`;
+}
+
 // When Nova's side of a turn began: its first step or words. Nothing yet while it is thinking.
 export const novaStart = (turn) => turn.items.find((it) => (it.kind === 'text' || it.kind === 'tool') && it.ts)?.ts ?? null;
 
@@ -319,6 +344,7 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
   const running = open && !!live;
   let nova = '';
   let lastTextId = null;
+  const steps = [];
   for (const it of turn.items) {
     if (it.kind === 'recall' || it.kind === 'memory') {
       const notes = it.kind === 'recall' ? renderNotes(it.notes, memory) : renderKept(it.ops, memory, turn.ts);
@@ -329,7 +355,15 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
     }
     if (it.kind === 'skill') nova += `<div class="margins" role="note" aria-label="Skill">${renderSkillNote(it, skills)}</div>`;
     if (it.kind === 'text') { nova += `<div class="prose" data-text="${esc(it.id)}">${renderMarkdown(it.text)}</div>`; lastTextId = it.id; }
-    if (it.kind === 'tool' && !(it.name === 'use_skill' && it.result?.ok)) nova += renderTool(it, running);
+    if (it.kind === 'tool' && !(it.name === 'use_skill' && it.result?.ok)) {
+      // A finished step folds into the turn's one group of steps, where the first one was. A step
+      // still running, failed, carrying a link, or one that was a decision (asked, allowed, declined,
+      // or taken without asking: its stamp) stays out in the open.
+      if (toolState(it, running) === 'done' && !it.approval && !it.result?.link) {
+        if (!steps.length) nova += STEPS;
+        steps.push(it);
+      } else nova += renderTool(it, running);
+    }
     if (it.kind === 'error') {
       nova += `<div class="error" role="alert"><p class="error-title">${esc(it.message)}</p>` +
         (it.detail ? `<details class="error-detail"><summary>Details</summary><pre tabindex="0">${esc(it.detail)}</pre></details>` : '') +
@@ -341,6 +375,7 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
     const steps = turn.items.filter((it) => it.kind === 'tool' && it.result).length;
     nova += waitingLine('Thinking', { key: 'reply', since: since(`reply-${turn.id}`), done: steps || null, noun: 'step', tag: 'div' });
   }
+  if (steps.length) nova = nova.replace(STEPS, renderSteps(steps, running));
   if (turn.state === 'stopped') nova += '<p class="notice">Stopped.</p>';
   if (open && !live) nova += '<p class="notice">This reply was interrupted.</p>';
 
