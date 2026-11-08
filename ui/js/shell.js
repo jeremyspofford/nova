@@ -3,7 +3,7 @@
 // and tested (layout.js, nav.js, status.js); this module applies them to the page.
 import { resolve, viewportOf } from './layout.js';
 import { DESTINATIONS, destination, placement } from './nav.js';
-import { ICONS } from './components.js';
+import { ICONS, versionStamp } from './components.js';
 import { ICON_WORDS, iconState, orbState } from './status.js';
 import { statusIcon } from './status-icon.js';
 import { escapeHtml as esc } from './markdown.js';
@@ -143,16 +143,11 @@ ${drawer && recent.list.length ? recentGroup() : ''}</div>
   }
 }
 
-// The version stamp at the rail's foot, from GET /api/v1/version: the version and the short commit
-// (open), a "v" (slim); amber with a dot when a redeploy is pending. Nothing until it is known.
+// The version stamp at the rail's foot, from GET /api/v1/version (components.js versionStamp): a
+// link to About. On a phone the rail is the navigation drawer, so the stamp is at the drawer's foot.
 let build = null;
 export function setBuild(v) { build = v; renderNav(); }
-function stamp() {
-  if (!build?.version) return '';
-  const pending = build.behind === true;
-  const words = `Nova ${build.version}${build.commit_short ? `, build ${build.commit_short}` : ''}${pending ? ', redeploy pending' : ''}`;
-  return `<p class="rail-stamp"${pending ? ' data-pending' : ''} title="${esc(words)}"><span class="sr-only">${esc(words)}</span><span class="rail-stamp-v" aria-hidden="true">v</span>${pending ? '<span class="rail-stamp-dot" aria-hidden="true"></span>' : ''}<span class="rail-stamp-full" aria-hidden="true">${esc(build.version)}${build.commit_short ? ` <span class="rail-stamp-commit">${esc(build.commit_short)}</span>` : ''}${pending ? ' redeploy pending' : ''}</span></p>`;
-}
+const stamp = () => versionStamp(build);
 
 // A phone's drawer lists the newest conversations under Places (owner decision 2026-11-08, option
 // B), as the composition does, and a row to the whole list: the conversations drawer (app.js).

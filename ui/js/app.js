@@ -11,7 +11,7 @@ import { api, fromCache, on as onCore, stream as coreStream } from './core.js';
 import { approvalFor, loadSecurity, renderSecurity, setupPasskey } from './passkey.js';
 import { bindConfig, bindConfigForm, loadConfigForm, renderConfig, renderConfigForm } from './config.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
-import { routeOf } from './nav.js';
+import { destination, routeOf } from './nav.js';
 import { greeting, problemTone, stoppingProblems } from './status.js';
 import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js';
 import { closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, setRecent, signal, toast as notify, toggleAside, liveIcon } from './shell.js';
@@ -41,6 +41,7 @@ const el = {
   home: $('home'), tasks: $('tasks-view'), memory: $('memory'), automations: $('automations'), rules: $('rules'),
   skills: $('skills'), schedules: $('schedules'), activity: $('activity'), health: $('health-view'), settings: $('settings-view'),
   aside: $('aside'), mainLink: $('main-link'), mainDot: $('main-dot'), capture: $('capture-view'), topology: $('topology-view'),
+  about: $('about-view'), changelog: $('changelog-view'), pipeline: $('pipeline-view'),
 };
 
 const state = {
@@ -285,10 +286,11 @@ function route() {
   else if (r.dest === 'settings') showSettings();
   else if (r.dest === 'capture') showCaptureView();
   else if (r.dest === 'topology') showTopologyView();
+  else if (['about', 'changelog', 'pipeline'].includes(r.dest)) showAboutView(r.dest);
   else showCore(r.dest);
 }
 
-const VIEWS = { home: 'home', chat: 'thread', tasks: 'tasks', memory: 'memory', automations: 'automations', skills: 'skills', activity: 'activity', health: 'health', settings: 'settings', capture: 'capture', topology: 'topology' };
+const VIEWS = { home: 'home', chat: 'thread', tasks: 'tasks', memory: 'memory', automations: 'automations', skills: 'skills', activity: 'activity', health: 'health', settings: 'settings', capture: 'capture', topology: 'topology', about: 'about', changelog: 'changelog', pipeline: 'pipeline' };
 function setView(view) {
   const was = state.view;
   state.view = view;
@@ -302,8 +304,8 @@ function setView(view) {
   showMenu();
   if (view !== 'chat') el.jump.hidden = true;
   if (was === 'settings' && view !== 'settings') { core.cancelPreview(); core.leaveBackups(); }
-  // Capture and Topology belong to Settings in the navigation.
-  markCurrent(['capture', 'topology'].includes(view) ? 'settings' : view);
+  // Settings' children (Capture, Topology, About and its pages) belong to Settings in the navigation.
+  markCurrent(destination(view)?.parent ?? view);
   if (was !== view) showSignals();
 }
 
@@ -641,7 +643,7 @@ const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state
 
 // Every view's heading names it, Home's too (UX review 1, F5: never an empty heading); beside a
 // rail, and on a phone's Home, it is there for screen readers only (layout.css).
-const TITLES = { home: 'Home', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture', topology: 'Topology' };
+const TITLES = { home: 'Home', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture', topology: 'Topology', about: 'About Nova', changelog: 'What’s new', pipeline: 'Where Nova stands' };
 function renderChrome() {
   const title = state.view === 'chat' ? (!state.id ? 'New chat' : state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
   el.dock.hidden = state.view !== 'chat' || readOnly();
@@ -1671,11 +1673,12 @@ function showSettings() {
   settingsUi.touched = false;
   selectSettings(settingsTarget(location.hash).cat);
   const opened = location.hash;
-  Promise.all([core.loadBackups(), loadPermissions(), refreshCore(['profile']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset(), loadSecurity(api), loadConfigForm()]).then(() => {
+  Promise.all([core.loadBackups(), loadPermissions(), refreshCore(['profile', 'version']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset(), loadSecurity(api), loadConfigForm()]).then(() => {
     renderSettingsView({ only: 'security' });
     renderSettingsView({ only: 'you' });
     renderSettingsView({ only: 'privacy' });
     renderSettingsView({ only: 'form' });
+    renderSettingsView({ only: 'about' });
     // The person has moved on since (typed in search, opened something): leave them be.
     if (settingsUi.touched || state.view !== 'settings' || location.hash !== opened) return;
     const { cat, target } = settingsTarget(location.hash);
@@ -1687,6 +1690,7 @@ function showSettings() {
 
 const PARTS = {
   you: () => core.renderYou(),
+  about: () => core.renderAboutSettings(),
   privacy: () => core.renderPrivacy(),
   providers: () => core.renderProviders(),
   perms: () => (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" id="perms" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
@@ -1940,6 +1944,15 @@ function showTopologyView() {
   leaveChat('topology');
   showTopology();
   el.topology.focus({ preventScroll: true });
+}
+// About Nova, What's new and Where Nova stands (about.js, loaded the first time one opens).
+function showAboutView(view) {
+  leaveChat(view);
+  enter(el[view]);
+  el[view].focus({ preventScroll: true });
+  import('./about.js').then((m) => m.show(view, el[view])).catch(() => {
+    el[view].innerHTML = `<header class="view-head"><h2 class="view-title">${escapeHtml(TITLES[view])}</h2></header><div class="empty-state"><p class="empty-title">This page couldn’t open</p><p class="empty-sub">Nova’s server didn’t answer. Open it again once Nova is back.</p></div>`;
+  });
 }
 el.capture.addEventListener('click', (e) => { followLink(e); });
 // The indicator opens the Capture view in place, from any page.

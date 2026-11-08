@@ -441,6 +441,14 @@ function aroundCosts(current, next, island, placeholder) {
 const utc = (iso) => `${iso.slice(0, 16).replace('T', ' ')} UTC`;
 export const buildStamp = (v) => (v ? `<p class="settings-note" data-build-stamp>${esc(v.words)} ${v.built_at ? `Built ${esc(utc(v.built_at))}.` : v.started_at ? `Started ${esc(utc(v.started_at))}.` : ''}</p>` : '');
 
+// Settings › About Nova: the version and the build stamp, and the doors to About and its two pages.
+export function renderAboutSettings() {
+  const v = store.version;
+  return `<section class="memory-section" id="about" aria-labelledby="set-about"><h2 class="memory-heading" id="set-about">About Nova</h2>
+<p class="memory-lede">${v ? `Nova ${esc(v.version)}.` : 'Which Nova this is, and what changed.'}</p>${buildStamp(v)}
+<div class="connection-actions"><a class="btn small" href="/about">Open About Nova</a><a class="btn small quiet" href="/changelog">What’s new</a><a class="btn small quiet" href="/pipeline">Where Nova stands</a></div></section>`;
+}
+
 export function renderHealth(el) {
   const retained = el.querySelector('[data-work-limits]');
   const opened = [...el.querySelectorAll('.work-costs details, .diagnostics-download details')].map(d => d.open);
