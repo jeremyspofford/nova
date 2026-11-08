@@ -100,7 +100,10 @@
   overflow-x: hidden;
 }
 .rail-head { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
-.rail-home { display: grid; place-items: center; min-width: var(--hit); min-height: var(--hit); border-radius: 50%; text-decoration: none; }
+/* The link is its whole square box to a pointer or finger (M9 hit areas); the round tile it shows when
+   current is drawn behind its content, not its edge, so its corners still take the tap. */
+.rail-home { position: relative; isolation: isolate; display: grid; place-items: center; min-width: var(--hit); min-height: var(--hit); text-decoration: none; }
+.rail-home::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: 50%; pointer-events: none; }
 .rail-search { width: var(--hit); height: var(--hit); border-radius: var(--radius-input); }
 .rail-group { display: none; }
 .rail-list { list-style: none; margin: 0; padding: 0; display: flex; }
@@ -150,7 +153,9 @@
 .nav-badge[data-tone="working"] { background: var(--status-working); animation: orb-pulse var(--motion-pulse) var(--motion-ease) infinite; }
 /* The rail's current place: the composition's tinted row and strong label, no accent line. */
 .rail .nav-item { min-height: var(--hit); }
-.rail .nav-item[aria-current="page"], .rail .rail-home[aria-current="page"] { background: var(--surface-card-hover); color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.rail .nav-item[aria-current="page"] { background: var(--surface-card-hover); color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.rail .rail-home[aria-current="page"] { color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.rail .rail-home[aria-current="page"]::before { background: var(--surface-card-hover); }
 .rail .nav-item[aria-current="page"]::before { content: none; }
 
 /* The open rail. */
