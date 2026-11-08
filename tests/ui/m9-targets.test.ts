@@ -13,7 +13,7 @@ import { browser, device, still } from './support.ts';
 import { CONTROLS, DESKTOP, PHONE, VIEWS, seeded, settled } from './m9-support.ts';
 
 // Every visible control's hit area, in the page: 44×44, or 48×48 where the pointer is a finger.
-// `scope`: an open overlay (the drawer, More, a sheet) is all that can be pressed while it's open.
+// `scope`: an open overlay (the drawer, a sheet) is all that can be pressed while it's open.
 // Returns the ones that miss.
 function probe(page: Page, where: string, scope = 'body') {
   return page.evaluate(({ sel, where, scope }) => {
@@ -174,10 +174,6 @@ test('M9 gate, hit areas: at a desktop’s width every control, the rail and the
     await page.click('#menu');
     await page.waitForSelector('.app.drawer-open');
     await check('chat, conversations open', '#sidebar');
-    await page.keyboard.press('Escape');
-    await page.click('#more-btn');
-    await page.waitForSelector('#more:not([hidden])');
-    await check('More', '#more');
     await page.keyboard.press('Escape');
     await page.goto(`${m.base}/tasks`);
     await settled(page, 'tasks');

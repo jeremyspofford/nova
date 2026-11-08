@@ -105,6 +105,9 @@
 .rail-group { display: none; }
 .rail-list { list-style: none; margin: 0; padding: 0; display: flex; }
 .rail-list { flex-direction: column; gap: 0; }
+/* Every place, between the head and the foot: a short window scrolls this, never hides a place
+   (no overflow menu, owner ruling 2026-11-08). The padding keeps focus rings inside the clip. */
+.rail-scroll { display: flex; flex-direction: column; align-items: inherit; gap: var(--space-1); flex: 1 1 auto; width: 100%; min-height: 0; padding-block: var(--space-1); overflow-y: auto; overflow-x: hidden; }
 .rail-foot { display: flex; flex-direction: column; align-items: center; width: 100%; margin-top: auto; padding-top: var(--space-2); border-top: 1px solid var(--border-subtle); }
 .rail-stamp { display: flex; align-items: center; justify-content: center; gap: var(--space-1); margin: 0; padding: var(--space-2) var(--space-3); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); }
 .rail-stamp[data-pending] { color: var(--status-attention); }
@@ -160,30 +163,11 @@ body[data-rail="open"] .rail .nav-item { flex-direction: row; gap: var(--space-3
 .rail-recent .nav-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 body[data-rail="open"] .rail .nav-label { flex: 1; text-align: start; }
 body[data-rail="open"] .rail .nav-count { display: inline-block; padding: 0 var(--space-2); border-radius: var(--radius-pill); background: var(--surface-card-hover); color: var(--text-secondary); font-size: var(--type-caption); font-variant-numeric: tabular-nums; }
-body[data-rail="open"] .rail .nav-count + .nav-badge { display: none; }
 body[data-rail="open"] .rail .nav-badge { position: static; flex: none; }
 body[data-rail="open"] .rail-foot { align-items: stretch; }
 body[data-rail="open"] .rail-stamp { justify-content: flex-start; }
 body[data-rail="open"] .rail-stamp-v { display: none; }
 body[data-rail="open"] .rail-stamp-full { display: inline; }
-
-/* More: the rest of the destinations, as a sheet. */
-.more {
-  position: fixed;
-  z-index: 40;
-  inset: auto var(--space-3) var(--space-3) var(--space-3);
-  max-width: calc(var(--space-8) * 5);
-  margin: 0 auto;
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-card);
-  background: var(--bg-overlay);
-  box-shadow: var(--shadow-raised);
-  animation: rise var(--motion-transition) var(--motion-ease) both;
-}
-.more-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
-.more .nav-item { flex-direction: row; gap: var(--space-3); padding: var(--space-3); font: var(--type-weight-regular) var(--type-body)/var(--type-line-tight) var(--font-body); }
-.more .nav-badge { position: static; margin-left: auto; }
 
 /* The right column (desktop) or context pane (tablet): at most three quiet cards. */
 .aside {
@@ -903,7 +887,7 @@ body[data-layout="phone"] .takeover-frame { width: max(100%, calc(var(--space-8)
 :root { --hit: 44px; }
 @media (pointer: coarse) { :root { --hit: 48px; } }
 .icon-btn, .send, .mic { width: var(--hit); height: var(--hit); }
-.btn:not(.small), .input, .field, .composer textarea, .memory-edit, select, .record > summary, .toc-item, .more .nav-item, .toast-btn { min-height: var(--hit); }
+.btn:not(.small), .input, .field, .composer textarea, .memory-edit, select, .record > summary, .toc-item, .toast-btn { min-height: var(--hit); }
 .act { min-height: var(--hit); min-width: var(--hit); justify-content: center; }
 /* A disclosure's own row is as tall as its hit area, so two in a row don't share one. */
 summary { padding-block: max(0px, calc((var(--hit) - 1lh) / 2)); }

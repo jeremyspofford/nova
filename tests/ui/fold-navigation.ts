@@ -50,16 +50,9 @@ export async function openFoldView(page: Page, url: string) {
       await page.locator('#settings-nav a[href="/settings#capture"]').click({ timeout: 15_000 });
       await page.locator('#settings-capture a[href="/capture"]').click({ timeout: 15_000 });
     } else {
-      const direct = page.locator(`#rail a[href="${target.pathname}"]`).filter({ visible: true });
-      if (await page.locator('#nav-menu').isVisible()) {
-        // A phone or a cover screen: the rail is the title bar's drawer.
-        await page.locator('#nav-menu').click({ timeout: 15_000 });
-        await page.locator(`#rail a[href="${target.pathname}"]`).click({ timeout: 15_000 });
-      } else if (await direct.count()) await direct.first().click({ timeout: 15_000 });
-      else {
-        await page.locator('#more-btn').click({ timeout: 15_000 });
-        await page.locator(`#more a[href="${target.pathname}"]`).click({ timeout: 15_000 });
-      }
+      // A phone or a cover screen: the rail is the title bar's drawer.
+      if (await page.locator('#nav-menu').isVisible()) await page.locator('#nav-menu').click({ timeout: 15_000 });
+      await page.locator(`#rail a[href="${target.pathname}"]`).click({ timeout: 15_000 });
     }
   }
   await foldViewReady(page, url);

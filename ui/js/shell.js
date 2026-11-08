@@ -1,5 +1,5 @@
 // The shell around every view: the layout and posture on <body>, the navigation each layout
-// shows (rail, its drawer on a phone, More), the live orb, toasts and the sheet. The rules themselves are pure
+// shows (rail, its drawer on a phone), the live orb, toasts and the sheet. The rules themselves are pure
 // and tested (layout.js, nav.js, status.js); this module applies them to the page.
 import { resolve, viewportOf } from './layout.js';
 import { DESTINATIONS, destination, placement } from './nav.js';
@@ -79,7 +79,6 @@ export function readLayout() {
     toggle.title = toggle.getAttribute('aria-label');
   }
   if (changed) {
-    closeMore();
     closeNav();
     renderNav();
     window.dispatchEvent(new CustomEvent('nova:layout', { detail: { ...layout } }));
@@ -115,35 +114,28 @@ function navItem(id, { tag = 'li' } = {}) {
   return tag ? `<${tag}>${a}</${tag}>` : a;
 }
 
-function moreButton(more) {
-  const b = more.map((id) => badges.get(id)).find(Boolean);
-  const open = !$('more')?.hidden;
-  return `<li><button type="button" class="nav-item" id="more-btn" aria-haspopup="dialog" aria-controls="more" aria-expanded="${open}"${more.includes(currentDest) ? ' data-current' : ''}>${ICONS.more}<span class="nav-label">More</span>${b ? `<span class="nav-badge" data-tone="${esc(b.tone)}" aria-hidden="true"></span>` : ''}</button></li>`;
-}
-
 export function renderNav() {
   if (!layout.layout) return;
-  const focused = document.activeElement?.closest?.('[data-dest], #more-btn, #rail .rail-recent a, #nav-all');
-  const focusKey = focused ? focused.dataset.dest ?? (focused.id === 'more-btn' ? 'more' : focused.id === 'nav-all' ? 'all' : focused.getAttribute('href')) : null;
+  const focused = document.activeElement?.closest?.('[data-dest], #rail .rail-recent a, #nav-all');
+  const focusKey = focused ? focused.dataset.dest ?? (focused.id === 'nav-all' ? 'all' : focused.getAttribute('href')) : null;
   const p = placement(layout.layout);
   // A phone's drawer: the same rail, Home a row (the orb is the top bar's), and a close button.
   const drawer = layout.layout === 'phone';
   const home = p.home === 'orb' ? `<a class="rail-home" href="/" data-dest="home" aria-label="Home. ${esc(ORB_WORDS[orbNow])}"${currentDest === 'home' ? ' aria-current="page"' : ''}>${orb({ state: orbNow, size: 'rail', live: true, decorative: true })}</a>` : '';
   $('rail').innerHTML = `<div class="rail-head">${home}
 <button type="button" class="icon-btn rail-search" id="rail-search" aria-label="Search or go to" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Search or go to (Ctrl K)">${ICONS.search}</button>${drawer ? `<button type="button" class="icon-btn rail-new" id="nav-new" aria-label="New conversation" title="New conversation (Ctrl Shift O)">${ICONS.plus}</button><button type="button" class="icon-btn" id="nav-close" aria-label="Close navigation">${ICONS.close}</button>` : ''}</div>
-<p class="rail-group" id="rail-places">Places</p>
-<ul class="rail-list" aria-labelledby="rail-places">${p.primary.map((id) => navItem(id)).join('')}${p.more.length ? moreButton(p.more) : ''}</ul>
-${drawer && recent.list.length ? recentGroup() : ''}
+<div class="rail-scroll"><p class="rail-group" id="rail-places">Places</p>
+<ul class="rail-list" aria-labelledby="rail-places">${p.primary.map((id) => navItem(id)).join('')}</ul>
+${drawer && recent.list.length ? recentGroup() : ''}</div>
 <div class="rail-foot"><ul class="rail-list">${p.foot.map((id) => navItem(id)).join('')}</ul>${stamp()}</div>`;
-  $('more').innerHTML = `<ul class="more-list">${p.more.map((id) => navItem(id)).join('')}</ul>`;
   // The menu button carries the most urgent place's dot, as the tabs did.
   const b = DESTINATIONS.map((d) => badges.get(d.id)).find(Boolean);
   $('nav-menu').innerHTML = `${ICONS.panel}${b ? `<span class="nav-badge" data-tone="${esc(b.tone)}" aria-hidden="true"></span>` : ''}`;
   $('nav-menu').setAttribute('aria-label', b ? `Open navigation, ${b.label}` : 'Open navigation');
   if (focusKey) {
-    const back = focusKey === 'more' ? $('more-btn') : focusKey === 'all' ? $('nav-all')
+    const back = focusKey === 'all' ? $('nav-all')
       : focusKey.startsWith('/c/') ? [...document.querySelectorAll('#rail .rail-recent a')].find((a) => a.getAttribute('href') === focusKey)
-        : document.querySelector(`#rail [data-dest="${focusKey}"], #more [data-dest="${focusKey}"]`);
+        : document.querySelector(`#rail [data-dest="${focusKey}"]`);
     // A Recent row that left the list hands focus to All conversations, not to the page.
     (back ?? (focusKey.startsWith('/c/') ? $('nav-all') : null))?.focus({ preventScroll: true });
   }
@@ -188,28 +180,6 @@ export function setBadge(dest, badge) {
   if (badge) badges.set(dest, badge); else badges.delete(dest);
   if (before !== JSON.stringify(badge ?? null)) renderNav();
 }
-
-// More: a sheet with the rest of the destinations.
-export function openMore() {
-  const more = $('more');
-  more.hidden = false;
-  $('more-btn')?.setAttribute('aria-expanded', 'true');
-  more.querySelector('a')?.focus();
-}
-export function closeMore({ focus = false } = {}) {
-  const more = $('more');
-  if (!more || more.hidden) return;
-  more.hidden = true;
-  $('more-btn')?.setAttribute('aria-expanded', 'false');
-  if (focus) $('more-btn')?.focus();
-}
-document.addEventListener('click', (e) => {
-  if (e.target.closest('#more-btn')) { $('more').hidden ? openMore() : closeMore(); return; }
-  if (!e.target.closest('#more')) closeMore();
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !$('more').hidden) { e.preventDefault(); closeMore({ focus: true }); }
-});
 
 // A phone's navigation drawer (owner decision 2026-11-08): the rail, opened by the title bar's menu
 // button. A modal while open: the page behind is inert, Tab stays inside, and the scrim, Esc and the
