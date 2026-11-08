@@ -1,0 +1,25 @@
+**2026-11-08 · Design system · Jarvis ring compositions (step 1, for owner reaction)**
+- What changed: step 1 of the owner's "Jarvis" design system. It is compositions only, for the owner's reaction before any tokens land.
+  - ui/js/jarvis-ring.js has a pure renderer, `jarvisRing({status, size, reduced, amplitude})`, returning SVG.
+    - Each ring is a circle with pathLength=360, so segments and arcs are stroke-dasharrays in degrees.
+    - Loops are CSS classes, left out under reduced motion.
+    - `jarvisCore()` cross-fades one layer per state over 800 ms. Success settles to idle after a second, the same contract as status-icon.js.
+    - Below 24 px it draws fewer ticks and thicker strokes.
+  - Styleguide entry /styleguide?entry=jarvis:
+    - all ten states at 16/24/48/96 px
+    - a hero HUD core driven by state buttons
+    - a speaking-amplitude slider and a reduced-motion switch
+  - Colours are local custom properties on the Jarvis root, mixed from schema tokens. It's a new use of `light-dark()` to keep the surface near-black in both modes; flagged for review.
+  - The 800 ms morph and the success timing run in JS, because token lint caps one-off CSS animations at 300 ms.
+  - No design-system manifest, tokens or Appearance entry. The Nebula status icon is untouched.
+  - The service worker cache moves to v53.
+- What you can now do: see every Jarvis state at four sizes and drive the HUD core in the styleguide.
+- Still unfinished: three things.
+  - Steps 2 and 3 (the token package, the Appearance entry, and rendering through statusIcon()) wait for the owner's reaction.
+  - At 16 px in greyscale: idle and success differ only by stroke weight, listening and offline read faint, and needs-you without colour is only a slightly heavier arc beside its gap.
+  - Stopped's red comes from main's status/error; the theme match (#384) deepens it.
+- Checked: locally, before CI.
+  - lint:tokens and typecheck.
+  - The 9 new jarvis-ring unit tests and styleguide-coverage pass, and the status-icon unit tests still pass.
+  - tests/ui/jarvis-rings.test.ts passes in Chromium and WebKit. It covers all 40 cells with their labels, the morph, success settling, the amplitude slider, reduced motion and no page errors.
+  - Screenshots are in docs/screenshots/jarvis-compositions-2026-11-08/.

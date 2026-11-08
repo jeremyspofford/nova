@@ -1,0 +1,123 @@
+/* Jarvis rings: compositions for the owner's reaction (2026-11-08, step 1), not a design system.
+   The rings (ui/js/jarvis-ring.js) and their styleguide entry (ui/js/sg-jarvis.js). The app never
+   loads this file. Colours are local custom properties on the Jarvis surface, each derived from the
+   current design system's tokens (no raw colour), the way compositions.css derives the orb's field:
+   light-dark() picks whichever of a token pair is light (or dark) in the mode on show, so the
+   surface stays near-black and the ink light in either mode. */
+
+.jv-surface, .jv-core {
+  --jv-ink: light-dark(var(--bg-raised), var(--text-primary));
+  --jv-black: light-dark(var(--text-primary), var(--bg-base));
+  --jv-hue: color-mix(in oklch, var(--orb-core) 70%, var(--status-ok));
+  --jv-c: color-mix(in oklch, var(--jv-hue) 72%, var(--jv-ink));
+  --jv-bg: color-mix(in oklch, var(--jv-black) 94%, var(--jv-hue));
+  --jv-line: color-mix(in oklch, var(--jv-c) 24%, transparent);
+  --jv-text-2: color-mix(in oklch, var(--jv-ink) 62%, var(--jv-bg));
+  --jv-amber: var(--orb-attention);
+  --jv-red: var(--status-error);
+  --jv-grey: color-mix(in oklch, var(--jv-ink) 42%, var(--jv-bg));
+  --jv-amp: 0;
+  --jv-k: 0;
+}
+
+/* ---- the rings ---- */
+.jv-core { position: relative; display: inline-grid; flex: none; vertical-align: middle; }
+.jv-core > .jv-ring { grid-area: 1 / 1; }
+.jv-ring { display: block; overflow: visible; }
+.jv-ring circle { fill: none; }
+/* Only what moves turns or scales about the centre; the drawing's own quarter turn (an SVG transform
+   attribute about 50 50) must keep the default origin, or the rings shift a whole size down. */
+.jv-ring [class*="jv-a-"], .jv-ring .jv-amp { transform-box: view-box; transform-origin: 50% 50%; }
+.jv-c { stroke: var(--jv-c); }
+.jv-dim { stroke: var(--jv-c); opacity: 0.38; }
+.jv-dim.jv-faint { opacity: 0.22; }
+.jv-hi { stroke: color-mix(in oklch, var(--jv-c) 70%, var(--jv-ink)); }
+.jv-flash { stroke: var(--jv-ink); }
+.jv-amber { stroke: var(--jv-amber); }
+.jv-red { stroke: var(--jv-red); }
+.jv-grey, .jv-off { stroke: var(--jv-grey); }
+.jv-grey { opacity: 0.7; }
+.jv-off { opacity: 0.3; }
+/* At 24 px and under, dim still has to be seen. */
+.jv-ring[data-tier="s"] .jv-grey { opacity: 1; }
+
+/* Ambient loops: 6–12 s, eased; nothing spins fast. */
+.jv-a-breathe { animation: jv-breathe var(--motion-breathe) var(--motion-ease) infinite alternate; }
+.jv-a-turn { animation: jv-turn calc(var(--motion-breathe) * 2) var(--motion-ease) infinite; }
+.jv-a-turn-rev { animation: jv-turn-rev calc(var(--motion-breathe) * 1.5) var(--motion-ease) infinite; }
+.jv-a-work { animation: jv-turn var(--motion-breathe) var(--motion-ease) infinite; }
+.jv-a-seg { animation: jv-seg var(--motion-breathe) var(--motion-ease) infinite; animation-delay: calc(var(--motion-breathe) * var(--jv-k) * -0.08); }
+.jv-a-pulse { animation: jv-pulse var(--motion-pulse) var(--motion-ease) infinite alternate; }
+/* Speaking with a voice: the radius follows the amplitude, not a loop. */
+.jv-amp { scale: calc(0.9 + var(--jv-amp) * 0.16); transition: scale var(--motion-duration-fast) var(--motion-ease); }
+/* Success shows for one second, so its one-second loop sweeps once. */
+.jv-a-sweep { opacity: 0; animation: jv-sweep calc(var(--motion-breathe) / 6) var(--motion-ease) infinite; }
+.jv-a-fill { animation: var(--jv-fill) var(--motion-breathe) var(--motion-ease) infinite; }
+.jv-f1 { --jv-fill: jv-fill-1; } .jv-f2 { --jv-fill: jv-fill-2; } .jv-f3 { --jv-fill: jv-fill-3; } .jv-f4 { --jv-fill: jv-fill-4; }
+.jv-f5 { --jv-fill: jv-fill-5; } .jv-f6 { --jv-fill: jv-fill-6; } .jv-f7 { --jv-fill: jv-fill-7; } .jv-f8 { --jv-fill: jv-fill-8; }
+
+@keyframes jv-breathe { from { opacity: 0.55; } to { opacity: 1; } }
+@keyframes jv-turn { from { rotate: 0deg; } to { rotate: 360deg; } }
+@keyframes jv-turn-rev { from { rotate: 0deg; } to { rotate: -360deg; } }
+@keyframes jv-seg { 0%, 100% { opacity: 0.5; } 18% { opacity: 1; } 40% { opacity: 0.5; } }
+@keyframes jv-pulse { from { scale: 0.92; } to { scale: 1.04; } }
+@keyframes jv-sweep { from { rotate: 0deg; opacity: 1; } 85% { opacity: 1; } to { rotate: 360deg; opacity: 0; } }
+/* The progress arc fills in eight steps over the loop, holds, and empties together. */
+@keyframes jv-fill-1 { 0% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0.2; } }
+@keyframes jv-fill-2 { 0%, 10% { opacity: 0.2; } 12% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0.2; } }
+@keyframes jv-fill-3 { 0%, 20% { opacity: 0.2; } 22% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0.2; } }
+@keyframes jv-fill-4 { 0%, 30% { opacity: 0.2; } 32% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0.2; } }
+@keyframes jv-fill-5 { 0%, 40% { opacity: 0.2; } 42% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0.2; } }
+@keyframes jv-fill-6 { 0%, 50% { opacity: 0.2; } 52% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0.2; } }
+@keyframes jv-fill-7 { 0%, 60% { opacity: 0.2; } 62% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0.2; } }
+@keyframes jv-fill-8 { 0%, 70% { opacity: 0.2; } 72% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0.2; } }
+
+/* Reduced motion: the renderer draws still configurations; nothing loops here either. */
+.jv-ring[data-reduced] *, .jv-surface[data-reduced] .jv-ring * { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .jv-ring * { animation: none; }
+  .jv-a-sweep { opacity: 1; }
+}
+
+/* ---- the styleguide entry: a near-black HUD surface with hairline cyan dividers ---- */
+.jv-surface {
+  padding: var(--space-5);
+  border: 1px solid var(--jv-line);
+  border-radius: var(--radius-card);
+  background: var(--jv-bg);
+  color: var(--jv-ink);
+  font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body);
+}
+.jv-note { margin: 0 0 var(--space-5); padding-bottom: var(--space-4); border-bottom: 1px solid var(--jv-line); color: var(--jv-text-2); font-size: var(--type-small); }
+.jv-note strong { color: var(--jv-ink); font-weight: var(--type-weight-strong); }
+.jv-hero-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-6); padding-bottom: var(--space-5); border-bottom: 1px solid var(--jv-line); }
+.jv-hero { display: grid; place-items: center; flex: none; padding: var(--space-4); border: 1px solid var(--jv-line); border-radius: var(--radius-card); }
+.jv-controls { flex: 1 1 calc(var(--space-8) * 4); min-width: 0; }
+.jv-label { margin: 0 0 var(--space-2); color: var(--jv-text-2); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.06em; text-transform: uppercase; }
+.jv-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.jv-row + .jv-label, .jv-row + .jv-row { margin-top: var(--space-4); }
+.jv-btn {
+  min-height: var(--space-7);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--jv-line);
+  border-radius: var(--radius-input);
+  background: transparent;
+  color: var(--jv-ink);
+  font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-mono);
+  cursor: pointer;
+}
+.jv-btn:hover { border-color: var(--jv-c); }
+.jv-btn[aria-pressed="true"] { border-color: var(--jv-c); color: var(--jv-c); }
+.jv-btn:focus-visible, .jv-switch input:focus-visible, .jv-amp-input:focus-visible { outline: 2px solid var(--jv-c); outline-offset: 2px; }
+.jv-switch { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--space-7); color: var(--jv-ink); font-size: var(--type-small); }
+.jv-switch input, .jv-amp-input { accent-color: var(--jv-c); }
+.jv-amp-input { flex: 1 1 calc(var(--space-8) * 2); min-width: 0; min-height: var(--space-7); }
+.jv-readout { min-width: var(--space-7); color: var(--jv-c); font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* The sheet: every state at 16, 24, 48 and 96 px, one row per state, hairlines between. */
+.jv-sheet-wrap { margin-top: var(--space-5); overflow-x: auto; }
+.jv-sheet { display: grid; grid-template-columns: minmax(calc(var(--space-8) + var(--space-5)), auto) repeat(4, minmax(var(--space-7), auto)); column-gap: var(--space-5); width: max-content; }
+.jv-sheet > * { display: flex; align-items: center; justify-content: center; padding-block: var(--space-2); border-bottom: 1px solid var(--jv-line); }
+.jv-head { color: var(--jv-text-2); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-mono); }
+.jv-sheet > .jv-head:first-child, .jv-name { justify-content: flex-start; }
+.jv-name { color: var(--jv-ink); font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-mono); }
