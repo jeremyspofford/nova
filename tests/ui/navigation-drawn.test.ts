@@ -140,6 +140,14 @@ test('the navigation drawer: every place, focus in and back, Esc, scrim and clos
       assert.equal(await page.evaluate(() => document.body.dataset.view), 'chat');
       assert.equal(await page.locator('.app.nav-open').count(), 0, `${what}: opening a conversation closes it`);
       assert.equal(await page.locator('#rail a[href="/c/2026-11-05-rec005"]').getAttribute('aria-current'), 'page', `${what}: the open conversation is marked`);
+      assert.equal(await page.locator('#rail [aria-current="page"]').count(), 1, `${what}: one current page, not Chat as well`);
+      // Focus on a Recent row survives the drawer redrawing (a new badge, a renamed conversation).
+      await menu.tap();
+      await page.locator('#rail a[href="/c/2026-11-04-rec004"]').focus();
+      await page.evaluate(() => import(String('/js/shell.js')).then((s) => s.setBadge('tasks', { tone: 'attention', label: 'test' })));
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('href')), '/c/2026-11-04-rec004', `${what}: focus kept on the Recent row`);
+      await page.keyboard.press('Escape');
+      await until(page, () => !document.querySelector('.app.nav-open'));
       assert.equal(await page.locator('#menu').isVisible(), false, `${what}: no separate conversations button`);
       // All conversations: the conversations drawer, with every one; closing it gives focus back to the menu button.
       await menu.tap();
