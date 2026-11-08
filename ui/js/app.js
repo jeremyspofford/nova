@@ -14,7 +14,7 @@ import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
 import { problemTone, stoppingProblems } from './status.js';
 import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js';
-import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, setRecent, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
+import { closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, setRecent, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
 import { bindConnections, loadConnections, renderConnections } from './connections.js';
 import { bindSites, loadSites, renderSites } from './sites.js';
@@ -269,7 +269,6 @@ function setReachable(ok) {
 function route() {
   if (setupShowing()) return;
   const r = routeOf(location.pathname);
-  closeMore();
   if (r.unknown) history.replaceState(null, '', `/${location.hash}`);
   if (r.dest === 'chat') {
     if (r.conversation === null) startNew();
@@ -838,7 +837,6 @@ function followLink(e) {
   if (!a || a.hasAttribute('download') || a.target === '_blank' || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0 || !inApp(a.getAttribute('href'))) return false;
   e.preventDefault();
   closeDrawer();
-  closeMore();
   navigate(a.getAttribute('href'));
   return true;
 }

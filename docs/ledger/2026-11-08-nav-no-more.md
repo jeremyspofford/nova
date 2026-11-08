@@ -1,0 +1,21 @@
+**2026-11-08 · UI rebuild · No overflow navigation (owner ruling)**
+- What changed: the owner ruled on 2026-11-08 that "More" goes. The ruling and the owner's screenshot are filed in docs/builder-packet/ui-references/nova-ui-no-more-overflow-ruling-2026-11-08.md and nova-ui-more-popover-owner-shot-2026-11-08.jpg. The screenshot showed a More popover covering Memory, with Health's problem hidden behind its dot.
+  - ui/js/nav.js has no `more` placement. The rail lists chat, tasks, memory, automations, skills, activity and health, with Settings in the foot.
+  - The More button, its popover (#more), its handlers and its CSS are deleted from shell.js, app.js, index.html, components.css and layout.css.
+  - Places, and Recent on a phone, sit in a .rail-scroll region between the rail's head and foot. The list scrolls there when the window is short and never covers content.
+  - The rule that hid a place's toned dot when a count showed is deleted. Health now shows its count and its alert dot on its own row.
+  - Settings' icon is now an 8-tooth gear (components.js).
+  - DESIGN-SYSTEM.md's slop list gains item 9, "No overflow nav, no nav popovers". §5 no longer caps the desktop rail at six destinations.
+  - The service worker cache moves to v47.
+- What you can now do: reach every place in one click at any width, and see which place needs you without opening anything.
+- Still unfinished:
+  - Owner reaction to the screenshots.
+  - The orb still renders as the old disc; the status icon (part B) and the Nebula theme match replace it.
+  - Not checked on a real device.
+- Checked:
+  - lint:tokens, typecheck; lint-scales, ui-logic and navigation-registry (27/27).
+  - UI: navigation-drawn (4/4) and navigation-reachability (2/2). The navigation-drawn suite is extended: at 1440×900, 1024×768, 832×750, 1024×600 and 1280×600, every place has a link inside the rail, there is no More or [aria-haspopup] item, moving between places opens no dialog or popover, and Health's toned dot is visible on the Health row.
+  - UI: m9-targets, m9-fold, fold-postures, health-caps-diagnostics, ios-status-bar, m9-contrast and m9-motion.
+  - posture-sweep failed once (a 320 px Home hero orb that arrived late) and passed on a rerun.
+  - The shots walkthrough passed 133/133.
+  - Screenshots are in docs/screenshots/nav-no-more-2026-11-08/.

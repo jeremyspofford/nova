@@ -116,7 +116,7 @@ function measures() {
 type Row = readonly [string, number, number];
 
 // One look of one design: the main views, each state. `phone`: at a phone's width, where nothing is
-// hovered, but the tabs, the conversations drawer, More, a sheet and a toast are measured open.
+// hovered, but the tabs, the conversations drawer, a sheet and a toast are measured open.
 async function audit(page: Page, base: string, look: string, { phone = false } = {}) {
   const fails: string[] = [];
   const states = { rest: 0, hover: 0, focus: 0, selected: 0, disabled: 0, error: 0, placeholder: 0, icon: 0, overlays: 0 };
