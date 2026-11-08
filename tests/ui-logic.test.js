@@ -81,18 +81,19 @@ test('every layout models the same eleven destinations, including Settings child
   for (const l of LAYOUTS) assert.deepEqual(reachable(l).sort(), all, l);
 });
 
-test('a phone\'s drawer lists every place as a row, Settings at the foot, no More; the rail has the orb and at most six', () => {
+test('a phone\'s drawer lists every place as a row, Settings at the foot; the rail has the orb and every other place; nothing overflows', () => {
   const phone = placement('phone');
   assert.deepEqual(phone.primary, ['home', 'chat', 'tasks', 'memory', 'automations', 'skills', 'activity', 'health']);
   assert.deepEqual(phone.foot, ['settings']);
-  assert.deepEqual(phone.more, []);
   assert.equal(phone.home, 'row');
   for (const l of ['tablet', 'desktop']) {
     const p = placement(l);
     assert.equal(p.home, 'orb');
-    assert.ok(p.primary.length + p.foot.length <= 6, l);
-    assert.ok(!p.primary.includes('home'));
+    assert.deepEqual(p.primary, ['chat', 'tasks', 'memory', 'automations', 'skills', 'activity', 'health'], l);
+    assert.deepEqual(p.foot, ['settings'], l);
   }
+  // No overflow menu anywhere (owner ruling 2026-11-08): the shape has no "more" at all.
+  for (const l of LAYOUTS) assert.ok(!('more' in placement(l)), l);
 });
 
 test('paths map to destinations, and Era 2 paths keep working', () => {

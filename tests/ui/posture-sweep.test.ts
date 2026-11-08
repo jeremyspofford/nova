@@ -29,20 +29,13 @@ const bandsOf = (page: Page) => page.evaluate(() => {
 
 const visible = (page: Page, sel: string) => page.$$eval(sel, (els) => els.filter((e) => (e as HTMLElement).checkVisibility()).map((e) => (e as HTMLElement).dataset.dest!));
 
-// The destinations a person can get to from here: what the rail shows (in its drawer on a phone),
-// plus More.
+// The destinations a person can get to from here: what the rail shows (in its drawer on a phone).
 async function reachable(page: Page): Promise<string[]> {
   const menu = page.locator('#nav-menu');
   const drawer = await menu.isVisible();
   if (drawer) { await menu.click(); await page.waitForSelector('.app.nav-open #rail .rail-foot', { state: 'visible' }); }
   const seen = new Set(await visible(page, '#rail [data-dest]'));
   if (drawer) await page.keyboard.press('Escape');
-  const more = page.locator('#more-btn');
-  if (await more.isVisible()) {
-    await more.click();
-    for (const d of await visible(page, '#more [data-dest]')) seen.add(d);
-    await page.keyboard.press('Escape');
-  }
   return [...seen].sort();
 }
 
@@ -110,17 +103,10 @@ test('M3 gate: every destination opens in every layout', async (t) => {
       await d.page.goto(`${m.base}/`);
       await ready(d.page);
       for (const dest of ALL) {
-        const direct = d.page.locator(`#rail [data-dest="${dest}"]`).filter({ visible: true });
         // The drawer first: a closing drawer's rows stay visible for its transition.
-        if (await d.page.locator('#nav-menu').isVisible()) {
-          await d.page.click('#nav-menu');
-          await d.page.locator(`#rail [data-dest="${dest}"]`).click();
-        } else if (await direct.count()) await direct.first().click();
-        else {
-          await d.page.click('#more-btn');
-          await d.page.locator(`#more [data-dest="${dest}"]`).click();
-        }
-        await d.page.waitForFunction((want) => document.querySelector(`[data-dest="${want}"][aria-current="page"]`) !== null || (want !== 'home' && document.querySelector('#more-btn[data-current]') !== null), dest);
+        if (await d.page.locator('#nav-menu').isVisible()) await d.page.click('#nav-menu');
+        await d.page.locator(`#rail [data-dest="${dest}"]`).click();
+        await d.page.waitForFunction((want) => document.querySelector(`[data-dest="${want}"][aria-current="page"]`) !== null, dest);
         const path = new URL(d.page.url()).pathname;
         assert.equal(path, dest === 'home' ? '/' : `/${dest}`, `${width}px: ${dest} opened`);
         const title = (await d.page.textContent('#title'))?.trim() ?? '';

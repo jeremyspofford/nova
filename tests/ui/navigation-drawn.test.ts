@@ -6,12 +6,12 @@
 // the tap's route to change first: until it does, the page it left still reads as ready.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stop } from '../acceptance/support.ts';
 import { blank, browser, device, finishSetup, until } from './support.ts';
 import { drawn, press, trackDocument } from './navigation-support.ts';
-import { placement } from '../../ui/js/nav.js';
+import { DESTINATIONS, placement } from '../../ui/js/nav.js';
 
 test('press() waits for the route, then drawn() waits out a conversation’s held entrance before anything is read', { timeout: 120_000 }, async () => {
   const b = await browser();
@@ -180,4 +180,70 @@ test('until() awaits an async check, as page.waitForFunction does not', { timeou
     assert.equal(await until(d.page, async () => (window as unknown as { done?: boolean }).done === true), true);
     assert.ok(Date.now() - t0 >= 250, 'it waited for the check to come true');
   } finally { await b.close(); }
+});
+
+// No overflow navigation (owner ruling 2026-11-08, ui-references/nova-ui-no-more-overflow-ruling):
+// at every rail width each destination is its own link in the rail, a short window scrolls the
+// rail's list instead of hiding places, moving between places never opens a floating panel, and
+// Health's badge is on Health itself.
+test('the rail holds every destination, scrolls when short, opens no popover, and Health wears its own badge', { timeout: 180_000 }, async () => {
+  const b = await browser();
+  assert.notEqual(typeof b, 'string', 'needs a real browser');
+  if (typeof b === 'string') throw new Error(b);
+  const m = blank('nova-nav-no-more-');
+  const nova = await m.start({ NOVA_AGENT_CMD: 'node scripts/fake-agent.js', NOVA_AGENT_EGRESS: 'none' });
+  try {
+    await finishSetup(m);
+    // A synthetic Health problem: a backup to a folder that went away.
+    const target = join(m.dir, 'backups');
+    mkdirSync(target);
+    assert.equal((await m.send('PUT', '/api/v1/backups/settings', { target })).status, 200);
+    rmSync(target, { recursive: true });
+    const run = (await m.send('POST', '/api/v1/backups')).body.id;
+    for (let i = 0; i < 100 && !['done', 'failed'].includes((await m.get(`/api/v1/tasks/${run}`)).state); i++) await new Promise((r) => setTimeout(r, 100));
+    const places = DESTINATIONS.filter((d) => !d.parent).map((d) => d.id);
+    for (const [w, h] of [[1440, 900], [1024, 768], [832, 750], [1024, 600], [1280, 600]] as const) {
+      const what = `${w}×${h}`;
+      const d = await device(b, { width: w, height: h, serviceWorkers: 'block' });
+      const page = d.page;
+      trackDocument(page);
+      await page.goto(`${m.base}/memory`);
+      await drawn(page);
+      assert.notEqual(await page.evaluate(() => document.body.dataset.layout), 'phone', `${what}: a rail layout`);
+      assert.equal(await page.locator('#more, #more-btn').count(), 0, `${what}: no More`);
+      assert.equal(await page.locator('#rail .rail-list [aria-haspopup]').count(), 0, `${what}: no place opens a menu`);
+      // Every place a link of its own, with an accessible name, reachable inside the rail's box.
+      const rail = (await page.locator('#rail').boundingBox())!;
+      assert.ok(rail.y >= 0 && rail.y + rail.height <= h + 1, `${what}: the rail fits the window (${JSON.stringify(rail)})`);
+      for (const id of places) {
+        const link = page.locator(`#rail a[data-dest="${id}"]`);
+        assert.equal(await link.count(), 1, `${what}: ${id} has one link in the rail`);
+        await link.scrollIntoViewIfNeeded();
+        assert.ok(await link.isVisible(), `${what}: ${id} is visible`);
+        const name = await link.evaluate((e) => e.getAttribute('aria-label') ?? e.textContent?.trim() ?? '');
+        assert.ok(name.length > 0, `${what}: ${id} has a name`);
+        const r = (await link.boundingBox())!;
+        assert.ok(r.y >= rail.y - 1 && r.y + r.height <= rail.y + rail.height + 1, `${what}: ${id} lies inside the rail, not past it`);
+      }
+      // Health's problem shows on the Health link in its tone: the toned dot, beside the count where the rail is open (ruling item 3).
+      const health = page.locator('#rail a[data-dest="health"]');
+      const mark = health.locator('.nav-badge[data-tone]').filter({ visible: true });
+      await mark.first().waitFor();
+      assert.match((await health.getAttribute('aria-label')) ?? '', /^Health, \d+ problems?$/, `${what}: Health says it has a problem`);
+      const [hb, bb] = [(await health.boundingBox())!, (await mark.first().boundingBox())!];
+      assert.match((await mark.first().getAttribute('data-tone')) ?? '', /^(alert|attention)$/, `${what}: the dot carries the problem's tone`);
+      assert.notEqual(await mark.first().evaluate((e) => getComputedStyle(e).backgroundColor), 'rgba(0, 0, 0, 0)', `${what}: the dot is painted`);
+      assert.ok(bb.width > 0 && bb.x >= hb.x && bb.x + bb.width <= hb.x + hb.width && bb.y >= hb.y && bb.y + bb.height <= hb.y + hb.height, `${what}: the badge sits on the Health row`);
+      // Moving between places never opens a floating panel over the page.
+      for (const id of places) {
+        const link = page.locator(`#rail a[data-dest="${id}"]`); // click() scrolls the rail to it
+        await link.click();
+        await until(page, (want) => document.querySelector(`#rail a[data-dest="${want}"]`)?.getAttribute('aria-current') === 'page', id);
+        const open = await page.evaluate(() => [...document.querySelectorAll('dialog[open], [role="dialog"], [role="menu"], [popover]')].filter((e) => (e as HTMLElement).checkVisibility() && (e.tagName !== 'DIALOG' || (e as HTMLDialogElement).open) && !(e as HTMLElement).hidden).map((e) => e.id || e.className));
+        assert.deepEqual(open, [], `${what}: going to ${id} opens no popover`);
+      }
+      assert.deepEqual(d.errors, [], `${what}: no errors`);
+      await d.ctx.close();
+    }
+  } finally { await b.close(); await stop(nova); }
 });
