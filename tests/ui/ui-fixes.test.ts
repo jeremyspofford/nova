@@ -352,7 +352,8 @@ test('UI fixes 5: Appearance applies live, Undo for this device, Save for all, t
         // (DESIGN-SYSTEM §0). The rest are secondary, behind More designs, not yet at the bar.
         assert.equal(await look.locator('.ds-recommended .ds-card').count(), 1, `${where}: one recommended design`);
         assert.equal(await look.locator('.ds-recommended .ds-card').getAttribute('data-ds'), 'nebula', `${where}: Nova's own design, light on a light system`);
-        assert.match((await look.locator('.ds-recommended .ds-kicker').textContent()) ?? '', /Nova’s design/, `${where}: said to be Nova's own`);
+        assert.match((await look.locator('.ds-recommended .ds-kicker').textContent()) ?? '', /^Recommended · Nova’s design$/, `${where}: the recommended pick, said to be Nova's own`);
+        assert.equal(await look.locator('.ds-picker > :first-child .ds-card').getAttribute('data-ds'), 'nebula', `${where}: Nebula comes first`);
         assert.match((await look.locator('.ds-reason').textContent()) ?? '', /design bar.*Light.*contrast/i, `${where}: with its reason, plainly`);
         const moreSummary = (await look.locator('.ds-more-summary').textContent()) ?? '';
         assert.match(moreSummary, /More designs.*not yet at Nova’s design bar/, `${where}: the others are not presented as equals`);

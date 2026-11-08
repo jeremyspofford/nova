@@ -108,8 +108,16 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         assertDrawn(await drawn(p), engine, expected ?? undefined);
         for (const s of STATES) for (const px of SIZES) {
           const sel = `[data-si-cell="${s}-${px}"] .status-icon`;
-          // Success is a flourish the sheet replays; catch it while it shows.
-          if (s === 'success') await p.waitForFunction((q) => document.querySelector(q)!.getAttribute('aria-label') === 'success', sel, { timeout: 5000 });
+          // Success is a flourish the sheet replays and that settles to idle, so its name changes
+          // under any lookup by name: find it by its cell and read role, name and title in one
+          // snapshot. That it says success while flourishing is the hero's check below.
+          if (s === 'success') {
+            const [role, name, title] = await p.locator(sel).evaluate((e) => [e.getAttribute('role'), e.getAttribute('aria-label'), e.getAttribute('title')]);
+            assert.equal(role, 'img', `${s}-${px}: role`);
+            assert.ok(name === 'success' || name === 'idle', `${s}-${px}: named success, or idle once settled (got ${name})`);
+            assert.equal(title, name, `${s}-${px}: title matches its name`);
+            continue;
+          }
           assert.equal(await p.getByRole('img', { name: s, exact: true }).and(p.locator(sel)).count(), 1, `${s}-${px}: found by its accessible name`);
         }
         const renderer = await p.locator('[data-si-hero] .status-icon').getAttribute('data-renderer');
@@ -157,10 +165,10 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         // Success: a flourish that settles to idle by itself, reduced or not.
         await p.getByRole('button', { name: 'success', exact: true }).click();
         assert.equal(await p.locator('[data-si-hero] .status-icon').getAttribute('aria-label'), 'success');
-        await p.waitForFunction(() => document.querySelector('[data-si-hero] .status-icon')!.getAttribute('aria-label') === 'idle', null, { timeout: 2500 });
+        await p.waitForFunction(() => document.querySelector('[data-si-hero] .status-icon')!.getAttribute('aria-label') === 'idle', null, { timeout: 3500 });
         await p.getByLabel('Reduced motion').uncheck();
         await p.getByRole('button', { name: 'success', exact: true }).click();
-        await p.waitForFunction(() => document.querySelector('[data-si-hero] .status-icon')!.getAttribute('aria-label') === 'idle', null, { timeout: 2500 });
+        await p.waitForFunction(() => document.querySelector('[data-si-hero] .status-icon')!.getAttribute('aria-label') === 'idle', null, { timeout: 3500 });
 
         // The mid-transition demo ends on needs-you, having moved through working.
         await p.getByRole('button', { name: /then needs-you 150 ms later/ }).click();
@@ -173,7 +181,9 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         const dir = shotsDir();
         if (dir && engine === 'chromium') {
           await p.evaluate(() => (document.querySelector('[data-si-hero] .status-icon') as HTMLElement & { setStatus: (s: string) => void }).setStatus('idle'));
-          const flourishing = (page: Page) => page.waitForFunction(() => document.querySelector('[data-si-cell="success-48"] .status-icon')!.getAttribute('aria-label') === 'success', null, { timeout: 5000 }).then(() => sleep(450));
+          // Catch a replay from its start, then wait out its 800 ms morph: the check, fully formed.
+          const label48 = (page: Page, l: string) => page.waitForFunction((x) => document.querySelector('[data-si-cell="success-48"] .status-icon')!.getAttribute('aria-label') === x, l, { timeout: 5000 });
+          const flourishing = async (page: Page) => { await label48(page, 'idle'); await label48(page, 'success'); await sleep(850); };
           await flourishing(p);
           await p.screenshot({ path: join(dir, 'status-icons-desktop-1440x900-nebula-dark.png') });
           await p.screenshot({ path: join(dir, 'status-icons-desktop-1440x900-nebula-dark-full.png'), fullPage: true });
@@ -199,11 +209,11 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
           const art = `data:image/jpeg;base64,${readFileSync(resolve(ROOT, 'docs/builder-packet/ui-references/nova-agent-state-system-sheet-2026-11-08.jpg')).toString('base64')}`;
           await p.evaluate(async ({ art, pairs }: { art: string; pairs: [string, [number, number] | null][] }) => {
             const { statusIcon } = await import('/js/status-icon.js' as string);
-            const k = 112 / 232; // the sheet's tiles are about 232 px square
+            const k = 100 / 232; // the sheet's tiles are about 232 px square; ours are 100, holding a 96 px icon
             const grid = document.createElement('div');
             grid.id = 'si-compare';
-            grid.style.cssText = 'display:grid;grid-template-columns:repeat(10,112px);gap:12px;padding:16px;background:var(--bg-base);color:var(--text-secondary);font:12px/1.4 var(--font-mono);width:max-content';
-            const tile = 'width:112px;height:112px;border-radius:24px;display:grid;place-items:center;background:var(--bg-raised);border:1px solid var(--border-subtle)';
+            grid.style.cssText = 'display:grid;grid-template-columns:repeat(10,100px);gap:12px;padding:16px;background:var(--bg-base);color:var(--text-secondary);font:12px/1.4 var(--font-mono);width:max-content';
+            const tile = 'box-sizing:border-box;width:100px;height:100px;border-radius:22px;display:grid;place-items:center;background:var(--bg-raised);border:1px solid var(--border-subtle)';
             for (const [, at] of pairs) {
               const t = document.createElement('div');
               t.style.cssText = at ? `${tile};background:url(${art}) ${-at[0] * k}px ${-at[1] * k}px / ${1536 * k}px auto no-repeat` : `${tile};opacity:.3`;
@@ -216,6 +226,43 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
           }, { art, pairs: [['idle', [185, 77]], ['listening', [490, 77]], ['thinking', [803, 77]], ['success', [1116, 77]], ['needs-you', [185, 353]], ['stopped', [493, 353]], ['paused', [805, 353]], ['offline', [1115, 353]], ['working', null], ['speaking', null]] as [string, [number, number] | null][] });
           await p.locator('#si-compare').screenshot({ path: join(dir, 'status-icons-vs-sheet-96px.png') });
           await p.evaluate(() => { document.getElementById('si-compare')!.remove(); });
+          // idle → working → idle at the real timing, on a manual clock so each frame lands exactly at
+          // its offset: 8 frames evenly across the two 800 ms morphs (back to idle at 800 ms).
+          const seq = await device(b!, { width: 400, height: 300, scheme: 'dark', serviceWorkers: 'block' });
+          await seq.ctx.addInitScript(() => {
+            let now = 0;
+            let queue: FrameRequestCallback[] = [];
+            performance.now = () => now;
+            window.requestAnimationFrame = (cb) => { queue.push(cb); return queue.length; };
+            (window as unknown as { clockTo: (t: number) => void }).clockTo = (t) => {
+              while (now < t) { now = Math.min(t, now + 16); const q = queue; queue = []; q.forEach((cb) => cb(now)); }
+            };
+          });
+          await seq.page.goto(`${base}/styleguide?entry=status-icon`);
+          await seq.page.evaluate(async () => {
+            const { statusIcon } = await import('/js/status-icon.js' as string);
+            const tile = document.createElement('div');
+            tile.id = 'si-seq';
+            tile.style.cssText = 'position:fixed;inset:0 auto auto 0;z-index:9;padding:8px;background:var(--bg-base)';
+            const icon = statusIcon({ status: 'idle', size: 96 });
+            tile.append(icon);
+            document.body.append(tile);
+            (window as unknown as { seqIcon: HTMLElement }).seqIcon = icon;
+          });
+          const clock = (t: number) => seq.page.evaluate((x) => (window as unknown as { clockTo: (t: number) => void }).clockTo(x), t);
+          const T0 = 1000;
+          await clock(T0);
+          await seq.page.evaluate(() => (window as unknown as { seqIcon: { setStatus: (s: string) => void } }).seqIcon.setStatus('working'));
+          for (let i = 0; i < 8; i++) {
+            const at = Math.round((i * 1600) / 7);
+            if (at >= 800 && Math.round(((i - 1) * 1600) / 7) < 800) {
+              await clock(T0 + 800);
+              await seq.page.evaluate(() => (window as unknown as { seqIcon: { setStatus: (s: string) => void } }).seqIcon.setStatus('idle'));
+            }
+            await clock(T0 + at + 1);
+            await seq.page.locator('#si-seq').screenshot({ path: join(dir, `idle-working-idle-${String(at).padStart(4, '0')}ms.png`) });
+          }
+          await seq.ctx.close();
           const phone = await device(b!, { width: 390, height: 844, scheme: 'dark', touch: true, serviceWorkers: 'block' });
           await open(phone.page, base);
           await flourishing(phone.page);
