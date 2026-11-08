@@ -45,7 +45,7 @@
 }
 .bubble {
   padding: var(--space-3) var(--space-4);
-  background: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-raised));
+  background: var(--surface-card-hover);
   border-radius: var(--radius-card);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -603,6 +603,14 @@ details.record { display: block; }
 .record[open] > summary::after { rotate: 90deg; }
 .record > summary:hover .record-label { color: var(--text-primary); }
 .record.is-failed .record-label, .record.is-skipped .record-label { color: var(--text-secondary); font-style: italic; }
+/* A turn's finished steps, folded into one line ("2 steps · 3 s", the frame's uc-steps). */
+.steps { border-left: 1px solid var(--border-subtle); padding-left: var(--space-3); }
+.steps > summary { display: flex; align-items: center; gap: var(--space-2); width: fit-content; list-style: none; cursor: pointer; border-radius: var(--radius-input); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.steps > summary::-webkit-details-marker { display: none; }
+.steps > summary::after { content: "›"; color: var(--text-faint); transition: rotate var(--motion-duration-fast) var(--motion-ease); }
+.steps[open] > summary::after { rotate: 90deg; }
+.steps > summary:hover { color: var(--text-primary); }
+.steps-list { display: flex; flex-direction: column; gap: var(--space-1); }
 .record-time { color: var(--text-secondary); }
 .record-time::before { content: "· "; }
 .record-output {

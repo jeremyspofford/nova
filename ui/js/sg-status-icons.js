@@ -6,7 +6,7 @@ import { STATUS_ICON_STATES, setReducedMotion, statusIcon } from './status-icon.
 const SIZES = [16, 24, 48];
 let forced = null;
 // The demo first lets the hero settle at idle, so the change always starts from the same place.
-const MIDWAY_START = 450;
+const MIDWAY_START = 900;
 
 // Every state at 16, 24 and 48 px; also drawn on the Nebula acceptance entry (nebula-match).
 export function statusIconSheet() {
@@ -31,7 +31,7 @@ export function bindStatusIcons(root) {
   }
   // Success never rests: the sheet replays its flourish so it can be seen. wait: clock: the replay
   const flourish = [...root.querySelectorAll('[data-si-cell^="success-"] .status-icon')];
-  if (flourish.length) { const replay = setInterval(() => (flourish[0].isConnected ? flourish.forEach((el) => el.setStatus('success')) : clearInterval(replay)), 2200); }
+  if (flourish.length) { const replay = setInterval(() => (flourish[0].isConnected ? flourish.forEach((el) => el.setStatus('success')) : clearInterval(replay)), 3400); }
   const preview = root.querySelector('[data-si-preview]');
   if (!preview) return;
   const hero = statusIcon({ status: 'idle', size: 96 });

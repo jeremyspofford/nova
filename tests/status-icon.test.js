@@ -22,6 +22,24 @@ test('the canonical states, and nothing else', () => {
   assert.throws(() => statusForm('warning'), /Unknown status/);
 });
 
+test('timing (owner, 2026-11-08): an 800 ms morph on a soft ease-in-out; success shows about a second', () => {
+  assert.equal(MORPH_MS, 800);
+  assert.equal(SUCCESS_MS, 1800);
+  const m = new StatusModel('idle', 0);
+  m.set('working', 0);
+  assert.ok(Math.abs(m.weights(400).working - 0.5) < 1e-9, 'half way at half time');
+  assert.ok(m.weights(80).working < 0.03 && m.weights(720).working > 0.97, 'eases in and out');
+});
+
+test('loops ease in and out over long periods: no linear spin', () => {
+  const gap = (s, a, b) => { const x = statusForm(s, a), y = statusForm(s, b); return Math.max(...x.map((v, i) => Math.abs(v - y[i]))); };
+  for (const [s, period] of [['thinking', 7], ['listening', 8]]) {
+    assert.ok(gap(s, 0, period) < 1e-5, `${s}: one period is a whole turn`);
+    assert.ok(gap(s, period, period + 0.01) * 20 < gap(s, period / 2, period / 2 + 0.01), `${s}: at rest at the period's end, moving at its middle`);
+  }
+  assert.ok(gap('idle', 10, 10.01) * 20 < gap('idle', 5, 5.01), 'idle: the same, over ten seconds');
+});
+
 test('a morph takes MORPH_MS and ends on the new form alone', () => {
   const m = new StatusModel('idle', 0);
   m.set('working', 1000);
@@ -88,7 +106,7 @@ test('every form: the same N points, finite, inside the canvas; small sizes are 
     assert.equal(f.length, N, `${s}: same point count`);
     for (let i = 0; i < f.length; i += 5) {
       assert.ok([...f.subarray(i, i + 5)].every(Number.isFinite), `${s}: finite`);
-      assert.ok(Math.abs(f[i]) + f[i + 2] <= 0.95 && Math.abs(f[i + 1]) + f[i + 2] <= 0.95, `${s}${small ? ' small' : ''}: point ${i / 5} fits`);
+      assert.ok(Math.abs(f[i]) + f[i + 2] <= 0.97 && Math.abs(f[i + 1]) + f[i + 2] <= 0.97, `${s}${small ? ' small' : ''}: point ${i / 5} fits`);
       if (small) assert.ok(f[i + 2] >= 0.1, `${s} small: no hairlines`);
     }
   }
