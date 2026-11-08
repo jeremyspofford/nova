@@ -15,6 +15,7 @@ import { escapeHtml as esc } from './markdown.js';
 import { workCosts, diagnosticsDownload, configImport, configSetup, configProposal, passkeySetup, PASSKEY_STATES, PASSKEY_SETUP_STATES, deviceModels } from './components.js';
 import * as fitEngine from './fit-engine.js';
 import { UC_FRAMES, entryOf, ucEntry, ucFrame } from './sg-compositions.js';
+import { bindStatusIcons, statusIconEntry } from './sg-status-icons.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -659,7 +660,9 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
       ['topology', 'Topology', 'Machines, their services, and versions in three layers. The hub leads the diagram; on a phone the same machines form an ordered list.', topologyEntry],
       ['orb', 'Orb', 'Nova’s presence: abstract light, no face, once per view. Seven fixed states; the hero on Home, the rail size everywhere else.',
         () => `<div class="sg-grid">${ORB_STATES.map((s) => `<div class="sg-swatch">${orb({ state: s, size: 'rail' })}<span class="sg-name">${s}</span></div>`).join('')}</div>${state('Sizes', `<div class="sg-demo-row sg-orb-sizes">${ORB_SIZES.map((s) => `<div class="sg-swatch">${orb({ state: 'idle', size: s })}<span class="sg-name">${s}</span></div>`).join('')}</div>`)}`],
-      ['status', 'Status', 'One vocabulary everywhere, each with a fixed colour. Verified always opens its evidence.',
+      ['status-icon', 'Status icon', 'The agent’s state as one iridescent ribbon, reshaped per state and morphing between them; told apart by shape at every size, not by colour alone. Success is a one-second flourish that settles to idle. Red only for stopped, amber only for needs-you. Rail, header and task rows only, never per message.',
+        statusIconEntry],
+      ['status', 'Status','One vocabulary everywhere, each with a fixed colour. Verified always opens its evidence.',
         () => `<div class="sg-demo-row">${['quiet', 'working', 'waiting', 'needs-you', 'failed'].map((s) => status(s)).join('')}${status('verified', { task: 'v1' })}</div>`],
       ['buttons', 'Buttons', 'One standout per view: the primary action. The rest are plain or quiet.',
         () => `${state('Primary, plain, quiet, small, unavailable', '<div class="sg-demo-row"><button class="btn primary">Approve</button><button class="btn">Not now</button><button class="btn quiet">Cancel</button><button class="btn small">Pause</button><button class="btn" disabled>Unavailable</button></div>')}${state('Icon buttons: send, stop, close', `<div class="sg-demo-row"><button class="send" aria-label="Send">${icons.send}</button><button class="send is-stop" aria-label="Stop">${icons.stop}</button><button class="icon-btn" aria-label="Close">${ICONS.close}</button></div>`)}${state('Links', '<div class="sg-demo-row"><a class="link" href="#sg-buttons">All tasks</a><a class="set-link" href="#sg-buttons">Styleguide</a></div>')}`],
@@ -780,6 +783,7 @@ function render() {
   bindPasskey();
   bindModels();
   bindHealthSpecimens();
+  bindStatusIcons(sg);
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }

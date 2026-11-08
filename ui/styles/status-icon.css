@@ -1,0 +1,14 @@
+/* The agent status icon (ui/js/status-icon.js): one canvas, drawn from the design system's tokens. */
+.status-icon { display: inline-flex; vertical-align: middle; }
+.status-icon canvas { display: block; }
+
+/* Its preview in the styleguide (ui/js/sg-status-icons.js). */
+.si-hero { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-5); margin-bottom: var(--space-6); }
+.si-controls { flex: 1 1 calc(var(--space-8) * 5); min-width: 0; }
+.si-controls .sg-label { margin-top: 0; }
+.si-controls .sg-demo-row + .sg-demo-row { margin-top: var(--space-3); }
+.si-reduce { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--space-7); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.si-tile { display: inline-grid; place-items: center; padding: var(--space-1); border: 1px solid var(--border-subtle); border-radius: var(--radius-input); background: var(--bg-base); }
+.si-tile-hero { padding: var(--space-2); border-radius: var(--radius-card); }
+.si-sheet { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, auto); align-items: center; justify-items: center; gap: var(--space-2) var(--space-4); max-width: calc(var(--space-8) * 6); }
+.si-sheet > .sg-name:nth-child(4n + 1) { justify-self: start; }

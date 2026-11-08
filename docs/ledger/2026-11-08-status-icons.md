@@ -1,0 +1,22 @@
+**2026-11-08 · Design system · Agent status icon, part A (component, preview, styleguide)**
+- What changed: the owner's agent status icon system (docs/builder-packet/ui-references/nova-agent-status-icon-builder-prompt-2026-11-08.md, art in nova-agent-state-system-sheet-2026-11-08.jpg, both filed in this PR) is built as one component, ui/js/status-icon.js. It covers Nova's canonical states plus thinking, paused and transient success.
+  - Renderer: one shared offscreen WebGL1 context and one fragment shader draw tapered, lit ribbons, then blit to each instance's own 2D canvas. A morph blends 36-point forms over about 400 ms, and a mid-morph change retargets from the blend on screen. One requestAnimationFrame loop drives every instance and stops when idle or hidden. Without WebGL, a Canvas2D fallback draws the same points.
+  - At 24 px and below the icon uses a simpler, flat-bodied variant.
+  - Colours come at runtime from existing tokens (orb/core, accent/secondary, orb/listening, orb/attention, status/error), so other designs map the same states. No schema change.
+  - Success is a ~1 s flourish that settles to idle and never rests.
+  - Reduced motion (the OS setting, or the preview's switch) gives a static frame per state.
+  - Each icon carries role="img" and an aria-label naming its state.
+  - The styleguide entry and preview are at /styleguide?entry=status-icon. It shows every state at 16, 24 and 48 px, a 96 px hero, state buttons, a mid-transition demo (idle → working, then needs-you 150 ms later) and a reduced-motion switch. The styleguide intro's hardcoded "Orb Teal, Nova's lead design" now says Nebula.
+- What you can now do: see and drive every state of the status icon in the styleguide.
+- Still unfinished: four things.
+  - Part B: placing the icon in the rail, header and task rows, with the service worker entry.
+  - The material is closer to the sheet but not there. The sheet's ribbons twist over and under; these are swept tubes. Idle curls rather than closing into the sheet's vortex, and listening's still frame is a crescent rather than a full tilted ring.
+  - Stopped renders salmon because Nebula dark's status/error token is #ff8a80. The theme-match PR owns that token.
+  - At 16 px, offline differs from idle mainly by brightness (the owner's mapping gives them the same swirl), and idle and working are distinct but close.
+  - Not tested on a real iPhone.
+- Checked: locally, before CI.
+  - lint:tokens and typecheck
+  - tests/status-icon.test.js, styleguide-coverage and lint-scales (19/19)
+  - ui-review and ui-fixes (20/20)
+  - tests/ui/status-icon.test.ts (2/2, Chromium and WebKit, both on WebGL)
+  - Screenshots are in docs/screenshots/status-icons-2026-11-08/.
