@@ -249,11 +249,11 @@ async function topBand(page: Page) {
     const cs = getComputedStyle(shell);
     const firstContent = [...document.querySelectorAll('#main .view-title, #main .greeting, #main .settings-search, #main input, #main .card')].map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0).sort((a, b) => a.top - b.top)[0];
     const topbar = document.querySelector('.topbar')!.getBoundingClientRect();
-    const hits = (sel: string) => [...document.querySelectorAll(sel)].filter((e) => (e as HTMLElement).checkVisibility()).map((e) => e.getBoundingClientRect());
+    const hits = (sel: string) => [...document.querySelectorAll(sel)].filter((e) => (e as HTMLElement).checkVisibility({ checkVisibilityCSS: true })).map((e) => e.getBoundingClientRect());
     return {
       paddingTop: parseFloat(cs.paddingTop), paddingBottom: parseFloat(cs.paddingBottom), paddingLeft: parseFloat(cs.paddingLeft), paddingRight: parseFloat(cs.paddingRight),
       topbar: Math.round(topbar.height), firstContent: firstContent ? Math.round(firstContent.top) : null,
-      controls: hits('#rail .nav-item, #rail .rail-home, #tabs .nav-item, #composer button, .topbar button, .topbar a').map((r) => ({ top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) })),
+      controls: hits('#rail .nav-item, #rail .rail-home, #composer button, .topbar button, .topbar a').map((r) => ({ top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) })),
       vw: innerWidth, vh: innerHeight,
     };
   });

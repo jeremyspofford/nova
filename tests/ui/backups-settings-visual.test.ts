@@ -14,7 +14,7 @@ const KEY = '01234567-89abcdef-01234567-89abcdef-01234567-89abcdef-01234567-89ab
 const POSTURES = { phone: { width: 390, height: 844 }, rail: { width: 1440, height: 900 }, tablet: { width: 820, height: 1180 }, halfopen: { width: 842, height: 675 } };
 
 async function open(page: Page) {
-  if (!await page.locator('a[href="/settings"]').filter({ visible: true }).first().isVisible()) await page.locator('#more-btn').click();
+  if (!await page.locator('a[href="/settings"]').filter({ visible: true }).first().isVisible()) await page.locator('#nav-menu').click();
   await page.locator('a[href="/settings"]').filter({ visible: true }).first().click();
   await page.locator('#settings-nav a[data-cat="backups"]').click();
   await page.locator('[data-action="backups-save"]').waitFor();

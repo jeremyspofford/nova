@@ -8,7 +8,7 @@
  * other rule here keys off those attributes, so a layout is chosen by viewport and posture,
  * never by device name, and every layout shows the same destinations, arranged differently.
  *
- *   phone    under --band-two, or a folded cover screen: one column, bottom tabs.
+ *   phone    under --band-two, or a folded cover screen: one column, the rail as a drawer.
  *   tablet   from --band-two, or half-open (two viewport segments): the rail and one column, a
  *            second pane only where the posture gives it room.
  *   desktop  from --band-three: Calm Control, the rail, a centre column, and a right column of
@@ -25,8 +25,8 @@
      aside  one card, the column's padding and its scrollbar;
      rail   layout/rail-width.
    --scrollbar-room is what this browser's scrollbars take (0 where they overlay), measured by
-   shell.js. --band-two keeps the compact width class (600 px) as its floor: under it, thumbs get
-   bottom tabs even where a rail would fit. */
+   shell.js. --band-two keeps the compact width class (600 px) as its floor: under it, the rail is
+   a drawer even where it would fit beside the column. */
 :root {
   --scrollbar-room: 0px;
   --region-main-min: calc(45ch + 2 * var(--space-5) + 2 * var(--scrollbar-room));
@@ -66,20 +66,34 @@ body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--r
 
 /* An installed app draws to the screen's edges (viewport-fit=cover): each safe-area inset is kept
    clear once, here, so no control sits under a notch, a status bar or the home indicator. A phone's
-   tabs keep the bottom one themselves. Where nothing is reported, every inset is 0. */
+   drawer keeps its own. Where nothing is reported, every inset is 0. */
 .shell { display: grid; height: 100dvh; min-height: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
-body[data-layout="phone"] .shell { padding-bottom: 0; }
 .main { grid-area: main; }
-.rail, .tabs, .aside { display: none; }
+.rail, .aside { display: none; }
 .rail { grid-area: rail; }
-.tabs { grid-area: tabs; }
 .aside { grid-area: aside; }
 
-/* phone: one column; tabs Home · Chat · Tasks · Memory · More along the bottom. */
+/* phone and a foldable's cover screen: one column. The rail is a drawer over the page, opened by
+   the title bar's menu button (owner decision 2026-11-08; the composition's is-drawer frame). */
 body[data-layout="phone"] .shell {
-  grid-template: "main" minmax(0, 1fr) "tabs" auto / minmax(0, 1fr);
+  grid-template: "main" minmax(0, 1fr) / minmax(0, 1fr);
 }
-body[data-layout="phone"] .tabs { display: flex; }
+body[data-layout="phone"] .rail {
+  display: flex;
+  position: fixed;
+  z-index: 35;
+  inset: 0 auto 0 0;
+  width: min(85%, calc(var(--space-8) * 4));
+  padding: calc(var(--space-3) + env(safe-area-inset-top)) var(--space-2) calc(var(--space-2) + env(safe-area-inset-bottom)) calc(var(--space-2) + env(safe-area-inset-left));
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
+  /* Closed it is simply gone: no slide out, so a tablet turned into a phone never shows it passing. */
+  visibility: hidden;
+  translate: -100% 0;
+}
+body[data-layout="phone"] .app.nav-open .rail { visibility: visible; translate: 0 0; transition: translate var(--motion-transition) var(--motion-ease); }
+.nav-menu { display: none; position: relative; }
+body[data-layout="phone"] .nav-menu { display: inline-grid; }
 /* A phone's view scrolls up and down only: Home's breathing orb glow, wider than the screen at its
    fullest, must not make it pan sideways (tables and code scroll sideways in their own box). */
 body[data-layout="phone"] .scroller { overflow-x: hidden; }
@@ -137,14 +151,10 @@ body[data-aside="on"] .home [data-asideable] { display: none; }
    under a card's minimum width: below it they stack. */
 body[data-layout="desktop"][data-aside="off"] .home-cards { grid-template-columns: repeat(auto-fit, minmax(max(var(--region-card-min), calc((100% - var(--layout-card-gap)) / 2)), 1fr)); }
 
-/* The phone's top bar carries a small orb, since there is no rail; Home has the big one, so a
-   phone shows no top bar there at all. Never a second orb in a conversation. */
+/* The phone's top bar carries the menu button and a small orb, since there is no rail; Home has the
+   big orb, so its bar has none. Never a second orb in a conversation. */
 .topbar-orb { display: none; }
 body[data-layout="phone"] .topbar-orb { display: inline-flex; }
-/* It keeps the page's heading for screen readers (UX review 1, F5): the bar folds to nothing. */
-body[data-layout="phone"][data-view="home"]:not([data-capturing="on"]) .topbar { min-height: 0; padding: 0; }
-/* While anything is capturing, its indicator is on every page: a phone's Home keeps a top bar for
-   it, without the small orb (Home has the big one). */
 body[data-layout="phone"][data-view="home"] .topbar-orb { display: none; }
 
 /* Activity and Settings rows narrow down on a phone. */

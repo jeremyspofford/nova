@@ -197,7 +197,7 @@ A design system is an extension (EXTENSION-MODEL) with kind `design-system` and 
 
 ## 5. Layouts and postures (code-level, package-independent)
 Layouts are chosen by viewport + posture, never by device name:
-- **Phone / foldable cover screen** — Ambient Home: orb hero, greeting, card stack (Brief, Nova is handling, Devices, Smart Home, Memory highlight), bottom tabs (Home, Chat, Tasks, Memory, More).
+- **Phone / foldable cover screen** — Ambient Home: orb hero, greeting, card stack (Brief, Nova is handling, Devices, Smart Home, Memory highlight). Navigation is a drawer, not bottom tabs (owner decision, 2026-11-08): a menu button in the title bar opens the rail's content (search, every place as a row with its count, Settings, the version stamp) over the page.
 - **Chat** — single centered conversation column; Nova's turns full-width and un-bubbled, the person's turns tinted bubbles without tails, grouped timestamps (Amendment 2026-10-30-C Part 1); "looking into it" working cards inline (H-right), composer with voice. The orb appears once in the view, not per message.
 - **Tablet / foldable inner / half-open** — two-pane: conversation or home + one contextual pane; half-open may split conversation (top) and active card/result (bottom).
 - **Desktop/laptop** — Calm Control (G): slim rail (orb + ≤6 destinations), center column (conversation/brief), optional right column with at most three quiet cards (Active Tasks, Device Mesh, System Health) — collapsible, off by default on smaller widths.

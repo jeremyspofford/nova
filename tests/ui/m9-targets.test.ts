@@ -94,12 +94,12 @@ test('M9 gate, hit areas: every control at a phone’s width is 44×44, 48×48 t
     await page.waitForSelector('.app.drawer-open');
     await check('chat, conversations open', '#sidebar');
     await page.keyboard.press('Escape');
-    // More, and a task's sheet.
+    // The navigation drawer, and a task's sheet.
     await page.goto(`${m.base}/tasks`);
     await settled(page, 'tasks');
-    await page.click('#more-btn');
-    await page.waitForSelector('#more:not([hidden])');
-    await check('More', '#more');
+    await page.click('#nav-menu');
+    await page.waitForSelector('.app.nav-open');
+    await check('navigation open', '#rail');
     await page.keyboard.press('Escape');
     await page.locator('#tasks-view [data-action="open-task"]').first().click();
     await page.waitForSelector('#sheet[open]');

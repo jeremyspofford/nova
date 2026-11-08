@@ -1,8 +1,8 @@
 // The shell around every view: the layout and posture on <body>, the navigation each layout
-// shows (rail, tabs, More), the live orb, toasts and the sheet. The rules themselves are pure
+// shows (rail, its drawer on a phone, More), the live orb, toasts and the sheet. The rules themselves are pure
 // and tested (layout.js, nav.js, status.js); this module applies them to the page.
 import { resolve, viewportOf } from './layout.js';
-import { destination, placement } from './nav.js';
+import { DESTINATIONS, destination, placement } from './nav.js';
 import { ICONS, orb } from './components.js';
 import { ORB_WORDS, orbState } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
@@ -67,9 +67,9 @@ export function readLayout() {
   body.dataset.posture = next.posture;
   body.dataset.aside = next.aside;
   body.dataset.room = room;
-  // The rail opens (icon, label and count in a row) only where a desktop has room for it beside
-  // both columns' minimums (layout.css --band-rail); elsewhere it stays slim.
-  body.dataset.rail = next.layout === 'desktop' && root.clientWidth >= b.rail ? 'open' : 'slim';
+  // The rail opens (icon, label and count in a row) where a desktop has room for it beside both
+  // columns' minimums (layout.css --band-rail), and in a phone's drawer; elsewhere it stays slim.
+  body.dataset.rail = next.layout === 'phone' || (next.layout === 'desktop' && root.clientWidth >= b.rail) ? 'open' : 'slim';
   const toggle = $('aside-toggle');
   if (toggle) {
     const open = next.aside === 'on';
@@ -80,6 +80,7 @@ export function readLayout() {
   }
   if (changed) {
     closeMore();
+    closeNav();
     renderNav();
     window.dispatchEvent(new CustomEvent('nova:layout', { detail: { ...layout } }));
   }
@@ -124,21 +125,20 @@ export function renderNav() {
   const focused = document.activeElement?.closest?.('[data-dest], #more-btn');
   const focusKey = focused ? focused.dataset.dest ?? 'more' : null;
   const p = placement(layout.layout);
-  const rail = $('rail');
-  const tabs = $('tabs');
-  if (p.home === 'orb') {
-    rail.innerHTML = `<div class="rail-head"><a class="rail-home" href="/" data-dest="home" aria-label="Home. ${esc(ORB_WORDS[orbNow])}"${currentDest === 'home' ? ' aria-current="page"' : ''}>${orb({ state: orbNow, size: 'rail', live: true, decorative: true })}</a>
-<button type="button" class="icon-btn rail-search" id="rail-search" aria-label="Search or go to" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Search or go to (Ctrl K)">${ICONS.search}</button></div>
+  // A phone's drawer: the same rail, Home a row (the orb is the top bar's), and a close button.
+  const drawer = layout.layout === 'phone';
+  const home = p.home === 'orb' ? `<a class="rail-home" href="/" data-dest="home" aria-label="Home. ${esc(ORB_WORDS[orbNow])}"${currentDest === 'home' ? ' aria-current="page"' : ''}>${orb({ state: orbNow, size: 'rail', live: true, decorative: true })}</a>` : '';
+  $('rail').innerHTML = `<div class="rail-head">${home}
+<button type="button" class="icon-btn rail-search" id="rail-search" aria-label="Search or go to" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Search or go to (Ctrl K)">${ICONS.search}</button>${drawer ? `<button type="button" class="icon-btn" id="nav-close" aria-label="Close navigation">${ICONS.close}</button>` : ''}</div>
 <p class="rail-group" id="rail-places">Places</p>
-<ul class="rail-list" aria-labelledby="rail-places">${p.primary.map((id) => navItem(id)).join('')}${moreButton(p.more)}</ul>
+<ul class="rail-list" aria-labelledby="rail-places">${p.primary.map((id) => navItem(id)).join('')}${p.more.length ? moreButton(p.more) : ''}</ul>
 <div class="rail-foot"><ul class="rail-list">${p.foot.map((id) => navItem(id)).join('')}</ul>${stamp()}</div>`;
-    tabs.innerHTML = '';
-  } else {
-    tabs.innerHTML = `<ul class="tabs-list">${p.primary.map((id) => navItem(id)).join('')}${moreButton(p.more)}</ul>`;
-    rail.innerHTML = '';
-  }
   $('more').innerHTML = `<ul class="more-list">${p.more.map((id) => navItem(id)).join('')}</ul>`;
-  if (focusKey) (focusKey === 'more' ? $('more-btn') : document.querySelector(`#rail [data-dest="${focusKey}"], #tabs [data-dest="${focusKey}"], #more [data-dest="${focusKey}"]`))?.focus({ preventScroll: true });
+  // The menu button carries the most urgent place's dot, as the tabs did.
+  const b = DESTINATIONS.map((d) => badges.get(d.id)).find(Boolean);
+  $('nav-menu').innerHTML = `${ICONS.panel}${b ? `<span class="nav-badge" data-tone="${esc(b.tone)}" aria-hidden="true"></span>` : ''}`;
+  $('nav-menu').setAttribute('aria-label', b ? `Open navigation, ${b.label}` : 'Open navigation');
+  if (focusKey) (focusKey === 'more' ? $('more-btn') : document.querySelector(`#rail [data-dest="${focusKey}"], #more [data-dest="${focusKey}"]`))?.focus({ preventScroll: true });
 }
 
 // The version stamp at the rail's foot, from GET /api/v1/version: the version and the short commit
@@ -184,6 +184,40 @@ document.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('more').hidden) { e.preventDefault(); closeMore({ focus: true }); }
+});
+
+// A phone's navigation drawer (owner decision 2026-11-08): the rail, opened by the title bar's menu
+// button. A modal while open: the page behind is inert, Tab stays inside, and the scrim, Esc and the
+// close button shut it and give focus back to the menu button. A place chosen closes it too.
+const navOpen = () => $('app').classList.contains('nav-open');
+export function openNav() {
+  $('app').classList.add('nav-open');
+  $('scrim').hidden = false;
+  $('main').inert = $('aside').inert = true;
+  $('nav-menu').setAttribute('aria-expanded', 'true');
+  ($('rail').querySelector('[aria-current="page"]') ?? $('rail-search')).focus();
+}
+export function closeNav({ focus = false } = {}) {
+  if (!navOpen()) return;
+  $('app').classList.remove('nav-open');
+  $('scrim').hidden = true;
+  $('main').inert = $('aside').inert = false;
+  $('nav-menu').setAttribute('aria-expanded', 'false');
+  if (focus) $('nav-menu').focus();
+}
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#nav-menu')) openNav();
+  // The search button's palette gives focus back to the menu button, so close (and focus) first.
+  else if (navOpen() && e.target.closest('#nav-close, #scrim, #rail-search')) closeNav({ focus: true });
+  else if (navOpen() && e.target.closest('#rail a')) closeNav();
+});
+document.addEventListener('keydown', (e) => {
+  if (!navOpen() || document.querySelector('dialog[open]')) return;
+  if (e.key === 'Escape') { e.preventDefault(); closeNav({ focus: true }); return; }
+  if (e.key !== 'Tab') return;
+  const items = [...$('rail').querySelectorAll('a[href], button')];
+  const edge = e.shiftKey ? items[0] : items.at(-1);
+  if (document.activeElement === edge || !$('rail').contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? items.at(-1) : items[0]).focus(); }
 });
 
 // ---- the live orb ------------------------------------------------------------------------------

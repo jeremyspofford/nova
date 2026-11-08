@@ -12,7 +12,7 @@ import { trackDocument, assertRetainedDocument } from './navigation-support.ts';
 
 async function openBackups(page: Page) {
   const settings = page.locator('a[href="/settings"]').filter({ visible: true }).first();
-  if (!await settings.isVisible()) await page.locator('#more-btn').click();
+  if (!await settings.isVisible()) await page.locator('#nav-menu').click();
   await page.locator('a[href="/settings"]').filter({ visible: true }).first().click();
   await page.locator('#settings-nav a[data-cat="backups"]').click();
   await page.locator('#settings-backups input[name="target"]').waitFor();

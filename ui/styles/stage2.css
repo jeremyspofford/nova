@@ -39,7 +39,6 @@ body[data-view="chat"][data-layout="desktop"][data-room="yes"][data-aside="off"]
 /* The current place is marked by a line and the primary text colour, not a filled tile. */
 .nav-item[aria-current="page"] { position: relative; background: transparent; color: var(--text-primary); }
 .nav-item[aria-current="page"]::before { content: ''; position: absolute; inset-block: var(--space-2); inset-inline-start: 0; width: calc(var(--space-1) / 2); border-radius: var(--radius-pill); background: var(--accent-primary); }
-.tabs .nav-item[aria-current="page"]::before { inset: 0 var(--space-4) auto; width: auto; height: calc(var(--space-1) / 2); }
 
 /* The composer: Send is the only filled control in the view; the microphone stays quiet. */
 .composer .mic { border-color: transparent; background: transparent; color: var(--text-secondary); }

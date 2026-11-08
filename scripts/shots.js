@@ -909,7 +909,9 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.waitForTimeout(450);
   await shot(p, 'mobile-drawer');
   await p.keyboard.press('Escape');
-  await p.click('#tabs [data-dest="memory"]');
+  // The phone's places are in the navigation drawer (owner decision 2026-11-08).
+  await p.click('#nav-menu');
+  await p.click('#rail [data-dest="memory"]');
   await p.waitForSelector('.memory-item');
   await p.waitForTimeout(500);
   await shot(p, 'mobile-memory');

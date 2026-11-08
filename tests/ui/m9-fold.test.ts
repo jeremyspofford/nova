@@ -219,9 +219,15 @@ test('M9 gate, foldable 3: nothing under the hinge, in the book and laptop postu
       await d.page.waitForSelector('.app.drawer-open');
       await check('conversations open');
       await d.page.keyboard.press('Escape');
-      await d.page.click('#more-btn');
-      await d.page.waitForSelector('#more:not([hidden])');
-      await check('More open');
+      if (await d.page.locator('#nav-menu').isVisible()) {
+        await d.page.click('#nav-menu');
+        await d.page.waitForSelector('.app.nav-open');
+        await check('navigation open');
+      } else {
+        await d.page.click('#more-btn');
+        await d.page.waitForSelector('#more:not([hidden])');
+        await check('More open');
+      }
       await d.page.keyboard.press('Escape');
       await d.page.goto(`${m.base}/tasks`);
       await screen(d.page, cdp, w, h, hinge);
@@ -302,7 +308,10 @@ test('M9 gate, foldable 4: 200% text survives, at a phone’s width and a deskto
         rows.push(`${size}, ${view}: text ${r.body}px, nothing cut off or overlapping`);
       }
       // Every destination is still within reach.
-      const seen = new Set(await d.page.$$eval('#rail [data-dest], #tabs [data-dest]', (els) => els.filter((e) => (e as HTMLElement).checkVisibility()).map((e) => (e as HTMLElement).dataset.dest!)));
+      const drawer = await d.page.locator('#nav-menu').isVisible();
+      if (drawer) { await d.page.click('#nav-menu'); await d.page.waitForSelector('.app.nav-open'); }
+      const seen = new Set(await d.page.$$eval('#rail [data-dest]', (els) => els.filter((e) => (e as HTMLElement).checkVisibility()).map((e) => (e as HTMLElement).dataset.dest!)));
+      if (drawer) await d.page.keyboard.press('Escape');
       if (await d.page.locator('#more-btn').isVisible()) {
         await d.page.click('#more-btn');
         for (const x of await d.page.$$eval('#more [data-dest]', (els) => els.filter((e) => (e as HTMLElement).checkVisibility()).map((e) => (e as HTMLElement).dataset.dest!))) seen.add(x);
