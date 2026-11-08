@@ -46,13 +46,47 @@ async function fixture(run: (base: string) => Promise<void>) {
 
 // The hero's pixels, to compare frames.
 const heroFrame = (page: Page) => page.evaluate(() => document.querySelector<HTMLCanvasElement>('[data-si-hero] canvas')!.toDataURL());
+// The styleguide redraws itself once the appearance arrives (sooner or later, by machine), which
+// replaces every icon. Wait until the preview stays the same preview for a while.
+async function settled(page: Page) {
+  for (let i = 0; i < 20; i++) {
+    const tag = `t${i}`;
+    await page.evaluate((t) => { (document.querySelector('[data-si-hero]') as HTMLElement).dataset.probe = t; }, tag);
+    await sleep(400);
+    if (await page.evaluate((t) => (document.querySelector('[data-si-hero]') as HTMLElement | null)?.dataset.probe === t, tag)) return;
+  }
+  assert.fail('the preview never settled');
+}
 const open = async (page: Page, base: string) => {
   await page.goto(`${base}/styleguide?entry=status-icon`);
   await page.waitForFunction((n) => document.querySelectorAll('[data-si-sheet] .status-icon').length === n && document.querySelector('[data-si-hero] .status-icon'), STATES.length * SIZES.length);
+  await settled(page);
 };
+// Every cell, measured in one task (a redraw between finding a node and measuring it would hand back
+// a node no longer in the page): its label, size, renderer and how much of it is lit.
+const drawn = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-si-cell]')].map((cell) => {
+  const el = cell.querySelector<HTMLElement>('.status-icon')!;
+  const c = el.querySelector('canvas')!;
+  const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+  let n = 0;
+  for (let i = 3; i < data.length; i += 4) if (data[i]! > 64) n++;
+  return { cell: cell.dataset.siCell!, role: el.getAttribute('role'), label: el.getAttribute('aria-label'), title: el.getAttribute('title'), renderer: el.dataset.renderer, css: c.getBoundingClientRect().width, px: c.width, share: n / (c.width * c.height) };
+}));
+function assertDrawn(cells: Awaited<ReturnType<typeof drawn>>, label: string, renderer?: string) {
+  assert.equal(cells.length, STATES.length * SIZES.length, `${label}: every state at every size`);
+  for (const c of cells) {
+    const [, s, px] = /^(.+)-(\d+)$/.exec(c.cell)!;
+    assert.equal(c.role, 'img', `${label} ${c.cell}: role`);
+    if (s !== 'success') { assert.equal(c.label, s, `${label} ${c.cell}: label`); assert.equal(c.title, s, `${label} ${c.cell}: title`); }
+    assert.equal(c.css, Number(px), `${label} ${c.cell}: drawn at its size`);
+    assert.ok(c.px >= Number(px), `${label} ${c.cell}: a backing store at least its size`);
+    assert.ok(c.share > 0.08, `${label} ${c.cell}: not blank (${(c.share * 100).toFixed(1)}% lit)`);
+    if (renderer) assert.equal(c.renderer, renderer, `${label} ${c.cell}: renderer`);
+  }
+}
 
 // Chromium with software WebGL (the container has no GPU), so the shader path is what's checked;
-// WebKit there has no WebGL, so it checks the Canvas2D fallback.
+// WebKit uses whatever its container offers. The fallback has its own test below, with WebGL refused.
 const webglChromium = () => chromium.launch({ executablePath: chromiumPath(), args: ['--disable-background-networking', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'] });
 
 for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], ['webkit', webkitBrowser, null]] as const) {
@@ -70,25 +104,13 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         await open(p, base);
         assert.equal(await p.getByRole('heading', { name: 'Status icon', exact: true }).count(), 1);
 
-        // Every state at every size: role img, named by its state, and not blank.
+        // Every state at every size: role img, named by its state, drawn at its size, and not blank.
+        assertDrawn(await drawn(p), engine, expected ?? undefined);
         for (const s of STATES) for (const px of SIZES) {
-          const icon = p.locator(`[data-si-cell="${s}-${px}"] .status-icon`);
+          const sel = `[data-si-cell="${s}-${px}"] .status-icon`;
           // Success is a flourish the sheet replays; catch it while it shows.
-          if (s === 'success') await p.waitForFunction((sel) => document.querySelector(sel)!.getAttribute('aria-label') === 'success', `[data-si-cell="${s}-${px}"] .status-icon`, { timeout: 5000 });
-          assert.equal(await icon.getAttribute('role'), 'img', `${s}-${px}: role`);
-          assert.equal(await icon.getAttribute('aria-label'), s, `${s}-${px}: label`);
-          assert.equal(await icon.getAttribute('title'), s, `${s}-${px}: title`);
-          assert.equal(await p.getByRole('img', { name: s, exact: true }).and(icon).count(), 1, `${s}-${px}: found by its accessible name`);
-          const lit = await icon.evaluate((el) => {
-            const c = el.querySelector('canvas')!;
-            const box = c.getBoundingClientRect();
-            const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
-            let n = 0;
-            for (let i = 3; i < data.length; i += 4) if (data[i]! > 64) n++;
-            return { share: n / (c.width * c.height), css: box.width };
-          });
-          assert.equal(lit.css, px, `${s}-${px}: drawn at its size`);
-          assert.ok(lit.share > 0.08, `${s}-${px}: not blank (${(lit.share * 100).toFixed(1)}% lit)`);
+          if (s === 'success') await p.waitForFunction((q) => document.querySelector(q)!.getAttribute('aria-label') === 'success', sel, { timeout: 5000 });
+          assert.equal(await p.getByRole('img', { name: s, exact: true }).and(p.locator(sel)).count(), 1, `${s}-${px}: found by its accessible name`);
         }
         const renderer = await p.locator('[data-si-hero] .status-icon').getAttribute('data-renderer');
         console.log(`${engine}: renderer ${renderer}`);
@@ -202,6 +224,38 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
           assert.ok(await phone.page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'phone: no horizontal scroll');
           await phone.ctx.close();
         }
+        await d.ctx.close();
+      });
+    } finally {
+      await b?.close();
+    }
+  });
+}
+
+// No WebGL at all (a browser without it, or one whose context is refused): the Canvas2D fallback
+// draws every state, at every size, sized from creation and not blank; and changes still land.
+for (const [engine, launch] of [['chromium', webglChromium], ['webkit', webkitBrowser]] as const) {
+  test(`Status icon ${engine}, WebGL refused: the Canvas2D fallback draws every state at 16/24/48`, { timeout: 300_000 }, async () => {
+    let b: Browser | undefined;
+    try {
+      const launched = await launch();
+      assert.notEqual(typeof launched, 'string', 'a browser is required');
+      b = launched as Browser;
+      await fixture(async (base) => {
+        const d = await device(b!, { width: 1440, height: 900, scheme: 'dark', serviceWorkers: 'block' });
+        await d.ctx.addInitScript(() => {
+          const real = HTMLCanvasElement.prototype.getContext;
+          HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, kind: string, ...rest: unknown[]) {
+            return /webgl/.test(kind) ? null : (real as (...a: unknown[]) => unknown).call(this, kind, ...rest);
+          } as typeof real;
+        });
+        await open(d.page, base);
+        assertDrawn(await drawn(d.page), `${engine} fallback`, 'canvas2d');
+        await d.page.getByRole('button', { name: 'stopped', exact: true }).click();
+        await d.page.waitForFunction(() => document.querySelector('[data-si-hero] .status-icon')!.getAttribute('aria-label') === 'stopped');
+        const shown = await d.page.evaluate(() => { const c = document.querySelector<HTMLCanvasElement>('[data-si-hero] canvas')!; return c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 === 3 && v > 64); });
+        assert.ok(shown, 'the hero still draws after a change');
+        assert.deepEqual(d.errors, [], 'no page errors');
         await d.ctx.close();
       });
     } finally {

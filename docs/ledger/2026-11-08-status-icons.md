@@ -8,13 +8,13 @@
   - Each icon carries role="img" and an aria-label naming its state.
   - The styleguide entry and preview are at /styleguide?entry=status-icon. It shows every state at 16, 24 and 48 px, a 96 px hero, state buttons, a mid-transition demo (idle → working, then needs-you 150 ms later) and a reduced-motion switch. The styleguide intro's hardcoded "Orb Teal, Nova's lead design" now says Nebula.
 - What you can now do: see and drive every state of the status icon in the styleguide.
-- Still unfinished:
+- Still unfinished: four things.
   - Part B: placing the icon in the rail, header and task rows, with the service worker entry.
   - The material is closer to the sheet but not there. The sheet's ribbons twist over and under; these are swept tubes. Idle curls rather than closing into the sheet's vortex, and listening's still frame is a crescent rather than a full tilted ring.
   - Stopped renders salmon because Nebula dark's status/error token is #ff8a80. The theme-match PR owns that token.
   - At 16 px, offline differs from idle mainly by brightness (the owner's mapping gives them the same swirl), and idle and working are distinct but close.
   - Not tested on a real iPhone.
-- Checked:
+- Checked: locally, before CI.
   - lint:tokens and typecheck
   - tests/status-icon.test.js, styleguide-coverage and lint-scales (19/19)
   - ui-review and ui-fixes (20/20)

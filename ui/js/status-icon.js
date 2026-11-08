@@ -328,8 +328,16 @@ function paint(ic, now, pals) {
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, size, size);
   const g = webgl();
-  ic.el.dataset.renderer = g ? 'webgl' : 'canvas2d';
-  if (!g) return strokeFallback(ctx, size, pts, cols, bright);
+  try {
+    if (g) { shade(g, ctx, size, pts, cols, bright, small); ic.el.dataset.renderer = 'webgl'; return; }
+  } catch {
+    gl = null; // a context that fails mid-draw: draw with Canvas2D from now on
+  }
+  ic.el.dataset.renderer = 'canvas2d';
+  strokeFallback(ctx, size, pts, cols, bright);
+}
+
+function shade(g, ctx, size, pts, cols, bright, small) {
   if (glCanvas.width < size) glCanvas.width = glCanvas.height = size;
   g.viewport(0, 0, size, size);
   g.clearColor(0, 0, 0, 0);

@@ -26,7 +26,7 @@ export function bindStatusIcons(root) {
     const [, s, px] = /^(.+)-(\d+)$/.exec(cell.dataset.siCell);
     cell.append(statusIcon({ status: s, size: Number(px) }));
   }
-  // Success never rests: the sheet replays its flourish so it can be seen.
+  // Success never rests: the sheet replays its flourish so it can be seen. wait: clock: the replay
   const flourish = [...preview.querySelectorAll('[data-si-cell^="success-"] .status-icon')];
   const replay = setInterval(() => (flourish[0].isConnected ? flourish.forEach((el) => el.setStatus('success')) : clearInterval(replay)), 2200);
   const hero = statusIcon({ status: 'idle', size: 96 });
@@ -38,6 +38,7 @@ export function bindStatusIcons(root) {
     const set = e.target.closest('[data-si-set]');
     if (set) hero.setStatus(set.dataset.siSet);
     if (e.target.closest('[data-si-midway]')) {
+      // wait: clock: the demo’s script (idle, then working, then needs-you 150 ms into that morph)
       hero.setStatus('idle');
       setTimeout(() => hero.setStatus('working'), MIDWAY_START);
       setTimeout(() => hero.setStatus('needs-you'), MIDWAY_START + 150);
