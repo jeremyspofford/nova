@@ -869,7 +869,7 @@ export function drawAppearance(box) {
   // "More designs", said plainly to be not yet at the bar, and open whenever one of them is in use.
   const inUse = others.some((d) => [showing, a.user, a.device].includes(d.id));
   const more = look.more || inUse;
-  const kicker = rec?.at_bar ? 'Nova’s design' : 'Recommended';
+  const kicker = rec?.at_bar ? 'Recommended · Nova’s design' : 'Recommended';
   // Orb Teal is at the bar too, though not the lead: count only the ones that aren't.
   const below = others.filter((d) => !d.at_bar).length;
   const moreNote = below === others.length ? `${below}, not yet at Nova’s design bar` : below ? `${others.length}, ${below} not yet at Nova’s design bar` : `${others.length}`;
