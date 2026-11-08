@@ -465,7 +465,8 @@ test('UI fixes 6: one scroll container per view, the OS scrollbar, a stable gutt
           const where = `${design}, ${size}, ${dest}`;
           await go(d.page, dest);
           if (dest === 'chat') {
-            await d.page.locator('.record[data-tool="c1"]').waitFor();
+            // A finished step is folded into its turn's collapsed steps (UI rebuild PR 4): there, not shown.
+            await d.page.locator('.record[data-tool="c1"]').waitFor({ state: 'attached' });
             // The oldest turn, with the wide code and table, laid out (older turns are skipped
             // while off screen).
             await d.page.evaluate(() => { for (const x of document.querySelectorAll('details')) (x as HTMLDetailsElement).open = true; document.getElementById('scroller')!.scrollTop = 0; });

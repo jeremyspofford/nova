@@ -12,7 +12,7 @@ import { approvalFor, loadSecurity, renderSecurity, setupPasskey } from './passk
 import { bindConfig, bindConfigForm, loadConfigForm, renderConfig, renderConfigForm } from './config.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { destination, routeOf } from './nav.js';
-import { problemTone, stoppingProblems } from './status.js';
+import { greeting, problemTone, stoppingProblems } from './status.js';
 import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js';
 import { closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, setRecent, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
@@ -299,6 +299,7 @@ function setView(view) {
   topologyVisible(view === 'topology');
   for (const [v, key] of Object.entries(VIEWS)) el[key].hidden = v !== view;
   el.dock.hidden = view !== 'chat';
+  if (view !== 'chat') { document.body.removeAttribute('data-empty'); document.body.removeAttribute('data-dock-wait'); }
   showMenu();
   if (view !== 'chat') el.jump.hidden = true;
   if (was === 'settings' && view !== 'settings') { core.cancelPreview(); core.leaveBackups(); }
@@ -358,7 +359,8 @@ function renderCore({ enter: entering = false } = {}) {
   if (state.view === 'tasks') keep(el.tasks, core.renderTasks);
   if (state.view === 'health') keep(el.health, core.renderHealth);
   if (state.view === 'automations') core.renderRules(el.rules);
-  if (state.view === 'chat' && state.session.turns.length) renderThread();
+  // An empty chat too: its greeting takes the name once the profile is in.
+  if (state.view === 'chat') renderThread();
   showSignals();
 }
 
@@ -380,7 +382,7 @@ function startNew() {
   stream?.close();
   stream = null;
   setView('chat');
-  Object.assign(state, { id: null, session: emptySession(), live: null, pending: null, stick: true });
+  Object.assign(state, { id: null, session: emptySession(), live: null, pending: null, stick: true, missing: false });
   restoreDraft();
   renderAll({ enter: true });
   el.input.focus();
@@ -389,9 +391,12 @@ function startNew() {
 function open(id, { quiet = false } = {}) {
   stream?.close();
   setView('chat');
-  if (!quiet || state.id !== id) Object.assign(state, { id, live: null, pending: state.pending?.sessionId === id ? state.pending : null, stick: true, snapshot: false });
+  if (!quiet || state.id !== id) Object.assign(state, { id, live: null, pending: state.pending?.sessionId === id ? state.pending : null, stick: true, snapshot: false, missing: false });
   if (!state.snapshot && !state.pending) { rendered = new Map(); showWaiting('chat', el.thread, 'Loading the conversation', { end: true, id }); }
   restoreDraft();
+  // The dock's state for the wait (renderThread): set now, before the first paint of it.
+  renderThread();
+  renderChrome();
   if (id === 'main') markMainSeen();
   const es = new EventSource(`/api/sessions/${id}/events`);
   stream = es;
@@ -422,7 +427,7 @@ function open(id, { quiet = false } = {}) {
     if (es.readyState === EventSource.CLOSED) {
       // A stream refused before any snapshot (no such conversation): the wait is over, never left
       // waiting for good.
-      if (es === stream && !state.snapshot) { state.snapshot = true; state.session = emptySession(id); renderThread(); }
+      if (es === stream && !state.snapshot) { Object.assign(state, { snapshot: true, missing: true, session: emptySession(id) }); renderThread(); renderChrome(); }
       setReachable(false);
       return;
     }
@@ -481,13 +486,36 @@ function flash(node) {
   found = { node, timer: setTimeout(() => { node.classList.remove('is-found'); found = null; }, FOUND_MS) }; // wait: expiry: the mark
 }
 
+// A conversation that couldn't be opened (no such conversation, or no server): said plainly, never
+// the greeting of an empty chat.
+const MISSING = '<div class="empty"><p class="empty-line">This conversation couldn’t be opened.</p><p class="memory-lede">It may not exist, or Nova’s server isn’t answering. <a href="/chat">Open the main conversation</a>.</p></div>';
+let emptyKey = '';
+
+// A conversation whose snapshot isn't in yet is waiting (open): nothing of another one shows.
+const loadingChat = () => state.view === 'chat' && !!state.id && state.snapshot === false && !state.pending;
+// Known to have no turns: a fresh one at once, any other only once its snapshot is in.
+const blankChat = () => state.view === 'chat' && !loadingChat() && !state.missing && !viewSession().turns.length;
+
 function renderThread() {
-  // A conversation whose snapshot isn't in yet is waiting (open): nothing of another one shows.
-  if (state.view === 'chat' && state.id && state.snapshot === false && !state.pending) return;
+  const waiting = loadingChat();
   const session = viewSession();
+  // An empty chat centres its composer (components.css); the first turn docks it again. The dock's
+  // geometry is final when it shows: only the main conversation can turn out empty after loading
+  // (any other began with a message), so while it loads its dock keeps its place unseen but
+  // focusable (components.css), then shows docked or centred, never moving on screen.
+  document.body.toggleAttribute('data-empty', blankChat());
+  document.body.toggleAttribute('data-dock-wait', waiting && state.id === 'main');
+  if (waiting) return;
   const wasNear = nearBottom();
   if (!session.turns.length) {
-    if (!el.thread.querySelector('.empty')) { el.thread.innerHTML = renderEmpty(new Date(), { fresh: !state.id }); rendered = new Map(); }
+    const name = core.store.identity?.address_as ?? core.store.identity?.user_name ?? '';
+    // Drawn again only when what it says changes (the name arriving), so it doesn't rise twice.
+    const key = state.missing ? 'missing' : greeting(new Date(), name);
+    if (!el.thread.querySelector('.empty') || key !== emptyKey) {
+      el.thread.innerHTML = state.missing ? MISSING : renderEmpty(new Date(), { name, orb: liveOrb('hero') });
+      emptyKey = key;
+      rendered = new Map();
+    }
     return;
   }
   el.thread.querySelector('.empty')?.remove();
@@ -616,8 +644,13 @@ const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state
 // rail, and on a phone's Home, it is there for screen readers only (layout.css).
 const TITLES = { home: 'Home', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture', topology: 'Topology', about: 'About Nova', changelog: 'What’s new', pipeline: 'Where Nova stands' };
 function renderChrome() {
-  const title = state.view === 'chat' ? (state.id && state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
+  const title = state.view === 'chat' ? (!state.id ? 'New chat' : state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
   el.dock.hidden = state.view !== 'chat' || readOnly();
+  // An empty chat asks; a thread with turns is replied to. The field is two rows while it is centred.
+  // Only a chat known to be empty: while one loads, the field stays one row, as most land.
+  const blank = blankChat();
+  el.input.placeholder = blank ? 'Ask Nova anything…' : 'Reply to Nova…';
+  if (el.input.rows !== (blank ? 2 : 1)) { el.input.rows = blank ? 2 : 1; autosize(); }
   if (onMain()) el.mainLink.setAttribute('aria-current', 'page');
   else el.mainLink.removeAttribute('aria-current');
   el.title.textContent = title;
@@ -810,6 +843,14 @@ el.thread.addEventListener('change', (e) => {
   if (allow) allow.disabled = !box.checked;
 });
 el.input.addEventListener('input', () => { autosize(); saveDraft(); renderChrome(); });
+// A suggestion on an empty chat fills the composer for the person to finish or send; it never sends.
+el.dock.addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  el.input.value = chip.textContent;
+  autosize(); saveDraft(); renderChrome();
+  el.input.focus();
+});
 el.input.addEventListener('focus', renderChrome);
 el.input.addEventListener('blur', () => setTimeout(renderChrome, 0)); // wait: after the event: focus has moved
 el.input.addEventListener('keydown', (e) => {
