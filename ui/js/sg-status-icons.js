@@ -6,29 +6,34 @@ import { STATUS_ICON_STATES, setReducedMotion, statusIcon } from './status-icon.
 const SIZES = [16, 24, 48];
 let forced = null;
 // The demo first lets the hero settle at idle, so the change always starts from the same place.
-const MIDWAY_START = 450;
+const MIDWAY_START = 900;
+
+// Every state at 16, 24 and 48 px; also drawn on the Nebula acceptance entry (nebula-match).
+export function statusIconSheet() {
+  const cells = STATUS_ICON_STATES.map((s) => `<span class="sg-name">${s}</span>${SIZES.map((px) => `<span class="si-tile" data-si-cell="${s}-${px}"></span>`).join('')}`).join('');
+  return `<div class="si-sheet" data-si-sheet><span></span>${SIZES.map((px) => `<span class="sg-name">${px} px</span>`).join('')}${cells}</div>`;
+}
 
 export function statusIconEntry() {
-  const cells = STATUS_ICON_STATES.map((s) => `<span class="sg-name">${s}</span>${SIZES.map((px) => `<span class="si-tile" data-si-cell="${s}-${px}"></span>`).join('')}`).join('');
   return `<div class="si-preview" data-si-preview>
 <div class="si-hero"><span class="si-tile si-tile-hero" data-si-hero></span>
 <div class="si-controls"><p class="sg-label">Set the hero’s state</p>
 <div class="sg-demo-row" role="group" aria-label="Set the hero’s state">${STATUS_ICON_STATES.map((s) => `<button type="button" class="btn small" data-si-set="${s}">${s}</button>`).join('')}</div>
 <div class="sg-demo-row"><button type="button" class="btn" data-si-midway>Idle → working, then needs-you 150 ms later</button>
 <label class="si-reduce"><input type="checkbox" data-si-reduced> Reduced motion</label></div></div></div>
-<div class="si-sheet" data-si-sheet><span></span>${SIZES.map((px) => `<span class="sg-name">${px} px</span>`).join('')}${cells}</div></div>`;
+${statusIconSheet()}</div>`;
 }
 
 export function bindStatusIcons(root) {
-  const preview = root.querySelector('[data-si-preview]');
-  if (!preview) return;
-  for (const cell of preview.querySelectorAll('[data-si-cell]')) {
+  for (const cell of root.querySelectorAll('[data-si-cell]')) {
     const [, s, px] = /^(.+)-(\d+)$/.exec(cell.dataset.siCell);
     cell.append(statusIcon({ status: s, size: Number(px) }));
   }
   // Success never rests: the sheet replays its flourish so it can be seen. wait: clock: the replay
-  const flourish = [...preview.querySelectorAll('[data-si-cell^="success-"] .status-icon')];
-  const replay = setInterval(() => (flourish[0].isConnected ? flourish.forEach((el) => el.setStatus('success')) : clearInterval(replay)), 2200);
+  const flourish = [...root.querySelectorAll('[data-si-cell^="success-"] .status-icon')];
+  if (flourish.length) { const replay = setInterval(() => (flourish[0].isConnected ? flourish.forEach((el) => el.setStatus('success')) : clearInterval(replay)), 3400); }
+  const preview = root.querySelector('[data-si-preview]');
+  if (!preview) return;
   const hero = statusIcon({ status: 'idle', size: 96 });
   preview.querySelector('[data-si-hero]').append(hero);
   const box = preview.querySelector('[data-si-reduced]');

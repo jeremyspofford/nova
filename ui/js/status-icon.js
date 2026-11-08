@@ -8,9 +8,10 @@
 // The model (StatusModel, statusForm) is pure and unit-tested (tests/status-icon.test.js).
 
 export const STATUS_ICON_STATES = Object.freeze(['idle', 'listening', 'thinking', 'working', 'speaking', 'needs-you', 'success', 'paused', 'stopped', 'offline']);
-export const MORPH_MS = 400;
+// Owner, 2026-11-08: 400 ms read as too fast and acute; a morph takes 800 ms on a soft ease-in-out.
+export const MORPH_MS = 800;
 // success is a flourish, never a resting state: it settles to idle by itself.
-export const SUCCESS_MS = 1000;
+export const SUCCESS_MS = 1800; // the 800 ms morph in, then about a second shown
 export const SMALL_MAX = 24;
 const N = 36;
 const EXTENT = 1; // the canvas shows [-EXTENT, EXTENT]; forms fill about 90% of it, the glow the rest
@@ -21,7 +22,7 @@ function known(status) {
   if (!STATUS_ICON_STATES.includes(status)) throw new TypeError(`Unknown status: ${String(status)}`);
   return status;
 }
-const ease = (k) => (k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2);
+const ease = (k) => (1 - Math.cos(Math.PI * k)) / 2;
 
 // ---- the state model: which forms are on screen, and how much of each --------------------------
 
@@ -75,26 +76,35 @@ function stroke(out, i0, n, at) {
 }
 // An arm of the swirl: from r0 (inner, a fine tip) to r1 (outer, broad); warm at the heart, cool outside.
 // taper < 1 swells the ribbon early, so most of its length is broad.
-const arm = ({ a0, span, r0, r1, w0, w1, squash = 0, taper = 1 }) => (s) => {
+const arm = ({ a0, span, r0, r1, w0, w1, taper = 1 }) => (s) => {
   const a = a0 - span * (1 - s);
-  const r = (r0 + (r1 - r0) * s) * (1 + squash * Math.abs(Math.sin(2 * a)));
+  const r = r0 + (r1 - r0) * s;
   return [r * Math.cos(a), r * Math.sin(a), w0 + (w1 - w0) * s ** taper, 1 - s];
 };
-const ring = (r, w, a0 = 0) => (s) => [r * Math.cos(a0 + s * TAU), r * Math.sin(a0 + s * TAU), w];
+const ring = (r, w, a0 = 0) => (s) => [r * Math.cos(a0 + s * TAU), r * Math.sin(a0 + s * TAU), w, 0.5 - 0.5 * Math.cos(TAU * s)];
 // A straight-ish stroke with a width profile along it.
 const bend = (ax, ay, bx, by, k, width) => (s) => {
   const x = ax + (bx - ax) * s, y = ay + (by - ay) * s, b = k * Math.sin(Math.PI * s);
   return [x - (by - ay) * b, y + (bx - ax) * b, width(s)];
 };
+// Loops ease in and out: each period turns by `step` and comes to rest, never a linear spin.
+const soft = (x) => (1 - Math.cos(Math.PI * x)) / 2;
+const turn = (t, period, step) => step * (Math.floor(t / period) + soft((t / period) % 1));
 
-// The idle swirl, the owner's supernova N: two broad arms wrapping over each other into a dark heart.
+// The idle swirl, the owner's supernova N: two broad lobes in opposite corners, joined by a diagonal
+// sweep that curls round a dark heart. Stretched along the upper-left to lower-right diagonal.
 function swirl(out, t, small, { scale = 1, thin = 1, from = 0, n = N / 2 } = {}) {
   const shape = small
-    ? { span: 1.2 * Math.PI, r0: 0.27, r1: 0.7, w0: 0.1, w1: 0.2, squash: 0.03 }
-    : { span: 1.55 * Math.PI, r0: 0.2, r1: 0.55, w0: 0.07, w1: 0.37, squash: 0.04, taper: 0.5 };
+    ? { span: 1.1 * Math.PI, r0: 0.26, r1: 0.6, w0: 0.1, w1: 0.2 }
+    : { span: 1.2 * Math.PI, r0: 0.17, r1: 0.55, w0: 0.05, w1: 0.36, taper: 0.45 };
+  const rot = turn(t, 10, Math.PI); // two-fold, so half a turn per period is seamless
   for (let k = 0; k < 2; k++) {
-    const at = arm({ a0: t * 0.25 + k * Math.PI + 0.6, ...shape });
-    stroke(out, from + k * n, n, (s) => { const [x, y, w, u] = at(s); return [x * scale, y * scale, w * scale * thin, u]; });
+    const at = arm({ a0: rot + k * Math.PI + (3 * Math.PI) / 4, ...shape });
+    stroke(out, from + k * n, n, (s) => {
+      const [x, y, w, u] = at(s);
+      const along = (x - y) / Math.SQRT2 * 1.12, across = (x + y) / Math.SQRT2 * 0.9;
+      return [((along + across) / Math.SQRT2) * scale, ((across - along) / Math.SQRT2) * scale, w * scale * thin, u];
+    });
   }
 }
 
@@ -104,29 +114,29 @@ export function statusForm(status, t = 0, small = false) {
     case 'idle': swirl(out, t, small); break;
     case 'offline': swirl(out, 0, small, { scale: 0.9, thin: 0.8 }); break;
     case 'speaking': {
-      // The idle swirl, smaller, with a ring breaking outward from it.
-      const k = (t / 1.4) % 1;
+      // The idle swirl, smaller, with a ring easing outward from it.
+      const k = soft((t / 1.6) % 1);
       swirl(out, t, small, { scale: 0.74, n: 9 });
-      stroke(out, 18, 18, ring(t ? 0.76 + 0.12 * k : 0.84, t ? 0.07 * (1 - k) + 0.02 : 0.05));
+      stroke(out, 18, 18, ring(t ? 0.78 + 0.12 * k : 0.86, t ? 0.07 * (1 - k) + 0.02 : 0.05));
       break;
     }
     case 'thinking':
-      // One arm curling inward: a nautilus whose outer turn rides over the inner.
+      // One arm curling inward: a nautilus whose outer turn rides over the inner. A slow, eased turn.
       stroke(out, 0, N, small
-        ? arm({ a0: t * 0.7, span: 1.5 * Math.PI, r0: 0.2, r1: 0.66, w0: 0.1, w1: 0.22 })
-        : arm({ a0: t * 0.7, span: 2.1 * Math.PI, r0: 0.06, r1: 0.55, w0: 0.04, w1: 0.37, taper: 0.7 }));
+        ? arm({ a0: turn(t, 7, TAU), span: 1.5 * Math.PI, r0: 0.2, r1: 0.66, w0: 0.1, w1: 0.22 })
+        : arm({ a0: turn(t, 7, TAU), span: 2.1 * Math.PI, r0: 0.06, r1: 0.55, w0: 0.04, w1: 0.37, taper: 0.7 }));
       break;
     case 'working':
-      // The thinking spiral's family: three broad blades around an open heart, turning fast.
-      for (let k = 0; k < 3; k++) stroke(out, k * 12, 12, arm({ a0: t * 2.6 + (k * TAU) / 3, span: 0.75 * Math.PI, r0: 0.26, r1: 0.64, w0: 0.08, w1: 0.26, taper: 0.7 }));
+      // The thinking spiral's family: three broad blades round an open heart, a third of a turn at a time, briskly.
+      for (let k = 0; k < 3; k++) stroke(out, k * 12, 12, arm({ a0: turn(t, 1.2, TAU / 3) + (k * TAU) / 3, span: 0.75 * Math.PI, r0: 0.26, r1: 0.64, w0: 0.08, w1: 0.26, taper: 0.7 }));
       break;
     case 'listening': {
-      // An open orbit, tilted, broad at its front and fine at both ends; the gap slowly turns.
-      const g = t * 0.6, tilt = -0.42;
+      // A full orbit ring, tilted, broad on one side and fine on the other; the broad side slowly orbits.
+      const g = turn(t, 8, TAU), tilt = 0.4;
       stroke(out, 0, N, (s) => {
-        const a = g + 0.6 + s * (TAU - 1.2);
-        const x = 0.7 * Math.cos(a), y = 0.42 * Math.sin(a);
-        return [x * Math.cos(tilt) - y * Math.sin(tilt), x * Math.sin(tilt) + y * Math.cos(tilt), 0.04 + 0.18 * Math.sin(Math.PI * s) ** 1.2];
+        const a = s * TAU;
+        const x = 0.68 * Math.cos(a), y = 0.44 * Math.sin(a);
+        return [x * Math.cos(tilt) - y * Math.sin(tilt), x * Math.sin(tilt) + y * Math.cos(tilt), 0.07 + 0.19 * (0.5 + 0.5 * Math.cos(a - g - 3.4)), 0.5 - 0.5 * Math.cos(a)];
       });
       break;
     }
@@ -137,7 +147,7 @@ export function statusForm(status, t = 0, small = false) {
         const a = Math.PI / 2 + s * TAU;
         const tri = 0.4 / Math.cos(((((a - Math.PI / 2) % (TAU / 3)) + TAU / 3) % (TAU / 3)) - Math.PI / 3);
         const r = (tri * 0.8 + 0.1) * z;
-        return [r * Math.cos(a), r * Math.sin(a) - 0.05, 0.15 + 0.07 * Math.cos(a - 3.6), s];
+        return [r * Math.cos(a), r * Math.sin(a) - 0.05, 0.15 + 0.07 * Math.cos(a - 3.6), 0.5 - 0.5 * Math.cos(TAU * s)];
       });
       break;
     }
@@ -159,15 +169,22 @@ export function statusForm(status, t = 0, small = false) {
       break;
     }
     case 'stopped': {
-      // Two crossed ribbons, broad lobes at the ends and narrow where they cross.
-      const width = (s) => 0.24 - 0.1 * Math.sin(Math.PI * s);
-      stroke(out, 0, 18, bend(-0.58, 0.58, 0.58, -0.58, 0.07, width));
-      stroke(out, 18, 18, bend(0.58, 0.58, -0.58, -0.58, -0.07, width));
+      // HALT: two heavy crossed ribbons, swung like a twist, broad lobes at the ends.
+      const width = (s) => 0.32 - 0.1 * Math.sin(Math.PI * s);
+      stroke(out, 0, 18, bend(-0.56, 0.56, 0.56, -0.56, 0.1, width));
+      stroke(out, 18, 18, bend(0.56, 0.56, -0.56, -0.56, -0.1, width));
       break;
     }
   }
-  // Small sizes: the same silhouette, no hairlines, and no band so broad it closes the gaps.
-  if (small) for (let i = 0; i < N; i++) out[i * 5 + 2] = Math.min(Math.max(out[i * 5 + 2] * 1.25, 0.1), 0.22);
+  if (small) {
+    // Small sizes: the same silhouette, no hairlines, and no band so broad it closes the gaps
+    // (stopped keeps its mass: it must read as a halt at 16 px).
+    const cap = status === 'stopped' ? 0.28 : 0.22;
+    for (let i = 0; i < N; i++) out[i * 5 + 2] = Math.min(Math.max(out[i * 5 + 2] * 1.25, 0.1), cap);
+  } else {
+    // Large sizes fill the tile, as the sheet's forms do.
+    for (let i = 0; i < N * 5; i += 5) { out[i] *= 1.04; out[i + 1] *= 1.04; out[i + 2] *= 1.04; }
+  }
   return out;
 }
 
@@ -193,7 +210,7 @@ export function statePalettes({ core, violet, coral, amber, red }) {
     'needs-you': [[magenta, amber, amber, coral, amber, mixc(amber, LIGHT, 0.2)], 1.05],
     success: [[violet, magenta, violet, core, mixc(core, LIGHT, 0.25), core], 1.1],
     paused: [[deep, violet, violet, magenta, magenta, violet], 0.95],
-    stopped: [[magenta, red, red, mixc(red, violet, 0.4), red, magenta], 1],
+    stopped: [[scalec(red, 0.45), scalec(red, 0.75), red, red, scalec(red, 0.6), mixc(red, violet, 0.35)], 1],
   };
 }
 
@@ -249,19 +266,20 @@ void main() {
       prev = cur;
     }
   }
-  // A lit volume: a darker body, a bright rim on the edge facing the light, a soft sheen, and the
-  // colour running along the ribbon (u), not across it.
+  // A solid lit ribbon first, glow second: a body darker on its shadow side, a bright rim on the
+  // edge facing the light, a soft sheen, and the colour running along the ribbon (u), not across it.
   vec3 base = pal(bu);
   float rr = length(bn), lit = clamp(dot(bn, normalize(vec2(-.6, .8))) * .5 + .5, 0., 1.);
-  vec3 col = base * mix(mix(.38, 1., lit), .95, uSmall) * mix(.85, 1.1, bz); // small sizes: flat and bright, for legibility
-  col += mix(base, vec3(1.), .12) * smoothstep(.5, .97, rr) * smoothstep(.45, 1., lit) * 1.2 * (1. - uSmall * .4);
-  col += mix(base, vec3(1.), .35) * exp(-pow((rr - .4) / .14, 2.)) * lit * .22 * (1. - uSmall);
+  vec3 col = base * mix(mix(.42, 1.05, lit), .98, uSmall) * mix(.85, 1.1, bz); // small sizes: flat and bright, for legibility
+  col += base * smoothstep(.5, .97, rr) * smoothstep(.45, 1., lit) * .9 * (1. - uSmall * .4);
+  col += mix(base, vec3(1.), .3) * exp(-pow((rr - .4) / .14, 2.)) * lit * .2 * (1. - uSmall);
   float star = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
   col += step(.993, star) * .25 * bz * (1. - uSmall);
-  col = min(col * uBright, vec3(1.));
-  // The glow fades out before the canvas edge, so no square shows.
-  float fade = 1. - smoothstep(.82, 1., max(abs(p.x), abs(p.y)));
-  float glow = exp(-max(edge, 0.) * 11.) * mix(.4, .22, uSmall) * uBright * (1. - cover) * fade;
+  col = mix(vec3(dot(col, vec3(.3, .59, .11))), col, 1.25); // toward the sheet's saturation
+  col = clamp(col * uBright, 0., 1.);
+  // A tight glow, fading out before the canvas edge so no square shows.
+  float fade = 1. - smoothstep(.9, 1., max(abs(p.x), abs(p.y)));
+  float glow = exp(-max(edge, 0.) * 26.) * mix(.24, .14, uSmall) * uBright * (1. - cover) * fade;
   gl_FragColor = vec4(col * cover + pal(.45) * glow, cover + glow);
 }`;
 

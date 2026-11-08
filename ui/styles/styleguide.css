@@ -1,6 +1,9 @@
 /* The living styleguide (DESIGN-SYSTEM §0, §7). Schema tokens only, like everything else. Each entry
    is its own block, so it can be captured and approved alone. */
 .sg { height: auto; min-height: 100%; overflow: auto; }
+/* The app's background (stage2.css: one quiet light from above, on one tone), not base.css's older
+   wash, so what the styleguide shows is what the app shows. Only styleguide.html loads this file. */
+body { background: radial-gradient(70% 35% at 50% 0%, color-mix(in srgb, var(--orb-glow) 25%, transparent), transparent 70%), var(--bg-base); }
 .sg-head {
   display: flex;
   flex-wrap: wrap;
