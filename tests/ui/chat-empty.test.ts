@@ -43,6 +43,31 @@ test('an empty chat: one orb, a greeting, the composer centred, suggestions that
     const r = await m.send('POST', '/api/v1/design-systems/nebula/apply', { scope: 'user' });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     for (const [size, vp] of [['1440x900', WIDE], ['390x844', PHONE]] as const) {
+      // The main conversation of a fresh home is empty, but the page only learns that from its
+      // snapshot (held back here, so the wait is seen): its dock never moves on screen on the way to
+      // the centred state, and nothing else shifts either, from navigation on.
+      {
+        const where = `${size} /chat, empty main`;
+        const d = await device(b, vp);
+        await d.ctx.addInitScript(() => {
+          (window as any).__shifts = [];
+          new PerformanceObserver((l) => { for (const e of l.getEntries() as any[]) (window as any).__shifts.push({ at: e.startTime, value: e.value, input: e.hadRecentInput, from: (e.sources ?? []).map((s: any) => s.node?.id || s.node?.className || s.node?.nodeName).join(', ') }); }).observe({ type: 'layout-shift', buffered: true });
+        });
+        await d.page.route('**/api/sessions/main/events', async (route) => { await new Promise((r) => setTimeout(r, 800)); await route.continue(); });
+        await d.page.goto(`${m.base}/chat`);
+        await ready(d.page);
+        await d.page.locator('#thread .chat-empty .greeting').waitFor();
+        await d.page.waitForTimeout(600);
+        const shifted = await d.page.evaluate(() => (window as any).__shifts.filter((s: any) => !s.input));
+        assert.deepEqual(shifted, [], `${where}: no layout shift`);
+        const composer = (await d.page.locator('#composer').boundingBox())!;
+        const greet = (await d.page.locator('#thread .greeting').boundingBox())!;
+        assert.ok(await d.page.locator('body[data-empty]:not([data-dock-wait])').count() === 1, `${where}: it ends as an empty chat, its dock shown`);
+        assert.ok(composer.y >= greet.y + greet.height && composer.y + composer.height < vp.height - 120, `${where}: the dock ends centred, under the greeting (${composer.y}+${composer.height} of ${vp.height})`);
+        assert.equal(await d.page.evaluate(() => document.activeElement?.id), 'input', `${where}: the composer has the arrival’s focus`);
+        assert.deepEqual(d.errors, [], `${where}: no errors in the page`);
+        await d.ctx.close();
+      }
       for (const scheme of ['light', 'dark'] as const) {
         const where = `${size} ${scheme}`;
         const d = await device(b, { ...vp, scheme });

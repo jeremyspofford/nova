@@ -297,7 +297,7 @@ function setView(view) {
   topologyVisible(view === 'topology');
   for (const [v, key] of Object.entries(VIEWS)) el[key].hidden = v !== view;
   el.dock.hidden = view !== 'chat';
-  if (view !== 'chat') document.body.removeAttribute('data-empty');
+  if (view !== 'chat') { document.body.removeAttribute('data-empty'); document.body.removeAttribute('data-dock-wait'); }
   showMenu();
   if (view !== 'chat') el.jump.hidden = true;
   if (was === 'settings' && view !== 'settings') { core.cancelPreview(); core.leaveBackups(); }
@@ -392,6 +392,9 @@ function open(id, { quiet = false } = {}) {
   if (!quiet || state.id !== id) Object.assign(state, { id, live: null, pending: state.pending?.sessionId === id ? state.pending : null, stick: true, snapshot: false, missing: false });
   if (!state.snapshot && !state.pending) { rendered = new Map(); showWaiting('chat', el.thread, 'Loading the conversation', { end: true, id }); }
   restoreDraft();
+  // The dock's state for the wait (renderThread): set now, before the first paint of it.
+  renderThread();
+  renderChrome();
   if (id === 'main') markMainSeen();
   const es = new EventSource(`/api/sessions/${id}/events`);
   stream = es;
@@ -486,12 +489,20 @@ function flash(node) {
 const MISSING = '<div class="empty"><p class="empty-line">This conversation couldn’t be opened.</p><p class="memory-lede">It may not exist, or Nova’s server isn’t answering. <a href="/chat">Open the main conversation</a>.</p></div>';
 let emptyKey = '';
 
+// A conversation whose snapshot isn't in yet is waiting (open): nothing of another one shows.
+const loadingChat = () => state.view === 'chat' && !!state.id && state.snapshot === false && !state.pending;
+// Known to have no turns: a fresh one at once, any other only once its snapshot is in.
+const blankChat = () => state.view === 'chat' && !loadingChat() && !state.missing && !viewSession().turns.length;
+
 function renderThread() {
-  // A conversation whose snapshot isn't in yet is waiting (open): nothing of another one shows.
-  const waiting = state.view === 'chat' && state.id && state.snapshot === false && !state.pending;
+  const waiting = loadingChat();
   const session = viewSession();
-  // An empty chat centres its composer (components.css); the first turn docks it again.
-  document.body.toggleAttribute('data-empty', state.view === 'chat' && !waiting && !state.missing && !session.turns.length);
+  // An empty chat centres its composer (components.css); the first turn docks it again. The dock's
+  // geometry is final when it shows: only the main conversation can turn out empty after loading
+  // (any other began with a message), so while it loads its dock keeps its place unseen but
+  // focusable (components.css), then shows docked or centred, never moving on screen.
+  document.body.toggleAttribute('data-empty', blankChat());
+  document.body.toggleAttribute('data-dock-wait', waiting && state.id === 'main');
   if (waiting) return;
   const wasNear = nearBottom();
   if (!session.turns.length) {
@@ -634,7 +645,8 @@ function renderChrome() {
   const title = state.view === 'chat' ? (!state.id ? 'New chat' : state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
   el.dock.hidden = state.view !== 'chat' || readOnly();
   // An empty chat asks; a thread with turns is replied to. The field is two rows while it is centred.
-  const blank = !viewSession().turns.length;
+  // Only a chat known to be empty: while one loads, the field stays one row, as most land.
+  const blank = blankChat();
   el.input.placeholder = blank ? 'Ask Nova anything…' : 'Reply to Nova…';
   if (el.input.rows !== (blank ? 2 : 1)) { el.input.rows = blank ? 2 : 1; autosize(); }
   if (onMain()) el.mainLink.setAttribute('aria-current', 'page');

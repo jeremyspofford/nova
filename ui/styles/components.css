@@ -452,11 +452,17 @@ button.status:hover { background: color-mix(in srgb, var(--status-c) 22%, transp
 
 /* An empty chat (UI rebuild PR 4, the frame's empty new chat): the hero orb in its band of stars,
    the greeting, then the composer and three quiet suggestions, together in the middle of the
-   column. Nothing moves in the DOM: the thread shrinks to its content and the dock follows it, the
-   two centred between the bar and the foot. The first turn docks the composer again. */
-body[data-empty] .scroller { flex: 0 1 auto; margin-top: auto; }
-body[data-empty] #thread { min-height: 0; padding-bottom: var(--space-4); }
-body[data-empty] .dock { margin-bottom: auto; }
+   column. Nothing moves in the DOM: the scroller and the dock share the free space equally, the
+   thread's content sitting at the scroller's foot and the dock's at its head, so the group is
+   centred while the scroller's top never moves (no layout shift as it arrives). The first turn
+   docks the composer again. */
+body[data-empty] .scroller { flex: 1 1 auto; }
+body[data-empty] #thread { justify-content: flex-end; padding-bottom: var(--space-4); }
+body[data-empty] .dock { flex: 1 0 auto; }
+/* The main conversation, loading: its dock holds its place unseen until it is known to be docked or
+   centred (app.js renderThread), so it never moves on screen. Transparent, not display (no reflow)
+   and not visibility (the field must still take the arrival's focus). */
+body[data-dock-wait] .dock { opacity: 0; }
 .chat-empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-4); margin: 0; padding-bottom: 0; }
 .chat-hero { position: relative; display: grid; place-items: center; width: 100%; padding-block: var(--space-5); }
 .chat-hero > .orb { position: relative; }
