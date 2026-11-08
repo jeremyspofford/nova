@@ -178,6 +178,10 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         await healthFromHome(p, touch);
         await p.addScriptTag({ content: axe });
         await healthLandmarks(p, `${engine}/${posture}/Home-entry`);
+        // The build stamp: Health says which commit is running, and when it was built or started.
+        const build = await m.get('/api/v1/version');
+        await until(p, (w: string) => !!document.querySelector('[data-build-stamp]')?.textContent?.includes(w), build.words);
+        assert.match(await p.locator('[data-build-stamp]').innerText(), build.built_at ? /Built \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\./ : /Started \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\./);
         // Conversation metering emits no Caps/profile/task event. Leaving and reopening Health
         // must read current usage, even in one visible document with an unsaved limits draft.
         const previousMonth = (await m.get('/api/v1/caps')).month;

@@ -54,7 +54,7 @@ test('list, one, and the schema the UI reads instead of keeping a copy', async (
   assert.equal(list.status, 200);
   assert.deepEqual(list.body.map((d: { id: string }) => d.id).sort(), ['aurora', 'companion-light', 'nebula', 'nova', 'obsidian', 'orb-teal', 'paper']);
   assert.ok(list.body.every((d: { valid: boolean; problems: string[] }) => d.valid && d.problems.length === 0));
-  assert.equal(list.body.find((d: { active: boolean }) => d.active).id, 'orb-teal');
+  assert.equal(list.body.find((d: { active: boolean }) => d.active).id, 'nebula');
   const one = await call('GET', '/design-systems/companion-light');
   assert.equal(one.body.name, 'Companion Light');
   assert.equal(one.body.manifest.tokens['font/display'].includes('serif'), true);
@@ -71,9 +71,9 @@ test('GET /design-system.css serves the active package as CSS, with no caching',
   assert.equal(css.status, 200);
   assert.match(css.type, /^text\/css/);
   assert.match(css.cache, /no-store/);
-  assert.match(css.body, /Orb Teal/);
-  assert.match(css.body, /--bg-base: #062a30;/);
-  assert.match((await text(`${root}/design-system.css?device=device-aaaa1111`)).body, /Orb Teal/);
+  assert.match(css.body, /Nebula/);
+  assert.match(css.body, /--bg-base: #fbfbfc;/);
+  assert.match((await text(`${root}/design-system.css?device=device-aaaa1111`)).body, /Nebula/);
   await stop();
 });
 
@@ -95,13 +95,13 @@ test('apply for the user and per device, then roll back; every change is on the 
   const back = await call('POST', '/design-systems/rollback', { scope: 'device', device_id: 'device-aaaa1111' });
   assert.equal(back.body.active.id, 'companion-light');
   const userBack = await call('POST', '/design-systems/rollback', { scope: 'user' });
-  assert.equal(userBack.body.active.id, 'orb-teal');
-  assert.match((await text(`${root}/design-system.css`)).body, /Orb Teal/);
+  assert.equal(userBack.body.active.id, 'nebula');
+  assert.match((await text(`${root}/design-system.css`)).body, /Nebula/);
 
   await until(() => events.seen.length >= 4);
   await events.stop();
   assert.deepEqual(events.seen.map((e) => [e.action, e.id, e.scope]), [
-    ['apply', 'companion-light', 'user'], ['apply', 'obsidian', 'device'], ['rollback', 'companion-light', 'device'], ['rollback', 'orb-teal', 'user'],
+    ['apply', 'companion-light', 'user'], ['apply', 'obsidian', 'device'], ['rollback', 'companion-light', 'device'], ['rollback', 'nebula', 'user'],
   ]);
   await stop();
 });
@@ -112,7 +112,7 @@ test('preview CSS renders a package for a sandboxed frame without applying it', 
   assert.equal(preview.status, 200);
   assert.match(preview.type, /^text\/css/);
   assert.match(preview.body, /--bg-base: #171512;/);
-  assert.equal((await call('GET', '/design-systems/active')).body.id, 'orb-teal');
+  assert.equal((await call('GET', '/design-systems/active')).body.id, 'nebula');
   assert.equal((await text(`${base}/design-systems/paper/preview.css?mode=sepia`)).status, 400);
   await stop();
 });
@@ -138,7 +138,7 @@ test('a third-party package installs over the API, validates, applies, and is re
   await call('POST', '/design-systems/example.slate/apply', { scope: 'user' });
   assert.match((await text(`${root}/design-system.css`)).body, /Example Slate/);
   assert.equal((await call('DELETE', '/extensions/example.slate')).status, 200);
-  assert.match((await text(`${root}/design-system.css`)).body, /Orb Teal/);
+  assert.match((await text(`${root}/design-system.css`)).body, /Nebula/);
   assert.equal((await call('DELETE', '/extensions/nova')).status, 409, 'built-ins stay');
 });
 

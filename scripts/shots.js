@@ -810,7 +810,7 @@ const golden = async (opts, prefix) => {
   await p.waitForSelector('html[data-ready] .empty');
   await p.waitForFunction(() => document.documentElement.dataset.theme);
   const t = await p.evaluate(() => [document.documentElement.dataset.theme, localStorage.getItem('nova.device')]);
-  check('a first visit opens in Orb Teal, with a device id of its own', t[0] === 'orb-teal' && /^[\w-]{8,64}$/.test(t[1] ?? ''), t.join(' '));
+  check('a first visit opens in Nebula, with a device id of its own', t[0] === 'nebula' && /^[\w-]{8,64}$/.test(t[1] ?? ''), t.join(' '));
   await ctx.close();
 }
 await golden({ theme: 'nova', mode: 'dark' }, 'nova');

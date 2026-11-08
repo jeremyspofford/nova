@@ -61,7 +61,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
           await p.waitForFunction(w => getComputedStyle(document.documentElement).getPropertyValue('--bg-base').trim().toLowerCase() === w, bg);
           await noOverflow(p);
           assert.equal(await p.locator('.topology-connections').isVisible(), size === 'desktop');
-          if (pkg.id === 'orb-teal') await shot(p, engine, size, 'machines');
+          if (pkg.id === 'nebula') await shot(p, engine, size, 'machines');
           // Export is the exact server snapshot already displayed; clicking export does not GET again.
           let reads = 0; let expected = '';
           p.on('response', async r => { if (r.url().endsWith('/api/v1/services/topology') && r.status() === 200) { reads++; expected = (await r.json()).mermaid; } });
@@ -72,17 +72,17 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
           const file = await (await download).path(); assert.ok(file); assert.equal(readFileSync(file, 'utf8'), expected); assert.equal(reads, before);
           const hub = p.locator(`[data-topology-machine="${f.hubId}"]`); await hub.focus(); await p.keyboard.press('Enter');
           const ordinary = p.locator(`[data-topology-service="${f.hubId}/ordinary"]`);
-          if (pkg.id === 'orb-teal') await shot(p, engine, size, 'services');
+          if (pkg.id === 'nebula') await shot(p, engine, size, 'services');
           await p.keyboard.press('Tab'); assert.equal(await ordinary.evaluate(e => e === document.activeElement), false, 'console is the first service');
           await ordinary.focus(); await p.keyboard.press('Enter'); await noOverflow(p);
           assert.match(await p.locator('.topology').innerText(), /Serving on this machine/);
-          if (pkg.id === 'orb-teal') await shot(p, engine, size, 'versions');
+          if (pkg.id === 'nebula') await shot(p, engine, size, 'versions');
           await p.locator('[data-topology-action="promote"]').click(); await p.locator('.approval-sheet[data-tier="2"]').waitFor();
-          if (pkg.id === 'orb-teal') await shot(p, engine, size, 'approval');
+          if (pkg.id === 'nebula') await shot(p, engine, size, 'approval');
           await p.keyboard.press('Escape'); await p.locator('[data-topology-back]').click();
           assert.equal(await ordinary.evaluate(e => e === document.activeElement), true);
           await p.locator('[data-topology-back]').click(); assert.equal(await hub.evaluate(e => e === document.activeElement), true);
-          if (pkg.id === 'orb-teal') {
+          if (pkg.id === 'nebula') {
             await detail(p, f.hubId, 'capture-demo');
             await p.locator('[data-topology-action="promote"]').click(); await p.locator('.approval-sheet[data-tier="3"]').waitFor();
             await shot(p, engine, size, 'approval-capture'); await p.keyboard.press('Escape');

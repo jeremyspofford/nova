@@ -51,7 +51,7 @@ test('every built-in design passes the live check in every look it has, starters
       assert.ok(c.ok, `${pkg.id} (${look}): ${c.results.filter((r) => !r.ok).map((r) => `${r.fg} on ${r.bg} ${r.ratio}:1`).join(', ')}`);
     }
   }
-  assert.deepEqual([...STARTERS], ['orb-teal', 'companion-light']);
+  assert.deepEqual([...STARTERS], ['nebula', 'orb-teal', 'companion-light']);
 });
 
 test('a valid package can still fail the live check, and says what and by how much', () => {

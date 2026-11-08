@@ -16,7 +16,7 @@ import { showWaiting, waitingUnits } from './skeleton.js';
 
 // What the core has told this page, kept fresh by the event stream.
 export const store = {
-  tasks: [], problems: [], resolved: [], health: null, profile: null, identity: null,
+  tasks: [], problems: [], resolved: [], health: null, version: null, profile: null, identity: null,
   memory: [], rules: [], messages: [], workers: [], reachable: true, stale: false, loaded: false, tried: false,
   // The device mesh: the registry, whether other devices can reach Nova (and who this page is),
   // and devices waiting for an OK.
@@ -41,6 +41,8 @@ export async function load(parts = INITIAL_PARTS) {
     tasks: () => get1('/tasks?limit=100'),
     problems: () => get1('/problems'),
     health: () => get1('/health'),
+    // The running build (commit, build or start time), read when Health opens.
+    version: () => get1('/version'),
     caps: () => get1('/caps'),
     resilience: () => get1('/resilience'),
     profile: () => Promise.all([get1('/profile'), get1('/identity')]).then(([a, b]) => [[a[0], b[0]], a[1] || b[1]]),
@@ -434,6 +436,11 @@ function aroundCosts(current, next, island, placeholder) {
   }
 }
 
+// GET /api/v1/version as one line: which commit is running and whether it's the latest merged, then
+// when it was built, or, when the launcher didn't say, when it started (never one passed off as the other).
+const utc = (iso) => `${iso.slice(0, 16).replace('T', ' ')} UTC`;
+export const buildStamp = (v) => (v ? `<p class="settings-note" data-build-stamp>${esc(v.words)} ${v.built_at ? `Built ${esc(utc(v.built_at))}.` : v.started_at ? `Started ${esc(utc(v.started_at))}.` : ''}</p>` : '');
+
 export function renderHealth(el) {
   const retained = el.querySelector('[data-work-limits]');
   const opened = [...el.querySelectorAll('.work-costs details, .diagnostics-download details')].map(d => d.open);
@@ -455,7 +462,7 @@ ${keepingRunning()}
 <div class="panel"><h3 class="section-title" id="h-work-costs">Work costs</h3>${workCosts({ view: store.caps, state: costsState(), error: costs.error, invalid: costs.invalid })}${store.capsState === 'unavailable' ? `<p class="settings-note" role="status">${esc(store.capsError)}</p><button class="btn" type="button" data-retry-work-costs>Retry work costs</button>` : ''}</div>
 <div class="panel"><h3 class="section-title" id="h-diagnostics">Diagnostics</h3>${diagnosticsDownload({ available: !!store.health && store.reachable })}</div>
 <section class="panel" aria-labelledby="h-checks"><h3 class="section-title" id="h-checks">Checks</h3>
-${h ? `<ul class="settings-list">${checks}</ul><p class="settings-note">Version ${esc(h.version)} · running for ${esc(uptime(h.uptime_s))}.</p>` : waitingLine('Checking Nova’s health', { key: 'health' })}</section>
+${h ? `<ul class="settings-list">${checks}</ul><p class="settings-note">Version ${esc(h.version)} · running for ${esc(uptime(h.uptime_s))}.</p>${buildStamp(store.version)}` : waitingLine('Checking Nova’s health', { key: 'health' })}</section>
 ${store.resolved.length ? `<details class="panel raw"><summary>Dealt with recently</summary><ul class="settings-list">${store.resolved.map((p) => problem(p, false)).join('')}</ul></details>` : ''}`;
   const fresh = next.querySelector('[data-work-limits]');
   if (retained) {
@@ -863,9 +870,12 @@ export function drawAppearance(box) {
   const inUse = others.some((d) => [showing, a.user, a.device].includes(d.id));
   const more = look.more || inUse;
   const kicker = rec?.at_bar ? 'Nova’s design' : 'Recommended';
-  const otherNote = others.some((d) => !d.at_bar) ? '<p class="settings-note">These work, and each says whether it reads well, but none has yet been held to the design bar Nova’s own design meets. They may change as they are brought up to it.</p>' : '';
+  // Orb Teal is at the bar too, though not the lead: count only the ones that aren't.
+  const below = others.filter((d) => !d.at_bar).length;
+  const moreNote = below === others.length ? `${below}, not yet at Nova’s design bar` : below ? `${others.length}, ${below} not yet at Nova’s design bar` : `${others.length}`;
+  const otherNote = below ? '<p class="settings-note">These work, and each says whether it reads well, but none has yet been held to the design bar Nova’s own design meets. They may change as they are brought up to it.</p>' : '';
   setHtml(box.querySelector('#appearance-design'), `${rec ? `<div class="ds-recommended"><p class="ds-kicker">${kicker}</p>${designCard(rec, a, { big: true, showing, want })}<p class="ds-reason">${esc(rec.reason)}</p></div>` : ''}
-${others.length ? `<details class="ds-more"${more ? ' open' : ''}><summary class="ds-more-summary">${ICONS.chevron}More designs <span class="ds-more-note">· ${others.length}, not yet at Nova’s design bar</span></summary>${otherNote}<ul class="ds-others" aria-label="More designs">${others.map((d) => `<li>${designCard(d, a, { showing, want })}${d.valid ? '' : `<p class="settings-note">${esc(d.problems.slice(0, 2).join(' '))}</p>`}</li>`).join('')}</ul></details>` : ''}`);
+${others.length ? `<details class="ds-more"${more ? ' open' : ''}><summary class="ds-more-summary">${ICONS.chevron}More designs <span class="ds-more-note">· ${moreNote}</span></summary>${otherNote}<ul class="ds-others" aria-label="More designs">${others.map((d) => `<li>${designCard(d, a, { showing, want })}${d.valid ? '' : `<p class="settings-note">${esc(d.problems.slice(0, 2).join(' '))}</p>`}</li>`).join('')}</ul></details>` : ''}`);
   const details = box.querySelector('.ds-more');
   if (details && !details.dataset.wired) { details.dataset.wired = '1'; details.addEventListener('toggle', () => { look.more = details.open; }); }
   const check = box.querySelector('#contrast-check');

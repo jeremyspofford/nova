@@ -98,7 +98,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
             await themeApplied(p, await (await response).text());
             for (const s of STATES) {
               await choose(p, 'passkey-state', s, `[data-passkey-specimen="${s}"]`);
-              if (process.env.NOVA_PASSKEY_STYLEGUIDE_SHOTS && theme === 'orb-teal') {
+              if (process.env.NOVA_PASSKEY_STYLEGUIDE_SHOTS && theme === 'nebula') {
                 const folder = resolve(process.env.NOVA_PASSKEY_STYLEGUIDE_SHOTS, engine);
                 mkdirSync(folder, { recursive: true });
                 await p.mouse.move(0, 0);
@@ -132,7 +132,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
             for (const s of SETUP) {
               await choose(p, 'passkey-setup-state', s, `[data-passkey-setup-state="${s}"]`);
               await geometry(p, `${engine}/${theme}/${size}/setup-${s}`);
-              if (process.env.NOVA_PASSKEY_STYLEGUIDE_SHOTS && theme === 'orb-teal') {
+              if (process.env.NOVA_PASSKEY_STYLEGUIDE_SHOTS && theme === 'nebula') {
                 await p.mouse.move(0, 0);
                 await padded(p, '[data-passkey-setup-content]', join(resolve(process.env.NOVA_PASSKEY_STYLEGUIDE_SHOTS, engine), `setup-${s}-${size}.png`));
               }
