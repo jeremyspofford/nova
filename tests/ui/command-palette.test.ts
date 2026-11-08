@@ -3,7 +3,8 @@
 // actions), the arrow keys and Enter go through the app's own router (one document request for the
 // whole test), Esc gives focus back, and it is a real modal: focus stays in it and the page behind
 // it is inert. 44 px rows, no sideways overflow at a phone's 390 px or a desktop's 1440 px, full
-// width at the top of a phone, and axe finds nothing in it. Chromium and WebKit.
+// width at the top of a phone, and axe finds nothing in it. The rail's search button opens it (a
+// click, and Enter), and the rail's foot stamps the running build's short commit. Chromium and WebKit.
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, rmSync } from 'node:fs';
@@ -20,7 +21,9 @@ const require = createRequire(import.meta.url);
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 
 let server: Awaited<ReturnType<typeof seeded>> | null = null;
-before(async () => { server = await seeded('nova-palette-'); });
+// The build the server says it runs (GET /api/v1/version), so the rail's stamp has a commit to show.
+const COMMIT = 'b66f2c5e0d1a2b3c4d5e6f708192a3b4c5d6e7f8';
+before(async () => { server = await seeded('nova-palette-', { NOVA_BUILD_COMMIT: COMMIT }); });
 after(async () => { if (server) { await stop(server.nova); rmSync(server.m.dir, { recursive: true, force: true }); } });
 
 const isOpen = (page: Page) => page.evaluate(() => !!document.querySelector<HTMLDialogElement>('#palette')?.open);
@@ -123,6 +126,27 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     await until(page, () => !document.querySelector<HTMLDialogElement>('#palette')!.open);
     assert.equal(await focused(page), 'scroller', 'focus returns to where it was');
     assert.equal(await page.evaluate(() => location.pathname), '/', 'Esc went nowhere');
+
+    // The rail's search button is the palette's touch door: a click opens it, and so does Enter.
+    assert.equal(await page.evaluate(() => document.body.dataset.rail), 'open', 'the rail is open at 1440');
+    const railSearch = page.locator('#rail-search');
+    assert.equal(await railSearch.getAttribute('aria-label'), 'Search or go to');
+    await railSearch.click();
+    await until(page, () => document.querySelector<HTMLDialogElement>('#palette')?.open && document.activeElement?.id === 'palette-input');
+    await page.keyboard.press('Escape');
+    await until(page, () => !document.querySelector<HTMLDialogElement>('#palette')!.open);
+    await page.focus('#rail-search');
+    await page.keyboard.press('Enter');
+    await until(page, () => document.querySelector<HTMLDialogElement>('#palette')?.open && document.activeElement?.id === 'palette-input');
+    await page.keyboard.press('Escape');
+    await until(page, () => !document.querySelector<HTMLDialogElement>('#palette')!.open);
+    assert.equal(await focused(page), 'rail-search', 'Esc gives focus back to the search button');
+
+    // The rail's foot stamps the running build: the API's own short commit.
+    const build = await page.evaluate(() => fetch('/api/v1/version').then((r) => r.json()));
+    assert.equal(build.commit_short, COMMIT.slice(0, 8));
+    await page.waitForSelector('#rail .rail-stamp-commit', { state: 'visible' });
+    assert.equal(await page.locator('#rail .rail-stamp-commit').textContent(), build.commit_short);
 
     // Filtering: a conversation by name, a setting by the words people use, and nothing at all.
     await open(page);

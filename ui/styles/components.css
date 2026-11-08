@@ -83,24 +83,35 @@
 .icon-btn:hover { background: var(--surface-card-hover); color: var(--text-primary); }
 .icon-btn[aria-expanded="true"] { color: var(--accent-primary); }
 
-/* The rail: the orb (Home) on top, a few destinations, Settings at the foot. */
+/* The rail (UI rebuild, 2026-11-08, the approved composition): the orb (Home) and the search
+   button on top, flat rows on the rail's own ground, a hairline over the foot (Settings and the
+   version stamp). Slim (layout/rail-width): each row an icon over its label. Open, where a desktop
+   has room (body[data-rail="open"], set by shell.js from layout.css's --band-rail): an icon, the
+   label and a quiet count in one 44 px row, under an uppercase group label. */
 .rail {
   flex-direction: column;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-5) 0 var(--space-4);
-  background: color-mix(in srgb, var(--bg-base) 55%, transparent);
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-1) var(--space-2);
+  background: var(--bg-base);
   border-right: 1px solid var(--border-subtle);
-  backdrop-filter: blur(var(--blur-glass));
-  -webkit-backdrop-filter: blur(var(--blur-glass));
   overflow-y: auto;
   /* The orb's glow reaches past the rail's edges; it must not make the rail scroll sideways. */
   overflow-x: hidden;
 }
-.rail-home { display: grid; place-items: center; margin-bottom: var(--space-4); border-radius: 50%; text-decoration: none; }
+.rail-head { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
+.rail-home { display: grid; place-items: center; min-width: var(--hit); min-height: var(--hit); border-radius: 50%; text-decoration: none; }
+.rail-search { width: var(--hit); height: var(--hit); border-radius: var(--radius-input); }
+.rail-group { display: none; }
 .rail-list, .tabs-list { list-style: none; margin: 0; padding: 0; display: flex; }
-.rail-list { flex-direction: column; gap: var(--space-1); }
-.rail-foot { margin-top: auto; }
+.rail-list { flex-direction: column; gap: 0; }
+.rail-foot { display: flex; flex-direction: column; align-items: center; width: 100%; margin-top: auto; padding-top: var(--space-2); border-top: 1px solid var(--border-subtle); }
+.rail-stamp { display: flex; align-items: center; justify-content: center; gap: var(--space-1); margin: 0; padding: var(--space-2) var(--space-3); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); }
+.rail-stamp[data-pending] { color: var(--status-attention); }
+.rail-stamp-dot { flex: none; width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: currentColor; }
+.rail-stamp-full { display: none; }
+.rail-stamp-commit { font-family: var(--font-mono); }
+.nav-count { display: none; }
 .nav-item {
   position: relative;
   display: flex;
@@ -134,6 +145,24 @@
 }
 .nav-badge[data-tone="alert"] { background: var(--status-error); }
 .nav-badge[data-tone="working"] { background: var(--status-working); animation: orb-pulse var(--motion-pulse) var(--motion-ease) infinite; }
+/* The rail's current place: the composition's tinted row and strong label, no accent line. */
+.rail .nav-item { min-height: var(--hit); }
+.rail .nav-item[aria-current="page"], .rail .rail-home[aria-current="page"] { background: var(--surface-card-hover); color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.rail .nav-item[aria-current="page"]::before { content: none; }
+
+/* The open rail. */
+body[data-rail="open"] .rail { align-items: stretch; padding: var(--space-3) var(--space-2) var(--space-2); }
+body[data-rail="open"] .rail-head { flex-direction: row; justify-content: space-between; margin-bottom: var(--space-2); }
+body[data-rail="open"] .rail-group { display: block; margin: var(--space-2) 0 var(--space-1); padding: 0 var(--space-3); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); text-transform: uppercase; letter-spacing: 0.04em; }
+body[data-rail="open"] .rail .nav-item { flex-direction: row; gap: var(--space-3); width: 100%; padding: var(--space-1) var(--space-3); font-size: var(--type-small); }
+body[data-rail="open"] .rail .nav-label { flex: 1; text-align: start; }
+body[data-rail="open"] .rail .nav-count { display: inline-block; padding: 0 var(--space-2); border-radius: var(--radius-pill); background: var(--surface-card-hover); color: var(--text-secondary); font-size: var(--type-caption); font-variant-numeric: tabular-nums; }
+body[data-rail="open"] .rail .nav-count + .nav-badge { display: none; }
+body[data-rail="open"] .rail .nav-badge { position: static; flex: none; }
+body[data-rail="open"] .rail-foot { align-items: stretch; }
+body[data-rail="open"] .rail-stamp { justify-content: flex-start; }
+body[data-rail="open"] .rail-stamp-v { display: none; }
+body[data-rail="open"] .rail-stamp-full { display: inline; }
 
 /* The phone's tabs: a glass bar along the bottom. */
 .tabs {
@@ -162,7 +191,7 @@
   animation: rise var(--motion-transition) var(--motion-ease) both;
 }
 body[data-layout="tablet"] .more,
-body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--layout-rail-width) + var(--space-2)); margin: 0; width: calc(var(--space-8) * 4); }
+body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--rail-col) + var(--space-2)); margin: 0; width: calc(var(--space-8) * 4); }
 .more-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .more .nav-item { flex-direction: row; gap: var(--space-3); padding: var(--space-3); font: var(--type-weight-regular) var(--type-body)/var(--type-line-tight) var(--font-body); }
 .more .nav-badge { position: static; margin-left: auto; }
