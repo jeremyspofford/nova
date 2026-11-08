@@ -8,11 +8,11 @@
   - DESIGN-SYSTEM.md's slop list gains item 9, "No overflow nav, no nav popovers". §5 no longer caps the desktop rail at six destinations.
   - The service worker cache moves to v47.
 - What you can now do: reach every place in one click at any width, and see which place needs you without opening anything.
-- Still unfinished:
+- Still unfinished: three things.
   - Owner reaction to the screenshots.
   - The orb still renders as the old disc; the status icon (part B) and the Nebula theme match replace it.
   - Not checked on a real device.
-- Checked:
+- Checked: locally, before CI.
   - lint:tokens, typecheck; lint-scales, ui-logic and navigation-registry (27/27).
   - UI: navigation-drawn (4/4) and navigation-reachability (2/2). The navigation-drawn suite is extended: at 1440×900, 1024×768, 832×750, 1024×600 and 1280×600, every place has a link inside the rail, there is no More or [aria-haspopup] item, moving between places opens no dialog or popover, and Health's toned dot is visible on the Health row.
   - UI: m9-targets, m9-fold, fold-postures, health-caps-diagnostics, ios-status-bar, m9-contrast and m9-motion.
