@@ -14,7 +14,7 @@ import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
 import { problemTone, stoppingProblems } from './status.js';
 import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js';
-import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
+import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
 import { bindConnections, loadConnections, renderConnections } from './connections.js';
 import { bindSites, loadSites, renderSites } from './sites.js';
@@ -194,17 +194,17 @@ function loadActivity() {
 function showBusy(busy = state.busy) {
   state.busy = { working: busy.working ?? 0, waiting: busy.waiting ?? 0 };
   const w = state.busy.waiting;
-  setBadge('activity', w ? { tone: 'attention', label: `${w} waiting for you` } : state.busy.working ? { tone: 'working', label: 'Nova is working' } : null);
+  setBadge('activity', w ? { tone: 'attention', label: `${w} waiting for you`, count: w } : state.busy.working ? { tone: 'working', label: 'Nova is working' } : null);
   showSignals();
 }
 
 function showSignals() {
   const asking = core.needsYou();
-  setBadge('tasks', asking ? { tone: 'attention', label: `${asking} need${asking === 1 ? 's' : ''} you` } : null);
+  setBadge('tasks', asking ? { tone: 'attention', label: `${asking} need${asking === 1 ? 's' : ''} you`, count: asking } : null);
   // Red only for problems that stop Nova; any other open problem needs the person (amber).
   const problems = core.store.problems;
   const stopped = stoppingProblems(problems).length;
-  setBadge('health', problems.length ? { tone: problemTone(problems), label: `${problems.length} problem${problems.length === 1 ? '' : 's'}` } : null);
+  setBadge('health', problems.length ? { tone: problemTone(problems), label: `${problems.length} problem${problems.length === 1 ? '' : 's'}`, count: problems.length } : null);
   signal({
     reachable: state.reachable,
     listening: state.listening,
@@ -2056,6 +2056,8 @@ function step(dir) {
 
 // The command palette (Ctrl K / Cmd K, palette.js) goes through this router, like every door.
 initPalette({ navigate, conversations: () => state.list, toggleAside: () => { toggleAside(); renderCore(); } });
+// The rail's search button: the palette's touch door (a button, so Enter and Space open it too).
+document.addEventListener('click', (e) => { if (e.target.closest?.('#rail-search')) openPalette(); });
 
 document.addEventListener('keydown', (e) => {
   if (setupShowing() || e.defaultPrevented) return;
@@ -2127,6 +2129,7 @@ function boot() {
   watch();
   refreshCore();
   loadCapture();
+  getJson('/api/v1/version').then(setBuild).catch(() => {}); // the rail's version stamp
   // The page shows once its layout and first view are set: nothing moves into place (M9, CLS).
   // Shown before route() in the same task, so no frame paints in between, but the composer can
   // take route()'s focus: a visibility:hidden shell can't be focused.

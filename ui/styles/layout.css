@@ -35,12 +35,23 @@
   --region-aside-max: calc(var(--space-8) * 5.5);
   --band-two: max(600px, calc(var(--layout-rail-width) + var(--region-main-min)));
   --band-three: calc(var(--layout-rail-width) + var(--region-main-min) + var(--region-aside-min));
+  /* The open rail (the composition's, icon, label and count in a row) takes this much; a desktop
+     opens it only from --band-rail, where it takes no width from reading: the centre keeps its
+     content width beside a full right column (and never less than the three-column band allows). */
+  --rail-open-width: calc(var(--space-8) * 4);
+  --band-rail: max(calc(var(--band-three) + var(--rail-open-width) - var(--layout-rail-width)), calc(var(--rail-open-width) + var(--layout-content-max) + var(--region-aside-max)));
+  --rail-col: var(--layout-rail-width);
 }
 /* What shell.js measures them with: never seen, never in the way. */
 .band-probes { position: fixed; top: 0; left: 0; width: 0; height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
 .band-probe { height: 0; }
 .band-probe[data-band="two"] { width: var(--band-two); }
 .band-probe[data-band="three"] { width: var(--band-three); }
+.band-probe[data-band="rail"] { width: var(--band-rail); }
+body[data-rail="open"] { --rail-col: var(--rail-open-width); }
+/* More opens beside the rail, at its current width. */
+body[data-layout="tablet"] .more,
+body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--rail-col) + var(--space-2)); margin: 0; width: calc(var(--space-8) * 4); }
 .band-probe[data-band="scrollbar"] { width: var(--space-8); height: var(--space-8); overflow-y: scroll; }
 
 :root { --segments: none; }
@@ -100,11 +111,11 @@ body[data-layout="tablet"][data-posture="half-open-horizontal"][data-room="no"] 
 /* desktop: Calm Control. Each column at least its minimum; the right column grows to its own
    width first, then the centre takes the rest. */
 body[data-layout="desktop"] .shell {
-  grid-template: "rail main" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr);
+  grid-template: "rail main" minmax(0, 1fr) / var(--rail-col) minmax(0, 1fr);
 }
 body[data-layout="desktop"] .rail { display: flex; }
 body[data-layout="desktop"][data-aside="on"] .shell {
-  grid-template: "rail main aside" minmax(0, 1fr) / var(--layout-rail-width) minmax(var(--region-main-min), 1fr) minmax(var(--region-aside-min), var(--region-aside-max));
+  grid-template: "rail main aside" minmax(0, 1fr) / var(--rail-col) minmax(var(--region-main-min), 1fr) minmax(var(--region-aside-min), var(--region-aside-max));
 }
 body[data-layout="desktop"][data-aside="on"] .aside { display: flex; }
 .aside-toggle { display: none; }
@@ -167,7 +178,7 @@ body[data-layout="phone"][data-view="home"] .topbar-title {
    sidebar is the second pane (list-detail). */
 body[data-layout="tablet"][data-view="settings"][data-settings-layout="sidebar"] .shell,
 body[data-layout="desktop"][data-view="settings"][data-settings-layout="sidebar"] .shell {
-  grid-template: "rail main" minmax(0, 1fr) / var(--layout-rail-width) minmax(0, 1fr);
+  grid-template: "rail main" minmax(0, 1fr) / var(--rail-col) minmax(0, 1fr);
 }
 body[data-view="settings"][data-settings-layout="sidebar"] .aside,
 body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { display: none; }

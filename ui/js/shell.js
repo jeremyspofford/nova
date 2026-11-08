@@ -31,24 +31,25 @@ const probes = (() => {
   const box = document.createElement('div');
   box.className = 'band-probes';
   box.setAttribute('aria-hidden', 'true');
-  box.innerHTML = '<div class="band-probe" data-band="two"></div><div class="band-probe" data-band="three"></div><div class="band-probe" data-band="scrollbar"></div>';
+  box.innerHTML = '<div class="band-probe" data-band="two"></div><div class="band-probe" data-band="three"></div><div class="band-probe" data-band="scrollbar"></div><div class="band-probe" data-band="rail"></div>';
   document.body.append(box);
-  const [two, three, scrollbar] = box.children;
-  return { two, three, scrollbar };
+  const [two, three, scrollbar, rail] = box.children;
+  return { two, three, scrollbar, rail };
 })();
 let scrollbarWidth = -1;
 export function bands() {
   // What a scrollbar takes here (0 where scrollbars overlay the content), for the regions' gutters.
   const sb = probes.scrollbar.offsetWidth - probes.scrollbar.clientWidth;
   if (sb !== scrollbarWidth) { scrollbarWidth = sb; root.style.setProperty('--scrollbar-room', `${sb}px`); }
-  return { two: probes.two.getBoundingClientRect().width, three: probes.three.getBoundingClientRect().width };
+  return { two: probes.two.getBoundingClientRect().width, three: probes.three.getBoundingClientRect().width, rail: probes.rail.getBoundingClientRect().width };
 }
 
 export function readLayout() {
   const cs = getComputedStyle(root);
   const word = (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
   const segments = word('--segments', 'none');
-  const viewport = viewportOf(root.clientWidth, bands());
+  const b = bands();
+  const viewport = viewportOf(root.clientWidth, b);
   // Room for a pane beside the conversation: the three-column band, or a real hinge's own screens.
   const room = viewport === 'wide' || segments === 'horizontal' ? 'yes' : 'no';
   const next = resolve({
@@ -66,6 +67,9 @@ export function readLayout() {
   body.dataset.posture = next.posture;
   body.dataset.aside = next.aside;
   body.dataset.room = room;
+  // The rail opens (icon, label and count in a row) only where a desktop has room for it beside
+  // both columns' minimums (layout.css --band-rail); elsewhere it stays slim.
+  body.dataset.rail = next.layout === 'desktop' && root.clientWidth >= b.rail ? 'open' : 'slim';
   const toggle = $('aside-toggle');
   if (toggle) {
     const open = next.aside === 'on';
@@ -105,7 +109,7 @@ function navItem(id, { tag = 'li' } = {}) {
   const b = badges.get(id);
   const cur = id === currentDest ? ' aria-current="page"' : '';
   const aria = b ? ` aria-label="${esc(`${d.label}, ${b.label}`)}"` : '';
-  const a = `<a class="nav-item" href="${d.path}" data-dest="${id}"${cur}${aria}>${ICONS[id]}<span class="nav-label">${esc(d.label)}</span>${b ? `<span class="nav-badge" data-tone="${esc(b.tone)}" aria-hidden="true"></span>` : ''}</a>`;
+  const a = `<a class="nav-item" href="${d.path}" data-dest="${id}"${cur}${aria}>${ICONS[id]}<span class="nav-label">${esc(d.label)}</span>${b?.count ? `<span class="nav-count" aria-hidden="true">${esc(String(b.count))}</span>` : ''}${b ? `<span class="nav-badge" data-tone="${esc(b.tone)}" aria-hidden="true"></span>` : ''}</a>`;
   return tag ? `<${tag}>${a}</${tag}>` : a;
 }
 
@@ -123,9 +127,11 @@ export function renderNav() {
   const rail = $('rail');
   const tabs = $('tabs');
   if (p.home === 'orb') {
-    rail.innerHTML = `<a class="rail-home" href="/" data-dest="home" aria-label="Home. ${esc(ORB_WORDS[orbNow])}"${currentDest === 'home' ? ' aria-current="page"' : ''}>${orb({ state: orbNow, size: 'rail', live: true, decorative: true })}</a>
-<ul class="rail-list">${p.primary.map((id) => navItem(id)).join('')}${moreButton(p.more)}</ul>
-<ul class="rail-list rail-foot">${p.foot.map((id) => navItem(id)).join('')}</ul>`;
+    rail.innerHTML = `<div class="rail-head"><a class="rail-home" href="/" data-dest="home" aria-label="Home. ${esc(ORB_WORDS[orbNow])}"${currentDest === 'home' ? ' aria-current="page"' : ''}>${orb({ state: orbNow, size: 'rail', live: true, decorative: true })}</a>
+<button type="button" class="icon-btn rail-search" id="rail-search" aria-label="Search or go to" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Search or go to (Ctrl K)">${ICONS.search}</button></div>
+<p class="rail-group" id="rail-places">Places</p>
+<ul class="rail-list" aria-labelledby="rail-places">${p.primary.map((id) => navItem(id)).join('')}${moreButton(p.more)}</ul>
+<div class="rail-foot"><ul class="rail-list">${p.foot.map((id) => navItem(id)).join('')}</ul>${stamp()}</div>`;
     tabs.innerHTML = '';
   } else {
     tabs.innerHTML = `<ul class="tabs-list">${p.primary.map((id) => navItem(id)).join('')}${moreButton(p.more)}</ul>`;
@@ -133,6 +139,17 @@ export function renderNav() {
   }
   $('more').innerHTML = `<ul class="more-list">${p.more.map((id) => navItem(id)).join('')}</ul>`;
   if (focusKey) (focusKey === 'more' ? $('more-btn') : document.querySelector(`#rail [data-dest="${focusKey}"], #tabs [data-dest="${focusKey}"], #more [data-dest="${focusKey}"]`))?.focus({ preventScroll: true });
+}
+
+// The version stamp at the rail's foot, from GET /api/v1/version: the version and the short commit
+// (open), a "v" (slim); amber with a dot when a redeploy is pending. Nothing until it is known.
+let build = null;
+export function setBuild(v) { build = v; renderNav(); }
+function stamp() {
+  if (!build?.version) return '';
+  const pending = build.behind === true;
+  const words = `Nova ${build.version}${build.commit_short ? `, build ${build.commit_short}` : ''}${pending ? ', redeploy pending' : ''}`;
+  return `<p class="rail-stamp"${pending ? ' data-pending' : ''} title="${esc(words)}"><span class="sr-only">${esc(words)}</span><span class="rail-stamp-v" aria-hidden="true">v</span>${pending ? '<span class="rail-stamp-dot" aria-hidden="true"></span>' : ''}<span class="rail-stamp-full" aria-hidden="true">${esc(build.version)}${build.commit_short ? ` <span class="rail-stamp-commit">${esc(build.commit_short)}</span>` : ''}${pending ? ' redeploy pending' : ''}</span></p>`;
 }
 
 export function markCurrent(dest) {
