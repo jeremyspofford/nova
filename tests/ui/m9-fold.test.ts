@@ -211,7 +211,7 @@ test('M9 gate, foldable 3: nothing under the hinge, in the book and laptop postu
         assert.equal(await d.page.evaluate(() => document.body.dataset.posture), posture, `${what}: the browser reports the posture`);
         await check(view);
       }
-      // Open things: the conversations drawer, More, a task's sheet, a toast.
+      // Open things: the conversations drawer, the navigation drawer, a task's sheet, a toast.
       await d.page.goto(`${m.base}/c/${CHAT}`);
       await screen(d.page, cdp, w, h, hinge);
       await settled(d.page, 'chat');
@@ -225,10 +225,6 @@ test('M9 gate, foldable 3: nothing under the hinge, in the book and laptop postu
         await d.page.click('#nav-menu');
         await d.page.waitForSelector('.app.nav-open');
         await check('navigation open');
-      } else {
-        await d.page.click('#more-btn');
-        await d.page.waitForSelector('#more:not([hidden])');
-        await check('More open');
       }
       await d.page.keyboard.press('Escape');
       await d.page.goto(`${m.base}/tasks`);
@@ -314,11 +310,6 @@ test('M9 gate, foldable 4: 200% text survives, at a phone’s width and a deskto
       if (drawer) { await d.page.click('#nav-menu'); await d.page.waitForSelector('.app.nav-open'); }
       const seen = new Set(await d.page.$$eval('#rail [data-dest]', (els) => els.filter((e) => (e as HTMLElement).checkVisibility()).map((e) => (e as HTMLElement).dataset.dest!)));
       if (drawer) await d.page.keyboard.press('Escape');
-      if (await d.page.locator('#more-btn').isVisible()) {
-        await d.page.click('#more-btn');
-        for (const x of await d.page.$$eval('#more [data-dest]', (els) => els.filter((e) => (e as HTMLElement).checkVisibility()).map((e) => (e as HTMLElement).dataset.dest!))) seen.add(x);
-        await d.page.keyboard.press('Escape');
-      }
       assert.deepEqual([...seen].sort(), ALL, `${size}: every destination is reachable`);
       assert.deepEqual(d.errors, [], `${size}: no errors in the page`);
       await d.ctx.close();

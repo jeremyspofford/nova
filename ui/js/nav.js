@@ -18,24 +18,24 @@ export const DESTINATIONS = Object.freeze([
 export const destination = (id) => DESTINATIONS.find((d) => d.id === id) ?? null;
 
 // phone and a foldable's cover screen: the rail's content as a drawer from the title bar (owner
-// decision 2026-11-08): Home and every other place as rows, Settings at the foot, nothing under More.
-// tablet and desktop: a slim rail, the orb (Home) on top, at most six destinations, Settings
-// at the foot, and the rest under More.
+// decision 2026-11-08): Home and every other place as rows, Settings at the foot.
+// tablet and desktop: the rail, the orb (Home) on top, every other place in the list (it scrolls
+// when the window is short), Settings at the foot. No overflow menu (owner ruling 2026-11-08).
 const PLACES = {
-  phone: { home: 'row', primary: ['home', 'chat', 'tasks', 'memory', 'automations', 'skills', 'activity', 'health'], more: [], foot: ['settings'] },
-  rail: { home: 'orb', primary: ['chat', 'tasks', 'memory', 'automations'], more: ['skills', 'activity', 'health'], foot: ['settings'] },
+  phone: { home: 'row', primary: ['home', 'chat', 'tasks', 'memory', 'automations', 'skills', 'activity', 'health'], foot: ['settings'] },
+  rail: { home: 'orb', primary: ['chat', 'tasks', 'memory', 'automations', 'skills', 'activity', 'health'], foot: ['settings'] },
 };
 
 export function placement(layout) {
   const p = layout === 'phone' ? PLACES.phone : PLACES.rail;
-  return { home: p.home, primary: [...p.primary], more: [...p.more], foot: [...p.foot], secondary: DESTINATIONS.filter(d => d.parent === 'settings').map(d => d.id) };
+  return { home: p.home, primary: [...p.primary], foot: [...p.foot], secondary: DESTINATIONS.filter(d => d.parent === 'settings').map(d => d.id) };
 }
 
 // Modelled homes, including Settings children. The rendered UI gate independently checks
 // actual doors against app.js VIEWS; this model alone cannot prove reachability.
 export function reachable(layout) {
   const p = placement(layout);
-  return [...new Set([...(p.home === 'orb' ? ['home'] : []), ...p.primary, ...p.more, ...p.foot, ...p.secondary])];
+  return [...new Set([...(p.home === 'orb' ? ['home'] : []), ...p.primary, ...p.foot, ...p.secondary])];
 }
 
 // The path → what to show. Era 2 paths keep working: /schedules is Automations.

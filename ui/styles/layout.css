@@ -49,9 +49,6 @@
 .band-probe[data-band="three"] { width: var(--band-three); }
 .band-probe[data-band="rail"] { width: var(--band-rail); }
 body[data-rail="open"] { --rail-col: var(--rail-open-width); }
-/* More opens beside the rail, at its current width. */
-body[data-layout="tablet"] .more,
-body[data-layout="desktop"] .more { inset: auto auto var(--space-5) calc(var(--rail-col) + var(--space-2)); margin: 0; width: calc(var(--space-8) * 4); }
 .band-probe[data-band="scrollbar"] { width: var(--space-8); height: var(--space-8); overflow-y: scroll; }
 
 :root { --segments: none; }
@@ -208,11 +205,10 @@ body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { displ
       / var(--layout-rail-width) calc(env(viewport-segment-width 0 0) - var(--layout-rail-width)) calc(env(viewport-segment-left 1 0) - env(viewport-segment-right 0 0)) env(viewport-segment-width 1 0);
   }
   body[data-layout="tablet"] .aside { border-left: 0; }
-  /* Overlays: the sheet and a toast on the right-hand screen; the drawer and More stay left. */
+  /* Overlays: the sheet and a toast on the right-hand screen; the drawer stays left. */
   .sheet { margin-inline-start: env(viewport-segment-left 1 0); max-width: calc(env(viewport-segment-width 1 0) - 2 * var(--space-4)); }
   .toast { left: calc(env(viewport-segment-left 1 0) + env(viewport-segment-width 1 0) / 2); max-width: calc(env(viewport-segment-width 1 0) - 2 * var(--space-4)); }
   .drawer { width: min(env(viewport-segment-width 0 0), calc(var(--space-8) * 5)); }
-  body[data-layout="tablet"] .more { max-width: calc(env(viewport-segment-width 0 0) - var(--layout-rail-width) - 2 * var(--space-3)); }
 }
 @media (vertical-viewport-segments: 2) {
   body[data-layout="tablet"] .shell,
@@ -226,7 +222,6 @@ body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { displ
   body[data-layout="tablet"] .aside { border-top: 0; }
   /* The conversation and its overlays above the hinge; a sheet on the lower screen. */
   .drawer { bottom: calc(100dvh - env(viewport-segment-bottom 0 0)); }
-  body[data-layout="tablet"] .more { bottom: calc(100dvh - env(viewport-segment-bottom 0 0) + var(--space-3)); }
   .toast { bottom: calc(100dvh - env(viewport-segment-bottom 0 0) + var(--space-5)); }
   .sheet { margin-block-start: env(viewport-segment-top 0 1); max-height: calc(env(viewport-segment-height 0 1) - 2 * var(--space-3)); }
 }
