@@ -324,7 +324,7 @@ function showCore(view) {
   renderCore({ enter: true });
   // Conversations and month rollover need no Core event; opening Health reads current spend.
   // A Caps-only failure belongs to its panel, not the whole Core's availability.
-  if (view === 'health') core.load(['caps']).then(() => renderCore());
+  if (view === 'health') core.load(['caps', 'version']).then(() => renderCore());
   const target = view === 'home' ? null : el[VIEWS[view]];
   if (target) target.focus({ preventScroll: true });
 }

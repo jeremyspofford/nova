@@ -102,14 +102,15 @@ jobs:
     needs: changes
     if: needs.changes.outputs.heavy == 'true'
     runs-on: ubuntu-latest
-    # The suite runs in two halves side by side (node --test-shard splits it by test file), every test
-    # in one of them: by November 2026 the whole suite took over 45 minutes in one job and the
-    # backstop below cut it off mid-run. A failed or cancelled half fails the gate.
+    # The suite runs in four shards side by side, every test file in exactly one of them: by November
+    # 2026 the whole suite took over 45 minutes in one job and the backstop below cut it off mid-run.
+    # scripts/ui-shard.js balances the shards by measured file times (Node's --test-shard dealt files
+    # round-robin by name: one half took ~32 minutes, the other ~17). A failed or cancelled shard fails the gate.
     strategy:
       fail-fast: false
       matrix:
-        shard: ['1/2', '2/2']
-    # Each half takes about 25 minutes. PR #236's first run hung for 90: a failed test left a server
+        shard: ['1/4', '2/4', '3/4', '4/4']
+    # Each shard takes about 13 minutes. PR #236's first run hung for 90: a failed test left a server
     # open, so its file never ended (test:ui now force-exits and times tests out). This is the backstop.
     timeout-minutes: 45
     # The Playwright image for the pinned playwright-core (package.json): its Chromium and system
@@ -129,8 +130,8 @@ jobs:
       # on the PR. Advisory only: the script always exits 0, and continue-on-error keeps even a crash
       # from failing this job or the gate.
       - name: accessibility (advisory, never fails)
-        # Once, in the first half's job.
-        if: ${{ !cancelled() && matrix.shard == '1/2' }}
+        # Once, in the first shard's job (scripts/ui-shard.js gives that shard less test time to match).
+        if: ${{ !cancelled() && matrix.shard == '1/4' }}
         continue-on-error: true
         timeout-minutes: 15
         run: npm run ui:axe
