@@ -108,7 +108,8 @@ const badges = new Map(); // dest → { tone: 'attention' | 'alert' | 'working',
 function navItem(id, { tag = 'li' } = {}) {
   const d = destination(id);
   const b = badges.get(id);
-  const cur = id === currentDest ? ' aria-current="page"' : '';
+  // One current page: in the drawer, a Recent row that is the open conversation takes it from Chat.
+  const cur = id === currentDest && !(id === 'chat' && recentHasCurrent()) ? ' aria-current="page"' : '';
   const aria = b ? ` aria-label="${esc(`${d.label}, ${b.label}`)}"` : '';
   const a = `<a class="nav-item" href="${d.path}" data-dest="${id}"${cur}${aria}>${ICONS[id]}<span class="nav-label">${esc(d.label)}</span>${b?.count ? `<span class="nav-count" aria-hidden="true">${esc(String(b.count))}</span>` : ''}${b ? `<span class="nav-badge" data-tone="${esc(b.tone)}" aria-hidden="true"></span>` : ''}</a>`;
   return tag ? `<${tag}>${a}</${tag}>` : a;
@@ -122,8 +123,8 @@ function moreButton(more) {
 
 export function renderNav() {
   if (!layout.layout) return;
-  const focused = document.activeElement?.closest?.('[data-dest], #more-btn');
-  const focusKey = focused ? focused.dataset.dest ?? 'more' : null;
+  const focused = document.activeElement?.closest?.('[data-dest], #more-btn, #rail .rail-recent a, #nav-all');
+  const focusKey = focused ? focused.dataset.dest ?? (focused.id === 'more-btn' ? 'more' : focused.id === 'nav-all' ? 'all' : focused.getAttribute('href')) : null;
   const p = placement(layout.layout);
   // A phone's drawer: the same rail, Home a row (the orb is the top bar's), and a close button.
   const drawer = layout.layout === 'phone';
@@ -139,7 +140,13 @@ ${drawer && recent.list.length ? recentGroup() : ''}
   const b = DESTINATIONS.map((d) => badges.get(d.id)).find(Boolean);
   $('nav-menu').innerHTML = `${ICONS.panel}${b ? `<span class="nav-badge" data-tone="${esc(b.tone)}" aria-hidden="true"></span>` : ''}`;
   $('nav-menu').setAttribute('aria-label', b ? `Open navigation, ${b.label}` : 'Open navigation');
-  if (focusKey) (focusKey === 'more' ? $('more-btn') : document.querySelector(`#rail [data-dest="${focusKey}"], #more [data-dest="${focusKey}"]`))?.focus({ preventScroll: true });
+  if (focusKey) {
+    const back = focusKey === 'more' ? $('more-btn') : focusKey === 'all' ? $('nav-all')
+      : focusKey.startsWith('/c/') ? [...document.querySelectorAll('#rail .rail-recent a')].find((a) => a.getAttribute('href') === focusKey)
+        : document.querySelector(`#rail [data-dest="${focusKey}"], #more [data-dest="${focusKey}"]`);
+    // A Recent row that left the list hands focus to All conversations, not to the page.
+    (back ?? (focusKey.startsWith('/c/') ? $('nav-all') : null))?.focus({ preventScroll: true });
+  }
 }
 
 // The version stamp at the rail's foot, from GET /api/v1/version: the version and the short commit
@@ -163,6 +170,7 @@ export function setRecent(list, current) {
   recent = next;
   renderNav();
 }
+const recentHasCurrent = () => layout.layout === 'phone' && recent.list.some((s) => s.id === recent.current);
 function recentGroup() {
   const rows = recent.list.map((s) => `<li><a class="nav-item" href="/c/${esc(s.id)}"${s.id === recent.current ? ' aria-current="page"' : ''}>${ICONS.chat}<span class="nav-label">${esc(s.title)}</span></a></li>`).join('');
   return `<p class="rail-group" id="rail-recent">Recent</p>
