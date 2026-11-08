@@ -143,7 +143,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               results.push({ engine, theme, size, state, contrast });
               if (contrast.some((c) => c.ratio < 4.5)) await failureShot(p, `${engine}/${theme}/${size}/${state}-contrast`);
               assert.ok(contrast.every((c) => c.ratio >= 4.5), `${engine}/${theme}/${size}/${state}: text contrast ${JSON.stringify(contrast)}`);
-              if (process.env.NOVA_BACKUPS_STYLEGUIDE_SHOTS && theme === 'orb-teal') {
+              if (process.env.NOVA_BACKUPS_STYLEGUIDE_SHOTS && theme === 'nebula') {
                 const folder = resolve(process.env.NOVA_BACKUPS_STYLEGUIDE_SHOTS, engine);
                 mkdirSync(folder, { recursive: true });
                 await p.screenshot({ path: join(folder, `${state}-${size}.png`), fullPage: true, animations: 'disabled', caret: 'hide' });
@@ -237,7 +237,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               assert.doesNotMatch(text, /%|of \d/);
               await geometry(p, `${engine}/${theme}/${size}/loading-${phase}`);
               measured.push({ engine, theme, size, phase, elapsed, since, text });
-              if (process.env.NOVA_BACKUPS_STYLEGUIDE_SHOTS && theme === 'orb-teal') {
+              if (process.env.NOVA_BACKUPS_STYLEGUIDE_SHOTS && theme === 'nebula') {
                 const folder = resolve(process.env.NOVA_BACKUPS_STYLEGUIDE_SHOTS, 'ci-i1-loading', engine);
                 mkdirSync(folder, { recursive: true });
                 // Fast-forwarding the finite appear animation would falsify the quiet screenshot.

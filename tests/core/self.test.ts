@@ -50,7 +50,7 @@ test('the briefing states the registry as it is: instance, person, models, captu
       assert.match(b, /Devices: only this hub; no other devices paired/);
       assert.match(b, /Morning summary \(Every day at 7:00, last run failed 60 min ago: “The model command exited with code 1”\)/);
       assert.match(b, /Approvals: asks first to run commands on this computer\. Goes ahead without asking to set up, change and remove schedules\./);
-      assert.match(b, /Appearance: Obsidian, mode auto; installed: Aurora, Companion Light, Nebula \(proposed\), Nova, Obsidian, Orb Teal, Paper/);
+      assert.match(b, /Appearance: Obsidian, mode auto; installed: Aurora, Companion Light, Nebula, Nova, Obsidian, Orb Teal, Paper/);
       assert.match(b, /Open problems: 1; latest: capture: “Screenpipe answered but refused Nova/);
       assert.match(b, /OpenRouter included/, 'the way to add a provider is named');
       assert.match(b, /OpenRouter included\) goes in Settings › Providers as the "Local model \(Ollama or compatible\)" provider/);
@@ -170,7 +170,7 @@ test('nova_settings lists its parts, refuses an unknown one, and shows appearanc
     assert.match(h.core.self.settings(), /^Settings parts: appearance, permissions, privacy, identity, user/);
     assert.throws(() => h.core.self.settings('vault'), /no settings part called vault/);
     assert.throws(() => h.core.self.settings('setup'), /no settings part called setup/);
-    assert.match(h.core.self.settings('appearance'), /Active: Orb Teal \[orb-teal\] \(the default\), mode auto\.[\s\S]*- Paper \[paper\][\s\S]*no chat tool for it/);
+    assert.match(h.core.self.settings('appearance'), /Active: Nebula \[nebula\] \(the default\), mode auto\.[\s\S]*- Paper \[paper\][\s\S]*no chat tool for it/);
     assert.match(h.core.self.settings('permissions'), /- Run commands on this computer \[commands\]: asks first/);
     assert.match(h.core.self.settings('privacy'), /Privacy setting: local-only/);
   });

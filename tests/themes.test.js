@@ -12,8 +12,8 @@ test('seven design systems ship: Orb Teal, Companion Light, Era 2’s four theme
   assert.equal(existsSync('ui/themes'), false, 'the Era 2 theme files are now packages');
 });
 
-test('Orb Teal is the default, and pages load the applied design system, swappable in place', () => {
-  assert.equal(DEFAULT_DESIGN_SYSTEM, 'orb-teal');
+test('Nebula is the default, and pages load the applied design system, swappable in place', () => {
+  assert.equal(DEFAULT_DESIGN_SYSTEM, 'nebula');
   for (const f of ['ui/index.html', 'ui/styleguide.html']) {
     const html = readFileSync(f, 'utf8');
     assert.match(html, /<link rel="stylesheet" id="ds-boot" href="\/design-system.css">/, f);

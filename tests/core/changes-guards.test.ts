@@ -429,7 +429,7 @@ test('rolling back a design system puts back only what it changed, not another d
     assert.equal((await settled(core, r.rollback_task_id!)).state, 'done');
     assert.equal(core.design.appearance().device_overrides['another-device-1'], 'orb-teal', 'their own choice stays');
     assert.equal(core.design.appearance().device_overrides[hub], undefined);
-    assert.equal(core.design.active('a-third-device-1').id, 'orb-teal', 'everyone else is back to what they had');
+    assert.equal(core.design.active('a-third-device-1').id, 'nebula', 'everyone else is back to what they had');
   } finally {
     await core.close();
   }

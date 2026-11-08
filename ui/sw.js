@@ -28,7 +28,7 @@ const SHELL = [
 // Diagnostics is a per-request attachment; included diagnostic logs may contain free text,
 // so neither its current response nor a legacy cached copy may be kept or served offline.
 // Passkeys (T2) are live too: a passkey removed must not look present, and a challenge is single use.
-const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/capture|v1\/models|v1\/changes|v1\/resilience|v1\/reset|v1\/services\/topology|v1\/diagnostics|v1\/security)(?:\/|$)/;
+const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/capture|v1\/models|v1\/changes|v1\/resilience|v1\/reset|v1\/services\/topology|v1\/diagnostics|v1\/version|v1\/security)(?:\/|$)/;
 // Pages the app answers with its shell.
 const PAGES = /^\/(?:|chat|new|tasks|memory|automations|skills|schedules|activity|health|settings|capture|topology|c\/[\w-]+)$/;
 

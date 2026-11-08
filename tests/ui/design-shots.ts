@@ -1,5 +1,5 @@
 // The design review's screenshots (DESIGN-SYSTEM §0, OPERATING-RULES "Design-first"): the main
-// surfaces and the styleguide, in the lead package (Orb Teal), at a desktop's width and a phone's,
+// surfaces and the styleguide, in the lead package (Nebula), at a desktop's width and a phone's,
 // against the UX review's seeded profile, plus onboarding on a blank one and the composer grown by
 // a long message (UX review F0). Not a gate: it writes pictures for a person to look at.
 //   node tests/ui/design-shots.ts <folder>      (in scripts/ui-test.sh's image, which has the browser)

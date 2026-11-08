@@ -39,9 +39,10 @@ export const TOKEN_NAMES: readonly string[] = Object.freeze(entries.map(([n]) =>
 // `bg/base` → `--bg-base`.
 export const cssVar = (name: string) => `--${name.replace(/\//g, '-')}`;
 
-export const DEFAULT_DESIGN_SYSTEM = 'orb-teal';
-// DESIGN-SYSTEM §3: the two packages made for Nova, dark first.
-export const STARTERS: readonly string[] = Object.freeze(['orb-teal', 'companion-light']);
+// Nebula (owner, 2026-11-07: "Yes, make it default"): light and dark, following the device.
+export const DEFAULT_DESIGN_SYSTEM = 'nebula';
+// DESIGN-SYSTEM §3: the packages made for Nova, the default first.
+export const STARTERS: readonly string[] = Object.freeze(['nebula', 'orb-teal', 'companion-light']);
 export const BUILTIN_DIR = fileURLToPath(new URL('../../design-systems', import.meta.url));
 export const MODES = ['light', 'dark', 'auto'] as const;
 export type Mode = (typeof MODES)[number];
@@ -163,8 +164,8 @@ export function overshoots(easing: string): boolean {
 // those rules. Orb Teal is the lead package: it is held to them first, and a package is presented as
 // a peer only after these rules and owner approval of its rendered styleguide. AT_THE_BAR is
 // the technical scale gate, not an approval record; stage 1's lead still awaits owner review.
-export const LEAD_DESIGN_SYSTEM = 'orb-teal';
-export const AT_THE_BAR: readonly string[] = Object.freeze(['orb-teal']);
+export const LEAD_DESIGN_SYSTEM = 'nebula';
+export const AT_THE_BAR: readonly string[] = Object.freeze(['nebula', 'orb-teal']);
 // 4pt spacing, with a name for each step. Off-scale spacing is a lint error in ui/ (lint:tokens).
 export const SPACE_SCALE: Readonly<Record<string, { px: number; name: string }>> = Object.freeze({
   'space/1': { px: 4, name: 'hair' }, 'space/2': { px: 8, name: 'tight' }, 'space/3': { px: 12, name: 'snug' }, 'space/4': { px: 16, name: 'base' },
