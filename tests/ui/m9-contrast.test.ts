@@ -245,7 +245,7 @@ test('M9 gate, contrast: every built-in design, in every look, in every state, a
   const rows: string[] = [];
   try {
     const designs: { id: string; name: string }[] = (await m.get('/api/v1/design-systems')).filter((d: any) => d.valid);
-    assert.equal(designs.length, 6, 'all six built-ins');
+    assert.equal(designs.length, 7, 'all seven built-ins');
     for (const ds of designs) {
       assert.equal((await m.send('POST', `/api/v1/design-systems/${ds.id}/apply`, { scope: 'user' })).status, 200);
       const looks = new Set<string>();

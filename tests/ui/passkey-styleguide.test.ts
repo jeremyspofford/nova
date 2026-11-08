@@ -91,7 +91,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
           await p.goto(`${base}/styleguide?entry=passkey-approval`);
           assert.equal(await p.getByRole('heading', { name: 'Passkey confirmation', exact: true }).count(), 1);
           const themes = await p.locator('#sg-ds option').evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
-          assert.equal(themes.length, 6);
+          assert.equal(themes.length, 7);
           for (const theme of themes) {
             const response = p.waitForResponse((r) => r.url().includes('/preview.css') && r.status() === 200);
             await p.locator('#sg-ds').selectOption(theme);
